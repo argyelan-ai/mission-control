@@ -3013,10 +3013,15 @@ _POLL_DELIVERED_TTL_SECONDS = 86400 * 7
 
 
 def _poll_delivery_mark(agent: Agent, task: Task) -> str | None:
-    """``<agent id>:<attempt id>``: one delivery of one attempt to one agent."""
-    if not task.dispatch_attempt_id:
+    """``<agent id>|<attempt id>|<dispatched_at>``: one delivery of one
+    dispatch to one agent. ``dispatched_at`` ties the mark to that dispatch:
+    a healer that resets the run for a fresh dispatch clears it (Tier-3
+    recovery, the stale-dispatch reset), even where it keeps the attempt."""
+    if not task.dispatch_attempt_id or task.dispatched_at is None:
         return None
-    return f"{agent.id}:{task.dispatch_attempt_id}"
+    from app.utils import ensure_aware
+
+    return f"{agent.id}|{task.dispatch_attempt_id}|{ensure_aware(task.dispatched_at).isoformat()}"
 
 
 async def _mark_poll_delivered(session: AsyncSession, agent: Agent, task: Task) -> None:

@@ -603,6 +603,38 @@ async def test_a_card_delivered_to_another_agent_is_held(
 
 
 @pytest.mark.asyncio
+async def test_a_run_reset_by_a_healer_is_not_in_flight(
+    client, make_board, make_agent, make_task,
+):
+    """The poll delivered the card, the agent ACKed and worked on it, then a
+    healer reset the run for a fresh dispatch without a new attempt (Tier-3
+    recovery: ``dispatched_at`` and ``ack_at`` cleared, then
+    ``auto_dispatch_task``, which HALTED refuses). That card is not in
+    flight: the delivery belongs to the old dispatch. HALTED holds it."""
+    from app.models.task import Task
+    from app.services.operations import SYSTEM_HALTED_REASON
+
+    board, agent, token = await _seed_agent(make_board, make_agent)
+    card = await make_task(
+        board_id=board.id, title="reset by recovery", status="inbox", assigned_agent_id=agent.id,
+    )
+    attempt = await _deliver(client, token, card.id)
+    async with _session() as s:  # ACKed, worked, then Tier 3 resets the run
+        row = await s.get(Task, card.id)
+        row.status = "in_progress"
+        row.ack_at = None
+        row.dispatched_at = None
+        s.add(row)
+        await s.commit()
+
+    await _set_mode("halted")
+    body = await _poll(client, token)
+    _assert_held(body, "system_halted", "system_draining", SYSTEM_HALTED_REASON)
+    row = await _card(card.id)
+    assert row.ack_at is None and row.dispatch_attempt_id == attempt
+
+
+@pytest.mark.asyncio
 async def test_halted_poll_does_not_restart_an_orphaned_run_it_delivered_itself(
     client, make_board, make_agent, make_task,
 ):

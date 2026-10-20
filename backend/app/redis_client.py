@@ -341,10 +341,10 @@ class RedisKeys:
 
     @staticmethod
     def poll_delivered(task_id: str) -> str:
-        """Delivery mark: ``<agent id>:<attempt id>`` of the last time
-        /agent/me/poll handed this card out as ``new_task``. A card is in
-        flight while its current attempt carries this agent's mark and no
-        ACK yet; the system-mode gate lets such a card keep its answer
+        """Delivery mark: ``<agent id>|<attempt id>|<dispatched_at>`` of the
+        last time /agent/me/poll handed this card out as ``new_task``. A card
+        is in flight while its current dispatch carries this agent's mark and
+        no ACK yet; the system-mode gate lets such a card keep its answer
         instead of holding it (the bridges read ``idle`` as "card gone").
         ``dispatched_at`` cannot tell this: push dispatch and the
         undispatched-card watcher stamp it without delivering. The poll

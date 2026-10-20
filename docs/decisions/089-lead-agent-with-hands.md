@@ -468,9 +468,11 @@ the same attempt, so nothing new goes out. An `idle` answer would be worse:
 the bridges read `idle` as "card gone", drop their dedup (one also resets
 its session, `poll.sh` drops its task lock) and paste the card a second
 time after the halt. The poll records each delivery in Redis
-(`RedisKeys.poll_delivered`, agent and attempt). `dispatched_at` cannot
-tell, because push dispatch and the watcher stamp it without delivering.
-A new attempt, a card reassigned to another agent, and the orphan restart
+(`RedisKeys.poll_delivered`: agent, attempt and `dispatched_at`).
+`dispatched_at` alone cannot tell, because push dispatch and the watcher
+stamp it without delivering. A new attempt, a card reassigned to another
+agent, a run a healer reset for a fresh dispatch (Tier-3 recovery clears
+`dispatched_at` and `ack_at` but keeps the attempt) and the orphan restart
 (a fresh attempt for an ACKed card) are not in flight and are held.
 
 **(c) The ladders wait.** The ACK ladder (silent retry with a new attempt,
