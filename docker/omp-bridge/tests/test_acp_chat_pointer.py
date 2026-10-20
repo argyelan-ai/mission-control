@@ -150,7 +150,8 @@ def read_json(path: Path) -> dict:
 def age(path: Path, seconds: float) -> Path:
     """Move a file's mtime into the past — it was written that long ago."""
     st = path.stat()
-    os.utime(path, (st.st_atime - seconds, st.st_mtime - seconds))
+    shift = int(seconds * 10 ** 9)
+    os.utime(path, ns=(st.st_atime_ns - shift, st.st_mtime_ns - shift))
     return path
 
 
@@ -220,8 +221,8 @@ def test_the_pointer_wins_over_a_state_mirror_that_is_not_newer(tmp_path, mirror
     _, folder = layout(tmp_path)
     pointer = write_pointer(folder, S, mc_copy(folder, S))
     mirror = write_state(folder, OLD, mc_copy(folder, OLD, ts="2026-10-19T01-00-00"))
-    stamp = pointer.stat().st_mtime - mirror_age
-    os.utime(mirror, (stamp, stamp))
+    stamp = pointer.stat().st_mtime_ns - mirror_age * 10 ** 9  # ns: exact
+    os.utime(mirror, ns=(stamp, stamp))
     c = client()
     sess = container_session(folder, c)
     try:

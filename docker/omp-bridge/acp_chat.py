@@ -357,25 +357,28 @@ class ChatSession:
         reset_detail = ""
         reset_text = ("Previous chat session could not be loaded — "
                       "started a new one (history starts over).")
+        reset_data: dict = {}
         started_fresh = False
+        session_id: Optional[str] = None
+        sink: Optional[acp_chat_events.ChatEventSink] = None
         if stored_id and stored_transcript:
             # A pointer written before the move names the old place.
-            transcript = sink_migration.remap(stored_transcript)
-            if transcript.exists():
+            transcript = _find_transcript(stored_transcript)
+            if transcript is not None:
                 try:
                     with self._muted_replay():
                         client.load_session(stored_id, self._cwd)
-                    self._session_id = stored_id
-                    self._mapper.set_session_id(stored_id)
-                    self._sink = acp_chat_events.ChatEventSink.appending(
-                        transcript, stored_id
-                    )
+                    sink = acp_chat_events.ChatEventSink.appending(transcript, stored_id)
+                    session_id = stored_id
                 except Exception as exc:  # noqa: BLE001 — any load failure is a reset
                     model = missing_model(f"{exc}")
                     if model is None:
                         reset_detail = f"{type(exc).__name__}: {exc}"
                     else:
                         reset_detail, reset_text = "model_missing", _model_missing_text(model)
+                        # The card in the UI language fills the name into its
+                        # own sentence; it never shows the English text.
+                        reset_data = {"model": acp_model.display_name(model) or None}
             else:
                 # Neither at the named place nor in `.mc/`: the chat cannot
                 # show this conversation — say so instead of starting over
@@ -390,28 +393,30 @@ class ChatSession:
             started_fresh = self._earlier_chat_exists()
         logger.info("chat session to resume: %s (from %s)%s", stored_id or "none",
                     self._resume_source, f" — {reset_detail}" if reset_detail else "")
-        if self._session_id is None:
-            self._session_id = client.new_session(self._cwd)
-            self._mapper.set_session_id(self._session_id)
-            self._sink = acp_chat_events.ChatEventSink(
-                self._sessions_dir, self._session_id
-            )
-        # Next to the transcript in use — the backend reads the preview from
-        # the transcript's folder. A resumed copy the move skipped still sits
-        # at the old place; its preview must sit there too.
-        self._preview = acp_chat_events.PreviewEventSink.beside(
-            self._sink.path if self._sink is not None else None, self._session_id
-        )
-        # The pointer FIRST: the model pin below already writes the state
-        # mirror, and the next start reads the pointer before the mirror —
-        # it must never name an older session than the mirror does.
-        self._write_persisted()
+        if session_id is None or sink is None:
+            session_id = client.new_session(self._cwd)
+            sink = acp_chat_events.ChatEventSink(self._sessions_dir, session_id)
+        # ONE locked step: switch AND pointer. The socket threads write the
+        # state mirror under this lock (a `prompt` while the omp child is
+        # respawned); none may name the new session before the pointer does,
+        # or a crash right then resumes the previous one (critic S1-R4).
+        # The pointer comes before the model pin below, which writes the
+        # mirror too.
+        with self._lock:
+            self._session_id = session_id
+            self._mapper.set_session_id(session_id)
+            self._sink = sink
+            # Next to the transcript in use — the backend reads the preview
+            # from the transcript's folder. A resumed copy the move skipped
+            # still sits at the old place; its preview must sit there too.
+            self._preview = acp_chat_events.PreviewEventSink.beside(sink.path, session_id)
+            self._write_persisted()
         self._absorb_session_result(getattr(client, "last_session_result", None))
         self._pin_model()
         if reset_detail:
             # The operator loses the old history here — that is an EVENT,
             # not a log line (Boss: errors must be visible in the chat).
-            self._emit_error("session_reset", reset_detail, text=reset_text)
+            self._emit_error("session_reset", reset_detail, text=reset_text, data=reset_data)
         elif started_fresh:
             self._emit_notice(CHAT_STARTED_FRESH, _CHAT_STARTED_FRESH_TEXT)
 
@@ -483,22 +488,17 @@ class ChatSession:
             )
 
     def _previous_queue(self) -> list[dict]:
-        """The jobs a previous daemon was holding, from its state mirror."""
-        try:
-            with open(self.state_file, "r", encoding="utf-8") as fh:
-                queue = (json.load(fh) or {}).get("queue")
-        except (OSError, ValueError, AttributeError):
-            return []
-        return [j for j in queue or [] if isinstance(j, dict)]
+        """The jobs a previous daemon was holding, from its state mirror.
+        Never blocks (a FIFO in its place on the mount), never raises."""
+        queue = _read_json_object(self.state_file).get("queue")
+        return [j for j in queue if isinstance(j, dict)] if isinstance(queue, list) else []
 
     def _previous_elicitations(self) -> list[str]:
         """Card ids a previous daemon still held open, from its state mirror."""
-        try:
-            with open(self.state_file, "r", encoding="utf-8") as fh:
-                rows = (json.load(fh) or {}).get("elicitations")
-        except (OSError, ValueError, AttributeError):
+        rows = _read_json_object(self.state_file).get("elicitations")
+        if not isinstance(rows, list):
             return []
-        return [str(r["id"]) for r in rows or []
+        return [str(r["id"]) for r in rows
                 if isinstance(r, dict) and isinstance(r.get("id"), str) and r["id"]]
 
     def _report_lost_queue(self, lost: list[dict]) -> None:
@@ -939,9 +939,9 @@ class ChatSession:
             self._mapper.set_session_id(new_id)
             self._sink = acp_chat_events.ChatEventSink(self._sessions_dir, new_id)
             self._preview = acp_chat_events.PreviewEventSink.beside(self._sink.path, new_id)
-        # Pointer before the state mirror (the pin and the thinking carry-over
-        # below write the mirror) — see _connect.
-        self._write_persisted()
+            # Inside the same locked step, before the pin and the thinking
+            # carry-over below write the mirror — see _connect.
+            self._write_persisted()
         self._absorb_session_result(result)
         self._pin_model()
         offered = self._config_value("thinking")
@@ -1256,11 +1256,20 @@ class ChatSession:
         except Exception:  # noqa: BLE001
             logger.exception("preview write failed")
 
-    def _emit_error(self, code: str, detail: str = "", text: Optional[str] = None) -> None:
+    def _emit_error(self, code: str, detail: str = "", text: Optional[str] = None,
+                    data: Optional[dict] = None) -> None:
+        """`data`: extra fields of the card (e.g. `model` for
+        `session_reset`/`model_missing`) — never `code` or `detail`, never a
+        None value."""
         with self._lock:
             self._last_error = {"code": code, "detail": str(detail)[:2000],
                                 "at": _now_iso()}
-        self._emit_transcript(self._mapper.map_chat_error(code, detail, text))
+        entries = self._mapper.map_chat_error(code, detail, text)
+        extra = {k: v for k, v in (data or {}).items()
+                 if v is not None and k not in ("code", "detail")}
+        if extra and entries:
+            entries[-1]["data"].update(extra)  # the card is the last entry
+        self._emit_transcript(entries)
         self._write_state()
 
     def _emit_notice(self, code: str, text: str, data: Optional[dict] = None) -> None:
@@ -1348,16 +1357,30 @@ class ChatSession:
            the deploy of S1-R4: the old image kept its pointer in the
            unmounted `$OMP_HOME`, but already wrote this file on the mount.
 
+        One exception: a state mirror strictly NEWER than the pointer that
+        names ANOTHER session wins over it (the pointer went stale, see
+        below). A newer mirror naming the same session is normal operation
+        and changes nothing.
+
         The old place `$OMP_HOME/acp-chat.json` is never read: a new image
         always means a recreate, so it is empty there — and a stale one
         must never win over the mirror. The caller follows a moved
         transcript (`sink_migration.remap`)."""
-        for source, path in ((RESUME_POINTER, self.persist_file),
-                             (RESUME_STATE, self.state_file)):
-            data = _read_json_object(path)
-            sid, transcript = data.get("sessionId"), data.get("transcript")
-            if isinstance(sid, str) and sid and isinstance(transcript, str) and transcript:
-                return {"sessionId": sid, "transcript": transcript, "source": source}
+        pointer, pointer_at = _named_session(self.persist_file)
+        mirror, mirror_at = _named_session(self.state_file)
+        if pointer and mirror and mirror[0] != pointer[0] and mirror_at > pointer_at:
+            # The pointer went stale. Every switch writes it first, so a
+            # NEWER mirror naming ANOTHER session means it stopped being
+            # written: a rollback to an image that writes only the mirror
+            # (and a forward deploy after it), or a pointer write that
+            # failed (only a log line). Reopening the pointer's session would
+            # silently undo the conversation the operator had open last.
+            logger.warning("the pointer names %s, the newer state mirror %s — "
+                           "following the state mirror", pointer[0], mirror[0])
+            pointer = None
+        for source, named in ((RESUME_POINTER, pointer), (RESUME_STATE, mirror)):
+            if named is not None:
+                return {"sessionId": named[0], "transcript": named[1], "source": source}
         return {}
 
     def _write_persisted(self) -> None:
@@ -1386,18 +1409,49 @@ def _format_counts(counts: Mapping[str, int]) -> str:
 
 def _read_json_object(path: Path) -> dict:
     """A JSON object from `path`, `{}` when the file is missing, unreadable,
-    no regular file or holds anything else. Never blocks: the pointer sits
-    in the sessions folder, the agent's own mount, where a FIFO in its place
-    would otherwise stall the chat's start (`open_regular`)."""
+    no regular file or holds anything else. Never blocks: the pointer and
+    the state mirror sit in the sessions folder, the agent's own mount,
+    where a FIFO in their place would otherwise stall the chat's start
+    (`open_regular`)."""
+    return _read_json_stamped(path)[0]
+
+
+def _read_json_stamped(path: Path) -> tuple[dict, int]:
+    """`_read_json_object` plus the file's mtime in ns (0 when unread),
+    taken from the same open file."""
     fh = acp_chat_events.open_regular(path)
     if fh is None:
-        return {}
+        return {}, 0
     try:
         with fh:
+            stamp = os.fstat(fh.fileno()).st_mtime_ns
             data = json.load(fh)
     except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+        return {}, 0
+    return (data, stamp) if isinstance(data, dict) else ({}, 0)
+
+
+def _named_session(path: Path) -> tuple[Optional[tuple[str, str]], int]:
+    """`(sessionId, transcript)` a pointer or state mirror names — None
+    unless both are non-empty strings — and the file's mtime in ns."""
+    data, stamp = _read_json_stamped(path)
+    sid, transcript = data.get("sessionId"), data.get("transcript")
+    if isinstance(sid, str) and sid and isinstance(transcript, str) and transcript:
+        return (sid, transcript), stamp
+    return None, stamp
+
+
+def _find_transcript(stored: str) -> Optional[Path]:
+    """The stored transcript, followed to `.mc/` (`sink_migration.remap`),
+    or None when it is in neither place — or the file system refuses the
+    path (too long, a folder the daemon may not enter): a missing
+    transcript then, never a crash at boot."""
+    try:
+        transcript = sink_migration.remap(stored)
+        return transcript if transcript.exists() else None
+    except (OSError, ValueError) as exc:
+        logger.warning("stored transcript unusable (%s): %.200s", type(exc).__name__, stored)
+        return None
 
 
 def missing_model(error: str) -> Optional[str]:
