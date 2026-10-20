@@ -121,6 +121,13 @@ def test_host_path_env_is_set_and_not_real(key):
     _assert_not_real(key, value)
 
 
+def test_stand_in_home_is_not_under_tmp():
+    """A real host home never lies under /tmp/, and MC treats /tmp/ as a
+    writable root of its own (dispatch._BACKEND_MOUNTED_ROOTS) — a stand-in
+    there makes every host path look writable (Linux CI, temp dir /tmp)."""
+    assert not os.environ["HOME_HOST"].startswith("/tmp/")
+
+
 def test_mc_repo_path_env_is_gone():
     """Scripts use MC_REPO_PATH to find their own code — unset, they use the
     checkout under test instead of the real one."""

@@ -57,7 +57,23 @@ _REAL_MC_REPO = Path(
     os.environ["MC_TEST_ORIGINAL_MC_REPO_PATH"]
     or _REAL_HOST_HOME / "Workspace" / "Projects" / "mission-control"
 )
-_TEST_HOST_HOME = Path(tempfile.mkdtemp(prefix="mc-test-host-home-")).resolve()
+
+
+def _make_test_host_home() -> Path:
+    """A temp dir for the stand-in host home — never under /tmp/.
+
+    A real host home never lies there, and MC treats /tmp/ as a writable
+    root of its own (dispatch._BACKEND_MOUNTED_ROOTS): a stand-in under /tmp
+    would make every host path look writable (seen on Linux CI, where the
+    temp dir is /tmp). /var/tmp is the fallback there."""
+    path = Path(tempfile.mkdtemp(prefix="mc-test-host-home-")).resolve()
+    if not str(path).startswith("/tmp/"):
+        return path
+    shutil.rmtree(path, ignore_errors=True)
+    return Path(tempfile.mkdtemp(prefix="mc-test-host-home-", dir="/var/tmp")).resolve()
+
+
+_TEST_HOST_HOME = _make_test_host_home()
 _TEST_MC_REPO = _TEST_HOST_HOME / "Workspace" / "Projects" / "mission-control"
 atexit.register(shutil.rmtree, _TEST_HOST_HOME, ignore_errors=True)
 
