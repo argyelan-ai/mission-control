@@ -263,7 +263,7 @@ def card_codes(lines: list[dict]) -> list[str]:
 
 
 def snapshot_previews(tmp_path: Path) -> dict[str, bytes]:
-    pdir = tmp_path / "sessions" / "previews"
+    pdir = tmp_path / "sessions" / acp_chat_events.MC_SINK_DIRNAME / "previews"
     if not pdir.is_dir():
         return {}
     return {p.name: p.read_bytes() for p in pdir.glob("*.jsonl")}

@@ -29,7 +29,8 @@ Spec: docs/specs/chat-over-acp.md. Contract in one picture:
                                             ChatSession
                                               │      │
                           transcript *.jsonl ◄┘      └─► previews/*.jsonl
-                          (what the backend chat reader tails)
+                          (what the backend chat reader tails — both under
+                          `<session folder>/.mc/`, where omp never looks)
 
 Everything the operator must SEE is a transcript line, written through the
 SAME mapper the task path uses (`acp_chat_events.ACPEventMapper`): the user
@@ -62,6 +63,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import acp_chat_events  # noqa: E402
 import acp_client  # noqa: E402
 import acp_model  # noqa: E402
+import sink_migration  # noqa: E402
 
 logger = logging.getLogger("acp_chat")
 
@@ -243,6 +245,10 @@ class ChatSession:
         """Spawn the child, handshake, and resume or open the ACP session."""
         self._state_dir.mkdir(parents=True, exist_ok=True)
         self._sessions_dir.mkdir(parents=True, exist_ok=True)
+        # S1-R3: MC copies an older image left next to omp's files move into
+        # `.mc/` BEFORE the pointer is read (`_connect` remaps it). Only a
+        # safety net — the real move runs on the host in the deploy window.
+        migration_problem = self._migrate_sinks()
         persisted = self._read_persisted()
         # Read BEFORE anything rewrites the mirror: the queue lives in memory,
         # so whatever a previous daemon still held is gone after a restart.
@@ -250,6 +256,16 @@ class ChatSession:
         lost_questions = self._previous_elicitations()
         self._connect(persisted)
         self._write_state()
+        if migration_problem:
+            # Visible, not only a log line (F7): old copies still sit where
+            # omp can mistake them for its own sessions.
+            self._emit_notice(
+                "sink_migration_skipped",
+                "Older chat copies could not be moved out of omp's session "
+                f"folder ({migration_problem}). The chat works; resuming an "
+                "older conversation can fail until the move has run.",
+                {"reason": migration_problem},
+            )
         if self._pump is None:
             self._pump = acp_chat_events.ToolOutputPump(
                 self._mapper, self._emit_preview
@@ -263,6 +279,29 @@ class ChatSession:
             self._emit_transcript(
                 self._mapper.map_elicitation_result(elicitation_id, "expired")
             )
+
+    def _migrate_sinks(self) -> Optional[str]:
+        """Move MC's old copies under the sessions root into `.mc/`
+        (`sink_migration.migrate`). Returns why it did not run — `locked`,
+        `error` — or None. Never raises: a failed move must not cost the
+        chat."""
+        root = self._sessions_dir.parent
+        try:
+            report = sink_migration.migrate(root, runner="daemon")
+        except Exception as exc:  # noqa: BLE001 — the chat starts anyway
+            logger.warning("sink migration under %s failed: %s: %s",
+                           root, type(exc).__name__, exc)
+            return "error"
+        counts = report.counts()
+        if report.status != "ok":
+            logger.warning("sink migration under %s did not run: %s (%s)",
+                           root, report.status, report.detail)
+            return report.status
+        if counts["moved"] or counts["media"] or counts["skipped"]:
+            logger.info("sink migration: moved %d copies (%d mixed, %d task), "
+                        "%d pictures, skipped %d", counts["moved"], counts["mixed"],
+                        counts["task"], counts["media"], counts["skipped"])
+        return None
 
     def _connect(self, persisted: dict) -> None:
         client = self._client_factory()
@@ -283,6 +322,9 @@ class ChatSession:
 
         stored_id = persisted.get("sessionId")
         stored_transcript = persisted.get("transcript")
+        if stored_transcript:
+            # A pointer written before the move names the old place.
+            stored_transcript = str(sink_migration.remap(stored_transcript))
         reset_detail = ""
         if stored_id and stored_transcript and Path(stored_transcript).exists():
             try:
@@ -1044,13 +1086,20 @@ class ChatSession:
     _NAME_LOOKUP_WAIT_S = 0.05
 
     def _omp_session_file(self) -> Optional[Path]:
-        """omp's OWN file of the current session: same folder, same session
-        id in the name, not the bridge sink's file."""
+        """omp's OWN file of the current session: the file named after the
+        session in the session folder. Since S1-R3 MC's copy lives in `.mc/`,
+        so that folder holds only omp's files. In a tree not moved yet MC's
+        old copy can still sit there (same id, often the younger file):
+        neither our own sink nor any file with MC's header is taken."""
         sid, own = self._session_id, self.transcript_path
         if not sid:
             return None
+        suffix = f"_{sid}.jsonl"
         try:
-            candidates = [p for p in self._sessions_dir.glob(f"*_{sid}.jsonl") if p != own]
+            candidates = [
+                p for p in self._sessions_dir.iterdir()
+                if p.name.endswith(suffix) and p != own and not acp_chat_events.is_mc_sink(p)
+            ]
             return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
         except OSError:
             return None
