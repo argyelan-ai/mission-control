@@ -467,13 +467,15 @@ def test_4a_after_a_load_the_next_turn_is_mapped_again(tmp_path):
 
 
 def test_4b_after_a_failed_load_the_next_turn_is_mapped_again(tmp_path):
-    """omp 18.10.1 can replay part of a session and then refuse the load
-    ("ACP session load was cancelled", live probe 20.10.2026): the daemon
-    opens a new session, says so in a card — and the switch must be off."""
+    """Defensive case: a load can fail AFTER (part of) its replay — the
+    agent dies while it replays (broken pipe), the reply times out, or an
+    agent errors late. Then the daemon opens a new session and says so in
+    a card, and the switch must still be off: no replayed line and no
+    replayed thought in front of that card, and the next turn is mapped."""
     seed_pointer(tmp_path)
     client = ReplayClient(
         replay=live_replay(),
-        load_raises=acp_client.ACPError("session/load failed: ACP session load was cancelled"),
+        load_raises=acp_client.ACPError("omp acp stdout closed unexpectedly"),
         turns=[NEXT_TURN],
     )
     sess = make_session(tmp_path, client)
@@ -487,5 +489,41 @@ def test_4b_after_a_failed_load_the_next_turn_is_mapped_again(tmp_path):
         assert tool_and_thought_lines(lines) == []
         assert sess._mapper._open_thought is None
         _assert_next_turn_mapped(sess, len(lines))
+    finally:
+        sess.close()
+
+
+# ── 5. a malformed update is skipped quietly ───────────────────────────────
+
+
+#: `sessionUpdate` values an agent should never send. A list or a dict is
+#: unhashable, so a plain `su in <frozenset>` would raise on it.
+MALFORMED = [["tool_call"], {"kind": "tool_call"}, None, 7]
+
+
+def test_5_a_non_string_session_update_never_raises(tmp_path, caplog):
+    """`sessionUpdate` comes from the agent. A value that is not a string
+    is skipped like any unknown update — during a replay (counted as
+    `unknown`) and outside it — and never logs an `event handling failed`
+    traceback. A normal turn still maps afterwards."""
+    seed_pointer(tmp_path)
+    replay = live_replay()
+    replay[5:5] = [{"sessionUpdate": su} for su in MALFORMED]
+    client = ReplayClient(replay=replay, turns=[NEXT_TURN])
+    sess = make_session(tmp_path, client)
+    caplog.set_level(logging.INFO, logger="acp_chat")
+    sess.start()
+    try:
+        for su in MALFORMED:
+            client.fire({"sessionId": SID, "update": {"sessionUpdate": su}})
+        failed = [r.getMessage() for r in caplog.records
+                  if r.getMessage() == "event handling failed"]
+        assert failed == [], f"{len(failed)} malformed updates raised"
+        logged = [r.getMessage() for r in caplog.records
+                  if r.getMessage().startswith("load replayed")]
+        assert len(logged) == 1, logged
+        assert logged[0].startswith("load replayed 100 updates (muted)"), logged[0]
+        assert "unknown=4" in logged[0], logged[0]
+        _assert_next_turn_mapped(sess, len(read_lines(sess.transcript_path)))
     finally:
         sess.close()
