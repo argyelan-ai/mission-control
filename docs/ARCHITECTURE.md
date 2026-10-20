@@ -1453,10 +1453,30 @@ lang nach — „kein Modell" heisst hier meist „die Box lädt gerade".
 supports_vision` / `local_recipes.supports_vision` (Migration 0196) laufen
 über denselben Reload-Kanal wie Modellname/Fenster — `build_runtime_env` setzt
 `OMP_MODEL_INPUT` (`text`|`text,image`), `render-omp-config.sh` rendert daraus
-`input:` in models.yml plus `omp config set modelRoles.vision` (nur wenn
-vision-fähig) bzw. `images.blockImages: true` (sonst) — Letzteres verhindert,
-dass omp bei fehlender Vision-Rolle auf einen ungeprüften externen
-Standard-Provider ausweicht (live am omp-Binary geprüft, siehe ADR-078).
+`input:` in models.yml plus die Rolle `vision` im `modelRoles`-Satz (nur wenn
+vision-fähig, siehe nächster Absatz) bzw. `images.blockImages: true` (sonst) —
+Letzteres verhindert, dass omp bei fehlender Vision-Rolle auf einen
+ungeprüften externen Standard-Provider ausweicht (live am omp-Binary geprüft,
+siehe ADR-078). Der frühere Aufruf `omp config set modelRoles.vision …` setzte
+nie etwas: omp 18.10.1 antwortet darauf mit „Unknown setting".
+
+**Modell-Rollen + Provider-Sperre (20.10.2026, ADR-086):** omps Subagenten
+wählen ihr Modell über Rollen (`task` → `@task`, `scout` → `@smol`,
+`reviewer` → `@slow`, Effort-Richter `judge`). `render-omp-config.sh`
+schreibt bei JEDEM Lauf (Start, Reload, Runtime-Wechsel) drei Einstellungen,
+jede für sich mit eigener WARN-Zeile: `disabledProviders` (omps eingebaute
+Modell-Provider; offen bleiben `web`, `local`, `cursor` und als einziger
+Discovery-Provider `lm-studio` — ohne ihn liest ein laufendes omp nach einem
+Reload models.yml nie neu ein), `modelRoles` als ganzer Satz (alle
+Chat-Rollen + `judge` → das gebundene Modell) und
+`task.agentModelOverrides: {}`. Grenze: das ist omps Profil-Ebene.
+Projekt-Einstellungen im Arbeitsverzeichnis (`.omp/config.yml`,
+`.claude/settings.json`) ersetzen die Sperre; solange `OPENAI_API_KEY` in
+omps Umgebung steht, erreicht omp dann wieder den eingebauten `openai`-
+Provider. Die Liste stammt aus omp 18.10.1 (`_OMP_LOCK_CHECKED`; ein Test
+bindet sie an `docker/cli-versions.json`, ein anderes omp loggt WARN) —
+bei einem omp-Update `MC_OMP_IMAGE=… pytest
+docker/omp-bridge/tests/test_render_omp_model_roles.py` laufen lassen.
 
 ### Vault (Karpathy-Wiki Memory) — live (M.1-M.5 + Boss/Jarvis on main 2026-05-15)
 
