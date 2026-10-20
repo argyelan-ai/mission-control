@@ -557,3 +557,58 @@ async def test_chat_panel_shows_the_task_snapshot_while_the_agent_works_it(tmp_p
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent = await s.get(Agent, agent_id)
         assert await worker.chat_todos(s, agent, adapter, own) == own
+
+
+# ── MC's display copies in ``<folder>/.mc/`` (chat reliability S1, R1) ─────
+#
+# A later step moves the omp bridge's display copies one level down, into
+# ``<cwd folder>/.mc/`` (omp 18.10.1 took them for its own sessions). The
+# task's plan and its ``taskId`` live ONLY in that copy, so the sync must
+# read it there — and, during the move, in both places at once.
+
+
+@pytest.mark.asyncio
+async def test_task_plan_in_a_copy_under_mc_is_found(tmp_path):
+    t0 = _t0()
+    _, _agent_id, task_id = await _scenario(dispatched_at=t0)
+    root = tmp_path / "omp-sessions"
+    ws = root / "--workspace--"
+    _write(
+        ws / "2026-10-12T13-54-15_chat-sess.jsonl",
+        _omp_header("chat-sess", t0 - timedelta(minutes=2)),
+        _omp_assistant("acp65e444b", t0 + timedelta(minutes=3), "Laeuft."),
+    )
+    _write(
+        ws / ".mc" / "2026-10-12T13-56-11_task-sess.jsonl",
+        _omp_header("task-sess", t0 + timedelta(seconds=11), str(task_id)),
+        _omp_user("acp00001", t0 + timedelta(seconds=11), "Arbeite die Aufgabe ab."),
+        _acp_plan("acp00042", t0 + timedelta(seconds=26), ("Schritt 1 lesen", "completed"), ("Schritt 2 rechnen", "in_progress")),
+    )
+    worker = sync.ChatTodoSync()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        assert await worker.sync_once(s, adapter_for=lambda a: _omp_tree_adapter(root)) == 1
+    assert [(r.title, r.status) for r in await _rows(task_id)] == [
+        ("Schritt 1 lesen", "done"),
+        ("Schritt 2 rechnen", "in_progress"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_task_runs_in_both_places_the_newest_plan_wins(tmp_path):
+    """Mid-move: the first run's copy still in the folder, the retry run's
+    copy already in ``.mc/`` — both are read, the newer plan counts."""
+    t0 = _t0()
+    _, _agent_id, task_id = await _scenario(dispatched_at=t0)
+    root, _chat, _task_run = _live_case(tmp_path, task_id, t0, tag_header=True)
+    _write(
+        root / "--workspace--" / ".mc" / "2026-10-12T13-58-25_retry-sess.jsonl",
+        _omp_header("retry-sess", t0 + timedelta(minutes=2, seconds=25), str(task_id)),
+        _acp_plan("acp00048", t0 + timedelta(minutes=2, seconds=40), ("Schritt 1 lesen", "completed"), ("Schritt 2 rechnen", "completed")),
+    )
+    worker = sync.ChatTodoSync()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        assert await worker.sync_once(s, adapter_for=lambda a: _omp_tree_adapter(root)) == 1
+    assert [(r.title, r.status) for r in await _rows(task_id)] == [
+        ("Schritt 1 lesen", "done"),
+        ("Schritt 2 rechnen", "done"),
+    ]
