@@ -63,7 +63,13 @@
         respond 403
     }
 
-    # API + health → backend
+    # API + health → backend. No active health checks: a dial failure to a
+    # stopped/unreachable upstream is already a 502, which handle_errors
+    # below catches (`in [502, 503]`). An active check was tried and
+    # reverted (PR 7 of the mc-update plan) — one slow-but-live /health
+    # call past the check's timeout made Caddy mark the whole backend
+    # unhealthy and 503 every /api/* request, including POSTs, which is a
+    # worse outage than the update window it was meant to soften.
     handle /api/* {
         reverse_proxy backend:8000
     }
@@ -74,6 +80,31 @@
     # Default: Next.js frontend
     handle {
         reverse_proxy frontend:3000
+    }
+
+    # Maintenance page — self-contained, reusable block for your own
+    # Caddyfile. Copy this `handle_errors` block plus
+    # caddy/maintenance/503.html into your setup (adjust the `root` path to
+    # wherever you mount that file). While backend or frontend is down, a
+    # request-time dial failure to it is a 502. Every such 502/503 gets
+    # `Retry-After: 5`; a browser page load (Accept contains text/html) also
+    # gets a self-reloading "MC is not responding" page (EN/DE the way MC
+    # picks it: NEXT_LOCALE cookie, then Accept-Language; light/dark by the
+    # browser's OS preference). Fetch, API and script callers keep the bare
+    # 502 — no HTML in their error messages.
+    handle_errors {
+        @mc_restarting expression {err.status_code} in [502, 503]
+        header @mc_restarting Retry-After "5"
+        @mc_restarting_page {
+            expression {err.status_code} in [502, 503]
+            header Accept *text/html*
+        }
+        handle @mc_restarting_page {
+            rewrite * /503.html
+            templates
+            root * /etc/caddy/maintenance
+            file_server
+        }
     }
 }
 
