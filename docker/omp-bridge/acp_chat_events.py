@@ -84,7 +84,8 @@ backend/tests/test_omp_chat.py):
   * ACP PREVIEW (Vorschau-Kanal, Folge-PR zu #471): agent text/thought
     chunks NEVER touch this transcript file. They stream into a SIBLING
     file — ``previews/<ts>_<sessionId>_<uniq>.jsonl`` next to the
-    transcript copy (both under ``<session folder>/.mc/``) — that the backend's tailer (transcript_chat.ChatTailerManager
+    transcript copy (both under ``<session folder>/.mc/``) — that the
+    backend's tailer (transcript_chat.ChatTailerManager
     via omp_chat.preview_channel) tails as a pure volatile channel,
     broadcasting ``kind: "preview", source: "acp"`` SSE frames. Nothing
     preview-shaped is ever written here, so read_history and the permanent
@@ -1523,8 +1524,8 @@ def find_sink(folder: Path, session_id: str) -> Optional[Path]:
     ``sink_migration`` has not moved yet). Only a file whose header names
     the bridge counts, so omp's own file is never returned. Several copies
     of one id: the newest by modification time. The id is compared as text
-    (never a glob pattern). Used by the chat daemon and P4's list, resume
-    and fork."""
+    (never a glob pattern). The one lookup for P4's list, resume and fork
+    (chat package Stage 1), so they never pick omp's file by mistake."""
     if not session_id:
         return None
     suffix = f"_{session_id}.jsonl"
