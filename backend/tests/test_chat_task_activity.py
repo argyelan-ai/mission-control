@@ -103,12 +103,15 @@ def acp_driver(monkeypatch):
     monkeypatch.setattr(settings, "omp_driver_default", "acp", raising=False)
 
 
-async def _setup(make_agent, make_board, make_task, tmp_path, monkeypatch, *, harness="omp"):
+async def _setup(make_agent, make_board, make_task, tmp_path, monkeypatch, *, harness="omp",
+                 status="in_progress", **agent_kw):
     board = await make_board(slug=f"b-{os.urandom(3).hex()}")
-    agent = await make_agent(name="Alpha", slug="alpha", agent_runtime="cli-bridge", harness=harness)
+    agent = await make_agent(name="Alpha", slug="alpha", agent_runtime="cli-bridge", harness=harness,
+                             **agent_kw)
     now = datetime.now(timezone.utc)
-    task = await make_task(board.id, title="Port the checklist", status="in_progress",
-                           assigned_agent_id=agent.id, dispatched_at=now - timedelta(minutes=3))
+    task = await make_task(board.id, title="Port the checklist", status=status,
+                           assigned_agent_id=agent.id, dispatched_at=now - timedelta(minutes=3),
+                           dispatch_attempt_id="att-1")
     from app.models.agent import Agent
     from sqlmodel.ext.asyncio.session import AsyncSession
     from tests.conftest import test_engine
@@ -189,7 +192,10 @@ async def test_preview_older_than_the_last_event_is_not_live(
 async def test_delivered_but_no_session_yet_still_names_the_delivery(
     auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
 ):
-    _board, agent, task, root, now = await _setup(make_agent, make_board, make_task, tmp_path, monkeypatch)
+    """ADR-097: delivered is not working — the card is still ``inbox``
+    (dispatched, not acked) while the model loads or does its prefill."""
+    _board, agent, task, root, now = await _setup(make_agent, make_board, make_task, tmp_path, monkeypatch,
+                                                  status="inbox")
     ws = root / "--workspace--"
     _write(ws / f"2026-10-20T03-36-53_{CHAT_SID}.jsonl", [_sink_header(CHAT_SID, _iso(now))])
     body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/task-activity")).json()
@@ -198,6 +204,73 @@ async def test_delivered_but_no_session_yet_still_names_the_delivery(
     assert body["events"] == []
     assert body["preview"] is None
     assert body["deliveredAt"] is not None  # from the task's dispatch time
+
+
+async def _beat(client: AsyncClient, token: str, task_id, attempt: str) -> dict:
+    resp = await client.post(
+        "/api/v1/agent/me/heartbeat",
+        json={"status": "working", "task_id": str(task_id), "attempt_id": attempt},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+async def _current_task_id(agent_id):
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    from app.models.agent import Agent
+    from tests.conftest import test_engine
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        return (await s.get(Agent, agent_id)).current_task_id
+
+
+@pytest.mark.asyncio
+async def test_the_block_survives_the_bridge_heartbeat_while_the_model_loads(
+    client: AsyncClient, auth_client: AsyncClient, make_agent, make_board, make_task,
+    tmp_path, monkeypatch, acp_driver,
+):
+    """Review Z1: in the delivery phase (card inbox, dispatched, no ACK — the
+    model loads or does its prefill) the bridge heartbeats every 30 s with
+    the turn's task and attempt. The heartbeat's self-heal knew only
+    in_progress cards and cleared ``current_task_id`` — the chat's task
+    block and the "Working on <task>" row vanished after at most 30 s and
+    came back with the model's first sign of life (flicker)."""
+    from app.auth import generate_agent_token
+
+    raw, token_hash = generate_agent_token()
+    _board, agent, task, _root, _now = await _setup(
+        make_agent, make_board, make_task, tmp_path, monkeypatch, status="inbox",
+        agent_token_hash=token_hash, scopes=["heartbeat"],
+    )
+    url = f"/api/v1/agents/{agent.id}/chat/task-activity"
+    assert (await auth_client.get(url)).json()["applies"] is True
+
+    body = await _beat(client, raw, task.id, "att-1")
+    assert "control" not in body, body  # ADR-097: live work, not withdrawn
+    assert await _current_task_id(agent.id) == task.id
+    after = (await auth_client.get(url)).json()
+    assert after["applies"] is True and after["taskId"] == str(task.id)
+
+
+@pytest.mark.asyncio
+async def test_a_returned_delivery_still_clears_the_pointer(
+    client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver,
+):
+    """Only the SAME attempt of a delivered, unclaimed card holds it: MC
+    rotated the attempt (or returned the card) — the bridge's turn is not
+    this card's live work any more."""
+    from app.auth import generate_agent_token
+
+    raw, token_hash = generate_agent_token()
+    _board, agent, task, _root, _now = await _setup(
+        make_agent, make_board, make_task, tmp_path, monkeypatch, status="inbox",
+        agent_token_hash=token_hash, scopes=["heartbeat"],
+    )
+    body = await _beat(client, raw, task.id, "att-OLD")
+    assert body["control"]["interrupt"] == "hard", body
+    assert await _current_task_id(agent.id) is None
 
 
 @pytest.mark.asyncio
