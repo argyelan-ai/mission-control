@@ -98,6 +98,21 @@ def test_long_thought_preview_carries_only_the_end_bounded():
     assert max(len(json.dumps(line)) for line in lines) < acp_chat_events.THINKING_PREVIEW_TAIL_CHARS + 600
 
 
+def test_the_preview_tail_never_opens_mid_word():
+    """Review R3: the cut took max() of the first newline and the first
+    space — a paragraph longer than the 200-char window (first newline far
+    in) meant NO cut at all, and the opened thought began mid-word."""
+    text = "x" * 5000 + "abcdefgh word" + "y" * 900 + "\n" + "z" * 1086
+    tail = acp_chat_events._tail_on_boundary(text, 2000)
+    assert tail.startswith("word"), tail[:20]
+    # A newline near the start still wins over a later space.
+    text = "x" * 5000 + "ab\ncd ef" + "y" * 1991
+    assert acp_chat_events._tail_on_boundary(text, 2000).startswith("cd ef")
+    # No boundary in reach: the plain tail, never empty.
+    text = "x" * 5000
+    assert acp_chat_events._tail_on_boundary(text, 2000) == "x" * 2000
+
+
 def test_finished_thought_lands_once_in_transcript_before_the_tool_call():
     clock = Clock()
     mapper = acp_chat_events.ACPEventMapper(clock=clock)

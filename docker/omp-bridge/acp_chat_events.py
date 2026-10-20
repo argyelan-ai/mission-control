@@ -358,9 +358,11 @@ def _tail_on_boundary(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     tail = text[-limit:]
-    cut = max(tail.find("\n"), tail.find(" "))
-    if 0 <= cut < 200:
-        tail = tail[cut + 1:]
+    # The EARLIEST boundary in reach (review R3: max() skipped the cut
+    # whenever the first newline lay deeper than the window).
+    cuts = [i for i in (tail.find("\n"), tail.find(" ")) if 0 <= i < 200]
+    if cuts:
+        tail = tail[min(cuts) + 1:]
     return tail
 
 
