@@ -39,6 +39,7 @@
     "DELETE /api/v1/vault/_trash/{filename}",
     "DELETE /api/v1/vault/note/{path}",
     "GET /api/v1/activity",
+    "GET /api/v1/activity/proof-gate/stats",
     "GET /api/v1/activity/stream",
     "GET /api/v1/agent-templates",
     "GET /api/v1/agent/agents/list",
