@@ -507,6 +507,35 @@ def test_system_mode_refusal_is_the_rule_of_check_dispatch_allowed(intent):
 
 
 @pytest.mark.asyncio
+async def test_check_dispatch_allowed_keeps_its_order_under_draining(
+    make_board, make_agent, make_task, async_session,
+):
+    """Taking the rule out of check_dispatch_allowed must not move DRAINING
+    ahead of the gates listed before it. The update drain's reason matters
+    most: only that reason makes auto_dispatch_task record the card for the
+    catch-up after the update (ADR-094 decision 7)."""
+    from app.services.operations import (
+        UPDATE_DRAIN_REASON,
+        check_dispatch_allowed,
+    )
+
+    board = await make_board(name="Order", slug=f"order-{uuid.uuid4().hex[:8]}")
+    active_agent = await make_agent(name="ActiveAgent", board_id=board.id)
+    paused_agent = await make_agent(name="PausedAgent", board_id=board.id, operational_mode="paused")
+    root = await make_task(board_id=board.id, title="root")
+    held = await make_task(board_id=board.id, title="held", run_control="manual_hold")
+
+    with patch("app.services.operations.get_system_mode", new_callable=AsyncMock, return_value="draining"):
+        _, reason = await check_dispatch_allowed(held, active_agent)
+        assert "run_control" in reason
+        _, reason = await check_dispatch_allowed(root, paused_agent)
+        assert "PAUSED" in reason
+        await _set_update_drain()
+        _, reason = await check_dispatch_allowed(root, active_agent, async_session)
+        assert reason == UPDATE_DRAIN_REASON
+
+
+@pytest.mark.asyncio
 async def test_redis_failure_keeps_the_poll_working(client, make_board, make_agent, make_task):
     """The mode read fails open like push dispatch (get_system_mode answers
     'active' when Redis is gone): a Redis outage must not stall the fleet."""
