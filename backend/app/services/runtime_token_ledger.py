@@ -11,16 +11,26 @@ models to get the "external" share (services/usage_baseline.py).
 
 Counters (all cumulative; ``prompt`` includes the cached part):
 
-  engine      prompt                          cached                             generated
-  tensorfold  tensorfold:prompt_tokens_total  tensorfold_health:cached_tokens_total  tensorfold_health:completion_tokens_total
-                                                                                 (streaming-aware; falls back to
-                                                                                 tensorfold:generation_tokens_total)
-  vllm        vllm:prompt_tokens_total        vllm:prefix_cache_hits_total       vllm:generation_tokens_total
-  sglang      sglang:prompt_tokens_total      sglang:cached_tokens_total         sglang:generation_tokens_total
+  engine      prompt                          cached                                  generated
+  tensorfold  tensorfold:prompt_tokens_total  tensorfold_health:cached_tokens_total   tensorfold_health:completion_tokens_total
+                                              (falls back to                          (streaming-aware; falls back to
+                                              tensorfold:prompt_tokens_cached_total)  tensorfold:generation_tokens_total)
+  vllm        vllm:prompt_tokens_total        vllm:prefix_cache_hits_total            vllm:generation_tokens_total
+  sglang      sglang:prompt_tokens_total      sglang:cached_tokens_total              sglang:generation_tokens_total
 
-Only the TensorFold names were checked against a running box; the vLLM cache
-and all SGLang names follow the engines' docs. A missing counter books 0 for
-that column, never a guess.
+The TensorFold names were checked against running boxes: the GLM build has
+the ``tensorfold_health:*`` family, TensorFold's native server (the
+DeepSeek-V4.1-Flash recipe, 20.10.2026) only the ``tensorfold:*`` names.
+Known gap: the native server on that box exports NO cached counter (live
+scrape: no such line; its engine source never writes one), although it
+does reuse prompt states — MC's own transcripts show cache reads on that
+model. So that box books cached 0: its "fresh" box tokens are too high, and
+Insights' external cached share is clamped to 0. The
+``tensorfold:prompt_tokens_cached_total`` fallback is the name a newer
+upstream engine exports ("prompt tokens restored from kept prompt states");
+only an engine update that has it fills the column. The vLLM cache and all
+SGLang names follow the engines' docs. A missing counter books 0 for that
+column, never a guess.
 
 Delta rules (``counter_delta``):
   - first sight of a host × engine books nothing — counting starts when the
@@ -68,7 +78,12 @@ COMPONENTS = ("prompt", "cached", "generated")
 _BOX_COUNTERS: dict[str, dict[str, tuple[str, ...]]] = {
     "tensorfold": {
         "prompt": ("tensorfold:prompt_tokens_total",),
-        "cached": ("tensorfold_health:cached_tokens_total",),
+        "cached": ("tensorfold_health:cached_tokens_total", "tensorfold:prompt_tokens_cached_total"),
+        # Never ``tensorfold:generation_tokens_running`` (the native server's
+        # in-flight gauge; the tok/s strip only uses it to tell the build): it
+        # falls when a reply ends, and a drop here reads as an engine restart
+        # that books the whole counter again. Finished tokens are booked when
+        # the reply ends.
         "generated": ("tensorfold_health:completion_tokens_total", "tensorfold:generation_tokens_total"),
     },
     "vllm": {
