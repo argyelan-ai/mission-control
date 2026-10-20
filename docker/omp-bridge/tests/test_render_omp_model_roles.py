@@ -212,8 +212,9 @@ def test_a_failed_role_write_is_loud_and_does_not_block_the_start(tmp_path):
     exit as "no model yet" and would wait 30 minutes."""
     data, out = _render(tmp_path, extra={"FAKE_OMP_FAIL": "modelRoles"})
     assert "modelRoles" not in data
-    assert "WARN" in out.stdout + out.stderr
-    assert "modelRoles" in out.stdout + out.stderr
+    # stdout: the entrypoint's first call drops stderr (`2>/dev/null`)
+    assert "WARN" in out.stdout
+    assert "modelRoles" in out.stdout
 
 
 def test_a_runtime_switch_moves_every_role_to_the_new_model(tmp_path):

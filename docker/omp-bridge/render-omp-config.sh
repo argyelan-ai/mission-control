@@ -340,13 +340,15 @@ print(json.dumps({r: sys.argv[1] for r in sys.argv[2].split()}))' \
         "$OMP_MODEL_SELECTOR" "$_MODEL_ROLES" 2>/dev/null) || _ROLES_JSON=""
     _DISABLED_JSON=$(python3 -c 'import json, sys
 print(json.dumps(sys.argv[1].split()))' "$_OMP_BUILTIN_PROVIDERS" 2>/dev/null) || _DISABLED_JSON=""
+    # WARN auf stdout wie die übrigen Zeilen hier: der Entrypoint verwirft
+    # beim ersten Aufruf stderr (`2>/dev/null`), stdout landet im Container-Log.
     if [ -n "$_ROLES_JSON" ] && [ -n "$_DISABLED_JSON" ] \
         && omp config set modelRoles "$_ROLES_JSON" >/dev/null 2>&1 \
         && omp config set task.agentModelOverrides '{}' >/dev/null 2>&1 \
         && omp config set disabledProviders "$_DISABLED_JSON" >/dev/null 2>&1; then
         echo "[render-omp-config] Modell-Rollen (${_MODEL_ROLES}) → ${OMP_MODEL_SELECTOR}; eingebaute Modell-Provider gesperrt"
     else
-        echo "[render-omp-config] WARN: omp config set (modelRoles/disabledProviders) fehlgeschlagen — Subagenten könnten an einem eingebauten Provider statt an ${OMP_MODEL_SELECTOR} landen" >&2
+        echo "[render-omp-config] WARN: omp config set (modelRoles/disabledProviders) fehlgeschlagen — Subagenten könnten an einem eingebauten Provider statt an ${OMP_MODEL_SELECTOR} landen"
     fi
 
     # Nicht-Vision-Fall: statt nur `modelRoles.vision` unbelegt zu lassen
