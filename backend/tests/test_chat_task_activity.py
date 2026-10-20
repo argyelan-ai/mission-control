@@ -173,6 +173,24 @@ async def test_running_acp_task_shows_delivery_events_and_live_thought(
 
 
 @pytest.mark.asyncio
+async def test_a_held_card_is_not_a_waiting_task(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
+):
+    """Review Z4: a card a lead holds (manual_hold) or an admin stopped never
+    starts by itself — the poll skips it. "1 more task waiting" must not
+    promise it."""
+    board, agent, task, root, now = await _setup(make_agent, make_board, make_task, tmp_path, monkeypatch)
+    await make_task(board.id, title="Held", status="inbox", assigned_agent_id=agent.id,
+                    run_control="manual_hold")
+    await make_task(board.id, title="Stopped", status="inbox", assigned_agent_id=agent.id,
+                    run_control="stopped")
+    await make_task(board.id, title="Next one", status="inbox", assigned_agent_id=agent.id)
+    _task_tree(root, str(task.id), now)
+    body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/task-activity")).json()
+    assert body["queued"] == 1
+
+
+@pytest.mark.asyncio
 async def test_preview_older_than_the_last_event_is_not_live(
     auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
 ):

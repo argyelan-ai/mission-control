@@ -167,6 +167,9 @@ async def task_activity(session: AsyncSession, agent: Any) -> dict[str, Any]:
                 Task.assigned_agent_id == agent.id,
                 Task.status == "inbox",
                 Task.id != task.id,
+                # Same filter as the poll claim: a held / stopped card never
+                # starts by itself, so it is not "waiting" (review Z4).
+                Task.run_control.is_(None),
             )
         )
     ).one()
