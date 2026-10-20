@@ -286,33 +286,55 @@ fi
 # in-container (omp v16.2.13, siehe entrypoint.sh) —, `omp config set` ist der
 # einzige Weg, der im Profil-Speicher ankommt.
 #
-# ── Modell-Rollen + eingebaute Provider (Fix 20.10.2026, ADR-086) ───────────
-# omps Subagenten wählen ihr Modell über ROLLEN: `task` → @task, `scout` →
-# @smol, `reviewer` → @slow (`omp agents unpack`, omp 18.10.1); der
-# Effort-Richter läuft über `judge`, eine frische ACP-Sitzung über `default`.
-# Eine leere Rolle löst omp quer über alle VERFÜGBAREN Modelle auf — und
-# omp.env setzt OPENAI_API_KEY (`sk-noauth` oder der echte Schlüssel einer
-# Cloud-Runtime), was omps eingebauten `openai`-Provider verfügbar macht.
-# Folge (live 20.10.2026): Subagenten liefen gegen api.openai.com — „401
-# invalid_api_key (sk-noauth)", bei einer Cloud-Runtime ginge MCs Schlüssel
-# an einen Fremden. Darum:
-#   * modelRoles: alle Chat-Rollen + judge → das gebundene Modell; vision nur
-#     bei bildfähiger Runtime (sonst images.blockImages, siehe unten).
-#     Ein record-Setting wird nur GANZ geschrieben — `modelRoles.vision`
-#     beantwortet omp 18.10.1 mit „Unknown setting" (der alte Vision-Zweig
-#     hat die Rolle darum nie gesetzt). Ganz schreiben räumt bei einem
-#     Wechsel auch eine alte vision-Rolle weg.
-#   * task.agentModelOverrides: leer (schlägt sonst die Rollen pro Agent).
-#   * disabledProviders: omps eingebaute Modell-Provider. Eine Erlaubt-Liste
-#     gibt es nicht (`enabledProviders` steuert nur Skill-/Regel-Quellen);
-#     disabledProviders prüft omp bei Verfügbarkeit, Rollen, Fallback-Ketten.
-#     Ausgenommen: `web` (web_search-Backends, kein Modellweg), `local`
-#     (Mini-Modelle im Container), `cursor` (dieselbe ID sperrte auch omps
-#     .cursor-Regel-Quelle — die Liste teilt omp mit den Skill-Quellen; der
-#     Modell-Provider braucht ein Cursor-Login, das es in MC nie gibt).
-#     Quelle der Liste: der Provider-Katalog im omp-18.10.1-Binary. Bei einem
-#     omp-Update neu abgleichen — tests/test_render_omp_model_roles.py (c1)
-#     zeigt jeden neuen, noch offenen Provider.
+# ── Model roles + built-in providers (fix 20.10.2026, ADR-086) ─────────────
+# omp's subagents pick their model by ROLE: `task` → @task, `scout` → @smol,
+# `reviewer` → @slow (`omp agents unpack`, omp 18.10.1); the effort judge uses
+# `judge`, a fresh ACP session `default`. omp resolves an empty role across
+# every AVAILABLE model, and OPENAI_API_KEY in omp's environment (`sk-noauth`,
+# or the real key of a keyed cloud runtime) makes omp's built-in `openai`
+# provider available. Live 20.10.2026: subagents went to api.openai.com ("401
+# invalid_api_key (sk-noauth)"); on a keyed runtime MC's key would go to a
+# third party. Three writes, each on its own with its own WARN, the lock first
+# (one failing write, e.g. a setting renamed by an omp bump, must not skip the
+# others):
+#   * disabledProviders: omp's built-in model providers (list below). omp has
+#     no allowlist (`enabledProviders` only governs skill/rule sources); it
+#     checks disabledProviders for availability, roles and fallback chains.
+#     Kept enabled: `web` (web_search backends, no model route), `local`
+#     (in-container tiny models), `cursor` (the same id is omp's .cursor
+#     rules source, the setting is shared; the model provider needs a cursor
+#     login MC never has). Source: the provider catalog of the omp 18.10.1
+#     binary plus `llama.cpp`, a keyless discovery provider outside it (omp
+#     probes 127.0.0.1:8080, LLAMA_CPP_BASE_URL, and lists what answers).
+#     ONE keyless discovery provider stays enabled on purpose: `lm-studio`
+#     (loopback :1234/v1/models, no key). omp refreshes its model registry —
+#     re-reads models.yml — for a model it does not know only while some
+#     discovery provider is enabled (`getDiscoverableProviders().length > 0`
+#     in omp 18.10.1). A running omp (the chat daemon lives for days) needs
+#     that refresh to find the new model after a reload/runtime switch; with
+#     all three locked its subagents fail (container test c3). lm-studio, not
+#     llama.cpp: 8080 is the common dev-server port, and llama.cpp re-probes
+#     on every refresh; lm-studio caches its probe for 24 h.
+#   * modelRoles: every chat role + judge → the bound model; vision only on a
+#     vision runtime (else images.blockImages, below). A record setting is
+#     written whole: omp 18.10.1 answers `modelRoles.vision` with "Unknown
+#     setting" (the old vision branch never set the role). Writing it whole
+#     also drops a stale vision role after a switch.
+#   * task.agentModelOverrides: empty (it outranks the roles per agent).
+# LIMIT: all of this is omp's PROFILE layer. omp merges project settings from
+# the working directory over it, and a project `disabledProviders` list
+# REPLACES this one: `<cwd>/.omp/config.yml` or `<cwd>/.claude/settings.json`
+# with `disabledProviders: []` re-enables `openai`, and OPENAI_API_KEY in omp's
+# environment goes to api.openai.com again (live, omp 18.10.1). omp has no
+# switch that turns project settings off. The structural fix is to keep
+# OPENAI_API_KEY out of every omp child environment (models.yml already
+# carries the key for mc-openai) — outside this script, still open.
+# omp bump: both lists come from the omp 18.10.1 binary. _OMP_LOCK_CHECKED
+# names that version: a CI test ties it to the pin in docker/cli-versions.json,
+# and a different installed omp (the in-product CLI update skips CI) gets a
+# WARN below. Re-check with tests/test_render_omp_model_roles.py and
+# MC_OMP_IMAGE=<image>: part c shows every new, still open provider or role.
+_OMP_LOCK_CHECKED=18.10.1
 _MODEL_ROLES="default smol slow plan commit tiny memory task advisor judge"
 if [ "$_SUPPORTS_VISION" = "1" ]; then
     _MODEL_ROLES="${_MODEL_ROLES} vision"
@@ -323,7 +345,7 @@ baseten bedrock-mantle cerebras charm-hyper cline-pass cloudflare-ai-gateway
 cloudflare-workers-ai commandcode coralbricks coreweave deepinfra deepseek devin
 factory-droid firepass fireworks github-copilot gitlab-duo gitlab-duo-agent
 gmi-cloud google google-antigravity google-gemini-cli google-vertex groq helmcode
-huggingface kilo kimi-code litellm lm-studio meta minimax minimax-code
+huggingface kilo kimi-code litellm llama.cpp meta minimax minimax-code
 minimax-code-cn mistral moonshot muse-code nanogpt novita nvidia ollama
 ollama-cloud openai openai-codex opencode-go opencode-zen openrouter qianfan
 sakana siliconflow siliconflow-cn singularityapi-dev
@@ -337,22 +359,38 @@ zenmux zhipu-coding-plan"
 _OMP_BUILTIN_PROVIDERS="${_OMP_BUILTIN_PROVIDERS} qwen-portal"  # model-catalog: allow
 
 if command -v omp >/dev/null 2>&1; then
-    # JSON über python3 statt von Hand: Modell-IDs dürfen `/`, `:` usw.
-    # enthalten. Scheitert das, bleibt der Wert leer und die Warnung unten greift.
+    # WARN lines go to stdout like every other line here: the entrypoint's
+    # first call drops stderr (`2>/dev/null`), stdout lands in the container log.
+    _omp_version="$(omp --version 2>/dev/null | head -n 1)"
+    _omp_version="${_omp_version##*/}"
+    if [ "$_omp_version" != "$_OMP_LOCK_CHECKED" ]; then
+        echo "[render-omp-config] WARN: omp ${_omp_version:-unbekannt} — Provider-Sperre und Modell-Rollen sind für omp ${_OMP_LOCK_CHECKED} geprüft; neue Provider/Rollen bleiben offen (tests/test_render_omp_model_roles.py mit MC_OMP_IMAGE)"
+    fi
+
+    # JSON via python3, not by hand: model ids may contain `/`, `:` etc. If
+    # that fails the value stays empty and the write's own WARN fires.
+    _DISABLED_JSON=$(python3 -c 'import json, sys
+print(json.dumps(sys.argv[1].split()))' "$_OMP_BUILTIN_PROVIDERS" 2>/dev/null) || _DISABLED_JSON=""
     _ROLES_JSON=$(python3 -c 'import json, sys
 print(json.dumps({r: sys.argv[1] for r in sys.argv[2].split()}))' \
         "$OMP_MODEL_SELECTOR" "$_MODEL_ROLES" 2>/dev/null) || _ROLES_JSON=""
-    _DISABLED_JSON=$(python3 -c 'import json, sys
-print(json.dumps(sys.argv[1].split()))' "$_OMP_BUILTIN_PROVIDERS" 2>/dev/null) || _DISABLED_JSON=""
-    # WARN auf stdout wie die übrigen Zeilen hier: der Entrypoint verwirft
-    # beim ersten Aufruf stderr (`2>/dev/null`), stdout landet im Container-Log.
-    if [ -n "$_ROLES_JSON" ] && [ -n "$_DISABLED_JSON" ] \
-        && omp config set modelRoles "$_ROLES_JSON" >/dev/null 2>&1 \
-        && omp config set task.agentModelOverrides '{}' >/dev/null 2>&1 \
+
+    if [ -n "$_DISABLED_JSON" ] \
         && omp config set disabledProviders "$_DISABLED_JSON" >/dev/null 2>&1; then
-        echo "[render-omp-config] Modell-Rollen (${_MODEL_ROLES}) → ${OMP_MODEL_SELECTOR}; eingebaute Modell-Provider gesperrt"
+        echo "[render-omp-config] eingebaute Modell-Provider gesperrt (disabledProviders, Profil-Ebene)"
     else
-        echo "[render-omp-config] WARN: omp config set (modelRoles/disabledProviders) fehlgeschlagen — Subagenten könnten an einem eingebauten Provider statt an ${OMP_MODEL_SELECTOR} landen"
+        echo "[render-omp-config] WARN: omp config set disabledProviders fehlgeschlagen — eingebaute Provider (openai u. a.) bleiben für Subagenten erreichbar"
+    fi
+    if [ -n "$_ROLES_JSON" ] \
+        && omp config set modelRoles "$_ROLES_JSON" >/dev/null 2>&1; then
+        echo "[render-omp-config] Modell-Rollen (${_MODEL_ROLES}) → ${OMP_MODEL_SELECTOR}"
+    else
+        echo "[render-omp-config] WARN: omp config set modelRoles fehlgeschlagen — Subagenten könnten an einem eingebauten Provider statt an ${OMP_MODEL_SELECTOR} landen"
+    fi
+    if omp config set task.agentModelOverrides '{}' >/dev/null 2>&1; then
+        :
+    else
+        echo "[render-omp-config] WARN: omp config set task.agentModelOverrides fehlgeschlagen — ein alter Eintrag pro Subagent schlägt die Modell-Rollen"
     fi
 
     # Nicht-Vision-Fall: statt nur `modelRoles.vision` unbelegt zu lassen
@@ -364,10 +402,12 @@ print(json.dumps(sys.argv[1].split()))' "$_OMP_BUILTIN_PROVIDERS" 2>/dev/null) |
     # (`if (settings.get("images.blockImages")) throw …`) — omp lehnt das Bild
     # dann mit einer eigenen, klaren Fehlermeldung ab, statt den
     # `sk-noauth`-Schlüssel gegen api.openai.com zu verschicken.
+    # The vision role itself is part of the modelRoles write above (its own
+    # line says whether it landed), so this line claims only what it set.
     if [ "$_SUPPORTS_VISION" = "1" ]; then
         omp config set images.blockImages false >/dev/null 2>&1 \
             && omp config set images.questionTimeoutMs 120000 >/dev/null 2>&1 \
-            && echo "[render-omp-config] Vision aktiv: modelRoles.vision=${OMP_MODEL_SELECTOR}, images.blockImages=false" \
+            && echo "[render-omp-config] Vision aktiv: images.blockImages=false, images.questionTimeoutMs=120000" \
             || echo "[render-omp-config] WARN: omp config set (Vision) fehlgeschlagen"
     else
         omp config set images.blockImages true >/dev/null 2>&1 \

@@ -26,7 +26,27 @@ for MC's container agents — container start AND every reload/runtime switch)
     ``vision`` only when the runtime takes images (else images.blockImages).
   * ``task.agentModelOverrides`` → ``{}`` (no per-agent route elsewhere).
   * ``disabledProviders`` → omp's built-in model providers (the gate omp
-    checks in role resolution, fallback chains and model availability).
+    checks in role resolution, fallback chains and model availability) —
+    except ``lm-studio``: one keyless loopback discovery provider must stay
+    enabled, or a running omp never re-reads models.yml after a reload.
+  Each write stands alone and logs its own WARN: a failing role write must not
+  take the provider lock with it.
+
+THE LIMIT (not closed here)
+  All three writes land in omp's PROFILE layer. omp merges project settings
+  from the working directory over it, and a project ``disabledProviders`` list
+  REPLACES the profile one: a ``<cwd>/.omp/config.yml`` or
+  ``<cwd>/.claude/settings.json`` with ``disabledProviders: []`` re-enables the
+  built-in ``openai`` provider while OPENAI_API_KEY is in omp's environment
+  (live, omp 18.10.1). omp has no switch that turns project settings off. The
+  structural fix — keep OPENAI_API_KEY out of every omp child environment — is
+  a follow-up outside this script; c1 below proves the lock for the profile
+  layer only.
+
+omp bump: the provider and role lists come from the omp 18.10.1 binary. The
+script names that version (``_OMP_LOCK_CHECKED``); a CI test ties it to the
+manifest pin in docker/cli-versions.json, and the script warns at runtime when
+a different omp is installed (the in-product CLI update skips CI).
 
 Part (a)/(b): no docker — a fake ``omp`` keeps a JSON settings store and
 rejects dotted record keys exactly like omp 18.10.1 does.
@@ -66,14 +86,21 @@ ROLES = ("default", "smol", "slow", "plan", "commit", "tiny", "memory",
 MUST_BE_DISABLED = {
     "openai", "anthropic", "google", "openrouter", "xai", "groq", "mistral",
     "deepseek", "azure", "azure-openai-responses", "github-copilot",
-    "openai-codex", "ollama", "ollama-cloud", "lm-studio", "vllm", "zenmux",
+    "openai-codex", "ollama", "ollama-cloud", "vllm", "zenmux",
     "huggingface", "together", "fireworks",
+    # keyless local discovery outside the auth catalog: omp probes
+    # 127.0.0.1:8080 (LLAMA_CPP_BASE_URL) and lists whatever answers there
+    "llama.cpp",
 }
+# omp's keyless loopback discovery providers (omp 18.10.1). Exactly one stays
+# enabled: see test_one_discovery_provider_stays_enabled_for_live_reload.
+DISCOVERY = {"ollama", "llama.cpp", "lm-studio"}
+KEPT_FOR_RELOAD = "lm-studio"
 # Never in the list: MC's own provider; `web` (web_search backends, not a
 # model route) and `local` (in-container tiny/tts/stt models); `cursor` is ALSO
 # the id of omp's rules/MCP discovery provider, and disabledProviders is shared
-# between both registries.
-MUST_STAY_ENABLED = {"mc-openai", "web", "local", "cursor"}
+# between both registries; KEPT_FOR_RELOAD (below).
+MUST_STAY_ENABLED = {"mc-openai", "web", "local", "cursor", KEPT_FOR_RELOAD}
 
 
 # ── (a)/(b) renderer, no docker ──────────────────────────────────────────────
@@ -90,6 +117,9 @@ KNOWN = {
     "startup.setupWizard": "boolean", "setupVersion": "number",
 }
 args = sys.argv[1:]
+if args == ["--version"]:
+    print("omp/" + os.environ.get("FAKE_OMP_VERSION", "18.10.1"))
+    sys.exit(0)
 if len(args) < 2 or args[0] != "config":
     sys.exit(1)
 action, key = args[1], (args[2] if len(args) > 2 else "")
@@ -206,6 +236,19 @@ def test_builtin_providers_are_disabled_but_mc_openai_is_not(tmp_path):
     assert not (disabled & MUST_STAY_ENABLED), sorted(disabled & MUST_STAY_ENABLED)
 
 
+def test_one_discovery_provider_stays_enabled_for_live_reload(tmp_path):
+    """omp 18.10.1 re-reads models.yml for a model it does not know only while
+    some discovery provider is enabled (`getDiscoverableProviders().length >
+    0` guards its registry refresh). A running omp — the chat daemon lives for
+    days — needs that refresh to find the new model after a reload; with all
+    three locked, its subagents fail after a runtime switch (container test
+    c3, live). The one kept open is lm-studio (loopback :1234, keyless, probe
+    cached 24 h), not llama.cpp (8080 is the common dev-server port)."""
+    data, _ = _render(tmp_path)
+    disabled = set(data.get("disabledProviders") or [])
+    assert DISCOVERY - disabled == {KEPT_FOR_RELOAD}
+
+
 def test_a_failed_role_write_is_loud_and_does_not_block_the_start(tmp_path):
     """If omp refuses the write, the log says so (a silent miss is how this
     bug lived); the render still succeeds — the entrypoint reads a non-zero
@@ -215,6 +258,65 @@ def test_a_failed_role_write_is_loud_and_does_not_block_the_start(tmp_path):
     # stdout: the entrypoint's first call drops stderr (`2>/dev/null`)
     assert "WARN" in out.stdout
     assert "modelRoles" in out.stdout
+
+
+WRITES = ("disabledProviders", "modelRoles", "task.agentModelOverrides")
+
+
+@pytest.mark.parametrize("failing", WRITES)
+def test_each_write_stands_alone_and_warns_on_its_own(tmp_path, failing):
+    """The three writes are independent safety layers. One failing write (an
+    omp bump that renames a setting) must not silently skip the others — the
+    provider lock above all — and the log names exactly the write that failed."""
+    data, out = _render(tmp_path, extra={"FAKE_OMP_FAIL": failing})
+    assert failing not in data
+    if failing != "disabledProviders":
+        assert MUST_BE_DISABLED <= set(data.get("disabledProviders") or [])
+    if failing != "modelRoles":
+        assert data.get("modelRoles") == {r: "mc-openai/Model-A" for r in ROLES}
+    if failing != "task.agentModelOverrides":
+        assert data.get("task.agentModelOverrides") == {}
+    warns = [ln for ln in out.stdout.splitlines() if "WARN" in ln]
+    assert len(warns) == 1, warns
+    assert failing in warns[0]
+
+
+def test_the_vision_line_does_not_claim_a_role_that_was_not_written(tmp_path):
+    """The vision log line used to print `modelRoles.vision=…` even when
+    nothing set it — the same kind of silent miss as the original bug."""
+    data, out = _render(tmp_path, model="Model-V", vision=True,
+                        extra={"FAKE_OMP_FAIL": "modelRoles"})
+    assert "modelRoles" not in data
+    assert data.get("images.blockImages") is False
+    assert "modelRoles.vision=" not in out.stdout
+    assert "Model-V" not in "".join(ln for ln in out.stdout.splitlines()
+                                    if "Vision" in ln and "WARN" not in ln)
+
+
+def test_an_unchecked_omp_version_is_loud(tmp_path):
+    """The in-product CLI update (cli_update_runner) bumps omp without CI:
+    the container log must say the lock was checked against another omp."""
+    _, out = _render(tmp_path, extra={"FAKE_OMP_VERSION": "19.0.0"})
+    warns = [ln for ln in out.stdout.splitlines() if "WARN" in ln]
+    assert any("19.0.0" in ln and _checked_version() in ln for ln in warns), out.stdout
+
+
+def _checked_version() -> str:
+    for line in SCRIPT.read_text(encoding="utf-8").splitlines():
+        if line.startswith("_OMP_LOCK_CHECKED="):
+            return line.split("=", 1)[1].strip().strip('"')
+    raise AssertionError("render-omp-config.sh names no _OMP_LOCK_CHECKED version")
+
+
+def test_the_lock_was_checked_against_the_pinned_omp():
+    """Bumping omp in the manifest (the pin every image build reads) without
+    re-checking the provider and role lists fails here. To re-check: build the
+    image, run `MC_OMP_IMAGE=mc-omp-agent:latest pytest
+    docker/omp-bridge/tests/test_render_omp_model_roles.py` (part c shows every
+    new, still open provider or role), update the lists, then
+    _OMP_LOCK_CHECKED in render-omp-config.sh."""
+    manifest = json.loads((ROOT.parent / "cli-versions.json").read_text(encoding="utf-8"))
+    assert manifest["omp"]["version"] == _checked_version()
 
 
 def test_a_runtime_switch_moves_every_role_to_the_new_model(tmp_path):
@@ -262,7 +364,9 @@ CATALOG_ENV_VARS = (
 # What may still show up with every key set: MC's provider, web_search
 # backends, in-container tiny models — and `cursor`, kept enabled for its
 # rules/MCP discovery twin (it needs a cursor login, never present in MC).
-ALLOWED_AVAILABLE = {"mc-openai", "web", "local", "cursor"}
+# With a server on its loopback port also KEPT_FOR_RELOAD (keyless, see
+# test_one_discovery_provider_stays_enabled_for_live_reload).
+ALLOWED_AVAILABLE = {"mc-openai", "web", "local", "cursor", KEPT_FOR_RELOAD}
 
 
 def _docker_ready() -> str | None:
@@ -296,15 +400,79 @@ RENDER_ENV = {
 }
 
 
+# Keyless local discovery: omp probes these loopback ports on every model
+# listing and lists whatever answers (ollama :11434, lm-studio :1234,
+# llama.cpp :8080 — dev servers inside an agent container often sit there).
+DEV_SERVERS = r"""
+import json, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+BODY = json.dumps({
+    "object": "list", "data": [{"id": "devserver-model", "object": "model"}],
+    "models": [{"name": "devserver-model", "model": "devserver-model", "details": {}}],
+    "capabilities": ["completion", "tools"], "details": {},
+    "model_info": {"general.architecture": "llama", "llama.context_length": 8192},
+}).encode()
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def _ok(self):
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(BODY)))
+        self.end_headers()
+        self.wfile.write(BODY)
+    def do_GET(self):
+        self._ok()
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("content-length") or 0))
+        self._ok()
+for port in (8080, 1234, 11434):
+    srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+print("dev servers up", flush=True)
+time.sleep(600)
+"""
+
+# Reads omp's own role lists from the binary (model-browser.ts: the first
+# array is every role id, the second the chat role ids) plus what the render
+# pinned. A drift guard for omp bumps: a new role shows up here.
+ROLE_PROBE = r"""
+import json, re, subprocess
+b = open("/usr/local/bin/omp", "rb").read()
+i = b.find(b"packages/tui/src/overlays/model-browser.ts")
+arrays = re.findall(rb"var \w+ = \[([^\]]*)\];", b[i:i + 4000]) if i >= 0 else []
+ids = [re.findall(rb'"([a-z]+)"', a) for a in arrays[:2]]
+roles = json.loads(subprocess.run(["omp", "config", "get", "modelRoles"],
+                                  capture_output=True, text=True).stdout)
+print("ROLES " + json.dumps({"all": [x.decode() for x in ids[0]] if ids else [],
+                             "chat": [x.decode() for x in ids[1]] if len(ids) > 1 else [],
+                             "pinned": roles}))
+"""
+NON_CHAT_ROLES = {"image", "web", "speech", "dictation"}  # need image/audio models
+
+
 @container
 def test_container_no_builtin_provider_is_available_even_with_every_key_set():
-    """(c1) The lock itself, on the real omp: render, then set EVERY key
-    omp's catalog knows and ask omp which providers have usable models."""
+    """(c1) The lock itself, on the real omp: render, set EVERY key omp's
+    catalog knows, start servers on the keyless discovery ports, and ask omp
+    which providers have usable models. Only lm-studio (kept on purpose,
+    keyless, loopback) may answer from a discovery port. Also: every chat
+    role omp knows is pinned to MC's model, and omp has no role this script
+    does not know.
+
+    LIMIT: this proves the PROFILE layer. A project settings file in the
+    working directory (``.omp/config.yml``, ``.claude/settings.json``) with
+    its own ``disabledProviders`` replaces this lock (live, omp 18.10.1); the
+    fix for that is keeping OPENAI_API_KEY out of omp's environment, not this
+    script."""
     script = (
         "set -e; bash /src/render-omp-config.sh --no-bootstrap >/dev/null; "
+        'python3 -c "$DEV_SERVERS" >/tmp/dev.log 2>&1 & '
+        "for _ in $(seq 50); do grep -q up /tmp/dev.log 2>/dev/null && break; sleep 0.1; done; "
+        'python3 -c "$ROLE_PROBE"; '
         "omp models --json --kind all"
     )
-    env_args: list[str] = []
+    env_args: list[str] = ["-e", f"DEV_SERVERS={DEV_SERVERS}", "-e", f"ROLE_PROBE={ROLE_PROBE}"]
     for k, v in RENDER_ENV.items():
         env_args += ["-e", f"{k}={v}"]
     for var in CATALOG_ENV_VARS:
@@ -312,11 +480,23 @@ def test_container_no_builtin_provider_is_available_even_with_every_key_set():
     r = _docker("run", "--rm", "--network", "none", *env_args,
                 "-v", f"{ROOT}:/src:ro", "--entrypoint", "bash", IMAGE, "-c", script,
                 timeout=180)
-    models = json.loads(r.stdout)["models"]
+    probe_line, _, models_json = r.stdout.partition("\n")
+    assert probe_line.startswith("ROLES "), r.stdout[:500]
+    probe = json.loads(probe_line[len("ROLES "):])
+    models = json.loads(models_json)["models"]
     providers = {m["provider"] for m in models}
     assert "mc-openai" in providers
     leaked = providers - ALLOWED_AVAILABLE
     assert not leaked, f"built-in providers still available: {sorted(leaked)}"
+    # the dev servers did answer: the one kept discovery provider found them
+    assert KEPT_FOR_RELOAD in providers, sorted(providers)
+
+    assert probe["chat"], "omp binary: chat role list not found — check model-browser.ts by hand"
+    unpinned = [r for r in probe["chat"] if r != "vision" and r not in probe["pinned"]]
+    assert not unpinned, f"chat roles omp knows but the render leaves open: {unpinned}"
+    assert all(v == "mc-openai/fake-model" for v in probe["pinned"].values()), probe["pinned"]
+    unknown = set(probe["all"]) - set(ROLES) - {"vision"} - NON_CHAT_ROLES
+    assert not unknown, f"omp has roles this test does not know — decide and add: {sorted(unknown)}"
 
 
 FAKE_ENGINE = r'''
