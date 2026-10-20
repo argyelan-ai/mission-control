@@ -494,6 +494,87 @@ async def test_a_node_agent_running_from_before_the_port_closed_does_not_hide_a_
     assert box.inspects == 1
 
 
+# ── What reaches the operator's alert channel (ADR-096 §11.4) ────────────
+
+
+def _outlives_port(box: FakeBox, probe: Probe):
+    """Port refused from t=0, the container exits 137 at t=100."""
+    probe.failure = FAIL_REFUSED
+
+    def world(t):
+        box.inspect = RUNNING if t < 100 else EXITED_137
+
+    return world
+
+
+def _wedged_then_killed(box: FakeBox, probe: Probe):
+    """Port times out (wedged), the engine is killed at t=140, then refused."""
+    probe.failure = FAIL_TIMEOUT
+
+    def world(t):
+        killed = t >= 140
+        probe.failure = FAIL_REFUSED if killed else FAIL_TIMEOUT
+        box.inspect = EXITED_137 if killed else RUNNING
+
+    return world
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario,interval,plain_first", [
+    pytest.param(_outlives_port, 30, True, id="outlives-port-30s"),
+    pytest.param(_outlives_port, 90, False, id="outlives-port-90s"),
+    pytest.param(_wedged_then_killed, 30, True, id="wedged-killed-30s"),
+    pytest.param(_wedged_then_killed, 90, False, id="wedged-killed-90s"),
+])
+async def test_a_death_after_the_plain_alarm_still_pushes_its_cause(
+    async_session, fake_redis, scenario, interval, plain_first,
+):
+    """Reviewer repro (PR 915, 2026-10-20). Both events are
+    ``runtime.unreachable`` for the same slug, so they share one alert-dedup
+    key. At the 30 s tick the plain warning (probe 3) opened that key's
+    one-hour window, and the death confirmed later in the 270 s window — the
+    error WITH the cause — came back "suppressed": nothing reached the
+    channel at once, and the digest later carried only the line without a
+    cause. An escalation is not a repeat: at both ticks the operator gets
+    exactly one alert for the outage, at once, and it names the cause."""
+    from app.services import discord_notify as dn
+
+    delivered: list[tuple[str, str]] = []
+    outcomes: list[tuple[str, bool, str]] = []
+    real_notify = dn.notify_event
+
+    async def fake_deliver(title, description, severity="warning"):
+        delivered.append((severity, title))
+
+    async def spy(event_type, title, severity, *, detail=None):
+        result = await real_notify(event_type, title, severity, detail=detail)
+        outcomes.append((severity, bool((detail or {}).get("engine_death")), result))
+        return result
+
+    box = FakeBox(inspect=RUNNING)
+    probe = Probe()
+    world = scenario(box, probe)
+    with patch.object(dn, "_deliver", fake_deliver), \
+            patch.object(dn, "get_redis", _redis_getter(fake_redis)), \
+            patch.object(dn, "notify_event", spy):
+        got_death, got_plain = await _outage(
+            async_session, fake_redis, interval=interval, box=box, probe=probe,
+            until=300, world=world,
+        )
+        with patch.object(dn, "DIGEST_WINDOW_SECONDS", 0):
+            flushed = await dn.flush_digest()     # the digest, once its window is over
+
+    deaths = await _deaths(async_session)
+    assert got_death is not None and len(deaths) == 1
+    assert bool(got_plain) is plain_first
+    assert ("error", True, "sent") in outcomes
+    reason = deaths[0].title
+    assert delivered == [("error", reason)]
+    assert "137" in reason or "Speicher" in reason
+    # The plain line without a cause does not follow 30 min later either.
+    assert flushed == 0
+
+
 
 # ── The agent sync breaker keeps its pace (one attempt per tick before) ──
 
