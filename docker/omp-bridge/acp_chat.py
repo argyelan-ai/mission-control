@@ -892,7 +892,9 @@ class ChatSession:
                 if replaying:
                     kind = su if isinstance(su, str) and su else "unknown"
                     self._replayed[kind] = self._replayed.get(kind, 0) + 1
-            if su in _STATE_UPDATES:
+            # isinstance first: `su` comes from the agent, and a list or a
+            # dict there would make the set lookup raise.
+            if isinstance(su, str) and su in _STATE_UPDATES:
                 self._apply_state_update(update, su)
             if replaying:
                 # A load's replay (see _muted_replay): state only — no
