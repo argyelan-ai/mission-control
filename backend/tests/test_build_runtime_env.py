@@ -507,8 +507,9 @@ async def test_build_runtime_env_omp_context_window_from_runtime(async_session):
 
 @pytest.mark.asyncio
 async def test_build_runtime_env_omp_max_tokens_capped_for_large_window(async_session):
-    """A large window (Qwen 262k) still caps output at 32k, not half (131k),
-    so a single turn can't eat the whole context."""
+    """A large local window (Qwen 262k) caps output at a quarter (64k), not
+    half (131k), so a single turn can't eat the whole context. (Was a fixed
+    32k until 20.10.2026; the full rule is in test_omp_max_tokens_rule.py.)"""
     from app.routers.internal import build_runtime_env
 
     rt = Runtime(
@@ -525,7 +526,7 @@ async def test_build_runtime_env_omp_max_tokens_capped_for_large_window(async_se
     env = await build_runtime_env(rt, async_session, agent=agent)
 
     assert env["OMP_CONTEXT_WINDOW"] == "262144"
-    assert env["OMP_MAX_TOKENS"] == "32768"
+    assert env["OMP_MAX_TOKENS"] == "65536"
 
 
 @pytest.mark.asyncio
