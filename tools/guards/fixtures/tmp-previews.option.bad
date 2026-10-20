@@ -1,0 +1,2 @@
+# An output option pointing under /tmp.
+node tools/shot.mjs --out=/tmp/screenshot-home.png

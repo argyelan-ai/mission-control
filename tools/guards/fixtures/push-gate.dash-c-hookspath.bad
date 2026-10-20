@@ -1,0 +1,2 @@
+# A config option before push switches the pre-push hook off.
+python3 scripts/privacy-scan.py && git -c core.hooksPath=/dev/null -C ../wt push origin feat/example

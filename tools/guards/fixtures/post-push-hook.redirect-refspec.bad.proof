@@ -1,0 +1,4 @@
+# The `2` of `2>&1` was read as refspec "2" ("another branch", skipped). The push was rejected.
+branch=feat/example
+head=1111111111111111111111111111111111111111
+remote=2222222222222222222222222222222222222222

@@ -1,0 +1,4 @@
+# The lease push was rejected; `| tail -1` hid it. The remote keeps the old commit.
+branch=feat/example
+head=1111111111111111111111111111111111111111
+remote=2222222222222222222222222222222222222222

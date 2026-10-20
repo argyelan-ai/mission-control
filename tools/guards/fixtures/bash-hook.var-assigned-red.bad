@@ -1,0 +1,10 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "WT=hook-repo-red; git -C \"$WT\" push -u origin feat/x",
+  "run_in_background": false
+ }
+}

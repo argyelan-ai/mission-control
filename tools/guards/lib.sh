@@ -6,7 +6,9 @@
 #
 # Contract for every guard: exit 0 = green, 1 = red (findings), 2 = usage or internal error.
 # A line containing "guard-allow: <guard-name>" is skipped. Use it rarely and give a reason
-# on the same line, because every allow is a blind spot.
+# on the same line, because every allow is a blind spot. It counts in repo files only,
+# where a reviewer sees it: with GUARD_ALLOW_DISABLED=1 (set by bash-hook.sh for live
+# commands) it is ignored, because there the agent would be exempting itself.
 
 GUARD_NAME="${GUARD_NAME:-guard}"
 _hits=0
@@ -83,7 +85,9 @@ lint_main() {
         case "$line" in [[:space:]]*'```'*|'```'*) fence=$((1 - fence)); continue ;; esac
         [ "$fence" = 1 ] || continue
       fi
-      case "$line" in *"guard-allow: $GUARD_NAME"*) continue ;; esac
+      if [ "${GUARD_ALLOW_DISABLED:-0}" != 1 ]; then
+        case "$line" in *"guard-allow: $GUARD_NAME"*) continue ;; esac
+      fi
       check_line "$f" "$n" "$line"
     done < "$f"
     if command -v end_file >/dev/null 2>&1; then end_file "$f"; fi

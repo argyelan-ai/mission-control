@@ -1,0 +1,2 @@
+# A harmless config option, the worktree named, output whole.
+python3 scripts/privacy-scan.py && git -C ../wt -c push.default=current push origin feat/example
