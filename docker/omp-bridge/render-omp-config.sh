@@ -286,18 +286,80 @@ fi
 # in-container (omp v16.2.13, siehe entrypoint.sh) —, `omp config set` ist der
 # einzige Weg, der im Profil-Speicher ankommt.
 #
-# Nicht-Vision-Fall: statt nur `modelRoles.vision` unbelegt zu lassen (omps
-# eigener Auflösungspfad sucht dann quer über ALLE registrierten Modelle nach
-# einem bildfähigen und würde trotzdem den eingebauten Standard-Provider
-# treffen — siehe Kommentar oben), wird `images.blockImages: true` gesetzt.
-# Das ist im omp-Binary die ERSTE Prüfung vor jeder Modell-Auflösung für
-# Bildfragen (`if (settings.get("images.blockImages")) throw …`) — omp lehnt
-# das Bild dann mit einer eigenen, klaren Fehlermeldung ab, statt den
-# `sk-noauth`-Schlüssel gegen api.openai.com zu verschicken.
+# ── Modell-Rollen + eingebaute Provider (Fix 20.10.2026, ADR-086) ───────────
+# omps Subagenten wählen ihr Modell über ROLLEN: `task` → @task, `scout` →
+# @smol, `reviewer` → @slow (`omp agents unpack`, omp 18.10.1); der
+# Effort-Richter läuft über `judge`, eine frische ACP-Sitzung über `default`.
+# Eine leere Rolle löst omp quer über alle VERFÜGBAREN Modelle auf — und
+# omp.env setzt OPENAI_API_KEY (`sk-noauth` oder der echte Schlüssel einer
+# Cloud-Runtime), was omps eingebauten `openai`-Provider verfügbar macht.
+# Folge (live 20.10.2026): Subagenten liefen gegen api.openai.com — „401
+# invalid_api_key (sk-noauth)", bei einer Cloud-Runtime ginge MCs Schlüssel
+# an einen Fremden. Darum:
+#   * modelRoles: alle Chat-Rollen + judge → das gebundene Modell; vision nur
+#     bei bildfähiger Runtime (sonst images.blockImages, siehe unten).
+#     Ein record-Setting wird nur GANZ geschrieben — `modelRoles.vision`
+#     beantwortet omp 18.10.1 mit „Unknown setting" (der alte Vision-Zweig
+#     hat die Rolle darum nie gesetzt). Ganz schreiben räumt bei einem
+#     Wechsel auch eine alte vision-Rolle weg.
+#   * task.agentModelOverrides: leer (schlägt sonst die Rollen pro Agent).
+#   * disabledProviders: omps eingebaute Modell-Provider. Eine Erlaubt-Liste
+#     gibt es nicht (`enabledProviders` steuert nur Skill-/Regel-Quellen);
+#     disabledProviders prüft omp bei Verfügbarkeit, Rollen, Fallback-Ketten.
+#     Ausgenommen: `web` (web_search-Backends, kein Modellweg), `local`
+#     (Mini-Modelle im Container), `cursor` (dieselbe ID sperrte auch omps
+#     .cursor-Regel-Quelle — die Liste teilt omp mit den Skill-Quellen; der
+#     Modell-Provider braucht ein Cursor-Login, das es in MC nie gibt).
+#     Quelle der Liste: der Provider-Katalog im omp-18.10.1-Binary. Bei einem
+#     omp-Update neu abgleichen — tests/test_render_omp_model_roles.py (c1)
+#     zeigt jeden neuen, noch offenen Provider.
+_MODEL_ROLES="default smol slow plan commit tiny memory task advisor judge"
+if [ "$_SUPPORTS_VISION" = "1" ]; then
+    _MODEL_ROLES="${_MODEL_ROLES} vision"
+fi
+_OMP_BUILTIN_PROVIDERS="abliteration aiand aimlapi alibaba-coding-plan
+alibaba-token-plan amazon-bedrock anthropic apple azure azure-openai-responses
+baseten bedrock-mantle cerebras charm-hyper cline-pass cloudflare-ai-gateway
+cloudflare-workers-ai commandcode coralbricks coreweave deepinfra deepseek devin
+factory-droid firepass fireworks github-copilot gitlab-duo gitlab-duo-agent
+gmi-cloud google google-antigravity google-gemini-cli google-vertex groq helmcode
+huggingface kilo kimi-code litellm lm-studio meta minimax minimax-code
+minimax-code-cn mistral moonshot muse-code nanogpt novita nvidia ollama
+ollama-cloud openai openai-codex opencode-go opencode-zen openrouter qianfan
+qwen-portal sakana siliconflow siliconflow-cn singularityapi-dev
+singularityapi-tech snowflake stepfun synthetic together typesafe umans venice
+vercel-ai-gateway vllm wafer-serverless xai xai-oauth xiaomi
+xiaomi-token-plan-ams xiaomi-token-plan-cn xiaomi-token-plan-sgp yolo-auto zai
+zenmux zhipu-coding-plan"
+
 if command -v omp >/dev/null 2>&1; then
+    # JSON über python3 statt von Hand: Modell-IDs dürfen `/`, `:` usw.
+    # enthalten. Scheitert das, bleibt der Wert leer und die Warnung unten greift.
+    _ROLES_JSON=$(python3 -c 'import json, sys
+print(json.dumps({r: sys.argv[1] for r in sys.argv[2].split()}))' \
+        "$OMP_MODEL_SELECTOR" "$_MODEL_ROLES" 2>/dev/null) || _ROLES_JSON=""
+    _DISABLED_JSON=$(python3 -c 'import json, sys
+print(json.dumps(sys.argv[1].split()))' "$_OMP_BUILTIN_PROVIDERS" 2>/dev/null) || _DISABLED_JSON=""
+    if [ -n "$_ROLES_JSON" ] && [ -n "$_DISABLED_JSON" ] \
+        && omp config set modelRoles "$_ROLES_JSON" >/dev/null 2>&1 \
+        && omp config set task.agentModelOverrides '{}' >/dev/null 2>&1 \
+        && omp config set disabledProviders "$_DISABLED_JSON" >/dev/null 2>&1; then
+        echo "[render-omp-config] Modell-Rollen (${_MODEL_ROLES}) → ${OMP_MODEL_SELECTOR}; eingebaute Modell-Provider gesperrt"
+    else
+        echo "[render-omp-config] WARN: omp config set (modelRoles/disabledProviders) fehlgeschlagen — Subagenten könnten an einem eingebauten Provider statt an ${OMP_MODEL_SELECTOR} landen" >&2
+    fi
+
+    # Nicht-Vision-Fall: statt nur `modelRoles.vision` unbelegt zu lassen
+    # (omps eigener Auflösungspfad sucht dann quer über ALLE registrierten
+    # Modelle nach einem bildfähigen und würde trotzdem den eingebauten
+    # Standard-Provider treffen — siehe Kommentar oben), wird
+    # `images.blockImages: true` gesetzt. Das ist im omp-Binary die ERSTE
+    # Prüfung vor jeder Modell-Auflösung für Bildfragen
+    # (`if (settings.get("images.blockImages")) throw …`) — omp lehnt das Bild
+    # dann mit einer eigenen, klaren Fehlermeldung ab, statt den
+    # `sk-noauth`-Schlüssel gegen api.openai.com zu verschicken.
     if [ "$_SUPPORTS_VISION" = "1" ]; then
         omp config set images.blockImages false >/dev/null 2>&1 \
-            && omp config set modelRoles.vision "${OMP_MODEL_SELECTOR}" >/dev/null 2>&1 \
             && omp config set images.questionTimeoutMs 120000 >/dev/null 2>&1 \
             && echo "[render-omp-config] Vision aktiv: modelRoles.vision=${OMP_MODEL_SELECTOR}, images.blockImages=false" \
             || echo "[render-omp-config] WARN: omp config set (Vision) fehlgeschlagen"
