@@ -3001,6 +3001,34 @@ def _task_still_dispatchable(task: Task, agent: Agent) -> bool:
     return task.status not in ("done", "failed") and task.assigned_agent_id == agent.id
 
 
+#: Poll answer flag per held system mode — same shape as the update drain's
+#: ``update_drain`` flag: ``state=idle`` + flag + ``detail``.
+_SYSTEM_MODE_POLL_FLAGS = {"halted": "system_halted", "draining": "system_draining"}
+
+
+async def _system_mode_hold(session: AsyncSession, task: Task) -> dict | None:
+    """The system mode (HALTED / DRAINING) for a card the poll is about to
+    hand out. The poll claim does not go through check_dispatch_allowed, so
+    it asks the same rule itself (operations.system_mode_refusal): the
+    emergency brake holds polling agents exactly like push dispatch.
+
+    Returns the poll answer that holds the card, or None when the mode lets
+    it through. The card stays untouched, so the first poll after the halt
+    delivers it — nothing to catch up. Agent rules (paused) stay out: a
+    paused agent still takes a card assigned to it by name.
+    """
+    from app.services.operations import get_system_mode, system_mode_refusal
+
+    # Pool hygiene (incident 2026-09-14): the mode lives in Redis — release
+    # the read transaction before awaiting it. Read phase, nothing uncommitted.
+    await session.commit()
+    mode = await get_system_mode()
+    reason = system_mode_refusal(mode, task)
+    if reason is None:
+        return None
+    return {"state": "idle", _SYSTEM_MODE_POLL_FLAGS[mode]: True, "detail": reason}
+
+
 async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, task: Task) -> dict | None:
     """Fix 2 (Poll-Luecke, 07.09.2026 incident): detect an ORPHANED RUN.
 
@@ -3016,6 +3044,8 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
       proves the LLM turn ran.
 
     Fresh signal  → None (caller reports `working`).
+    System HALTED/DRAINING holds the card (_system_mode_hold) → None too:
+    the restart waits for the first poll after the halt.
     Stale/missing → orphan handling: ack_at cleared, fresh
     dispatch_attempt_id (set_dispatch_attempt_id, reason poll_orphan_run),
     Redis counter incremented (endlos-redispatch guard), event
@@ -3073,6 +3103,13 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
     # Nothing is uncommitted here (read phase), so commit releases the
     # connection's transaction before the awaits.
     await session.commit()
+
+    # System mode (HALTED / DRAINING): restarting the run hands out work.
+    # While the system holds it, the caller keeps reporting `working` and
+    # the card stays untouched — the first poll after the halt restarts it.
+    if await _system_mode_hold(session, task) is not None:
+        return None
+
     redis = await get_redis()
     if not await try_claim_heal(redis, str(task.id)):
         logger.info(
@@ -3178,6 +3215,10 @@ async def agent_poll(
     - working: agent has in_progress or blocked task → poll.sh does nothing
     - new_task: claimed a new inbox task → poll.sh pastes prompt to tmux
     - idle: nothing to do
+
+    An `idle` answer may say why a card is held, with one flag plus `detail`:
+    `runtime_not_ready`, `update_drain`, `system_halted` or `system_draining`.
+    The card stays untouched; a later poll delivers it.
 
     Every response additionally includes `new_comments` (a list) — new user
     comments on active tasks that the agent hasn't seen yet. poll.sh pastes
@@ -3478,6 +3519,14 @@ async def agent_poll(
             task.id, agent.id, task.status, task.assigned_agent_id,
         )
         return {"state": "idle", **_poll_extra}
+
+    # System mode (HALTED / DRAINING) — the last gate before any card leaves
+    # this poll: phase approval, an undelivered active card, a fresh inbox
+    # card. Same rule as push dispatch; the update drain and runtime
+    # readiness above keep their own answers.
+    _held = await _system_mode_hold(session, task)
+    if _held is not None:
+        return {**_held, **_poll_extra}
 
     # 3. Claim the task. Two paths:
     #    - inbox: only set dispatched_at (if still None) — status stays
