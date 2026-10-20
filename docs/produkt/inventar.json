@@ -100,6 +100,7 @@
     "GET /api/v1/agents/{agent_id}/chat/pr/draft",
     "GET /api/v1/agents/{agent_id}/chat/stream",
     "GET /api/v1/agents/{agent_id}/chat/subagent/{run_id}",
+    "GET /api/v1/agents/{agent_id}/chat/task-activity",
     "GET /api/v1/agents/{agent_id}/cli-sessions",
     "GET /api/v1/agents/{agent_id}/config",
     "GET /api/v1/agents/{agent_id}/config/{file_type}",
