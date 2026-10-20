@@ -330,13 +330,6 @@ describe("Chat-Fehlerkarte — Nochmal senden (S1-R7)", () => {
     expect(screen.getByTestId("chat-error-card")).not.toHaveTextContent(RETRY);
   });
 
-  it("keeps the button at the right edge even when the link row wraps (narrow phone, large text)", () => {
-    renderCard(unreachable());
-
-    // justify-between alone puts a wrapped button at the LEFT of its new line.
-    expect(screen.getByTestId("chat-error-resend").className).toContain("ml-auto");
-  });
-
   it("[10] session_reset with detail model_missing shows the translated sentence, not the code word", () => {
     renderCard(
       mkError({
@@ -370,5 +363,86 @@ describe("Chat-Fehlerkarte — Nochmal senden (S1-R7)", () => {
 
     expect(screen.queryByTestId("chat-error-body")).not.toBeInTheDocument();
     expect(screen.getByTestId("chat-error-detail")).toHaveTextContent("unknown config option: model");
+  });
+});
+
+/* ── Layout B (operator choice 20.10.) ──────────────────────────────────────
+   "Send again" is the card's last row: a hairline across the card's content,
+   then the button over the full width, its label centred. The Runtimes link
+   stays above the line, at the text's left edge — it never shares a row with
+   the button (variant A put both in one row, button pushed right). jsdom does
+   not lay out, so the row is checked through its parts: last child of the
+   card, not inside a flex row, full width, centred, the line on its top edge;
+   the pictures at 390/320 px and large text show the real layout. */
+
+const BUTTON_CARDS: Array<[string, () => MessageEvent]> = [
+  ["interrupted", () => interrupted()],
+  ["model not answering", unreachable],
+];
+
+describe("Chat-Fehlerkarte — Nochmal senden als volle Zeile (Layout B)", () => {
+  it.each(BUTTON_CARDS)("%s: the button is the card's last row, full width and centred", (_name, mk) => {
+    renderCard(mk());
+
+    const card = screen.getByTestId("chat-error-card");
+    const button = screen.getByRole("button", { name: "Send again" });
+    expect(button).toHaveAttribute("data-testid", "chat-error-resend");
+    expect(card.lastElementChild).toBe(button);
+    expect(button.parentElement).toBe(card);
+    expect(button.className).toMatch(/(^|\s)w-full(\s|$)/);
+    expect(button.className).toMatch(/(^|\s)justify-center(\s|$)/);
+    expect(button.className).not.toContain("ml-auto");
+  });
+
+  it.each(BUTTON_CARDS)("%s: a hairline in the card's border tone sits on the row's top edge", (_name, mk) => {
+    renderCard(mk());
+
+    const borderTop = screen.getByTestId("chat-error-resend").style.borderTop;
+    expect(borderTop).toContain("1px solid");
+    // The calm card tone, never the card's red frame (K6: the signal once).
+    expect(borderTop).toContain(C.border);
+    expect(borderTop).not.toContain(C.error);
+  });
+
+  it.each(BUTTON_CARDS)("%s: finger target at least 44 px at every width (K11)", (_name, mk) => {
+    renderCard(mk());
+
+    const cls = screen.getByTestId("chat-error-resend").className;
+    expect(cls).toMatch(/(^|\s)min-h-11(\s|$)/);
+    // no smaller height from a breakpoint on (a tablet is a finger, too)
+    expect(cls).not.toMatch(/:min-h-(?:[0-9]|10)(\s|$)/);
+  });
+
+  it("model not answering: the Runtimes link stays above the line, never in the button's row", () => {
+    renderCard(unreachable());
+
+    const link = screen.getByTestId("chat-error-runtimes-link");
+    const button = screen.getByTestId("chat-error-resend");
+    expect(link.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(link.contains(button)).toBe(false);
+    // the link is not wrapped into a shared action row with the button
+    expect(link.parentElement).toBe(screen.getByTestId("chat-error-card"));
+    expect(link.parentElement?.className ?? "").not.toMatch(/(^|\s)flex(\s|$)/);
+  });
+
+  it("after the tap the row keeps its place and shape ('Sent', locked, same line)", () => {
+    renderCard(interrupted());
+    fireEvent.click(screen.getByTestId("chat-error-resend"));
+
+    const button = screen.getByRole("button", { name: "Sent" });
+    expect(button).toBeDisabled();
+    expect(screen.getByTestId("chat-error-card").lastElementChild).toBe(button);
+    expect(button.className).toMatch(/(^|\s)w-full(\s|$)/);
+    expect(button.style.borderTop).toContain(C.border);
+  });
+
+  it("a card without the button draws no line (nothing below the text)", () => {
+    renderCard(interrupted(), { canResend: () => false });
+
+    const card = screen.getByTestId("chat-error-card");
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+    for (const el of Array.from(card.querySelectorAll<HTMLElement>("*"))) {
+      expect(el.style.borderTop).toBe("");
+    }
   });
 });
