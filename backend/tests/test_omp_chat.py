@@ -501,6 +501,49 @@ def test_custom_message_chat_error_without_data_still_carries_a_code():
     assert ev["error"] == {"code": None, "detail": None}
 
 
+def _chat_error_line(retry) -> str:
+    data = {"code": "turn_interrupted", "detail": "turn 4"}
+    if retry is not _NO_RETRY:
+        data["retryText"] = retry
+    return json.dumps({
+        "type": "custom_message", "customType": "chat_error",
+        "content": "Die Antwort wurde unterbrochen.", "display": True, "data": data,
+        "id": "e3e3e3e3", "timestamp": "2026-10-20T08:49:44.991Z",
+    })
+
+
+_NO_RETRY = object()
+
+
+@pytest.mark.parametrize("retry", ["Bitte fasse die Datei zusammen.", "x" * 8000],
+                         ids=["short", "8000-chars"])
+def test_chat_error_passes_retry_text_through(retry):
+    """Chat reliability S1 (R1): a card the daemon can offer "Send again"
+    for carries the operator's own message as ``data.retryText``. The parser
+    hands it on unchanged, up to 8000 characters."""
+    (ev,) = parse(_chat_error_line(retry))
+    assert ev["error"] == {"code": "turn_interrupted", "detail": "turn 4", "retryText": retry}
+
+
+@pytest.mark.parametrize(
+    "retry",
+    ["x" * 8001, 42, ["Bitte"], {"text": "Bitte"}, None, True, "", "   "],
+    ids=["8001-chars", "number", "list", "object", "null", "bool", "empty", "blank"],
+)
+def test_chat_error_drops_a_retry_text_it_cannot_send_as_written(retry):
+    """Never shortened, never coerced: a too long or non-text ``retryText``
+    is LEFT OUT, so the frontend shows no "Send again" button. A cut text
+    would send a message the operator never wrote (review finding F3)."""
+    (ev,) = parse(_chat_error_line(retry))
+    assert ev["error"] == {"code": "turn_interrupted", "detail": "turn 4"}
+    assert "retryText" not in ev["error"]
+
+
+def test_chat_error_without_retry_text_has_no_retry_field():
+    (ev,) = parse(_chat_error_line(_NO_RETRY))
+    assert "retryText" not in ev["error"]
+
+
 def test_custom_message_without_a_display_field_is_still_shown():
     """``display`` FEHLT ist nicht ``display: false``. Das Format ist
     versioniert und aendert sich ohne Ankuendigung — ein weggeworfener
