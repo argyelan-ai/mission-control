@@ -91,14 +91,21 @@
     # dial failure to it is a 502 (Caddy's default on a stopped/unreachable
     # upstream — verified: stopping the backend container here and hitting
     # /api/* returns exactly 502, no health check needed to produce it).
-    # Answer with a self-reloading "MC is restarting" page instead of a
-    # bare error.
+    # Every such 502/503 gets `Retry-After: 5`. Only a browser page load
+    # (Accept contains text/html) also gets the self-reloading page; fetch,
+    # API and script callers keep the bare 502, so the app's error toasts
+    # and agents' tool errors never fill up with 2 KB of HTML.
     # Copy this block (and maintenance/503.html) into your own Caddyfile —
     # see caddy/Caddyfile.tls.example for the documented, reusable version.
+    # Behaviour test: caddy/test_maintenance_page.sh.
     handle_errors {
         @mc_restarting expression {err.status_code} in [502, 503]
-        handle @mc_restarting {
-            header Retry-After "5"
+        header @mc_restarting Retry-After "5"
+        @mc_restarting_page {
+            expression {err.status_code} in [502, 503]
+            header Accept *text/html*
+        }
+        handle @mc_restarting_page {
             rewrite * /503.html
             templates
             root * /etc/caddy/maintenance
