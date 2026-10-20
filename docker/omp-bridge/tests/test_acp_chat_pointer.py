@@ -235,6 +235,28 @@ def test_a_pointer_without_id_and_transcript_falls_to_the_state_mirror(tmp_path,
         sess.close()
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+def test_a_fifo_in_place_of_the_pointer_never_stalls_the_start(tmp_path):
+    """The pointer now sits in the agent's own mount: a FIFO named like it
+    must not hang the chat's start — it counts as no pointer."""
+    import threading
+
+    _, folder = layout(tmp_path)
+    os.mkfifo(folder / "acp-chat.json")
+    write_state(folder, S, mc_copy(folder, S))
+    c = client()
+    sess = container_session(folder, c)
+    worker = threading.Thread(target=sess.start, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    try:
+        assert not worker.is_alive(), "start() hung on a FIFO pointer"
+        assert loads(c) == [S]
+        assert sess._resume_source == "state"
+    finally:
+        sess.close()
+
+
 # ── 2. + 3. production wiring: the pointer is on the mount ──────────────────
 
 
