@@ -53,6 +53,12 @@ from typing import Mapping, Callable, Iterable, Iterator, Optional, TextIO
 # robust.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import context_detect  # noqa: E402
+# The "model is not answering" pattern, shared with the chat daemon
+# (S1-R6) — model_errors.py lies next to this file too (Dockerfile COPY).
+from model_errors import (  # noqa: E402
+    MODEL_UNREACHABLE_RE,
+    UNREACHABLE_TAIL_CHARS as _UNREACHABLE_TAIL_CHARS,
+)
 
 # ---------------------------------------------------------------------------
 # Completion contract (mirrors docs/omp-bridge-design.md §3.4)
@@ -158,22 +164,9 @@ TRANSIENT_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 
-#: The model's endpoint does not answer at all — omp's wording once it gave
-#: up retrying (live 19.10.2026: ``ECONNREFUSED: Unable to connect. Is the
-#: computer able to access the url?``, ACP: ``Internal error`` /
-#: ``Connection error.``). Narrower than TRANSIENT_ERROR_RE: no "network",
-#: no bare 5xx — an overloaded server DID answer.
-MODEL_UNREACHABLE_RE = re.compile(
-    r"econnrefused|connection refused|unable to connect|enotfound|ehostunreach|"
-    r"enetunreach|etimedout|fetch failed|connection error|socket hang ?up|"
-    r"bad gateway|service unavailable|gateway time-?out",
-    re.IGNORECASE,
-)
-
-#: How much of the turn's END counts: omp appends its error as the turn's
-#: last text; a model that merely talks about a refused connection earlier
-#: in a long answer is not a lost model.
-_UNREACHABLE_TAIL_CHARS = 300
+# MODEL_UNREACHABLE_RE (the model's endpoint does not answer at all) and
+# _UNREACHABLE_TAIL_CHARS (how much of the turn's END counts) come from
+# model_errors.py — one source for the task path and the chat (S1-R6).
 
 
 def model_unreachable_text(outcome: "RunOutcome") -> Optional[str]:

@@ -63,6 +63,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import acp_chat_events  # noqa: E402
 import acp_client  # noqa: E402
 import acp_model  # noqa: E402
+import model_errors  # noqa: E402
 import sink_migration  # noqa: E402
 
 logger = logging.getLogger("acp_chat")
@@ -101,6 +102,9 @@ _MODES = (MODE_NOW, MODE_QUEUE)
 MAX_QUEUE = 20
 #: The state mirror shows a held message's text up to this length.
 _QUEUE_PREVIEW_CHARS = 2000
+#: How much of omp's own session file the end of a turn reads at most
+#: (S1-R6): one turn's lines, written moments ago.
+_OMP_TURN_READ_BYTES = 2 * 1024 * 1024
 #: The longest text a card offers to send again (`data.retryText`, the
 #: backend's `_RETRY_TEXT_MAX_CHARS`). A longer one is left out — never cut:
 #: "Send again" must send exactly what the operator wrote (S1-R5, F3).
@@ -117,6 +121,18 @@ _TURN_INTERRUPTED_TEXT = (
 #: did): no claim about resending — hermes-bridge delivers a task again on
 #: its own after a restart.
 _TURN_INTERRUPTED_NEUTRAL_TEXT = "The chat restarted while a reply was running."
+
+#: The card when the model's endpoint does not answer (S1-R6): omp gave up
+#: and its error line is the turn's only "answer". The chat itself is at
+#: rest again — there is no "waiting for the model" chat state; the card
+#: says it. Like `turn_interrupted`, the promise about the message only for
+#: the operator's own text, which the card then offers to send again.
+MODEL_UNREACHABLE = model_errors.MODEL_UNREACHABLE
+_MODEL_UNREACHABLE_TEXT = (
+    "The model is not answering — check the Runtimes page. "
+    "Your message is not lost."
+)
+_MODEL_UNREACHABLE_NEUTRAL_TEXT = "The model is not answering — check the Runtimes page."
 
 #: Who wrote a prompt (`prompt(..., origin=)`, the control protocol's
 #: `origin` field). ORIGIN_OPERATOR: the operator's own message (the
@@ -272,6 +288,9 @@ class ChatSession:
         # `interrupted` meanwhile, so a stop in between never loses it.
         # `{}` = busy without `current` (an image before S1-R5).
         self._unreported: Optional[dict] = None
+        # omp's own session file and its size when the running prompt was
+        # claimed — the turn's lines start there (S1-R6, `_omp_turn_line`).
+        self._omp_mark: tuple[Optional[Path], int] = (None, 0)
         self._worker: Optional[threading.Thread] = None
         self._closed = False
 
@@ -963,6 +982,10 @@ class ChatSession:
         if job["kind"] == "prompt":
             self._turn += 1
             job = {**job, "turn": self._turn}
+            # omp is idle between jobs: its file ends where this turn's
+            # lines will start (S1-R6). Taken here, not in the worker, so
+            # the turn itself starts no later than before.
+            self._omp_mark = self._omp_file_mark()
         self._current = _current_entry(job)
         return job
 
@@ -1072,6 +1095,10 @@ class ChatSession:
         self._mapper.begin_turn()
         self._full_text = []
         self._throttle = {"chars": -10 ** 9, "at": time.monotonic(), "pending": None}
+        # Where omp's own file of this session ended when the job was
+        # claimed: what omp writes after it is this turn (S1-R6).
+        with self._lock:
+            omp_mark, self._omp_mark = self._omp_mark, (None, 0)
         try:
             with self._lock:
                 client, sid = self._client, self._session_id
@@ -1117,13 +1144,25 @@ class ChatSession:
 
         final_text = "".join(self._full_text)
         stop_reason = getattr(result, "stopReason", "") if result is not None else ""
+        alive = self._client_alive()
+        # Did the model answer at all (S1-R6)? Decided BEFORE the reply line
+        # is written: omp's error line is cut off the end of the reply (the
+        # card below says it instead); when nothing is left, there is no
+        # reply bubble.
+        verdict = self._judge_turn(
+            stop_reason, final_text, error_text,
+            getattr(result, "usage", None) if result is not None else None, omp_mark,
+        ) if alive else model_errors.NOTHING
         if result is not None:
             self._mapper.set_prompt_usage(getattr(result, "usage", None))
+            # An empty text still goes through the mapper: it writes no
+            # bubble but closes a thought that is still open (#902).
             self._emit_transcript(self._mapper.map_final_assistant_message(
-                final_text, stop_reason="stop" if stop_reason == "end_turn" else "",
+                final_text if verdict.reply is None else verdict.reply,
+                stop_reason="stop" if stop_reason == "end_turn" else "",
             ))
 
-        if not self._client_alive():
+        if not alive:
             # The card offers the text of the turn that died — the
             # operator's, and only when its reply never came (`result` is
             # None): a child that exits right after a complete reply leaves
@@ -1138,8 +1177,17 @@ class ChatSession:
             )
             self._restart_child()
         else:
-            code, detail = _classify_turn(stop_reason, final_text, error_text)
-            if code:
+            code, detail = _classify_turn(stop_reason, final_text, error_text, verdict)
+            if code == MODEL_UNREACHABLE:
+                # Same rule as `turn_interrupted`: only the operator's own
+                # text is offered again (and only whole).
+                operator = origin == ORIGIN_OPERATOR
+                self._emit_error(
+                    code, detail,
+                    text=_MODEL_UNREACHABLE_TEXT if operator else _MODEL_UNREACHABLE_NEUTRAL_TEXT,
+                    data=retry_data(text) if operator else None,
+                )
+            elif code:
                 self._emit_error(code, detail)
 
     def _client_alive(self) -> bool:
@@ -1319,6 +1367,57 @@ class ChatSession:
             if attempt + 1 < self._NAME_LOOKUP_TRIES:
                 time.sleep(self._NAME_LOOKUP_WAIT_S)
         return None
+
+    #: How often and how long the end of a turn waits for omp's final line
+    #: of that turn (S1-R6). omp writes it when the message ends; whether
+    #: that is always on disk before the prompt reply is not proven.
+    _OMP_LINE_TRIES = 5
+    _OMP_LINE_WAIT_S = 0.1
+
+    def _omp_file_mark(self) -> tuple[Optional[Path], int]:
+        """omp's own file of this session and its size now — the next
+        turn's lines start there. `(None, 0)` when omp has no file yet (the
+        session's first turn: then the whole file is this turn)."""
+        path = self._omp_session_file()
+        if path is None:
+            return None, 0
+        try:
+            return path, path.stat().st_size
+        except OSError:
+            return None, 0
+
+    def _omp_turn_line(self, mark: tuple[Optional[Path], int]
+                       ) -> "Optional[model_errors.OmpTurnEnd]":
+        """omp's line that ended this turn (and its retried attempts), from
+        omp's OWN session file — None when there is none (no file,
+        unreadable, a file that shrank, or no final line within the short
+        wait)."""
+        for attempt in range(self._OMP_LINE_TRIES):
+            path = self._omp_session_file()
+            if path is not None:
+                start = mark[1] if mark[0] == path else 0
+                lines = _read_lines_from(path, start)
+                if lines is not None:
+                    end = model_errors.omp_turn_end(lines)
+                    if end is not None:
+                        return end
+            if attempt + 1 < self._OMP_LINE_TRIES:
+                time.sleep(self._OMP_LINE_WAIT_S)
+        return None
+
+    def _judge_turn(self, stop_reason: str, final_text: str, error_text: str,
+                    usage: Any, mark: tuple[Optional[Path], int]
+                    ) -> "model_errors.ChatTurnVerdict":
+        """`model_errors.classify_chat_turn` with omp's line of this turn —
+        read only for a turn that ends like a lost model or has no text."""
+        end = None
+        if model_errors.needs_omp_line(stop_reason, final_text, error_text):
+            end = self._omp_turn_line(mark)
+        return model_errors.classify_chat_turn(
+            stop_reason=stop_reason, final_text=final_text, error_text=error_text,
+            usage=usage, omp_line=end.message if end is not None else None,
+            omp_retried=end.retried if end is not None else (),
+        )
 
     def _on_elicitation(self, rpc_id: Any, params: dict) -> None:
         """P3: omp asks (`elicitation/create`). Called on the ACP reader
@@ -1579,6 +1678,29 @@ def _current_entry(job: dict) -> dict:
     }
 
 
+def _read_lines_from(path: Path, start: int) -> Optional[list[str]]:
+    """The lines of `path` from byte `start` on (at most the last
+    `_OMP_TURN_READ_BYTES`, without a cut first line), or None when the file
+    is unreadable, no regular file, or shorter than `start` (rewritten: its
+    end no longer marks this turn). Never blocks (`open_regular`)."""
+    fh = acp_chat_events.open_regular(path)
+    if fh is None:
+        return None
+    try:
+        with fh:
+            raw = fh.buffer
+            size = os.fstat(raw.fileno()).st_size
+            if size < start:
+                return None
+            begin = max(start, size - _OMP_TURN_READ_BYTES)
+            raw.seek(begin)
+            data = raw.read(size - begin)
+    except (OSError, ValueError):
+        return None
+    lines = data.decode("utf-8", errors="replace").split("\n")
+    return lines[1:] if begin > start else lines
+
+
 def _format_counts(counts: Mapping[str, int]) -> str:
     """`{"tool_call": 33, ...}` -> `"tool_call=33, ..."`, sorted by kind."""
     return ", ".join(f"{kind}={count}" for kind, count in sorted(counts.items()))
@@ -1649,12 +1771,20 @@ def _model_missing_text(selector: str) -> str:
             "is kept.")
 
 
-def _classify_turn(stop_reason: str, final_text: str, error_text: str) -> tuple[
+def _classify_turn(stop_reason: str, final_text: str, error_text: str,
+                   verdict: Optional["model_errors.ChatTurnVerdict"] = None) -> tuple[
         Optional[str], str]:
     """Turn outcome -> (chat_error code, detail). `None` = nothing to report.
 
-    `cancelled` is deliberately NOT an error: the operator pressed Stop.
+    `cancelled` is deliberately NOT an error: the operator pressed Stop —
+    and neither is a turn omp's own line calls aborted. The model not
+    answering (`verdict`, S1-R6) comes first: before `provider_error`,
+    `rpc_error` and `empty_turn`.
     """
+    if verdict is not None and verdict.kind == MODEL_UNREACHABLE:
+        return MODEL_UNREACHABLE, verdict.detail
+    if verdict is not None and verdict.kind == model_errors.ABORTED:
+        return None, ""
     if error_text:
         code = "provider_error" if _PROVIDER_ERROR_RE.search(error_text) else "rpc_error"
         return code, error_text
