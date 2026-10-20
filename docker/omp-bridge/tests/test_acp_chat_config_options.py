@@ -229,7 +229,7 @@ def test_a_push_between_reply_and_apply_is_not_overwritten(tmp_path):
     newer = ["off", "low", "high"]
     result = {}
     worker = threading.Thread(
-        target=lambda: result.update(sess.config("model", NEXT_MODEL)))
+        target=lambda: result.update(sess.config("model", NEXT_MODEL)), daemon=True)
     try:
         worker.start()
         assert in_request.wait(timeout=5)
@@ -360,10 +360,14 @@ def test_overlapping_configs_never_apply_an_older_reply_last(tmp_path):
     sess = make_session(tmp_path, client)
     sess.start()
     results = {}
+    # daemon: a config call stuck behind a broken lock fails the test
+    # instead of keeping the test process alive.
     slow = threading.Thread(
-        target=lambda: results.update(thinking=sess.config("thinking", "low")))
+        target=lambda: results.update(thinking=sess.config("thinking", "low")),
+        daemon=True)
     fast = threading.Thread(
-        target=lambda: results.update(model=sess.config("model", NEXT_MODEL)))
+        target=lambda: results.update(model=sess.config("model", NEXT_MODEL)),
+        daemon=True)
     try:
         slow.start()
         assert thinking_out.wait(timeout=5)
@@ -400,7 +404,7 @@ def test_a_refused_config_does_not_block_the_next_one(tmp_path):
         assert sess.config("model", "prov/nope")["ok"] is False
         done = {}
         worker = threading.Thread(
-            target=lambda: done.update(sess.config("thinking", "max")))
+            target=lambda: done.update(sess.config("thinking", "max")), daemon=True)
         worker.start()
         worker.join(timeout=5)
         assert not worker.is_alive(), "second config hung behind the refused one"
