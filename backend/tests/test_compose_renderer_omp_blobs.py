@@ -202,7 +202,11 @@ def test_rewrite_path_non_omp_images_get_no_blobs_line(slug):
     assert "omp-blobs" not in block
 
 
-@pytest.mark.parametrize("image", [CLAUDE_IMAGE, OPENCLAUDE_IMAGE, KIMI_IMAGE])
+@pytest.mark.parametrize(
+    "image",
+    [CLAUDE_IMAGE, OPENCLAUDE_IMAGE, KIMI_IMAGE],
+    ids=["claude", "openclaude", "kimi"],
+)
 def test_append_path_non_omp_images_get_no_blobs_line(image):
     block = _build_new_agent_block("newagent", image, is_vault_writer=False)
     assert "omp-blobs" not in block
