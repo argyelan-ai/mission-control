@@ -331,9 +331,10 @@ paused agent, but only with a card that is already assigned to it:
 - the agent's own poll (c);
 - the undispatched-card watcher (`_check_undispatched_tasks` in
   `backend/app/services/watchdog/task_monitor.py`). For a cli-bridge agent
-  it does what push dispatch does there, one watcher pass after the refused
-  push: it prepares the workspace (`dispatch_to_cli_bridge` in
-  `backend/app/services/cli_bridge_runner.py`) and stamps `dispatched_at`;
+  it does what push dispatch does there, on a later watcher pass once the
+  agent has no other card in flight: it prepares the workspace
+  (`dispatch_to_cli_bridge` in `backend/app/services/cli_bridge_runner.py`)
+  and stamps `dispatched_at`;
 - `mc reassign` (`backend/app/routers/agent_task_status.py`), which
   prepares the workspace right after assigning.
 
@@ -374,8 +375,11 @@ or for any other.
    workspace root, the bridge's fallback (`docker/omp-bridge/bridge.py`).
    The bridge's guard only checks that this folder exists. A card is
    prepared before the claim only when `mc reassign` assigned it (it
-   prepares right after assigning), or when it waited long enough, because
-   the agent was busy, for the undispatched-card watcher. For a
+   prepares right after assigning), or when the undispatched-card watcher
+   reaches it before the poll does. Live on 2026-10-19 and 2026-10-20 both
+   kinds happened: cards claimed at once without a workspace, and cards
+   that waited while the agent finished another one and were prepared by
+   the watcher. For a
    repository-bound card this is the failure class of the 2026-09-13
    incident (`docs/dispatch-path-parity.md` row 24: in an unprepared folder
    an agent cloned the repository by short name and opened its PRs on the
