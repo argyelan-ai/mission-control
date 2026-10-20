@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rep: [1, 2, 3, 4]
+        rep: [1, 2, 3]
     defaults:
       run:
         working-directory: backend
@@ -34,4 +34,4 @@ jobs:
       - name: compileall
         run: /usr/bin/time -f "COMPILEALL %e s" python -m compileall -q -j 4 app tests ../jarvis_core > /dev/null
       - name: Run tests
-        run: /usr/bin/time -f "TIME %e s wall, %U user, %S sys, %P cpu" pytest -x --tb=short -q -n auto --dist worksteal --durations=0 --durations-min=0
+        run: /usr/bin/time -f "TIME %e s wall, %U user, %S sys, %P cpu" pytest -x --tb=short -q -n auto --dist worksteal -v --durations=0 --durations-min=0
