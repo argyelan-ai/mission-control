@@ -272,6 +272,31 @@ def test_6_an_existing_target_is_skipped_with_a_reason(tmp_path):
     assert read_list(root)["runs"][0]["skipped"] == report.skipped
 
 
+def test_6b_a_target_that_appears_after_planning_is_not_overwritten(tmp_path, monkeypatch):
+    """The move itself refuses too: a file that shows up in ``.mc/`` between
+    planning and moving (a sink opening right then) is never replaced."""
+    root = tmp_path / "sessions"
+    p = build_tree(root)
+    clash = root / "--workspace--" / ".mc" / p["mc_b"].name
+    real_plan = sink_migration._plan
+
+    def plan_then_clash(r):
+        planned = real_plan(r)
+        clash.parent.mkdir(exist_ok=True)
+        clash.write_text("written meanwhile", encoding="utf-8")
+        return planned
+
+    monkeypatch.setattr(sink_migration, "_plan", plan_then_clash)
+    report = sink_migration.migrate(root)
+
+    assert clash.read_text(encoding="utf-8") == "written meanwhile"
+    assert p["mc_b"].exists()
+    assert {"path": "--workspace--/" + p["mc_b"].name, "reason": "target_exists"} in report.skipped
+    run = read_list(root)["runs"][0]
+    assert run["status"] == "done"
+    assert "sid-b" not in [e["sessionId"] for e in run["moved"]]
+
+
 # ── 7. a dry run writes nothing and says the same ───────────────────────────
 
 
