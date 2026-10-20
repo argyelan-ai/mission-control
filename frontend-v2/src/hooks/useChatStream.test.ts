@@ -284,6 +284,19 @@ describe("Live-Vorschau (preview) — eigenes Fach, nie Zeitachse", () => {
     state = chatReducer(state, { kind: "session_changed" });
     expect(state.preview).toBeNull();
   });
+
+  // Review Z3: a chat turn that ends while a TASK turn runs (the operator
+  // stops it mid answer) reports task_working / waiting_model, not idle —
+  // the chat is at rest all the same, its half answer must not stay.
+  it.each(["task_working", "waiting_model"] as const)(
+    "verfaellt auch, wenn der Chat ruht und nur eine Aufgabe laeuft (%s)",
+    (status) => {
+      let state = chatReducer(createInitialChatState(), preview("Halbe Antw"));
+      state = chatReducer(state, { kind: "state", status: "working", prompt: null });
+      state = chatReducer(state, { kind: "state", status, prompt: null });
+      expect(state.preview).toBeNull();
+    },
+  );
 });
 
 describe("gemischte Bloecke unter einer uuid (omp)", () => {
@@ -826,6 +839,13 @@ describe("Live-Werkzeugausgabe (tool_output) — eigenes Fach je Werkzeugaufruf"
     expect(chatReducer(st, idle).toolOutputs).toEqual({});
     const rollover: SessionChangedEvent = { kind: "session_changed" };
     expect(chatReducer(st, rollover).toolOutputs).toEqual({});
+    // Review Z3: the chat at rest while a task runs counts the same.
+    for (const status of ["task_working", "waiting_model"] as const) {
+      expect(chatReducer(st, { kind: "state", status, prompt: null }).toolOutputs).toEqual({});
+    }
+    // A question or an approval belongs to a running chat turn: kept.
+    expect(chatReducer(st, { kind: "state", status: "permission_prompt", prompt: null }).toolOutputs)
+      .toEqual(st.toolOutputs);
   });
 
   it("Seed: History-Werkzeug mit Ergebnis vor gepufferter Live-Ausgabe -> nichts Veraltetes", () => {

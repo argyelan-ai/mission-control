@@ -157,10 +157,9 @@ function resolveDisplay(
       return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: `${workingWord}…`, pulse: true };
     case "task_working":
       // A task turn of an ACP agent runs through the bridge, not the chat
-      // (follow-up to ADR-097). A running tool is more concrete than words.
-      if (activity) {
-        return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: activity.title, pulse: true };
-      }
+      // (follow-up to ADR-097). `activity` is the CHAT's open tool: the
+      // task's tools never reach the chat's events (#898), and the chat is
+      // not busy here — an open chat tool is a stale one (review Z3/UI-2).
       return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: t("taskWorking"), pulse: true };
     case "waiting_model":
       // A task is delivered, the agent's model has not answered yet (box off,
@@ -219,9 +218,9 @@ export function StatusLine({
   const workingWord = useWorkingWord(connected && state?.status === "working" && !sending);
   const display = resolveDisplay(state, connected, aliveness, sending, workingWord, activity, t);
   const working = !sending && aliveness !== "ended" && connected && state?.status === "working";
-  // A task turn shows its tool title in mono like a chat turn does.
+  // Only a running CHAT turn shows its tool title (mono, one line).
   const toolRuns = !sending && aliveness !== "ended" && connected && !!activity
-    && (state?.status === "working" || state?.status === "task_working");
+    && state?.status === "working";
   // Buchstaben-Lauf nur fuer das Verb; ein Werkzeug-Titel steht ruhig da
   // (Monospace, eine Zeile, abgeschnitten — nichts springt).
   const showVerb = working && !activity;

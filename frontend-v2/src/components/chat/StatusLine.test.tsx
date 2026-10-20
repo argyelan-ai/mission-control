@@ -232,9 +232,24 @@ describe("StatusLine — Arbeits-Verb (Render-Reinheit)", () => {
     expect(screen.getByTestId("status-dot")).toHaveAttribute("data-live", "true");
   });
 
-  it("a running tool of the task turn is more concrete than the word", () => {
-    render(<StatusLine state={mkState("task_working")} connected activity={{ title: "Read poll.sh" }} />);
-    expect(screen.getByTestId("status-label")).toHaveTextContent("Read poll.sh");
+  // Review Z3/UI-2: `activity` is the CHAT's last tool without a result. A
+  // task turn's tools never reach the chat's events (#898 pins the chat to
+  // its own session), and while a task turn runs the chat is not busy — so
+  // an open chat tool there is always a stale one (a chat turn stopped mid
+  // tool). It must not pose as the task's running work.
+  it("a task turn never shows a leftover chat tool as running", () => {
+    render(<StatusLine state={mkState("task_working")} connected activity={{ title: "$ npm run build" }} />);
+    const label = screen.getByTestId("status-label");
+    expect(label).toHaveTextContent("Working on a task");
+    expect(label).not.toHaveTextContent("npm run build");
+    expect(label).not.toHaveClass("font-mono");
+  });
+
+  it("waiting for the model never shows a leftover chat tool either", () => {
+    render(<StatusLine state={mkState("waiting_model")} connected activity={{ title: "$ npm run build" }} />);
+    const label = screen.getByTestId("status-label");
+    expect(label).toHaveTextContent("Waiting for the model");
+    expect(label).not.toHaveClass("font-mono");
   });
 
   it('shows "Waiting for the model" for a delivered task whose model has not answered', () => {
