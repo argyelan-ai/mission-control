@@ -413,6 +413,50 @@ describe("Chat-Fehlerkarte — Nochmal senden als volle Zeile (Layout B)", () =>
     expect(cls).not.toMatch(/:min-h-(?:[0-9]|10)(\s|$)/);
   });
 
+  /* jsdom cannot measure the row, so these guard every class or style that
+     could make it narrower than the card's content: a max width, auto
+     margins, a fixed or content width, an inline box, a breakpoint that
+     changes width or display, or a card that lays its rows out as flex/grid
+     items (which would shrink the button to its label). A small centred
+     button would pass "w-full" alone; it does not pass this. */
+  it.each(BUTTON_CARDS)("%s: nothing narrows, centres-as-a-box or hides the row", (_name, mk) => {
+    renderCard(mk());
+
+    const button = screen.getByTestId("chat-error-resend");
+    const tokens = button.className.split(/\s+/).filter(Boolean);
+    const narrowing = tokens.filter((tk) =>
+      /^(?:[a-z0-9]+:)*(?:max-w-|w-(?!full$)|mx-|ml-|mr-|ms-|me-|-mx-|-ml-|-mr-|inline|hidden$|invisible$|contents$|self-|basis-|shrink|grow|flex-(?:none|auto|initial|1)$|absolute$|fixed$|float-)/.test(tk)
+    );
+    expect(narrowing).toEqual([]);
+    // w-full holds at every width: no breakpoint variant of anything layout-ish
+    expect(tokens.filter((tk) => /^(?:sm|md|lg|xl|2xl):(?!hover|focus|disabled)/.test(tk))).toEqual([]);
+    for (const prop of ["width", "maxWidth", "marginLeft", "marginRight", "marginInline", "display", "position"] as const) {
+      expect(button.style[prop]).toBe("");
+    }
+    const cardCls = screen.getByTestId("chat-error-card").className;
+    expect(cardCls).not.toMatch(/(^|\s)(?:[a-z0-9]+:)*(?:flex|inline-flex|grid|inline-grid|inline-block|items-|justify-|place-)/);
+  });
+
+  it.each(BUTTON_CARDS)("%s: the hover surface is shaped like the card's controls, its top straight on the hairline", (_name, mk) => {
+    renderCard(mk());
+
+    const tokens = screen.getByTestId("chat-error-resend").className.split(/\s+/);
+    // DESIGN.md Buttons: rounded-md (10 px) — at the two corners that are
+    // free. The top edge IS the hairline, so it stays straight: a rounded top
+    // would bend the line's ends (and, on hover, leave wedges under it).
+    expect(tokens).toContain("rounded-b-md");
+    expect(tokens.filter((tk) => /^(?:[a-z0-9]+:)*rounded(?:$|-(?!b-md$))/.test(tk))).toEqual([]);
+  });
+
+  it("model not answering: the Runtimes link is a finger target of 44 px at every width, like the button (K11)", () => {
+    renderCard(unreachable());
+
+    const cls = screen.getByTestId("chat-error-runtimes-link").className;
+    expect(cls).toMatch(/(^|\s)min-h-11(\s|$)/);
+    // one finger-target rule in the card: no smaller link from a breakpoint on
+    expect(cls).not.toMatch(/:min-h-(?:[0-9]|10)(\s|$)/);
+  });
+
   it("model not answering: the Runtimes link stays above the line, never in the button's row", () => {
     renderCard(unreachable());
 
