@@ -194,15 +194,21 @@ def test_pointer_into_mc_with_the_copy_in_both_places_is_stable(tmp_path):
 
 def test_a_pointer_into_mc_cannot_leave_the_tree(tmp_path):
     """The tree check stays for the new candidates: a ``.mc/`` entry that is
-    a link out of the sessions tree does not count — the fallback answers."""
-    root, ws, _native_file, chat_sink, _ = _tree(tmp_path, "mc")
+    a link out of the sessions tree is not taken from the pointer. (What
+    the fallback then picks is gated by ``transcript_allowed`` at every
+    reader, as for a link directly in the folder.)"""
+    root, ws, _native_file, _chat_sink, _ = _tree(tmp_path, "mc")
     secret = tmp_path / "outside.jsonl"
     _write(secret, [{"type": "session", "version": 3, "id": "x", "cwd": "", "bridge": "acp"}])
-    (ws / ".mc" / "2026-10-20T11-00-00_outside.jsonl").symlink_to(secret)
-    _pointer(ws, f"{CONTAINER_SESSIONS}/{ws.name}/.mc/2026-10-20T11-00-00_outside.jsonl", "x")
-    found = _find(root)
-    assert found is not None and found[0] != secret
-    assert found[0] == chat_sink
+    link = ws / ".mc" / "2026-10-20T11-00-00_outside.jsonl"
+    link.symlink_to(secret)
+    for transcript in (
+        f"{CONTAINER_SESSIONS}/{ws.name}/.mc/{link.name}",  # candidate 2
+        f"{CONTAINER_SESSIONS}/{ws.name}/{link.name}",      # old pointer -> candidate 2
+        f"/elsewhere/{link.name}",                           # candidate 4
+    ):
+        _pointer(ws, transcript, "x")
+        assert omp_chat._pointed_chat_transcript(root) is None, transcript
 
 
 # ── 3 · no pointer: a task never becomes the chat ──────────────────────────

@@ -119,13 +119,30 @@ _SESSIONS_DIRNAME = "omp-sessions"
 #: Kosmetik der TUI, der Text ist die Aussage.
 FRESH_SESSION_MARKER = "New session started"
 
-#: Wie tief unter dem Sessions-Wurzelverzeichnis eine Session liegen darf.
-#: 1 = die pro-cwd-Ordner. Tiefer liegen nur Anhaenge/Blobs, keine Sessions.
-_SESSION_GLOBS = ("*.jsonl", "*/*.jsonl")
+#: Folder below a per-cwd folder that holds MC's OWN files of a session: the
+#: display copy the omp-bridge ACP sink writes (header ``"bridge": "acp"``),
+#: and beside it ``previews/`` and ``media/``. Must equal
+#: ``docker/omp-bridge/acp_chat_events.MC_SINK_DIRNAME`` (backend and bridge
+#: share no code; a contract test compares both files as text).
+#:
+#: Why a folder of its own: omp 18.10.1 treats every ``<folder>/*.jsonl``
+#: whose first lines carry ``type: "session"`` plus an ``id`` as one of its
+#: sessions — MC's copy qualifies, so omp listed every chat twice and failed
+#: to load the current one. ``list(cwd)`` globs ``<folder>/*.jsonl`` and
+#: ``listAll()`` ``*/*.jsonl``; ``<folder>/.mc/`` is one level deeper than
+#: either, and a dot folder on top. Until every copy has moved, both places
+#: are read (old copies beside omp's file, new ones in ``.mc/``).
+_MC_SINK_DIRNAME = ".mc"
+
+#: Where a session file can lie below the sessions root: flat, in a per-cwd
+#: folder, or (MC's display copy) in that folder's ``.mc/``. Deeper files
+#: are previews, media and blobs, never a session.
+_SESSION_GLOBS = ("*.jsonl", "*/*.jsonl", f"*/{_MC_SINK_DIRNAME}/*.jsonl")
 
 #: Unterverzeichnis im Sessions-Wurzelverzeichnis, in dem der omp-bridge ACP-
 #: Treiber die FLUECHTIGEN Vorschau-Snapshots ablegt (Folge-PR zu #471):
-#: ``<sessions-wurzel>/<kodiertes-cwd>/previews/<ts>_<sessionId>.jsonl``. Es
+#: ``<ordner der kopie>/previews/<ts>_<sessionId>.jsonl`` (also
+#: ``<kodiertes-cwd>/previews/`` bzw. ``<kodiertes-cwd>/.mc/previews/``). Es
 #: liegt TIEFER als ``_SESSION_GLOBS`` sucht — die History-/Rollover-Logik
 #: kann diese Dateien also nie mit Transkripten verwechseln — und wird vom
 #: Tailer ausschliesslich ueber :func:`preview_channel` gelesen.
@@ -212,9 +229,19 @@ def _pointed_chat_transcript(tdir: Path) -> Path | None:
     Der Daemon schreibt den Pfad aus SEINER Sicht (im Container
     ``/home/agent/.omp/...``) — auf dem Host zaehlen nur der Dateiname und
     der cwd-Ordner. Aufgeloest wird darum ausschliesslich INNERHALB von
-    ``tdir``: zuerst ``<tdir>/<ordner>/<datei>``, dann neben der
-    Zustandsdatei. Ein Zeiger, der aus dem Baum hinauszeigt oder auf eine
-    (noch) fehlende Datei, zaehlt nicht — dann gilt der Rueckfall."""
+    ``tdir``, in dieser Reihenfolge:
+
+    1. ``<tdir>/<ordner>/<datei>``
+    2. ``<tdir>/<ordner>/.mc/<datei>``
+    3. ``<ordner der zustandsdatei>/<datei>``
+    4. ``<ordner der zustandsdatei>/.mc/<datei>``
+
+    ``<ordner>`` ist der cwd-Ordner — zeigt der Zeiger schon in ``.mc/``,
+    der Name DARUEBER. So findet ein alter Zeiger (ohne ``.mc/``) die
+    verschobene Kopie, und ein neuer Zeiger (mit ``.mc/``) die Datei auch
+    dann, wenn sie wieder am alten Ort liegt (Rueckweg des Umzugs). Ein
+    Zeiger, der aus dem Baum hinauszeigt oder auf eine (noch) fehlende
+    Datei, zaehlt nicht — dann gilt der Rueckfall."""
     state_file = chat_state_file(tdir)
     if state_file is None:
         return None
@@ -229,11 +256,16 @@ def _pointed_chat_transcript(tdir: Path) -> Path | None:
     name = pointed.name
     if not name.endswith(".jsonl") or name in (".", ".."):
         return None
-    folder = pointed.parent.name
+    parent = pointed.parent
+    if parent.name == _MC_SINK_DIRNAME:
+        parent = parent.parent
+    folder = parent.name
     candidates = []
-    if folder and folder not in (".", ".."):
+    if folder and folder not in (".", "..", _MC_SINK_DIRNAME):
         candidates.append(tdir / folder / name)
+        candidates.append(tdir / folder / _MC_SINK_DIRNAME / name)
     candidates.append(state_file.parent / name)
+    candidates.append(state_file.parent / _MC_SINK_DIRNAME / name)
     try:
         root = tdir.resolve()
     except OSError:
@@ -264,23 +296,54 @@ def _cwd_is_task_dir(cwd: str | None) -> bool:
     return norm.startswith(_TASK_CWD_PREFIXES)
 
 
+def _session_folder(path: Path) -> Path:
+    """The per-cwd folder a session file belongs to: its own folder, or the
+    one above when the file is MC's display copy in ``<folder>/.mc/``."""
+    folder = path.parent
+    return folder.parent if folder.name == _MC_SINK_DIRNAME else folder
+
+
+def session_files(path: Path) -> list[Path]:
+    """Every file of the same session as ``path`` (same embedded session id)
+    in its per-cwd folder AND in that folder's ``.mc/`` — whichever of the
+    two ``path`` itself lies in. Under ACP one session has two files: omp's
+    own (always in the folder) and MC's display copy (in the folder before
+    the move to ``.mc/``, in ``.mc/`` after it; during the move, either).
+
+    Order: the folder ``path`` lies in first, then the other one, each
+    sorted by name — so a caller that takes the first match gets the same
+    answer every time. ``path`` is included when it exists. Never a file of
+    another folder, a preview (one level deeper) or another session."""
+    session_id = session_id_for(path)
+    folder = _session_folder(path)
+    places = [folder, folder / _MC_SINK_DIRNAME]
+    if path.parent != folder:
+        places.reverse()
+    found: list[Path] = []
+    for place in places:
+        try:
+            candidates = sorted(place.glob("*.jsonl"))
+        except OSError:
+            continue
+        for candidate in candidates:
+            if session_id_for(candidate) == session_id and candidate.is_file():
+                found.append(candidate)
+    return found
+
+
 def is_task_session(path: Path) -> bool:
     """Gehoert ``path`` zu einer Task-Sitzung (nicht zum Chat)?
 
-    Ja, wenn irgendeine Datei DERSELBEN Sitzung im selben Ordner einen
-    ``taskId`` im Kopf traegt (das schreibt nur der Bridge-Sink des
-    Task-Pfads — omps eigene Datei hat ihn nie) oder wenn die Sitzung in
-    einem Task-Arbeitsverzeichnis laeuft (Worktree, Task-Ordner)."""
+    Ja, wenn irgendeine Datei DERSELBEN Sitzung (:func:`session_files` —
+    Ordner und sein ``.mc/``) einen ``taskId`` im Kopf traegt (das schreibt
+    nur der Bridge-Sink des Task-Pfads — omps eigene Datei hat ihn nie) oder
+    wenn die Sitzung in einem Task-Arbeitsverzeichnis laeuft (Worktree,
+    Task-Ordner)."""
     session_id = session_id_for(path)
-    key = (str(path.parent), session_id)
+    key = (str(_session_folder(path)), session_id)
     if key in _TASK_SESSION_CACHE:
         return True
-    try:
-        siblings = [path] + [
-            s for s in path.parent.glob(f"*{session_id}.jsonl") if s != path
-        ]
-    except OSError:
-        siblings = [path]
+    siblings = [path] + [s for s in session_files(path) if s != path]
     answer = False
     for sibling in siblings:
         if session_id_for(sibling) != session_id:
@@ -299,15 +362,12 @@ def is_task_session(path: Path) -> bool:
 
 
 def _session_mtime(path: Path) -> float:
-    """Juengste mtime ueber alle Dateien DERSELBEN Sitzung im Ordner — unter
-    ACP schreiben omp und der Bridge-Sink je eine eigene Datei, und
-    ``live`` soll die Sitzung meinen, nicht die eine Datei."""
+    """Juengste mtime ueber alle Dateien DERSELBEN Sitzung (Ordner und sein
+    ``.mc/``) — unter ACP schreiben omp und der Bridge-Sink je eine eigene
+    Datei, und ``live`` soll die Sitzung meinen, nicht die eine Datei."""
     session_id = session_id_for(path)
     best = -1.0
-    try:
-        files = [path] + list(path.parent.glob(f"*{session_id}.jsonl"))
-    except OSError:
-        files = [path]
+    files = [path] + [f for f in session_files(path) if f != path]
     for f in files:
         if session_id_for(f) != session_id:
             continue
@@ -582,18 +642,13 @@ def is_bridge_file(path: Path) -> bool:
 
 
 def bridge_sibling(path: Path) -> Path:
-    """The bridge sink's file of the same session as ``path`` (same folder,
-    same embedded session id), or ``path`` itself when there is none or
-    ``path`` already is it."""
+    """The bridge sink's file of the same session as ``path`` (same per-cwd
+    folder or its ``.mc/``, same embedded session id), or ``path`` itself
+    when there is none or ``path`` already is it."""
     if is_bridge_file(path):
         return path
-    session_id = session_id_for(path)
-    try:
-        siblings = sorted(path.parent.glob("*.jsonl"))
-    except OSError:
-        return path
-    for sibling in siblings:
-        if sibling != path and session_id_for(sibling) == session_id and is_bridge_file(sibling):
+    for sibling in session_files(path):
+        if sibling != path and is_bridge_file(sibling):
             return sibling
     return path
 
@@ -674,21 +729,18 @@ def session_cwd(path: Path) -> str | None:
     ``session_id_for``): omp's own file has the real ``cwd``, the ACP bridge
     sink writes the header with an EMPTY ``cwd`` — and the sink file is often
     the one ``find_active_session`` returns. So when this file's header is
-    empty, the siblings in the same folder that carry the same session id
-    are asked. The folder NAME also encodes the cwd, but not reversibly
-    (``-`` stands for both ``/`` and a literal dash), so it is deliberately
-    not decoded. ``None`` when no file of this session records a cwd.
+    empty, the other files of the same session are asked
+    (:func:`session_files`: the folder and its ``.mc/`` — the sink file may
+    lie in ``.mc/``, omp's file never does). The folder NAME also encodes the
+    cwd, but not reversibly (``-`` stands for both ``/`` and a literal dash),
+    so it is deliberately not decoded. ``None`` when no file of this session
+    records a cwd.
     """
     own = _header_cwd(path)
     if own:
         return own
-    session_id = session_id_for(path)
-    try:
-        siblings = sorted(path.parent.glob("*.jsonl"))
-    except OSError:
-        return None
-    for sibling in siblings:
-        if sibling == path or session_id_for(sibling) != session_id:
+    for sibling in session_files(path):
+        if sibling == path:
             continue
         cwd = _header_cwd(sibling)
         if cwd:
@@ -771,6 +823,12 @@ _PATH_TOOLS = {"read": "Read", "write": "Write", "edit": "Edit"}
 #: erst beim Merge, hier schon beim Zusammenfuegen der Bloecke, damit ein
 #: 500-KB-Bash-Ergebnis nicht erst komplett im Speicher landet.
 _RESULT_TRUNCATE_LEN = 4000
+
+#: Longest operator message a ``chat_error`` card may offer to send again
+#: (``data.retryText``). Longer ones get no button rather than a cut text.
+#: Well below the chat input's own limit (``agent_chat._MAX_TEXT_LEN``), so
+#: a text that passes here is never refused when it is sent.
+_RETRY_TEXT_MAX_CHARS = 8000
 
 #: Ein ``fileMention``-Eintrag traegt den ganzen Dateiinhalt. Im Chat zeigen
 #: wir Kopf + Anfang, nicht die ganze Datei.
@@ -1549,6 +1607,15 @@ class OmpLineParser:
             # das Frontend eine rote Karte daraus baut, statt den Fehler unter
             # den uebrigen Systemhinweisen verschwinden zu lassen.
             data = d.get("data") if isinstance(d.get("data"), dict) else {}
+            error: dict[str, Any] = {"code": data.get("code"), "detail": data.get("detail")}
+            # "Send again" (chat reliability S1): the daemon hands the
+            # operator's own message back as ``retryText``. Passed on only
+            # as written — a non-text or too long value is LEFT OUT, never
+            # cut: a cut text would send a message the operator never
+            # wrote. No field = no button.
+            retry = data.get("retryText")
+            if isinstance(retry, str) and retry.strip() and len(retry) <= _RETRY_TEXT_MAX_CHARS:
+                error["retryText"] = retry
             return [
                 {
                     "kind": "message",
@@ -1557,7 +1624,7 @@ class OmpLineParser:
                     "role": "teammate",
                     "teammate": custom_type,
                     "source": {"kind": "error", "title": custom_type},
-                    "error": {"code": data.get("code"), "detail": data.get("detail")},
+                    "error": error,
                     "text": content[:_RESULT_TRUNCATE_LEN],
                     "model": None,
                     "sidechain": False,

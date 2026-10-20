@@ -175,9 +175,13 @@ async def apply_todo_snapshot(
 # ── the loop ────────────────────────────────────────────────────────────────
 
 #: Where a harness keeps its session files below the transcript root: flat
-#: (Claude Code) or one per-cwd folder deep (omp, Hermes). Deeper files are
-#: subagents, previews or blobs — never a task's own session.
-_SESSION_GLOBS = ("*.jsonl", "*/*.jsonl")
+#: (Claude Code), one per-cwd folder deep (omp, Hermes), or — for the omp
+#: bridge's display copy, the only file that carries a task run's
+#: ``taskId`` and plan — in that folder's ``.mc/`` (``omp_chat.
+#: _MC_SINK_DIRNAME``; old copies still lie beside omp's file until they are
+#: moved, so both places are read). Other deeper files are subagents,
+#: previews, media or blobs — never a task's own session.
+_SESSION_GLOBS = ("*.jsonl", "*/*.jsonl", "*/.mc/*.jsonl")
 
 #: Lines that can name the task a session works on: the omp bridge's session
 #: header (``taskId``) or the dispatch prompt (``**Task ID:** <uuid>``).
