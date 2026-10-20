@@ -70,6 +70,11 @@ export interface ChatNoticeInfo {
 export interface ChatErrorInfo {
   code: string;
   detail?: string | null;
+  /** The operator's own message of the turn that broke, word for word —
+   *  what "Send again" sends. The backend leaves it out (never shortens it)
+   *  when the daemon sent none or the text is too long, so a missing value
+   *  means: no button (spec docs/specs/chat-over-acp.md, "Errors"). */
+  retryText?: string | null;
 }
 
 export interface ToolEvent {
