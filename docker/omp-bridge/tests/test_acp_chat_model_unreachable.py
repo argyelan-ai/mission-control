@@ -275,6 +275,7 @@ def test_3b_the_detail_is_at_most_240_characters(tmp_path):
     })
     detail = cards(lines, "model_unreachable")[0]["data"]["detail"]
     assert 0 < len(detail) <= 240
+    assert detail.startswith("Retry budget exhausted"), "omp's line keeps its start"
 
 
 # ── 4. a prompt that fails as a whole ───────────────────────────────────────
@@ -438,11 +439,16 @@ def _task_outcome(text="", stop="refusal", worked=False, error=None):
     return o
 
 
-_REFLECTION = (
-    "\n\nTASK_COMPLETE\n\n## Was wurde gemacht\nTests ergaenzt und den Fehler behoben.\n"
-    "## Was hat funktioniert\nDer Fehler 'connection refused' im Log war alt und ist behoben.\n"
-    "## Was war unklar\nNichts.\n## Lesson für Agent-Memory\nErst das Log lesen, dann aendern.\n"
-)
+def _finish_mentioning_the_word() -> str:
+    """#897's template (test_model_wait.py), word for word."""
+    import test_ack_on_first_activity as base  # noqa: PLC0415
+
+    return "Fertig." + base._REFLECTION.replace(
+        "Das Modell antwortete sofort und sauber.",
+        "Der Fehler 'connection refused' im Log war alt und ist behoben.",
+    )
+
+
 _TALKING_END = ("Analysis. " * 40) + "The last request failed with connection refused."
 
 #: #897's templates (tests/test_model_wait.py) with omp's own final line.
@@ -461,8 +467,8 @@ PARITY = [
      omp_assistant("error", error=UNABLE_TEXT), True, True),
     ("prompt fails: connection error", "", "", False, "Internal error: Connection error.",
      None, True, True),
-    ("real finish mentioning the word", "Fertig." + _REFLECTION, "end_turn", True, None,
-     omp_reply("Fertig." + _REFLECTION), False, False),
+    ("real finish mentioning the word", _finish_mentioning_the_word(), "end_turn", True,
+     None, omp_reply(_finish_mentioning_the_word()), False, False),
     ("the word early in a long turn",
      "Im Log stand ECONNREFUSED von gestern.\n" + ("Analyse. " * 120), "end_turn", True,
      None, omp_reply("Im Log stand ECONNREFUSED von gestern."), False, False),
@@ -590,6 +596,14 @@ def test_17_the_final_line_is_the_last_assistant_line_that_ends_the_turn():
 def test_17b_a_turn_that_has_not_ended_in_the_file_has_no_final_line(last):
     entries = [omp_user("q"), omp_tool_result()] + ([last] if last else [])
     assert model_errors().final_assistant_message(_raw(*entries)) is None
+
+
+def test_17d_an_earlier_turns_final_line_before_this_turns_user_line_never_counts():
+    """The mark is taken when the job is claimed; a final line of the turn
+    before that omp wrote late can sit after it — this turn's user line
+    follows it, so it is not this turn's end."""
+    raw = _raw(omp_assistant("error", error=ECONN_TEXT), omp_user("the next question"))
+    assert model_errors().final_assistant_message(raw) is None
 
 
 def test_17c_broken_and_half_written_lines_are_skipped():
