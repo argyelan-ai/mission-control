@@ -217,6 +217,7 @@ const ERROR_TEXT_KEYS = [
   "process_exitBody",
   "process_exit_restart_failedBody",
   "resendQuoteLabel",
+  "resendQuote",
   "session_resetBody",
   "session_reset_model_missingBody",
   "session_reset_transcript_missingBody",

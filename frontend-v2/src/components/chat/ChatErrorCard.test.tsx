@@ -315,7 +315,7 @@ describe("Chat-Fehlerkarte — Nochmal senden (S1-R7)", () => {
     const { rerender, wrap } = renderCard(interrupted());
 
     const quote = screen.getByTestId("chat-error-retry-text");
-    expect(quote).toHaveTextContent(RETRY);
+    expect(quote).toHaveTextContent(`“${RETRY}”`);
     expect(screen.getByTestId("chat-error-card")).toContainElement(quote);
 
     fireEvent.click(screen.getByTestId("chat-error-resend"));

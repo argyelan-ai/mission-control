@@ -188,14 +188,16 @@ export function ChatErrorCard({ ev }: ChatErrorCardProps) {
           // What the button sends, word for word. After a model change the
           // restart opens a NEW conversation, so the operator's own bubble is
           // not on this page (plan review F1) — the tap must not be blind.
+          // Quotation marks at the card's own edge, not an indented bar: an
+          // indent would be a third left edge in the card (K9).
           <ClampedContent
             text={retryText}
             testId="chat-error-retry-text"
-            className="mt-2 pl-3 break-words whitespace-pre-wrap text-sm leading-normal"
-            style={{ color: C.textSecondary, borderLeft: `1px solid ${C.border}` }}
+            className="mt-2 break-words whitespace-pre-wrap text-sm leading-normal"
+            style={{ color: C.textPrimary }}
           >
             <span className="sr-only">{t("error.resendQuoteLabel")}: </span>
-            {retryText}
+            {t("error.resendQuote", { text: retryText })}
           </ClampedContent>
         )}
         {(showLink || showResend) && (

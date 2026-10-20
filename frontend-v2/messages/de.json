@@ -3753,7 +3753,8 @@
       "runtimesLink": "Zur Runtimes-Seite",
       "resend": "Nochmal senden",
       "resent": "Gesendet",
-      "resendQuoteLabel": "Deine Nachricht"
+      "resendQuoteLabel": "Deine Nachricht",
+      "resendQuote": "„{text}“"
     },
     "notice": {
       "label": "Hinweis",
