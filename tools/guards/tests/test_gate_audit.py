@@ -88,7 +88,8 @@ def test_python_guard_without_nonzero_exit_is_red(tree):
 def test_guard_whose_red_path_is_in_a_sourced_sibling_lib(tree):
     guard = '#!/bin/bash\n. "$(cd "$(dirname "$0")" && pwd)/lib.sh"\ncheck_line() { :; }\nlint_main "$@"\n'
     (tree / "tools/guards/lint-x.sh").write_text(guard)
-    add_rows(tree, row("script:tools/guards/lint-x.sh"), row("script:tools/guards/lib.sh", kind="Helfer"))
+    add_rows(tree, row("script:tools/guards/lint-x.sh", probe=PROBE_CELL), row("script:tools/guards/lib.sh", kind="Helfer"))
+    (tree / "tools/hooks/tests/test_real_gate.py").write_text(PROBE_TEST + "# lint-x.sh\n")
     # lib missing -> nothing can exit non-zero
     assert any(x.startswith("R4") and "lib.sh" in x for x in findings(tree))
     assert any(x.startswith("R5") and "lint-x.sh" in x for x in findings(tree))
@@ -102,11 +103,12 @@ def test_guard_whose_red_path_is_in_a_sourced_sibling_lib(tree):
 
 def test_escaped_pipe_stays_in_its_cell_and_extra_columns_are_red(tree):
     # `\|` is a pipe inside a cell: the row keeps 6 columns and stays green
-    add_rows(tree, row("script:tools/hooks/real-gate.sh".replace("real", "piped"), blocks=r"gate piped into `\| tail`"))
+    add_rows(tree, row("script:tools/hooks/piped-gate.sh", blocks=r"gate piped into `\| tail`", probe=PROBE_CELL))
+    (tree / "tools/hooks/tests/test_real_gate.py").write_text(PROBE_TEST + "# piped-gate.sh\n")
     (tree / "tools/hooks/piped-gate.sh").write_text(REAL_GATE)
     assert findings(tree) == []
     # an unescaped pipe shifts every later column - that must not pass silently
-    add_rows(tree, row("script:tools/hooks/other-gate.sh", blocks="gate piped into `| tail`"))
+    add_rows(tree, row("script:tools/hooks/other-gate.sh", blocks="gate piped into `| tail`", probe=PROBE_CELL))
     (tree / "tools/hooks/other-gate.sh").write_text(REAL_GATE)
     assert any("expected 6 columns, got 7" in x for x in findings(tree))
 
@@ -281,3 +283,44 @@ def test_probe_file_that_never_runs_the_script_is_red(tree):
 def test_python_hook_scripts_must_be_registered_too(tree):
     (tree / "tools/hooks/new-check.py").write_text("import sys\nsys.exit(2)\n")
     assert any(x.startswith("R2") and "new-check.py" in x for x in findings(tree))
+
+
+# --- R10 for guards in tools/guards: their fixtures are the sabotage test ----
+
+RUN_ALL = '#!/bin/bash\nNOT_GUARDS=" run-all.sh lib.sh "\nfor g in *.sh; do bash "$g" fixtures/x.bad || exit 1; done\n'
+FIXTURE_CELL = "`tools/guards/fixtures/lint-y*.bad` über run-all.sh"
+
+
+def _guard_tree(tree, fixtures=("lint-y.bad", "lint-y.good")):
+    (tree / "tools/guards/fixtures").mkdir(exist_ok=True)
+    (tree / "tools/guards/run-all.sh").write_text(RUN_ALL)
+    (tree / "tools/guards/lint-y.sh").write_text(REAL_GATE)
+    for f in fixtures:
+        (tree / "tools/guards/fixtures" / f).write_text("x\n")
+    add_rows(tree, row("script:tools/guards/run-all.sh", probe=PROBE_CELL.replace("real_gate", "real_gate")),
+             row("script:tools/guards/lint-y.sh", probe=FIXTURE_CELL))
+    (tree / "tools/hooks/tests/test_real_gate.py").write_text(PROBE_TEST + "# run-all.sh\n")
+
+
+def test_guard_with_its_own_bad_fixtures_satisfies_r10(tree):
+    _guard_tree(tree)
+    assert findings(tree) == []
+
+
+def test_guard_fixture_probe_without_a_bad_fixture_is_red(tree):
+    _guard_tree(tree, fixtures=("lint-y.good",))
+    assert any(x.startswith("R10") and "no fixtures/lint-y.bad" in x for x in findings(tree))
+
+
+def test_guard_fixture_probe_for_a_script_run_all_skips_is_red(tree):
+    _guard_tree(tree)
+    (tree / "tools/guards/run-all.sh").write_text(RUN_ALL.replace(" lib.sh ", " lib.sh lint-y.sh "))
+    assert any(x.startswith("R10") and "skips lint-y.sh" in x for x in findings(tree))
+
+
+def test_fixture_of_another_guard_does_not_count(tree):
+    _guard_tree(tree)
+    p = tree / "tools/guards/GATES.md"
+    p.write_text(p.read_text().replace(FIXTURE_CELL, "`tools/guards/fixtures/other*.bad`"))
+    (tree / "tools/guards/fixtures/other.bad").write_text("x\n")
+    assert any(x.startswith("R10") and "lint-y.sh" in x for x in findings(tree))

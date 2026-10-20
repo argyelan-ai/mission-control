@@ -25,7 +25,9 @@ Red (exit 1) when:
       ignores it - say so: kind "Gate (nicht Pflicht)"), or the reverse
   R10 a script registered as Gate names no existing test file in its probe
       column that really mentions the script (a probe that is only words, or
-      a test file that never runs this script, proves nothing)
+      a test file that never runs this script, proves nothing). For a guard
+      in tools/guards its fixtures count instead (`tools/guards/fixtures/
+      <guard>*.bad`): run-all.sh runs them, sabotage-probe.sh proves the logic
   R9  (only with --verify-runs, needs the GitHub API) a run id in the
       evidence column does not exist, belongs to another workflow, or is
       called "Rot-Lauf" but did not fail (run, or the row's own job)
@@ -166,12 +168,41 @@ def soft_fail_findings(path, rel):
 PROBE_PATH = re.compile(r"`?((?:[\w.-]+/)+[\w.-]+\.(?:py|sh|ts|tsx|mjs))`?")
 
 
+FIXTURE_PATH = re.compile(r"tools/guards/fixtures/([\w-]+)[\w.*-]*\.bad")
+
+
+def fixture_probe_problem(root, script, probe):
+    """R10 for a guard in tools/guards: its sabotage test is its own fixtures.
+    run-all.sh runs every fixtures/<guard>.bad / <guard>.*.bad against the guard
+    (must exit 1) and sabotage-probe.sh proves the guard's logic is what makes
+    them red. None = ok, "" = the probe names no fixture, else the reason."""
+    named = [m for m in FIXTURE_PATH.findall(probe) if m == script.stem]
+    if not named:
+        return ""
+    guards = root / "tools/guards"
+    if script.parent.resolve() != guards.resolve() or script.suffix != ".sh":
+        return f"fixtures only count for a guard script in tools/guards, not {script.name}"
+    runner = guards / "run-all.sh"
+    if not runner.is_file():
+        return "fixtures named, but tools/guards/run-all.sh (their runner) is missing"
+    m = re.search(r'NOT_GUARDS="([^"]*)"', runner.read_text(errors="replace"))
+    if m and script.name in m.group(1).split():
+        return f"run-all.sh skips {script.name} (NOT_GUARDS) - its fixtures never run"
+    fx = guards / "fixtures"
+    if not (fx / f"{script.stem}.bad").is_file() and not list(fx.glob(f"{script.stem}.*.bad")):
+        return f"no fixtures/{script.stem}.bad or {script.stem}.*.bad exists"
+    return None
+
+
 def probe_file_problem(root, script, probe):
     """R10: None when the probe column names a test file that exists and
     mentions the script (its file name, or its stem for python imports)."""
+    fixture = fixture_probe_problem(root, script, probe)
+    if fixture is None:
+        return None
     paths = PROBE_PATH.findall(probe)
     if not paths:
-        return "probe column names no test file (write the path of the sabotage test)"
+        return fixture or "probe column names no test file (write the path of the sabotage test)"
     names = {script.name, script.stem, script.stem.replace("-", "_")}
     existing = [q for q in paths if (root / q).is_file()]
     if not existing:
@@ -306,8 +337,8 @@ def audit(root):
         "hints": sum(1 for r in by_id.values() if r["kind"] == "hinweis"),
         "no_red_case": sum(1 for f in findings if f.startswith(("R5", "R7")) or "no red case" in f),
         "not_required": sum(1 for f in findings if f.startswith("R8")),
-        "no_probe": sum(1 for f in findings if "no sabotage probe" in f),
-        "unregistered": sum(1 for f in findings if f.startswith(("R1", "R2"))),
+        "no_probe": sum(1 for f in findings if "no sabotage probe" in f or f.startswith("R10 ")),
+        "unregistered": sum(1 for f in findings if f.startswith(("R1 ", "R2 "))),
         "unjustified_soft": sum(1 for f in findings if f.startswith("R6")),
     }
     return findings, stats
