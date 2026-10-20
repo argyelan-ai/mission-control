@@ -20,10 +20,15 @@ describe("formatCrashTime", () => {
 });
 
 describe("crashReasonKey", () => {
-  it("passes known codes, maps anything else to unknown", () => {
-    expect(crashReasonKey("killed")).toBe("killed");
-    expect(crashReasonKey("memguard")).toBe("memguard");
-    expect(crashReasonKey("something_new")).toBe("unknown");
+  it("passes ADR-096 codes, maps anything else to unknown", () => {
+    expect(crashReasonKey("oom")).toBe("oom");
+    expect(crashReasonKey("crash_loop")).toBe("crash_loop");
+    expect(crashReasonKey("memguard")).toBe("unknown"); // not an ADR code
+    expect(crashReasonKey("crashed")).toBe("unknown");
     expect(crashReasonKey(null)).toBe("unknown");
+  });
+  it("an exit with a code gets the code wording", () => {
+    expect(crashReasonKey("exit", 137)).toBe("exitCode");
+    expect(crashReasonKey("exit", null)).toBe("exit");
   });
 });

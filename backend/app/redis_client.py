@@ -650,6 +650,32 @@ class RedisKeys:
     def runtime_evicted(slug: str) -> str:
         return f"mc:runtime-evicted:{slug}"
 
+    # runtime_stop_intent (ADR-096 §11.1): "MC stopped this on purpose" —
+    # operator stop, switched away, schedule, idle unload, crash-loop stop.
+    # NO TTL: only the runtime's own next start lifts it (runtime_grace).
+    @staticmethod
+    def runtime_stop_intent(slug: str) -> str:
+        return f"mc:runtime-stop-intent:{slug}"
+
+    # runtime_death (ADR-096 §11.3): the explained death of one runtime row
+    # (reason, reason_code, box, at). The watcher mirrors it into the live
+    # snapshot's existing status/reason fields on every silent probe; the
+    # first answering probe or a start/stop of the row removes it.
+    @staticmethod
+    def runtime_death(slug: str) -> str:
+        return f"mc:runtime-death:{slug}"
+
+    # One death / one unreachable alarm per ENDPOINT outage (§11.2, §11.4):
+    # rows sharing a port (Spark :8000) add none. Cleared by the first probe
+    # on that endpoint that gets an answer.
+    @staticmethod
+    def runtime_endpoint_death(endpoint: str) -> str:
+        return f"mc:runtime-endpoint-death:{endpoint.rstrip('/')}"
+
+    @staticmethod
+    def runtime_endpoint_alarm(endpoint: str) -> str:
+        return f"mc:runtime-endpoint-alarm:{endpoint.rstrip('/')}"
+
     # One auto-recovery attempt per 15 min per runtime; the SET-nx claim on
     # this key is what keeps two workers from starting the engine twice.
     @staticmethod

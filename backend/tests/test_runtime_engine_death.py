@@ -1,76 +1,112 @@
-"""Engine death (services/engine_death.py, wired into runtime_watcher).
+"""Engine death — ADR-096 §11 (runtime_watcher + engine_death + runtime_grace).
 
-The live case behind it (18./19.10.2026): a recipe's memory guard killed the
-engine container (exit 137). The watcher wrote "endpoint unreachable" three
-times — slot row, the recipe that ran, and a recipe that never ran on the same
-port — the box looked free, running tasks retried a dead endpoint until they
-ended blocked, and nothing said why it did not come back.
+The live case (19.10.2026): a recipe's memory guard killed the DeepSeek engine
+(container Exited 137). ``runtime.unreachable`` came 3 min 53 s later, without
+a cause, three times — once per row sharing the Spark's ``:8000``.
 
-These tests pin the new contract: one honest event with a reason, a
-"crashed" status with time, running tasks back in the inbox, and none of it
-for planned silence (stop through MC, eviction by a start).
+Contract pinned here:
+- §11.2 speed: connection refused + own anchor exited → death at THAT probe;
+  any other failure + anchor exited → at the 2nd probe; anchor running or not
+  askable → no death, the threshold of 3 stays.
+- §11.1 planned vs. unplanned: a durable stop intent without TTL; a manual
+  stop is never a death and never undone by auto-recovery; only the
+  runtime's own start lifts it.
+- §11.3 explain: existing readers, existing live fields (status "failed" +
+  reason) plus reason_code / box / at.
+- §11.4 one notification per death: runtime.unreachable with the cause, for
+  the dead row only.
+- §11.5 work stays: tasks in progress keep their status, get one comment.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import socket
 import uuid
 from contextlib import ExitStack
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from sqlmodel import select
 
 from app.models.activity import ActivityEvent
 from app.models.agent import Agent
 from app.models.board import Board
+from app.models.host import Host
 from app.models.runtime import Runtime
 from app.models.task import Task, TaskComment
 from app.redis_client import RedisKeys
-from app.services import engine_death, runtime_grace
+from app.services import engine_death, runtime_grace, runtime_manager
+from app.services import runtime_watcher as rw
 from app.services import sse as sse_mod
-from app.services.agent_runtime_switch import ProbedModel
+from app.services.agent_runtime_switch import (
+    FAIL_ERROR,
+    FAIL_REFUSED,
+    FAIL_TIMEOUT,
+    ProbedModel,
+    classify_probe_error,
+    probe_runtime_model_info,
+)
 from app.services.host_resolver import ResolvedHost
 from app.services.runtime_watcher import UNREACHABLE_EVENT_THRESHOLD, RuntimeWatcher
 
-BOX = ResolvedHost(ssh_host="192.0.2.10", ssh_user="mc", kind="ssh", source="registry")
+BOX = ResolvedHost(ssh_host="192.0.2.10", ssh_user="mc", kind="ssh", source="registry",
+                   display_name="Box A")
 ENDPOINT = "http://192.0.2.10:8000/v1"
+INTERVAL = 90
+EXITED_137 = "exited|137|false|2026-10-19T18:44:25Z|2026-10-19T09:00:00Z"
+RUNNING = "running|0|false|0001-01-01T00:00:00Z|2026-10-19T09:00:00Z"
 
 
 class FakeBox:
-    """`docker inspect` / `docker logs` / `pgrep` of one box, configurable."""
+    """``docker inspect`` / ``docker logs`` / handle check of one box."""
 
-    def __init__(self, *, inspect: str | None = "exited|137|false|2026-10-18T17:20:17Z|2026-10-18T09:00:00Z",
-                 logs: str = "", pgrep_running: bool = False):
+    def __init__(self, *, inspect: str | None = EXITED_137, logs: str = "",
+                 pgrep_running: bool = False, ssh_fails: bool = False, hang: float = 0.0):
         self.inspect = inspect
         self.logs = logs
         self.pgrep_running = pgrep_running
+        self.ssh_fails = ssh_fails
+        self.hang = hang
         self.commands: list[str] = []
 
     async def run(self, command, *, host=None, timeout=None):
         self.commands.append(command)
-        if command.startswith("docker inspect"):
+        if self.hang:
+            await asyncio.sleep(self.hang)
+        if self.ssh_fails:
+            raise OSError("ssh: connect to host: Connection timed out")
+        if command.startswith('docker inspect --format "{{.State.Status}}'):
             if self.inspect is None:
-                return ("", "Error: No such object", 1)
+                return ("", "Error: No such object: x", 1)
             return (self.inspect, "", 0)
         if command.startswith("docker logs"):
             return (self.logs, "", 0)
-        if command.startswith("pgrep"):
+        if command.startswith("pgrep -x"):
             return ("", "", 0 if self.pgrep_running else 1)
         return ("", "", 0)
 
+    @property
+    def inspects(self) -> int:
+        return sum(1 for c in self.commands if c.startswith('docker inspect --format "{{.State.Status}}'))
+
 
 class Probe:
-    """What the port answers this tick (None = down)."""
+    """What the port answers this tick: a model id, or None + failure kind."""
 
-    def __init__(self, served):
+    def __init__(self, served=None, failure=FAIL_REFUSED):
         self.served = served
+        self.failure = failure
 
     async def __call__(self, runtime):
-        return ProbedModel(model_id=self.served, context_len=None)
+        if self.served is not None:
+            return ProbedModel(self.served, None)
+        return ProbedModel(None, None, self.failure)
 
 
-def _stack(box: FakeBox, fake_redis, probe: Probe):
+def _stack(box: FakeBox, fake_redis, probe: Probe, *, recover=None):
     async def _get_redis():
         return fake_redis
 
@@ -83,8 +119,8 @@ def _stack(box: FakeBox, fake_redis, probe: Probe):
         patch.object(sse_mod, "get_redis", _get_redis),
         patch("app.services.runtime_watcher.resolve_host_for_runtime", new=AsyncMock(return_value=BOX)),
         patch("app.services.runtime_manager._ssh_run", new=box.run),
-        patch("app.services.runtime_watcher.RuntimeWatcher._maybe_auto_recover", new=AsyncMock(return_value=None)),
-        patch("app.services.runtime_watcher.RuntimeWatcher._served_answer_is_own", new=AsyncMock(return_value=True)),
+        patch("app.services.runtime_watcher.RuntimeWatcher._maybe_auto_recover",
+              new=recover or AsyncMock(return_value=None)),
         patch("app.services.runtime_watcher.host_memory_prep.finish_for_host", new=AsyncMock(return_value=False)),
         patch("app.services.runtime_watcher.host_memory_prep.recover_orphaned_preps", new=AsyncMock(return_value=[])),
         patch("app.services.runtime_watcher.sync_pending_agents", new=AsyncMock(return_value=None)),
@@ -95,11 +131,12 @@ def _stack(box: FakeBox, fake_redis, probe: Probe):
     return stack
 
 
-async def _rt(session, *, slug, model, is_slot=False, runtime_type="ssh_process", process="dsv-tf") -> Runtime:
+async def _rt(session, *, slug, model, is_slot=False, runtime_type="ssh_process",
+              process="dsv-tf", container=None, endpoint=ENDPOINT) -> Runtime:
     rt = Runtime(
-        slug=slug, display_name=slug, runtime_type=runtime_type, endpoint=ENDPOINT,
+        slug=slug, display_name=slug, runtime_type=runtime_type, endpoint=endpoint,
         model_identifier=model, enabled=True, is_slot=is_slot,
-        process_name=None if is_slot else process,
+        process_name=None if is_slot else process, container_name=container,
     )
     session.add(rt)
     await session.commit()
@@ -108,187 +145,452 @@ async def _rt(session, *, slug, model, is_slot=False, runtime_type="ssh_process"
 
 
 async def _events(session, event_type: str) -> list[ActivityEvent]:
-    return list((await session.exec(select(ActivityEvent).where(ActivityEvent.event_type == event_type))).all())
+    return list((await session.exec(
+        select(ActivityEvent).where(ActivityEvent.event_type == event_type)
+    )).all())
 
 
-async def _serve_then_die(watcher, session, probe, model):
-    """One serving tick, then exactly enough silent ticks to hit the threshold."""
-    probe.served = model
-    await watcher.tick(session=session)
-    probe.served = None
-    for _ in range(UNREACHABLE_EVENT_THRESHOLD):
+async def _deaths(session) -> list[ActivityEvent]:
+    return [e for e in await _events(session, "runtime.unreachable")
+            if (e.detail or {}).get("engine_death")]
+
+
+async def _live(fake_redis, slug) -> dict:
+    return json.loads(await fake_redis.get(RedisKeys.runtime_live(slug)))
+
+
+class FakeClock:
+    """Virtual time for the watcher's schedule: one tick every INTERVAL s.
+    The engine dies right after a healthy probe — the worst case for any
+    probe-based detector (a whole interval passes before anyone looks)."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.died_at: float | None = None
+        self.decided_at: float | None = None
+
+    async def tick(self, watcher, session):
+        self.now += INTERVAL
         await watcher.tick(session=session)
 
 
+async def _measure(session, probe: Probe, *, model, max_ticks=5) -> FakeClock:
+    """Serve once, die, then tick until a death is declared (or max_ticks)."""
+    clock = FakeClock()
+    watcher = RuntimeWatcher(interval=INTERVAL)
+    probe.served = model
+    await watcher.tick(session=session)          # t=0: healthy, own answer
+    clock.died_at = clock.now                    # dies right after it
+    probe.served = None
+    for _ in range(max_ticks):
+        await clock.tick(watcher, session)
+        if await _deaths(session):
+            clock.decided_at = clock.now
+            break
+    return clock
+
+
+# ── §11.2 speed ──────────────────────────────────────────────────────────
+
 @pytest.mark.asyncio
-async def test_engine_death_is_reported_once_with_reason_and_time(async_session, fake_redis):
+async def test_refused_with_exited_anchor_is_a_death_at_the_first_probe(async_session, fake_redis):
+    """Before (#895 as opened, and main): decision at probe 3 = 270 s after the
+    death in this schedule (live 3 min 53 s). Now: probe 1 = 90 s."""
     rt = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
-    box = FakeBox()
-    probe = Probe(None)
+    box = FakeBox(logs="INFO serving\nKilled\n")
+    probe = Probe(failure=FAIL_REFUSED)
     with _stack(box, fake_redis, probe):
-        await _serve_then_die(RuntimeWatcher(interval=90), async_session, probe, "DeepSeek-V4.1")
+        clock = await _measure(async_session, probe, model="DeepSeek-V4.1")
 
-    died = await _events(async_session, "runtime.engine_died")
-    assert len(died) == 1
-    assert died[0].severity == "error"
-    assert died[0].detail["reason_code"] == engine_death.KILLED
-    assert died[0].detail["exit_code"] == 137
-    assert "SIGKILL" in died[0].title
-    # The generic alarm is replaced, not doubled.
-    assert await _events(async_session, "runtime.unreachable") == []
-    # Box autostart is off here → the event says MC will not restart it.
-    assert "Box-Autostart ist aus" in died[0].title
+    assert clock.decided_at is not None
+    latency = clock.decided_at - clock.died_at
+    assert latency == 1 * INTERVAL                     # ≤ 2 intervals (ADR target)
+    assert latency < UNREACHABLE_EVENT_THRESHOLD * INTERVAL
+    deaths = await _deaths(async_session)
+    assert len(deaths) == 1
+    d = deaths[0]
+    assert d.severity == "error"
+    assert d.detail["reason_code"] == engine_death.EXIT
+    assert d.detail["exit_code"] == 137
+    assert d.detail["consecutive_failures"] == 1
+    assert d.detail["failure"] == FAIL_REFUSED
+    assert d.detail["box"] == "Box A"
+    assert d.title.startswith("dsv gestoppt auf Box A: Engine hart beendet (Exit 137")
+    assert d.detail["reason_en"].startswith("dsv stopped on Box A: engine killed (exit 137")
+    assert d.detail["log_line"] == "Killed"            # built-in marker, existing reader
+    # Explanation used the crash-loop reader, scoped to the current boot.
+    assert any(c.startswith("docker logs --since 2026-10-19T09:00:00Z --tail 200 dsv-tf")
+               for c in box.commands)
 
-    live = json.loads(await fake_redis.get(RedisKeys.runtime_live(rt.slug)))
-    assert live["status"] == "crashed"
-    assert live["crash"]["reason_code"] == engine_death.KILLED
-    assert live["crash"]["at"] == "2026-10-18T17:20:17Z"  # Docker's own finish time
+    live = await _live(fake_redis, rt.slug)
+    assert live["status"] == "failed"                  # existing status value
+    assert live["reason"] == d.title                   # existing reason field
+    assert live["reason_code"] == engine_death.EXIT
+    assert live["at"] == "2026-10-19T18:44:25Z"        # Docker's own finish time
+    assert live["box"] == "Box A"
     await async_session.refresh(rt)
     assert rt.serving_since is None
 
 
 @pytest.mark.asyncio
-async def test_crashed_status_survives_further_ticks_and_ends_when_serving(async_session, fake_redis):
-    rt = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
-    probe = Probe(None)
-    watcher = RuntimeWatcher(interval=90)
-    with _stack(FakeBox(), fake_redis, probe):
-        await _serve_then_die(watcher, async_session, probe, "DeepSeek-V4.1")
-        await watcher.tick(session=async_session)  # 4th silent tick
-        live = json.loads(await fake_redis.get(RedisKeys.runtime_live(rt.slug)))
-        assert live["status"] == "crashed"
-        assert len(await _events(async_session, "runtime.engine_died")) == 1
-
-        probe.served = "DeepSeek-V4.1"
-        await watcher.tick(session=async_session)
-
-    live = json.loads(await fake_redis.get(RedisKeys.runtime_live(rt.slug)))
-    assert live.get("status") != "crashed"
-    assert "crash" not in live
-    assert await fake_redis.get(runtime_grace.crash_key(rt.slug)) is None
+async def test_timeout_with_exited_anchor_is_a_death_at_the_second_probe(async_session, fake_redis):
+    await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    box = FakeBox()
+    probe = Probe(failure=FAIL_TIMEOUT)
+    with _stack(box, fake_redis, probe):
+        clock = await _measure(async_session, probe, model="DeepSeek-V4.1")
+    assert clock.decided_at - clock.died_at == 2 * INTERVAL
+    assert (await _deaths(async_session))[0].detail["consecutive_failures"] == 2
+    # The first timeout did not even ask the box (a stalling box looks like that).
+    assert box.inspects == 1
 
 
 @pytest.mark.asyncio
-async def test_shared_port_yields_one_event_naming_the_model_that_ran(async_session, fake_redis):
-    """Live 19.10.: slot + DeepSeek + GLM on one port → three alarms. Now one."""
+@pytest.mark.parametrize("failure", [FAIL_REFUSED, FAIL_TIMEOUT])
+async def test_anchor_still_running_is_no_death_and_keeps_the_threshold(async_session, fake_redis, failure):
+    await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    probe = Probe(failure=failure)
+    with _stack(FakeBox(inspect=RUNNING), fake_redis, probe):
+        clock = await _measure(async_session, probe, model="DeepSeek-V4.1", max_ticks=4)
+    assert clock.decided_at is None
+    plain = await _events(async_session, "runtime.unreachable")
+    assert len(plain) == 1 and not plain[0].detail.get("engine_death")
+    assert plain[0].detail["failure"] == failure
+
+
+@pytest.mark.asyncio
+async def test_box_not_askable_is_no_death(async_session, fake_redis):
+    await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    probe = Probe(failure=FAIL_REFUSED)
+    with _stack(FakeBox(ssh_fails=True), fake_redis, probe):
+        clock = await _measure(async_session, probe, model="DeepSeek-V4.1", max_ticks=4)
+    assert clock.decided_at is None
+    assert len(await _events(async_session, "runtime.unreachable")) == 1  # plain, at 3
+
+
+@pytest.mark.asyncio
+async def test_the_decision_is_bounded_under_30_seconds(async_session, fake_redis):
+    """A box that hangs on SSH cannot hold the tick: anchor check and log read
+    each have a hard bound, together under 30 s from the failed probe."""
+    assert rw._ANCHOR_CHECK_TIMEOUT + rw._EXPLAIN_TIMEOUT < 30
+    assert rw._ANCHOR_SSH_TIMEOUT < rw._ANCHOR_CHECK_TIMEOUT
+    await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    probe = Probe(failure=FAIL_REFUSED)
+    loop = asyncio.get_running_loop()
+    with _stack(FakeBox(hang=5), fake_redis, probe), \
+            patch.object(rw, "_ANCHOR_CHECK_TIMEOUT", 0.2):
+        watcher = RuntimeWatcher(interval=INTERVAL)
+        probe.served = "DeepSeek-V4.1"
+        await watcher.tick(session=async_session)
+        probe.served = None
+        started = loop.time()
+        await watcher.tick(session=async_session)
+        elapsed = loop.time() - started
+    assert elapsed < 1.5
+    assert await _deaths(async_session) == []
+
+
+@pytest.mark.asyncio
+async def test_host_process_gone_is_a_death_with_reason_exit(async_session, fake_redis):
+    await _rt(async_session, slug="dsv", model="DeepSeek-V4.1", process="dsv-engine")
+    probe = Probe(failure=FAIL_REFUSED)
+    with _stack(FakeBox(inspect=None, pgrep_running=False), fake_redis, probe):
+        clock = await _measure(async_session, probe, model="DeepSeek-V4.1")
+    assert clock.decided_at - clock.died_at == INTERVAL
+    d = (await _deaths(async_session))[0]
+    assert d.detail["reason_code"] == engine_death.EXIT
+    assert d.detail["exit_code"] is None
+    assert "Engine-Prozess läuft nicht mehr" in d.title
+
+
+@pytest.mark.asyncio
+async def test_oom_killed_reads_as_oom(async_session, fake_redis):
+    await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    probe = Probe(failure=FAIL_REFUSED)
+    box = FakeBox(inspect="exited|137|true|2026-10-19T18:44:25Z|2026-10-19T09:00:00Z")
+    with _stack(box, fake_redis, probe):
+        await _measure(async_session, probe, model="DeepSeek-V4.1")
+    assert (await _deaths(async_session))[0].detail["reason_code"] == engine_death.OOM
+
+
+@pytest.mark.asyncio
+async def test_death_status_holds_and_ends_with_the_next_answer(async_session, fake_redis):
+    rt = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    probe = Probe(failure=FAIL_REFUSED)
+    watcher = RuntimeWatcher(interval=INTERVAL)
+    with _stack(FakeBox(), fake_redis, probe):
+        await _measure(async_session, probe, model="DeepSeek-V4.1")
+        for _ in range(4):
+            await watcher.tick(session=async_session)
+        assert (await _live(fake_redis, rt.slug))["status"] == "failed"
+        assert len(await _deaths(async_session)) == 1
+        assert await _events(async_session, "runtime.unreachable") == await _deaths(async_session)
+        probe.served = "DeepSeek-V4.1"
+        await watcher.tick(session=async_session)
+    live = await _live(fake_redis, rt.slug)
+    assert live.get("status") != "failed" and "reason_code" not in live
+    assert await engine_death.get_death(fake_redis, rt.slug) is None
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_restores_the_plain_alarm(async_session, fake_redis):
+    await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    probe = Probe(failure=FAIL_REFUSED)
+    with _stack(FakeBox(), fake_redis, probe), \
+            patch("app.services.runtime_watcher.settings.runtime_engine_death_enabled", False):
+        clock = await _measure(async_session, probe, model="DeepSeek-V4.1", max_ticks=3)
+    assert clock.decided_at is None
+    assert len(await _events(async_session, "runtime.unreachable")) == 1
+
+
+# ── §11.2 one engine death = one death (shared :8000) ────────────────────
+
+@pytest.mark.asyncio
+async def test_shared_port_one_death_one_notification_no_autostart_of_glm(async_session, fake_redis):
+    """ADR-096 PR 3 test (a): slot + DeepSeek + GLM on one port; DeepSeek dies
+    while GLM's eviction marker has long expired → exactly one death, one
+    notification, for DeepSeek; GLM gets no alarm and no autostart."""
+    host = Host(slug="box-a", display_name="Box A", kind="ssh", ssh_host="192.0.2.10",
+                autostart_enabled=True, autostart_recipe_slug="recipe-glm")
+    async_session.add(host)
+    await async_session.commit()
     slot = await _rt(async_session, slug="box-slot", model="DeepSeek-V4.1", is_slot=True,
                      runtime_type="openai_compatible")
     dsv = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
     glm = await _rt(async_session, slug="glm", model="GLM-5.3", process="glm-tf")
-    probe = Probe(None)
-    watcher = RuntimeWatcher(interval=90)
-    with _stack(FakeBox(), fake_redis, probe):
-        await _serve_then_die(watcher, async_session, probe, "DeepSeek-V4.1")
-        # The slot row defers to the recipe row, which mirrors its crash doc
-        # onto it; the slot's snapshot picks it up on its next silent probe.
-        await watcher.tick(session=async_session)
+    for r in (slot, dsv, glm):
+        r.host_id = host.id
+        async_session.add(r)
+    await async_session.commit()
+    # GLM was switched away when DeepSeek started — the 1 h marker is gone,
+    # the durable intent is not.
+    async def _get_redis():
+        return fake_redis
+    with patch("app.services.runtime_grace.get_redis", _get_redis):
+        await runtime_grace.mark_stop_intent(glm.slug, runtime_grace.INTENT_SWITCHED_AWAY, by=dsv.slug)
+    assert await runtime_grace.get_evicted(glm.slug, fake_redis) is None
 
-    died = await _events(async_session, "runtime.engine_died")
-    assert len(died) == 1
-    assert died[0].detail["slug"] == dsv.slug
+    start = AsyncMock(return_value={"ok": True, "message": "x"})
+    probe = Probe(failure=FAIL_REFUSED)
+    own = {dsv.slug: True, glm.slug: False}
+
+    async def _own(self, session, runtime):
+        return own.get(runtime.slug, True)
+
+    with _stack(FakeBox(), fake_redis, probe, recover=None), \
+            patch.object(RuntimeWatcher, "_maybe_auto_recover", RuntimeWatcher._maybe_auto_recover), \
+            patch.object(RuntimeWatcher, "_served_answer_is_own", _own), \
+            patch.object(RuntimeWatcher, "_autostart_start", start), \
+            patch.object(RuntimeWatcher, "_autostart_target",
+                         AsyncMock(return_value=(host, object()))), \
+            patch.object(RuntimeWatcher, "_record_autostart_attempt", AsyncMock()), \
+            patch.object(RuntimeWatcher, "_host_answers", AsyncMock(return_value=True)), \
+            patch.object(RuntimeWatcher, "_active_exclusive_sibling", AsyncMock(return_value=None)):
+        await _measure(async_session, probe, model="DeepSeek-V4.1", max_ticks=1)
+        watcher = RuntimeWatcher(interval=INTERVAL)
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 1):
+            await watcher.tick(session=async_session)
+
+    alarms = await _events(async_session, "runtime.unreachable")
+    assert len(alarms) == 1
+    assert alarms[0].detail["engine_death"] is True
+    assert alarms[0].detail["slug"] == dsv.slug
+    started = [c.args[1].slug for c in start.await_args_list]
+    assert glm.slug not in started                     # GLM never autostarted
+    glm_live = await _live(fake_redis, glm.slug)
+    assert glm_live.get("status") != "failed"
+
+
+@pytest.mark.asyncio
+async def test_a_row_that_never_ran_raises_nothing_even_without_any_marker(async_session, fake_redis):
+    await _rt(async_session, slug="box-slot", model="DeepSeek-V4.1", is_slot=True,
+              runtime_type="openai_compatible")
+    dsv = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    await _rt(async_session, slug="glm", model="GLM-5.3", process="glm-tf")
+    own = {"glm": False}
+
+    async def _own(self, session, runtime):
+        return own.get(runtime.slug, True)
+
+    probe = Probe(failure=FAIL_TIMEOUT)
+    with _stack(FakeBox(inspect=RUNNING), fake_redis, probe), \
+            patch.object(RuntimeWatcher, "_served_answer_is_own", _own):
+        await _measure(async_session, probe, model="DeepSeek-V4.1", max_ticks=4)
+    # No death (engine still running), so ONE plain alarm for the endpoint —
+    # not three, and never from the GLM row.
+    alarms = await _events(async_session, "runtime.unreachable")
+    assert len(alarms) == 1
+    assert alarms[0].detail["slug"] != "glm"
+    assert alarms[0].detail["slug"] in {dsv.slug, "box-slot"}
+
+
+# ── §11.1 planned vs. unplanned ──────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_manual_stop_is_never_a_death_and_never_expires(async_session, fake_redis):
+    rt = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    probe = Probe(failure=FAIL_REFUSED)
+    watcher = RuntimeWatcher(interval=INTERVAL)
+    with _stack(FakeBox(), fake_redis, probe), \
+            patch.object(runtime_manager, "stop_ssh_process", AsyncMock(return_value={"ok": True, "message": "s"})):
+        probe.served = "DeepSeek-V4.1"
+        await watcher.tick(session=async_session)
+        await runtime_manager.stop_runtime(rt.to_registry_dict(), host=BOX)
+        probe.served = None
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 3):
+            await watcher.tick(session=async_session)
+        # A neighbour answering on the shared port does not lift it either.
+        probe.served = "GLM-5.3"
+        await watcher.tick(session=async_session)
+        probe.served = None
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 1):
+            await watcher.tick(session=async_session)
+
+    assert await _events(async_session, "runtime.unreachable") == []
+    assert (await runtime_grace.get_stop_intent(rt.slug, fake_redis))["why"] == runtime_grace.INTENT_OPERATOR_STOP
+    assert await fake_redis.ttl(RedisKeys.runtime_stop_intent(rt.slug)) == -1   # no TTL
+
+
+@pytest.mark.asyncio
+async def test_stop_intent_is_set_before_the_stop_itself(fake_redis):
+    seen = {}
+
+    async def _stop(runtime, *, host=None):
+        seen["intent"] = await runtime_grace.get_stop_intent("dsv", fake_redis)
+        return {"ok": True, "message": "s"}
+
+    async def _get_redis():
+        return fake_redis
+    with patch("app.services.runtime_grace.get_redis", _get_redis), \
+            patch.object(runtime_manager, "stop_ssh_process", _stop):
+        await runtime_manager.stop_runtime(
+            {"slug": "dsv", "runtime_type": "ssh_process", "display_name": "dsv",
+             "process_name": "dsv-tf"}, host=BOX,
+        )
+    assert seen["intent"]["why"] == runtime_grace.INTENT_OPERATOR_STOP
+
+
+@pytest.mark.asyncio
+async def test_auto_recovery_never_overrides_a_stop_intent(async_session, fake_redis):
+    rt = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    async def _get_redis():
+        return fake_redis
+    with patch("app.services.runtime_grace.get_redis", _get_redis):
+        await runtime_grace.mark_stop_intent(rt.slug, runtime_grace.INTENT_OPERATOR_STOP)
+    target = AsyncMock(return_value=(object(), object()))
+    with patch("app.services.runtime_watcher.settings.runtime_auto_recovery_enabled", True), \
+            patch.object(RuntimeWatcher, "_autostart_target", target):
+        await RuntimeWatcher(interval=INTERVAL)._maybe_auto_recover(
+            async_session, fake_redis, rt, UNREACHABLE_EVENT_THRESHOLD + 5,
+        )
+    target.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_only_the_runtimes_own_start_lifts_the_intent(fake_redis):
+    async def _get_redis():
+        return fake_redis
+    with patch("app.services.runtime_grace.get_redis", _get_redis), \
+            patch.object(runtime_manager, "already_running",
+                         AsyncMock(return_value={"ok": True, "message": "läuft schon"})):
+        await runtime_grace.mark_stop_intent("dsv", runtime_grace.INTENT_OPERATOR_STOP)
+        await runtime_grace.mark_stop_intent("glm", runtime_grace.INTENT_SWITCHED_AWAY, by="dsv")
+        # A start of ANOTHER runtime does not touch it.
+        await runtime_manager.start_runtime(
+            {"slug": "glm", "runtime_type": "vllm_docker", "container_name": "glm"}, host=BOX)
+        assert await runtime_grace.get_stop_intent("dsv", fake_redis) is not None
+        assert await runtime_grace.get_stop_intent("glm", fake_redis) is None
+        # Auto-recovery is not "the operator chose it again".
+        await runtime_manager.start_runtime(
+            {"slug": "dsv", "runtime_type": "vllm_docker", "container_name": "dsv"}, host=BOX,
+            grace_source=runtime_grace.SOURCE_AUTO_RECOVERY)
+        assert await runtime_grace.get_stop_intent("dsv", fake_redis) is not None
+        await runtime_manager.start_runtime(
+            {"slug": "dsv", "runtime_type": "vllm_docker", "container_name": "dsv"}, host=BOX)
+        assert await runtime_grace.get_stop_intent("dsv", fake_redis) is None
+
+
+@pytest.mark.asyncio
+async def test_eviction_marks_switched_away_before_it_stops(session, fake_redis):
+    from tests.test_recipe_switcher_p3 import _host, _runtime
+
+    box = await _host(session, "box-a")
+    await _runtime(session, "tf-box-a", box, container_name="tf-engine")
+    new = await _runtime(session, "vllm-box-a", box, container_name="vllm-head")
+    seen = {}
+
+    async def fake_evict(slug, **_kw):
+        seen["intent"] = await runtime_grace.get_stop_intent(slug, fake_redis)
+        return {"ok": True}
+
+    with (
+        patch("app.services.runtime_grace.get_redis", AsyncMock(return_value=fake_redis)),
+        patch.object(runtime_manager, "evict_spark_runtime_containers", fake_evict),
+        patch.object(runtime_manager, "get_runtime_state", AsyncMock(return_value={"state": "ready"})),
+        patch("app.services.heads.box_guard.switch_lock", AsyncMock(return_value=(None, []))),
+    ):
+        await runtime_manager.ensure_exclusive_host(new.model_dump(), session=session)
+    assert seen["intent"]["why"] == runtime_grace.INTENT_SWITCHED_AWAY
+    assert seen["intent"]["by"] == "vllm-box-a"
+    assert await fake_redis.ttl(RedisKeys.runtime_stop_intent("tf-box-a")) == -1
+
+
+@pytest.mark.asyncio
+async def test_a_dead_row_with_an_expired_eviction_but_durable_intent_is_no_death(async_session, fake_redis):
+    rt = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    probe = Probe(failure=FAIL_REFUSED)
+    watcher = RuntimeWatcher(interval=INTERVAL)
+    with _stack(FakeBox(), fake_redis, probe):
+        probe.served = "DeepSeek-V4.1"
+        await watcher.tick(session=async_session)
+        await runtime_grace.mark_stop_intent(rt.slug, runtime_grace.INTENT_SWITCHED_AWAY, by="glm")
+        probe.served = None
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 1):
+            await watcher.tick(session=async_session)
     assert await _events(async_session, "runtime.unreachable") == []
 
-    glm_live = json.loads(await fake_redis.get(RedisKeys.runtime_live(glm.slug)))
-    assert glm_live.get("status") != "crashed"  # GLM never ran
-    slot_live = json.loads(await fake_redis.get(RedisKeys.runtime_live(slot.slug)))
-    assert slot_live["status"] == "crashed"     # the box's address is dark too
 
+# ── crash-loop stop is reported once (test (c)) ──────────────────────────
 
 @pytest.mark.asyncio
-async def test_stop_through_mc_is_not_a_death(async_session, fake_redis):
-    rt = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
-    probe = Probe(None)
-    watcher = RuntimeWatcher(interval=90)
-    with _stack(FakeBox(), fake_redis, probe):
-        probe.served = "DeepSeek-V4.1"
+async def test_crash_loop_stop_is_reported_once_and_never_again_as_death(async_session, fake_redis):
+    rt = await _rt(async_session, slug="vllm", model="org/m", runtime_type="vllm_docker",
+                   process=None, container="vllm-c")
+    restarts = {"n": 0, "looping": True}
+
+    class LoopBox(FakeBox):
+        async def run(self, command, *, host=None, timeout=None):
+            if command.startswith('docker inspect --format "{{.RestartCount}}'):
+                if restarts["looping"]:
+                    restarts["n"] += 3
+                return (f"{restarts['n']} 2026-10-19T09:00:00Z", "", 0)
+            if command.startswith('docker inspect --format "{{.State.Status}}'):
+                # Docker restarts it on its own: "restarting", not a death.
+                # After MC's `docker stop` it is plainly exited.
+                state = "restarting|1" if restarts["looping"] else "exited|137"
+                return (f"{state}|false|2026-10-19T18:44:25Z|2026-10-19T09:00:00Z", "", 0)
+            return await super().run(command, host=host, timeout=timeout)
+
+    probe = Probe(failure=FAIL_REFUSED)
+    watcher = RuntimeWatcher(interval=INTERVAL)
+    with _stack(LoopBox(logs="ValueError: KV cache too small"), fake_redis, probe):
+        probe.served = "org/m"
         await watcher.tick(session=async_session)
-        await runtime_grace.mark_stopped(rt.slug)
         probe.served = None
-        for _ in range(UNREACHABLE_EVENT_THRESHOLD):
+        await watcher.tick(session=async_session)     # baseline
+        await watcher.tick(session=async_session)     # delta 3 → loop stopped
+        assert len(await _events(async_session, "runtime.crash_loop_stopped")) == 1
+        restarts["looping"] = False                   # loop broken: no more restarts
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 2):
             await watcher.tick(session=async_session)
 
-    assert await _events(async_session, "runtime.engine_died") == []
-    assert len(await _events(async_session, "runtime.unreachable")) == 1  # unchanged behaviour
-    live = json.loads(await fake_redis.get(RedisKeys.runtime_live(rt.slug)))
-    assert live.get("status") != "crashed"
+    assert len(await _events(async_session, "runtime.crash_loop_stopped")) == 1
+    assert await _events(async_session, "runtime.unreachable") == []
+    live = await _live(fake_redis, rt.slug)
+    assert live["status"] == "failed" and live["reason_code"] == engine_death.CRASH_LOOP
 
 
-@pytest.mark.asyncio
-async def test_stopping_the_recipe_keeps_the_slot_row_quiet_too(async_session, fake_redis):
-    """Stop button on the recipe → the box's slot row goes dark as planned:
-    no crash on the slot card, no task of a slot-bound agent handed back."""
-    slot = await _rt(async_session, slug="box-slot", model="DeepSeek-V4.1", is_slot=True,
-                     runtime_type="openai_compatible")
-    dsv = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
-    board, agent = await _board_agent(async_session, slot)
-    running = Task(board_id=board.id, title="running", status="in_progress",
-                   assigned_agent_id=agent.id, dispatched_at=datetime.now(timezone.utc))
-    async_session.add(running)
-    await async_session.commit()
-    probe = Probe(None)
-    watcher = RuntimeWatcher(interval=90)
-    with _stack(FakeBox(), fake_redis, probe):
-        probe.served = "DeepSeek-V4.1"
-        await watcher.tick(session=async_session)
-        await runtime_grace.mark_stopped(dsv.slug)
-        probe.served = None
-        for _ in range(UNREACHABLE_EVENT_THRESHOLD):
-            await watcher.tick(session=async_session)
-
-    assert await _events(async_session, "runtime.engine_died") == []
-    slot_live = json.loads(await fake_redis.get(RedisKeys.runtime_live(slot.slug)))
-    assert slot_live.get("status") != "crashed"
-    await async_session.refresh(running)
-    assert running.status == "in_progress"
-
-
-@pytest.mark.asyncio
-async def test_eviction_by_a_start_is_not_a_death(async_session, fake_redis):
-    rt = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
-    probe = Probe(None)
-    watcher = RuntimeWatcher(interval=90)
-    with _stack(FakeBox(), fake_redis, probe):
-        probe.served = "DeepSeek-V4.1"
-        await watcher.tick(session=async_session)
-        await runtime_grace.mark_evicted(rt.slug, by="glm")
-        probe.served = None
-        for _ in range(UNREACHABLE_EVENT_THRESHOLD):
-            await watcher.tick(session=async_session)
-
-    assert await _events(async_session, "runtime.engine_died") == []
-
-
-@pytest.mark.asyncio
-async def test_a_silent_but_running_engine_is_not_a_death(async_session, fake_redis):
-    """Container still running, port silent (busy or stuck engine): no
-    "crashed", no task handed back — only the old unreachable alarm."""
-    rt = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
-    board, agent = await _board_agent(async_session, rt)
-    running = Task(board_id=board.id, title="running", status="in_progress",
-                   assigned_agent_id=agent.id, dispatched_at=datetime.now(timezone.utc))
-    async_session.add(running)
-    await async_session.commit()
-    probe = Probe(None)
-    with _stack(FakeBox(inspect="running|0|false|0001-01-01T00:00:00Z|x"), fake_redis, probe):
-        await _serve_then_die(RuntimeWatcher(interval=90), async_session, probe, "DeepSeek-V4.1")
-    assert await _events(async_session, "runtime.engine_died") == []
-    assert len(await _events(async_session, "runtime.unreachable")) == 1
-    live = json.loads(await fake_redis.get(RedisKeys.runtime_live(rt.slug)))
-    assert live.get("status") != "crashed"
-    await async_session.refresh(running)
-    assert running.status == "in_progress"
-
-
-@pytest.mark.asyncio
-async def test_kill_switch_restores_old_behaviour(async_session, fake_redis):
-    await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
-    probe = Probe(None)
-    with _stack(FakeBox(), fake_redis, probe), \
-            patch("app.services.engine_death.settings.runtime_engine_death_enabled", False):
-        await _serve_then_die(RuntimeWatcher(interval=90), async_session, probe, "DeepSeek-V4.1")
-    assert await _events(async_session, "runtime.engine_died") == []
-    assert len(await _events(async_session, "runtime.unreachable")) == 1
-
+# ── §11.5 work stays, one comment ────────────────────────────────────────
 
 async def _board_agent(session, runtime: Runtime) -> tuple[Board, Agent]:
     board = Board(name="B", slug=f"b-{uuid.uuid4().hex[:6]}", auto_dispatch_enabled=False)
@@ -303,346 +605,107 @@ async def _board_agent(session, runtime: Runtime) -> tuple[Board, Agent]:
 
 
 @pytest.mark.asyncio
-async def test_running_tasks_of_bound_agents_go_back_to_the_inbox(async_session, fake_redis):
-    rt = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
-    other = await _rt(async_session, slug="other", model="X", process="x")
-    other.endpoint = "http://192.0.2.11:8000/v1"  # another box: its work is not touched
-    async_session.add(other)
-    await async_session.commit()
-    board, agent = await _board_agent(async_session, rt)
-    _, bystander = await _board_agent(async_session, other)
+async def test_running_work_stays_and_gets_one_comment_with_the_reason(async_session, fake_redis):
+    slot = await _rt(async_session, slug="box-slot", model="DeepSeek-V4.1", is_slot=True,
+                     runtime_type="openai_compatible")
+    await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    other = await _rt(async_session, slug="far", model="x", endpoint="http://192.0.2.99:8000/v1")
+    board, agent = await _board_agent(async_session, slot)      # bound to the SLOT row
+    _, far_agent = await _board_agent(async_session, other)
     now = datetime.now(timezone.utc)
     running = Task(board_id=board.id, title="running", status="in_progress",
-                   assigned_agent_id=agent.id, dispatched_at=now, ack_at=now,
-                   dispatch_attempt_id=str(uuid.uuid4()))
-    delivered = Task(board_id=board.id, title="delivered", status="inbox",
-                     assigned_agent_id=agent.id, dispatched_at=now)
-    finished = Task(board_id=board.id, title="finished", status="done", assigned_agent_id=agent.id)
-    elsewhere = Task(board_id=board.id, title="elsewhere", status="in_progress",
-                     assigned_agent_id=bystander.id, dispatched_at=now, ack_at=now)
-    for t in (running, delivered, finished, elsewhere):
-        async_session.add(t)
+                   assigned_agent_id=agent.id, dispatched_at=now, ack_at=now)
+    queued = Task(board_id=board.id, title="queued", status="inbox",
+                  assigned_agent_id=agent.id, dispatched_at=now)
+    elsewhere = Task(board_id=board.id, title="far", status="in_progress",
+                     assigned_agent_id=far_agent.id, dispatched_at=now)
+    async_session.add_all([running, queued, elsewhere])
     await async_session.commit()
     agent.current_task_id = running.id
     async_session.add(agent)
     await async_session.commit()
 
-    probe = Probe(None)
+    probe = Probe(failure=FAIL_REFUSED)
+    watcher = RuntimeWatcher(interval=INTERVAL)
     with _stack(FakeBox(), fake_redis, probe):
-        await _serve_then_die(RuntimeWatcher(interval=90), async_session, probe, "DeepSeek-V4.1")
+        await _measure(async_session, probe, model="DeepSeek-V4.1")
+        for _ in range(3):
+            await watcher.tick(session=async_session)
 
-    for t in (running, delivered, finished, elsewhere):
+    for t in (running, queued, elsewhere):
         await async_session.refresh(t)
     await async_session.refresh(agent)
-    assert running.status == "inbox"
-    assert running.dispatched_at is None and running.ack_at is None
-    assert running.dispatch_attempt_id is None
-    assert agent.current_task_id is None
-    assert delivered.status == "inbox" and delivered.dispatched_at is None
-    assert finished.status == "done"
+    assert running.status == "in_progress"                # not moved
+    assert running.dispatched_at is not None and running.ack_at is not None
+    assert agent.current_task_id == running.id
+    assert queued.status == "inbox" and queued.dispatched_at is not None
     assert elsewhere.status == "in_progress"
 
-    notes = (await async_session.exec(
+    notes = list((await async_session.exec(
         select(TaskComment).where(TaskComment.task_id == running.id)
-    )).all()
-    assert any("Modell ausgefallen" in c.content for c in notes)
-    requeued = await _events(async_session, "task.requeued_runtime_down")
-    assert {e.task_id for e in requeued} == {running.id, delivered.id}
-    died = (await _events(async_session, "runtime.engine_died"))[0]
-    assert set(died.detail["requeued_task_ids"]) == {str(running.id), str(delivered.id)}
-    # The card says how many went back (crash doc read by the live snapshot).
-    live = json.loads(await fake_redis.get(RedisKeys.runtime_live(rt.slug)))
-    assert live["crash"]["requeued_tasks"] == 2
+    )).all())
+    assert len(notes) == 1                                 # once per death
+    assert notes[0].comment_type == "system"
+    assert notes[0].content.startswith("Modell ausgefallen: dsv gestoppt auf Box A")
+    assert "bleibt in Arbeit" in notes[0].content
+    for t in (queued, elsewhere):
+        assert (await async_session.exec(
+            select(TaskComment).where(TaskComment.task_id == t.id)
+        )).all() == []
+    d = (await _deaths(async_session))[0]
+    assert d.detail["commented_task_ids"] == [str(running.id)]
+    assert await _events(async_session, "task.requeued_runtime_down") == []
 
+
+# ── stop acknowledges a death on the card ────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_requeue_switch_off_leaves_tasks_alone(async_session, fake_redis):
+async def test_stop_of_a_dead_runtime_clears_its_card_reason(async_session, fake_redis):
     rt = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
-    board, agent = await _board_agent(async_session, rt)
-    running = Task(board_id=board.id, title="running", status="in_progress",
-                   assigned_agent_id=agent.id, dispatched_at=datetime.now(timezone.utc))
-    async_session.add(running)
-    await async_session.commit()
-    probe = Probe(None)
+    probe = Probe(failure=FAIL_REFUSED)
     with _stack(FakeBox(), fake_redis, probe), \
-            patch("app.services.engine_death.settings.runtime_engine_death_requeue_enabled", False):
-        await _serve_then_die(RuntimeWatcher(interval=90), async_session, probe, "DeepSeek-V4.1")
-    await async_session.refresh(running)
-    assert running.status == "in_progress"
-    assert len(await _events(async_session, "runtime.engine_died")) == 1
+            patch.object(runtime_manager, "stop_ssh_process", AsyncMock(return_value={"ok": True, "message": "s"})):
+        await _measure(async_session, probe, model="DeepSeek-V4.1")
+        assert await engine_death.get_death(fake_redis, rt.slug) is not None
+        await runtime_manager.stop_runtime(rt.to_registry_dict(), host=BOX)
+        assert await engine_death.get_death(fake_redis, rt.slug) is None
+        await RuntimeWatcher(interval=INTERVAL).tick(session=async_session)
+    assert (await _live(fake_redis, rt.slug)).get("status") != "failed"
 
 
-# ── diagnose(): the reason read from the box ─────────────────────────────
+# ── probe failure kinds ──────────────────────────────────────────────────
 
-def _row(runtime_type="ssh_process", process="dsv-tf", container=None):
-    return Runtime(slug="r", display_name="r", runtime_type=runtime_type, endpoint=ENDPOINT,
-                   process_name=process, container_name=container)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("inspect,logs,expected", [
-    ("exited|137|true|2026-10-18T17:20:17Z|x", "", engine_death.OOM),
-    ("exited|137|false|2026-10-18T17:20:17Z|x", "memguard: MemAvailable under floor, killing", engine_death.MEMGUARD),
-    ("exited|137|false|2026-10-18T17:20:17Z|x", "", engine_death.KILLED),
-    ("exited|1|false|2026-10-18T17:20:17Z|x", "ValueError: KV cache too small", engine_death.EXITED_ERROR),
-    ("exited|0|false|2026-10-18T17:20:17Z|x", "", engine_death.EXITED_CLEAN),
-    ("running|0|false|0001-01-01T00:00:00Z|x", "", engine_death.HUNG),
-])
-async def test_diagnose_reads_the_reason_from_docker(inspect, logs, expected):
-    box = FakeBox(inspect=inspect, logs=logs)
-    with patch("app.services.runtime_manager._ssh_run", new=box.run):
-        diag = await engine_death.diagnose(_row(), BOX)
-    assert diag["reason_code"] == expected
-    if expected == engine_death.EXITED_ERROR:
-        assert "KV cache" in diag["log_line"]
-    if expected == engine_death.HUNG:
-        assert diag["finished_at"] is None
+def test_classify_probe_error():
+    req = httpx.Request("GET", "http://x/v1/models")
+    refused = httpx.ConnectError("All connection attempts failed", request=req)
+    refused.__cause__ = ConnectionRefusedError(111, "Connection refused")
+    assert classify_probe_error(refused) == FAIL_REFUSED
+    assert classify_probe_error(httpx.ConnectTimeout("timed out", request=req)) == FAIL_TIMEOUT
+    assert classify_probe_error(httpx.ReadTimeout("timed out", request=req)) == FAIL_TIMEOUT
+    dns = httpx.ConnectError("[Errno -2] Name or service not known", request=req)
+    assert classify_probe_error(dns) == FAIL_ERROR
 
 
 @pytest.mark.asyncio
-async def test_diagnose_host_process_and_missing_container():
-    gone = FakeBox(inspect=None, pgrep_running=False)
-    with patch("app.services.runtime_manager._ssh_run", new=gone.run):
-        assert (await engine_death.diagnose(_row(), BOX))["reason_code"] == engine_death.PROCESS_GONE
-    docker_gone = FakeBox(inspect=None)
-    with patch("app.services.runtime_manager._ssh_run", new=docker_gone.run):
-        diag = await engine_death.diagnose(_row("vllm_docker", process=None, container="c"), BOX)
-    assert diag["reason_code"] == engine_death.CONTAINER_GONE
-    assert not any(c.startswith("pgrep") for c in docker_gone.commands)
+async def test_a_closed_local_port_probes_as_refused():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    rt = Runtime(slug="p", display_name="p", runtime_type="vllm_docker",
+                 endpoint=f"http://127.0.0.1:{port}/v1")
+    probed = await probe_runtime_model_info(rt)
+    assert probed.model_id is None
+    assert probed.failure == FAIL_REFUSED
 
 
-@pytest.mark.asyncio
-async def test_diagnose_without_anchor_or_ssh_is_unknown():
-    assert (await engine_death.diagnose(_row(process=None), BOX))["reason_code"] == engine_death.UNKNOWN
-    assert (await engine_death.diagnose(_row(), None))["reason_code"] == engine_death.UNKNOWN
-
-
-# ── stop_runtime marks the stop as planned ───────────────────────────────
-
-@pytest.mark.asyncio
-async def test_stop_runtime_marks_stop_and_acknowledges_crash(fake_redis):
-    from app.services import runtime_manager
-
-    async def _get_redis():
-        return fake_redis
-
-    await fake_redis.set(runtime_grace.crash_key("lms-rt"), json.dumps({"reason_code": "killed"}))
-    with patch("app.services.runtime_grace.get_redis", _get_redis), \
-            patch("app.services.runtime_manager._ssh_run", new=AsyncMock(return_value=("", "", 0))):
-        await runtime_manager.stop_runtime(
-            {"id": "x", "slug": "lms-rt", "display_name": "lms", "runtime_type": "lmstudio",
-             "lms_identifier": "m"},
-            host=BOX,
+def test_reason_sentences_name_box_and_time():
+    with patch("app.services.engine_death.settings.usage_timezone", "Europe/Zurich"):
+        de, en = engine_death.sentences(
+            engine_death.EXIT, display="DeepSeek", box="Box A",
+            at="2026-10-19T18:44:25Z", exit_code=137, marker=None,
         )
-    assert await runtime_grace.was_stopped("lms-rt", fake_redis) is True
-    assert await fake_redis.get(runtime_grace.crash_key("lms-rt")) is None
-
-
-# ── Critic round 1 (19.10.): the live topology and its edge cases ─────────
-#
-# Live, every local agent is bound to the box's SLOT row; the recipe rows on
-# the same port have no agents. Every recipe switch marks the previous recipe
-# "evicted" for an hour. These tests pin that exact shape.
-
-async def _live_topology(session):
-    slot = await _rt(session, slug="box-slot", model="DeepSeek-V4.1", is_slot=True,
-                     runtime_type="openai_compatible")
-    glm = await _rt(session, slug="glm", model="GLM-5.3", process="glm-tf")
-    dsv = await _rt(session, slug="dsv", model="DeepSeek-V4.1")
-    board, agent = await _board_agent(session, slot)
-    return slot, glm, dsv, board, agent
-
-
-async def _running(session, board, agent, title="running") -> Task:
-    now = datetime.now(timezone.utc)
-    task = Task(board_id=board.id, title=title, status="in_progress",
-                assigned_agent_id=agent.id, dispatched_at=now, ack_at=now)
-    session.add(task)
-    await session.commit()
-    await session.refresh(task)
-    return task
-
-
-@pytest.mark.asyncio
-async def test_death_soon_after_a_recipe_switch_still_hands_slot_tasks_back(async_session, fake_redis):
-    """Blocker: GLM → DeepSeek switch marks GLM evicted for 1 h. DeepSeek dies
-    20 min later. The slot-bound agents' running work must go back, the event
-    must say so, and there must be no second "unreachable" alarm."""
-    slot, glm, dsv, board, agent = await _live_topology(async_session)
-    task = await _running(async_session, board, agent)
-    probe = Probe(None)
-    with _stack(FakeBox(), fake_redis, probe):
-        await runtime_grace.mark_evicted(glm.slug, by=dsv.slug)  # the earlier switch
-        watcher = RuntimeWatcher(interval=90)
-        await _serve_then_die(watcher, async_session, probe, "DeepSeek-V4.1")
-        await watcher.tick(session=async_session)  # one more silent tick
-
-    died = await _events(async_session, "runtime.engine_died")
-    assert len(died) == 1
-    assert died[0].detail["slug"] == dsv.slug
-    assert died[0].detail["requeued_task_ids"] == [str(task.id)]
-    assert "1 laufende Task(s) zurück" in died[0].title
-    assert await _events(async_session, "runtime.unreachable") == []
-    await async_session.refresh(task)
-    assert task.status == "inbox"
-    # The recipe card (the one the stage shows) and the slot line both say it.
-    dsv_live = json.loads(await fake_redis.get(RedisKeys.runtime_live(dsv.slug)))
-    assert dsv_live["crash"]["requeued_tasks"] == 1
-    slot_live = json.loads(await fake_redis.get(RedisKeys.runtime_live(slot.slug)))
-    assert slot_live["status"] == "crashed"
-    assert slot_live["crash"]["requeued_tasks"] == 1
-
-
-@pytest.mark.asyncio
-async def test_a_lost_race_in_the_hand_back_keeps_the_alarm(async_session, fake_redis):
-    """Major: one 409 (the agent PATCHed the card in the same instant) must not
-    expire the watcher's objects and swallow the whole alarm."""
-    from fastapi import HTTPException
-
-    from app.services import task_state
-
-    _, _, dsv, board, agent = await _live_topology(async_session)
-    first = await _running(async_session, board, agent, "first")
-    second = await _running(async_session, board, agent, "second")
-    real = task_state.lock_and_set
-    calls = {"n": 0}
-
-    async def flaky(session, task_id, to, *, actor):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise HTTPException(status_code=409, detail="raced")
-        return await real(session, task_id, to, actor=actor)
-
-    probe = Probe(None)
-    with _stack(FakeBox(), fake_redis, probe), patch.object(task_state, "lock_and_set", flaky):
-        await _serve_then_die(RuntimeWatcher(interval=90), async_session, probe, "DeepSeek-V4.1")
-
-    died = await _events(async_session, "runtime.engine_died")
-    assert len(died) == 1
-    assert len(died[0].detail["requeued_task_ids"]) == 1
-    statuses = set()
-    for t in (first, second):
-        await async_session.refresh(t)
-        statuses.add(t.status)
-    assert statuses == {"inbox", "in_progress"}
-    await async_session.refresh(dsv)
-    assert dsv.serving_since is None
-    assert json.loads(await fake_redis.get(RedisKeys.runtime_live(dsv.slug)))["status"] == "crashed"
-
-
-@pytest.mark.asyncio
-async def test_an_unexpected_error_in_the_hand_back_keeps_the_alarm(async_session, fake_redis):
-    """Any other error mid-hand-back rolls back — the alarm and the rest of the
-    tick must survive it (no MissingGreenlet on expired objects)."""
-    _, _, dsv, board, agent = await _live_topology(async_session)
-    await _running(async_session, board, agent, "first")
-    await _running(async_session, board, agent, "second")
-    calls = {"n": 0}
-
-    async def boom(*_a, **_k):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("db hiccup")
-
-    probe = Probe(None)
-    with _stack(FakeBox(), fake_redis, probe), \
-            patch("app.services.dispatch_attempt_audit.clear_dispatch_attempt_id", new=boom):
-        await _serve_then_die(RuntimeWatcher(interval=90), async_session, probe, "DeepSeek-V4.1")
-
-    died = await _events(async_session, "runtime.engine_died")
-    assert len(died) == 1
-    assert len(died[0].detail["requeued_task_ids"]) == 1
-    await async_session.refresh(dsv)
-    assert dsv.serving_since is None
-
-
-@pytest.mark.asyncio
-async def test_a_box_that_cannot_be_asked_reports_but_keeps_the_tasks(async_session, fake_redis):
-    """Major: SSH timeout / network flap is no proof of a death. Report it
-    (reason unknown), but do not pull running work."""
-    _, _, dsv, board, agent = await _live_topology(async_session)
-    task = await _running(async_session, board, agent)
-
-    class Unreachable(FakeBox):
-        async def run(self, command, *, host=None, timeout=None):
-            raise TimeoutError("ssh timed out")
-
-    probe = Probe(None)
-    with _stack(Unreachable(), fake_redis, probe):
-        await _serve_then_die(RuntimeWatcher(interval=90), async_session, probe, "DeepSeek-V4.1")
-
-    died = await _events(async_session, "runtime.engine_died")
-    assert len(died) == 1
-    assert died[0].detail["reason_code"] == engine_death.UNKNOWN
-    assert died[0].detail["requeued_task_ids"] == []
-    assert "bleiben" in died[0].title
-    await async_session.refresh(task)
-    assert task.status == "in_progress"
-    live = json.loads(await fake_redis.get(RedisKeys.runtime_live(dsv.slug)))
-    assert live["crash"]["tasks_kept"] is True
-
-
-@pytest.mark.asyncio
-async def test_stop_on_the_crashed_recipe_also_clears_the_slot_crash(async_session, fake_redis):
-    slot, _, dsv, _, _ = await _live_topology(async_session)
-    probe = Probe(None)
-    watcher = RuntimeWatcher(interval=90)
-    with _stack(FakeBox(), fake_redis, probe):
-        await _serve_then_die(watcher, async_session, probe, "DeepSeek-V4.1")
-        assert await fake_redis.get(runtime_grace.crash_key(slot.slug)) is not None
-        await runtime_grace.mark_stopped(dsv.slug)
-        await watcher.tick(session=async_session)
-    assert await fake_redis.get(runtime_grace.crash_key(slot.slug)) is None
-    slot_live = json.loads(await fake_redis.get(RedisKeys.runtime_live(slot.slug)))
-    assert slot_live.get("status") != "crashed"
-
-
-@pytest.mark.asyncio
-async def test_duo_head_death_says_the_worker_may_still_run(async_session, fake_redis):
-    from app.models.host import Host
-    from app.models.runtime_host import RuntimeHost
-
-    _, _, dsv, _, _ = await _live_topology(async_session)
-    # A real worker box: on Postgres the member row's FK to hosts is enforced
-    # (SQLite let a random host_id through).
-    worker = Host(slug="worker-box", display_name="WORKER", kind="ssh", ssh_host="192.0.2.11")
-    async_session.add(worker)
-    await async_session.commit()
-    await async_session.refresh(worker)
-    async_session.add(RuntimeHost(runtime_id=dsv.id, host_id=worker.id, role="worker", node_rank=1))
-    await async_session.commit()
-    probe = Probe(None)
-    with _stack(FakeBox(), fake_redis, probe):
-        await _serve_then_die(RuntimeWatcher(interval=90), async_session, probe, "DeepSeek-V4.1")
-    died = (await _events(async_session, "runtime.engine_died"))[0]
-    assert "zweiten Box" in died.title and "Stoppen" in died.title
-    live = json.loads(await fake_redis.get(RedisKeys.runtime_live(dsv.slug)))
-    assert live["crash"]["multi_box"] is True
-
-
-@pytest.mark.asyncio
-async def test_autostart_on_promises_no_more_than_the_gate_allows(async_session, fake_redis):
-    await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
-    probe = Probe(None)
-    with _stack(FakeBox(), fake_redis, probe), \
-            patch("app.services.runtime_watcher.RuntimeWatcher._autostart_target",
-                  new=AsyncMock(return_value=(object(), object()))):
-        await _serve_then_die(RuntimeWatcher(interval=90), async_session, probe, "DeepSeek-V4.1")
-    died = (await _events(async_session, "runtime.engine_died"))[0]
-    assert "darf" in died.title and "versucht einen Neustart" not in died.title
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("inspect,logs,expected", [
-    # A start banner mentioning memguard does not turn a Python crash into a memguard kill.
-    ("exited|1|false|2026-10-18T17:20:17Z|x", "memguard: armed, floor 2.5 GiB\nValueError: shape mismatch",
-     engine_death.EXITED_ERROR),
-    ("exited|137|false|2026-10-18T17:20:17Z|x", "memguard: armed, floor 2.5 GiB", engine_death.KILLED),
-    ("exited|137|false|2026-10-18T17:20:17Z|x",
-     "memguard: MemAvailable 2551 MiB was under the 2.5 GiB floor: killed container", engine_death.MEMGUARD),
-])
-async def test_memguard_needs_a_kill_line_and_exit_137(inspect, logs, expected):
-    box = FakeBox(inspect=inspect, logs=logs)
-    with patch("app.services.runtime_manager._ssh_run", new=box.run):
-        diag = await engine_death.diagnose(_row(), BOX)
-    assert diag["reason_code"] == expected
+    assert de == "DeepSeek gestoppt auf Box A: Engine hart beendet (Exit 137, SIGKILL — z. B. ein Speicherwächter) um 20:44"
+    assert en == "DeepSeek stopped on Box A: engine killed (exit 137, SIGKILL — e.g. a memory guard) at 20:44"
+    assert set(engine_death.REASON_CODES) == {
+        "guard", "oom", "kernel_oom", "exit", "member_down", "crash_loop", "unknown",
+    }

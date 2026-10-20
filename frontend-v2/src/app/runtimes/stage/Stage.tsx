@@ -63,9 +63,9 @@ export type StageStatus = "serving" | "quiet" | "switching" | "failed";
 
 export function deriveStageStatus(rt: Runtime, live?: RuntimeLiveStatus): StageStatus {
   if (live?.status === "switching") return "switching";
-  // Engine death (backend engine_death): the watcher's honest verdict, not
-  // the three-probe heuristic below — it holds across every later tick.
-  if (live?.status === "crashed") return "failed";
+  // Engine death / crash-loop stop (ADR-096 §11): the watcher's verdict in
+  // its existing status field — it holds across every later tick.
+  if (live?.status === "failed") return "failed";
   if ((rt.state ?? "unknown") === "failed") return "failed";
   if (live?.reachable === false && (live?.consecutive_failures ?? 0) >= 3) return "failed";
   return "serving";
@@ -143,17 +143,20 @@ export function Stage({
   });
 
   const status = useMemo(() => deriveStageStatus(runtime, live), [runtime, live]);
-  // Engine death: reason + time on the card instead of a bare "unreachable".
-  const crash = status === "failed" && live?.status === "crashed" ? live.crash ?? null : null;
+  // Engine death (ADR-096 §11): reason, box and time on the card instead of a
+  // bare "unreachable". The watcher writes them into the live snapshot.
+  const crash = status === "failed" && live?.status === "failed" && live.reason_code ? live : null;
   const crashTime = crash ? formatCrashTime(crash.at, locale) : null;
-  const crashReason = crash ? t(`crashReason.${crashReasonKey(crash.reason_code)}`) : null;
+  const crashReason = crash
+    ? t(`crashReason.${crashReasonKey(crash.reason_code, crash.exit_code)}`, { code: crash.exit_code ?? "" })
+    : null;
+  const crashWhere = crash?.box ? t("crashOnBox", { box: crash.box }) : "";
   const crashFollowUp = crash
     ? [
         t(crash.autostart ? "crashAutostartOn" : "crashAutostartOff"),
-        (crash.requeued_tasks ?? 0) > 0 ? t("crashRequeued", { count: crash.requeued_tasks ?? 0 }) : null,
-        crash.tasks_kept ? t("crashTasksKept") : null,
+        (crash.tasks_commented ?? 0) > 0 ? t("crashTasksCommented", { count: crash.tasks_commented ?? 0 }) : null,
         // A duo head death can leave the worker rank holding box 2's memory.
-        (crash.multi_box ?? members.length > 1) ? t("crashDuoWorker") : null,
+        members.length > 1 ? t("crashDuoWorker") : null,
       ]
         .filter(Boolean)
         .join(" · ")
@@ -361,8 +364,8 @@ export function Stage({
             ? t("switchingTo", { model: shortModelTitle(runtime.display_name) })
             : crash
               ? crashTime
-                ? t("crashedLine", { time: crashTime, reason: crashReason ?? "" })
-                : t("crashedLineNoTime", { reason: crashReason ?? "" })
+                ? t("crashedLine", { time: crashTime, where: crashWhere, reason: crashReason ?? "" })
+                : t("crashedLineNoTime", { where: crashWhere, reason: crashReason ?? "" })
               : status === "failed"
               ? t("engineUnreachable")
               : nowLineParts.length > 0

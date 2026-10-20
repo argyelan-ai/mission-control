@@ -2205,43 +2205,37 @@ export interface RuntimeLiveStatus {
    *  der DB-Zeile in jeden Live-Status-Eintrag gespiegelt, damit die Karte es
    *  ohne einen zweiten Request hat. */
   serving_since?: string | null;
-  /** Engine death (backend services/engine_death.py): set while
-   *  `status === "crashed"` — the engine was serving and is gone without a
-   *  planned stop. Cleared by the first serving probe or a stop through MC. */
-  crash?: RuntimeCrash | null;
+  /** ADR-096 §11 engine death — in the watcher's EXISTING fields: `status`
+   *  is "failed" and `reason` carries the German sentence (as the crash-loop
+   *  stop writes it), plus the fields below. Present while the row is down
+   *  after a death; the first answering probe, a start or a stop clears it. */
+  reason?: string | null;
+  reason_en?: string | null;
+  reason_code?: RuntimeDeathReason | string | null;
+  /** Box the engine died on (display name). */
+  box?: string | null;
+  /** When it died: Docker's own finish time when known, else detection time. */
+  at?: string | null;
+  exit_code?: number | null;
+  /** Last error/marker line of the current boot (tooltip on the card). */
+  log_line?: string | null;
+  /** Whether the box autostart may try a restart (hosts.autostart_enabled). */
+  autostart?: boolean | null;
+  /** Tasks in progress that got a system comment with the reason (work stays). */
+  tasks_commented?: number | null;
   /** The model the port answered with last (carried through an outage). */
   last_served_model?: string | null;
 }
 
-export type RuntimeCrashReason =
+/** ADR-096 §11.3 reason codes. */
+export type RuntimeDeathReason =
+  | "guard"
   | "oom"
-  | "memguard"
-  | "killed"
-  | "exited_error"
-  | "exited_clean"
-  | "hung"
-  | "container_gone"
-  | "process_gone"
+  | "kernel_oom"
+  | "exit"
+  | "member_down"
+  | "crash_loop"
   | "unknown";
-
-export interface RuntimeCrash {
-  reason_code: RuntimeCrashReason | string;
-  /** German sentence (event title convention); the card translates `reason_code`. */
-  reason: string;
-  /** When it died: Docker's own finish time when known, else detection time. */
-  at: string;
-  detected_at: string;
-  exit_code: number | null;
-  oom_killed: boolean | null;
-  log_line: string | null;
-  /** Whether the box autostart will try a restart (hosts.autostart_enabled). */
-  autostart: boolean;
-  requeued_tasks?: number;
-  /** Box not askable (reason "unknown"): no proof of a death, running tasks were left alone. */
-  tasks_kept?: boolean;
-  /** Duo/verbund row: the worker rank on the other box may still be running. */
-  multi_box?: boolean;
-}
 
 export interface RuntimesLiveResponse {
   live: Record<string, RuntimeLiveStatus>;

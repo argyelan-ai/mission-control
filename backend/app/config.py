@@ -515,17 +515,15 @@ class Settings(BaseSettings):
     # switch-grace state — planned switches stay silent either way.
     runtime_auto_recovery_enabled: bool = True
 
-    # Engine death (services/engine_death.py): an engine that was serving and
-    # is gone outside any planned window (no switch grace, not stopped through
-    # MC, not evicted by a start) is reported ONCE as `runtime.engine_died`
-    # with a reason read from the box, the card says "crashed" with reason and
-    # time, and the running tasks of agents bound to that runtime go back to
-    # the inbox instead of failing silently. A restart is NOT part of this —
-    # that stays the box's autostart switch (`hosts.autostart_enabled`,
-    # default off) with its own cooldown and attempt cap.
-    # Kill switch for the whole behaviour; the requeue has its own switch.
+    # Engine death (ADR-096 §11, runtime_watcher._maybe_declare_death): an
+    # engine whose row served its own answer and is gone without a stop intent
+    # is declared dead — at once on connection refused, from the 2nd failed
+    # probe otherwise — when its own anchor (node-agent / docker inspect /
+    # handle check) confirms it exited. One runtime.unreachable with the cause
+    # (severity error), status "failed" + reason on the card, one comment on
+    # each task in progress (the work stays where it is). Restart stays the
+    # box's autostart switch. Kill switch: back to the plain threshold alarm.
     runtime_engine_death_enabled: bool = True
-    runtime_engine_death_requeue_enabled: bool = True
 
     # Slot-Runtimes (ADR-078): beim Backend-Start bekommt jede Head-Box eine
     # ankerlose Zeile („<Box> :8000"), an der ihre Agenten hängen, statt an der

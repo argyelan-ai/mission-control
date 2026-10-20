@@ -158,69 +158,82 @@ async def get_evicted(slug: str, redis=None) -> dict | None:
     return doc if isinstance(doc, dict) else None
 
 
-# ── Stopped through MC ───────────────────────────────────────────────────
-# An engine MC itself stopped (Stop button, schedule, lifecycle) is not an
-# engine death. The marker outlives the watcher's three-probe threshold by a
-# wide margin and is lifted by the next probe that sees the engine serving
-# (services/engine_death.clear_after_serving).
-STOPPED_TTL = 60 * 60
+# ── Stop intent (ADR-096 §11.1) ──────────────────────────────────────────
+# Every stop MC causes leaves a stop intent: who, why, since. A runtime that
+# goes down WITH an intent is planned silence; one that goes down WITHOUT an
+# intent is an engine death (runtime_watcher). The eviction marker above
+# expires after an hour — this one does not: a runtime that was stopped or
+# switched away stays "not running — on purpose" until its OWN next start
+# (``runtime_manager.start_runtime`` / ``restart_runtime``) lifts it. No probe,
+# no neighbour's answer on a shared port and no timer ever clears it, so a
+# manual stop can never later be read as a death or undone by auto-recovery.
+# Redis runs with AOF (docker-compose: --appendonly yes), so "no TTL" survives
+# a Redis restart.
+INTENT_OPERATOR_STOP = "operator_stop"
+INTENT_SWITCHED_AWAY = "switched_away"
+INTENT_SCHEDULE = "schedule"
+INTENT_IDLE_UNLOAD = "idle_unload"
+INTENT_CRASH_LOOP = "crash_loop_stop"
 
 
-def _stopped_key(slug: str) -> str:
-    return f"mc:runtime-stopped:{slug}"
+async def mark_stop_intent(slug: str | None, why: str, *, by: str | None = None) -> None:
+    """Record that MC is stopping ``slug`` on purpose. No TTL. Never raises.
 
-
-def crash_key(slug: str) -> str:
-    """Where services/engine_death keeps the last engine death of ``slug``."""
-    return f"mc:runtime-crash:{slug}"
-
-
-async def mark_stopped(slug: str | None) -> None:
-    """Remember that MC stopped ``slug`` on purpose. Best-effort — never raises.
-
-    A stop is also the operator's acknowledgement of an earlier engine death:
-    the "crashed" record goes, the card falls back to plain "stopped"."""
+    Set BEFORE the stop, so the first failed probe after it already sees it."""
     if not slug:
         return
     try:
         redis = await get_redis()
-        await redis.setex(_stopped_key(slug), STOPPED_TTL, _utcnow_iso())
-        # The crash was mirrored onto the box's slot row(s) (engine_death):
-        # the acknowledgement covers them too, else the slot line stays
-        # "crashed" for days while the box is idle.
-        raw = await redis.get(crash_key(slug))
-        if isinstance(raw, bytes):
-            raw = raw.decode()
-        mirrors: list = []
-        if raw:
-            try:
-                doc = json.loads(raw)
-                mirrors = [m for m in (doc.get("mirrored_to") or []) if isinstance(m, str)]
-            except (ValueError, AttributeError):
-                mirrors = []
-        await redis.delete(crash_key(slug), *(crash_key(m) for m in mirrors))
+        await redis.set(
+            RedisKeys.runtime_stop_intent(slug),
+            json.dumps({"why": why, "by": by, "since": _utcnow_iso()}),
+        )
     except Exception as exc:  # noqa: BLE001
-        logger.debug("mark_stopped(%s) failed: %s", slug, exc)
+        logger.debug("mark_stop_intent(%s) failed: %s", slug, exc)
 
 
-async def clear_stopped(slug: str | None, redis=None) -> None:
+async def clear_stop_intent(slug: str | None) -> None:
+    """Only a start of ``slug`` itself calls this. Never raises."""
     if not slug:
         return
     try:
-        redis = redis or await get_redis()
-        await redis.delete(_stopped_key(slug))
+        redis = await get_redis()
+        await redis.delete(RedisKeys.runtime_stop_intent(slug))
     except Exception as exc:  # noqa: BLE001
-        logger.debug("clear_stopped(%s) failed: %s", slug, exc)
+        logger.debug("clear_stop_intent(%s) failed: %s", slug, exc)
 
 
-async def was_stopped(slug: str, redis=None) -> bool:
-    """True when MC stopped this runtime within ``STOPPED_TTL``. Redis down → False."""
+async def get_stop_intent(slug: str, redis=None) -> dict | None:
+    """The intent document, or ``None``. Redis down → ``None`` (the watcher
+    cannot count failures then either, so nothing is declared)."""
     try:
         redis = redis or await get_redis()
-        return bool(await redis.get(_stopped_key(slug)))
+        raw = await redis.get(RedisKeys.runtime_stop_intent(slug))
     except Exception as exc:  # noqa: BLE001
-        logger.debug("was_stopped(%s) failed: %s", slug, exc)
-        return False
+        logger.debug("get_stop_intent(%s) failed: %s", slug, exc)
+        return None
+    if not raw:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return {"why": "unknown"}
+    return doc if isinstance(doc, dict) else {"why": "unknown"}
+
+
+async def clear_death_record(slug: str | None) -> None:
+    """A start or a stop of ``slug`` acknowledges an earlier engine death: the
+    card falls back from "failed — <reason>" to its normal state. The event in
+    the feed stays. Never raises."""
+    if not slug:
+        return
+    try:
+        redis = await get_redis()
+        await redis.delete(RedisKeys.runtime_death(slug))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("clear_death_record(%s) failed: %s", slug, exc)
 
 
 def _utcnow_iso() -> str:

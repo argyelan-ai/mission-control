@@ -1,5 +1,5 @@
 /**
- * Engine death on the stage card (backend services/engine_death.py): when it
+ * Engine death on the stage card (ADR-096 §11, backend engine_death): when it
  * died, in the viewer's locale. Today → "17:20"; another day → "18 Oct, 17:20"
  * / "18. Okt., 17:20". Unparseable → null (the card then shows no time —
  * never an invented one).
@@ -16,19 +16,25 @@ export function formatCrashTime(at: string | null | undefined, locale: string, n
     : d.toLocaleString(tag, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
-/** Reason codes the catalog knows (runtimes.stage.crashReason.*); anything else → "unknown". */
+/** ADR-096 §11.3 reason codes the catalog knows (runtimes.stage.crashReason.*);
+ *  anything else → "unknown". */
 export const CRASH_REASONS = [
+  "guard",
   "oom",
-  "memguard",
-  "killed",
-  "exited_error",
-  "exited_clean",
-  "hung",
-  "container_gone",
-  "process_gone",
+  "kernel_oom",
+  "exit",
+  "member_down",
+  "crash_loop",
   "unknown",
 ] as const;
 
-export function crashReasonKey(code: string | null | undefined): (typeof CRASH_REASONS)[number] {
-  return (CRASH_REASONS as readonly string[]).includes(code ?? "") ? (code as (typeof CRASH_REASONS)[number]) : "unknown";
+export type CrashReasonKey = (typeof CRASH_REASONS)[number] | "exitCode";
+
+/** Catalog key for a reason code; an exit with a known code gets its own
+ *  wording ("exited with code 137"), an exit without one reads "process gone". */
+export function crashReasonKey(code: string | null | undefined, exitCode?: number | null): CrashReasonKey {
+  const known = (CRASH_REASONS as readonly string[]).includes(code ?? "")
+    ? (code as (typeof CRASH_REASONS)[number])
+    : "unknown";
+  return known === "exit" && exitCode != null ? "exitCode" : known;
 }
