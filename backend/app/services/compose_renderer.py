@@ -571,11 +571,20 @@ def _ensure_omp_blobs_volume(body_lines: list[str], slug: str) -> list[str]:
     return body
 
 
-def _agents_host_root() -> Path:
-    """``HOME_HOST/.mc/agents`` as the backend sees it. The backend container
-    mounts ``HOME_HOST/.mc`` under the same path (docker-compose.yml), so this
-    is the folder Docker binds into the agent containers."""
-    return Path(settings.home_host) / ".mc" / "agents"
+def _agents_host_root() -> Path | None:
+    """The agents root the backend may create folders in, or None.
+
+    ``MC_AGENTS_ROOT`` is set by docker-compose.yml for the backend and the
+    worker (``${HOME}/.mc/agents``); both mount ``${HOME}/.mc`` under the same
+    path, so this is the folder Docker binds into the agent containers. Unset
+    (a bare-metal dev run, the test suite) means: create nothing — Docker then
+    makes a missing source itself, as it always did. Deliberately NOT derived
+    from ``settings.home_host``: that is the real home in a test run, and tests
+    that render the default compose file must never create folders in the
+    operator's live agents directory.
+    """
+    root = os.environ.get("MC_AGENTS_ROOT", "").strip()
+    return Path(root) if root else None
 
 
 def ensure_omp_host_dirs(content: str, agents_root: Path) -> list[Path]:
@@ -1445,8 +1454,11 @@ def _ensure_live_omp_host_dirs(target: Path, rendered: str) -> None:
     """
     if Path(target) != Path(DEFAULT_COMPOSE_PATH):
         return
+    agents_root = _agents_host_root()
+    if agents_root is None:
+        return
     try:
-        ensure_omp_host_dirs(rendered, _agents_host_root())
+        ensure_omp_host_dirs(rendered, agents_root)
     except Exception:  # best effort — the compose write already happened
         logger.exception("compose_renderer could not ensure omp host folders")
 

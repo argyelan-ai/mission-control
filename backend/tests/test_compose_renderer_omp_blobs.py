@@ -246,9 +246,10 @@ def _redis(fake_redis):
 
 @pytest.fixture
 def host_home(tmp_path: Path, monkeypatch) -> Path:
+    """What the backend container has: MC_AGENTS_ROOT = <home>/.mc/agents."""
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setattr(compose_renderer.settings, "home_host", str(home))
+    monkeypatch.setenv("MC_AGENTS_ROOT", str(home / ".mc" / "agents"))
     return home
 
 
@@ -322,6 +323,28 @@ async def test_other_compose_files_create_no_host_folders(
 
     assert "omp-blobs" in other.read_text(encoding="utf-8")
     assert not (host_home / ".mc").exists()
+
+
+@pytest.mark.asyncio
+async def test_without_agents_root_nothing_is_created(
+    _redis, async_session, tmp_path, live_compose, monkeypatch
+):
+    """MC_AGENTS_ROOT is set only in the backend and worker containers. A
+    test run or a bare-metal dev run has no such root, and then nothing is
+    created, even for the default compose file: tests that render that file
+    must never litter the operator's live agents directory. In particular,
+    the code must not fall back to ``settings.home_host`` (the real home in
+    a test run)."""
+    monkeypatch.delenv("MC_AGENTS_ROOT", raising=False)
+    home = tmp_path / "home-host"
+    home.mkdir()
+    monkeypatch.setattr(compose_renderer.settings, "home_host", str(home))
+
+    result = await write_compose_agents(async_session)
+
+    assert result["changed"] == "true"
+    assert "omp-blobs" in live_compose.read_text(encoding="utf-8")
+    assert list(home.iterdir()) == []
 
 
 @pytest.mark.asyncio
