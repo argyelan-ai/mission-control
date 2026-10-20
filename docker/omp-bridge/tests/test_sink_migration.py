@@ -755,6 +755,7 @@ def test_17_a_symlinked_mc_folder_sends_nothing_out_of_the_root(tmp_path):
     applied = _cli("--root", str(root), "--apply")
     assert _files_under(outside) == []
     assert "unsafe_target" in applied.stdout
+    assert "WARNING" in applied.stdout.splitlines()[2], applied.stdout
 
 
 def test_17b_a_symlinked_media_folder_keeps_the_pictures_home(tmp_path):

@@ -175,6 +175,14 @@ class Report:
         lines = [
             f"sink {title}{mode} in {self.root}",
             f"status: {self.status}" + (f" — {self.detail}" if self.detail else ""),
+        ]
+        unsafe = [e["path"] for e in self.skipped if e.get("reason") == "unsafe_target"]
+        if unsafe:
+            # Not the expected numbers: someone put a link (or a file) where
+            # a folder belongs. Nothing went there; look at it by hand.
+            lines.append(f"WARNING: {len(unsafe)} place(s) are a symlink or a file where a "
+                         "real folder belongs — nothing moved through them; check by hand")
+        lines += [
             f"moves: {counts['moved']} (mixed: {counts['mixed']}, task copies: {counts['task']})",
             f"media: {counts['media']}",
             f"skipped: {counts['skipped']}",
