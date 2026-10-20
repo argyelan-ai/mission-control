@@ -5,7 +5,7 @@ The image copies its Python files ONE BY ONE (``COPY acp_chat.py
 /opt/omp-bridge/acp_chat.py``, ...). A module that ``acp_chat.py``,
 ``bridge.py`` or ``acp_chat_events.py`` imports but the Dockerfile does not
 copy is an ImportError at start: the chat daemon (window 3) or the task
-driver (window 1) never comes up — Sparky would take no chat and no task.
+driver (window 1) never comes up — the agent would take no chat and no task.
 The suite runs from the source folder, where every file is present, so no
 other test would notice.
 

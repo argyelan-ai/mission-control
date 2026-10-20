@@ -9,7 +9,7 @@ writes a list of every move (``.mc-sink-migration.json`` at the sessions
 root, paths relative to it) and can undo it (``rollback``).
 
 It runs on the host by hand in the deploy window (``--dry-run``, then
-``--apply``, Sparky stopped) and, as a safety net only, in
+``--apply``, agent stopped) and, as a safety net only, in
 ``ChatSession.start()`` before the pointer is read.
 
 Tests 4-11 and 14-16 of the plan, plus remap, the CLI and the daemon net.
