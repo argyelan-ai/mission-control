@@ -1916,8 +1916,9 @@ class TaskStateFile:
     The chat's status came only from the chat daemon's ``busy`` flag, but a
     task runs through this bridge's own ACP client — so while a task ran,
     the chat said "Ready". The serve loop writes its phase here:
-    ``delivered`` (picked up, the model has not answered), ``working`` (the
-    model answered) or ``idle``. The file sits at the root of the omp
+    ``delivered`` (picked up, the model has not answered — also after a run
+    that ended "awaiting model", for as long as the poll holds that card),
+    ``working`` (the model answered) or ``idle``. The file sits at the root of the omp
     sessions tree, which the backend reads through the ``omp-sessions``
     mount (``acp_chat_transport.read_acp_task_phase``). The heartbeater
     re-stamps ``updatedAt`` while a phase is not idle, so a crashed bridge's
@@ -3205,6 +3206,10 @@ def serve_loop(
             _acp_context_pct=acp_context_pct.get,
         )
     last_attempt_id: Optional[str] = None
+    # A run that ended "awaiting model" (ACP, card delivered, never claimed)
+    # leaves its task id here: the phase file stays ``delivered`` until the
+    # poll stops holding that card (see the check after the poll below).
+    awaiting_model_task: Optional[str] = None
     ready_printed = False
     iterations = 0
     # Review PR #522 W3: `iterations == 1` burns the one-shot startup-recovery
@@ -3276,6 +3281,18 @@ def serve_loop(
 
         if state in ("idle", "cancelled", "stopped"):
             last_attempt_id = None  # clear dedup so a re-opened task dispatches
+
+        # Still waiting for the model (review Z2, 20.10.2026)? The card stays
+        # delivered after "awaiting model"; MC returns it for the model (ACK
+        # ladder) and the poll gate holds it while the model is away — the
+        # poll then says ``runtime_not_ready``. Any task in the answer owns
+        # the phase itself (the dedup keeps it, a run rewrites it). Every
+        # other answer (card taken away, done, stopped) ends the wait. No
+        # answer at all (poll error) says nothing about the card.
+        if awaiting_model_task is not None and payload is not None and not task:
+            if not (state == "idle" and payload.get("runtime_not_ready")):
+                _task_state_for_loop().write("idle")
+                awaiting_model_task = None
 
         # comm_v2 delivery: nudge mode short-circuits the queue entirely — it
         # never persists message bodies, only per-thread high-water seqs (the
@@ -3536,6 +3553,8 @@ def serve_loop(
             # heartbeat payload carries task_id/attempt_id WHILE the turn runs.
             # Cleared in finally — after the turn the bridge reports no ids.
             _set_turn_context(str(task["id"]), attempt_id)
+            awaiting_model_task = None  # this run owns the phase now
+            waits_for_model = False
             try:
                 if ack_gate is not None:
                     # The chat says "waiting for the model" until it answers.
@@ -3562,6 +3581,7 @@ def serve_loop(
                     classify_fn=classify_acp if _acp_env_driver() == "acp" else None,
                     ack_gate=ack_gate,
                 )
+                waits_for_model = getattr(run_action, "action", None) == "awaiting_model"
                 # Fix 3 post-processing: an INTERRUPTED run needs NO retry,
                 # NO blocker escalation, NO "omp abort (hang)" comment. The
                 # loop falls back to idle -> the next poll reports
@@ -3599,7 +3619,14 @@ def serve_loop(
                     pass
             finally:
                 if ack_gate is not None:
-                    _task_state_for_loop().write("idle")
+                    if waits_for_model:
+                        # Delivered, not claimed, the model is away: the chat
+                        # keeps saying "Waiting for the model" (the
+                        # heartbeater keeps the file fresh) — not "Ready".
+                        _task_state_for_loop().write("delivered", str(task["id"]))
+                        awaiting_model_task = str(task["id"])
+                    else:
+                        _task_state_for_loop().write("idle")
                 _set_turn_context(None, None)
                 _set_task_lock(False)
 

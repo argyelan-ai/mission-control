@@ -27,7 +27,12 @@ Contract under test:
    no continue-nudge, no retry into the dead endpoint.
 4. The task channel's phase file (``acp-task-state.json``) for the chat:
    ``delivered`` while the model has not answered, ``working`` once it did,
-   ``idle`` after the run.
+   ``idle`` after the run. A run that ends "awaiting model" leaves the card
+   delivered, so the phase stays ``delivered`` (the chat keeps saying
+   "Waiting for the model") until the poll stops holding that card — while
+   MC returns it for the model or holds it in the inbox, the poll says
+   ``runtime_not_ready``; any other answer (card taken away, done, stopped)
+   ends the wait.
 """
 from __future__ import annotations
 
@@ -191,7 +196,11 @@ def _serve_with_phases(fixture: Path, **kw) -> tuple[list[tuple], list[str]]:
 
     def spy(self, phase, task_id=None):
         phases.append(phase)
-        return orig(self, phase, task_id)
+        result = orig(self, phase, task_id)
+        if self.path is not None and self.path.exists():
+            # What the backend reads (not only what was asked for).
+            phases.append("file:" + json.loads(self.path.read_text())["phase"])
+        return result
 
     bridge.TaskStateFile.write = spy
     try:
@@ -201,20 +210,74 @@ def _serve_with_phases(fixture: Path, **kw) -> tuple[list[tuple], list[str]]:
     return calls, phases
 
 
+def _written(phases: list[str]) -> list[str]:
+    return [p for p in phases if not p.startswith("file:")]
+
+
 def test_serve_loop_waits_for_a_dead_model_without_claim_or_blocker():
     calls, phases = _serve_with_phases(base.ECONNREFUSED, retries="1", continues="2")
     kinds = [c[0] for c in calls]
     assert "ack" not in kinds and "blocker" not in kinds, calls
     assert "comment" not in kinds, calls
-    assert phases[0] == "delivered" and phases[-1] == "idle", phases
-    assert "working" not in phases, phases
+    assert _written(phases)[0] == "delivered", phases
+    # The card is still delivered and not claimed: the chat keeps saying
+    # "Waiting for the model", not "Ready" (review Z2).
+    assert phases[-1] == "file:delivered", phases
+    assert "idle" not in phases and "working" not in phases, phases
+
+
+_HELD = {"state": "idle", "runtime_not_ready": True,
+         "detail": "Runtime 'X' antwortet nicht"}
+
+
+def test_phase_stays_delivered_while_the_poll_holds_the_card_for_the_model():
+    """The ACK ladder returned the card for the model / the poll gate holds
+    it: the poll says runtime_not_ready — still waiting for the model."""
+    calls, phases = _serve_with_phases(
+        base.ECONNREFUSED, retries="1", continues="2", after=[_HELD, _HELD],
+    )
+    assert "idle" not in phases, phases
+    assert phases[-1] == "file:delivered", phases
+    assert "ack" not in [c[0] for c in calls], calls
+
+
+def test_phase_stays_delivered_while_the_poll_resends_the_same_delivery():
+    """Gate off / model back for a moment: the same attempt again is the
+    dedup path — no new run, the delivery still waits."""
+    calls, phases = _serve_with_phases(
+        base.ECONNREFUSED, retries="1", continues="2",
+        after=lambda task: [{"state": "new_task", "task": task}],
+    )
+    assert "idle" not in phases, phases
+    assert phases[-1] == "file:delivered", phases
+
+
+def test_the_wait_ends_when_the_poll_no_longer_holds_the_card():
+    """Card taken away / done / stopped: the poll answers plain idle — the
+    phase goes back to idle (otherwise the chat would wait forever)."""
+    _calls, phases = _serve_with_phases(
+        base.ECONNREFUSED, retries="1", continues="2", after=[_HELD, {"state": "idle"}],
+    )
+    assert phases[-1] == "file:idle", phases
+    _calls, phases = _serve_with_phases(
+        base.ECONNREFUSED, retries="1", continues="2", after=[{"state": "stopped"}],
+    )
+    assert phases[-1] == "file:idle", phases
+
+
+def test_a_poll_without_an_answer_does_not_end_the_wait():
+    """No answer (the poll failed, payload None) is not "card gone"."""
+    _calls, phases = _serve_with_phases(
+        base.ECONNREFUSED, retries="1", continues="2", after=[None],
+    )
+    assert phases[-1] == "file:delivered", phases
 
 
 def test_serve_loop_reports_working_once_the_model_answers():
     calls, phases = _serve_with_phases(base.NORMAL, retries="0")
     assert [c[0] for c in calls].count("ack") == 1, calls
-    assert phases[0] == "delivered", phases
-    assert "working" in phases and phases[-1] == "idle", phases
+    assert _written(phases)[0] == "delivered", phases
+    assert "working" in phases and phases[-1] == "file:idle", phases
 
 
 def test_task_state_file_is_atomic_json(tmp_path):

@@ -307,7 +307,12 @@ _ENV_KEYS = (
 )
 
 
-def _serve_once(fixture: Path, *, retries: str = "1", continues: str = "0") -> list[tuple]:
+def _serve_once(
+    fixture: Path, *, retries: str = "1", continues: str = "0", after=(),
+) -> list[tuple]:
+    """One task pickup through the real serve loop. ``after``: the poll's
+    answers after the pickup (a list, or ``task -> list`` to re-send the
+    picked-up task) — one more loop iteration each."""
     saved = {k: os.environ.get(k) for k in _ENV_KEYS}
     orig_run = bridge.run_acp_once
     fakes: list = []
@@ -346,9 +351,10 @@ def _serve_once(fixture: Path, *, retries: str = "1", continues: str = "0") -> l
             task = {"id": "task-1", "board_id": "board-1",
                     "dispatch_attempt_id": "att-1", "prompt": "Do the thing.",
                     "workspace_path": str(tmp / "workspace")}
-            states = iter([{"state": "new_task", "task": task}])
+            later = list(after(task) if callable(after) else after)
+            states = iter([{"state": "new_task", "task": task}, *later])
             bridge.serve_loop(
-                poll_interval=0, max_iterations=1,
+                poll_interval=0, max_iterations=1 + len(later),
                 _poll_fn=lambda: next(states, {"state": "idle"}),
                 _lifecycle_factory=lambda t: lc, _run_factory=None,
                 _sleep=lambda _s: None,
