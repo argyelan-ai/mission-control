@@ -192,6 +192,53 @@ def test_pointer_into_mc_with_the_copy_in_both_places_is_stable(tmp_path):
     assert {_find(root)[0] for _ in range(5)} == {legacy}
 
 
+@pytest.mark.parametrize("state_at", ("root", "other-folder"))
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_pointer_into_mc_takes_the_folder_above_mc_when_the_state_file_is_elsewhere(
+        tmp_path, layout, state_at):
+    """Contract point (4): when the pointer already names
+    ``<folder>/.mc/<file>``, ``<folder>`` is the name ABOVE ``.mc``. The
+    state file lies NOT in that folder (tree root, or another cwd folder),
+    so the two candidates beside the state file cannot hide a wrong
+    ``<folder>``. ``mc``: the copy in ``.mc/`` is found. ``legacy`` (the
+    move was rolled back): the copy beside omp's file. A newer non-task
+    session is present: reading ``.mc`` as the folder name would drop
+    candidates 1 and 2, and the fallback would show that other
+    conversation."""
+    root, ws, _native_file, chat_sink, _ = _tree(tmp_path, layout, other=True)
+    state_folder = root if state_at == "root" else root / "--workspace-worktrees-bench-x--"
+    _pointer(state_folder, f"{CONTAINER_SESSIONS}/{ws.name}/.mc/{chat_sink.name}", CHAT)
+    assert omp_chat.chat_state_file(root).parent == state_folder
+    assert not (state_folder / chat_sink.name).exists()
+    assert not (state_folder / ".mc" / chat_sink.name).exists()
+    assert omp_chat._pointed_chat_transcript(root) == chat_sink
+    assert _find(root)[0] == chat_sink
+
+
+@pytest.mark.parametrize("broken", ("name", "folder"))
+def test_a_pointer_with_a_nul_byte_never_raises(tmp_path, broken):
+    """The state file is written inside the agent's container. A pointer
+    with a NUL byte makes ``Path.resolve()`` raise ``ValueError`` (not
+    ``OSError``); that must not escape into ``/chat/history`` or the tailer.
+    Such a candidate is skipped like a missing one: a bad file name leaves
+    no candidate (fallback = the newest non-task session); a bad folder
+    name still finds the copy beside the state file."""
+    root, ws, _native_file, chat_sink, _ = _tree(tmp_path, "mc", other=True)
+    if broken == "name":
+        transcript = f"{CONTAINER_SESSIONS}/{ws.name}/.mc/bad\x00{chat_sink.name}"
+        expected = None
+    else:
+        transcript = f"{CONTAINER_SESSIONS}/--work\x00space--/{chat_sink.name}"
+        expected = chat_sink
+    _pointer(ws, transcript, CHAT)
+    assert omp_chat._pointed_chat_transcript(root) == expected
+    found = _find(root)[0]
+    if expected is None:
+        assert found.name.endswith(f"_{OTHER}.jsonl")
+    else:
+        assert found == chat_sink
+
+
 def test_a_pointer_into_mc_cannot_leave_the_tree(tmp_path):
     """The tree check stays for the new candidates: a ``.mc/`` entry that is
     a link out of the sessions tree is not taken from the pointer. (What

@@ -266,14 +266,17 @@ def _pointed_chat_transcript(tdir: Path) -> Path | None:
         candidates.append(tdir / folder / _MC_SINK_DIRNAME / name)
     candidates.append(state_file.parent / name)
     candidates.append(state_file.parent / _MC_SINK_DIRNAME / name)
+    # ValueError too: the pointer comes from a file inside the agent's
+    # container, and a NUL byte in it makes resolve() raise ValueError —
+    # skipped like a missing file, never a 500 or a dead tailer.
     try:
         root = tdir.resolve()
-    except OSError:
+    except (OSError, ValueError):
         return None
     for candidate in candidates:
         try:
             resolved = candidate.resolve()
-        except OSError:
+        except (OSError, ValueError):
             continue
         if root not in resolved.parents:
             continue

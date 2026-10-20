@@ -612,3 +612,13 @@ async def test_task_runs_in_both_places_the_newest_plan_wins(tmp_path):
         ("Schritt 1 lesen", "done"),
         ("Schritt 2 rechnen", "done"),
     ]
+
+
+def test_session_globs_match_the_chat_reader():
+    """The sync keeps its own glob tuple (it serves every harness), but it
+    must look exactly where the chat reader looks. If ``.mc`` were renamed
+    in ``omp_chat`` only, the sync would quietly stop finding task plans."""
+    from app.services import omp_chat
+
+    assert sync._SESSION_GLOBS == omp_chat._SESSION_GLOBS
+    assert f"*/{omp_chat._MC_SINK_DIRNAME}/*.jsonl" in sync._SESSION_GLOBS
