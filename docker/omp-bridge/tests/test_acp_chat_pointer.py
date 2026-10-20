@@ -16,14 +16,20 @@ Contract (docs/specs/chat-over-acp.md, "What survives what"):
   the deploy, because the old image already wrote it. The old place
   `$OMP_HOME/acp-chat.json` is never read again (a new image always means
   a recreate, so it is empty there; a stale one must never win).
-* The pointer is written BEFORE the state mirror names a new session, so
-  the first source of the chain is never older than the second.
+* One exception (critic S1-R4, finding 1): a state mirror that is strictly
+  NEWER than the pointer and names ANOTHER session wins — the pointer went
+  stale (a rollback to an image that writes only the mirror, or a pointer
+  write that failed). A mirror naming the same session never overrides.
+* The pointer is written BEFORE the state mirror names a new session — in
+  the same locked step as the switch, so no other thread can write the
+  mirror in between.
 * Unknown pointer fields survive a rewrite.
 * Visible instead of silent: pointer whose transcript is gone (also after
-  `sink_migration.remap`) -> `session_reset` / `transcript_missing`; omp
-  refuses the load because the session's model is not configured ("Could
-  not restore model X", omp >= 18.6.3 under ACP) -> `session_reset` /
-  `model_missing`, naming the model; no pointer but an earlier chat copy
+  `sink_migration.remap`, or a path the file system refuses) ->
+  `session_reset` / `transcript_missing`; omp refuses the load because the
+  session's model is not configured ("Could not restore model X", omp >=
+  18.6.3 under ACP) -> `session_reset` / `model_missing`, naming the model
+  in the text and as `data.model`; no pointer but an earlier chat copy
   -> `chat_notice` `chat_started_fresh`. A brand-new agent, or one with
   only task copies, gets no card.
 
@@ -35,6 +41,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -139,6 +147,13 @@ def read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def age(path: Path, seconds: float) -> Path:
+    """Move a file's mtime into the past — it was written that long ago."""
+    st = path.stat()
+    os.utime(path, (st.st_atime - seconds, st.st_mtime - seconds))
+    return path
+
+
 def loads(client: FakeClient) -> list[str]:
     return [c[1] for c in client.calls if c[0] == "load_session"]
 
@@ -197,18 +212,97 @@ def test_recreate_resumes_the_session_the_state_mirror_names(tmp_path, moved):
         sess.close()
 
 
-def test_the_pointer_wins_over_the_state_mirror(tmp_path):
+@pytest.mark.parametrize("mirror_age", [3600, 0], ids=["mirror-older", "same-mtime"])
+def test_the_pointer_wins_over_a_state_mirror_that_is_not_newer(tmp_path, mirror_age):
     """Source 1 of the chain: a pointer with id and transcript is taken
-    even when the state mirror names another session."""
+    even when the state mirror names another session — as long as the
+    mirror is not strictly newer (finding 1 below)."""
     _, folder = layout(tmp_path)
-    write_pointer(folder, S, mc_copy(folder, S))
-    write_state(folder, OLD, mc_copy(folder, OLD, ts="2026-10-19T01-00-00"))
+    pointer = write_pointer(folder, S, mc_copy(folder, S))
+    mirror = write_state(folder, OLD, mc_copy(folder, OLD, ts="2026-10-19T01-00-00"))
+    stamp = pointer.stat().st_mtime - mirror_age
+    os.utime(mirror, (stamp, stamp))
     c = client()
     sess = container_session(folder, c)
     try:
         sess.start()
         assert loads(c) == [S]
         assert sess._resume_source == "pointer"
+    finally:
+        sess.close()
+
+
+def test_a_newer_state_mirror_naming_the_same_session_never_overrides(tmp_path):
+    """In normal operation the mirror is written after the pointer, all the
+    time — newer, same session. The pointer stays the source."""
+    _, folder = layout(tmp_path)
+    copy = mc_copy(folder, S)
+    age(write_pointer(folder, S, copy), 3600)
+    write_state(folder, S, copy)
+    c = client()
+    sess = container_session(folder, c)
+    try:
+        sess.start()
+        assert loads(c) == [S]
+        assert sess._resume_source == "pointer"
+    finally:
+        sess.close()
+
+
+# ── finding 1: a stale pointer never wins over a newer state mirror ─────────
+
+
+def test_a_stale_pointer_loses_to_a_newer_state_mirror_after_a_rollback(tmp_path):
+    """Rollback to the image before S1-R4 (it writes only the mirror on the
+    mount), a new conversation there, then forward again: the pointer on
+    the mount still names the conversation from BEFORE the rollback. The
+    newer mirror names the one that was open last — it wins, no card."""
+    _, folder = layout(tmp_path)
+    age(write_pointer(folder, S, mc_copy(folder, S)), 3600)
+    later = mc_copy(folder, "sid-X", ts="2026-10-20T05-00-00")
+    write_state(folder, "sid-X", later)
+    c = client()
+    sess = container_session(folder, c)
+    try:
+        sess.start()
+        assert loads(c) == ["sid-X"]
+        assert news(c) == 0
+        assert sess._resume_source == "state"
+        assert sess.transcript_path == later
+        errors, notices = cards(later)
+        assert errors == [] and notices == []
+        # The pointer is right again from now on.
+        assert read_json(folder / "acp-chat.json")["sessionId"] == "sid-X"
+    finally:
+        sess.close()
+
+
+def test_a_pointer_that_could_not_be_written_never_undoes_new(tmp_path):
+    """The pointer write fails (only a warning in the log) while the mirror
+    keeps being written: `/new` switched to sid-B, the pointer still names
+    S. The next start must not silently reopen S."""
+    _, folder = layout(tmp_path)
+    age(write_pointer(folder, S, mc_copy(folder, S)), 3600)
+    (folder / "acp-chat.json.tmp").mkdir()  # every pointer write fails
+    first = client(new_ids=["sid-B"])
+    sess = container_session(folder, first)
+    try:
+        sess.start()
+        assert loads(first) == [S]
+        assert sess.new_session()["ok"]
+        assert sess.wait_idle(5)
+        assert read_json(folder / "acp-chat.json")["sessionId"] == S
+        assert read_json(folder / "acp-chat-state.json")["sessionId"] == "sid-B"
+    finally:
+        sess.close()
+    second = client()
+    sess = container_session(folder, second)
+    try:
+        sess.start()
+        assert loads(second) == ["sid-B"]
+        assert news(second) == 0
+        errors, notices = cards(sess.transcript_path)
+        assert errors == [] and notices == []
     finally:
         sess.close()
 
@@ -470,6 +564,59 @@ def test_the_pointer_names_a_new_session_before_the_state_mirror(tmp_path, monke
         assert first_writer == "acp-chat.json", (sid, seen)
 
 
+@pytest.mark.parametrize("switch", ["new", "child-restart"])
+def test_no_state_mirror_write_slips_between_a_switch_and_the_pointer(
+        tmp_path, monkeypatch, switch):
+    """Finding 3: the socket threads (prompt, config, ...) write the state
+    mirror while the worker switches the session (`/new`) or respawns the
+    omp child. Switch and pointer write are ONE locked step: a mirror write
+    from another thread lands before the switch or after the pointer,
+    never in between. The pointer write is made slow here so a gap — if
+    there is one — is wide open."""
+    _, folder = layout(tmp_path)
+    write_pointer(folder, S, mc_copy(folder, S))
+    healthy = client(new_ids=["sid-B"])
+    respawn = client(new_ids=["sid-C"],
+                     load_raises=acp_client.ACPError("session/load failed: load was cancelled"))
+    sess = container_session(folder, healthy, respawn)
+    sess.start()  # resumes S
+    snapshots: list[tuple] = []
+    writers: list[threading.Thread] = []
+    real = acp_chat.ChatSession._write_persisted
+
+    def other_thread_writes_the_mirror():
+        with sess._lock:
+            sess._write_state()
+            snapshots.append((read_json(sess.state_file).get("sessionId"),
+                              acp_chat._read_json_object(sess.persist_file).get("sessionId")))
+
+    def slow_pointer(self):
+        writer = threading.Thread(target=other_thread_writes_the_mirror, daemon=True)
+        writer.start()
+        writers.append(writer)
+        time.sleep(0.3)
+        real(self)
+
+    monkeypatch.setattr(acp_chat.ChatSession, "_write_persisted", slow_pointer)
+    try:
+        if switch == "new":
+            assert sess.new_session()["ok"]
+            assert sess.wait_idle(5)
+            new = "sid-B"
+        else:
+            sess._restart_child()  # the respawn cannot load S -> sid-C
+            new = "sid-C"
+        for writer in writers:
+            writer.join(5)
+        assert writers and len(snapshots) == len(writers)
+        ahead = [(mirror, pointer) for mirror, pointer in snapshots
+                 if mirror and mirror != pointer]
+        assert ahead == [], f"the mirror named a session the pointer did not: {ahead}"
+        assert read_json(folder / "acp-chat.json")["sessionId"] == new
+    finally:
+        sess.close()
+
+
 # ── 9. omp cannot restore the session's model ───────────────────────────────
 
 
@@ -506,6 +653,9 @@ def test_load_refused_for_a_missing_model_is_one_model_missing_card(tmp_path, pa
         assert codes(errors) == [("session_reset", "model_missing")]
         assert "Old-Model-4.1-Flash" in errors[0]["content"]
         assert "mc-openai/" not in errors[0]["content"]
+        # Finding 2: the name as a field too — the card in the UI language
+        # (S1-R7) never shows `content`, it fills the name into its sentence.
+        assert errors[0]["data"]["model"] == "Old-Model-4.1-Flash"
         assert notices == []
         assert read_json(folder / "acp-chat.json")["sessionId"] == "sid-new"
     finally:
@@ -522,6 +672,7 @@ def test_model_missing_without_a_name_still_says_model_missing(tmp_path):
         errors, _ = cards(sess.transcript_path)
         assert codes(errors) == [("session_reset", "model_missing")]
         assert "model" in errors[0]["content"]
+        assert "model" not in errors[0]["data"]  # no name, no field
     finally:
         sess.close()
 
@@ -578,5 +729,79 @@ def test_the_state_mirror_never_leaks_into_the_pointer(tmp_path):
     try:
         sess.start()
         assert set(read_json(folder / "acp-chat.json")) == {"sessionId", "transcript"}
+    finally:
+        sess.close()
+
+
+# ── finding 4: a broken pointer or state mirror never kills or stalls start ─
+
+
+@pytest.mark.parametrize("bad", ["name-too-long", "unreadable-folder"])
+def test_a_transcript_path_the_file_system_refuses_is_a_missing_transcript(tmp_path, bad):
+    """`Path.exists()` raises for a path that is too long or sits in a
+    folder the daemon may not enter — the start must not die (it would
+    loop at boot): the transcript counts as gone, one visible card."""
+    _, folder = layout(tmp_path)
+    locked = folder / "locked"
+    if bad == "name-too-long":
+        transcript = "/" + "x" * 5000 + ".jsonl"
+    else:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            pytest.skip("root enters every folder")
+        locked.mkdir()
+        transcript = mc_copy(locked, S)
+        locked.chmod(0)
+    write_pointer(folder, S, transcript)
+    c = client(new_ids=["sid-new"])
+    sess = container_session(folder, c)
+    try:
+        sess.start()
+        assert loads(c) == []
+        assert news(c) == 1
+        errors, notices = cards(sess.transcript_path)
+        assert codes(errors) == [("session_reset", "transcript_missing")]
+        assert notices == []
+    finally:
+        sess.close()
+        if locked.exists():
+            locked.chmod(0o755)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+def test_a_fifo_in_place_of_the_state_mirror_never_stalls_the_start(tmp_path):
+    """The state mirror sits in the agent's own mount too: the lost queue and
+    the open questions are read from it at start — without blocking."""
+    _, folder = layout(tmp_path)
+    write_pointer(folder, S, mc_copy(folder, S))
+    os.mkfifo(folder / "acp-chat-state.json")
+    c = client()
+    sess = container_session(folder, c)
+    worker = threading.Thread(target=sess.start, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    try:
+        assert not worker.is_alive(), "start() hung on a FIFO state mirror"
+        assert loads(c) == [S]
+    finally:
+        sess.close()
+
+
+@pytest.mark.parametrize("queue", [5, "text", {"a": 1}, None])
+def test_a_state_mirror_with_a_broken_queue_reports_nothing_lost(tmp_path, queue):
+    """Whatever an older daemon left as `queue`/`elicitations`, the start
+    goes on and reports no lost job."""
+    _, folder = layout(tmp_path)
+    write_pointer(folder, S, mc_copy(folder, S))
+    (folder / "acp-chat-state.json").write_text(
+        json.dumps({"sessionId": S, "queue": queue, "elicitations": queue}),
+        encoding="utf-8")
+    age(folder / "acp-chat-state.json", 3600)
+    c = client()
+    sess = container_session(folder, c)
+    try:
+        sess.start()
+        assert loads(c) == [S]
+        errors, _ = cards(sess.transcript_path)
+        assert errors == []
     finally:
         sess.close()
