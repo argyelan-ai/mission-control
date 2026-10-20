@@ -216,6 +216,44 @@ async def claim_endpoint_alarm(redis, runtime: Runtime) -> bool:
         return True
 
 
+#: The row's last answer outlives any backend downtime worth talking about;
+#: every healthy probe renews it.
+ANSWER_MEMORY_TTL = 7 * 24 * 3600
+
+
+async def remember_answer(redis, slug: str, *, served: str | None, own: bool) -> None:
+    """What the port said at this row's healthy probe, and whether it was the
+    row's OWN engine (§11.2). Durable — unlike the live snapshot (3 probe
+    intervals), so an outage that began while the backend was down still
+    knows who held the port. Never raises."""
+    try:
+        await redis.set(
+            RedisKeys.runtime_last_answer(slug),
+            json.dumps({"served_model": served, "own": bool(own), "at": _now_iso()}),
+            ex=ANSWER_MEMORY_TTL,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("engine-death: answer not remembered for %s: %s", slug, exc)
+
+
+async def last_answer(redis, slug: str) -> dict:
+    """The remembered answer, ``{}`` when unknown (never probed healthy, or
+    Redis lost it)."""
+    try:
+        raw = await redis.get(RedisKeys.runtime_last_answer(slug))
+    except Exception:  # noqa: BLE001
+        return {}
+    if not raw:
+        return {}
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
 def live_fields(doc: dict) -> dict:
     """The record in the live snapshot's existing shape (crash-loop stop
     writes ``status="failed"`` + ``reason`` the same way)."""

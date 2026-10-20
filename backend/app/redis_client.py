@@ -675,6 +675,23 @@ class RedisKeys:
     def runtime_stop_intent(slug: str) -> str:
         return f"mc:runtime-stop-intent:{slug}"
 
+    # runtime_start_pending (ADR-096 §11.2): MC launched this row and it has
+    # not answered since — it is the port's wanted holder. Outlives the
+    # 20-min switch grace on purpose: a start that never comes up must end
+    # in the plain alarm, not in silence. Cleared by the row's next answer
+    # (own or a neighbour's) and by a stop intent.
+    @staticmethod
+    def runtime_start_pending(slug: str) -> str:
+        return f"mc:runtime-start-pending:{slug}"
+
+    # runtime_last_answer (ADR-096 §11.2): what the port said at this row's
+    # last healthy probe, and whether it was the row's OWN engine. Durable
+    # (days, not the live snapshot's 3 intervals): a backend that was down
+    # longer than the snapshot lives must still know who held the port.
+    @staticmethod
+    def runtime_last_answer(slug: str) -> str:
+        return f"mc:runtime-last-answer:{slug}"
+
     # runtime_death (ADR-096 §11.3): the explained death of one runtime row
     # (reason, reason_code, box, at). The watcher mirrors it into the live
     # snapshot's existing status/reason fields on every silent probe; the

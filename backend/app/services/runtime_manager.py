@@ -2242,6 +2242,12 @@ async def start_runtime(
             return {"ok": False, "message": exclusive["message"]}
 
     if is_docker or is_ssh_process:
+        # ADR-096 §11.2: from here on this row is the port's wanted holder
+        # until it answers — the grace marker below ends after 20 min, this
+        # one does not, so a start that never comes up ends in the plain
+        # alarm instead of silence. Not cleared when the call fails: the old
+        # engine is already gone then, and the dark port is an outage.
+        await runtime_grace.mark_start_pending(slug, grace_source)
         await runtime_grace.mark_switching(
             slug, runtime_grace.PHASE_LAUNCHING, grace_source
         )
@@ -2786,6 +2792,7 @@ async def restart_runtime(
         await runtime_grace.clear_stop_intent(slug)
     await runtime_grace.clear_death_record(slug)
     if is_docker:
+        await runtime_grace.mark_start_pending(slug, grace_source)
         await runtime_grace.mark_switching(
             slug, runtime_grace.PHASE_LAUNCHING, grace_source
         )

@@ -70,10 +70,16 @@ from app.services.runtime_grace import (
     PHASE_LOADING,
     SOURCE_AUTO_RECOVERY,
     SOURCE_SWITCH,
+    STOP_INTENT_SETTLE,
+    clear_evicted,
+    clear_start_pending,
+    clear_stop_intent,
     clear_switching,
     get_evicted,
+    get_start_pending,
     get_stop_intent,
     get_switching,
+    marker_age_seconds,
     mark_stop_intent,
     mark_switching,
 )
@@ -403,6 +409,7 @@ class RuntimeWatcher:
                 # produced the notification storm on every switch. The 20-min
                 # TTL on the marker guarantees we fall back to normal
                 # alerting even if nobody ever clears it.
+                remembered = await engine_death.last_answer(redis, runtime.slug)
                 await self._write_live(
                     redis, runtime.slug,
                     reachable=False, served_model=None, latency_ms=None,
@@ -410,6 +417,8 @@ class RuntimeWatcher:
                     status="switching",
                     phase=switching.get("phase"),
                     switch_source=switching.get("source"),
+                    last_served_model=remembered.get("served_model"),
+                    was_own=bool(remembered.get("own")),
                 )
                 # ADR-078: solange DIESE Instanz lädt, lädt auch die Box —
                 # also bekommt die Slot-Zeile der Box denselben Marker mit
@@ -421,16 +430,14 @@ class RuntimeWatcher:
                 await self._refresh_slot_grace(session, runtime, switching)
                 return
             # What did the port say last, and was it THIS row's own answer?
-            # Carried forward through the outage (ADR-096 §11.2): only a row
-            # whose last healthy probe was its own answer can die — the GLM
-            # row that never ran on the shared :8000 cannot.
-            prev = await self._read_live(redis, runtime.slug)
-            if prev.get("reachable"):
-                last_served = prev.get("served_model")
-                was_own = bool(prev.get("own_answer"))
-            else:
-                last_served = prev.get("last_served_model")
-                was_own = bool(prev.get("was_own"))
+            # (ADR-096 §11.2): only a row whose last healthy probe was its own
+            # answer can die — the GLM row that never ran on the shared :8000
+            # cannot. Read from the durable answer memory, not the live
+            # snapshot: that one expires after 3 intervals, so a backend that
+            # was down longer would forget who held the port.
+            remembered = await engine_death.last_answer(redis, runtime.slug)
+            last_served = remembered.get("served_model")
+            was_own = bool(remembered.get("own"))
             fails = await self._bump_failures(redis, runtime.slug)
             failure = getattr(probed, "failure", None)
             if fails in (1, UNREACHABLE_EVENT_THRESHOLD):
@@ -463,7 +470,7 @@ class RuntimeWatcher:
             )
             if fails == UNREACHABLE_EVENT_THRESHOLD and death is None:
                 if await self._plain_alarm_wanted(
-                    session, redis, runtime, was_own=was_own, last_served=last_served,
+                    session, redis, runtime, was_own=was_own,
                 ):
                     message = (
                         f"{runtime.slug}: endpoint unreachable "
@@ -539,13 +546,35 @@ class RuntimeWatcher:
         # Is this answer THIS row's own engine (ADR-096 §11.2)? Same question
         # and same SSH round trip the probe guard below always asked when the
         # answer does not match the row — asked once here, used twice: by the
-        # guard, and carried in the snapshot so a later outage knows whether
-        # this row was up at all. A matching answer (or a slot row) is own.
+        # guard, and remembered so a later outage knows whether this row was
+        # up at all. A matching answer (or a slot row) is own — unless another
+        # row on this port carries the same model id (two recipe variants of
+        # one model): then only the anchor can tell whose engine answered.
         ctx_mismatch = served_ctx is not None and self._context_would_change(runtime, served_ctx)
-        if runtime.is_slot or (served == (runtime.model_identifier or "") and not ctx_mismatch):
+        anchor_checked = False
+        if runtime.is_slot:
+            own_answer = True
+        elif (
+            served == (runtime.model_identifier or "")
+            and not ctx_mismatch
+            and not await self._model_id_shared_on_port(session, runtime)
+        ):
             own_answer = True
         else:
             own_answer = await self._served_answer_is_own(session, runtime)
+            anchor_checked = True
+        await engine_death.remember_answer(redis, runtime.slug, served=served, own=own_answer)
+        if not runtime.is_slot:
+            # Whoever answers, a start of this row is no longer pending: its
+            # own engine came up, or another engine holds the port now.
+            await clear_start_pending(runtime.slug, redis)
+            try:
+                await self._maybe_lift_stop_intent(
+                    session, redis, runtime,
+                    own_verified=own_answer if anchor_checked else None,
+                )
+            except Exception:  # noqa: BLE001 — bookkeeping may not cost the probe
+                logger.exception("stop-intent check failed for %s", runtime.slug)
         await self._write_live(
             redis, runtime.slug,
             reachable=True, served_model=served, latency_ms=latency_ms,
@@ -1441,46 +1470,124 @@ class RuntimeWatcher:
             return {**out, "state": "unknown", "why": "docker_unreadable"}
         return {**out, "state": "gone"}
 
+    async def _stopped_on_purpose(self, slug: str, redis) -> bool:
+        """MC stopped this row on purpose: a stop intent, or a (1 h) eviction
+        marker from a switch (ADR-096 §11.1)."""
+        if await get_stop_intent(slug, redis) is not None:
+            return True
+        return await get_evicted(slug, redis) is not None
+
     async def _plain_alarm_wanted(
         self, session: AsyncSession, redis, runtime: Runtime, *, was_own: bool,
-        last_served: str | None = None,
     ) -> bool:
         """The plain ``runtime.unreachable`` at the threshold — once per
         endpoint outage, never for planned silence (ADR-096 §11.1/§11.4).
 
-        Quiet when: the row has a stop intent; a death on this endpoint
-        already said it (with its cause); a slot row whose recipe rows are
-        stopped on purpose; a recipe row that shares the port and never served
-        its own answer (the GLM row on 19.10.). Otherwise exactly one row per
-        endpoint outage raises it.
+        Quiet only for what MC KNOWS is planned:
+        - this row was stopped on purpose (stop intent or eviction marker);
+        - a death on this endpoint already said it, with its cause;
+        - the port's holder was stopped on purpose. Holders are the recipe
+          rows whose last healthy probe was their OWN answer (durable answer
+          memory) plus rows MC launched that never answered (pending start —
+          a switch whose new recipe never came up is NOT planned, whatever
+          the grace said before it ran out);
+        - a recipe row that is not a holder, while a holder is not stopped on
+          purpose: that holder (or the slot row) speaks for the port — the
+          GLM row that never ran on 19.10. adds nothing.
+        Nothing known about the holder (memory gone) → the alarm fires, as on
+        main. Exactly one row per endpoint outage raises it.
         """
-        if await get_stop_intent(runtime.slug, redis) is not None:
+        if await self._stopped_on_purpose(runtime.slug, redis):
             return False
         if await engine_death.endpoint_had_death(redis, runtime.endpoint):
             return False
-        siblings = []
+        rows = [] if runtime.is_slot else [runtime]
         if runtime.endpoint:
-            siblings = list((await session.exec(
+            rows += list((await session.exec(
                 select(Runtime).where(
                     Runtime.enabled.is_(True),
                     Runtime.endpoint == runtime.endpoint,
                     Runtime.id != runtime.id,
+                    Runtime.is_slot.is_(False),
                 )
             )).all())
-        if runtime.is_slot:
-            # Quiet only when the recipe that SERVED last was stopped on
-            # purpose — an older recipe switched away hours ago must not
-            # silence the outage of whatever ran after it.
-            for sib in siblings:
-                if sib.is_slot:
-                    continue
-                if last_served and sib.model_identifier != last_served:
-                    continue
-                if await get_stop_intent(sib.slug, redis) is not None:
-                    return False
-        elif siblings and not was_own:
-            return False
+        holders: list[Runtime] = []
+        for row in rows:
+            if row.id == runtime.id:
+                own = was_own
+            else:
+                own = bool((await engine_death.last_answer(redis, row.slug)).get("own"))
+            if own or await get_start_pending(row.slug, redis) is not None:
+                holders.append(row)
+        if holders:
+            wanted = [h for h in holders if not await self._stopped_on_purpose(h.slug, redis)]
+            if not wanted:
+                return False
+            if not runtime.is_slot and all(h.id != runtime.id for h in wanted):
+                return False
         return await engine_death.claim_endpoint_alarm(redis, runtime)
+
+    async def _model_id_shared_on_port(self, session: AsyncSession, runtime: Runtime) -> bool:
+        """Does another enabled recipe row on this endpoint carry the same
+        ``model_identifier``? Then a matching answer proves nothing."""
+        if not runtime.endpoint or not runtime.model_identifier:
+            return False
+        other = (await session.exec(
+            select(Runtime.id).where(
+                Runtime.enabled.is_(True),
+                Runtime.endpoint == runtime.endpoint,
+                Runtime.id != runtime.id,
+                Runtime.is_slot.is_(False),
+                Runtime.model_identifier == runtime.model_identifier,
+            ).limit(1)
+        )).first()
+        return other is not None
+
+    async def _maybe_lift_stop_intent(
+        self, session: AsyncSession, redis, runtime: Runtime, *, own_verified: bool | None,
+    ) -> bool:
+        """ADR-096 §11.1: a stop intent ends with the row's own next start —
+        also one MC did not issue (``start.sh`` by hand after a stop via MC, a
+        ``--restart always`` container after a box reboot). Without this, the
+        old stop would silence that engine's next real death for good.
+
+        Evidence, all of it: the row has an anchor, the anchor runs and the
+        port answers (checked by the same probe guard as drift), and the stop
+        was asked at least ``STOP_INTENT_SETTLE`` ago — an engine still
+        answering while its stop runs is not a start. A neighbour's answer on
+        a shared port never counts (its anchor is not this row's). Lifts the
+        eviction marker with it: the switch it described is undone.
+        """
+        intent = await get_stop_intent(runtime.slug, redis)
+        evicted = await get_evicted(runtime.slug, redis)
+        if intent is None and evicted is None:
+            return False
+        ages = [
+            marker_age_seconds(intent, "since") if intent is not None else None,
+            marker_age_seconds(evicted, "at") if evicted is not None else None,
+        ]
+        known = [a for a in ages if a is not None]
+        if known and min(known) < STOP_INTENT_SETTLE:
+            return False
+        from app.services.runtime_manager import runtime_anchor_names
+
+        if not runtime_anchor_names({
+            "runtime_type": runtime.runtime_type,
+            "process_name": runtime.process_name,
+            "container_name": runtime.container_name,
+        }):
+            return False  # nothing on the box to tell this row's engine apart
+        own = own_verified if own_verified is not None else \
+            await self._served_answer_is_own(session, runtime)
+        if not own:
+            return False
+        await clear_stop_intent(runtime.slug)
+        await clear_evicted(runtime.slug)
+        logger.info(
+            "runtime %s: stop intent lifted (%s) — its own engine answers again, "
+            "started outside MC", runtime.slug, (intent or {}).get("why") or "evicted",
+        )
+        return True
 
     # ── Auto-recovery ────────────────────────────────────────────────────
 
@@ -2115,22 +2222,6 @@ class RuntimeWatcher:
                 nx=True, ex=AUTO_RECOVERY_COOLDOWN,
             )
         )
-
-    async def _read_live(self, redis, slug: str) -> dict:
-        """The previous live snapshot, ``{}`` when absent/unreadable."""
-        try:
-            raw = await redis.get(RedisKeys.runtime_live(slug))
-        except Exception:  # noqa: BLE001
-            return {}
-        if not raw:
-            return {}
-        if isinstance(raw, bytes):
-            raw = raw.decode()
-        try:
-            doc = json.loads(raw)
-        except ValueError:
-            return {}
-        return doc if isinstance(doc, dict) else {}
 
     async def _write_live(self, redis, slug: str, **fields) -> None:
         payload = {"last_probe_at": _utcnow_iso(), **fields}

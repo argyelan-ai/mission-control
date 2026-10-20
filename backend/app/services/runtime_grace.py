@@ -164,22 +164,37 @@ async def get_evicted(slug: str, redis=None) -> dict | None:
 # intent is an engine death (runtime_watcher). The eviction marker above
 # expires after an hour — this one does not: a runtime that was stopped or
 # switched away stays "not running — on purpose" until its OWN next start
-# (``runtime_manager.start_runtime`` / ``restart_runtime``) lifts it. No probe,
-# no neighbour's answer on a shared port and no timer ever clears it, so a
-# manual stop can never later be read as a death or undone by auto-recovery.
-# Redis runs with AOF (docker-compose: --appendonly yes), so "no TTL" survives
-# a Redis restart.
+# lifts it. That is MC's start (``runtime_manager.start_runtime`` /
+# ``restart_runtime``) — or a start MC only observes: ``start.sh`` by hand
+# after a stop via MC (the mc-runtime-pause flow), a ``--restart always``
+# container after a box reboot. The watcher lifts the intent for those once
+# the row's OWN anchor runs and the port answers, at least
+# ``STOP_INTENT_SETTLE`` after the stop was asked (an engine still answering
+# while its stop runs is not a start). No neighbour's answer on a shared port
+# and no timer ever clears it, so a manual stop can never later be read as a
+# death or undone by auto-recovery. Redis runs with AOF (docker-compose:
+# --appendonly yes), so "no TTL" survives a Redis restart.
 INTENT_OPERATOR_STOP = "operator_stop"
 INTENT_SWITCHED_AWAY = "switched_away"
 INTENT_SCHEDULE = "schedule"
 INTENT_IDLE_UNLOAD = "idle_unload"
 INTENT_CRASH_LOOP = "crash_loop_stop"
 
+#: How long after a stop was asked an own answer may still be the stop in
+#: progress. MC's stops are bounded well below it (ssh stop 180 s + verify,
+#: eviction ``docker stop -t 120``); independent of the watcher interval.
+STOP_INTENT_SETTLE = 10 * 60
+
+#: A pending start outlives every switch grace (20 min) by far — it ends with
+#: the row's next answer or a stop, the TTL only collects rows nobody probes.
+START_PENDING_TTL = 7 * 24 * 3600
+
 
 async def mark_stop_intent(slug: str | None, why: str, *, by: str | None = None) -> None:
     """Record that MC is stopping ``slug`` on purpose. No TTL. Never raises.
 
-    Set BEFORE the stop, so the first failed probe after it already sees it."""
+    Set BEFORE the stop, so the first failed probe after it already sees it.
+    A stop also ends a pending start of ``slug``: it is no longer wanted."""
     if not slug:
         return
     try:
@@ -188,12 +203,14 @@ async def mark_stop_intent(slug: str | None, why: str, *, by: str | None = None)
             RedisKeys.runtime_stop_intent(slug),
             json.dumps({"why": why, "by": by, "since": _utcnow_iso()}),
         )
+        await redis.delete(RedisKeys.runtime_start_pending(slug))
     except Exception as exc:  # noqa: BLE001
         logger.debug("mark_stop_intent(%s) failed: %s", slug, exc)
 
 
 async def clear_stop_intent(slug: str | None) -> None:
-    """Only a start of ``slug`` itself calls this. Never raises."""
+    """Only a start of ``slug`` itself calls this — MC's own, or one the
+    watcher observed on the box (see ``STOP_INTENT_SETTLE``). Never raises."""
     if not slug:
         return
     try:
@@ -221,6 +238,77 @@ async def get_stop_intent(slug: str, redis=None) -> dict | None:
     except ValueError:
         return {"why": "unknown"}
     return doc if isinstance(doc, dict) else {"why": "unknown"}
+
+
+def marker_age_seconds(doc: dict | None, field: str) -> float | None:
+    """Seconds since ``doc[field]`` (an ISO time), ``None`` when unknown."""
+    from datetime import datetime, timezone
+
+    raw = (doc or {}).get(field)
+    if not raw:
+        return None
+    try:
+        at = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - at).total_seconds()
+
+
+# ── Pending start (ADR-096 §11.2) ────────────────────────────────────────
+# MC launched ``slug`` and it has not answered since: it is the port's wanted
+# holder. The switch grace (20 min) keeps the watcher quiet while it loads;
+# when the grace runs out and the row still never answered, this marker is
+# what makes the silence an outage again (one plain alarm) — instead of
+# "a row that never served its own answer" on a shared port, which stays
+# quiet. Ends with the row's next answer (watcher), a stop intent, or the TTL.
+
+
+async def mark_start_pending(slug: str | None, source: str) -> None:
+    """``runtime_manager`` calls this where it opens the switch window.
+    Never raises."""
+    if not slug:
+        return
+    try:
+        redis = await get_redis()
+        await redis.setex(
+            RedisKeys.runtime_start_pending(slug),
+            START_PENDING_TTL,
+            json.dumps({"source": source, "since": _utcnow_iso()}),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("mark_start_pending(%s) failed: %s", slug, exc)
+
+
+async def clear_start_pending(slug: str | None, redis=None) -> None:
+    """The row answered (own engine or a neighbour holding the port). Never raises."""
+    if not slug:
+        return
+    try:
+        redis = redis or await get_redis()
+        await redis.delete(RedisKeys.runtime_start_pending(slug))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("clear_start_pending(%s) failed: %s", slug, exc)
+
+
+async def get_start_pending(slug: str, redis=None) -> dict | None:
+    """The pending-start document, or ``None`` (also when Redis is down)."""
+    try:
+        redis = redis or await get_redis()
+        raw = await redis.get(RedisKeys.runtime_start_pending(slug))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("get_start_pending(%s) failed: %s", slug, exc)
+        return None
+    if not raw:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return {"source": "unknown"}
+    return doc if isinstance(doc, dict) else {"source": "unknown"}
 
 
 async def clear_death_record(slug: str | None) -> None:
