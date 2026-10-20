@@ -15,6 +15,7 @@ import tempfile
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import fakeredis.aioredis
@@ -42,6 +43,14 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 # host home in the temp dir; the repo path inside it is never created, which
 # is exactly what CI sees (no checkout at the default path). HOME itself stays
 # untouched: git, ssh and gh in test subprocesses read their config from it.
+# What still uses the real HOME (measured 2026-10-20: full suite with an
+# empty HOME, and with a filled one): git auth (GitService._ensure_git_auth)
+# is moved onto the stand-in below ("Git auth"); the fixture
+# `scratch_outside_tmp` in tests/test_mc_head_scratch_origin.py needs a
+# folder outside every temp root and so makes ~/.cache/mc-head-test-<id> on
+# purpose (removed after the test). Nothing else may: a test that needs "a
+# folder in the home" takes the stand-in (HOME_HOST), as
+# tests/test_visual_proof.py does.
 # The autouse fixture `isolate_host_paths` below repeats the redirect for
 # every test, and pytest_sessionstart / pytest_sessionfinish at the end of
 # this file fail the run if the real places changed anyway.
@@ -143,6 +152,29 @@ _TEST_HARVEST_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-harvest-"))
 _TEST_HEADS_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-heads-"))
 # And for browser-session last images (ADR-088): never into the real ~/.mc.
 _TEST_BROWSER_SESSIONS_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-browser-sessions-"))
+
+# Every test process makes these roots afresh (each xdist worker its own),
+# so they go when the process ends — until 2026-10-20 they stayed, and
+# $TMPDIR held thousands of them.
+for _root in (_TEST_VAULT_ROOT, _TEST_HARVEST_ROOT, _TEST_HEADS_ROOT, _TEST_BROWSER_SESSIONS_ROOT):
+    atexit.register(shutil.rmtree, _root, ignore_errors=True)
+
+# Test ids must not carry these per-process paths: xdist collects in every
+# worker and aborts the run when the ids differ ("Different tests were
+# collected"). pytest_make_parametrize_id below puts a name in their place.
+# Both spellings of each root: as made (macOS: /var/folders/…) and resolved
+# (/private/var/folders/…), the longer one first — it contains the other.
+_PER_PROCESS_ROOTS = tuple(
+    (form, name)
+    for root, name in (
+        (_TEST_HOST_HOME, "<host-home>"),
+        (_TEST_VAULT_ROOT, "<test-vault>"),
+        (_TEST_HARVEST_ROOT, "<test-harvest>"),
+        (_TEST_HEADS_ROOT, "<test-heads>"),
+        (_TEST_BROWSER_SESSIONS_ROOT, "<test-browser-sessions>"),
+    )
+    for form in dict.fromkeys((str(root.resolve()), str(root)))
+)
 
 # Third incident of the same class (2026-09-07, omp agent): tests that spawn
 # real subprocesses (render-omp-config.sh & Co.) inherited the agent
@@ -632,15 +664,55 @@ def isolate_host_paths():
                 os.environ[key] = value
 
 
+# Git auth reads the HOME it runs under, not HOME_HOST: GitService.
+# _ensure_git_auth writes ~/.git-credentials and runs `git config --global`
+# (credential.helper, safe.directory, user.name, user.email) — and without a
+# token it deletes ~/.git-credentials. Tests reach it through _run_cmd with
+# the real HOME (test_git_service.py, test_worktree_relative_gitdir.py,
+# test_agent_repo_binding.py): measured 2026-10-20, an existing credentials
+# file was gone after every run, and with GH_TOKEN in the shell the token and
+# a foreign git identity landed in the real home. So while it runs under the
+# real HOME, HOME (and GIT_CONFIG_GLOBAL) point at the stand-in; a test that
+# set HOME itself (tmp_path) runs the method unchanged.
+from app.services.git_service import GitService as _GitService
+
+_real_ensure_git_auth = _GitService._ensure_git_auth
+_GIT_HOME_KEYS = ("HOME", "GIT_CONFIG_GLOBAL")
+
+
+async def _ensure_git_auth_off_the_real_home(self) -> None:
+    if os.path.realpath(os.path.expanduser("~")) != os.path.realpath(_REAL_HOME):
+        return await _real_ensure_git_auth(self)
+    saved = {key: os.environ.get(key) for key in _GIT_HOME_KEYS}
+    os.environ["HOME"] = str(_TEST_HOST_HOME)
+    os.environ["GIT_CONFIG_GLOBAL"] = str(_TEST_HOST_HOME / ".gitconfig")
+    try:
+        return await _real_ensure_git_auth(self)
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+_GitService._ensure_git_auth = _ensure_git_auth_off_the_real_home
+
+
 # The guard: what the real machine looked like before the run and after it.
-# Watched are the two places tests have written into (incident 2026-10-20):
+# Watched are the places tests have written into (incident 2026-10-20):
 # the real ~/.mc/agents and the real fleet file
 # docker/docker-compose.agents.yml (with its .bak/.tmp/.rejected) of the
-# real checkout. Only where they exist — on CI neither does, so nothing is
-# watched there. Live agents write logs, transcripts and session state into
-# ~/.mc/agents all the time; those folders and suffixes are skipped, so the
-# guard sees what tests write: new folders, agent config files, skills/,
-# plugins/. Folders are compared by name, files by mtime and size.
+# real checkout; and, by name only (depth 1), ~/.mc/references/groups and
+# ~/.mc/workspaces, where older runs left room-*/running-*/paused-* group
+# folders and test-agent workspaces. Only where they exist — on CI none
+# does, so nothing is watched there. Live agents write logs, transcripts
+# and session state into ~/.mc/agents all the time; those folders and
+# suffixes are skipped, so the guard sees what tests write: new folders,
+# agent config files, skills/, plugins/. Folders are compared by name, files
+# by mtime and size. In the name-only places the live system adds a folder
+# only when someone starts a group or creates an agent, and changes inside
+# a folder are not looked at.
 _HOST_GUARD_TREE_DEPTH = 4  # <slug>/claude-config/plugins/<file>
 _HOST_GUARD_SKIP_DIRS = frozenset({
     "logs", "projects", "sessions", "session-env", "shell-snapshots",
@@ -652,8 +724,10 @@ _HOST_GUARD_SKIP_SUFFIXES = (
     ".log", ".err", ".out", ".jsonl", ".paste", ".pid", ".lock", ".sock",
     ".marker", ".swp",
 )
+_HOST_GUARD_NAME_ONLY = (("references", "groups"), ("workspaces",))  # under <home>/.mc
 _COMPOSE_FILE = "docker-compose.agents.yml"
 _HOST_GUARD_KEY = pytest.StashKey[tuple]()
+_HOST_GUARD_STAT = "home-guard failed"  # the word in the last summary line
 
 
 def _main_checkout(repo: Path) -> Path:
@@ -679,10 +753,11 @@ def _host_guard_targets(
     homes: tuple[Path, ...] | None = None,
     repos: tuple[Path, ...] | None = None,
 ) -> tuple[tuple[str, Path], ...]:
-    """("tree", <home>/.mc/agents) for every home that has MC installed
-    (<home>/.mc exists), ("compose", <repo>/docker) for every checkout that
-    holds a real fleet file. Defaults: the real home + HOME_HOST, and the
-    real checkout + the main checkout behind this one."""
+    """("tree", <home>/.mc/agents) and ("names", <home>/.mc/references/
+    groups | workspaces) for every home that has MC installed (<home>/.mc
+    exists), ("compose", <repo>/docker) for every checkout that holds a real
+    fleet file. Defaults: the real home + HOME_HOST, and the real checkout +
+    the main checkout behind this one."""
     if homes is None:
         homes = (_REAL_HOME, _REAL_HOST_HOME)
     if repos is None:
@@ -692,6 +767,8 @@ def _host_guard_targets(
     for home in homes:
         if (home / ".mc").is_dir():
             targets.setdefault((home / ".mc" / "agents").resolve(), "tree")
+            for parts in _HOST_GUARD_NAME_ONLY:
+                targets.setdefault(home.joinpath(".mc", *parts).resolve(), "names")
     for repo in repos:
         if (repo / "docker" / _COMPOSE_FILE).is_file():
             targets.setdefault((repo / "docker").resolve(), "compose")
@@ -699,7 +776,8 @@ def _host_guard_targets(
 
 
 def _host_guard_snapshot(targets) -> dict[str, tuple[int, int] | None]:
-    """path -> (mtime_ns, size) for files, None for folders (names only)."""
+    """path -> (mtime_ns, size) for files, None for folders and for every
+    entry of a "names" target (names only)."""
     snap: dict[str, tuple[int, int] | None] = {}
 
     def add_file(path: str) -> None:
@@ -713,6 +791,15 @@ def _host_guard_snapshot(targets) -> dict[str, tuple[int, int] | None]:
         if kind == "compose":
             for name in (_COMPOSE_FILE, *(f"{_COMPOSE_FILE}{s}" for s in (".bak", ".tmp", ".rejected"))):
                 add_file(os.path.join(root, name))
+            continue
+        if kind == "names":
+            try:
+                entries = list(os.scandir(root))
+            except OSError:
+                continue
+            for entry in entries:
+                is_dir = entry.is_dir(follow_symlinks=False)
+                snap[entry.path + (os.sep if is_dir else "")] = None
             continue
         stack = [(os.fspath(root), 1)]
         while stack:
@@ -742,6 +829,23 @@ def _host_guard_diff(before: dict, after: dict) -> list[str]:
         if before[p] != after[p]
     ]
     return lines
+
+
+def pytest_make_parametrize_id(config, val, argname):
+    """A test id without the per-process temp roots (_PER_PROCESS_ROOTS):
+    each is replaced by its name, e.g. "<host-home>/.mc/agents/x". Under
+    xdist every worker has its own roots, so an id built from one differs
+    between workers and the whole run stops at collection. Values without
+    such a root return None and keep pytest's own id."""
+    if not isinstance(val, (str, os.PathLike)):
+        return None
+    text = os.fspath(val)
+    if not isinstance(text, str):
+        return None
+    stable = text
+    for form, name in _PER_PROCESS_ROOTS:
+        stable = stable.replace(form, name)
+    return stable if stable != text else None
 
 
 def pytest_sessionstart(session):
@@ -777,6 +881,15 @@ def pytest_sessionfinish(session, exitstatus):
     ]
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
+        # This hook runs inside the reporter's own sessionfinish, before it
+        # prints the summary — so the failure also lands in the LAST line
+        # ("N passed, 1 home-guard failed"), which is what people read and
+        # what `| tail -1` shows. The empty line ends xdist's open progress
+        # line ("[100%]") before the banner.
+        reporter.stats.setdefault(_HOST_GUARD_STAT, []).append(
+            SimpleNamespace(count_towards_summary=True, changes=len(changes))
+        )
+        reporter.write_line("")
         reporter.write_sep("=", "the real home or checkout changed during this test run", red=True, bold=True)
         for line in lines:
             reporter.write_line(line)

@@ -22,7 +22,11 @@ guard at its end). These tests check both halves:
 
 from __future__ import annotations
 
+import io
+import json
 import os
+import subprocess
+import sys
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -355,6 +359,10 @@ def _fake_install(tmp_path: Path) -> tuple[Path, Path]:
     (agents / "alpha" / "logs").mkdir()
     (agents / "alpha" / "logs" / "poll.log").write_text("tick\n")
     (agents / "alpha" / "claude-config" / "projects" / "p").mkdir(parents=True)
+    groups = home / ".mc" / "references" / "groups"
+    (groups / "a-real-group").mkdir(parents=True)
+    (groups / "a-real-group" / "result.md").write_text("# Room\n")
+    (home / ".mc" / "workspaces" / "alpha").mkdir(parents=True)
     repo = tmp_path / "checkout"
     (repo / "docker").mkdir(parents=True)
     (repo / "docker" / "docker-compose.agents.yml").write_text("services: {}\n")
@@ -381,6 +389,8 @@ def test_guard_watches_only_installs_that_exist(tmp_path):
 
     assert targets == (
         ("tree", (home / ".mc" / "agents").resolve()),
+        ("names", (home / ".mc" / "references" / "groups").resolve()),
+        ("names", (home / ".mc" / "workspaces").resolve()),
         ("compose", (repo / "docker").resolve()),
     )
     assert conftest._host_guard_targets(homes=(bare_home,), repos=(bare_repo,)) == ()
@@ -399,6 +409,12 @@ def test_guard_sees_what_tests_wrote_and_skips_live_noise(tmp_path):
     _touch_later(agents / "alpha" / "logs" / "poll.log", "tock\n")
     (agents / "alpha" / "claude-config" / "projects" / "p" / "t.jsonl").write_text("{}\n")
     (agents / "alpha" / "claude-config" / "pane.log").write_text("x")
+    # In the name-only places, what changes INSIDE an existing folder is not
+    # reported either (a live group run rewrites its result.md).
+    groups = home / ".mc" / "references" / "groups"
+    _touch_later(groups / "a-real-group" / "result.md", "# Room\n\n## Result\n")
+    (groups / "a-real-group" / "notes.md").write_text("x")
+    (home / ".mc" / "workspaces" / "alpha" / "file.txt").write_text("x")
     assert conftest._host_guard_diff(before, conftest._host_guard_snapshot(targets)) == []
 
     # What tests wrote (incident 2026-10-20): reported.
@@ -409,10 +425,18 @@ def test_guard_sees_what_tests_wrote_and_skips_live_noise(tmp_path):
     (agents / "alpha" / "claude-config" / "skills" / "b-skill").mkdir()
     _touch_later(repo / "docker" / "docker-compose.agents.yml", "services: {x: {}}\n")
     (repo / "docker" / "docker-compose.agents.yml.bak").write_text("services: {}\n")
+    # Seen live 2026-10-20: group-run tests left room-*/running-*/paused-*
+    # folders in the real references/groups, and test agents left
+    # workspaces behind (test_update_drain.py & Co. on an older branch).
+    (groups / "room-0a1b2c").mkdir()
+    (groups / "room-0a1b2c" / "result.md").write_text("# Room\n")
+    (home / ".mc" / "workspaces" / "zz-testlead").mkdir()
 
     diff = conftest._host_guard_diff(before, conftest._host_guard_snapshot(targets))
     a = (home / ".mc" / "agents").resolve()
     d = (repo / "docker").resolve()
+    g = groups.resolve()
+    w = (home / ".mc" / "workspaces").resolve()
     assert sorted(diff) == sorted([
         f"new:     {a}/cardhostagent-host/",
         f"new:     {a}/cardhostagent-host/start-claude.sh",
@@ -421,6 +445,8 @@ def test_guard_sees_what_tests_wrote_and_skips_live_noise(tmp_path):
         f"changed: {d}/docker-compose.agents.yml",
         f"changed: {a}/alpha/claude-config/plugins/known_marketplaces.json",
         f"changed: {a}/alpha/settings.json",
+        f"new:     {g}/room-0a1b2c/",
+        f"new:     {w}/zz-testlead/",
     ])
 
 
@@ -453,10 +479,12 @@ def test_main_checkout_behind_a_worktree(tmp_path):
     assert conftest._main_checkout(tmp_path / "no-git") == tmp_path / "no-git"
 
 
-def _fake_session(exitstatus=0, workerinput=None):
+def _fake_session(exitstatus=0, workerinput=None, reporter=None):
     config = SimpleNamespace(
         stash=pytest.Stash(),
-        pluginmanager=SimpleNamespace(get_plugin=lambda name: None),
+        pluginmanager=SimpleNamespace(
+            get_plugin=lambda name: reporter if name == "terminalreporter" else None
+        ),
     )
     if workerinput is not None:
         config.workerinput = workerinput
@@ -525,3 +553,139 @@ def test_guard_runs_in_the_xdist_controller_not_in_workers(tmp_path, monkeypatch
     controller = _fake_session()
     conftest.pytest_sessionstart(controller)
     assert controller.config.stash.get(conftest._HOST_GUARD_KEY, None) is not None
+
+
+def test_guard_failure_shows_in_the_last_summary_line(tmp_path, monkeypatch, request):
+    """The exit code alone is not enough: people (and agents piping through
+    `tail`) read the last line. A guard failure must be in it — not only
+    'N passed' — and the banner must not start on the progress line."""
+    from _pytest.terminal import TerminalReporter
+
+    from tests import conftest
+
+    home, repo = _fake_install(tmp_path)
+    targets = conftest._host_guard_targets(homes=(home,), repos=(repo,))
+    monkeypatch.setattr(conftest, "_host_guard_targets", lambda: targets)
+
+    out = io.StringIO()
+    reporter = TerminalReporter(request.config, out)
+    reporter.stats["passed"] = [SimpleNamespace(), SimpleNamespace()]
+    reporter.write("tests/test_x.py ..  [100%]")  # xdist leaves this line open
+    session = _fake_session(reporter=reporter)
+    conftest.pytest_sessionstart(session)
+    (home / ".mc" / "agents" / "cardhostagent-host").mkdir()
+    conftest.pytest_sessionfinish(session, 0)
+
+    parts, _color = reporter.build_summary_stats_line()
+    assert [text for text, _markup in parts] == ["2 passed", "1 home-guard failed"]
+    lines = out.getvalue().splitlines()
+    assert lines[0] == "tests/test_x.py ..  [100%]", "the banner must start on a line of its own"
+    assert any("real home or checkout changed during this test run" in line for line in lines[1:])
+    assert session.exitstatus == pytest.ExitCode.TESTS_FAILED
+
+
+# ── 6. Per-process temp roots: stable test ids, gone at exit ─────────────
+
+def test_parametrize_ids_hide_the_per_process_temp_roots(request):
+    """Under xdist every worker has its own stand-in host home (and vault,
+    heads, … roots). An id built from one would differ between workers, and
+    xdist aborts the whole run: 'Different tests were collected'."""
+    from tests import conftest
+
+    settings = app.config.settings
+    make_id = conftest.pytest_make_parametrize_id
+    assert make_id(request.config, f"{settings.home_host}/.mc/agents/x", "path") == "<host-home>/.mc/agents/x"
+    assert make_id(request.config, Path(settings.mc_repo_path) / "docker", "path") == (
+        "<host-home>/Workspace/Projects/mission-control/docker"
+    )
+    assert make_id(request.config, f"--vault={settings.vault_path}/notes", "arg") == "--vault=<test-vault>/notes"
+    assert make_id(request.config, str(settings.heads_root), "root") == "<test-heads>"
+    assert make_id(request.config, "/srv/elsewhere", "path") is None, "other values keep pytest's id"
+    assert make_id(request.config, 42, "n") is None
+
+
+@pytest.mark.parametrize("path", [f"{app.config.settings.home_host}/.mc/agents/probe"])
+def test_a_parametrize_value_from_the_stand_in_gets_a_stable_id(request, path):
+    """No explicit id here on purpose: this is the trap itself. Without the
+    hook this id holds the worker's own temp path, and `pytest -n 2` stops
+    at collection."""
+    assert request.node.callspec.id == "<host-home>/.mc/agents/probe"
+    assert path.startswith(os.environ["HOME_HOST"])
+
+
+def test_a_test_process_leaves_no_temp_roots_behind(tmp_path):
+    """conftest makes temp roots per test process (stand-in host home,
+    vault, harvest, heads, browser sessions). All of them must be gone when
+    the process ends — $TMPDIR held thousands of them from earlier runs."""
+    tmpdir = tmp_path / "tmpdir"
+    tmpdir.mkdir()
+    probe = (
+        "import json, os, tests.conftest as c\n"
+        "roots = [c._TEST_HOST_HOME, c._TEST_VAULT_ROOT, c._TEST_HARVEST_ROOT,\n"
+        "         c._TEST_HEADS_ROOT, c._TEST_BROWSER_SESSIONS_ROOT]\n"
+        "print(json.dumps([[str(r), os.path.isdir(r)] for r in roots]))\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=Path(__file__).resolve().parents[1],
+        env=dict(os.environ, TMPDIR=str(tmpdir)),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert done.returncode == 0, done.stderr[-2000:]
+    roots = json.loads(done.stdout.strip().splitlines()[-1])
+    assert len(roots) == 5 and all(made for _path, made in roots), roots
+    assert [path for path, _made in roots if os.path.exists(path)] == []
+    assert list(tmpdir.iterdir()) == [], "nothing else may stay in the temp dir either"
+
+
+# ── 7. Git auth: never the real ~/.git-credentials or global git config ──
+
+_GIT_AUTH_PROBE = """
+import asyncio, json, os, sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+import tests.conftest as c
+from app.services import git_service
+found = AsyncMock(return_value=SimpleNamespace(token=sys.argv[1]))
+with patch.object(git_service, "resolve_github_config", found):
+    asyncio.run(git_service.GitService()._ensure_git_auth())
+print(json.dumps(sorted(os.listdir(c._TEST_HOST_HOME))))
+"""
+
+
+@pytest.mark.parametrize("token", ["", "dummy-token"], ids=["no-token", "token"])
+def test_git_auth_never_touches_the_real_home(tmp_path, token):
+    """GitService._ensure_git_auth writes ~/.git-credentials and runs
+    `git config --global` (credential.helper, safe.directory, user.name,
+    user.email) — without a token it DELETES ~/.git-credentials. Tests reach
+    it through _run_cmd with the real HOME (test_git_service.py,
+    test_worktree_relative_gitdir.py, test_agent_repo_binding.py). Measured
+    2026-10-20 with a stand-in HOME: an existing credentials file was gone
+    after every run, and with GH_TOKEN set the token and a foreign git
+    identity landed in it.
+
+    Runs in a child process whose home is a temp dir: even with the guard
+    broken, nothing real is touched."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".git-credentials").write_text("https://u:keep@example.invalid\n")
+    (home / ".gitconfig").write_text("[user]\n\tname = Operator\n")
+    before = {p.name: p.read_text() for p in home.iterdir()}
+    env = {k: v for k, v in os.environ.items() if k != "GIT_CONFIG_GLOBAL"}
+    env["HOME"] = str(home)
+
+    done = subprocess.run(
+        [sys.executable, "-c", _GIT_AUTH_PROBE, token],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert done.returncode == 0, done.stderr[-2000:]
+    assert {p.name: p.read_text() for p in home.iterdir()} == before
+    if token:  # the auth setup still ran — into the stand-in home
+        assert {".git-credentials", ".gitconfig"} <= set(json.loads(done.stdout.strip().splitlines()[-1]))
