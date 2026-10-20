@@ -7,7 +7,10 @@ Central test fixtures for Mission Control Backend.
 - Factory functions for test data
 """
 
+import atexit
+import json
 import os
+import shutil
 import tempfile
 import uuid
 from collections.abc import AsyncGenerator
@@ -21,6 +24,79 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
+
+# ── Host paths: no test ever writes into the real home or checkout ───────
+# Incident 2026-10-20: a plain local `pytest` wrote into the operator's real
+# machine on every run. settings.home_host and the HOME_HOST env var default
+# to the real home, settings.mc_repo_path to the real checkout — the one the
+# live backend renders its fleet from. Measured on one run: new folders
+# ~/.mc/agents/cardhostagent-host + cardhostagentoff-host (host launcher
+# sync), rewritten skills/ folders, settings.json, plugins/*.json and
+# .claude.json inside existing agent folders, and a rewrite of
+# <checkout>/docker/docker-compose.agents.yml (write_compose_agents).
+# Several modules resolve these paths ONCE at import (docker_agent_sync.
+# AGENTS_DIR, pane_stream.AGENTS_ROOT, compose_renderer.DEFAULT_COMPOSE_PATH,
+# dispatch._BACKEND_MOUNTED_ROOTS, cli_terminal._HOST_LAUNCH_AGENTS), so the
+# redirect has to happen HERE, before the first `import app…`; a fixture
+# alone would come too late for them. Every test process gets one stand-in
+# host home in the temp dir; the repo path inside it is never created, which
+# is exactly what CI sees (no checkout at the default path). HOME itself stays
+# untouched: git, ssh and gh in test subprocesses read their config from it.
+# The autouse fixture `isolate_host_paths` below repeats the redirect for
+# every test, and pytest_sessionstart / pytest_sessionfinish at the end of
+# this file fail the run if the real places changed anyway.
+#
+# The real values are kept in MC_TEST_ORIGINAL_* the first time: xdist
+# workers (and any pytest a test starts) inherit this process's env, which
+# by then already holds the stand-in.
+for _key in ("HOME_HOST", "MC_REPO_PATH"):
+    os.environ.setdefault(f"MC_TEST_ORIGINAL_{_key}", os.environ.get(_key, ""))
+_REAL_HOME = Path.home()
+_REAL_HOST_HOME = Path(os.environ["MC_TEST_ORIGINAL_HOME_HOST"] or _REAL_HOME)
+_REAL_MC_REPO = Path(
+    os.environ["MC_TEST_ORIGINAL_MC_REPO_PATH"]
+    or _REAL_HOST_HOME / "Workspace" / "Projects" / "mission-control"
+)
+_TEST_HOST_HOME = Path(tempfile.mkdtemp(prefix="mc-test-host-home-")).resolve()
+_TEST_MC_REPO = _TEST_HOST_HOME / "Workspace" / "Projects" / "mission-control"
+atexit.register(shutil.rmtree, _TEST_HOST_HOME, ignore_errors=True)
+
+# Env vars the app reads for host paths. MC_AGENTS_ROOT (mcp_sync) and
+# MC_MCP_REGISTRY_DIR (mcp_registry) are the two places that would otherwise
+# fall back to expanduser("~") — the real home.
+_TEST_HOST_ENV = {
+    "HOME_HOST": str(_TEST_HOST_HOME),
+    "MC_AGENTS_ROOT": str(_TEST_HOST_HOME / ".mc" / "agents"),
+    "MC_MCP_REGISTRY_DIR": str(_TEST_HOST_HOME / ".mc" / "mcp-servers"),
+}
+# MC_REPO_PATH is removed, not redirected: scripts use it to find their own
+# code (scripts/hermes_acp_chat.py, scripts/auto-rebuild-agents-on-drift.sh),
+# and without it they use the checkout under test. The setting
+# mc_repo_path gets the stand-in below.
+_TEST_HOST_ENV_REMOVED = ("MC_REPO_PATH",)
+os.environ.update(_TEST_HOST_ENV)
+for _key in _TEST_HOST_ENV_REMOVED:
+    os.environ.pop(_key, None)
+# `~` defaults of the token harvester, for a test that builds its own
+# Settings() (the shared one below gets explicit values).
+os.environ.update({
+    "TOKEN_HARVEST_PATHS": json.dumps([str(_TEST_HOST_HOME / ".mc" / "agents")]),
+    "GROK_HARVEST_PATH": str(_TEST_HOST_HOME / ".grok" / "logs" / "unified.jsonl"),
+    "GROK_SESSIONS_PATH": str(_TEST_HOST_HOME / ".grok" / "sessions"),
+    "HERMES_STATE_DB_PATH": str(_TEST_HOST_HOME / ".hermes" / "state.db"),
+})
+
+# Settings whose defaults derive from the host home or the checkout.
+# tests/test_tests_never_touch_real_home.py walks EVERY settings field and
+# fails if one still points at the real home — a new field with such a
+# default has to be added here.
+_TEST_HOST_SETTINGS = {
+    "home_host": str(_TEST_HOST_HOME),
+    "mc_repo_path": str(_TEST_MC_REPO),
+    "wake_request_dir": _TEST_HOST_HOME / ".mc" / "wake-requests",
+    "chat_media_root": _TEST_HOST_HOME / ".mc" / "chat-media",
+    "token_harvest_paths": [str(_TEST_HOST_HOME / ".mc" / "agents")],
+}
 
 # ── Patch settings BEFORE the app is imported ────────────────────────────
 # database_url stays PostgreSQL (so app.database.engine is created without error).
@@ -130,6 +206,8 @@ app.config.settings = app.config.Settings(
     # Beweis-Tor off by default: tests that exercise it set warn/enforce
     # themselves (tests/test_proof_gate.py) — no other test may reach gh.
     proof_gate_mode="off",
+    # Host home + checkout → the stand-in (see "Host paths" at the top).
+    **_TEST_HOST_SETTINGS,
 )
 
 # Now import app modules
@@ -426,6 +504,271 @@ def block_real_engine_metrics():
     engine._transport = httpx.MockTransport(unreachable)
     yield
     engine._transport = original
+
+
+# ── Host paths, per test + the guard around the whole run ───────────────
+
+def _is_under(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _points_into_real_host(
+    value,
+    real_roots: tuple[Path, ...] | None = None,
+    test_home: Path | None = None,
+) -> bool:
+    """True when a setting or env value addresses the real machine.
+
+    That is a path under the real home, the real HOME_HOST or the real
+    checkout (and not under the stand-in host home), or a ``~`` path, which
+    expands to the real HOME. Lists and ``docker:host;…`` mapping strings are
+    checked element by element; anything that is not a path never matches."""
+    if real_roots is None:
+        real_roots = (_REAL_HOME, _REAL_HOST_HOME, _REAL_MC_REPO)
+    if test_home is None:
+        test_home = _TEST_HOST_HOME
+    if isinstance(value, dict):
+        value = list(value.values())
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(_points_into_real_host(v, real_roots, test_home) for v in value)
+    if not isinstance(value, (str, os.PathLike)):
+        return False
+    for token in os.fspath(value).replace(";", " ").replace(",", " ").replace(":", " ").split():
+        if token.startswith("~"):
+            return True
+        if not token.startswith("/"):
+            continue
+        path = Path(os.path.normpath(token))
+        if _is_under(path, test_home):
+            continue
+        if any(_is_under(path, root) for root in real_roots):
+            return True
+    return False
+
+
+def _empty_test_host_home(home: Path | None = None) -> None:
+    """Give the next test an empty stand-in host home (what CI has: a home
+    without ~/.mc). Runs BEFORE the test, so a crashed predecessor cannot
+    leave files behind for it — same reasoning as setup_db."""
+    home = _TEST_HOST_HOME if home is None else home
+    try:
+        entries = list(os.scandir(home))
+    except FileNotFoundError:
+        home.mkdir(parents=True, exist_ok=True)
+        return
+    for entry in entries:
+        if entry.is_dir(follow_symlinks=False):
+            shutil.rmtree(entry.path, ignore_errors=True)
+        else:
+            try:
+                os.unlink(entry.path)
+            except OSError:
+                pass
+
+
+def _redirect_host_paths(settings, environ) -> None:
+    """Put every host-path setting and env var that addresses the real
+    machine (or, for env vars, is missing — the app then falls back to
+    expanduser("~")) back on the stand-in. Other values stay as they are."""
+    for name, value in _TEST_HOST_SETTINGS.items():
+        if _points_into_real_host(getattr(settings, name)):
+            setattr(settings, name, value)
+    for key, value in _TEST_HOST_ENV.items():
+        current = environ.get(key)
+        if current is None or _points_into_real_host(current):
+            environ[key] = value
+    for key in _TEST_HOST_ENV_REMOVED:
+        if _points_into_real_host(environ.get(key)):
+            environ.pop(key, None)
+
+
+@pytest.fixture(autouse=True)
+def isolate_host_paths():
+    """Every test starts with its host paths in the stand-in host home.
+
+    The redirect itself happens once at import (top of this file) — this
+    fixture keeps it true for each test: a host-path setting or env var that
+    points at the real home, the real HOME_HOST or the real checkout again
+    (a test that set it without restoring, a deleted HOME_HOST, which makes
+    the app fall back to expanduser("~")) is put back on the stand-in, the
+    stand-in home is emptied, and after the test the values are reset.
+
+    A test that wants another value sets it itself (monkeypatch, patch) — that
+    runs after this fixture and wins. A value set earlier by a module- or
+    session-scoped fixture is kept as long as it does not point at the real
+    machine. Yields the stand-in host home.
+
+    Deliberately without the monkeypatch fixture (see block_real_docker)."""
+    settings = app.config.settings
+    _redirect_host_paths(settings, os.environ)
+    applied_settings = {name: getattr(settings, name) for name in _TEST_HOST_SETTINGS}
+    applied_env = {key: os.environ.get(key) for key in (*_TEST_HOST_ENV, *_TEST_HOST_ENV_REMOVED)}
+    _empty_test_host_home()
+    try:
+        yield _TEST_HOST_HOME
+    finally:
+        for name, value in applied_settings.items():
+            setattr(settings, name, value)
+        for key, value in applied_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+# The guard: what the real machine looked like before the run and after it.
+# Watched are the two places tests have written into (incident 2026-10-20):
+# the real ~/.mc/agents and the real fleet file
+# docker/docker-compose.agents.yml (with its .bak/.tmp/.rejected) of the
+# real checkout. Only where they exist — on CI neither does, so nothing is
+# watched there. Live agents write logs, transcripts and session state into
+# ~/.mc/agents all the time; those folders and suffixes are skipped, so the
+# guard sees what tests write: new folders, agent config files, skills/,
+# plugins/. Folders are compared by name, files by mtime and size.
+_HOST_GUARD_TREE_DEPTH = 4  # <slug>/claude-config/plugins/<file>
+_HOST_GUARD_SKIP_DIRS = frozenset({
+    "logs", "projects", "sessions", "session-env", "shell-snapshots",
+    "file-history", "paste-cache", "debug", "telemetry", "statusline-state",
+    "todos", "cache", "backups", "worktrees", "deliverables", "omp-sessions",
+    "_tasks", ".git", "node_modules",
+})
+_HOST_GUARD_SKIP_SUFFIXES = (
+    ".log", ".err", ".out", ".jsonl", ".paste", ".pid", ".lock", ".sock",
+    ".marker", ".swp",
+)
+_COMPOSE_FILE = "docker-compose.agents.yml"
+_HOST_GUARD_KEY = pytest.StashKey[tuple]()
+
+
+def _main_checkout(repo: Path) -> Path:
+    """The main checkout behind a git worktree (``repo`` itself otherwise).
+    A worktree's ``.git`` is a file pointing at <main>/.git/worktrees/<name>,
+    whose ``commondir`` leads back to <main>/.git."""
+    marker = repo / ".git"
+    try:
+        text = marker.read_text(encoding="utf-8").strip()
+    except (IsADirectoryError, FileNotFoundError, PermissionError, NotADirectoryError):
+        return repo
+    if not text.startswith("gitdir:"):
+        return repo
+    gitdir = (repo / text.split(":", 1)[1].strip()).resolve()
+    try:
+        common = (gitdir / (gitdir / "commondir").read_text(encoding="utf-8").strip()).resolve()
+    except OSError:
+        return repo
+    return common.parent
+
+
+def _host_guard_targets(
+    homes: tuple[Path, ...] | None = None,
+    repos: tuple[Path, ...] | None = None,
+) -> tuple[tuple[str, Path], ...]:
+    """("tree", <home>/.mc/agents) for every home that has MC installed
+    (<home>/.mc exists), ("compose", <repo>/docker) for every checkout that
+    holds a real fleet file. Defaults: the real home + HOME_HOST, and the
+    real checkout + the main checkout behind this one."""
+    if homes is None:
+        homes = (_REAL_HOME, _REAL_HOST_HOME)
+    if repos is None:
+        here = Path(__file__).resolve().parents[2]
+        repos = (_REAL_MC_REPO, _main_checkout(here), here)
+    targets: dict[Path, str] = {}
+    for home in homes:
+        if (home / ".mc").is_dir():
+            targets.setdefault((home / ".mc" / "agents").resolve(), "tree")
+    for repo in repos:
+        if (repo / "docker" / _COMPOSE_FILE).is_file():
+            targets.setdefault((repo / "docker").resolve(), "compose")
+    return tuple((kind, path) for path, kind in targets.items())
+
+
+def _host_guard_snapshot(targets) -> dict[str, tuple[int, int] | None]:
+    """path -> (mtime_ns, size) for files, None for folders (names only)."""
+    snap: dict[str, tuple[int, int] | None] = {}
+
+    def add_file(path: str) -> None:
+        try:
+            st = os.stat(path, follow_symlinks=False)
+        except OSError:
+            return
+        snap[path] = (st.st_mtime_ns, st.st_size)
+
+    for kind, root in targets:
+        if kind == "compose":
+            for name in (_COMPOSE_FILE, *(f"{_COMPOSE_FILE}{s}" for s in (".bak", ".tmp", ".rejected"))):
+                add_file(os.path.join(root, name))
+            continue
+        stack = [(os.fspath(root), 1)]
+        while stack:
+            folder, depth = stack.pop()
+            try:
+                entries = list(os.scandir(folder))
+            except OSError:
+                continue
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name in _HOST_GUARD_SKIP_DIRS:
+                        continue
+                    snap[entry.path + os.sep] = None
+                    if depth < _HOST_GUARD_TREE_DEPTH:
+                        stack.append((entry.path, depth + 1))
+                elif not entry.name.endswith(_HOST_GUARD_SKIP_SUFFIXES):
+                    add_file(entry.path)
+    return snap
+
+
+def _host_guard_diff(before: dict, after: dict) -> list[str]:
+    lines = [f"new:     {p}" for p in sorted(after.keys() - before.keys())]
+    lines += [f"gone:    {p}" for p in sorted(before.keys() - after.keys())]
+    lines += [
+        f"changed: {p}"
+        for p in sorted(before.keys() & after.keys())
+        if before[p] != after[p]
+    ]
+    return lines
+
+
+def pytest_sessionstart(session):
+    # Under xdist the controller watches the whole run; workers skip.
+    if hasattr(session.config, "workerinput"):
+        return
+    targets = _host_guard_targets()
+    if targets:
+        session.config.stash[_HOST_GUARD_KEY] = (targets, _host_guard_snapshot(targets))
+
+
+def pytest_sessionfinish(session, exitstatus):
+    state = session.config.stash.get(_HOST_GUARD_KEY, None)
+    if state is None:
+        return
+    targets, before = state
+    changes = _host_guard_diff(before, _host_guard_snapshot(targets))
+    if not changes:
+        return
+    lines = [
+        "Tests must write only into tmp_path or the stand-in host home",
+        "(backend/tests/conftest.py, 'Host paths'). These real places changed",
+        "while this run was going:",
+        "",
+        *(f"  {line}" for line in changes[:40]),
+        *([f"  … and {len(changes) - 40} more"] if len(changes) > 40 else []),
+        "",
+        "Find the test: the folder or agent name usually names it",
+        "(grep the tests for it), or run the suspects alone with -p no:xdist.",
+        "Then remove what the run left there. Not from this run? Another",
+        "process may have written at the same time: a live agent, the live",
+        "backend, or a test run on a branch from before this guard.",
+    ]
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_sep("=", "the real home or checkout changed during this test run", red=True, bold=True)
+        for line in lines:
+            reporter.write_line(line)
+    else:
+        import sys
+        sys.stderr.write("\n".join(["real home or checkout changed during this test run", *lines]) + "\n")
+    if session.exitstatus in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED):
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.fixture

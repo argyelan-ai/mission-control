@@ -1,18 +1,19 @@
 """Tests for deliverable_paths.validate_deliverable_path."""
 import uuid
-from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
 
+from app.config import settings
 from app.services.deliverable_paths import accepted_path_prefixes, validate_deliverable_path
 
 
 TASK_ID = uuid.UUID("11111111-2222-3333-4444-555555555555")
 
-# accepted_path_prefixes() derives the host-form prefix from settings.home_host,
-# which defaults to the real Path.home() — match that dynamically.
-HOME = str(Path.home())
+# accepted_path_prefixes() derives the host-form prefix from settings.home_host
+# — in tests the stand-in host home from conftest, never the real one. Its
+# path differs per xdist worker, hence the fixed test id below.
+HOME = settings.home_host
 
 
 # ── accepted paths ────────────────────────────────────────────────────────────
@@ -25,7 +26,7 @@ HOME = str(Path.home())
     f"/shared-mcp/{TASK_ID}/capture.png",
     f"/shared-mcp/{TASK_ID}/e2e-run.webm",
     f"~/.mc/deliverables/{TASK_ID}/output.md",
-    f"{HOME}/.mc/deliverables/{TASK_ID}/output.md",
+    pytest.param(f"{HOME}/.mc/deliverables/{TASK_ID}/output.md", id="host-home-form"),
 ])
 def test_accepted_local_paths(path):
     validate_deliverable_path(path, None, TASK_ID)  # must not raise

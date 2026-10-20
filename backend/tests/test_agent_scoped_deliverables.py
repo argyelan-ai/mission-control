@@ -7,21 +7,21 @@ Replaces the RED stub from Plan 26-01.
 
 import os
 import uuid
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.config import settings as app_settings
 from tests.conftest import test_engine
 
-# The host-form deliverable resolver falls back to settings.home_host, which
-# defaults to the real Path.home() — match that dynamically instead of a
-# hardcoded machine-specific path (the HOME_HOST monkeypatches below document
-# intent but the resolver reads the cached settings singleton, not a live
-# env lookup, so the expected value must equal the real Path.home()).
-HOME = str(Path.home())
+# The host-form deliverable resolver falls back to settings.home_host — in
+# tests the stand-in host home from conftest, never the real one (the
+# HOME_HOST monkeypatches below document intent but the resolver reads the
+# cached settings singleton, not a live env lookup, so the expected value must
+# equal settings.home_host).
+HOME = app_settings.home_host
 
 
 async def _create_test_data(session: AsyncSession):

@@ -62,7 +62,7 @@ def test_load_env_from_file_parses_kv_quotes_and_comments(bridge, tmp_path):
     assert "INVALID_LINE_NO_EQUALS" not in env
     assert "# this is a comment" not in env
     # HOME forced to HOME_DIR (HOME_HOST env override, falling back to Path.home())
-    assert env["HOME"] == str(Path.home())
+    assert env["HOME"] == str(bridge.HOME_DIR)
 
 
 def test_start_hermes_session_invokes_tmux_new_session(bridge, tmp_path, monkeypatch):
