@@ -9,8 +9,9 @@ empty. MC capped every model, local or cloud, at 32768.
 The rule is model- and harness-neutral (ADR-086/093): it reads only the
 runtime row (window + local/cloud), never a model name.
 
-* local runtime: a quarter of the window, at most 131072, never below the
-  previous rule (half the window, at most 32768);
+* local runtime: an eighth of the window, at most 131072, never below the
+  previous rule (half the window, at most 32768). Windows up to 262144 keep
+  exactly their old budget; today only the 1M slot gets more;
 * cloud runtime: unchanged, half the window, at most 32768.
 """
 from __future__ import annotations
@@ -33,8 +34,9 @@ RENDER_SCRIPT = REPO_ROOT / "docker" / "omp-bridge" / "render-omp-config.sh"
 # window -> (old fixed rule, new local rule)
 LOCAL_TABLE = [
     (1_048_576, 32_768, 131_072),  # 1M window (the DeepSeek case)
-    (524_288, 32_768, 131_072),
-    (262_144, 32_768, 65_536),
+    (2_097_152, 32_768, 131_072),  # the ceiling holds for bigger windows
+    (524_288, 32_768, 65_536),
+    (262_144, 32_768, 32_768),  # unchanged up to 262144
     (131_072, 32_768, 32_768),
     (65_536, 32_768, 32_768),  # never lower than before
     (32_768, 16_384, 16_384),  # never lower than before
@@ -66,6 +68,25 @@ def test_local_budget_bounds(window):
     budget = omp_max_output_tokens(window, local=True)
     assert 0 < budget <= window // 2
     assert budget <= 131_072
+
+
+@pytest.mark.parametrize("window", [262_145, 300_000, 524_288, 786_432, 1_048_576, 2_097_152])
+def test_a_raised_budget_stays_inside_the_harness_reserve(window):
+    """Where the local rule gives more than the old one, the budget is at most
+    an eighth of the window. omp compacts the history while 15 % of the window
+    (at least 16384 tokens) is still free, so an answer budget below that share
+    is always sent as set. A larger one would make omp trim the request to its
+    own ESTIMATE of the free room, and an engine that refuses instead of
+    trimming (vLLM: HTTP 400, TensorFold: context_length) fails the turn when
+    that estimate runs low. The old 32768 cap never reached this zone for
+    windows of 262144 and up; the raised budget must not either."""
+    from app.routers.internal import omp_max_output_tokens
+
+    budget = omp_max_output_tokens(window, local=True)
+    old = min(window // 2, 32_768)
+    if budget > old:
+        assert budget <= window // 8
+    assert budget < max(int(window * 0.15), 16_384)
 
 
 # ── build_runtime_env: which runtimes count as local ─────────────────────────
@@ -105,10 +126,10 @@ async def test_local_slot_with_1m_window_gets_131072(async_session):
 async def test_self_hosted_engine_type_counts_as_local_without_host(async_session):
     from app.routers.internal import build_runtime_env
 
-    rt = _runtime(runtime_type="vllm_docker", max_context_len=262_144)
+    rt = _runtime(runtime_type="vllm_docker", max_context_len=524_288)
     env = await build_runtime_env(rt, async_session, agent=_omp_agent())
 
-    assert env["OMP_MAX_TOKENS"] == "65536"
+    assert env["OMP_MAX_TOKENS"] == "65536"  # cloud rule would give 32768
 
 
 @pytest.mark.asyncio
@@ -148,7 +169,7 @@ async def test_preferred_window_is_used_when_max_is_unset(async_session):
     env = await build_runtime_env(rt, async_session, agent=_omp_agent())
 
     assert env["OMP_CONTEXT_WINDOW"] == "524288"
-    assert env["OMP_MAX_TOKENS"] == "131072"
+    assert env["OMP_MAX_TOKENS"] == "65536"
 
 
 # ── renderers pass the value through, they do not cap it again ───────────────

@@ -27,12 +27,16 @@ router = APIRouter(prefix="/api/v1/internal", tags=["internal"])
 
 
 #: Highest answer budget (one turn's output, thinking included) MC gives a
-#: local model: four times the old cap. Vendors suggest more for their longest
-#: reasoning runs (the DeepSeek V4.1 Flash model card benchmarks its highest
-#: effort with at least 256K), but at local decode speeds (tens of tokens per
-#: second) 131072 tokens already hold one of the engine's parallel slots for
-#: about half an hour. A trade-off between answer room and slot time, not a
-#: model limit.
+#: local model: four times the old cap, the vendor default for DeepSeek V4.1
+#: Flash at its highest effort (its model card benchmarks that effort with
+#: 256K and more). Not free: the budget is sent as ``max_tokens`` on EVERY
+#: request, and an engine with one shared context pool reserves prompt +
+#: max_tokens for each request when it admits it (TensorFold's DeepSeek family:
+#: one pool for all parallel streams). So a bigger budget costs pool room on
+#: every request, even a short one, not only on long turns: fewer long prompts
+#: fit side by side, and kept prompt caches are dropped sooner. A trade-off
+#: between answer room and pool room, not a model limit. 65536 would halve that
+#: cost but leave the highest effort without the room its vendor sets for it.
 LOCAL_MAX_OUTPUT_TOKENS = 131072
 #: The previous fixed cap. Still the whole rule for cloud endpoints, and the
 #: floor for local ones.
@@ -47,20 +51,25 @@ def omp_max_output_tokens(context_window: int, *, local: bool) -> int:
 
     * Cloud: half the window, at most 32768 (unchanged). A managed API sets
       its own output cap and may refuse a larger request.
-    * Local: a quarter of the window, at most 131072, never below the cloud
+    * Local: an eighth of the window, at most 131072, never below the cloud
       rule. Until 20.10.2026 local models had the cloud cap too; a local
       DeepSeek with a 1M window thought past 32768 tokens at the default
-      effort and returned empty answers. The quarter keeps three quarters of
-      the window for prompt and history, and the 131072 ceiling bounds how
-      long one turn can hold one of the engine's parallel slots. Small
-      windows keep their old budget: lowering it would free no prompt room
-      (omp 18.10 compacts the history while 15 % of the window, at least
-      16384 tokens, is still free) and would only cut answers short.
+      effort and returned empty answers.
+
+    Why an eighth: windows up to 262144 keep exactly their old budget, so
+    only large windows change (today the 1M slot, which gets the full
+    131072). And a raised budget stays below the share of the window omp
+    keeps free before it compacts (15 %, at least 16384 tokens): a budget
+    above that share makes omp trim the request to its own estimate of the
+    free room, and engines that refuse rather than trim (vLLM, TensorFold)
+    fail the turn when the estimate runs low. Small windows keep their old
+    budget because lowering it frees no prompt room under omp's compaction
+    and would only cut answers short.
     """
     cloud = min(context_window // 2, CLOUD_MAX_OUTPUT_TOKENS)
     if not local:
         return cloud
-    return min(LOCAL_MAX_OUTPUT_TOKENS, max(context_window // 4, cloud))
+    return min(LOCAL_MAX_OUTPUT_TOKENS, max(context_window // 8, cloud))
 
 
 async def build_runtime_env(
