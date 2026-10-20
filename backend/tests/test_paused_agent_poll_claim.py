@@ -3,17 +3,22 @@ poll; automatic delivery (push dispatch) stays off.
 
 ADR-089 §4 says automatic delivery of jobs to the local omp agent resumes
 only after the security step B4. The Nachtrag of 2026-10-20 states what that
-covers: push dispatch refuses a paused agent (`check_dispatch_allowed`,
-rule R-paused-no-dispatch), but `/agent/me/poll` does not read
-`operational_mode`, so a card the operator or the lead agent assigns to the
-agent explicitly is still delivered when the agent polls. That is how the
-local omp agent gets small jobs while it is paused.
+covers. The paths that ask `check_dispatch_allowed` (rule
+R-paused-no-dispatch) refuse a paused agent. `/agent/me/poll` does not read
+`operational_mode` (rule R-paused-poll-takes-assigned), so a card assigned
+to the agent by name is still delivered when the agent polls, whoever
+assigned it. The undispatched-card watcher does not read the mode either: it
+prepares the workspace of a card already assigned to a paused cli-bridge
+agent. The line holds for every paused agent whose poller runs, not only for
+the local omp agent.
 
-These tests pin both halves of that line, so neither side can flip quietly:
+These tests pin that line, so no side can flip quietly:
 
 - push refuses, and the card stays in the inbox, still assigned;
 - the agent's own poll then delivers exactly that card;
-- the poll never takes a card that is unassigned or assigned to someone else.
+- the poll never takes a card that is unassigned or assigned to someone else;
+- the undispatched-card watcher prepares an assigned card for the paused
+  agent, and the poll still delivers it afterwards.
 
 If one of them goes red, the behaviour changed and the Nachtrag in
 docs/decisions/089-lead-agent-with-hands.md has to change with it.
@@ -55,7 +60,9 @@ async def _seed_paused_agent(make_board, make_agent):
 
 
 async def _push_dispatch(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
-    """The real push path every assignment in the app goes through."""
+    """The push path `auto_dispatch_task`: a new card, and the operator's
+    re-assign on the card in the app. `mc reassign` and the undispatched-card
+    watcher do not go through it (see the watcher test below)."""
     with patch("app.services.activity.broadcast", new_callable=AsyncMock), \
          patch("app.services.dispatch.engine", test_engine):
         from app.services.dispatch import auto_dispatch_task
@@ -158,3 +165,70 @@ async def test_paused_agent_poll_takes_only_cards_assigned_to_it(
             row = await s.get(Task, card_id)
             assert row.assigned_agent_id == owner
             assert row.dispatched_at is None
+
+
+@pytest.mark.asyncio
+async def test_undispatched_watcher_prepares_assigned_card_of_paused_agent(
+    client, fake_redis, make_board, make_agent, make_task,
+):
+    """The second path to the agent does not read the mode.
+
+    `_check_undispatched_tasks` re-dispatches a card that is assigned but has
+    no `dispatched_at`. For a cli-bridge agent that means: prepare the
+    workspace (`dispatch_to_cli_bridge`), stamp `dispatched_at` and show the
+    agent as running. It does this for a paused agent too. It only acts on
+    cards that are already assigned, and the poll still delivers the card
+    afterwards. The agent stays paused.
+    """
+    from datetime import timedelta
+
+    from app.models.agent import Agent
+    from app.models.task import Task
+    from app.services.watchdog.task_monitor import TaskMonitorMixin
+    from app.utils import utcnow
+
+    board, agent, token = await _seed_paused_agent(make_board, make_agent)
+    card = await make_task(
+        board_id=board.id,
+        title="Assigned card that waits for the watcher",
+        status="inbox",
+        assigned_agent_id=agent.id,
+    )
+
+    await _push_dispatch(card.id, board.id)
+
+    # Past the watcher's 5 s grace window.
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        row = await s.get(Task, card.id)
+        assert row.dispatched_at is None
+        row.updated_at = utcnow() - timedelta(minutes=5)
+        s.add(row)
+        await s.commit()
+
+    prepared = AsyncMock(return_value=True)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        with patch("app.services.cli_bridge_runner.dispatch_to_cli_bridge", prepared), \
+             patch("app.services.dispatch._build_dispatch_message",
+                   AsyncMock(return_value="brief")):
+            await TaskMonitorMixin()._check_undispatched_tasks(s)
+
+    assert prepared.await_count == 1, (
+        "the undispatched-card watcher no longer prepares an assigned card "
+        "for a paused cli-bridge agent — update ADR-089 Nachtrag 2026-10-20 "
+        "(b)/(d): the immediate poll claim is then the only way in, unprepared"
+    )
+    assert prepared.await_args.args[0].id == agent.id
+    assert prepared.await_args.args[1].id == card.id
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        stamped = await s.get(Task, card.id)
+        assert stamped.status == "inbox"
+        assert stamped.dispatched_at is not None
+        watched_agent = await s.get(Agent, agent.id)
+        assert watched_agent.operational_mode == "paused"
+        # Known display side effect, named in the Nachtrag (d).
+        assert watched_agent.run_state == "running"
+
+    body = await _poll(client, token)
+    assert body["state"] == "new_task", body
+    assert body["task"]["id"] == str(card.id)
