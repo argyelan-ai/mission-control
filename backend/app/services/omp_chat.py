@@ -91,6 +91,7 @@ from app.services.transcript_chat import (
     _LIVE_WINDOW_SECONDS,
     _truncate_detail,
     _truncate_title,
+    preview_event,
     resolve_context_window,
 )
 from app.services.token_harvester import _host_home
@@ -595,6 +596,55 @@ def bridge_sibling(path: Path) -> Path:
         if sibling != path and session_id_for(sibling) == session_id and is_bridge_file(sibling):
             return sibling
     return path
+
+
+#: ``find_task_session`` answers, by ``(path, inode)``: the task id in the
+#: file's bridge header (``""`` = a header without one). The header never
+#: changes once written; a file without a header yet is not cached.
+_TASK_ID_CACHE: dict[tuple[str, int], str] = {}
+
+
+def find_task_session(tdir: Path, task_id: str, since: float | None = None) -> Path | None:
+    """The newest session file of ``task_id`` under ``tdir``, or ``None``.
+
+    Under ACP a task runs in its OWN session beside the chat (#898 keeps the
+    chat on the chat daemon's session). The bridge writes ``taskId`` into
+    the header of the task run's file; every attempt (continue nudge,
+    re-dispatch) is a new session, so the newest match is the live one.
+    ``since`` (epoch seconds, e.g. the task's dispatch time minus a slack)
+    skips files last written before it without opening them."""
+    want = (task_id or "").strip().lower()
+    if not want or not tdir.is_dir():
+        return None
+    best: tuple[float, Path] | None = None
+    for pattern in _SESSION_GLOBS:
+        try:
+            candidates = list(tdir.glob(pattern))
+        except OSError:
+            continue
+        for candidate in candidates:
+            try:
+                st = candidate.stat()
+            except OSError:
+                continue
+            if since is not None and st.st_mtime < since:
+                continue
+            if best is not None and st.st_mtime <= best[0]:
+                continue
+            key = (str(candidate), st.st_ino)
+            found = _TASK_ID_CACHE.get(key)
+            if found is None:
+                header = _session_header(candidate)
+                if header is None:
+                    continue
+                raw = header.get("taskId")
+                found = raw.strip().lower() if isinstance(raw, str) else ""
+                if len(_TASK_ID_CACHE) > 4096:
+                    _TASK_ID_CACHE.clear()
+                _TASK_ID_CACHE[key] = found
+            if found == want:
+                best = (st.st_mtime, candidate)
+    return best[1] if best else None
 
 
 def prefers_sibling(new_path: Path, current_path: Path) -> bool:
@@ -1183,15 +1233,19 @@ class OmpLineParser:
                 text = block.get("thinking")
                 if text is None:
                     continue
-                events.append(
-                    {
-                        "kind": "thinking",
-                        "uuid": entry_id,
-                        "ts": ts,
-                        "text": text,
-                        "sidechain": False,
-                    }
-                )
+                thinking_ev: dict[str, Any] = {
+                    "kind": "thinking",
+                    "uuid": entry_id,
+                    "ts": ts,
+                    "text": text,
+                    "sidechain": False,
+                }
+                # The omp bridge records how long a thought took (20.10.2026);
+                # omp's own files do not — then the key is simply absent.
+                duration = block.get("durationMs")
+                if isinstance(duration, int) and not isinstance(duration, bool) and duration >= 0:
+                    thinking_ev["durationMs"] = duration
+                events.append(thinking_ev)
             elif btype == "toolCall":
                 name = block.get("name")
                 if not name:
@@ -1433,15 +1487,7 @@ class OmpLineParser:
         # timeline. Stacking them as teammate messages doubled the answer
         # in the history and grew the transcript quadratically.
         if custom_type == "acp-preview":
-            return [
-                {
-                    "kind": "preview",
-                    "uuid": None,
-                    "ts": ts,
-                    "text": content[:_RESULT_TRUNCATE_LEN],
-                    "source": "acp",
-                }
-            ]
+            return [preview_event(content, ts, d.get("data"))]
         if custom_type == "acp-tool-output":
             # Chat package P1: a running tool's output so far (the bridge's
             # volatile snapshot). Never a timeline row: it rides its own

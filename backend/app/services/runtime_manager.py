@@ -2089,6 +2089,33 @@ async def _free_exclusive_targets(
     }
 
 
+def exclusive_event(
+    slug: str | None, result: dict, *, box: str | None = None, extra: dict | None = None
+) -> tuple[str, str, str, dict]:
+    """``(event_type, title, severity, detail)`` of an exclusivity decision.
+
+    One shape for every writer of ``runtime.exclusive_evicted`` /
+    ``runtime.exclusive_blocked``: the start (:func:`_emit_exclusive_event`)
+    and the watcher holding a duo back because its worker box is busy
+    (``runtime_watcher._report_worker_blocked``), which writes it in its own
+    session. ``extra``: more detail keys (who blocks, the sentence per UI
+    language)."""
+    return (
+        "runtime.exclusive_evicted" if result.get("ok") else "runtime.exclusive_blocked",
+        f"{slug}{f' [{box}]' if box else ''}: {result.get('message')}",
+        "info" if result.get("ok") else "warning",
+        {
+            "slug": slug,
+            "box": box,
+            "stopped": result.get("stopped") or [],
+            # E1 switch lock: the refusal, or the engines whose load was unknown.
+            "switch_lock": result.get("switch_lock"),
+            "switch_lock_unknown": result.get("switch_lock_unknown") or [],
+            **(extra or {}),
+        },
+    )
+
+
 async def _emit_exclusive_event(slug: str | None, result: dict, *, box: str | None = None) -> None:
     """Record an exclusivity decision in the activity feed. Best-effort — a
     failing event must never be the reason a start does not happen.
@@ -2101,21 +2128,9 @@ async def _emit_exclusive_event(slug: str | None, result: dict, *, box: str | No
         from app.services.activity import emit_event
         from app.services.runtime_model_resolver import session_scope
 
+        event_type, title, severity, detail = exclusive_event(slug, result, box=box)
         async with session_scope() as session:
-            await emit_event(
-                session,
-                "runtime.exclusive_evicted" if result.get("ok") else "runtime.exclusive_blocked",
-                f"{slug}{f' [{box}]' if box else ''}: {result.get('message')}",
-                severity="info" if result.get("ok") else "warning",
-                detail={
-                    "slug": slug,
-                    "box": box,
-                    "stopped": result.get("stopped") or [],
-                    # E1 switch lock: the refusal, or the engines whose load was unknown.
-                    "switch_lock": result.get("switch_lock"),
-                    "switch_lock_unknown": result.get("switch_lock_unknown") or [],
-                },
-            )
+            await emit_event(session, event_type, title, severity=severity, detail=detail)
     except Exception as exc:  # noqa: BLE001
         logger.debug("exclusive: event emit failed for %s: %s", slug, exc)
 

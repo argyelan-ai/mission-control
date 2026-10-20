@@ -3240,3 +3240,16 @@ export interface Device {
   /** Alter der letzten Meldung in Sekunden. */
   age_s: number | null;
 }
+
+/** GET /boards/{b}/tasks/{t}/model-wait (follow-up to ADR-097): is this
+ *  not-yet-started task waiting for its agent's MODEL? */
+export interface TaskModelWait {
+  /** False for every task that is not an assigned inbox task. */
+  applies: boolean;
+  /** Delivered to the agent (dispatched_at set), not claimed yet. */
+  delivered: boolean;
+  /** The model answers (or is not checked: cloud, gate off, error). */
+  ready: boolean;
+  runtime: string | null;
+  reason: string | null;
+}

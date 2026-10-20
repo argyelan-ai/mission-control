@@ -175,9 +175,26 @@ else:
 # ── Database fixtures ─────────────────────────────────────────────────────
 
 async def _empty_all_tables(conn) -> None:
+    """Delete every row of every model table.
+
+    One query asks which tables hold rows at all; only those get a DELETE.
+    Same end state as a DELETE per table (every table empty, schema and
+    AUTOINCREMENT counters untouched), but one aiosqlite round trip instead of
+    ~70 for the typical test that wrote into a handful of tables or none —
+    the per-table DELETEs were ~14 ms of every test's setup (CI 2026-10-20:
+    ~95 % of a no-op test's cost, minutes of the Backend Tests job).
+    A table missing from the schema raises OperationalError here exactly like
+    the old DELETE did, so setup_db's rebuild rescue still fires."""
     from sqlalchemy import text as _text
-    for table in reversed(SQLModel.metadata.sorted_tables):
-        await conn.execute(_text(f'DELETE FROM "{table.name}"'))
+    tables = [t.name for t in reversed(SQLModel.metadata.sorted_tables)]
+    probe = " UNION ALL ".join(
+        f"SELECT {i} WHERE EXISTS (SELECT 1 FROM \"{name}\")"
+        for i, name in enumerate(tables)
+    )
+    filled = {row[0] for row in await conn.execute(_text(probe))}
+    for i, name in enumerate(tables):
+        if i in filled:
+            await conn.execute(_text(f'DELETE FROM "{name}"'))
 
 
 # Schema fingerprint of the SQLite engine right after create_all — one row

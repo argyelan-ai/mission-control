@@ -289,6 +289,13 @@ export function createInitialChatState(): ChatReducerState {
   };
 }
 
+/** A running thought (`preview.block === "thinking"`) ends when the model
+ *  moves on — a tool call, the finished thought itself. An answer preview
+ *  stays: only the answer ends it. */
+function withoutThought(state: ChatReducerState): ChatReducerState {
+  return state.preview?.block === "thinking" ? { ...state, preview: null } : state;
+}
+
 /** The tool event this live output belongs to, if it is already known. */
 function toolFor(state: ChatReducerState, toolUseId: string): ToolEvent | null {
   const i = state.index.get(`tool:${toolUseId}`);
@@ -360,17 +367,26 @@ function pushOrReplace(state: ChatReducerState, ev: TimelineChatEvent): ChatRedu
   return { ...state, events, index };
 }
 
+/** States in which the CHAT itself runs no turn (a task turn of an ACP agent
+ *  runs beside it, follow-up to ADR-097). */
+const CHAT_AT_REST: ReadonlySet<StateEvent["status"]> = new Set(["idle", "task_working", "waiting_model"]);
+
 export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatReducerState {
   switch (event.kind) {
-    case "state":
+    case "state": {
       /* Ruht der Agent, gibt es nichts mehr vorzuschauen — was dann noch im
-         Fach stuende, hat das Transkript nie bestaetigt. */
+         Fach stuende, hat das Transkript nie bestaetigt. Der CHAT ruht auch,
+         waehrend nur eine Aufgabe laeuft oder auf ihr Modell wartet
+         (ACP, Review Z3): ein dabei gestoppter Chat-Zug darf nicht als
+         laufend stehen bleiben. */
+      const chatAtRest = CHAT_AT_REST.has(event.status);
       return {
         ...state,
         state: event,
-        preview: event.status === "idle" ? null : state.preview,
-        toolOutputs: event.status === "idle" ? NO_TOOL_OUTPUTS : state.toolOutputs,
+        preview: chatAtRest ? null : state.preview,
+        toolOutputs: chatAtRest ? NO_TOOL_OUTPUTS : state.toolOutputs,
       };
+    }
     case "preview":
       return { ...state, preview: event };
     case "tool_output": {
@@ -421,12 +437,16 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
       );
     case "tool":
       /* Sein Ergebnis beendet die Live-Ausgabe (die Karte zeigt ab jetzt
-         das Ergebnis selbst). */
+         das Ergebnis selbst). Ein Werkzeugaufruf beendet auch einen
+         laufenden Gedanken: das Modell hat zu Ende gedacht. */
       return pushOrReplace(
-        event.result != null ? withoutToolOutput(state, event.toolUseId) : state,
+        withoutThought(event.result != null ? withoutToolOutput(state, event.toolUseId) : state),
         event,
       );
     case "thinking":
+      /* Der fertige Gedanke steht ab jetzt im Verlauf — die Live-Zeile hat
+         ausgedient (sonst stuende er zweimal da). */
+      return pushOrReplace(withoutThought(state), event);
     case "command":
     case "notification":
     case "elicitation":

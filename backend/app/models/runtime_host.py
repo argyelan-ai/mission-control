@@ -1,20 +1,17 @@
-"""RuntimeHost — membership of a host in a multi-node runtime "Verbund"
-(Fleet & Rezepte v2, Verbund-UI Phase 1b).
+"""RuntimeHost — membership of a host in a multi-box runtime ("Verbund").
 
-A `Runtime` row's own `host_id` stays the HEAD of the verbund (unchanged,
-untouched by this table — host_resolver keeps resolving exactly as before).
-This table only records the ADDITIONAL member hosts of a multi-node runtime
-(e.g. a 2-node GLM TP=2 verbund: alpha as head/rank0 already IS
-runtimes.host_id, Beta as a worker/rank1 gets one row here). A solo runtime
-(the overwhelming majority today) has ZERO rows in this table — that is the
-whole point: nothing about the existing single-host path changes, and
-nothing here is read unless a runtime actually has member hosts.
+One row per member box: the head is rank 0 (role ``head``, the same box as
+``runtimes.host_id``), workers are rank 1..n-1 (role ``worker``). A solo
+runtime has ZERO rows — nothing about the single-host path reads this table.
 
-This is deliberately data-only for now (Phase 1b) — no orchestration, no
-health rollup across nodes, no "start the whole verbund" button. It exists
-so the UI can say "this box is part of <runtime>, role=worker" instead of
-inventing a guess, and so a future phase has a real place to hang multi-
-host orchestration off of without another migration.
+This table is the only truth for which boxes a multi-box runtime uses
+(ADR-096 §1). ``runtimes.topology`` keeps only the count (``nodes``) and the
+recipe; the old ``topology.worker_host_id`` is no longer written and is
+derived from rank 1 in API responses.
+
+Exactly one module writes this table: ``app.services.runtime_membership``
+(``set_members`` / ``clear_members``). An architecture test rejects any other
+writer. Readers that need the head should still use ``runtimes.host_id``.
 """
 import uuid
 from datetime import datetime

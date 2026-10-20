@@ -627,6 +627,16 @@ class TaskRunnerService:
 
             redis = await get_redis()
 
+            # Model-wait rule (follow-up to ADR-097): a delivered, unclaimed
+            # task whose agent's model does not answer goes back to the inbox
+            # with the reason. Checked BEFORE the in-turn pause below: the
+            # omp bridge heartbeats "working" while omp retries a dead
+            # endpoint, which would otherwise hold this off for 2x the ACK
+            # timeout.
+            if task.dispatched_at and task.ack_at is None:
+                if await self._return_if_model_unreachable(session, task, agent, now):
+                    continue
+
             # Bauplan Lauf 2 Teil 4 (21.09.2026): the ACK clock pauses while
             # the agent is genuinely mid-turn — same signal Guard 3 (Teil 2)
             # uses to decide whether to queue in the first place
@@ -717,6 +727,65 @@ class TaskRunnerService:
                 # ── Check 2: dispatch pending ──
                 # This check is skipped in subagent-dispatch mode
                 await self._handle_dispatch_pending(session, task, agent, now, redis)
+
+    async def _return_if_model_unreachable(
+        self, session: AsyncSession, task: Task, agent: Agent, now: datetime,
+    ) -> bool:
+        """Delivered (``dispatched_at`` set, no ACK) for at least half the
+        ACK timeout — where the ladder would rotate — AND the agent's runtime
+        does not answer (``runtime_readiness``, local runtimes included):
+        un-deliver the task with the reason instead of rotating or
+        escalating. The poll gate keeps it in the inbox until the model
+        answers again and then delivers it fresh (new attempt id).
+
+        Returns True when it acted. A runtime that answers, a cloud runtime,
+        a gate error (fail-open) or a younger delivery -> False: the old
+        ladder runs unchanged."""
+        minutes = (now - ensure_aware(task.dispatched_at)).total_seconds() / 60
+        if minutes < _get_ack_timeout_minutes(agent) / 2.0:
+            return False
+        from app.services.runtime_readiness import runtime_ready_for_agent
+
+        ready, reason = await runtime_ready_for_agent(
+            agent, session, include_local=True, notify=False,
+        )
+        if ready:
+            return False
+        from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+
+        reason = reason or "das Modell antwortet nicht"
+        task.dispatched_at = None
+        task.ack_at = None
+        session.add(task)
+        session.add(TaskComment(
+            task_id=task.id,
+            author_type="system",
+            comment_type="watchdog_notify",
+            content=(
+                f"Zurück in die Inbox: an {agent.name} zugestellt, aber das Modell "
+                f"hat in {int(minutes)} min nicht geantwortet ({reason}). Der Task "
+                "wird neu zugestellt, sobald das Modell wieder läuft."
+            ),
+        ))
+        await clear_dispatch_attempt_id(
+            session, task, caller="model_wait", reason="runtime_not_ready",
+        )
+        await emit_event(
+            session,
+            "task.returned_model_unreachable",
+            f"'{task.title[:60]}' zurück in die Inbox — Modell von {agent.name} antwortet nicht",
+            severity="warning",
+            agent_id=agent.id,
+            board_id=task.board_id,
+            task_id=task.id,
+            detail={"reason": reason, "minutes_since_dispatch": int(minutes)},
+        )
+        await session.commit()
+        logger.warning(
+            "model wait: '%s' (%s) returned to inbox after %dmin — %s",
+            task.title[:60], agent.name, int(minutes), reason,
+        )
+        return True
 
     async def _handle_ack_timeout(
         self, session: AsyncSession, task: Task, agent: Agent, now: datetime, redis

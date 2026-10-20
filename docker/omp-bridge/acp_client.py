@@ -75,6 +75,20 @@ class _Pending:
     response: Optional[dict] = None
 
 
+def default_command() -> list[str]:
+    """`omp acp`, plus the lesson guards (guard-hook.mjs) when the image ships them.
+
+    The guards run tools/guards/bash-hook.sh before every bash call and
+    post-push-hook.sh after a push — the same checks as the Claude Code hooks.
+    Kill switch: OMP_GUARD_HOOK=0. A missing hook file means no guards (old image).
+    """
+    cmd = ["omp", "acp"]
+    hook = os.environ.get("OMP_GUARD_HOOK_FILE", "/opt/omp-bridge/guard-hook.mjs")
+    if os.environ.get("OMP_GUARD_HOOK", "1") != "0" and os.path.isfile(hook):
+        cmd += ["--hook", hook]
+    return cmd
+
+
 class ACPClient:
     """Synchronous ACP client around one `omp acp` child process.
 
@@ -95,7 +109,7 @@ class ACPClient:
         cwd: Optional[str] = None,
         env: Optional[dict] = None,
     ):
-        self._command = command or ["omp", "acp"]
+        self._command = command or default_command()
         self._cwd = cwd
         self._fs_jail: Optional[str] = None  # realpath(cwd) — fs/* restricted here (Review #464 Major)
         self._env = env

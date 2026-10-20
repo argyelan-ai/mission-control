@@ -182,6 +182,7 @@ async def _notify_asleep(session: AsyncSession, rt: Runtime, agent) -> None:
 
 async def runtime_ready_for_agent(
     agent, session: AsyncSession, *, include_local: bool = False, task=None,
+    notify: bool = True,
 ) -> tuple[bool, str | None]:
     """Gate decision for an agent. Returns (allowed, reason).
 
@@ -189,7 +190,10 @@ async def runtime_ready_for_agent(
     (False, msg)  → the agent's power-managed backend is asleep/not serving,
                     or (``include_local``, ADR-097) its local model server
                     does not answer; hold the task until it does.
-    ``task`` only feeds the timeline note of a held task.
+    ``task`` only feeds the timeline note of a held task. ``notify=False``
+    skips that note and the power-managed "box asleep" event (a read such as
+    the task card's model-wait or the chat's status line, or a caller that
+    writes its own reason).
     """
     if not settings.enable_runtime_readiness_gate:
         return True, None
@@ -209,7 +213,8 @@ async def runtime_ready_for_agent(
                 return True, None
             if await is_local_runtime_serving(rt):
                 return True, None
-            await _notify_local_down(session, rt, agent, task)
+            if notify:
+                await _notify_local_down(session, rt, agent, task)
             return (
                 False,
                 f"Runtime '{rt.display_name}' antwortet nicht ({rt.endpoint}) — "
@@ -217,7 +222,8 @@ async def runtime_ready_for_agent(
             )
         if await is_runtime_ready(rt):
             return True, None
-        await _notify_asleep(session, rt, agent)
+        if notify:
+            await _notify_asleep(session, rt, agent)
         return (
             False,
             f"Runtime '{rt.display_name}' schläft (power-managed) — Box wecken, "

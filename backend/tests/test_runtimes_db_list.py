@@ -315,7 +315,12 @@ async def test_get_runtimes_reports_member_hosts_and_topology(async_session, aut
     rows = {r["slug"]: r for r in resp.json()["runtimes"]}
 
     verbund_row = rows["glm-verbund"]
-    assert verbund_row["topology"] == {"nodes": 2, "tp_total": 2, "roles": ["head", "worker"]}
+    # ADR-096 §1.5: stored keys pass through; worker_host_id is derived from
+    # the rank-1 row (never stored).
+    assert verbund_row["topology"] == {
+        "nodes": 2, "tp_total": 2, "roles": ["head", "worker"],
+        "worker_host_id": str(worker_host.id),
+    }
     assert len(verbund_row["member_hosts"]) == 1
     member = verbund_row["member_hosts"][0]
     assert member["slug"] == "beta"

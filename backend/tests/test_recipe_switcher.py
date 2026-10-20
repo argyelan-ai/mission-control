@@ -173,9 +173,26 @@ async def test_duo_needs_a_free_second_box(auth_client, session):
     assert entry["startable"] is True
     assert entry["candidate_workers"] == [{"host_id": str(box_b.id), "slug": "box-b", "role": None}]
 
-    # box-b wird von einer laufenden exklusiven Runtime belegt → keine freie zweite Box.
+    # Ein laufendes Solo auf box-b verdrängt der Duo-Start (Solo<->Duo,
+    # Kritik 19.10.) — box-b bleibt Kandidat.
     await _runtime(session, "other-on-b", box_b, endpoint="http://192.0.2.11:8000/v1")
     with _probe({"other-on-b"}):
+        entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-duo"]
+    assert entry["fit"] == "duo"
+    assert [c["slug"] for c in entry["candidate_workers"]] == ["box-b"]
+
+    # box-b arbeitet als Worker eines laufenden Verbunds mit ANDEREM Head
+    # → keine freie zweite Box.
+    from app.services import runtime_membership
+
+    box_c = await _host(session, "box-c", ssh_host="192.0.2.12")
+    other = await _runtime(
+        session, "duo-on-c", box_c, endpoint="http://192.0.2.12:8000/v1", topology={"nodes": 2}
+    )
+    await runtime_membership.set_members(
+        session, other, runtime_membership.duo(box_c.id, box_b.id)
+    )
+    with _probe({"duo-on-c"}):
         entry = _by_slug((await auth_client.get(f"/api/v1/hosts/{box_a.id}/recipes")).json())["recipe-duo"]
     assert entry["fit"] == "none"
     assert entry["startable"] is False

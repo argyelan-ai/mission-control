@@ -62,6 +62,7 @@ from app.services import chat_actions, chat_media, commit_llm
 from app.services.activity import emit_event
 from app.services.chat_changes import aggregate_changes
 from app.services.chat_diff import capture_texts
+from app.services.chat_task_activity import task_activity
 from app.services.sse import _sse_generator, sse_response
 from app.services.transcript_adapters import adapter_for
 from app.services.checklist_todo_sync import chat_todo_sync
@@ -279,6 +280,27 @@ async def get_chat_history(
     history["todos"] = await chat_todo_sync.chat_todos(session, agent, adapter, history.get("todos"))
     history["capabilities"] = capabilities
     return history
+
+
+@router.get("/agents/{agent_id}/chat/task-activity")
+async def get_chat_task_activity(
+    agent_id: uuid.UUID,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """What the agent's RUNNING task does, for the chat's task block.
+
+    Since #898 the agent chat shows the chat daemon's session only; an ACP
+    task runs in a session of its own, and its delivery, tools and thoughts
+    had left the chat (operator finding 20.10.2026). This read brings them
+    back as one separate block (``chat_task_activity``): ``deliveredAt``,
+    the newest few ``events`` of the task session (same normalized events
+    as the chat), the task session's live ``preview`` (a running thought:
+    ``block: "thinking"``) and ``queued`` = more inbox tasks of this agent.
+    ``{"applies": false}`` when the agent has no task or its harness runs
+    the task inside the chat itself. Reads only (files + one count)."""
+    agent = await _load_agent_or_404(agent_id, session)
+    return await task_activity(session, agent)
 
 
 #: Erlaubte Gestalt einer ``runId``. Der Wert wird SYNTAKTISCH geprueft, bevor
@@ -720,7 +742,8 @@ def _agent_busy(agent_id: uuid.UUID) -> bool:
     """The chat is mid-turn (as the live stream last saw it): writing into
     its files now would race the agent's own edits."""
     state = tailer_manager.last_state(str(agent_id))
-    return isinstance(state, dict) and state.get("status") == "working"
+    # task_working: a TASK turn edits the same files (follow-up to ADR-097).
+    return isinstance(state, dict) and state.get("status") in ("working", "task_working")
 
 
 async def _recorded_reverts(
