@@ -948,7 +948,8 @@ class ACPEventMapper:
         ]
 
     def map_chat_error(
-        self, code: str, detail: str = "", text: Optional[str] = None
+        self, code: str, detail: str = "", text: Optional[str] = None,
+        data: Optional[dict] = None,
     ) -> list[dict[str, Any]]:
         """A chat-visible failure -> ONE ``chat_error`` custom_message line.
 
@@ -957,9 +958,18 @@ class ACPEventMapper:
         ``data`` carries the machine-readable pair the frontend styles on
         (``code`` chip + ``detail`` body); ``content`` is the human text.
         Codes: rpc_error, provider_error, empty_turn, process_exit, busy,
-        session_reset.
+        session_reset, turn_interrupted, queue_lost, ...
+
+        The ``data`` argument adds fields of the card (``retryText`` for the
+        "Send again" button, ``model`` for ``model_missing``). They never
+        replace ``code`` or ``detail``, a None value is left out, and they
+        are not cut: a text cut short is a text the operator never wrote.
+        Without it the line is exactly what it always was.
         """
         body = text or detail or code
+        payload: dict[str, Any] = {"code": code, "detail": str(detail)[:_RESULT_TRUNCATE_LEN]}
+        payload.update({k: v for k, v in (data or {}).items()
+                        if v is not None and k not in payload})
         return self._flush_thought() + [
             {
                 "type": "custom_message",
@@ -970,7 +980,7 @@ class ACPEventMapper:
                 "id": self._next_id(),
                 "parentId": None,
                 "timestamp": _now_iso(),
-                "data": {"code": code, "detail": str(detail)[:_RESULT_TRUNCATE_LEN]},
+                "data": payload,
             }
         ]
 

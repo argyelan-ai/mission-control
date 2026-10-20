@@ -101,6 +101,18 @@ _MODES = (MODE_NOW, MODE_QUEUE)
 MAX_QUEUE = 20
 #: The state mirror shows a held message's text up to this length.
 _QUEUE_PREVIEW_CHARS = 2000
+#: The longest text a card offers to send again (`data.retryText`, the
+#: backend's `_RETRY_TEXT_MAX_CHARS`). A longer one is left out — never cut:
+#: "Send again" must send exactly what the operator wrote (S1-R5, F3).
+RETRY_TEXT_MAX_CHARS = 8000
+
+#: The card when a daemon restart cut a running reply off (S1-R5). Nothing
+#: is ever sent again on its own; the card offers the text instead.
+TURN_INTERRUPTED = "turn_interrupted"
+_TURN_INTERRUPTED_TEXT = (
+    "The chat restarted while a reply was running — nothing was resent "
+    "automatically."
+)
 _STATE_FILENAME = "acp-chat-state.json"
 _PERSIST_FILENAME = "acp-chat.json"
 _DEFAULT_SOCKET_NAME = "acp-chat.sock"
@@ -235,6 +247,10 @@ class ChatSession:
         # Jobs waiting behind the running turn, oldest first:
         # {"id", "kind": "prompt"|"new_session", "text", "at"}.
         self._queue: list[dict] = []
+        # The job running right now, as the state mirror shows it
+        # (`_current_entry`), None when idle. A daemon that stops mid-turn
+        # leaves it on disk; the next start turns it into a card (S1-R5).
+        self._current: Optional[dict] = None
         self._worker: Optional[threading.Thread] = None
         self._closed = False
 
@@ -279,6 +295,13 @@ class ChatSession:
         # so whatever a previous daemon still held is gone after a restart.
         lost = self._previous_queue()
         lost_questions = self._previous_elicitations()
+        # The same for the job it was running: its reply never came (S1-R5).
+        interrupted = self._previous_current()
+        if interrupted is not None and interrupted.get("kind") == "new_session":
+            # A `/new` that never ran is one more job the restart dropped —
+            # it belongs on the card that lists those, first in line.
+            lost = [{"kind": "new_session", "text": ""}, *lost]
+            interrupted = None
         self._connect(persisted)
         self._write_state()
         if migration_problem:
@@ -295,6 +318,9 @@ class ChatSession:
             self._pump = acp_chat_events.ToolOutputPump(
                 self._mapper, self._emit_preview
             ).start()
+        if interrupted is not None:
+            # The running turn came before anything held behind it.
+            self._report_interrupted_turn(interrupted)
         if lost:
             self._report_lost_queue(lost)
         for elicitation_id in lost_questions:
@@ -493,6 +519,29 @@ class ChatSession:
         queue = _read_json_object(self.state_file).get("queue")
         return [j for j in queue if isinstance(j, dict)] if isinstance(queue, list) else []
 
+    def _previous_current(self) -> Optional[dict]:
+        """The job a previous daemon was running when it stopped: the state
+        mirror's `current` while `busy` was true. `{}` when it was busy but
+        names no job (an image before S1-R5 wrote no `current`) — None when
+        it was idle, or the mirror is missing or unreadable. Never blocks,
+        never raises."""
+        state = _read_json_object(self.state_file)
+        if state.get("busy") is not True:
+            return None
+        current = state.get("current")
+        return dict(current) if isinstance(current, dict) else {}
+
+    def _report_interrupted_turn(self, current: dict) -> None:
+        """One card for the reply a restart cut off. It offers the operator's
+        text (`retryText`) when the mirror kept all of it; nothing is ever
+        sent again on its own — not here, not anywhere in start()."""
+        turn = current.get("turn")
+        detail = f"turn {turn}" if isinstance(turn, int) and not isinstance(turn, bool) \
+            else "turn unknown"
+        text = current.get("text") if current.get("kind") == "prompt" else None
+        self._emit_error(TURN_INTERRUPTED, detail, text=_TURN_INTERRUPTED_TEXT,
+                         data=retry_data(text))
+
     def _previous_elicitations(self) -> list[str]:
         """Card ids a previous daemon still held open, from its state mirror."""
         rows = _read_json_object(self.state_file).get("elicitations")
@@ -503,7 +552,8 @@ class ChatSession:
 
     def _report_lost_queue(self, lost: list[dict]) -> None:
         """One card naming what a restart dropped — the operator typed it and
-        must see that it never ran (spec: the queue is in memory only)."""
+        must see that it never ran (spec: the queue is in memory only). A
+        `/new` that was running when the daemon stopped is listed first."""
         texts = ["/new" if j.get("kind") == "new_session" else str(j.get("text") or "")
                  for j in lost]
         listed = "\n".join(f"- {t}" for t in texts if t)
@@ -799,6 +849,7 @@ class ChatSession:
                     {**job, "text": job["text"][:_QUEUE_PREVIEW_CHARS]}
                     for job in self._queue
                 ],
+                "current": dict(self._current) if self._current else None,
                 "elicitations": [
                     {"id": e["id"], "at": e["at"], "message": e["message"][:200]}
                     for e in self._elicitations.values()
@@ -856,12 +907,14 @@ class ChatSession:
 
     def _claim_locked(self, job: dict) -> dict:
         """Mark the session busy for `job`; a prompt gets its turn number
-        here, when it STARTS — not when it was queued. Caller holds `_lock`."""
+        here, when it STARTS — not when it was queued. `job` becomes the
+        mirror's `current` (S1-R5). Caller holds `_lock`."""
         self._busy = True
         self._idle.clear()
         if job["kind"] == "prompt":
             self._turn += 1
             job = {**job, "turn": self._turn}
+        self._current = _current_entry(job)
         return job
 
     def _spawn(self, job: dict) -> None:
@@ -886,6 +939,8 @@ class ChatSession:
                 logger.exception("chat job %s failed", job.get("kind"))
             with self._lock:
                 closed = self._closed
+                # The job is over; the next queued one (if any) is current.
+                self._current = None
                 if closed or not self._queue:
                     self._busy = False
                     job = None
@@ -893,7 +948,9 @@ class ChatSession:
                     job = self._claim_locked(self._queue.pop(0))
             if closed:
                 # A retired session touches nothing shared (see the closed
-                # branch in _run_turn) — only the idle flag opens.
+                # branch in _run_turn) — only the idle flag opens. Its
+                # mirror keeps `busy` + `current`: that is how the next
+                # daemon learns which reply never came (S1-R5).
                 break
             # The mirror must be on disk BEFORE the idle flag opens: a waiter
             # that reads acp-chat-state.json the moment it wakes would
@@ -1015,10 +1072,13 @@ class ChatSession:
             ))
 
         if not self._client_alive():
+            # The card offers the text of the turn that died; the respawn
+            # below only reloads the session — it never sends it again.
             self._emit_error(
                 "process_exit",
                 error_text or f"child exited during turn {turn}",
                 text="The ACP process died — reconnecting the session.",
+                data=retry_data(text),
             )
             self._restart_child()
         else:
@@ -1259,17 +1319,12 @@ class ChatSession:
     def _emit_error(self, code: str, detail: str = "", text: Optional[str] = None,
                     data: Optional[dict] = None) -> None:
         """`data`: extra fields of the card (e.g. `model` for
-        `session_reset`/`model_missing`) — never `code` or `detail`, never a
-        None value."""
+        `session_reset`/`model_missing`, `retryText`) — never `code` or
+        `detail`, never a None value (`ACPEventMapper.map_chat_error`)."""
         with self._lock:
             self._last_error = {"code": code, "detail": str(detail)[:2000],
                                 "at": _now_iso()}
-        entries = self._mapper.map_chat_error(code, detail, text)
-        extra = {k: v for k, v in (data or {}).items()
-                 if v is not None and k not in ("code", "detail")}
-        if extra and entries:
-            entries[-1]["data"].update(extra)  # the card is the last entry
-        self._emit_transcript(entries)
+        self._emit_transcript(self._mapper.map_chat_error(code, detail, text, data=data))
         self._write_state()
 
     def _emit_notice(self, code: str, text: str, data: Optional[dict] = None) -> None:
@@ -1400,6 +1455,33 @@ class ChatSession:
                 os.replace(tmp, target)
             except OSError:
                 logger.warning("session id not persisted: %s", target)
+
+
+def retry_data(text: Any) -> dict:
+    """`{"retryText": text}` for a card that offers "Send again" — only for
+    a non-empty text of at most RETRY_TEXT_MAX_CHARS; `{}` otherwise. Never
+    a shortened text: the button sends exactly what the operator wrote, or
+    the card has no button."""
+    if isinstance(text, str) and text.strip() and len(text) <= RETRY_TEXT_MAX_CHARS:
+        return {"retryText": text}
+    return {}
+
+
+def _current_entry(job: dict) -> dict:
+    """The mirror's `current` for a claimed job: `{kind, turn, text,
+    truncated, startedAt}`. `text` is the whole prompt, or None with
+    `truncated: true` when it is longer than RETRY_TEXT_MAX_CHARS. Same
+    protection class as the held texts in `queue`."""
+    kind = job.get("kind")
+    text = str(job.get("text") or "") if kind == "prompt" else ""
+    whole = len(text) <= RETRY_TEXT_MAX_CHARS
+    return {
+        "kind": kind,
+        "turn": job.get("turn"),
+        "text": text if whole else None,
+        "truncated": not whole,
+        "startedAt": _now_iso(),
+    }
 
 
 def _format_counts(counts: Mapping[str, int]) -> str:
