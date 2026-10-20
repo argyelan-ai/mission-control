@@ -10,8 +10,18 @@ head AND worker must show the model).
 Only RFC 5737 placeholder IPs — public repo, no real addresses.
 """
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_engine_probe():
+    """Changing a stored member set asks whether the engine runs (ADR-096
+    §1.2). No network in tests: every runtime here is stopped unless a test
+    patches ``probe_running`` itself."""
+    with patch("app.services.recipe_switcher.probe_running", AsyncMock(return_value=False)):
+        yield
 
 
 def _ssh_host_body(slug: str = "gpu-box", **overrides) -> dict:
@@ -270,20 +280,31 @@ async def test_same_pair_same_direction_allowed(auth_client):
 
 @pytest.mark.asyncio
 async def test_worker_busy_with_foreign_running_exclusive_409(auth_client):
-    """A running exclusive solo on the worker box makes it 'not free' —
-    duo_worker_candidates, exactly as POST /hosts/{id}/recipes/{slug}/start."""
-    h = await _hosts(auth_client, "alpha", "beta")
+    """A running exclusive duo of ANOTHER head on the worker box makes it
+    'not free' — duo_worker_candidates, exactly as POST
+    /hosts/{id}/recipes/{slug}/start. A plain solo there does not: the duo
+    start evicts it (Solo<->Duo, critic 19.10.)."""
+    h = await _hosts(auth_client, "alpha", "beta", "gamma")
     solo = await auth_client.post(
         "/api/v1/runtimes/db",
         json=_runtime_body(slug="solo-beta", host_id=h["beta"]["id"], exclusive_memory=True),
     )
     assert solo.status_code == 200, solo.text
+    other = await _duo(auth_client, "duo-gamma", h["gamma"], h["beta"], exclusive_memory=True)
+    assert other.status_code == 200, other.text
 
-    async def _running(rt, host=None):
+    async def _solo_runs(rt, host=None):
         return rt.slug == "solo-beta"
 
-    with patch("app.services.recipe_switcher.probe_running", _running):
+    with patch("app.services.recipe_switcher.probe_running", _solo_runs):
         resp = await _duo(auth_client, "duo-rt", h["alpha"], h["beta"])
+    assert resp.status_code == 200, resp.text
+
+    async def _other_duo_runs(rt, host=None):
+        return rt.slug == "duo-gamma"
+
+    with patch("app.services.recipe_switcher.probe_running", _other_duo_runs):
+        resp = await _duo(auth_client, "duo-rt-2", h["alpha"], h["beta"])
     assert resp.status_code == 409, resp.text
     assert "beta" in resp.json()["detail"]
 
@@ -371,7 +392,7 @@ async def test_patch_duo_without_any_worker_names_the_way_out(auth_client):
 async def test_create_duo_is_atomic_when_member_write_fails(auth_client):
     h = await _hosts(auth_client, "alpha", "beta")
     boom = AsyncMock(side_effect=RuntimeError("member write failed"))
-    with patch("app.services.recipe_switcher._add_member_rows", boom):
+    with patch("app.services.runtime_membership._insert_rows", boom):
         with pytest.raises(RuntimeError):
             await _duo(auth_client, "duo-rt", h["alpha"], h["beta"])
     assert await _runtime_row("duo-rt") is None
