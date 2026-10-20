@@ -273,6 +273,38 @@ async def test_the_block_survives_the_bridge_heartbeat_while_the_model_loads(
 
 
 @pytest.mark.asyncio
+async def test_a_worker_gets_the_pointer_from_the_heartbeat_during_delivery(
+    client: AsyncClient, auth_client: AsyncClient, make_agent, make_board, make_task,
+    tmp_path, monkeypatch, acp_driver,
+):
+    """Workers in subagent mode get no pointer from the poll's claim (only
+    leads do) — the heartbeat is where it comes from, in_progress or, now,
+    delivered with the bridge's own attempt."""
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    from app.auth import generate_agent_token
+    from app.models.agent import Agent
+    from tests.conftest import test_engine
+
+    raw, token_hash = generate_agent_token()
+    _board, agent, task, _root, _now = await _setup(
+        make_agent, make_board, make_task, tmp_path, monkeypatch, status="inbox",
+        agent_token_hash=token_hash, scopes=["heartbeat"],
+    )
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        row = await s.get(Agent, agent.id)
+        row.current_task_id = None
+        s.add(row)
+        await s.commit()
+    url = f"/api/v1/agents/{agent.id}/chat/task-activity"
+    assert (await auth_client.get(url)).json() == {"applies": False}
+
+    await _beat(client, raw, task.id, "att-1")
+    assert await _current_task_id(agent.id) == task.id
+    assert (await auth_client.get(url)).json()["applies"] is True
+
+
+@pytest.mark.asyncio
 async def test_a_returned_delivery_still_clears_the_pointer(
     client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver,
 ):
