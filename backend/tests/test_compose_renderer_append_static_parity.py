@@ -52,6 +52,12 @@ x-openclaude-agent-base: &openclaude-agent-base
   networks:
     - mission-control_default
 
+x-omp-agent-base: &omp-agent-base
+  image: mc-omp-agent:latest
+  restart: unless-stopped
+  networks:
+    - mission-control_default
+
 services:
   mc-agent-worker-a:
     <<: *claude-agent-base
@@ -97,6 +103,25 @@ services:
       - ${HOME}/.mc/workspaces/worker-c:/workspace
       - ${HOME}/Workspace/Projects:/workspace-ref:ro
       - ${HOME}/.mc/deliverables/worker-c:/deliverables
+      - ${HOME}/.mc/references:${HOME}/.mc/references:ro
+
+  # omp-harness block written before the renderer injected omp's own mounts
+  # (session transcripts, image folder). It carries only the shared mounts;
+  # the REWRITE path has to add the omp ones. Parity target for the
+  # appended-omp test below, so both paths must end up with the same set.
+  mc-agent-worker-d:
+    <<: *omp-agent-base
+    container_name: mc-agent-worker-d
+    environment:
+      - AGENT_NAME=worker-d
+      - MC_API_URL=${MC_API_URL:-http://backend:8000}
+      - MC_TOKEN=${MC_TOKEN_WORKER_D}
+      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
+    volumes:
+      - ${HOME}/.mc/agents/worker-d/claude-config:/home/agent/.claude
+      - ${HOME}/.mc/mcp-servers:/mc-servers:ro
+      - ${HOME}/.mc/workspaces/worker-d:/workspace
+      - ${HOME}/.mc/deliverables/worker-d:/deliverables
       - ${HOME}/.mc/references:${HOME}/.mc/references:ro
 
 networks:
@@ -247,4 +272,60 @@ async def test_appended_openclaude_block_has_same_mount_targets_as_static_block(
     )
     assert not extra, (
         f"appended openclaude block has mounts absent from the static one: {extra}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_appended_omp_block_has_same_mount_targets_as_rewritten_block(
+    async_session, compose_path
+):
+    """omp-harness parity between the two code paths (S1-R8): the static
+    ``worker-d`` block only gets omp's own mounts — session transcripts and
+    the image folder (``blobs``) — through the rewrite path, a new omp agent
+    gets them through the append path. Both must end up with the same set of
+    container-side targets, so a mount added to one path but not the other
+    fails here."""
+    rt = Runtime(
+        slug="omp-local",
+        display_name="Local omp",
+        runtime_type="omp",
+        endpoint="http://localhost:8000/v1",
+        enabled=True,
+    )
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+
+    new_agent = Agent(
+        name="Worker-E",
+        agent_runtime="cli-bridge",
+        runtime_id=rt.id,
+        harness="omp",
+        scopes=["tasks:read"],
+    )
+    async_session.add(new_agent)
+    await async_session.commit()
+
+    rendered = await render_compose_agents(async_session, compose_path=compose_path)
+    appended_block = _extract_service_block(rendered, "worker-e")
+    assert "<<: *omp-agent-base" in appended_block
+
+    rewritten_block = _extract_service_block(rendered, "worker-d")
+    rewritten_targets = _mount_targets(rewritten_block)
+    appended_targets = _mount_targets(appended_block)
+
+    for omp_target in (
+        "/home/agent/.omp/profiles/mc-agent/agent/sessions",
+        "/home/agent/.omp/profiles/mc-agent/agent/blobs:rw",
+    ):
+        assert omp_target in rewritten_targets, f"rewrite path lacks {omp_target}"
+        assert omp_target in appended_targets, f"append path lacks {omp_target}"
+
+    missing = rewritten_targets - appended_targets
+    extra = appended_targets - rewritten_targets
+    assert not missing, (
+        f"appended omp block is missing mounts the rewritten one has: {missing}"
+    )
+    assert not extra, (
+        f"appended omp block has mounts the rewritten one lacks: {extra}"
     )
