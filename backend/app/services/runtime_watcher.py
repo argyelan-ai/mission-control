@@ -677,10 +677,16 @@ class RuntimeWatcher:
         bound = (
             await session.exec(select(Agent).where(Agent.runtime_id == runtime.id))
         ).all()
+        # Archived agents never count: mark_agents_for_sync skips them on
+        # purpose, so their model is never updated — an archived agent with
+        # the previous model stayed "stale" forever and re-flagged every live
+        # agent on the runtime once per guard window (live 2026-10-20: a host
+        # bridge restarted every ~10.5 min, all day).
         stale = [
             agent
             for agent in bound
             if agent.agent_runtime == "cli-bridge"
+            and agent.archived_at is None
             and not agent.pending_runtime_sync
             and (agent.model or "").strip()
             and agent.model.strip() != model
