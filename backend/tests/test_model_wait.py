@@ -203,6 +203,30 @@ async def test_notify_false_never_writes_the_held_line(async_session):
         note.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_notify_false_never_writes_the_asleep_event_either(async_session):
+    """A read (the task card, the chat's status line every few seconds) must
+    not announce "a task waits, wake the box" for a power-managed runtime."""
+    from types import SimpleNamespace
+
+    from app.models.runtime import Runtime
+    from app.services import runtime_readiness
+
+    rt = Runtime(slug=f"pm-{uuid.uuid4().hex[:6]}", display_name="Sleepy",
+                 runtime_type="openai_compatible", endpoint="http://192.0.2.11:8000/v1",
+                 power_managed=True)
+    async_session.add(rt)
+    await async_session.commit()
+    agent = SimpleNamespace(runtime_id=rt.id, id=uuid.uuid4(), name="W")
+    with patch.object(runtime_readiness, "is_runtime_ready", new=AsyncMock(return_value=False)), \
+         patch.object(runtime_readiness, "_notify_asleep", new=AsyncMock()) as note:
+        ok, _ = await runtime_readiness.runtime_ready_for_agent(agent, async_session, notify=False)
+        assert ok is False
+        note.assert_not_called()
+        await runtime_readiness.runtime_ready_for_agent(agent, async_session)
+        note.assert_called_once()
+
+
 # ── 3. GET .../model-wait for the task card ─────────────────────────────────
 
 async def _bind_local_runtime(agent_id, name: str = "BOX-A :8000"):

@@ -49,6 +49,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Any, Protocol
 
 import httpx
@@ -442,3 +443,84 @@ def read_acp_turn_status(
         # plain working/idle answer.
         return "waiting_input"
     return "working" if busy else "idle"
+
+
+#: How long the chat's model facts (a card waiting in the inbox, does the
+#: model answer) are kept per agent. The tailer probes every ~2 s per open
+#: chat; the readiness itself is cached in Redis for 15 s anyway.
+_MODEL_WAIT_CACHE_S = 10.0
+_model_wait_cache: dict[str, tuple[float, bool, bool]] = {}
+
+
+async def _model_wait_facts(agent) -> tuple[bool, bool]:
+    """(an assigned card waits in the agent's inbox, the agent's model
+    answers). The card is one the poll would deliver by itself
+    (``run_control`` empty, same filter as the poll claim); the readiness
+    is the poll's own gate (``runtime_ready_for_agent``, local runtimes
+    included, cached, fail-open) as a read: no timeline note."""
+    from sqlmodel import select
+
+    import app.database
+    from app.models.task import Task
+    from app.services.runtime_readiness import runtime_ready_for_agent
+
+    async with app.database.async_session_maker() as session:
+        card = (
+            await session.exec(
+                select(Task.id).where(
+                    Task.assigned_agent_id == agent.id,
+                    Task.status == "inbox",
+                    Task.run_control.is_(None),
+                ).limit(1)
+            )
+        ).first()
+        # Pool hygiene: the gate awaits Redis and maybe an HTTP probe —
+        # release the read transaction first (nothing uncommitted).
+        await session.commit()
+        ready, _reason = await runtime_ready_for_agent(
+            agent, session, include_local=True, notify=False,
+        )
+    return card is not None, bool(ready)
+
+
+async def refine_status_by_model(agent, status: str | None) -> str | None:
+    """The chat's status, corrected by what MC knows about the agent's MODEL
+    (review Z2/Z5 of the ADR-097 follow-up, 20.10.2026). The bridge's phase
+    file is not the whole truth:
+
+    * ``idle`` while an assigned card waits in the inbox and the model does
+      not answer -> ``waiting_model``. omp gave up on the dead endpoint,
+      MC's ACK ladder returned the card for the model and the poll gate
+      holds it — the chat said "Ready", the task card "waiting for the
+      model" (the 19.10. case: box off).
+    * ``task_working`` while the model does not answer -> ``waiting_model``.
+      The engine died after the claim (task 43788774): omp retries for
+      minutes and the phase stays "working".
+
+    Every other status passes through (a busy chat turn, a question, an
+    unknown state). An agent without a runtime has nothing to wait for and
+    costs no read. Cached per agent (``_MODEL_WAIT_CACHE_S``); any error
+    keeps ``status`` — a broken read never invents a state."""
+    if status not in ("idle", "task_working"):
+        return status
+    if not getattr(agent, "runtime_id", None):
+        return status
+    key = str(getattr(agent, "id", ""))
+    now = time.monotonic()
+    hit = _model_wait_cache.get(key)
+    if hit is not None and now - hit[0] < _MODEL_WAIT_CACHE_S:
+        waiting_card, ready = hit[1], hit[2]
+    else:
+        try:
+            waiting_card, ready = await _model_wait_facts(agent)
+        except Exception as e:  # noqa: BLE001 — never break the status line
+            logger.debug("chat model facts skipped for %s: %s", key, e)
+            return status
+        if len(_model_wait_cache) > 512:
+            _model_wait_cache.clear()
+        _model_wait_cache[key] = (now, waiting_card, ready)
+    if ready:
+        return status
+    if status == "task_working" or waiting_card:
+        return "waiting_model"
+    return status

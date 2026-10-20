@@ -191,8 +191,9 @@ async def runtime_ready_for_agent(
                     or (``include_local``, ADR-097) its local model server
                     does not answer; hold the task until it does.
     ``task`` only feeds the timeline note of a held task. ``notify=False``
-    skips that note (a read such as the task card's model-wait, or a caller
-    that writes its own reason).
+    skips that note and the power-managed "box asleep" event (a read such as
+    the task card's model-wait or the chat's status line, or a caller that
+    writes its own reason).
     """
     if not settings.enable_runtime_readiness_gate:
         return True, None
@@ -221,7 +222,8 @@ async def runtime_ready_for_agent(
             )
         if await is_runtime_ready(rt):
             return True, None
-        await _notify_asleep(session, rt, agent)
+        if notify:
+            await _notify_asleep(session, rt, agent)
         return (
             False,
             f"Runtime '{rt.display_name}' schläft (power-managed) — Box wecken, "

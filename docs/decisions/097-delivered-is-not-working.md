@@ -136,7 +136,17 @@ Added with the follow-up PR (same day, live tasks 4de17c6a and 43788774).
    new values, so no Stop button and no queued echo for a task turn.
    `GET /boards/{b}/tasks/{t}/model-wait` lets the task card name the
    runtime that does not answer; it is a read (`notify=False`, no timeline
-   line).
+   line, no "box asleep" event either).
+6. **One answer in chat and card for the whole wait** (review of the
+   follow-up). After `awaiting_model` the bridge keeps the phase `delivered`
+   for as long as the poll holds that card (`runtime_not_ready`); any other
+   poll answer ends the wait. The chat tailer also asks MC itself, through
+   the same cached readiness gate (`notify=False`, fail-open, 10 s per agent):
+   an assigned inbox card + a model that does not answer reads
+   `waiting_model` even without a phase (card returned by the ACK ladder,
+   bridge restarted), and a task turn whose model stopped answering reads
+   `waiting_model` instead of `task_working` (engine died after the claim,
+   omp still retrying).
 
 Out of scope: a genuine content-filter refusal keeps today's path (missing
 sentinel → nudges); whether to report omp's regex upstream is an operator

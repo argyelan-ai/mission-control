@@ -99,7 +99,11 @@ from app.services import chat_media
 from app.services.chat_todos import todo_event_from_tool
 from app.services.harness_catalog import get_observed_model_windows, observe_model_window
 from app.services.pane_preview import PanePreview
-from app.services.acp_chat_transport import headless_chat_kind, read_acp_turn_status
+from app.services.acp_chat_transport import (
+    headless_chat_kind,
+    read_acp_turn_status,
+    refine_status_by_model,
+)
 from app.services.pane_state import capture_pane, process_alive
 from app.redis_client import RedisKeys
 from app.services.token_harvester import _host_home, _should_attribute_boss_path
@@ -2767,6 +2771,9 @@ class ChatTailerManager:
                     "prompt": None,
                     "aliveness": aliveness,
                 }
+            # The model's side (review Z2/Z5): a card held for a model that
+            # does not answer, or a task turn whose engine went away.
+            status = await refine_status_by_model(agent, status)
             return {"status": status, "prompt": None, "aliveness": aliveness}
 
         if pane_text is _PANE_UNSET:
