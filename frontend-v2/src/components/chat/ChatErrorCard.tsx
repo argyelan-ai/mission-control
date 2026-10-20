@@ -19,7 +19,9 @@
  * Operator nach einem Neustart eine rote Karte mit „turn 4" bzw. englischen
  * Text unter einem deutschen Etikett. Traegt die Karte den eigenen Text des
  * Operators (`retryText`), bietet sie EINEN Tipp „Nochmal senden" an — nur
- * wenn ChatView sie dafuer freigibt (`chatResend.tsx`), nie von selbst.
+ * wenn ChatView sie dafuer freigibt (`chatResend.tsx`), nie von selbst — und
+ * zeigt genau diesen Text als Zitat darueber: nach einem Modellwechsel landet
+ * die Karte in einem NEUEN Gespraech, in dem die Blase des Operators fehlt.
  */
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -40,6 +42,47 @@ interface ChatErrorCardProps {
  *  `session_reset`) — they choose the sentence and are not printed again. */
 const DETAIL_CASE = /^[a-z][a-z_]*$/;
 
+/** A detail that only counts turns ("turn 4", "child exited during turn 4")
+ *  tells the operator nothing the sentence does not (K3), and it is English
+ *  jargon under a sentence in the UI language (K10). */
+const TURN_COUNTER = /^(?:child exited during )?turn \d+$/;
+
+/** `process_exit` after a failed respawn of the agent process — its own
+ *  case: the chat is NOT reconnecting. The exception after it is the cause. */
+const RESTART_FAILED = /^restart failed:\s*/;
+
+/** Which sentence a card gets and what of the raw detail stays as small
+ *  print: the case of a code first (`session_reset` + `model_missing`), then
+ *  the code itself. Codes without a sentence keep the detail as their text. */
+function cardText(
+  code: string,
+  rawDetail: string,
+  has: (key: string) => boolean,
+): { bodyKey: string | null; small: string } {
+  let caseName: string | null = null;
+  let rest = rawDetail;
+  if (DETAIL_CASE.test(rawDetail)) {
+    caseName = rawDetail;
+    rest = "";
+  } else if (code === "process_exit" && RESTART_FAILED.test(rawDetail)) {
+    caseName = "restart_failed";
+    rest = rawDetail.replace(RESTART_FAILED, "");
+  }
+  const caseKey = caseName ? `error.${code}_${caseName}Body` : null;
+  const bodyKey =
+    caseKey && has(caseKey)
+      ? caseKey
+      : code === "model_unreachable"
+        ? "error.modelUnreachableHint"
+        : has(`error.${code}Body`)
+          ? `error.${code}Body`
+          : null;
+  if (!bodyKey) return { bodyKey: null, small: "" };
+  // A case word that chose no sentence of its own is still information.
+  const small = bodyKey === caseKey ? rest : rawDetail;
+  return { bodyKey, small: TURN_COUNTER.test(small) ? "" : small };
+}
+
 /** ready → sent (tapped, waiting for ChatView to see the echo) → seen (the
  *  echo or the operator's line is there). */
 type ResendPhase = "ready" | "sent" | "seen";
@@ -55,20 +98,10 @@ export function ChatErrorCard({ ev }: ChatErrorCardProps) {
   const detail = ev.error?.detail?.trim() || ev.text;
   const rawDetail = ev.error?.detail?.trim() ?? "";
 
-  // The sentence in the operator's language: first the case of this code
-  // (`session_reset` + `model_missing`), then the code itself.
-  const caseKey = DETAIL_CASE.test(rawDetail) ? `error.${code}_${rawDetail}Body` : null;
-  const bodyKey =
-    caseKey && t.has(caseKey)
-      ? caseKey
-      : code === "model_unreachable"
-        ? "error.modelUnreachableHint"
-        : t.has(`error.${code}Body`)
-          ? `error.${code}Body`
-          : null;
+  // The sentence in the operator's language; the raw detail only as small
+  // print, and only where it carries a cause (K3: never twice, no counters).
+  const { bodyKey, small: smallDetail } = cardText(code, rawDetail, (key) => t.has(key));
   const body = bodyKey ? t(bodyKey) : null;
-  // K3: a detail that chose the sentence is not printed a second time.
-  const smallDetail = body && bodyKey !== caseKey ? rawDetail : "";
 
   const retryText = retryTextOf(ev);
   const offered = canResend(ev.uuid);
@@ -126,13 +159,17 @@ export function ChatErrorCard({ ev }: ChatErrorCardProps) {
               {body}
             </p>
             {smallDetail && (
-              <p
-                data-testid="chat-error-detail"
-                className="mt-1 break-words font-mono text-xs leading-normal"
+              // An exception can run to 4000 characters (session_reset,
+              // process_exit) — clamped like before this card had a sentence,
+              // with its line breaks kept.
+              <ClampedContent
+                text={smallDetail}
+                testId="chat-error-detail"
+                className="mt-1 break-words whitespace-pre-wrap font-mono text-xs leading-normal"
                 style={{ color: C.textMuted }}
               >
                 {smallDetail}
-              </p>
+              </ClampedContent>
             )}
           </>
         ) : (
@@ -147,9 +184,23 @@ export function ChatErrorCard({ ev }: ChatErrorCardProps) {
             </ClampedContent>
           )
         )}
+        {showResend && retryText !== null && (
+          // What the button sends, word for word. After a model change the
+          // restart opens a NEW conversation, so the operator's own bubble is
+          // not on this page (plan review F1) — the tap must not be blind.
+          <ClampedContent
+            text={retryText}
+            testId="chat-error-retry-text"
+            className="mt-2 pl-3 break-words whitespace-pre-wrap text-sm leading-normal"
+            style={{ color: C.textSecondary, borderLeft: `1px solid ${C.border}` }}
+          >
+            <span className="sr-only">{t("error.resendQuoteLabel")}: </span>
+            {retryText}
+          </ClampedContent>
+        )}
         {(showLink || showResend) && (
-          <div className="mt-1 flex flex-wrap items-center justify-between gap-x-4">
-            {showLink ? (
+          <div className="mt-1 flex flex-wrap items-center gap-x-4">
+            {showLink && (
               <Link
                 href="/runtimes"
                 data-testid="chat-error-runtimes-link"
@@ -159,16 +210,16 @@ export function ChatErrorCard({ ev }: ChatErrorCardProps) {
                 {t("error.runtimesLink")}
                 <ChevronRight size={14} aria-hidden="true" />
               </Link>
-            ) : (
-              <span aria-hidden="true" />
             )}
             {showResend && (
+              // ml-auto, not justify-between: when the row wraps (narrow
+              // phone, large text) the button stays at the right edge.
               <button
                 type="button"
                 data-testid="chat-error-resend"
                 onClick={handleResend}
                 disabled={sent}
-                className="-mr-2 inline-flex min-h-11 md:min-h-9 items-center gap-2 rounded-md px-2 text-sm font-medium transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-default disabled:hover:bg-transparent"
+                className="-mr-2 ml-auto inline-flex min-h-11 md:min-h-9 items-center gap-2 rounded-md px-2 text-sm font-medium transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-default disabled:hover:bg-transparent"
                 style={{ color: sent ? C.textMuted : C.accent }}
               >
                 {sent ? <Check size={14} aria-hidden="true" /> : <RotateCcw size={14} aria-hidden="true" />}

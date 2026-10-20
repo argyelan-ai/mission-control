@@ -3744,14 +3744,16 @@
       "turn_interrupted": "Interrupted",
       "model_unreachable": "Model not responding",
       "turn_interruptedBody": "The chat restarted while a reply was running. Nothing was resent automatically.",
-      "process_exitBody": "The agent process ended unexpectedly.",
+      "process_exitBody": "The agent process ended unexpectedly. The chat is reconnecting.",
+      "process_exit_restart_failedBody": "The agent process ended and could not be restarted.",
       "session_resetBody": "The last conversation could not be loaded. A new one started.",
       "session_reset_model_missingBody": "The conversation ran on a model that is not set up right now. A new conversation started; the old one is kept.",
       "session_reset_transcript_missingBody": "The history of the last conversation was not found. A new conversation started.",
       "modelUnreachableHint": "Check the Runtimes page. Your message is not lost.",
       "runtimesLink": "Open Runtimes",
       "resend": "Send again",
-      "resent": "Sent"
+      "resent": "Sent",
+      "resendQuoteLabel": "Your message"
     },
     "notice": {
       "label": "Notice",

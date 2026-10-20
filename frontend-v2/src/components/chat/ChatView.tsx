@@ -55,7 +55,7 @@ import { SubagentGroup } from "./SubagentGroup";
 import { ToolGroup } from "./ToolGroup";
 import { ToolOutputContext, createToolOutputStore, type ToolOutputStore } from "./toolOutputStore";
 import { ChatMediaContext } from "./chatMedia";
-import { ChatResendContext, resendableErrorUuid, type ChatResend } from "./chatResend";
+import { ChatResendContext, useResendableErrorUuid, type ChatResend } from "./chatResend";
 import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
 import { ElicitationCard } from "./ElicitationCard";
@@ -814,10 +814,7 @@ export function ChatView({
   const handleSendRef = useRef(handleSend);
   handleSendRef.current = handleSend;
   const canSend = !head && !!agent && isAdmin && aliveness !== "ended";
-  const resendUuid = useMemo(
-    () => (canSend ? resendableErrorUuid(stream.events, stream.pendingEchoes.length) : null),
-    [canSend, stream.events, stream.pendingEchoes.length],
-  );
+  const resendUuid = useResendableErrorUuid(stream.events, stream.pendingEchoes, canSend);
   const chatResend = useMemo<ChatResend>(
     () => ({
       resend: (text) => handleSendRef.current(text),

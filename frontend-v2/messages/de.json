@@ -3744,14 +3744,16 @@
       "turn_interrupted": "Unterbrochen",
       "model_unreachable": "Modell antwortet nicht",
       "turn_interruptedBody": "Der Chat wurde neu gestartet, während eine Antwort lief. Nichts wurde automatisch neu gesendet.",
-      "process_exitBody": "Der Agent-Prozess wurde unerwartet beendet.",
+      "process_exitBody": "Der Agent-Prozess wurde unerwartet beendet. Der Chat verbindet sich neu.",
+      "process_exit_restart_failedBody": "Der Agent-Prozess wurde beendet und liess sich nicht neu starten.",
       "session_resetBody": "Das letzte Gespräch liess sich nicht laden. Ein neues hat begonnen.",
       "session_reset_model_missingBody": "Das Gespräch lief auf einem Modell, das gerade nicht eingetragen ist. Ein neues Gespräch hat begonnen, das alte bleibt gespeichert.",
       "session_reset_transcript_missingBody": "Der Verlauf des letzten Gesprächs wurde nicht gefunden. Ein neues Gespräch hat begonnen.",
       "modelUnreachableHint": "Prüfe die Runtimes-Seite. Deine Nachricht ist nicht verloren.",
       "runtimesLink": "Zur Runtimes-Seite",
       "resend": "Nochmal senden",
-      "resent": "Gesendet"
+      "resent": "Gesendet",
+      "resendQuoteLabel": "Deine Nachricht"
     },
     "notice": {
       "label": "Hinweis",
