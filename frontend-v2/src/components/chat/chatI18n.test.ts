@@ -215,6 +215,8 @@ const ERROR_TEXT_KEYS = [
   "runtimesLink",
   "turn_interruptedBody",
   "process_exitBody",
+  "process_exit_restart_failedBody",
+  "resendQuoteLabel",
   "session_resetBody",
   "session_reset_model_missingBody",
   "session_reset_transcript_missingBody",

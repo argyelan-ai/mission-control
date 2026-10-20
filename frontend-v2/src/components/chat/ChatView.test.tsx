@@ -27,6 +27,9 @@ import {
   MOBILE_HEADER_METRICS,
 } from "./ChatView";
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
+import { useHeadTranscript } from "@/hooks/useHeadTranscript";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { mkRun } from "@/lib/__tests__/headFixtures";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import type { AgentWithState } from "./TerminalPanel";
@@ -2508,11 +2511,16 @@ describe("Naht: Preview-Tick baut die Zeitachse nicht neu (echtes Modul, echte K
 // + deliver, never a second one), and only the NEWEST error card that holds
 // the operator's text offers it — and only while nothing has been sent after
 // it. Otherwise a reload of the page would offer an old card a second time.
-function mkErrorCard(uuid: string, retryText: string | null, code = "turn_interrupted"): MessageEvent {
+function mkErrorCard(
+  uuid: string,
+  retryText: string | null,
+  code = "turn_interrupted",
+  ts = "2026-10-20T10:00:00Z",
+): MessageEvent {
   return {
     kind: "message",
     uuid,
-    ts: "2026-10-20T10:00:00Z",
+    ts,
     role: "teammate",
     teammate: "chat_error",
     text: "The chat restarted while a reply was running — nothing was resent automatically.",
@@ -2521,6 +2529,24 @@ function mkErrorCard(uuid: string, retryText: string | null, code = "turn_interr
     source: { kind: "error", title: "chat_error" },
     error: { code, detail: "turn 4", retryText },
   };
+}
+
+/** The same element on every call, so a test can re-render ONE mounted view. */
+function chatViewEl(
+  agent: AgentWithState,
+  overrides: Partial<React.ComponentProps<typeof ChatView>> = {},
+) {
+  return (
+    <ChatView
+      agent={agent}
+      hasTranscript
+      detailLevel="normal"
+      onDetailLevelChange={noop}
+      centerView="chat"
+      onCenterViewChange={noop}
+      {...overrides}
+    />
+  );
 }
 
 describe("ChatView — Nochmal senden (S1-R7)", () => {
@@ -2564,20 +2590,118 @@ describe("ChatView — Nochmal senden (S1-R7)", () => {
     unmount();
 
     // The operator wrote after the card -> no button anywhere.
-    mockUseChatStream.mockReturnValue(mkStream({ events: [older, newer, mkMsg({ role: "user", text: "next" })] }));
+    mockUseChatStream.mockReturnValue(
+      mkStream({ events: [older, newer, mkMsg({ role: "user", text: "next", ts: "2026-10-20T10:01:00Z" })] })
+    );
     const second = renderChatView({ agent: mkAgent({ headless_chat: true }) });
     expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
     second.unmount();
 
-    // A send is on its way (open echo) -> no button either.
+    // A send went out AFTER the card showed up (open echo) -> no button either.
+    const agent = mkAgent({ headless_chat: true });
+    mockUseChatStream.mockReturnValue(mkStream({ events: [older, newer] }));
+    const third = render(chatViewEl(agent));
+    expect(screen.getByTestId("chat-error-resend")).toBeInTheDocument();
     mockUseChatStream.mockReturnValue(
       mkStream({
         events: [older, newer],
         pendingEchoes: [{ id: "echo-1", text: "x", sentAt: Date.now(), status: "pending" }],
       })
     );
-    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+    third.rerender(chatViewEl(agent));
     expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+  });
+
+  it("an echo a restart orphaned BEFORE the card arrived does not hide the button (queued follow-up, then queue_lost)", () => {
+    // Critic finding: the queued follow-up B dies with the old daemon. Its echo
+    // goes queued -> pending -> unconfirmed and is never retired — it was sent
+    // before the card, so it says nothing about the card.
+    const agent = mkAgent({ headless_chat: true });
+    const userA = mkMsg({ role: "user", text: "count to 20", ts: "2026-10-20T09:59:00Z" });
+    const orphan = { id: "echo-7", text: "and then the tests", sentAt: Date.now() - 60_000, status: "queued" as const };
+    mockUseChatStream.mockReturnValue(mkStream({ events: [userA], pendingEchoes: [orphan] }));
+    const view = render(chatViewEl(agent));
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+
+    const queueLost = mkErrorCard("e-lost", null, "queue_lost", "2026-10-20T10:00:01Z");
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [userA, mkErrorCard("e-int", "count to 20"), queueLost],
+        pendingEchoes: [{ ...orphan, status: "unconfirmed" }],
+      })
+    );
+    view.rerender(chatViewEl(agent));
+
+    const cards = screen.getAllByTestId("chat-error-card");
+    expect(cards[0]).toContainElement(screen.getByTestId("chat-error-resend"));
+  });
+
+  it("decides by transcript time, not array position: an older card re-seeded after a newer operator line is not offered", () => {
+    // A reconnect re-seed appends the rows the live stream missed at the END.
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [
+          mkMsg({ role: "user", text: "first", ts: "2026-10-20T10:00:00Z" }),
+          mkMsg({ role: "user", text: "second", ts: "2026-10-20T10:05:00Z" }),
+          mkErrorCard("c1", "first", "turn_interrupted", "2026-10-20T10:01:00Z"),
+        ],
+      })
+    );
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    expect(screen.getByTestId("chat-error-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+  });
+
+  it("offers the card that is newest in time even when an older one was appended after it", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [
+          mkMsg({ role: "user", text: "first", ts: "2026-10-20T10:00:00Z" }),
+          mkErrorCard("c2", "second", "model_unreachable", "2026-10-20T10:06:00Z"),
+          mkErrorCard("c1", "first", "turn_interrupted", "2026-10-20T10:01:00Z"),
+        ],
+      })
+    );
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    expect(screen.getAllByTestId("chat-error-resend")).toHaveLength(1);
+    expect(screen.getAllByTestId("chat-error-card")[0]).toContainElement(screen.getByTestId("chat-error-resend"));
+  });
+
+  it("offers nothing in an ended session — the composer cannot send there", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [mkErrorCard("e1", "again")],
+        session: { sessionId: "s1", live: false, startedAt: null, aliveness: "ended" },
+      })
+    );
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    expect(screen.getByTestId("chat-error-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+  });
+
+  it("offers nothing in a head's transcript, even while the agent row is still set", () => {
+    const headHook = vi.mocked(useHeadTranscript);
+    const quiet = headHook.getMockImplementation();
+    headHook.mockImplementation(
+      () => mkStream({ events: [mkErrorCard("e1", "again")] }) as unknown as ReturnType<typeof useHeadTranscript>
+    );
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [], session: null }));
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+      render(
+        <QueryClientProvider client={qc}>
+          {chatViewEl(mkAgent({ headless_chat: true }), { head: mkRun({ state: "running" }) })}
+        </QueryClientProvider>
+      );
+
+      expect(screen.getByTestId("chat-error-card")).toBeInTheDocument();
+      expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+    } finally {
+      if (quiet) headHook.mockImplementation(quiet);
+    }
   });
 
   it("a newer card WITHOUT a text does not hide the offer of the newest card that has one", () => {

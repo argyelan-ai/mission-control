@@ -231,15 +231,110 @@ describe("Chat-Fehlerkarte — Nochmal senden (S1-R7)", () => {
   });
 
   it("puts the translated sentence first and the raw detail only small below it", () => {
+    renderCard(unreachable());
+
+    expect(screen.getByTestId("chat-error-body")).toHaveTextContent("Check the Runtimes page.");
+    expect(screen.getByTestId("chat-error-detail")).toHaveTextContent(
+      "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    );
+    expect(screen.getByTestId("chat-error-detail").className).toContain("text-xs");
+  });
+
+  it("turn_interrupted: the sentence alone — the turn counter ('turn 4') tells the operator nothing (K3/K10)", () => {
     renderCard(interrupted());
 
     expect(screen.getByTestId("chat-error-code")).toHaveTextContent("Interrupted");
     expect(screen.getByTestId("chat-error-body")).toHaveTextContent(
       "The chat restarted while a reply was running. Nothing was resent automatically."
     );
-    expect(screen.getByTestId("chat-error-detail")).toHaveTextContent("turn 4");
-    expect(screen.getByTestId("chat-error-detail").className).toContain("text-xs");
+    expect(screen.queryByTestId("chat-error-detail")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-error-card")).not.toHaveTextContent("turn 4");
     expect(tDe("error.turn_interrupted")).toBe("Unterbrochen");
+  });
+
+  it("process_exit during a turn: says the chat reconnects, and drops the bare turn counter", () => {
+    renderCard(
+      mkError({
+        text: "The ACP process died — reconnecting the session.",
+        error: { code: "process_exit", detail: "child exited during turn 7" },
+      })
+    );
+
+    expect(screen.getByTestId("chat-error-body")).toHaveTextContent(
+      "The agent process ended unexpectedly. The chat is reconnecting."
+    );
+    expect(screen.queryByTestId("chat-error-detail")).not.toBeInTheDocument();
+    expect(tDe("error.process_exitBody")).toBe(
+      "Der Agent-Prozess wurde unerwartet beendet. Der Chat verbindet sich neu."
+    );
+  });
+
+  it("process_exit with the child's own error keeps that cause as small print", () => {
+    renderCard(mkError({ error: { code: "process_exit", detail: "BrokenPipeError: [Errno 32] Broken pipe" } }));
+
+    expect(screen.getByTestId("chat-error-body")).toHaveTextContent("The chat is reconnecting.");
+    expect(screen.getByTestId("chat-error-detail")).toHaveTextContent("BrokenPipeError: [Errno 32] Broken pipe");
+  });
+
+  it("process_exit after a failed respawn: its own sentence (no 'reconnecting'), the exception as small print", () => {
+    renderCard(
+      mkError({ error: { code: "process_exit", detail: "restart failed: FileNotFoundError: omp not found" } })
+    );
+
+    expect(screen.getByTestId("chat-error-body")).toHaveTextContent(
+      "The agent process ended and could not be restarted."
+    );
+    expect(screen.getByTestId("chat-error-body")).not.toHaveTextContent("reconnecting");
+    expect(screen.getByTestId("chat-error-detail")).toHaveTextContent("FileNotFoundError: omp not found");
+    expect(screen.getByTestId("chat-error-detail")).not.toHaveTextContent("restart failed");
+    expect(tDe("error.process_exit_restart_failedBody")).toBe(
+      "Der Agent-Prozess wurde beendet und liess sich nicht neu starten."
+    );
+  });
+
+  it("clamps a long raw detail under a sentence (session_reset carries exception text up to 4000 chars)", () => {
+    // jsdom measures every box as 0 px high; give the content a real height
+    // so ClampedContent can see that it overflows.
+    const spy = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(2000);
+    try {
+      const long = `RuntimeError: load failed\n${"x".repeat(3990)}`;
+      renderCard(mkError({ error: { code: "session_reset", detail: long } }));
+
+      const detail = screen.getByTestId("chat-error-detail");
+      expect(detail).toHaveAttribute("data-clamped", "true");
+      expect(detail.className).toContain("whitespace-pre-wrap");
+      expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("quotes the operator's text it will send — the original bubble may be in another session or far up", () => {
+    // F1 of the plan review: after a model change the restart opens a NEW
+    // session, so the card lands in a transcript without the operator's line.
+    const { rerender, wrap } = renderCard(interrupted());
+
+    const quote = screen.getByTestId("chat-error-retry-text");
+    expect(quote).toHaveTextContent(RETRY);
+    expect(screen.getByTestId("chat-error-card")).toContainElement(quote);
+
+    fireEvent.click(screen.getByTestId("chat-error-resend"));
+    rerender(wrap({ canResend: () => false }));
+    expect(screen.getByTestId("chat-error-retry-text")).toHaveTextContent(RETRY);
+  });
+
+  it("does not quote the text on a card that offers nothing (an older card, after a reload)", () => {
+    renderCard(interrupted(), { canResend: () => false });
+
+    expect(screen.queryByTestId("chat-error-retry-text")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-error-card")).not.toHaveTextContent(RETRY);
+  });
+
+  it("keeps the button at the right edge even when the link row wraps (narrow phone, large text)", () => {
+    renderCard(unreachable());
+
+    // justify-between alone puts a wrapped button at the LEFT of its new line.
+    expect(screen.getByTestId("chat-error-resend").className).toContain("ml-auto");
   });
 
   it("[10] session_reset with detail model_missing shows the translated sentence, not the code word", () => {
