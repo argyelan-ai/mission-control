@@ -587,7 +587,18 @@ class TaskRunnerService:
            (skipped in subagent-dispatch mode)
 
         Escalation: create an approval so the operator can decide.
+
+        Neither check runs for a card the system mode (HALTED / DRAINING) or
+        the MC update drain holds, nor for one ACK timeout (+ margin) after
+        the hold ends (RedisKeys.dispatch_system_hold).
         """
+        # Read once per pass. Fail-open like push dispatch: no mode → active.
+        from app.services import update_drain
+        from app.services.operations import get_system_mode, system_mode_refusal
+
+        system_mode = await get_system_mode()
+        update_drained = (await update_drain.current(session)).active
+
         result = await session.exec(
             select(Task).where(
                 Task.status == "inbox",
@@ -608,6 +619,33 @@ class TaskRunnerService:
             if not agent:
                 continue
 
+            redis = await get_redis()
+
+            # rule: R-system-mode-holds-poll - a card the system holds is not "not ACKed"
+            # The system mode or the MC update drain holds this card: the
+            # poll, push dispatch, the undispatched-card watcher and pull
+            # dispatch all refuse to hand it out. Not ACKed / never
+            # delivered is then the system's doing, not the agent's: no
+            # silent retry (a new attempt the poll would hold as well), no
+            # operator escalation, no model-wait return. The key keeps both
+            # ladders waiting one ACK timeout (+ margin) after the hold ends,
+            # so the first poll after it delivers the card before a ladder
+            # reads its old dispatched_at. A genuinely lost card still
+            # escalates once that window has run out.
+            hold_key = RedisKeys.dispatch_system_hold(str(task.id))
+            if update_drained or system_mode_refusal(system_mode, task):
+                await redis.set(
+                    hold_key, "1",
+                    ex=int((_get_ack_timeout_minutes(agent) + RESUME_SUPPRESS_MARGIN_MINUTES) * 60),
+                )
+                continue
+            if await redis.get(hold_key):
+                logger.debug(
+                    "ACK/pending ladder waits after a system hold: '%s' (%s)",
+                    task.title, agent.name,
+                )
+                continue
+
             # Host-based FreeCode-Bridge agents: own stale check.
             # Do NOT apply to Docker cli-bridge agents — they have their
             # own turn-state check in poll.sh (lib/turn-state.sh).
@@ -624,8 +662,6 @@ class TaskRunnerService:
             # Skip non-worker agents (e.g. Planner)
             if Scope.TASKS_WRITE not in get_agent_effective_scopes(agent):
                 continue
-
-            redis = await get_redis()
 
             # Model-wait rule (follow-up to ADR-097): a delivered, unclaimed
             # task whose agent's model does not answer goes back to the inbox

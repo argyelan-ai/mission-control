@@ -2351,6 +2351,13 @@ class TaskMonitorMixin:
         (host) are handled via dispatch.auto_dispatch_task (see TODO below).
         """
         from app.services.dispatch import _build_dispatch_message
+        from app.services.operations import get_system_mode, system_mode_refusal
+
+        # System mode, read once per pass. core.py runs this watcher only
+        # when the system is not HALTED and no MC update drains it; DRAINING
+        # still reaches here. The cli-bridge branch below never asks
+        # check_dispatch_allowed, so the rule is asked here for every branch.
+        system_mode = await get_system_mode()
 
         # Grace: don't touch tasks created/promoted in the last 5s.
         # Prevents a race with auto_dispatch_task (background task after promote).
@@ -2379,6 +2386,15 @@ class TaskMonitorMixin:
                 continue
 
             if task.assigned_agent_id in dispatched_agents:
+                continue
+
+            # rule: R-system-mode-holds-poll - the watcher leaves a card the system holds untouched
+            # A card the system mode holds stays untouched: no workspace
+            # preparation, no dispatched_at for the ACK ladder to count, no
+            # "Nachdispatcht" note for auto_dispatch_task to refuse anyway.
+            # The first pass after the hold picks it up. Agent rules (paused)
+            # stay out (ADR-089 Nachtrag 2026-10-20 (b)).
+            if system_mode_refusal(system_mode, task):
                 continue
 
             agent = await session.get(Agent, task.assigned_agent_id)

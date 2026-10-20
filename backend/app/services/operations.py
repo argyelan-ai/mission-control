@@ -123,11 +123,15 @@ def system_mode_refusal(system_mode: str, task: Task) -> str | None:
     continuation flows (subtask, review hand-off, rework).
 
     One rule for every path that hands a card out: push dispatch
-    (check_dispatch_allowed below) and the agent's own poll claim
-    (routers/agents.py agent_poll), which does not go through
-    check_dispatch_allowed. Agent rules (paused, runtime readiness) stay
-    out of here: they differ per path.
+    (check_dispatch_allowed below) and the paths that do not go through
+    check_dispatch_allowed — the agent's own poll claim (routers/agents.py
+    agent_poll), the undispatched-card watcher (watchdog/task_monitor.py)
+    and pull dispatch (routers/agent_task_status.py get_next_task). The
+    ACK and pending ladders (task_runner._check_dispatch_ack) skip a card
+    it holds. Agent rules (paused, runtime readiness) stay out of here:
+    they differ per path.
     """
+    # rule: R-system-mode-holds-poll - one system-mode rule for every path that hands a card out
     if system_mode == "halted":
         return SYSTEM_HALTED_REASON
     if system_mode == "draining" and not is_continuation_flow(task):
