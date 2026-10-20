@@ -14,7 +14,7 @@ many more tasks wait in the agent's inbox. A harness whose tasks run INSIDE the
 chat (Claude Code, native omp) answers ``applies: false`` — its chat already
 shows the task.
 
-Folder layout and header shapes follow the live Sparky tree of 20.10.2026
+Folder layout and header shapes follow the live sessions tree of an omp agent of 20.10.2026
 (ids made up).
 """
 from __future__ import annotations
@@ -96,7 +96,7 @@ def acp_driver(monkeypatch):
 
 async def _setup(make_agent, make_board, make_task, tmp_path, monkeypatch, *, harness="omp"):
     board = await make_board(slug=f"b-{os.urandom(3).hex()}")
-    agent = await make_agent(name="Sparky", slug="sparky", agent_runtime="cli-bridge", harness=harness)
+    agent = await make_agent(name="Alpha", slug="alpha", agent_runtime="cli-bridge", harness=harness)
     now = datetime.now(timezone.utc)
     task = await make_task(board.id, title="Port the checklist", status="in_progress",
                            assigned_agent_id=agent.id, dispatched_at=now - timedelta(minutes=3))

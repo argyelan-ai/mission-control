@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The thinking phase is visible in the chat (operator finding 20.10.2026).
 
-Live: Sparky (omp over ACP, DeepSeek-V4.1-Flash) thought for minutes —
+Live: an omp agent over ACP with a reasoning model thought for minutes —
 ~5 900 tokens of reasoning — and the chat showed nothing that said so. omp
 DID stream ``agent_thought_chunk``; the mapper wrote each chunk as an
 ``acp-preview`` line that looked exactly like answer text (so the chat showed
