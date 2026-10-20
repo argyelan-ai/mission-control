@@ -39,6 +39,7 @@ import { MemberRowContainer } from "./MemberRow";
 import { ActionBar } from "./ActionBar";
 import { PhaseBar } from "./PhaseBar";
 import { shortModelTitle } from "./modelTitle";
+import { crashLikelyOutOfMemory, crashReasonKey, formatCrashTime } from "./crashFormat";
 import { useAppStore } from "@/lib/store";
 import { headOnBoxes, useHeadOccupancy } from "@/components/heads/HeadOccupancy";
 import { useHeadPairsForLabels } from "@/components/heads/HeadStateCard";
@@ -62,6 +63,9 @@ export type StageStatus = "serving" | "quiet" | "switching" | "failed";
 
 export function deriveStageStatus(rt: Runtime, live?: RuntimeLiveStatus): StageStatus {
   if (live?.status === "switching") return "switching";
+  // Engine death / crash-loop stop (ADR-096 §11): the watcher's verdict in
+  // its existing status field — it holds across every later tick.
+  if (live?.status === "failed") return "failed";
   if ((rt.state ?? "unknown") === "failed") return "failed";
   if (live?.reachable === false && (live?.consecutive_failures ?? 0) >= 3) return "failed";
   return "serving";
@@ -139,6 +143,29 @@ export function Stage({
   });
 
   const status = useMemo(() => deriveStageStatus(runtime, live), [runtime, live]);
+  // Engine death (ADR-096 §11): reason, box and time on the card instead of a
+  // bare "unreachable". The watcher writes them into the live snapshot.
+  const crash = status === "failed" && live?.status === "failed" && live.reason_code ? live : null;
+  const crashTime = crash ? formatCrashTime(crash.at, locale) : null;
+  const crashReasonText = crash
+    ? t(`crashReason.${crashReasonKey(crash.reason_code, crash.exit_code)}`, { code: crash.exit_code ?? "" })
+    : null;
+  // Exit 137 (SIGKILL): "…, probably out of memory" — a hint, not a reason.
+  const crashReason =
+    crash && crashReasonText && crashLikelyOutOfMemory(crash.reason_code, crash.exit_code)
+      ? t("crashReasonLikelyOom", { reason: crashReasonText })
+      : crashReasonText;
+  const crashWhere = crash?.box ? t("crashOnBox", { box: crash.box }) : "";
+  const crashFollowUp = crash
+    ? [
+        t(crash.autostart ? "crashAutostartOn" : "crashAutostartOff"),
+        (crash.tasks_commented ?? 0) > 0 ? t("crashTasksCommented", { count: crash.tasks_commented ?? 0 }) : null,
+        // A duo head death can leave the worker rank holding box 2's memory.
+        members.length > 1 ? t("crashDuoWorker") : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : null;
   const idleSeconds = pulse?.available ? pulse?.idle_seconds ?? null : null;
   const flowKind = flowKindFor(status, idleSeconds);
   const isDuo = members.length > 1;
@@ -317,7 +344,9 @@ export function Stage({
             style={{ fontSize: "10px", letterSpacing: "0.08em", color: C.textMuted }}
           >
             {status === "failed"
-              ? t("cornerUnreachable")
+              ? crash
+                ? t("cornerCrashed")
+                : t("cornerUnreachable")
               : status === "switching"
                 ? t("cornerSwitching")
                 : uptime
@@ -328,15 +357,31 @@ export function Stage({
           </span>
         </div>
         <HeatStrip pulse={pulse} dead={status === "failed"} />
-        <div className="text-xs mt-2 pb-4 font-mono truncate" style={{ color: status === "failed" ? STATUS_TEXT.error : C.textMuted }} data-testid="stage-now-line">
+        {/* A crash line wraps on a phone: the reason is its point and must
+            not be cut after "von aussen beendet (Exit…". */}
+        <div
+          className={`text-xs mt-2 font-mono ${crash ? "break-words" : "truncate pb-4"}`}
+          style={{ color: status === "failed" ? STATUS_TEXT.error : C.textMuted }}
+          data-testid="stage-now-line"
+          title={crash?.log_line ?? undefined}
+        >
           {status === "switching"
             ? t("switchingTo", { model: shortModelTitle(runtime.display_name) })
-            : status === "failed"
+            : crash
+              ? crashTime
+                ? t("crashedLine", { time: crashTime, where: crashWhere, reason: crashReason ?? "" })
+                : t("crashedLineNoTime", { where: crashWhere, reason: crashReason ?? "" })
+              : status === "failed"
               ? t("engineUnreachable")
               : nowLineParts.length > 0
                 ? nowLineParts.join(" · ")
                 : `${typeLabel(runtime.runtime_type)}${runtime.model_identifier ? ` · ${runtime.model_identifier}` : ""}`}
         </div>
+        {crash && (
+          <div className="text-xs mt-1 pb-4" style={{ color: C.textMuted }} data-testid="stage-crash-followup">
+            {crashFollowUp}
+          </div>
+        )}
       </div>
 
       <div className="relative" style={{ zIndex: 2 }}>

@@ -3457,7 +3457,26 @@
       "cornerUptimeHours": "up {h} h {m}",
       "cornerUptimeMinutes": "up {m} min",
       "restartHint": "Restarts the model running on this box.",
-      "restartMultiNodeHint": "Multi-node runtime: both boxes are stopped and started together."
+      "restartMultiNodeHint": "Multi-node runtime: both boxes are stopped and started together.",
+      "cornerCrashed": "down",
+      "crashedLine": "Down since {time}{where} · {reason}",
+      "crashedLineNoTime": "Down{where} · {reason}",
+      "crashOnBox": " on {box}",
+      "crashAutostartOff": "Box autostart off — will not restart by itself",
+      "crashAutostartOn": "Box autostart on — MC may try a restart",
+      "crashTasksCommented": "{count, plural, one {# running task waits (comment with reason)} other {# running tasks wait (comment with reason)}}",
+      "crashDuoWorker": "The worker on the second box may still be running — Stop clears both boxes",
+      "crashReasonLikelyOom": "{reason}, probably out of memory",
+      "crashReason": {
+        "guard": "stopped by the recipe's memory guard",
+        "oom": "out of memory (OOM)",
+        "kernel_oom": "kernel ran out of memory (OOM)",
+        "exit": "engine process is gone",
+        "exitCode": "engine exited (exit {code})",
+        "member_down": "a member box went down",
+        "crash_loop": "restart loop, stopped by MC",
+        "unknown": "reason unknown"
+      }
     },
     "cockpit": {
       "modeNoDevice": "No node agent is paired with this box — the mode list is unavailable.",

@@ -3457,7 +3457,26 @@
       "cornerUptimeHours": "seit {h} h {m}",
       "cornerUptimeMinutes": "seit {m} min",
       "restartHint": "Startet das laufende Modell auf dieser Box neu.",
-      "restartMultiNodeHint": "Verbund: beide Boxen werden zusammen gestoppt und neu gestartet."
+      "restartMultiNodeHint": "Verbund: beide Boxen werden zusammen gestoppt und neu gestartet.",
+      "cornerCrashed": "ausgefallen",
+      "crashedLine": "Ausgefallen seit {time}{where} · {reason}",
+      "crashedLineNoTime": "Ausgefallen{where} · {reason}",
+      "crashOnBox": " auf {box}",
+      "crashAutostartOff": "Box-Autostart aus — startet nicht von selbst neu",
+      "crashAutostartOn": "Box-Autostart an — MC darf einen Neustart versuchen",
+      "crashTasksCommented": "{count, plural, one {# laufender Task wartet (Kommentar mit Grund)} other {# laufende Tasks warten (Kommentar mit Grund)}}",
+      "crashDuoWorker": "Der Worker auf der zweiten Box läuft evtl. noch — Stoppen räumt beide Boxen",
+      "crashReasonLikelyOom": "{reason}, vermutlich Speicher voll",
+      "crashReason": {
+        "guard": "vom Speicherwächter des Rezepts beendet",
+        "oom": "kein Speicher mehr (OOM)",
+        "kernel_oom": "Kernel: kein Speicher mehr (OOM)",
+        "exit": "Engine-Prozess läuft nicht mehr",
+        "exitCode": "Engine beendet (Exit {code})",
+        "member_down": "Mitglied-Box ausgefallen",
+        "crash_loop": "Neustart-Schleife, von MC angehalten",
+        "unknown": "Grund unbekannt"
+      }
     },
     "cockpit": {
       "modeNoDevice": "Kein Node-Agent mit dieser Box gekoppelt — die Modus-Liste ist nicht verfügbar.",

@@ -2205,7 +2205,37 @@ export interface RuntimeLiveStatus {
    *  der DB-Zeile in jeden Live-Status-Eintrag gespiegelt, damit die Karte es
    *  ohne einen zweiten Request hat. */
   serving_since?: string | null;
+  /** ADR-096 §11 engine death — in the watcher's EXISTING fields: `status`
+   *  is "failed" and `reason` carries the German sentence (as the crash-loop
+   *  stop writes it), plus the fields below. Present while the row is down
+   *  after a death; the first answering probe, a start or a stop clears it. */
+  reason?: string | null;
+  reason_en?: string | null;
+  reason_code?: RuntimeDeathReason | string | null;
+  /** Box the engine died on (display name). */
+  box?: string | null;
+  /** When it died: Docker's own finish time when known, else detection time. */
+  at?: string | null;
+  exit_code?: number | null;
+  /** Last error/marker line of the current boot (tooltip on the card). */
+  log_line?: string | null;
+  /** Whether the box autostart may try a restart (hosts.autostart_enabled). */
+  autostart?: boolean | null;
+  /** Tasks in progress that got a system comment with the reason (work stays). */
+  tasks_commented?: number | null;
+  /** The model the port answered with last (carried through an outage). */
+  last_served_model?: string | null;
 }
+
+/** ADR-096 §11.3 reason codes. */
+export type RuntimeDeathReason =
+  | "guard"
+  | "oom"
+  | "kernel_oom"
+  | "exit"
+  | "member_down"
+  | "crash_loop"
+  | "unknown";
 
 export interface RuntimesLiveResponse {
   live: Record<string, RuntimeLiveStatus>;

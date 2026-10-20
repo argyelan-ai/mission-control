@@ -2034,6 +2034,12 @@ async def _free_exclusive_targets(
     stopped: list[str] = []
     for other, other_dict, other_host in live:
         logger.info("exclusive: stopping %s to free the box for %s", other.slug, slug)
+        # ADR-096 §11.1: "switched away" — durable, BEFORE the stop (the
+        # watcher may probe mid-stop), lifted only by a start of ``other``.
+        # The 1 h eviction marker below keeps its own job (auto-recovery).
+        await runtime_grace.mark_stop_intent(
+            other.slug, runtime_grace.INTENT_SWITCHED_AWAY, by=slug
+        )
         if _is_multi_box_instance(other) and (other.stop_command or "").strip():
             # Ein Verbund lebt auf mehreren Boxen; nur sein eigener Stopp-Befehl
             # kennt den Worker (ADR-077: das Rezept orchestriert seine zweite
@@ -2049,7 +2055,10 @@ async def _free_exclusive_targets(
         elif other.runtime_type == SSH_PROCESS_TYPE:
             result = await stop_ssh_process(other_dict, host=other_host)
         else:
-            result = await stop_runtime(other_dict, host=other_host)
+            result = await stop_runtime(
+                other_dict, host=other_host,
+                stop_intent=runtime_grace.INTENT_SWITCHED_AWAY, stop_by=slug,
+            )
 
         if not result.get("ok"):
             return {
@@ -2213,6 +2222,11 @@ async def start_runtime(
         # Someone chose THIS runtime again — a switch that stopped it earlier
         # no longer speaks for the operator.
         await runtime_grace.clear_evicted(slug)
+        # ADR-096 §11.1: the one place a stop intent ends — this runtime's
+        # own start. (Auto-recovery never reaches here with an intent set:
+        # the watcher refuses to recover a runtime MC stopped on purpose.)
+        await runtime_grace.clear_stop_intent(slug)
+    await runtime_grace.clear_death_record(slug)
 
     if is_docker or is_ssh_process:
         already = await already_running(runtime, host=host)
@@ -2228,6 +2242,16 @@ async def start_runtime(
             return {"ok": False, "message": exclusive["message"]}
 
     if is_docker or is_ssh_process:
+        # ADR-096 §11.2: from here on this row is the port's wanted holder
+        # until it answers — the grace marker below ends after 20 min, this
+        # one does not, so a start that never comes up ends in the plain
+        # alarm instead of silence. Not cleared when the call fails: the old
+        # engine is already gone then, and the dark port is an outage.
+        # It also closes the port's previous outage (one death / one alarm
+        # each): this start gets its own alarm if it never comes up.
+        await runtime_grace.mark_start_pending(
+            slug, grace_source, endpoint=runtime.get("endpoint")
+        )
         await runtime_grace.mark_switching(
             slug, runtime_grace.PHASE_LAUNCHING, grace_source
         )
@@ -2626,7 +2650,13 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
     return {"ok": False, "message": f"Unbekannter runtime_type: {runtime_type}"}
 
 
-async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
+async def stop_runtime(
+    runtime: dict,
+    *,
+    host: ResolvedHost | None = None,
+    stop_intent: str = runtime_grace.INTENT_OPERATOR_STOP,
+    stop_by: str | None = None,
+) -> dict:
     """Stops a runtime.
 
     vllm_docker / llamacpp_docker: docker stop via SSH
@@ -2636,6 +2666,16 @@ async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
     """
     runtime_type = runtime["runtime_type"]
     host = host or resolve_host_from_runtime_fields(runtime)
+    # ADR-096 §11.1: every stop MC issues (button, schedule, idle unload,
+    # eviction, restart) leaves a durable stop intent — the watcher never
+    # reads the silence that follows as an engine death, and auto-recovery
+    # never undoes it. Set BEFORE the stop so the first failed probe already
+    # sees it; only this runtime's own next start lifts it. A stop is also
+    # the operator's acknowledgement of an earlier death on the card.
+    # Registry dicts carry the slug as "id" (Runtime.to_registry_dict) —
+    # _grace_slug is the key every other grace marker uses.
+    await runtime_grace.mark_stop_intent(_grace_slug(runtime), stop_intent, by=stop_by)
+    await runtime_grace.clear_death_record(_grace_slug(runtime))
 
     if runtime_type == "lmstudio":
         lms_id = runtime.get("lms_identifier", "")
@@ -2749,7 +2789,16 @@ async def restart_runtime(
     """
     slug = _grace_slug(runtime)
     is_docker = runtime.get("runtime_type") in DOCKER_ENGINE_TYPES
+    if grace_source != runtime_grace.SOURCE_AUTO_RECOVERY:
+        # A restart is this runtime's own start (ADR-096 §11.1). The stop+start
+        # paths below set and lift the intent themselves; `docker restart`
+        # never passes stop_runtime, so it is lifted here.
+        await runtime_grace.clear_stop_intent(slug)
+    await runtime_grace.clear_death_record(slug)
     if is_docker:
+        await runtime_grace.mark_start_pending(
+            slug, grace_source, endpoint=runtime.get("endpoint")
+        )
         await runtime_grace.mark_switching(
             slug, runtime_grace.PHASE_LAUNCHING, grace_source
         )

@@ -498,7 +498,12 @@ eviction marker expires after an hour (`EVICTED_TTL`); a runtime that was
 switched away therefore also gets a durable intent "not running — switched
 away", **without TTL**, cleared only by its own next start. A transition to
 down **without** an intent is an engine death. Slot rows (ADR-078) report
-through their recipe row only, as today.
+through their recipe row only, as today. "Its own next start" includes a
+start MC only observes (`start.sh` by hand after a stop via MC, a restart-policy
+container after a box reboot): the row's own anchor runs and the port answers,
+at least 10 minutes after the stop was asked (`STOP_INTENT_SETTLE`; an engine
+still answering while its stop runs is not a start). A neighbour's answer on
+a shared port never lifts it.
 
 11.2 **Detect per runtime, not per endpoint.** On the Sparks several rows
 share one endpoint (`:8000`); a dead engine makes all of them unreachable at
@@ -508,7 +513,23 @@ process alive): only a row whose last healthy probe was its **own** answer can
 die. A row whose anchor never ran (the GLM row on 2026-10-19) gets no death,
 no notification and no restart — whether or not its eviction marker has
 expired. One engine death produces exactly one death. The slot row follows its
-recipe row (11.1).
+recipe row (11.1). Whether the last answer was a row's own is remembered
+durably (days), not only in the live snapshot (3 probe intervals), so an
+outage that began while the backend was down is still judged per row. A
+matching model id counts as own only when no other row on the port carries
+the same id; otherwise the anchor decides.
+
+The plain `runtime.unreachable` (no death declared) fires once per endpoint
+outage and stays quiet only for silence MC knows is planned: the row, or the
+port's holder, was stopped on purpose. The holder is the row whose last
+answer was its own, **or a row MC launched that has not answered yet**
+(pending start, no TTL tied to the grace): a switch whose new recipe never
+comes up (it hangs or dies while loading) ends in that one alarm when the
+20-minute grace runs out, as before this section. When nothing is known about
+the holder, the alarm fires. Every start MC issues opens a new window on the
+port: the one-death / one-alarm keys of the outage before it are closed, so
+"Restart now" or "Other model" on a dead card (including an auto-recovery
+start) that never comes up ends in its own one alarm instead of silence.
 
 **Detection target: ≤ 2 probe intervals** after the death (operator
 requirement, 2026-10-19; today up to 3 intervals plus the tick offset, live
@@ -544,7 +565,9 @@ start; rows sharing the endpoint add none) with a reason sentence in DE/EN
 naming the box ("<runtime> stopped on <box>: the recipe's memory guard ended
 the engine at 21:14"); the Runtimes card shows the reason, the time and a link
 to the last log lines; the `runtime.unreachable` event carries the cause and
-fires once, for the dead row.
+fires once, for the dead row. Recipe rows are probed before slot rows in each
+watcher tick, so a death declared at the threshold (timeout path) is never
+preceded by the slot row's plain alarm for the same outage.
 
 11.5 **Work does not fail silently**: agents bound to a dead runtime keep
 their queued work; delivery waits while the runtime is down (relates to open

@@ -221,6 +221,8 @@ function pickBest(runtimes: Runtime[]): Runtime {
 //   2. A runtime in an active DB state (ready/warming/starting).
 //   3. A runtime the watcher reports as `reachable === true` even without an
 //      active state (e.g. hosted APIs that don't track lifecycle state).
+//   4. A runtime whose engine died (ADR-096 §11: `status === "failed"` with a
+//      `reason_code` — the watcher's death record, not the 3-probe heuristic).
 // Ties within a tier are broken by state weight (ready < warming < starting),
 // then `ui_order`. Returns null when nothing is active — the stage renders an
 // OFF placeholder.
@@ -244,6 +246,14 @@ export function pickServing(
 
   const reachable = candidates.filter((rt) => liveFor(rt)?.reachable === true);
   if (reachable.length > 0) return pickBest(reachable);
+
+  // 4. Engine death: nothing serves, but the watcher says THIS runtime was
+  //    serving and died without a planned stop. The box is not free — it
+  //    shows the dead engine with its reason until a start or a stop.
+  const crashed = candidates.filter(
+    (rt) => liveFor(rt)?.status === "failed" && Boolean(liveFor(rt)?.reason_code),
+  );
+  if (crashed.length > 0) return pickBest(crashed);
 
   return null;
 }

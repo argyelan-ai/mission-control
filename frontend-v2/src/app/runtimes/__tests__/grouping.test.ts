@@ -222,6 +222,25 @@ describe("pickServing", () => {
   it("returns null for an idle host", () => {
     expect(pickServing({ host: makeHost({}), runtimes: [makeRuntime({ state: "stopped" })] })).toBeNull();
   });
+  // Engine death (ADR-096 §11): the box is NOT free — the dead engine keeps
+  // the stage until a start or a stop, so its reason is visible.
+  it("shows a crashed runtime instead of an empty box", () => {
+    const dead = makeRuntime({ slug: "d", state: "stopped" });
+    const other = makeRuntime({ slug: "o", state: "stopped" });
+    expect(pickServing({ host: makeHost({}), runtimes: [other, dead] },
+      { d: live({ status: "failed", reason_code: "exit" }) })?.slug).toBe("d");
+  });
+  it("a failed status without a death record does not hold the stage", () => {
+    const dead = makeRuntime({ slug: "d", state: "stopped" });
+    expect(pickServing({ host: makeHost({}), runtimes: [dead] },
+      { d: live({ status: "failed" }) })).toBeNull();
+  });
+  it("a serving runtime still beats a crashed one", () => {
+    const dead = makeRuntime({ slug: "d", state: "stopped" });
+    const up = makeRuntime({ slug: "u", state: "ready" });
+    expect(pickServing({ host: makeHost({}), runtimes: [dead, up] },
+      { d: live({ status: "failed", reason_code: "exit" }) })?.slug).toBe("u");
+  });
 });
 
 // ── Slot-Runtime (ADR-078) ────────────────────────────────────────────────
