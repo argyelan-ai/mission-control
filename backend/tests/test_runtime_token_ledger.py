@@ -42,7 +42,8 @@ tensorfold_health:pool_tokens 1099776
 
 # TensorFold's native (Zig) server (the DeepSeek-V4.1-Flash two-Spark recipe):
 # lines of a live scrape (20.10.2026), with one reply in flight. No
-# tensorfold_health:* family, no prompt cache counter (that build keeps none).
+# tensorfold_health:* family and no prompt cache counter — although that box
+# does reuse prompt states (a known gap, see the ledger's module docstring).
 _TENSORFOLD_NATIVE = """
 # TYPE tensorfold:generation_tokens_running gauge
 tensorfold:generation_tokens_running 5904
@@ -107,8 +108,9 @@ def test_parse_tensorfold_native_books_finished_tokens_only():
 
 
 def test_parse_tensorfold_native_prompt_cache_counter_is_the_cached_column():
-    # Native builds that keep prompt states export it (engine source,
-    # server/metrics.zig: only "if (keeps)").
+    # A newer upstream native server exports it when it keeps prompt states
+    # (server/metrics.zig: "if (keeps)"); the build on the DeepSeek box does
+    # not yet, so there the column stays empty until an engine update.
     text = _TENSORFOLD_NATIVE + "tensorfold:prompt_tokens_cached_total 4096\n"
     assert parse_box_counters(text, "tensorfold") == _c(7957562, 4096, 216401)
 

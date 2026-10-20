@@ -6,14 +6,16 @@ scrapes the Prometheus ``/metrics`` endpoint of every host that carries a slot
 runtime (``runtimes.is_slot=True`` with a bound ``host_id`` — the fixed box
 endpoint, e.g. a Duo's Head box), reads the engine's generation-token metric
 (vLLM: ``vllm:generation_tokens_total``, a cumulative counter — turns the
-delta between two probes into tokens/second; TensorFold: the GLM build's
-``tensorfold_health:completion_tokens_total`` or, on the native server
-without that family, ``tensorfold:generation_tokens_total`` +
-``tensorfold:generation_tokens_running``; SGLang fallback:
-``sglang:generation_tokens_total``, also a counter, same delta math — or
+delta between two probes into tokens/second; TensorFold's GLM build:
+``tensorfold_health:completion_tokens_total``, same delta math; SGLang
+fallback: ``sglang:generation_tokens_total``, also a counter — or
 ``sglang:gen_throughput``, which is **not** a counter but a gauge already
 reporting tokens/second, confirmed live against a running SGLang box
 2026-09-06: its value is used as the tok/s reading directly, no delta).
+TensorFold's native server (no ``tensorfold_health:*`` family) has no
+/metrics figure whose delta is the speed; for it the poller asks the engine
+for its own rate, ``GET /health`` → ``live.decode_tokens_per_second``
+(see ``_METRIC_CANDIDATES``).
 A Duo is scraped on its Head box only: the second box runs no API, every
 reply — and so every counted token — leaves through the Head.
 
@@ -30,14 +32,12 @@ Design choices worth calling out:
     second time — the spec is explicit ("Nur pollen, wenn die hosts-Runtime
     reachable"). An unreachable host is skipped outright: no HTTP call, no
     ring write, meta flips to ``available: false``.
-  - **First probe after a gap always reports 0 tok/s.** There is no prior
-    sample to diff against (or the engine changed under us), so the honest
-    answer is "no rate yet", not a guess.
-  - **A negative delta reports 0** rather than negative throughput, and the
-    higher count is held for one probe (``advance_rate``): an engine restart
-    then rates from the new count on, while a probe that only hit
-    TensorFold's handover gap (a finished reply between its two figures)
-    is averaged with the next one instead of leaving a dip and a spike.
+  - **First counter probe after a gap always reports 0 tok/s.** There is no
+    prior sample to diff against (or the counter changed under us), so the
+    honest answer is "no rate yet", not a guess. A rate (a gauge, or the
+    engine's own figure) is real from the first probe.
+  - **A negative delta reports 0** rather than negative throughput — an
+    engine restart; the new count is the next baseline (``advance_rate``).
   - **Errors are swallowed, never raised** — one Prometheus scrape failing
     must never take the polling loop with it, and must never surface as a
     5xx on the card. Logging is throttled (one warning per host per outage,
@@ -53,6 +53,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 import time
 from datetime import datetime, timezone
@@ -75,7 +76,9 @@ SCRAPE_TIMEOUT = 3.0  # seconds
 
 # Metric families to look for, in priority order. Each entry is
 # (engine, metric_names, kind) — kind is "counter" (cumulative, needs the
-# delta-over-time math) or "rate" (already tokens/second, used as-is).
+# delta-over-time math), "rate" (already tokens/second, used as-is) or
+# "engine_rate" (the names only identify the build; tokens/second come
+# from the engine's GET /health, see ``engine_rate_from_health``).
 # The first entry whose metric names ALL have at least one matching series
 # in the scraped text wins; every series of every name is summed (a
 # multi-model deployment can expose a metric with several label sets).
@@ -94,17 +97,22 @@ _METRIC_CANDIDATES: tuple[tuple[str, tuple[str, ...], str], ...] = (
     # tokens as they stream, so its delta is the real speed.
     ("tensorfold", ("tensorfold_health:completion_tokens_total",), "counter"),
     # TensorFold's native (Zig) server (e.g. the DeepSeek-V4.1-Flash
-    # two-Spark recipe, live 20.10.2026) has no tensorfold_health:* family.
-    # It does have ``tensorfold:generation_tokens_running`` ("Generated tokens
-    # held by live streams", a gauge). When a reply ends its tokens move from
-    # that gauge into the finished counter, so finished + running grows
-    # steadily while replies stream and its delta is the real speed. Never
-    # the finished counter alone: that is the spike problem above.
-    (
-        "tensorfold",
-        ("tensorfold:generation_tokens_total", "tensorfold:generation_tokens_running"),
-        "counter",
-    ),
+    # two-Spark recipe, live 20.10.2026) has no tensorfold_health:* family —
+    # ``tensorfold:generation_tokens_running`` ("Generated tokens held by live
+    # streams", a gauge) is its tell. Its speed is NOT read from /metrics:
+    # the finished counter jumps (above), and finished + running is steady
+    # only if a finished reply leaves the gauge and enters the counter at
+    # the same moment. In the engine it does not (TensorFold lane_host.zig +
+    # server/chat.zig): the HTTP thread adds the reply to the counter when
+    # it leaves; the gauge is recomputed by noteLive(), which runs only
+    # after admitOne() has prefilled the next queued request. A box with
+    # every lane busy and a request waiting counts the reply twice for a
+    # whole prompt pass — a spike of reply/interval (1 000+ tok/s), then a 0
+    # — and the other order dips first, then spikes. "engine_rate": the
+    # engine's own decode rate, GET /health → live.decode_tokens_per_second
+    # (tokens it delivered in its last 2 s, halved; noteDecoded), which has
+    # no handover in it.
+    ("tensorfold", ("tensorfold:generation_tokens_running",), "engine_rate"),
     ("sglang", ("sglang:generation_tokens_total",), "counter"),
     ("sglang", ("sglang:gen_throughput",), "rate"),
 )
@@ -113,10 +121,10 @@ _METRIC_CANDIDATES: tuple[tuple[str, tuple[str, ...], str], ...] = (
 class TokenReading(NamedTuple):
     """One scrape's generated-token figure.
 
-    ``source`` names the metric(s) it came from. Two readings are only diffed
-    when their sources match: one engine can have several (the GLM build's
-    health counter and the native build's pair are both "tensorfold", but
-    the numbers do not compare)."""
+    ``source`` names the metric(s) it came from. Two counter readings are
+    only diffed when their sources match: one engine can have several
+    builds whose numbers do not compare. For kind ``engine_rate`` the value
+    is not used (the speed comes from GET /health)."""
 
     engine: str
     value: float
@@ -158,8 +166,9 @@ def parse_token_counter(text: str) -> TokenReading | None:
     """The first matching entry of ``_METRIC_CANDIDATES`` in ``text``.
 
     Returns a ``TokenReading`` — ``kind`` is ``"counter"`` (caller must diff
-    against the previous sample) or ``"rate"`` (the value already IS
-    tokens/second) — or ``None`` if no entry is complete (engine not
+    against the previous sample), ``"rate"`` (the value already IS
+    tokens/second) or ``"engine_rate"`` (caller reads the rate from the
+    engine's GET /health) — or ``None`` if no entry is complete (engine not
     exposing generation metrics, or the scrape returned something unrelated).
     """
     lines = [
@@ -175,42 +184,40 @@ def parse_token_counter(text: str) -> TokenReading | None:
 
 def advance_rate(
     prev: dict | None, *, source: str, counter: float, now: float
-) -> tuple[float, dict, float | None]:
-    """One counter probe → ``(tok/s, sample to store, smooth_at)``.
+) -> tuple[float, dict]:
+    """One counter probe → ``(tok/s, sample to store)``.
 
     ``prev`` is the stored sample of the last probe (None if there is none).
-
-      - No previous sample, or one from another source → 0 (no honest rate
-        yet). A sample written before ``source`` existed counts as another
-        source: one 0 point after the update.
-      - Counter went down → 0 for this probe, and the higher previous count
-        is HELD for one probe. Two causes look alike here: the engine
-        restarted (the counter starts over), or the probe hit a handover gap
-        — TensorFold reads each /metrics family on its own, not as one
-        snapshot, so a scrape can land after a finished reply left
-        ``generation_tokens_running`` but before it reached
-        ``generation_tokens_total``. That scrape is short by the whole
-        reply (thousands of tokens); the next one is whole again.
-      - Next probe at or above the held count → it was a gap: the rate is
-        the average since the held probe, and ``smooth_at`` (the time of
-        the 0 point) tells the caller to give that point the same rate (no
-        dip, no spike). Still below → it was a restart: rate from the lower
-        count on.
+    No previous sample, or one from another source → 0 (no honest rate
+    yet); a sample written before ``source`` existed counts as another
+    source: one 0 point after the update. Counter went down (engine
+    restart) → 0, and the new count is the next baseline. Only for counters
+    that move steadily — never for a sum of figures the engine updates at
+    different moments (see the native TensorFold entry in
+    ``_METRIC_CANDIDATES``).
     """
     sample: dict = {"t": now, "counter": counter, "source": source}
     if prev is None or prev.get("source") != source:
-        return 0.0, sample, None
-    held = prev.get("held")
-    if held is not None and counter >= held["counter"] and now > held["t"]:
-        return round((counter - held["counter"]) / (now - held["t"]), 2), sample, prev["t"]
+        return 0.0, sample
     dt = now - prev["t"]
-    if dt <= 0:
-        return 0.0, sample, None
     delta = counter - prev["counter"]
-    if delta < 0:
-        sample["held"] = {"t": prev["t"], "counter": prev["counter"]}
-        return 0.0, sample, None
-    return round(delta / dt, 2), sample, None
+    if dt <= 0 or delta < 0:
+        return 0.0, sample
+    return round(delta / dt, 2), sample
+
+
+def engine_rate_from_health(doc: object) -> float | None:
+    """TensorFold native server's own decode rate from its GET /health body
+    (``live.decode_tokens_per_second``, server/live.zig), or None when the
+    body has none — a server with API keys on answers only
+    ``{"status": "ok"}`` — or it is not a finite, non-negative number."""
+    live = doc.get("live") if isinstance(doc, dict) else None
+    value = live.get("decode_tokens_per_second") if isinstance(live, dict) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return round(float(value), 2)
 
 
 class RuntimePulse:
@@ -295,15 +302,18 @@ class RuntimePulse:
             await self._write_meta(redis, host_id, available=False)
             return
 
+        engine_tps: float | None = None
         try:
             import httpx  # local import — mirrors agent_runtime_switch's probe
 
-            url = self._metrics_url(runtime.endpoint)
+            root = self._engine_root(runtime.endpoint)
             async with httpx.AsyncClient(timeout=SCRAPE_TIMEOUT) as client:
-                resp = await client.get(url)
-            if resp.status_code != 200:
-                raise ValueError(f"metrics endpoint returned {resp.status_code}")
-            parsed = parse_token_counter(resp.text)
+                resp = await client.get(f"{root}/metrics")
+                if resp.status_code != 200:
+                    raise ValueError(f"metrics endpoint returned {resp.status_code}")
+                parsed = parse_token_counter(resp.text)
+                if parsed is not None and parsed.kind == "engine_rate":
+                    engine_tps = await self._read_engine_rate(client, root)
         except Exception as exc:  # noqa: BLE001 — never raise out of the poller
             await self._log_throttled(redis, host_id, exc)
             await self._write_meta(redis, host_id, available=False)
@@ -319,18 +329,26 @@ class RuntimePulse:
         engine = parsed.engine
         now = time.time()
         await self._feed_ledger(runtime, engine, resp.text, now)
-        if parsed.kind == "rate":
+        if parsed.kind == "engine_rate":
+            if engine_tps is None:
+                # The box serves and its tokens are booked, but it states no
+                # speed: no point and "no data", never a guess from /metrics.
+                await self._log_throttled(
+                    redis, host_id, "engine /health has no live decode rate (API keys on?)"
+                )
+                await self._write_meta(redis, host_id, available=False)
+                return
+            tps = engine_tps
+        elif parsed.kind == "rate":
             # Already tokens/second (e.g. sglang:gen_throughput, a gauge) —
             # use it as-is, no delta, no counter-sample bookkeeping.
             tps = round(max(parsed.value, 0.0), 2)
         else:
             prev = await self._read_sample(redis, host_id)
-            tps, sample, smooth_at = advance_rate(
+            tps, sample = advance_rate(
                 prev, source=parsed.source, counter=parsed.value, now=now
             )
             await self._write_sample(redis, host_id, sample)
-            if smooth_at is not None:
-                await self._set_last_point_tps(redis, host_id, t=smooth_at, tps=tps)
         await self._push_point(redis, host_id, t=now, tps=tps)
         await self._write_meta(redis, host_id, available=True, last_ok=now, engine=engine)
 
@@ -348,11 +366,23 @@ class RuntimePulse:
             logger.exception("token ledger booking failed for runtime %s", runtime.slug)
 
     @staticmethod
-    def _metrics_url(endpoint: str) -> str:
+    def _engine_root(endpoint: str) -> str:
         base = endpoint.rstrip("/")
         if base.endswith("/v1"):
             base = base[: -len("/v1")]
-        return f"{base}/metrics"
+        return base
+
+    @staticmethod
+    async def _read_engine_rate(client, root: str) -> float | None:
+        """The engine's own decode rate (GET /health), None on any failure —
+        the /metrics scrape and the token booking go on without it."""
+        try:
+            resp = await client.get(f"{root}/health")
+            if resp.status_code != 200:
+                return None
+            return engine_rate_from_health(resp.json())
+        except Exception:  # noqa: BLE001 — a missing rate is "no speed", not an error
+            return None
 
     async def _read_sample(self, redis, host_id: str) -> dict | None:
         raw = await redis.get(RedisKeys.host_pulse_sample(host_id))
@@ -375,23 +405,6 @@ class RuntimePulse:
         key = RedisKeys.host_pulse(host_id)
         await redis.rpush(key, json.dumps({"t": t, "tps": tps}))
         await redis.ltrim(key, -RING_MAX_POINTS, -1)
-
-    async def _set_last_point_tps(self, redis, host_id: str, *, t: float, tps: float) -> None:
-        """Give the ring's newest point another rate, keeping its time — the
-        0 of a held drop that turned out to be a handover gap. Only if that
-        point IS the one written at ``t`` (nothing else is ever rewritten)."""
-        key = RedisKeys.host_pulse(host_id)
-        raw = await redis.lindex(key, -1)
-        if not raw:
-            return
-        try:
-            point = json.loads(raw)
-        except (TypeError, ValueError):
-            return
-        if not isinstance(point, dict) or point.get("t") != t:
-            return
-        point["tps"] = tps
-        await redis.lset(key, -1, json.dumps(point))
 
     async def _write_meta(
         self,
