@@ -4,7 +4,8 @@
   Served by Caddy's `handle_errors` block (see ../Caddyfile and
   ../Caddyfile.tls.example) whenever the frontend or backend upstream is
   down — the restart window of an update (docs/decisions/094-*.md) or any
-  other outage that trips the active health check.
+  other outage where Caddy cannot reach the upstream (a 502 dial error, or
+  a 503).
 
   Rendered through Caddy's built-in `templates` directive (no app server
   involved, so it still works while MC itself is down). Language is picked
@@ -103,7 +104,7 @@
     <div class="spinner" aria-hidden="true"></div>
     {{if eq $lang "de"}}
     <h1>Mission Control startet neu</h1>
-    <p>Diese Seite meldet sich automatisch wieder, sobald MC bereit ist.</p>
+    <p>Diese Seite kommt von selbst zurück, sobald MC wieder bereit ist.</p>
     <p class="hint">Lädt sich alle 5 Sekunden neu …</p>
     {{else}}
     <h1>Mission Control is restarting</h1>
