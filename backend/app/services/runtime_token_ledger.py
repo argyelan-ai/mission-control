@@ -11,14 +11,18 @@ models to get the "external" share (services/usage_baseline.py).
 
 Counters (all cumulative; ``prompt`` includes the cached part):
 
-  engine      prompt                          cached                             generated
-  tensorfold  tensorfold:prompt_tokens_total  tensorfold_health:cached_tokens_total  tensorfold_health:completion_tokens_total
-                                                                                 (streaming-aware; falls back to
-                                                                                 tensorfold:generation_tokens_total)
-  vllm        vllm:prompt_tokens_total        vllm:prefix_cache_hits_total       vllm:generation_tokens_total
-  sglang      sglang:prompt_tokens_total      sglang:cached_tokens_total         sglang:generation_tokens_total
+  engine      prompt                          cached                                  generated
+  tensorfold  tensorfold:prompt_tokens_total  tensorfold_health:cached_tokens_total   tensorfold_health:completion_tokens_total
+                                              (falls back to                          (streaming-aware; falls back to
+                                              tensorfold:prompt_tokens_cached_total)  tensorfold:generation_tokens_total)
+  vllm        vllm:prompt_tokens_total        vllm:prefix_cache_hits_total            vllm:generation_tokens_total
+  sglang      sglang:prompt_tokens_total      sglang:cached_tokens_total              sglang:generation_tokens_total
 
-Only the TensorFold names were checked against a running box; the vLLM cache
+The TensorFold names were checked against running boxes: the GLM build has
+the ``tensorfold_health:*`` family, TensorFold's native server (the
+DeepSeek-V4.1-Flash recipe, 20.10.2026) only the ``tensorfold:*`` names —
+its ``prompt_tokens_cached_total`` follows the engine source (exported only
+when the server keeps prompt states; that box keeps none). The vLLM cache
 and all SGLang names follow the engines' docs. A missing counter books 0 for
 that column, never a guess.
 
@@ -68,7 +72,11 @@ COMPONENTS = ("prompt", "cached", "generated")
 _BOX_COUNTERS: dict[str, dict[str, tuple[str, ...]]] = {
     "tensorfold": {
         "prompt": ("tensorfold:prompt_tokens_total",),
-        "cached": ("tensorfold_health:cached_tokens_total",),
+        "cached": ("tensorfold_health:cached_tokens_total", "tensorfold:prompt_tokens_cached_total"),
+        # Never ``tensorfold:generation_tokens_running`` (the native server's
+        # in-flight gauge, which the tok/s strip adds): it falls when a reply
+        # ends, and a drop here reads as an engine restart that books the
+        # whole counter again. Finished tokens are booked when the reply ends.
         "generated": ("tensorfold_health:completion_tokens_total", "tensorfold:generation_tokens_total"),
     },
     "vllm": {
