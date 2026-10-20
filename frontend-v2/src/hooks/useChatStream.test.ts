@@ -299,6 +299,57 @@ describe("Live-Vorschau (preview) — eigenes Fach, nie Zeitachse", () => {
   );
 });
 
+describe("laufender Gedanke (preview.block = thinking, 20.10.2026)", () => {
+  const thought = (text: string): PreviewEvent => ({
+    kind: "preview", uuid: null, ts: "2026-10-20T09:00:00Z", text, source: "acp",
+    block: "thinking", chars: text.length, startedAt: "2026-10-20T08:59:00Z",
+  });
+  const answer = (text: string): PreviewEvent =>
+    ({ kind: "preview", uuid: null, ts: "2026-10-20T09:00:01Z", text, source: "acp" });
+  const tool: ToolEvent = {
+    kind: "tool", uuid: "t1", ts: "2026-10-20T09:00:02Z", name: "bash", title: "$ ls",
+    detail: null, result: null, status: "pending", toolUseId: "call-1",
+  } as unknown as ToolEvent;
+  const done: ThinkingEvent = {
+    kind: "thinking", uuid: "th1", ts: "2026-10-20T09:00:02Z", text: "fertig gedacht",
+    sidechain: false, durationMs: 60_000,
+  };
+
+  it("liegt im Vorschau-Fach mit Groesse und Beginn", () => {
+    const state = chatReducer(createInitialChatState(), thought("ich denke"));
+    expect(state.preview?.block).toBe("thinking");
+    expect(state.preview?.startedAt).toBe("2026-10-20T08:59:00Z");
+    expect(state.events).toHaveLength(0);
+  });
+
+  it("endet mit dem naechsten Werkzeugaufruf", () => {
+    let state = chatReducer(createInitialChatState(), thought("ich denke"));
+    state = chatReducer(state, tool);
+    expect(state.preview).toBeNull();
+    expect(state.events).toHaveLength(1);
+  });
+
+  it("endet, wenn der fertige Gedanke im Verlauf steht — nie doppelt", () => {
+    let state = chatReducer(createInitialChatState(), thought("ich denke"));
+    state = chatReducer(state, done);
+    expect(state.preview).toBeNull();
+    expect(state.events.map((e) => e.kind)).toEqual(["thinking"]);
+  });
+
+  it("wird von der beginnenden Antwort ersetzt", () => {
+    let state = chatReducer(createInitialChatState(), thought("ich denke"));
+    state = chatReducer(state, answer("Die Antwort"));
+    expect(state.preview?.block).toBeUndefined();
+    expect(state.preview?.text).toBe("Die Antwort");
+  });
+
+  it("eine Antwort-Vorschau ueberlebt einen Werkzeugaufruf weiter wie bisher", () => {
+    let state = chatReducer(createInitialChatState(), answer("Ich schaue nach"));
+    state = chatReducer(state, tool);
+    expect(state.preview?.text).toBe("Ich schaue nach");
+  });
+});
+
 describe("gemischte Bloecke unter einer uuid (omp)", () => {
   it("behaelt Denken UND Antwort, wenn beide dieselbe Eintrags-uuid tragen", () => {
     // LIVE gemessen an dem echten omp-Transkript eines Agenten (21.08.2026): 10 von 25

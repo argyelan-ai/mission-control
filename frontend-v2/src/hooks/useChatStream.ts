@@ -289,6 +289,13 @@ export function createInitialChatState(): ChatReducerState {
   };
 }
 
+/** A running thought (`preview.block === "thinking"`) ends when the model
+ *  moves on — a tool call, the finished thought itself. An answer preview
+ *  stays: only the answer ends it. */
+function withoutThought(state: ChatReducerState): ChatReducerState {
+  return state.preview?.block === "thinking" ? { ...state, preview: null } : state;
+}
+
 /** The tool event this live output belongs to, if it is already known. */
 function toolFor(state: ChatReducerState, toolUseId: string): ToolEvent | null {
   const i = state.index.get(`tool:${toolUseId}`);
@@ -430,12 +437,16 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
       );
     case "tool":
       /* Sein Ergebnis beendet die Live-Ausgabe (die Karte zeigt ab jetzt
-         das Ergebnis selbst). */
+         das Ergebnis selbst). Ein Werkzeugaufruf beendet auch einen
+         laufenden Gedanken: das Modell hat zu Ende gedacht. */
       return pushOrReplace(
-        event.result != null ? withoutToolOutput(state, event.toolUseId) : state,
+        withoutThought(event.result != null ? withoutToolOutput(state, event.toolUseId) : state),
         event,
       );
     case "thinking":
+      /* Der fertige Gedanke steht ab jetzt im Verlauf — die Live-Zeile hat
+         ausgedient (sonst stuende er zweimal da). */
+      return pushOrReplace(withoutThought(state), event);
     case "command":
     case "notification":
     case "elicitation":

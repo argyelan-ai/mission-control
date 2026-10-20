@@ -105,6 +105,11 @@ def test_every_adapter_offers_the_full_contract():
                 # "kein zweiter Tailer, kein Thread-Hop" — eine Lambda-Attrappe
                 # wuerde das Gate unterlaufen.
                 assert value is None or callable(value), (harness, field.name)
+            elif field.name == "find_task_session":
+                # Optional (20.10.2026): only a harness that runs tasks in
+                # sessions of their OWN has one; ``None`` = the task runs in
+                # the chat itself and the chat's task block stays away.
+                assert value is None or callable(value), (harness, field.name)
             elif field.name == "head_transcript_glob":
                 # Optional: a harness adapter may have no head reader yet
                 # (docs/decisions/085 Nachtrag 2026-10-04) — ``None`` means

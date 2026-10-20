@@ -49,6 +49,8 @@ import { PreviewRow } from "./PreviewRow";
 import { TodoPanel } from "./TodoPanel";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
+import { LiveThinkingRow } from "./LiveThinkingRow";
+import { TaskActivityBlock } from "./TaskActivityBlock";
 import { SubagentGroup } from "./SubagentGroup";
 import { ToolGroup } from "./ToolGroup";
 import { ToolOutputContext, createToolOutputStore, type ToolOutputStore } from "./toolOutputStore";
@@ -1279,9 +1281,19 @@ export function ChatView({
                 tmux-Bildschirmabgriff ("pane") zeigte Bruchstuecke, Werkzeug-
                 Rahmen und den Dispatch-Prompt und ist seit 10.09.2026 nicht
                 mehr Teil des Chats — die Statuszeile sagt, was laeuft. */}
+            {/* Ein laufender GEDANKE ist keine Antwort (20.10.2026: minutenlanges
+                Denken sah aus wie „nichts passiert"): eigene, eingeklappte
+                Zeile mit Uhr und Token-Schaetzung statt der Antwort-Vorschau. */}
             {stream.preview && stream.preview.source === "acp" && (
-              <PreviewRow preview={stream.preview} />
+              stream.preview.block === "thinking"
+                ? <LiveThinkingRow preview={stream.preview} />
+                : <PreviewRow preview={stream.preview} />
             )}
+
+            {/* Was die laufende Aufgabe tut — eigener Block, nie in den Chat
+                gemischt (seit #898 zeigt der Chat nur die Chat-Sitzung; eine
+                ACP-Aufgabe laeuft in einer eigenen). */}
+            {!head && agent && workingOn && <TaskActivityBlock agentId={agent.id} />}
 
             {/* The run-record summary card — only once the head has ended
                 AND actually wrote one (`run.run_record`, the same boolean
