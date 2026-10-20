@@ -809,3 +809,27 @@ async def test_operator_stop_on_a_shared_port_raises_nothing_from_any_row(async_
         for _ in range(UNREACHABLE_EVENT_THRESHOLD + 1):
             await watcher.tick(session=async_session)
     assert await _events(async_session, "runtime.unreachable") == []
+
+
+@pytest.mark.asyncio
+async def test_crash_loop_intent_is_set_before_docker_stop(async_session, fake_redis):
+    rt = await _rt(async_session, slug="vllm", model="org/m", runtime_type="vllm_docker",
+                   process=None, container="vllm-c")
+    seen = {}
+    restarts = {"n": 0}
+
+    class LoopBox(FakeBox):
+        async def run(self, command, *, host=None, timeout=None):
+            if command.startswith('docker inspect --format "{{.RestartCount}}'):
+                restarts["n"] += 3
+                return (f"{restarts['n']} 2026-10-19T09:00:00Z", "", 0)
+            if command.startswith("docker stop"):
+                seen["intent"] = await runtime_grace.get_stop_intent(rt.slug, fake_redis)
+            return await super().run(command, host=host, timeout=timeout)
+
+    probe = Probe(failure=FAIL_TIMEOUT)
+    watcher = RuntimeWatcher(interval=INTERVAL)
+    with _stack(LoopBox(inspect=RUNNING), fake_redis, probe):
+        for _ in range(3):
+            await watcher.tick(session=async_session)
+    assert seen["intent"]["why"] == runtime_grace.INTENT_CRASH_LOOP

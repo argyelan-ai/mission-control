@@ -926,6 +926,9 @@ class RuntimeWatcher:
             f"{delta} Neustarts im Startfenster"
         )
 
+        # ADR-096 §11.1: intent BEFORE the stop (same rule as stop_runtime) —
+        # no probe may ever see this container gone without it.
+        await mark_stop_intent(runtime.slug, INTENT_CRASH_LOOP, by="runtime_watcher")
         try:
             await _ssh_run(f"docker update --restart=no {container}", host=host, timeout=20)
             _, stop_err, stop_code = await _ssh_run(
@@ -948,10 +951,9 @@ class RuntimeWatcher:
         await self._finish_memory_prep(session, runtime, success=False)
         # ADR-096 §11.1: MC's own crash-loop stop is a stop with intent — its
         # runtime.crash_loop_stopped below stays THE report; the silence that
-        # follows is never counted as an engine death a second time. The
-        # record keeps the card on "failed — restart loop" across later ticks
+        # follows is never counted as an engine death a second time (the
+        # intent was set before `docker stop` above). The record keeps the card on "failed — restart loop" across later ticks
         # and keeps the rows sharing the port from alarming.
-        await mark_stop_intent(runtime.slug, INTENT_CRASH_LOOP, by="runtime_watcher")
         loop_doc = {
             "reason": reason,
             "reason_en": f"{runtime.display_name}: restart loop ({delta} restarts), stopped by MC",
