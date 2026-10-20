@@ -47,6 +47,27 @@ an opt-in preview, macOS host only — see
 - `${HOME}/.openclaw` — Agent-Workspaces, settings.json, Tokens
 - `/var/run/docker.sock` — Docker-Zugriff für Agent-Container Lifecycle
 
+**Docker-Aufrufe des Backends:** Jeder Aufruf, der einen Container anlegt,
+ersetzt, startet, neu startet, stoppt oder entfernt, läuft über
+`backend/app/services/docker_gateway.py` (`run` / `create_subprocess`). Das
+Gateway liest den Update-Drain (10-s-Cache, ADR-094 §7) und antwortet in
+einem Drain „deferred“ statt zu starten; lesende Aufrufe (`ps`, `inspect`,
+`logs`) und `docker exec` bleiben frei. `backend/tests/test_docker_gateway_lint.py`
+wird rot, sobald irgendwo sonst ein verändernder `docker`-Aufruf entsteht.
+
+**Update-Drain (ADR-094 §7):** Der Drain ist eine Zeile in Postgres
+(`system_state`, `key='update_drain'`, mit Ablaufdatum), die der Update-Motor
+per `psql` setzt. `backend/app/services/update_drain.py` liest sie: frisch über
+die Session für Dispatch (`operations.check_dispatch_allowed`, hält auch
+Review-Übergaben an), den Poll-Claim neuer Inbox-Karten, den Watchdog-Redispatch,
+neue Gruppenchat- und Loop-Runden und fällige Zeitpläne; aus einem Cache (alle
+5 s im Watcher aufgefrischt, in API und Worker) fürs Docker-Gateway. Was der
+Drain zurückhält (Dispatch, Zeitplan-Jobs), steht als `deferred:<art>:<id>` in
+`system_state` und wird nachgeholt, sobald er weg ist — auch über den
+Neustart hinweg. „Laufende Arbeit“, auf die der Motor wartet und die die UI
+zeigt, hat eine Definition: die SQL-Funktion `update_running_work()`
+(Migration 0219).
+
 ---
 
 ## Bausteine
@@ -111,6 +132,8 @@ an opt-in preview, macOS host only — see
 1. **User JWT (HS256)** — Login via `auth/login` (gültig 7 Tage, `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`), localStorage-Storage, `token_version` für Logout-Invalidierung (auch Passwortwechsel: alle anderen Sitzungen abgemeldet, die eigene bekommt einen neuen Token)
 2. **Agent PBKDF2 (200k iter)** — `POST /agents` erzeugt Token einmalig, Redis-Cache `SHA256(token) → agent_id` (5min TTL) verhindert N×200ms Hash pro Request
 3. **Legacy LOCAL_AUTH_TOKEN** — nur falls explizit gesetzt, Fallback
+
+**Step-up (erneute Passwort-Bestätigung, ADR-094 §9):** gefährliche Admin-Aktionen hängen `Depends(require_recent_auth())` aus `services/step_up.py` an. `POST /api/v1/auth/step-up` prüft das Passwort (gleiche Bremse wie Login, plus pro Konto) und gibt einen Einmal-Token, 5 Min gültig, an Benutzer + `token_version` gebunden; der Client schickt ihn im Header `X-MC-Step-Up`. Abgelehnt: `LOCAL_AUTH_TOKEN` und der MCP-Dienst-Token, Konten ohne Passwort, Cookie/`?token=`. Fehlt der Token → **403** `step_up_required` (nie 401 — das würde die UI abmelden). `GET /api/v1/auth/step-up` sagt der UI, ob der Knopf möglich ist. Welche Anmeldung eine Anfrage trug, steht in `request.state.mc_auth_method` (`app/auth.py`).
 
 **16 Scopes**, default-gefiltert pro Agent-Typ (Lead/Developer/Planner/Reviewer/Deployer/Researcher/Writer). `require_scope()` Dependency erzwingt Scopes backend-seitig, zusätzlich werden TOOLS.md-Sektionen gefiltert (weniger Tokens, weniger Angriffsfläche).
 
@@ -206,7 +229,8 @@ an opt-in preview, macOS host only — see
 **Hinweis:** Der OpenClaw Gateway (WebSocket-Daemon auf Port `18789`) wurde mit v0.9 (ADR-039) komplett entfernt — als Runtime, Code-Pfad, DB-Schema, Frontend-Konzept und Host-Service. Verbleibende Host-Komponenten:
 
 **CLI-Bridge** (`scripts/cli-bridge.py`) — Host-HTTP-Server auf Port `18792` (+ WebSocket-PTY `18793`):
-- **Auth:** jede Anfrage ausser `GET /ping` und jeder PTY-Attach braucht den Header `X-MC-Bridge-Token` (HTTP 401, auch schon im WS-Handshake). Token-Datei `~/.mc/secrets/cli-bridge.token` (0600, beim ersten Start erzeugt); Backend + Worker lesen sie über den `~/.mc`-Mount oder `CLI_BRIDGE_TOKEN`. Einzige Header-Quelle im Backend: `services/cli_bridge_auth.py`. Der Browser spricht nie direkt mit der Bridge — Terminal und Plugin-Shell laufen über den Backend-WS-Proxy (Stream-Ticket + Admin). Bind `CLI_BRIDGE_BIND`, Default `127.0.0.1`. Details + Rollout: `docs/setup/cli-bridge-auth.md`.
+- **Auth:** jede Anfrage ausser `GET /ping` und jeder PTY-Attach braucht den Header `X-MC-Bridge-Token` (HTTP 401, auch schon im WS-Handshake). Token-Datei `~/.mc/secrets/cli-bridge.token` (0600, beim ersten Start erzeugt); Backend + Worker lesen sie über den `~/.mc`-Mount oder `CLI_BRIDGE_TOKEN`. Einzige Header-Quelle im Backend: `services/cli_bridge_auth.py`. Der Browser spricht nie direkt mit der Bridge — Terminal und Plugin-Shell laufen über den Backend-WS-Proxy (Stream-Ticket + Admin). Bind `CLI_BRIDGE_BIND`, Default `127.0.0.1` (Linux: Gateway des Netzes `mission-control_default`, gesetzt von `./install.sh --bridge`, Backend liest `FREE_CODE_BRIDGE_URL`). Details + Rollout: `docs/setup/cli-bridge-auth.md`.
+- **Update-Tür (ADR-094):** `/mc-update/{preflight,start,status,rollback,resume}` mit eigenem Token `X-MC-Update-Token` (`scripts/mc_update_door.py`); startet `scripts/mc_update.py` losgelöst und setzt beim Bridge-Start einen unterbrochenen Lauf fort.
 - Rendert Agent-Konfig aus Jinja2-Templates (`backend/templates/*.j2`):
   - `cli_agent_settings.json.j2` → `settings.json` + `claude-config/settings.json` (Kopie, **kein Symlink** — Docker-Kompatibilität)
   - `cli_agent.env.j2` → `agent.env` (MC_AGENT_TOKEN)
@@ -644,7 +668,7 @@ PORSCHE ist eine **Windows-Box** mit lokalem **unsloth-OpenAI-Server**, die im L
 - **State-Mapping** (`get_runtime_state`, Feld `state` + Debug-Feld `container_status`): `:5555` aus → `stopped`/`asleep`; `:5555` da, `/v1` ≠ 200 → `stopped`/`booted_no_model`; `/v1/models` = 200 → `ready`/`serving`.
 - **Bedarfsgesteuert:** WoL weckt nur die Box (billig); das Modell lädt erst on demand via Start (Warmup ~1–3 Min) — GPU/VRAM/Strom laufen nur bei Nutzung, kein Autostart.
 - **Wake-Flow (Backend kann kein L2-Broadcast aus Docker):** `POST /api/v1/runtimes/{id}/wake` → `runtime_manager.wake_runtime()` schreibt eine Trigger-Datei nach `~/.mc/wake-requests/<slug>.request.json` (unter dem bestehenden `~/.mc`-Bind-Mount; Shape `{slug, mac, ip, broadcast, requested_at}`). Ein host-seitiger launchd-Watcher liest sie und ruft `~/.claude/skills/wake-porsche/wake_porsche.py` auf, das das Magic-Packet sendet. Endpoint ist hart auf `power_managed` gegated (400 sonst, 404 wenn Runtime fehlt).
-- **Runtime-Readiness Dispatch-Gate** (`services/runtime_readiness.py`): ein Agent, dessen LLM-Hirn auf einer schlafenden PORSCHE sitzt, soll keinen Task in die Session injiziert bekommen. Konsultiert an beiden Dispatch-Einstiegen — `operations.check_dispatch_allowed` (Schritt 3.5, neuer optionaler `session`-Param; alle 6 Push-Aufrufstellen über 5 Dateien — `task_lifecycle.py` mit zweien — übergeben ihn) + `routers/agents.py::agent_poll` (nur der frische Inbox-Claim, Recovery/phase_approval unberührt). **Greift ausschliesslich für `power_managed`-gebundene Agenten:** `runtime_id` NULL, nicht-power-managed Runtime oder Kill-Switch `enable_runtime_readiness_gate=false` → sofortiger früher Return, jeder andere Agent (24/7 cli-bridge, host, DGX, cloud) läuft den unveränderten Pfad. Readiness wird ~15 s in Redis gecacht (kein `:5555`-Hämmern), und **jeder Fehler fällt OPEN** — ein Gate-Bug kann die Fleet nie stalled lassen. Ist die Box schlafend, bleibt der Task geparkt (inbox, `dispatched_at` ungesetzt) bis `ready`.
+- **Runtime-Readiness Dispatch-Gate** (`services/runtime_readiness.py`): ein Agent, dessen LLM-Hirn auf einer schlafenden PORSCHE sitzt, soll keinen Task in die Session injiziert bekommen. Konsultiert an beiden Dispatch-Einstiegen — `operations.check_dispatch_allowed` (Schritt 3.5, neuer optionaler `session`-Param; alle 6 Push-Aufrufstellen über 5 Dateien — `task_lifecycle.py` mit zweien — übergeben ihn) + `routers/agents.py::agent_poll` (nur der frische Inbox-Claim, Recovery/phase_approval unberührt). **Greift ausschliesslich für `power_managed`-gebundene Agenten:** `runtime_id` NULL, nicht-power-managed Runtime oder Kill-Switch `enable_runtime_readiness_gate=false` → sofortiger früher Return, jeder andere Agent (24/7 cli-bridge, host, DGX, cloud) läuft den unveränderten Pfad. Readiness wird ~15 s in Redis gecacht (kein `:5555`-Hämmern), und **jeder Fehler fällt OPEN** — ein Gate-Bug kann die Fleet nie stalled lassen. Ist die Box schlafend, bleibt der Task geparkt (inbox, `dispatched_at` ungesetzt) bis `ready`. **Seit ADR-097 (19.10.2026)** hält der Poll-Claim (`include_local=True`) auch für jede **lokale** Runtime (`heads.pairs.is_local`), deren Models-Endpunkt nicht antwortet (ein gecachter GET, Antwort < 500 = da) — der Task bleibt in der Inbox, die Timeline bekommt eine Zeile `task.dispatch_held_runtime_down`; Push-Stellen bleiben für lokale Runtimes ungegated. Die omp-bridge (ACP) setzt `in_progress` erst bei der ersten Arbeit des Modells (`FirstActivityAck`), nicht bei der Zustellung.
 - **Default manuelles Wecken** (Auto-Wake-on-dispatch deferred als spätere Opt-in-Stufe).
 
 **omp Runtime (NEU 2026-07-01, ADR-045):** Dritter Harness-Image-Typ neben `mc-claude-agent` (native claude) und `mc-agent-base` (openclaude). Statt einer interaktiven CLI-Pane in tmux Window 0 läuft `docker/omp-bridge/bridge.py --serve` als persistenter Poll→omp→Lifecycle-Treiber; `omp -p --mode json` ist ein kurzlebiger Subprozess, dessen strukturierter NDJSON-Stream deterministisch auf `mc ack` / `mc finish` / `mc blocked` gemappt wird (schliesst die Silent-Abort-Lücke — jeder Lauf endet terminal). omp spricht OpenAI-completions nativ und treibt Qwen auf der DGX Spark direkt (kein openclaude-Shim). Drei Routing-Branch-Points lernen `omp` **ohne Token-Routing-Duplikat**:
@@ -1585,6 +1609,72 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-19** — **Terminal door + crash matrix (ADR-094, update plan PR 2c):** on the stable
+  channel `install.sh --update`, `--rollback` and `--resume` only run `scripts/mc_update.py`
+  (`mc_update_door`: the install's own engine, else the one next to the installer, else main's)
+  with stdin closed and the engine's lines unchanged, then name the next step per exit code;
+  python3 ≥ 3.9 is part of the prerequisites report (`MC_PYTHON`). `mc_update_guard_open_run`
+  reads `status --json` before anything restarts the stack (`--update` offers the resume at a
+  terminal; installer re-run and edge update stop; `rollback_failed` sends to `--rollback`).
+  Edge keeps the installer's own path. The engine records its install folder (resume/rollback
+  from another folder → 409), writes the drain into the journal before the row, and `resume`
+  without an open run tidies ended runs (leftover drain, private copies).
+  `scripts/tests/test_mc_update_crash.py` kills the engine before and after every journal write
+  (found by a probe run, `MC_UPDATE_TEST_CRASH_SAVE` / `MC_UPDATE_TEST_SAVE_LOG`), at the named
+  inner points and inside the resume, and checks the end state (CI job `mc-update-crash`).
+- **2026-10-19** — **Pre-update backup + R2 (ADR-094, update plan PR 2b):** the engine's
+  `backup` phase runs `backup.sh preupdate` (database + pins + encrypted `.env`, prefix
+  `mc_backup_preupdate_*`, own rotation 3 / 14 days, no `~/.mc` archive) from a copy of the
+  script in the run folder, and records the schema it backed up; the switch refuses to start
+  unless that equals `schema_before`. The way back picks R1 only when `alembic_version ==
+  schema_before`; otherwise (new head, half-way chain, unreadable) R2: stop `backend` +
+  `mc-worker`, `backup.sh restore <own backup> --yes --no-safety-copy --keep-env`, check the
+  schema, then R1. `.env` is always written in place. A manual way back is refused (409) when
+  a newer update exists or the run's backup is gone. Tests drive the real `backup.sh` against
+  the fake docker (`scripts/tests/fake_docker.py`); `backend/tests/test_backup_sh.py` covers
+  the new mode against a throwaway Postgres.
+- **2026-10-19** — **Self-update API + drain in Postgres (ADR-094, update plan PR 4c):**
+  `backend/app/routers/system_update.py` — `/api/v1/system/update/{preflight,start,status,
+  rollback,resume,history}`, admin only, `start` + `rollback` behind step-up
+  (`services/step_up.py`); `MC_UPDATE_MANAGED=deploy` → `409` on every route, feature switch
+  `MC_SELF_UPDATE_ENABLED` (off) → `404`. The backend only talks to the bridge's update door
+  (`services/mc_update_runner.py`, door token from `~/.mc/secrets/mc-update.token`) and adds
+  what only it can see: scheduled jobs due within 15 min (red), group-chat rounds and loops
+  (notes), step-up availability. Status is filtered (no paths, no raw log), mirrored into the
+  history (`system_updates`) and Redis; the backend reconciles the history with the journal at
+  start. Migration 0219: `system_state` (the engine's drain row + deferred work),
+  `system_updates`, function `update_running_work()` — the engine now waits for tasks in
+  progress **and** open group-chat rounds. The drain (`services/update_drain.py`) holds
+  dispatch, the poll claim, watchdog re-dispatch, new group/loop rounds and due jobs, feeds the
+  Docker gateway, and catches up held-back dispatches and jobs once it is gone. Tests:
+  `backend/tests/test_update_drain.py`, `test_system_update_api.py`,
+  `test_system_update_postgres.py` (Postgres lane: the engine's own SQL against the migrated
+  table).
+- **2026-10-19** — **Update door in the cli-bridge (ADR-094, update plan PR 3):**
+  `scripts/mc_update_door.py`, served by `scripts/cli-bridge.py` under `/mc-update/*`: exactly
+  five routes (`preflight`, `start`, `status`, `rollback`, `resume`), its own token
+  (`X-MC-Update-Token`, `~/.mc/secrets/mc-update.token`), `409` managed install / target
+  mismatch, `423` live or interrupted run, `429` start limit (`MC_UPDATE_MAX_STARTS_PER_DAY`, 3).
+  The engine runs detached (`systemd-run --user` on Linux, double fork + new session elsewhere;
+  `KillMode=process` / `AbandonProcessGroup` in the service units), its exit code in
+  `~/.mc/update/bridge/`. Start routine: an interrupted run is resumed when the bridge starts and
+  Docker answers; otherwise an orphaned drain is lifted (`mc_update.py drain-sweep`). `/ping`
+  names `api_version`. `install.sh` sets the bridge up after a yes (`--bridge`, offered after
+  install and update); on Linux it binds to the gateway of `mission-control_default`, points
+  backend + worker there (`FREE_CODE_BRIDGE_URL`) and offers linger (explicit yes, sudo). A
+  missing tmux is a warning now, not a crash. Tests: `scripts/tests/test_mc_update_door.py`,
+  `backend/tests/test_install_bridge_setup.py`.
+- **2026-10-19** — **Update engine core (ADR-094, update plan PR 2a):** `scripts/mc_update.py`
+  (host, python3 standard library) is the one engine for terminal and the Settings button:
+  phases `preflight → drain → fetch → verify_release → pull → backup → switch → up → verify`,
+  an atomic journal per run under `~/.mc/update/journal/`, a `flock` lock with PID + start time,
+  the resume rule (before `switch` → `aborted`; after → finish or go back), rollback R1 (old
+  code, `.env` in place, fleet file, four checks against the old version), the four success
+  checks with failures counted only after the backend's `start_period`, the real compose project
+  name, pulls of `backend`/`frontend` only, the target tag's own engine from `switch` on, and the
+  drain row `system_state.update_drain` (with expiry) the backend reads from PR 4c. Not wired to
+  `install.sh` or the bridge yet (PR 2c / PR 3); R2 (database restore) is PR 2b, signature checks
+  PR 6. Tests: `scripts/tests/test_mc_update.py` (CI job `mc-update`, Python 3.9 + 3.12).
 - **2026-10-17** — **Any host uid on Linux:** the backend image starts as root only in
   `backend/docker-entrypoint.sh`, gives `mcuser` the host user's ids (`PUID`/`PGID` from `.env`,
   written by `setup.sh` on Linux; empty = uid 1000 as before, macOS/Windows unchanged) and drops

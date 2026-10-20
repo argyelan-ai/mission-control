@@ -409,6 +409,18 @@ async def prepare_process() -> None:
             await apply_ai_provider_overrides(_ai_session)
     except Exception as e:
         logger.warning("ai provider overrides at startup failed (env defaults stay): %s", e)
+    # Update drain (ADR-094 decision 7): wire the Docker gateway to the
+    # Postgres drain, read it once before this process hands out any work,
+    # then keep it fresh. The process that runs the background services also
+    # catches up work the drain held back. Never fatal: without it the
+    # manual MC_UPDATE_DRAIN switch still guards Docker calls.
+    try:
+        from app.config import settings as _settings
+        from app.services import update_drain
+
+        await update_drain.start(catch_up_work=_settings.enable_background_services)
+    except Exception as e:
+        logger.warning("update drain watcher failed to start (non-fatal): %s", e)
 
 
 

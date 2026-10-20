@@ -1677,7 +1677,10 @@ async def update_task(
             allowed, reason = await check_dispatch_allowed(task, agent, session)
             if not allowed:
                 logger.info("Manual re-dispatch blocked: '%s' — %s", task.title, reason)
-                _dispatch_allowed = False
+                from app.services.operations import UPDATE_DRAIN_REASON
+                # An MC update only holds the dispatch back: auto_dispatch_task
+                # records it and the drain's catch-up delivers it afterwards.
+                _dispatch_allowed = reason == UPDATE_DRAIN_REASON
 
         # Phase 29: Re-dispatch via auto_dispatch_task (cli-bridge / host / claude-code
         # runtimes). Gateway-only path removed.
@@ -1952,6 +1955,7 @@ _ACTIVITY_KIND_MAP: dict[str, str] = {
     "task.dispatch_fallback": "dispatch",
     "task.dispatch_pending": "dispatch",
     "task.dispatch_queued": "dispatch",
+    "task.dispatch_held_runtime_down": "dispatch",
     "task.dispatch_runtime_unsupported": "dispatch",
     "task.unblock_redispatched": "dispatch",
     "task.unblock_requeued": "dispatch",

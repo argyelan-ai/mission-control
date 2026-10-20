@@ -1,0 +1,4 @@
+# HEAD is on another branch than the one pushed: nothing to compare.
+branch=feat/example
+head=1111111111111111111111111111111111111111
+remote=2222222222222222222222222222222222222222

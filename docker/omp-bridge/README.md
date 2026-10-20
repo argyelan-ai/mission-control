@@ -12,6 +12,16 @@ lifecycle (`mc ack` / `mc finish` / `mc blocked`).
 `in_progress`. A hang, a dead TUI, or a per-task deadline all trip a watchdog
 that SIGKILLs + relaunches the TUI and blocks the task.
 
+**Delivered is not working ([ADR-097](../../docs/decisions/097-delivered-is-not-working.md)).**
+On the ACP driver (`OMP_DRIVER=acp`) the bridge claims a task (`mc ack` →
+in_progress) only on the model's first work — a thought, a tool call, a second
+text chunk, or a turn that ended normally with text (`FirstActivityAck`,
+`RunOutcome.model_worked`). Until then the card stays `inbox` (delivered), the
+bridge holds its own comments, and a run whose model never answered is blocked
+straight from inbox. Deploy the backend first: it must know that a heartbeat
+for a delivered, unclaimed card is live work. The native TUI path keeps the
+up-front ack.
+
 Design + rationale: **[ADR-049](../../docs/decisions/049-omp-native-tui-session.md)**
 (supersedes the headless drive model of
 [ADR-045](../../docs/decisions/045-omp-runtime.md)).

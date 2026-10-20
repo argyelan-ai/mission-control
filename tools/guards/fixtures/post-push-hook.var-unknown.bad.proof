@@ -1,0 +1,4 @@
+# $WT is set outside this command, so the hook cannot know the tree. Even with a matching capture the push is NOT proven, and the hook must say so instead of skipping.
+branch=feat/example
+head=1111111111111111111111111111111111111111
+remote=1111111111111111111111111111111111111111

@@ -1,0 +1,4 @@
+# The path is a variable assigned in the same command: resolve it, then prove.
+branch=feat/example
+head=1111111111111111111111111111111111111111
+remote=2222222222222222222222222222222222222222

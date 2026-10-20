@@ -1,0 +1,10 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "echo x > /private/tmp/claude-502/-Users-x/1234/scratchpad/preview.html && cp shot.png /tmp/claude-502/proj/abcd/scratchpad/screenshot.png",
+  "run_in_background": false
+ }
+}

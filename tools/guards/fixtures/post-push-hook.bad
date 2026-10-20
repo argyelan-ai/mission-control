@@ -1,0 +1,14 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "hook_event_name": "PostToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "python3 scripts/privacy-scan.py && git -C ../mc-wt-example push --force-with-lease origin feat/example 2>&1 | tail -1"
+ },
+ "tool_response": {
+  "stdout": "",
+  "stderr": "",
+  "interrupted": false
+ }
+}

@@ -3435,12 +3435,28 @@ async def agent_poll(
                 # the runtime. Not DB work: commit the read transaction
                 # first so no pool connection is pinned across those awaits.
                 await session.commit()
-                _rt_ready, _rt_reason = await runtime_ready_for_agent(agent, session)
+                # include_local (ADR-097): a local runtime whose model does
+                # not answer holds the claim too — delivered is not working.
+                _rt_ready, _rt_reason = await runtime_ready_for_agent(
+                    agent, session, include_local=True, task=task,
+                )
                 if not _rt_ready:
                     return {
                         "state": "idle",
                         "runtime_not_ready": True,
                         "detail": _rt_reason,
+                        **_poll_extra,
+                    }
+                # MC update drain (ADR-094 decision 7): this claim bypasses
+                # check_dispatch_allowed, so it asks the drain itself. The
+                # card stays inbox and is claimed by the first poll after the
+                # update — nothing to catch up.
+                from app.services import update_drain
+                if (await update_drain.current(session)).active:
+                    return {
+                        "state": "idle",
+                        "update_drain": True,
+                        "detail": update_drain.REASON,
                         **_poll_extra,
                     }
 
@@ -4049,7 +4065,26 @@ def _heartbeat_control(
 _WITHDRAWN_TASK_STATUSES = ("inbox", "cancelled", "aborted", "failed")
 
 
-async def _withdrawn_task_reason(session, agent, task_id, *, previously_held=None) -> str | None:
+def _delivered_not_yet_claimed(task, attempt_id) -> bool:
+    """A card the poll delivered and the bridge is still waiting on the
+    model for (19.10.2026, "zustellen ist nicht arbeiten"): inbox,
+    dispatched_at set, not acked, and the bridge reports the SAME dispatch
+    attempt. The omp-bridge (ACP) claims only on the model's first sign of
+    life, so this shape is live work, not a withdrawal. Every requeue path
+    clears dispatched_at and the attempt id, and the ACK-timeout ladder
+    rotates the attempt — those still read as withdrawn."""
+    return (
+        task.status == "inbox"
+        and task.dispatched_at is not None
+        and task.ack_at is None
+        and bool(attempt_id)
+        and str(task.dispatch_attempt_id or "") == str(attempt_id)
+    )
+
+
+async def _withdrawn_task_reason(
+    session, agent, task_id, *, previously_held=None, attempt_id=None,
+) -> str | None:
     """Return a human reason if the task the bridge reports as running is no
     longer this agent's live work (reassigned or requeued/cancelled); None
     otherwise. Best-effort: any DB hiccup returns None (legacy shape).
@@ -4071,6 +4106,8 @@ async def _withdrawn_task_reason(session, agent, task_id, *, previously_held=Non
                 f"uebergeben) — nicht weiterarbeiten"
             )
         if task.status in _WITHDRAWN_TASK_STATUSES:
+            if _delivered_not_yet_claimed(task, attempt_id):
+                return None
             return (
                 f"Task {task.id} wurde dir entzogen (Status {task.status}) — "
                 f"nicht weiterarbeiten"
@@ -4529,6 +4566,7 @@ async def agent_heartbeat(
     if _payload_task_id is not None:
         _withdrawn = await _withdrawn_task_reason(
             session, agent, _payload_task_id, previously_held=_pre_heal_task_id,
+            attempt_id=payload.attempt_id,
         )
         if _withdrawn is not None:
             control = {"interrupt": "hard", "reason": _withdrawn}

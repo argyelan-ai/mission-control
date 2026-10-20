@@ -182,6 +182,13 @@ class LoopRunnerService:
     async def _advance(self, session: AsyncSession, loop: Loop) -> None:
         if loop.current_task_id is None:
             # Frisch gestartet oder nach Gate/Resume: nächste Runde fällig.
+            # MC update drain (ADR-094 decision 7): no new round while an
+            # update runs — the loop stays "running" and its next round
+            # starts on the first tick after the drain is gone.
+            from app.services import update_drain
+            if (await update_drain.current(session)).active:
+                logger.info("Loop %s: next round waits for the MC update to end", loop.id)
+                return
             await self._start_round(session, loop)
             return
 

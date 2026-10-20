@@ -1,0 +1,6 @@
+# Reading or cleaning up under /tmp is not durable output.
+ls /tmp/preview
+cat /tmp/screenshot-notes.txt
+du -sh /tmp/handoff
+rm -rf /tmp/preview-old
+find /tmp -name 'render-*' -mtime +3 -delete

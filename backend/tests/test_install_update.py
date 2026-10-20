@@ -1,4 +1,10 @@
-"""``install.sh --update`` tells the truth and always has a fresh backup.
+"""``install.sh --update --channel edge`` tells the truth and has a fresh backup.
+
+Scope since the update engine (ADR-094, update plan PR 2c): on the **stable**
+channel ``--update`` hands over to ``scripts/mc_update.py`` — tested in
+``scripts/tests/test_install_door.py`` and ``scripts/tests/test_mc_update*.py``.
+The **edge** channel (main, built locally) keeps the installer's own path
+below, which these tests pin.
 
 Before: ``--update`` switched the code, ran ``docker compose up -d`` and
 printed "Update complete" right away — without a backup, without waiting
@@ -111,6 +117,10 @@ def world(tmp_path: Path):
     (up / "backup.sh").write_text(FAKE_BACKUP)
     (up / "setup.sh").chmod(0o755)
     (up / "backup.sh").chmod(0o755)
+    # edge builds locally; build_locally() sources the release's disk preflight.
+    (up / "docker" / "shared").mkdir(parents=True)
+    (up / "docker" / "shared" / "disk-preflight.sh").write_text(
+        "mc_disk_preflight() { :; }\nmc_build_cache_cleanup() { :; }\n")
     versions = up / "backend" / "alembic" / "versions"
     versions.mkdir(parents=True)
     for i, tag in enumerate(["v0.1.0", "v0.2.0"], start=1):
@@ -158,7 +168,7 @@ def world(tmp_path: Path):
         # start_new_session: no controlling terminal → /dev/tty is not
         # usable, exactly like cron or `curl | bash` without a terminal.
         r = subprocess.run(
-            ["bash", str(INSTALL_SH), "--update", *flags],
+            ["bash", str(INSTALL_SH), "--update", "--channel", "edge", *flags],
             cwd=inst, env={**env, **stub}, capture_output=True, text=True,
             timeout=120, start_new_session=True,
             input=stdin_data if stdin_data is not None else "",
@@ -186,7 +196,7 @@ def test_healthy_update_backs_up_first_then_reports_complete(world):
     assert r.returncode == 0, r.out
     assert "Update complete" in r.out
     assert head_tag() == "v0.2.0"
-    assert "MC_IMAGE_TAG=0.2.0" in (inst / ".env").read_text()
+    assert "MC_IMAGE_TAG=edge" in (inst / ".env").read_text()
     # the backup ran on the OLD release, i.e. before the switch
     assert "backup.sh on v0.1.0" in r.calls
     assert r.calls.index("backup.sh on") < r.calls.index("docker compose up")

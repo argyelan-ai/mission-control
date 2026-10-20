@@ -1216,10 +1216,21 @@ describe("ChatView", () => {
     expect(onBack).toHaveBeenCalled();
   });
 
-  it("shows the context line under the agent name", () => {
+  it("shows the running task as one quiet row that links to the task", () => {
     mockUseChatStream.mockReturnValue(mkStream());
-    renderChatView({ contextLine: "Login reparieren" });
-    expect(screen.getByText("Login reparieren")).toBeInTheDocument();
+    renderChatView({ workingOn: { taskId: "task-42", title: "Login reparieren" } });
+    const row = screen.getByTestId("chat-working-on");
+    expect(row).toHaveTextContent("Working on");
+    expect(row).toHaveTextContent("Login reparieren");
+    expect(row).toHaveAttribute("href", "/tasks?task=task-42");
+    // Said once: the header no longer repeats the task title (K3).
+    expect(screen.getByTestId("chat-header")).not.toHaveTextContent("Login reparieren");
+  });
+
+  it("shows no working-on row without a running task", () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    renderChatView();
+    expect(screen.queryByTestId("chat-working-on")).toBeNull();
   });
 
   it("keeps the options sheet closed until the header button is used", async () => {
@@ -2311,10 +2322,11 @@ describe("ChatView", () => {
       expect(screen.getByLabelText("Start voice assistant")).toBeInTheDocument();
     });
 
-    it("zeigt die Aufgaben-Zeile mittig unter dem Namen", () => {
-      renderChatView({ onBack: vi.fn(), contextLine: "Login reparieren" });
+    it("zeigt die laufende Aufgabe als Zeile unter dem Kopf, nicht im Titel", () => {
+      renderChatView({ onBack: vi.fn(), workingOn: { taskId: "t-1", title: "Login reparieren" } });
       const title = screen.getByTestId("chat-header-title");
-      expect(title.textContent).toContain("Login reparieren");
+      expect(title.textContent).not.toContain("Login reparieren");
+      expect(screen.getByTestId("chat-working-on")).toHaveTextContent("Login reparieren");
     });
   });
 

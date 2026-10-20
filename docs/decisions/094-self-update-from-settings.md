@@ -287,6 +287,42 @@ decision 3). No registry entry is needed: there is exactly one engine.
   emergency page over the network.
 - The proxy hole stays open until ADR-095 is implemented.
 
+## Nachtrag (2026-10-19) — what PR 4c implements differently from decision 7 and 9
+
+Decided while building the backend side (update plan PR 4c); this section is
+the binding version where it differs from the text above.
+
+- **Running work = tasks `in_progress` + open group-chat rounds.** One SQL
+  function, `update_running_work()` (migration 0219), shared by the engine
+  and the UI. **Loops** are not counted as such: a loop runs for hours and
+  would block every update. Its current round is a task (counted); the next
+  round waits for the drain. **Scheduled jobs due within 15 minutes** are not
+  waited for either: they are a red preflight check, and `start` refuses
+  with `422` while one is due. Jobs that come due during the drain are
+  recorded and run afterwards.
+- **The update drain also holds continuation flows** (review and test
+  hand-offs, rework), unlike the Redis `DRAINING` mode: the code switch
+  follows as soon as running work reaches zero. Nothing held back is lost:
+  a held dispatch is recorded with the card's status and assignee and
+  delivered after the drain if the card is still there; a developer's
+  hand-in for review is recorded as its own kind and the hand-off (reviewer
+  choice included) runs after the drain while the card is still on `review`
+  with its author. What the catch-up drops because the card moved on is
+  logged and shown as an activity event (`system.update_drain_skipped`).
+- **Step-up on every `rollback` call, a cancel included.** Without a live run
+  the same call performs a real rollback; a cheaper cancel would race with
+  the run ending. When the bridge provably did not get the request
+  (connection refused), the confirmation is handed back with its original
+  expiry, so a retry needs no second password; after a lost answer it stays
+  spent.
+- **Missing step-up answers `403 step_up_required`, not `401`** (decision 9
+  of the step-up building block: a 401 signs the UI out).
+- **Binding for the engine (update plan PR 6):** after `drain_set` the engine
+  waits a short settle time (at least the Docker gateway's drain cache, 10 s)
+  before it counts running work. Without it, a dispatch that read "not
+  drained" just before the drain was set, or a gateway call served from its
+  cache, can still start work after the count reached zero.
+
 ## Referenzen
 
 - Betroffene Dateien (planned): `scripts/mc_update.py`, `install.sh`,

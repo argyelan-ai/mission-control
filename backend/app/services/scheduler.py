@@ -455,6 +455,22 @@ class SchedulerService:
                 )
                 return  # No run record for snoozed jobs
 
+            # Update drain (ADR-094 decision 7): a job that comes due while an
+            # MC update runs starts no work now — it is recorded and caught up
+            # once the drain is gone (update_drain.catch_up). No run record:
+            # nothing ran.
+            from app.services import update_drain
+
+            drain = await update_drain.current(session)
+            if drain.active:
+                logger.info("Job %s is due during an MC update — deferred until it ends", job.name)
+                await update_drain.defer(
+                    update_drain.KIND_SCHEDULE, job_id,
+                    bind=session.bind, run_id=drain.run_id,
+                    detail={"retry_attempt": retry_attempt},
+                )
+                return
+
             logger.info("Executing job: %s (attempt %d)", job.name, retry_attempt)
 
             # Create run record
@@ -812,6 +828,12 @@ class SchedulerService:
 
     async def trigger_now(self, job_id: str):
         create_tracked_task(self._execute_job(job_id))
+
+    async def execute_deferred(self, job_id: str, retry_attempt: int = 0) -> None:
+        """Run a job the update drain held back (update_drain.catch_up).
+        Goes through the normal path, so a drain that came back in the
+        meantime defers it again; a held-back retry keeps its attempt number."""
+        await self._execute_job(job_id, retry_attempt)
 
 
 scheduler = SchedulerService()

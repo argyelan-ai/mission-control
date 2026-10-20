@@ -18,12 +18,16 @@ This always runs the newest updater, whatever version you have installed.
 release that ships this updater.)
 
 `--update` must run inside an installed checkout (it checks for
-`docker-compose.yml` + `.env`). On the default **stable** channel it looks up
-the latest release, checks out exactly that tag, pins `MC_IMAGE_TAG` in `.env`
-to the same version, pulls those images and restarts — code and images always
-match. It falls back to a local build of the same tag when the images can't be
-pulled, and it refuses to move backwards (a lower release, or a release older
-than your database schema).
+`docker-compose.yml` + `.env`). On the default **stable** channel it hands over
+to the update engine (`scripts/mc_update.py`, needs `python3`): it waits for
+running work, downloads only Mission Control's images, backs up
+(`mc_backup_preupdate_*`), switches to exactly the latest release, and proves
+the new version (healthy, right images, version, schema) — or goes back to the
+previous one on its own, with the database from that backup when it had
+already changed. `./install.sh --resume` finishes a run that was interrupted
+(power cut, closed terminal); `./install.sh --rollback` undoes the last update
+within 14 days. It refuses to move backwards. Details:
+[docs/setup/updating.md](../../setup/updating.md).
 
 On the **edge** channel (`--channel edge`, developers only) it follows `main`
 and builds locally.

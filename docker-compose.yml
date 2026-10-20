@@ -125,6 +125,12 @@ services:
       HEADS_NO_PROGRESS_MIN: ${HEADS_NO_PROGRESS_MIN:-20}
       HEADS_HARD_LIMIT_LOCAL_S: ${HEADS_HARD_LIMIT_LOCAL_S:-28800}
       HEADS_HARD_LIMIT_CLOUD_S: ${HEADS_HARD_LIMIT_CLOUD_S:-7200}
+      # Beweis-Tor (services/proof_gate.py) — runs in the API process on every
+      # agent status change to review/done. off | warn | enforce; the date
+      # flips warn to enforce by itself once MIN_CHECKS transitions were checked.
+      PROOF_GATE_MODE: ${PROOF_GATE_MODE:-warn}
+      PROOF_GATE_ENFORCE_AFTER: ${PROOF_GATE_ENFORCE_AFTER:-}
+      PROOF_GATE_ENFORCE_MIN_CHECKS: ${PROOF_GATE_ENFORCE_MIN_CHECKS:-15}
       # Konsument ist backend/app/routers/browser_live.py — ein Router, also
       # der API-Prozess. War auf main gesetzt und wurde beim Teil-2-Umbau
       # still ersetzt statt ergaenzt (Rex-Review PR #500, Blocker B4):
@@ -333,6 +339,18 @@ services:
       # read ~/.mc/secrets/cli-bridge.token through the ~/.mc mount below.
       CLI_BRIDGE_TOKEN: ${CLI_BRIDGE_TOKEN:-}
       CLI_BRIDGE_TOKEN_FILE: ${CLI_BRIDGE_TOKEN_FILE:-}
+      # Where the cli-bridge listens. macOS: host.docker.internal (Docker
+      # Desktop delivers it to the host's loopback). Linux: install.sh sets
+      # the gateway of MC's Docker network (./install.sh --bridge, ADR-094).
+      FREE_CODE_BRIDGE_URL: ${FREE_CODE_BRIDGE_URL:-http://host.docker.internal:18792}
+      # Self-update (ADR-094): feature switch (off until accepted), managed
+      # install (deploy = no button, 409), the door token file (empty =
+      # ~/.mc/secrets/mc-update.token through the ~/.mc mount) and the manual
+      # drain switch of the Docker gateway. API and worker both read them.
+      MC_SELF_UPDATE_ENABLED: ${MC_SELF_UPDATE_ENABLED:-false}
+      MC_UPDATE_MANAGED: ${MC_UPDATE_MANAGED:-}
+      MC_UPDATE_TOKEN_FILE: ${MC_UPDATE_TOKEN_FILE:-}
+      MC_UPDATE_DRAIN: ${MC_UPDATE_DRAIN:-false}
       # ADR-022: MC-Home unter ~/.mc/. Stage-2-Entkopplung (2026-06-01): aller
       # Backend-Code referenziert jetzt direkt ~/.mc/...; der Legacy ~/.openclaw
       # Mount wurde entfernt (Host-Symlinks bleiben bis Stage 3 bestehen).
@@ -583,6 +601,18 @@ services:
       PGID: ${PGID:-}
       CLI_BRIDGE_TOKEN: ${CLI_BRIDGE_TOKEN:-}
       CLI_BRIDGE_TOKEN_FILE: ${CLI_BRIDGE_TOKEN_FILE:-}
+      # Where the cli-bridge listens. macOS: host.docker.internal (Docker
+      # Desktop delivers it to the host's loopback). Linux: install.sh sets
+      # the gateway of MC's Docker network (./install.sh --bridge, ADR-094).
+      FREE_CODE_BRIDGE_URL: ${FREE_CODE_BRIDGE_URL:-http://host.docker.internal:18792}
+      # Self-update (ADR-094): feature switch (off until accepted), managed
+      # install (deploy = no button, 409), the door token file (empty =
+      # ~/.mc/secrets/mc-update.token through the ~/.mc mount) and the manual
+      # drain switch of the Docker gateway. API and worker both read them.
+      MC_SELF_UPDATE_ENABLED: ${MC_SELF_UPDATE_ENABLED:-false}
+      MC_UPDATE_MANAGED: ${MC_UPDATE_MANAGED:-}
+      MC_UPDATE_TOKEN_FILE: ${MC_UPDATE_TOKEN_FILE:-}
+      MC_UPDATE_DRAIN: ${MC_UPDATE_DRAIN:-false}
       MC_MCP_REGISTRY_DIR: ${HOME}/.mc/mcp-servers
       MC_AGENTS_ROOT: ${HOME}/.mc/agents
     volumes:

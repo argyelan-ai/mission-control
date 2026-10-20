@@ -1,0 +1,3 @@
+# The harness session scratchpad lives under /private/tmp on purpose.
+echo x > /private/tmp/claude-502/-Users-x/1234/scratchpad/preview.html
+cp shot.png /tmp/claude-502/proj/abcd/scratchpad/screenshot.png

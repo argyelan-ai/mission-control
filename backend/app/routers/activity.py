@@ -38,6 +38,19 @@ async def list_activity(
     return result.all()
 
 
+@router.get("/activity/proof-gate/stats")
+async def proof_gate_stats(
+    days: int = Query(30, ge=1, le=365),
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """Beweis-Tor: who caught false finish reports (``gefangen_von``) —
+    the gate, a reviewer role, the lead or the operator. Read-only."""
+    from app.services.proof_gate import caught_by_stats
+
+    return await caught_by_stats(session, days=days)
+
+
 @router.get("/activity/stream")
 async def stream_activity(current_user = Depends(require_user)):
     return make_sse_response([RedisKeys.activity_events()])

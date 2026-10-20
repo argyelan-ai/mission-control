@@ -758,3 +758,117 @@ def test_backup_passes_the_detected_project_name_to_every_compose_call(env):
     assert log, "no compose calls were logged"
     for line in log.splitlines():
         assert line.startswith("compose -p repo "), line
+
+
+# ── pre-update backups (ADR-094 decision 4, update plan PR 2b) ─────────────
+#
+# The update engine (scripts/mc_update.py) runs `./backup.sh preupdate` right
+# before it switches versions, and `./backup.sh restore <that file> --yes
+# --no-safety-copy --keep-env` when the way back must bring the database back.
+
+
+def _preupdate(e, **extra):
+    r = e.run("preupdate", stdin="", extra=extra or None)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return r
+
+
+def _preupdate_file(r) -> Path:
+    last = [ln for ln in r.stdout.splitlines() if ln.startswith("Pre-update backup: ")]
+    assert last, r.stdout
+    return Path(last[-1].split(": ", 1)[1])
+
+
+def _fake_set(folder: Path, stamp: str) -> Path:
+    db = folder / f"mc_backup_preupdate_{stamp}.sql.gz"
+    db.write_bytes(b"x")
+    (folder / f"mc_pins_preupdate_{stamp}.txt").write_text("GIT_TAG=v0.0.1\n")
+    (folder / f"mc_env_preupdate_{stamp}.env.enc").write_bytes(b"x")
+    return db
+
+
+def test_preupdate_backup_has_its_own_prefix_pins_and_no_data_archive(env):
+    _psql(env.pg, "create table if not exists alembic_version(version_num text); "
+                  "delete from alembic_version; insert into alembic_version values ('0218_config_checks')")
+    (env.repo / ".env").write_text("MC_IMAGE_TAG=0.9.2\nMC_AGENT_IMAGE_TAG=0.9.2\nMC_CHANNEL=stable\n")
+    r = _preupdate(env)
+    db = _preupdate_file(r)
+    assert db.name.startswith("mc_backup_preupdate_") and db.exists()
+    with gzip.open(db, "rt") as fh:
+        assert "-- PostgreSQL database dump complete" in fh.read()
+    # The ~/.mc archive is not part of it — an update does not change ~/.mc.
+    assert not list(env.backups.glob("mc_data_*")), "no ~/.mc archive in a pre-update backup"
+    pins = env.backups / db.name.replace("mc_backup_", "mc_pins_").replace(".sql.gz", ".txt")
+    body = pins.read_text()
+    assert "SCHEMA=0218_config_checks" in body
+    assert "MC_IMAGE_TAG=0.9.2" in body and "MC_AGENT_IMAGE_TAG=0.9.2" in body
+    assert stat.S_IMODE(pins.stat().st_mode) == 0o600
+    # Not a daily backup: the daily auto-pick of `restore` never takes it.
+    assert not list(env.backups.glob("mc_backup_2*.sql.gz"))
+
+
+def test_preupdate_keeps_the_newest_three_and_nothing_older_than_14_days(env):
+    env.backups.mkdir(mode=0o700)
+    sets = [_fake_set(env.backups, f"2026-01-0{d}_00-00-00") for d in (1, 2, 3, 4)]
+    # The newest of the old ones is fresh by name but 15 days old on disk.
+    old = time.time() - 15 * 24 * 3600
+    os.utime(sets[3], (old, old))
+    r = _preupdate(env)
+    new = _preupdate_file(r)
+    left = sorted(p.name for p in env.backups.glob("mc_backup_preupdate_*.sql.gz"))
+    # new (kept always) + 2026-01-03 + 2026-01-02 would be the newest three,
+    # but 01-04 is older than 14 days and goes first → new, 01-03, 01-02.
+    assert left == sorted([new.name, sets[2].name, sets[1].name]), left
+    # A set goes as a whole: pins and the encrypted .env with it.
+    assert not (env.backups / "mc_pins_preupdate_2026-01-04_00-00-00.txt").exists()
+    assert not (env.backups / "mc_env_preupdate_2026-01-01_00-00-00.env.enc").exists()
+    assert (env.backups / "mc_pins_preupdate_2026-01-03_00-00-00.txt").exists()
+
+
+def test_daily_rotation_never_removes_preupdate_backups_and_vice_versa(env):
+    env.backups.mkdir(mode=0o700)
+    keep = _fake_set(env.backups, "2026-01-01_00-00-00")
+    for _ in range(2):
+        r = env.run(extra={"MC_BACKUP_KEEP": "1"})
+        assert r.returncode == 0, r.stdout + r.stderr
+        time.sleep(1.1)
+    assert keep.exists(), "the daily rotation must not touch pre-update backups"
+    daily = list(env.backups.glob("mc_backup_2*.sql.gz"))
+    assert len(daily) == 1
+    for _ in range(4):
+        _preupdate(env)
+        time.sleep(1.1)
+    assert daily[0].exists(), "the pre-update rotation must not touch daily backups"
+    assert len(list(env.backups.glob("mc_backup_preupdate_*.sql.gz"))) == 3
+
+
+def test_list_shows_preupdate_backups(env):
+    db = _preupdate_file(_preupdate(env))
+    r = env.run("list")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert str(db) in r.stdout
+
+
+def test_restore_of_a_preupdate_backup_with_keep_env_leaves_env_alone(env):
+    envfile = env.repo / ".env"
+    envfile.write_text(ENV_BODY)
+    db = _preupdate_file(_preupdate(env, MC_BACKUP_PASSPHRASE="pw"))
+    assert (env.backups / db.name.replace("mc_backup_", "mc_env_").replace(".sql.gz", ".env.enc")).exists()
+    _psql(env.pg, "insert into notes select g, 'after' from generate_series(6,9) g")
+    changed = "SECRETS_ENCRYPTION_KEY=pinned-by-the-update\nMC_IMAGE_TAG=0.9.3\n"
+    envfile.write_text(changed)
+    inode = envfile.stat().st_ino
+    env.log.write_text("")
+
+    r = env.run("restore", str(db), "--yes", "--no-safety-copy", "--keep-env", stdin="",
+                extra={"MC_BACKUP_PASSPHRASE": "pw"})
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _rows(env.pg) == 5, "database is back on the pre-update state"
+    assert envfile.read_text() == changed and envfile.stat().st_ino == inode
+    assert not list(env.repo.glob(".env.backup-pre-restore-*"))
+    assert "~/.mc is NOT restored" in r.stdout
+    assert not list(env.backups.glob("mc_backup_pre-restore_*")), "--no-safety-copy"
+    lines = env.log.read_text().splitlines()
+    idx_drop = next(i for i, ln in enumerate(lines) if "DROP DATABASE" in ln)
+    assert any(" stop " in ln and "mc-worker" in ln for ln in lines[:idx_drop])

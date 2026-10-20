@@ -1,0 +1,2 @@
+# A preview copied into /tmp is gone after a few days.
+cp -r dist /tmp/preview
