@@ -84,6 +84,40 @@ _SILENT_MAILBOX_DELIBERATE_WAIT = frozenset({"waiting", "blocked"})
 _SILENT_MAILBOX_MARKER = "STILLE SCHLANGE"
 
 
+async def _cards_the_system_holds(session: AsyncSession, cards: list[Task]) -> set[uuid.UUID]:
+    """Ids of the ``cards`` that no path may hand out now, or only just can again.
+
+    Held: the MC update drain holds every card (ADR-094); the system mode
+    holds what ``system_mode_refusal`` refuses (HALTED every card, DRAINING
+    every card but the continuation flows). Just released: the ACK ladder
+    marks each held card with ``RedisKeys.dispatch_system_hold`` for one ACK
+    timeout plus margin, so the first poll after the hold can deliver it
+    before anyone reads its old timestamps.
+
+    A Redis error leaves the grace window out: the silent-mailbox alarm then
+    fires as it did before, loud rather than quiet. The system mode itself
+    reads as "active" on a Redis error (``get_system_mode``).
+    """
+    from app.services import update_drain
+    from app.services.operations import get_system_mode, system_mode_refusal
+
+    if (await update_drain.current(session)).active:
+        return {t.id for t in cards}
+    system_mode = await get_system_mode()
+    held = {t.id for t in cards if system_mode_refusal(system_mode, t)}
+    rest = [t for t in cards if t.id not in held]
+    if not rest:
+        return held
+    try:
+        redis = await get_redis()
+        marks = await redis.mget([RedisKeys.dispatch_system_hold(str(t.id)) for t in rest])
+    except Exception as e:  # noqa: BLE001 — report-only, never break the tick
+        logger.debug("system-hold grace marks unreadable (%s) — no grace window", e)
+        return held
+    held.update(t.id for t, mark in zip(rest, marks) if mark)
+    return held
+
+
 def _dt_max(*values: datetime | None) -> datetime | None:
     """Return the latest timezone-aware instant, ignoring Nones."""
     aware = [ensure_aware(v) for v in values if v is not None]
@@ -1669,6 +1703,10 @@ class TaskMonitorMixin:
         - A `waiting` or `blocked` card for the same agent → deliberate
           wait, excluded explicitly, regardless of how long the inbox card
           has sat.
+        - A card the system holds (HALTED, DRAINING for a non-continuation
+          card, the MC update drain) or only just released does not count:
+          the poll answers ``idle`` for it on purpose, so an agent with only
+          held cards is not silent (ADR-089 Nachtrag 2026-10-20 (c)).
 
         Episode boundary: the agent picking up a card (in_progress > 0) or
         the queue going empty (inbox == 0) each remove the agent from the
@@ -1693,6 +1731,14 @@ class TaskMonitorMixin:
         if not inbox_candidates:
             return
 
+        # rule: R-system-mode-holds-poll - a card the system holds is not a dead mailbox
+        # The poll, push dispatch, the undispatched-card watcher and pull
+        # dispatch all refuse to hand such a card out, so nobody pulling
+        # it is the system's doing. Counted, it reached the Board Lead 15
+        # minutes into every hold and the operator 30 minutes later
+        # (_check_lead_notify_escalations). Same skip as the ACK ladder.
+        held_by_system = await _cards_the_system_holds(session, inbox_candidates)
+
         now = utcnow()
         threshold = timedelta(minutes=SILENT_MAILBOX_THRESHOLD_MINUTES)
 
@@ -1705,10 +1751,12 @@ class TaskMonitorMixin:
 
         for (agent_id, board_id), inbox_tasks in grouped.items():
             # A card an operator explicitly paused/stopped isn't "queued
-            # work the agent should have pulled" — don't count it.
+            # work the agent should have pulled" — don't count it. Neither
+            # is a card the system holds (above).
             active_inbox = [
                 t for t in inbox_tasks
                 if t.run_control not in ("stopped", "manual_hold")
+                and t.id not in held_by_system
             ]
             if not active_inbox:
                 continue

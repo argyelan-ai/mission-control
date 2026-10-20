@@ -445,3 +445,157 @@ async def test_active_task_recovery_restores_the_own_running_card_while_halted(
     body = resp.json()
     assert body["active"] is True and body["task"]["id"] == str(card.id), body
     assert body["task"]["dispatch_attempt_id"] == "running-attempt", body
+
+
+# ── the silent-mailbox watcher and its operator escalation ──────────────────
+
+
+async def _mailbox(make_board, make_agent, make_task, *, intents=("root",), minutes=20, **worker):
+    """A Board Lead and a cli-bridge worker whose inbox cards have sat
+    ``minutes`` with nothing in progress: past the silent-mailbox threshold
+    (15 min). Returns the worker's cards in ``intents`` order."""
+    board = await make_board(name="Mailbox", slug=f"mailbox-{uuid.uuid4().hex[:8]}")
+    await make_agent(
+        name=f"Lead-{uuid.uuid4().hex[:6]}", board_id=board.id, is_board_lead=True, role="lead",
+    )
+    worker = await make_agent(
+        name=f"M-{uuid.uuid4().hex[:6]}", board_id=board.id, is_board_lead=False,
+        role="developer", agent_runtime="cli-bridge", **worker,
+    )
+    parent = None
+    if any(i != "root" for i in intents):
+        parent = await make_task(board_id=board.id, title="parent", status="done")
+    cards = []
+    for intent in intents:
+        cards.append(await make_task(
+            board_id=board.id, title=f"queued {intent}", status="inbox",
+            assigned_agent_id=worker.id, dispatch_intent=intent,
+            parent_task_id=parent.id if parent and intent != "root" else None,
+            created_at=_ago(minutes), updated_at=_ago(minutes),
+        ))
+    return worker, cards
+
+
+async def _mailbox_notes() -> list:
+    from app.models.task import TaskComment
+
+    async with _session() as s:
+        return (await s.exec(
+            select(TaskComment).where(
+                TaskComment.comment_type == "watchdog_notify",
+                TaskComment.content.like("STILLE SCHLANGE%"),  # type: ignore[union-attr]
+            )
+        )).all()
+
+
+async def _silent_mailbox_pass() -> None:
+    from app.services.watchdog.task_monitor import TaskMonitorMixin
+
+    with patch("app.services.watchdog.task_monitor.emit_event", AsyncMock()):
+        async with _session() as s:
+            await TaskMonitorMixin()._check_silent_mailbox(s)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hold", ["halted", "draining", "update_drain"])
+async def test_silent_mailbox_does_not_report_a_card_the_system_holds(
+    make_board, make_agent, make_task, hold,
+):
+    """A root card held for 20 min is not a dead mailbox: the poll answers
+    ``idle`` for it on purpose. Before, the Board Lead got a "STILLE
+    SCHLANGE" note 15 min into every hold, for every agent with a held
+    card."""
+    await _mailbox(make_board, make_agent, make_task)
+
+    if hold == "update_drain":
+        await _set_update_drain()
+    else:
+        await _set_mode(hold)
+    await _silent_mailbox_pass()
+
+    assert await _mailbox_notes() == [], f"silent-mailbox alarm for a card {hold} holds"
+
+
+@pytest.mark.asyncio
+async def test_silent_mailbox_still_counts_the_cards_draining_lets_through(
+    make_board, make_agent, make_task,
+):
+    """DRAINING lets a subtask through, so a worker sitting 20 min on it is
+    still silent. The note counts that card only, not the held root card
+    next to it."""
+    _, (root, sub) = await _mailbox(
+        make_board, make_agent, make_task, intents=("root", "subtask"),
+    )
+
+    await _set_mode("draining")
+    await _silent_mailbox_pass()
+
+    notes = await _mailbox_notes()
+    assert len(notes) == 1, "a continuation card the worker does not pull is still reported"
+    assert notes[0].task_id == sub.id
+    assert "Karten in inbox: 1" in notes[0].content
+
+
+@pytest.mark.asyncio
+async def test_no_operator_escalation_for_a_mailbox_the_halt_holds(
+    client, make_board, make_agent, make_task,
+):
+    """The full chain the reviewer reproduced: HALTED, the worker's poll
+    answers ``idle``, its root card has waited an hour. No stage-1 note to
+    the Board Lead, and so no stage-2 escalation to the operator 30 min
+    later."""
+    from app.models.task import TaskComment
+    from app.services.watchdog.task_monitor import TaskMonitorMixin
+
+    raw, token_hash = generate_agent_token()
+    _, (card,) = await _mailbox(
+        make_board, make_agent, make_task, minutes=60,
+        agent_token_hash=token_hash, scopes=["tasks:read", "tasks:write"],
+        provision_status="provisioned", requires_git_workflow=False,
+    )
+
+    await _set_mode("halted")
+    with patch("app.services.dispatch.build_agent_task_prompt", AsyncMock(return_value="P")):
+        resp = await client.get("/api/v1/agent/me/poll", headers={"Authorization": f"Bearer {raw}"})
+    assert resp.json().get("system_halted") is True, resp.text
+
+    await _silent_mailbox_pass()
+    async with _session() as s:  # 31 min later
+        for c in (await s.exec(select(TaskComment).where(TaskComment.task_id == card.id))).all():
+            c.created_at = _ago(31)
+            s.add(c)
+        await s.commit()
+    with patch("app.services.watchdog.task_monitor.emit_event", AsyncMock()), \
+         patch("app.services.operator_approvals.send_approval", AsyncMock()):
+        async with _session() as s:
+            await TaskMonitorMixin()._check_lead_notify_escalations(s)
+
+    async with _session() as s:
+        alarms = (await s.exec(select(TaskComment).where(
+            TaskComment.task_id == card.id,
+            TaskComment.comment_type.in_(("watchdog_notify", "lead_escalated_notify")),  # type: ignore[union-attr]
+        ))).all()
+    assert alarms == [], [a.comment_type for a in alarms]
+
+
+@pytest.mark.asyncio
+async def test_silent_mailbox_waits_one_ack_timeout_after_the_hold_ends(
+    make_board, make_agent, make_task,
+):
+    """Right after the halt the held card is still old. The first poll after
+    it delivers the card, so the watcher waits the ladders' grace window
+    (``RedisKeys.dispatch_system_hold``) before it calls the mailbox dead,
+    then reports as before."""
+    from app.redis_client import RedisKeys, get_redis
+
+    _, (card,) = await _mailbox(make_board, make_agent, make_task)
+
+    await _set_mode("halted")
+    await _tick()  # the ladder marks the held card
+    await _set_mode("active")
+    await _silent_mailbox_pass()
+    assert await _mailbox_notes() == [], "alarm right after the halt, before any poll could deliver"
+
+    await (await get_redis()).delete(RedisKeys.dispatch_system_hold(str(card.id)))
+    await _silent_mailbox_pass()
+    assert len(await _mailbox_notes()) == 1, "the watcher no longer reports after the grace window"
