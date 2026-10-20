@@ -51,13 +51,13 @@ acp_chat_ctl.py <op>  (CLI shim used by docker exec)      ·      hermes-bridge.
 ### Component: `docker/omp-bridge/acp_chat.py` (chat daemon)
 
 - `ChatSession(client_factory, cwd, state_dir, sessions_dir)` — pure-Python core, testable with a fake ACP process (`tests/fake_acp_server.py`) or an in-memory fake client.
-- Startup: move MC copies an older image left next to omp's files into `.mc/` (see "Storage" below); find the session to resume — the pointer `acp-chat.json` (`{"sessionId", "transcript"}`), else the state mirror (see "What survives what" below) — and follow it to a moved file (`sink_migration.remap`); `initialize`; try `session/load` with the stored id → on success append to the stored transcript file; when the load fails or the transcript is gone, `session/new`, a new transcript file and a visible `chat_error{code:"session_reset"}`. No pointer at all, but an earlier chat copy in the tree → `chat_notice{code:"chat_started_fresh"}`. When the move did not run (lock held by a live run, unreadable list, error) the chat shows a `chat_notice` with `code: "sink_migration_skipped"` and the chat starts anyway.
+- Startup: move MC copies an older image left next to omp's files into `.mc/` (see "Storage" below); find the session to resume — the pointer `acp-chat.json` (`{"sessionId", "transcript"}`), else the state mirror (see "What survives what" below) — and follow it to a moved file (`sink_migration.remap`); `initialize`; try `session/load` with the stored id → on success append to the stored transcript file; when the load fails or the transcript is gone, `session/new`, a new transcript file and a visible `chat_error{code:"session_reset"}`. No pointer at all, but an earlier chat copy in the tree → `chat_notice{code:"chat_started_fresh"}`. When the move did not run (lock held by a live run, unreadable list, error) the chat shows a `chat_notice` with `code: "sink_migration_skipped"` and the chat starts anyway. Before anything rewrites the state mirror, the start also reads what the previous daemon was doing: held jobs (`queue_lost`) and a reply it was running (`turn_interrupted`, see "Interrupted turns" below).
 - Uses `acp_chat_events.ACPEventMapper` + `ChatEventSink` + `PreviewEventSink` exactly like `run_acp_once` (user line via `map_user_prompt`, streaming previews, ONE final assistant line with usage).
 - Thinking (20.10.2026): a thought's preview line carries `data: {"block": "thinking", "chars": <full size>, "startedAt": <iso>}` and only the END of the thought as `content` (≤ 2 000 chars — the file grows linearly). The backend passes these on the `preview` SSE event; the chat shows "Thinking · ≈N tokens · m:ss" instead of an answer preview. When the thought ends (next answer chunk, tool call, plan, the turn's final line or a chat error) ONE assistant line with a `{"type": "thinking", "thinking", "durationMs"}` block lands in the transcript. Usage/config updates do not end a thought.
 - Running task in the agent chat (20.10.2026): the agent chat shows the chat daemon's session only (#898); a task runs in a session of its own (bridge header `taskId`). `GET /agents/{id}/chat/task-activity` reads that session through the same adapter (`find_task_session`, `tasks_in_own_session`) and the chat renders it as a separate "From the task" block — delivery, the newest steps, the running thought, more inbox tasks. Harnesses whose task runs inside the chat answer `applies: false` — Claude Code, omp under the native driver, and Hermes (over ACP the hermes-bridge hands a task to the chat daemon itself).
 - `configOptions` (from `session/new`/`session/load` result and `config_option_update` notifications) and `available_commands_update` are kept in memory and mirrored to `sessions_dir/acp-chat-state.json` after every change.
 - Permissions: `OMP_ACP_PERMISSIONS` policy (yolo → allow), same helper as the bridge.
-- Errors → transcript `custom_message` line, `customType: "chat_error"`, content = human text, plus `data: {"code": ..., "detail": ...}`. Codes: `rpc_error` (JSON-RPC error on prompt/config), `provider_error` (`401`/`403`/`429`/quota text detected in the error or in the final agent text when the turn produced no text), `empty_turn` (turn ended with stopReason `end_turn` and zero agent text), `process_exit` (child died; daemon restarts it and re-loads the session), `busy`, `session_reset` (the conversation to resume could not be opened; `detail` is `transcript_missing` when its transcript is gone, `model_missing` when omp cannot restore the session's model — the content then names the model, and `data.model` carries the name for the card in the UI language —, otherwise the exception), `queue_full` (20 messages already held), `new_session_failed` (`session/new` refused; the current session continues), `queue_lost` (a restart dropped held jobs), `cancelled` is NOT an error (it produces a normal end-of-turn).
+- Errors → transcript `custom_message` line, `customType: "chat_error"`, content = human text, plus `data: {"code": ..., "detail": ...}`. Codes: `rpc_error` (JSON-RPC error on prompt/config), `provider_error` (`401`/`403`/`429`/quota text detected in the error or in the final agent text when the turn produced no text), `empty_turn` (turn ended with stopReason `end_turn` and zero agent text), `process_exit` (child died; daemon restarts it and re-loads the session — `data.retryText` carries the operator's text of the turn that died, when its reply never came), `turn_interrupted` (the daemon restarted while a reply ran; `detail` is `turn <n>` or `turn unknown`, `data.retryText` the operator's text — see "Interrupted turns"), `busy`, `session_reset` (the conversation to resume could not be opened; `detail` is `transcript_missing` when its transcript is gone, `model_missing` when omp cannot restore the session's model — the content then names the model, and `data.model` carries the name for the card in the UI language —, otherwise the exception), `queue_full` (20 messages already held), `new_session_failed` (`session/new` refused; the current session continues), `queue_lost` (a restart dropped held jobs, and a `/new` that was running), `cancelled` is NOT an error (it produces a normal end-of-turn). Extra fields of a card go through `ACPEventMapper.map_chat_error(code, detail, text, data=None)`: they never replace `code` or `detail`, a `None` value is left out, and without `data` the line is exactly the one before S1-R5.
 - Model pin (incident 19.10.2026): every `session/new` and `session/load` pins the selector read from the CURRENT `omp.env` (`acp_model.current_selector` — a runtime switch re-renders that file in the running container; the daemon's boot env goes stale). A selector the session does not offer is replaced by the offered model of the same provider and the chat gets a `custom_message` line `customType: "chat_notice"`, `data: {"code": "model_fallback", "previous", "current"}` (frontend `ChatNoticeCard`, `chat.notice.*`). The task path (`bridge.run_acp_once`) does the same, writes a refused pin into the task's chat as `chat_error`, and marks its prompts `attribution: "mc"` + `origin: {kind: "task"|"nudge"}` so the chat shows them as task events, not as operator bubbles.
 - Socket server: `$OMP_HOME/acp-chat.sock` (path configurable via `--socket`), newline-delimited JSON; each connection = one request/one response.
 
@@ -217,6 +217,7 @@ does not know (P4 adds `homeSessionId`) stay when it is rewritten.
 | the pointer's transcript is gone (also not in `.mc/`), or the file system refuses its path | a new conversation and the card `session_reset` / `transcript_missing` |
 | no pointer and no state mirror, but an earlier chat copy (`bridge: "acp"`, no `taskId`) in the tree | a new conversation and the notice `chat_started_fresh` |
 | a brand-new agent, or only task copies / omp's own files in the tree | a new conversation, no card |
+| any restart or recreate **while a reply runs** | the conversation goes on, the running reply is lost: card `turn_interrupted` with the operator's text to send again (a crash of the omp child: `process_exit` with the text) — never resent on its own (see "Interrupted turns") |
 
 In one sentence: **the conversation goes on as long as the model is the same
 as at its last turn; otherwise there is a visible card.** omp (since 18.6.3)
@@ -233,13 +234,80 @@ The pictures of a conversation (omp's `blobs/` folder) survive a recreate
 only with the mount from S1-R8 (`docker/omp-bridge/README.md`, "What lives
 where").
 
+### Interrupted turns (S1-R5, 20.10.2026)
+
+A restart of the chat daemon (`docker restart`, a recreate, a bridge reload,
+Hermes' `ChatDaemon.restart`) ends a reply that is running. omp gets no
+second chance to finish it, and the new daemon never sends it again on its
+own: a message the model already half-answered — maybe with tool calls that
+changed files — must not run twice without the operator deciding it.
+
+- Who wrote a prompt is part of the request: `origin` (control protocol
+  below). `"operator"` is the operator's own message — the composer.
+  `"task"` / `"nudge"` mean Mission Control wrote it (the names of the task
+  path); the chat line is then an MC event (`attribution: "mc"`), not an
+  operator bubble. Anything else, or no `origin` at all, is unknown and
+  shown as before. **Only the operator's text is ever offered to send
+  again** — fail-closed: hermes-bridge's dispatch and comment prompts and
+  the omp bridge's wake-up go through the same session, and hermes-bridge
+  delivers a task again on its own after a restart. One tap on its dispatch
+  text (with an attempt id that may be stale by then) could run the task a
+  second time. A caller that forgets to say who wrote a text costs a
+  button, never a second run. State 20.10.2026: no caller sends `origin`
+  yet — the backend's composer path (`acp_chat_transport.prompt`) and
+  Hermes' `ChatDaemon.request` have to pass `"operator"` on before any card
+  offers "Send again"; hermes-bridge's `ChatDaemon.prompt` and the omp
+  bridge's wake-up may then say `"task"` / `"nudge"` (follow-up).
+- While a job runs, the state mirror carries
+  `current: {"kind": "prompt" | "new_session", "turn": n | null, "text": "…" | null, "truncated": bool, "startedAt": "…", "origin": "operator" | "task" | "nudge" | null}`,
+  set when the job is claimed (`_claim_locked`), `null` when the job ends;
+  the next job from the queue becomes `current` (a held job keeps its
+  `origin`). `text` is the whole prompt — the same protection class as the
+  held texts in `queue` — or `null` with `truncated: true` when it has more
+  than 8000 characters.
+- A daemon that stops mid-turn leaves `busy: true` and `current` on disk. A
+  closed session writes nothing more — no state mirror, transcript, preview
+  or pointer — from any thread: its ACP reader still hands over buffered
+  updates while `close()` waits for the child, and one of them rewriting
+  the mirror with `busy: false` would hide the cut-off reply. The next
+  `start()` reads the mirror before anything rewrites it:
+
+| previous mirror | the chat shows |
+|---|---|
+| `busy: true`, `current.kind == "prompt"`, `current.origin == "operator"` | ONE `chat_error` card `turn_interrupted` ("The chat restarted while a reply was running — nothing was resent automatically."), `detail: "turn <n>"`, `data.retryText` = the operator's text |
+| `busy: true`, `current.kind == "prompt"`, any other `origin` | the `turn_interrupted` card ("The chat restarted while a reply was running.") — **no** `retryText`, no claim about resending |
+| `busy: true`, `current.kind == "new_session"` | no card of its own: `/new` is listed first on the `queue_lost` card |
+| `busy: true`, no `current` (an image before S1-R5) | the `turn_interrupted` card with `detail: "turn unknown"`, the sentence without the claim, and **no** `retryText` |
+| `interrupted` set (a start before died before its card) | the same as for `current` |
+| `busy` not `true` and no `interrupted` (idle, missing, unreadable) | nothing |
+
+- The interrupted job is never used up before its card is written: from
+  the moment `start()` reads it until the card is on disk, the mirror keeps
+  it as `interrupted` (the same shape as `current`), although `busy` is
+  already `false` again. A stop in between shows the card on the next
+  start; a stop right after the card and before the mirror is rewritten
+  shows it once more — twice, never not at all. The held queue (`queue_lost`)
+  and open questions do not have this yet: a stop in that window loses
+  their card, as before S1-R5.
+- The omp child dying mid-turn is the other way a reply is cut off: the
+  `process_exit` card carries `data.retryText` too — only for the
+  operator's text, and only when the reply never came (a child that exits
+  right after a complete reply leaves nothing to send again). The respawn
+  only reloads the session.
+- `retryText` is only ever the **whole** text, never a shortened one: an
+  empty text or one longer than 8000 characters gets no `retryText` (the
+  backend applies the same rule, `_RETRY_TEXT_MAX_CHARS`). The frontend's
+  "Send again" button sends it through the normal send path, once, and only
+  on the newest such card (S1-R7).
+- No code path sends a prompt from `start()` or from the child restart.
+
 ### Control protocol (socket and HTTP share the schema)
 
 | op | request | response |
 |----|---------|----------|
-| `prompt` | `{"op":"prompt","text":"...","mode"?:"now"\|"queue"}` | `{"ok":true,"turn":n}` immediately (turn runs async) · busy + `mode:"queue"`: `{"ok":true,"queued":true,"queueId":"…","position":n,"at":"…"}` · busy otherwise: `{"ok":false,"error":"busy"}` · `{"ok":false,"error":"queue_full"}` |
+| `prompt` | `{"op":"prompt","text":"...","mode"?:"now"\|"queue","origin"?:"operator"\|"task"\|"nudge"}` — `origin`: who wrote the text (see "Interrupted turns"); only `"operator"` makes it offerable again | `{"ok":true,"turn":n}` immediately (turn runs async) · busy + `mode:"queue"`: `{"ok":true,"queued":true,"queueId":"…","position":n,"at":"…"}` · busy otherwise: `{"ok":false,"error":"busy"}` · `{"ok":false,"error":"queue_full"}` |
 | `new_session` | `{"op":"new_session","mode"?:"now"\|"queue"}` | `{"ok":true,"previousSessionId":"…"}` — `session/new` runs in the worker; a new transcript file starts (the chat view follows it as a rollover), the old file stays, model + thinking carry over, the old ACP session gets `session/close`. Busy: `{"ok":false,"error":"busy"}`, or held in the queue with `mode:"queue"` |
-| `queue_clear` | `{"op":"queue_clear"}` | `{"ok":true,"dropped":[{"id","kind":"prompt"\|"new_session","text","at"}, …]}` oldest first |
+| `queue_clear` | `{"op":"queue_clear"}` | `{"ok":true,"dropped":[{"id","kind":"prompt"\|"new_session","text","origin"?,"at"}, …]}` oldest first |
 
 The queue lives in the daemon's memory only. A daemon restart (container recreate, bridge reload) drops held jobs; the restarted daemon reads the old `queue` from the state mirror and posts one `queue_lost` card listing them. The composer shows held messages from its own optimistic echo, so after a page reload or on another device they are not shown until they run (follow-up: render them from the state file's `queue`).
 | `cancel` | `{"op":"cancel"}` | `{"ok":true}` (no-op when idle) |
@@ -283,6 +351,7 @@ least two).
   "configOptions": [{"id":"thinking","category":"thought_level","currentValue":"medium","options":[{"value":"off","name":"Off"}, …]}, {"id":"model","category":"model","currentValue":"…","options":[…]}, {"id":"mode", …}],
   "commands": [{"name":"usage","description":"…","input":null}, …],
   "queue": [{"id":"…","kind":"prompt" | "new_session","text":"…","at":"…"}, …],
+  "current": null | {"kind":"prompt" | "new_session","turn":12 | null,"text":"…" | null,"truncated":false,"startedAt":"…"},
   "updatedAt": "2026-09-13T12:00:00Z",
   "lastError": null | {"code":"…","detail":"…","at":"…"}
 }
