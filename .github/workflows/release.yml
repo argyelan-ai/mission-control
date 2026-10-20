@@ -262,6 +262,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            # gate-audit: soft - pre-releases are never offered by the update engine (stable vX.Y.Z only), so there is no install path to prove; stable tags still go through the check below
             echo "pre-release $GITHUB_REF_NAME: the engine never installs it, nothing to prove"; exit 0
           fi
           out="$(python3 scripts/mc_update_verify.py signature "$GITHUB_REF_NAME" --commit "$GITHUB_SHA")" \

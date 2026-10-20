@@ -1,0 +1,49 @@
+name: gate-audit
+
+# Gate-Ehrlichkeit: every gate (CI job, Claude Code hook, guard script) must be
+# in tools/guards/GATES.md with the case it turns red on and a sabotage probe
+# or a recorded red run. Red on: unregistered gate, gate without red case or
+# probe, stale row, script that can only `exit 0`, `if: false` job, soft-fail
+# without a `# gate-audit: soft - <reason>` comment, non-required Gate not
+# marked as such, cited "Rot-Lauf" id that does not exist or was not red. Rules: tools/guards/gate_audit.py.
+# Also runs the hook tests, so a hook that stops blocking turns this red too.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  # Same reason as ci.yml: if this ever becomes a required check, the merge
+  # queue must get a result for its gh-readonly-queue/... builds.
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+  actions: read  # R9: look up the run ids cited as evidence in GATES.md
+
+jobs:
+  gate-audit:
+    name: gate-audit (register + hook probes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Register vs. tree (tools/guards/GATES.md) + cited runs really red
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/guards/gate_audit.py --verify-runs
+
+      - name: Hook + audit sabotage probes
+        run: |
+          pip install pytest
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+          python3 -m pytest -q -p no:cacheprovider tools/hooks/tests tools/guards/tests
+
+      - name: shellcheck hook scripts
+        run: shellcheck -S warning tools/hooks/*.sh
