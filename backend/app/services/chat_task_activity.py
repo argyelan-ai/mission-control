@@ -43,7 +43,7 @@ _SINCE_SLACK = timedelta(minutes=2)
 #: A preview snapshot older than this is a dead run, not a live thought.
 _PREVIEW_MAX_AGE = timedelta(minutes=10)
 #: Bytes read from the END of a preview file (it can be tens of MB).
-_PREVIEW_TAIL_BYTES = 64 * 1024
+_PREVIEW_TAIL_BYTES = 512 * 1024
 
 NOT_APPLICABLE: dict[str, Any] = {"applies": False}
 
