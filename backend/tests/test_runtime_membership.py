@@ -972,3 +972,47 @@ async def test_watcher_reports_a_duo_held_back_by_a_busy_worker_box_once(
     assert "recipe-x-box-b" in event.title and "box-b" in event.title
     assert set(event.detail["sentence"]) == {"de", "en"}
     assert "recipe-x-box-b" in event.detail["sentence"]["en"]
+
+
+@pytest.mark.asyncio
+async def test_set_members_asks_is_it_running_before_it_takes_the_lock(session):
+    """Critic on the #893 fix: the probe is network (SSH/HTTP, seconds). Asked
+    under the row lock it would block every other writer of the runtime —
+    the healer included — for as long as a slow box takes to answer."""
+    a = await _host(session, "box-a")
+    b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    c = await _host(session, "box-c", ssh_host="192.0.2.12")
+    rt = await _duo_rt(session, "duo", a)
+    await rm.set_members(session, rt, rm.duo(a.id, b.id))
+
+    order: list[str] = []
+    real_lock = rm.lock_runtime
+
+    async def lock_spy(sess, runtime_id):
+        order.append("lock")
+        await real_lock(sess, runtime_id)
+
+    async def probe_spy(sess, runtime):
+        order.append("probe")
+        return False
+
+    with patch.object(rm, "lock_runtime", lock_spy), patch.object(rm, "is_running", probe_spy):
+        assert await rm.set_members(session, rt, rm.duo(a.id, c.id)) is True
+    assert order == ["probe", "lock"]
+    assert await _rows(session, rt.id) == [("head", 0, a.id), ("worker", 1, c.id)]
+
+
+@pytest.mark.asyncio
+async def test_a_box_that_is_a_duos_worker_cannot_be_deleted(auth_client, session):
+    """Deleting a host cascades its ``runtime_hosts`` rows away at the DB level
+    — a membership write past the one writer and its lock (critic on the
+    #893 fix). Same rule as for a head box: 409, rebind first."""
+    a = await _host(session, "box-a")
+    b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    rt = await _duo_rt(session, "duo", a)
+    await rm.set_members(session, rt, rm.duo(a.id, b.id))
+
+    resp = await auth_client.delete(f"/api/v1/hosts/{b.id}")
+    assert resp.status_code == 409, resp.text
+    assert "duo" in resp.json()["detail"]
+    assert await _rows(session, rt.id) == [("head", 0, a.id), ("worker", 1, b.id)]

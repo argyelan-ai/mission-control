@@ -196,6 +196,18 @@ async def workers_by_runtime(
     return out
 
 
+async def worker_of_runtimes(session: AsyncSession, host_id: uuid.UUID) -> list[str]:
+    """Slugs of the runtimes this box is a non-head member of (sorted)."""
+    rows = (
+        await session.exec(
+            select(Runtime.slug)
+            .join(RuntimeHost, RuntimeHost.runtime_id == Runtime.id)
+            .where(RuntimeHost.host_id == host_id, RuntimeHost.role != ROLE_HEAD)
+        )
+    ).all()
+    return sorted(set(rows))
+
+
 def _as_set(members: Iterable[Any]) -> set[tuple[uuid.UUID, str, int]]:
     out = set()
     for m in members:
@@ -386,6 +398,15 @@ async def set_members(
     not collided with.
     """
     await validate_members(session, runtime, members, recipe=recipe)
+    if running is None:
+        # "Does it run?" is network (SSH/HTTP). Ask it BEFORE the lock, never
+        # while holding it — a slow box would block every other writer of
+        # this runtime (critic on the #893 fix). Only when the answer can
+        # matter: a stored, different set. A writer that filled the set
+        # between here and the lock is the rare case that is probed under it.
+        unlocked = await members_of(session, runtime.id)
+        if unlocked and _as_set(unlocked) != _as_set(members):
+            running = await is_running(session, runtime)
     await lock_runtime(session, runtime.id)
     stored = await members_of(session, runtime.id)
     if _as_set(stored) == _as_set(members):
@@ -415,6 +436,8 @@ async def clear_members(
     A solo runtime (zero rows) is a no-op without a probe. A running duo is
     refused (409): its worker would look free while the engine still uses it.
     """
+    if running is None and await members_of(session, runtime.id):
+        running = await is_running(session, runtime)  # network: before the lock
     await lock_runtime(session, runtime.id)
     stored = await members_of(session, runtime.id)
     if not stored:
