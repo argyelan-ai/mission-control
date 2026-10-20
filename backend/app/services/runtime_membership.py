@@ -522,13 +522,11 @@ async def _repair_under_lock(session: AsyncSession, runtime: Runtime) -> AuditFi
     membership writer can slip in between. A path that does not write ends
     the transaction here (rollback) — the healer never sits on the lock.
     """
-    # The audit only read so far. Ending that read transaction first makes the
-    # locked SELECT see everything committed since (the id is taken before:
-    # a rollback expires the loaded object).
-    runtime_id = runtime.id
-    await session.rollback()
+    # populate_existing: overwrite what the first read put into the identity
+    # map with the row as it is now (Postgres READ COMMITTED: each statement
+    # sees what was committed before it; the lock waits for open writers).
     fresh = await session.get(
-        Runtime, runtime_id, with_for_update=True, populate_existing=True
+        Runtime, runtime.id, with_for_update=True, populate_existing=True
     )
     try:
         if fresh is None or fresh.is_slot or await _is_switching(fresh.slug):
