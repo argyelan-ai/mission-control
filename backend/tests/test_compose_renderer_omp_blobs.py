@@ -246,10 +246,15 @@ def _redis(fake_redis):
 
 @pytest.fixture
 def host_home(tmp_path: Path, monkeypatch) -> Path:
-    """What the backend container has: MC_AGENTS_ROOT = <home>/.mc/agents."""
+    """What the backend container has: MC_AGENTS_ROOT = <home>/.mc/agents.
+
+    ``settings.home_host`` points at the same tmp home as a safety net: a
+    regression (or a sabotage probe) that falls back to it must land here,
+    never in the real home of whoever runs the suite."""
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("MC_AGENTS_ROOT", str(home / ".mc" / "agents"))
+    monkeypatch.setattr(compose_renderer.settings, "home_host", str(home))
     return home
 
 
