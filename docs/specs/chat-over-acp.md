@@ -51,13 +51,13 @@ acp_chat_ctl.py <op>  (CLI shim used by docker exec)      ·      hermes-bridge.
 ### Component: `docker/omp-bridge/acp_chat.py` (chat daemon)
 
 - `ChatSession(client_factory, cwd, state_dir, sessions_dir)` — pure-Python core, testable with a fake ACP process (`tests/fake_acp_server.py`) or an in-memory fake client.
-- Startup: move MC copies an older image left next to omp's files into `.mc/` (see "Storage" below); read `state_dir/acp-chat.json` (`{"sessionId", "transcript"}`) and follow a pointer to a moved file (`sink_migration.remap`); `initialize`; try `session/load` with the stored id → on success append to the stored transcript file (history survives restarts); on failure `session/new`, new transcript file, and emit `chat_error{code:"session_reset"}`. When the move did not run (lock held by a live run, unreadable list, error) the chat shows a `chat_notice` with `code: "sink_migration_skipped"` and the chat starts anyway.
+- Startup: move MC copies an older image left next to omp's files into `.mc/` (see "Storage" below); find the session to resume — the pointer `acp-chat.json` (`{"sessionId", "transcript"}`), else the state mirror (see "What survives what" below) — and follow it to a moved file (`sink_migration.remap`); `initialize`; try `session/load` with the stored id → on success append to the stored transcript file; when the load fails or the transcript is gone, `session/new`, a new transcript file and a visible `chat_error{code:"session_reset"}`. No pointer at all, but an earlier chat copy in the tree → `chat_notice{code:"chat_started_fresh"}`. When the move did not run (lock held by a live run, unreadable list, error) the chat shows a `chat_notice` with `code: "sink_migration_skipped"` and the chat starts anyway.
 - Uses `acp_chat_events.ACPEventMapper` + `ChatEventSink` + `PreviewEventSink` exactly like `run_acp_once` (user line via `map_user_prompt`, streaming previews, ONE final assistant line with usage).
 - Thinking (20.10.2026): a thought's preview line carries `data: {"block": "thinking", "chars": <full size>, "startedAt": <iso>}` and only the END of the thought as `content` (≤ 2 000 chars — the file grows linearly). The backend passes these on the `preview` SSE event; the chat shows "Thinking · ≈N tokens · m:ss" instead of an answer preview. When the thought ends (next answer chunk, tool call, plan, the turn's final line or a chat error) ONE assistant line with a `{"type": "thinking", "thinking", "durationMs"}` block lands in the transcript. Usage/config updates do not end a thought.
 - Running task in the agent chat (20.10.2026): the agent chat shows the chat daemon's session only (#898); a task runs in a session of its own (bridge header `taskId`). `GET /agents/{id}/chat/task-activity` reads that session through the same adapter (`find_task_session`, `tasks_in_own_session`) and the chat renders it as a separate "From the task" block — delivery, the newest steps, the running thought, more inbox tasks. Harnesses whose task runs inside the chat answer `applies: false` — Claude Code, omp under the native driver, and Hermes (over ACP the hermes-bridge hands a task to the chat daemon itself).
 - `configOptions` (from `session/new`/`session/load` result and `config_option_update` notifications) and `available_commands_update` are kept in memory and mirrored to `sessions_dir/acp-chat-state.json` after every change.
 - Permissions: `OMP_ACP_PERMISSIONS` policy (yolo → allow), same helper as the bridge.
-- Errors → transcript `custom_message` line, `customType: "chat_error"`, content = human text, plus `data: {"code": ..., "detail": ...}`. Codes: `rpc_error` (JSON-RPC error on prompt/config), `provider_error` (`401`/`403`/`429`/quota text detected in the error or in the final agent text when the turn produced no text), `empty_turn` (turn ended with stopReason `end_turn` and zero agent text), `process_exit` (child died; daemon restarts it and re-loads the session), `busy`, `session_reset`, `queue_full` (20 messages already held), `new_session_failed` (`session/new` refused; the current session continues), `queue_lost` (a restart dropped held jobs), `cancelled` is NOT an error (it produces a normal end-of-turn).
+- Errors → transcript `custom_message` line, `customType: "chat_error"`, content = human text, plus `data: {"code": ..., "detail": ...}`. Codes: `rpc_error` (JSON-RPC error on prompt/config), `provider_error` (`401`/`403`/`429`/quota text detected in the error or in the final agent text when the turn produced no text), `empty_turn` (turn ended with stopReason `end_turn` and zero agent text), `process_exit` (child died; daemon restarts it and re-loads the session), `busy`, `session_reset` (the conversation to resume could not be opened; `detail` is `transcript_missing` when its transcript is gone, `model_missing` when omp cannot restore the session's model — the content then names the model —, otherwise the exception), `queue_full` (20 messages already held), `new_session_failed` (`session/new` refused; the current session continues), `queue_lost` (a restart dropped held jobs), `cancelled` is NOT an error (it produces a normal end-of-turn).
 - Model pin (incident 19.10.2026): every `session/new` and `session/load` pins the selector read from the CURRENT `omp.env` (`acp_model.current_selector` — a runtime switch re-renders that file in the running container; the daemon's boot env goes stale). A selector the session does not offer is replaced by the offered model of the same provider and the chat gets a `custom_message` line `customType: "chat_notice"`, `data: {"code": "model_fallback", "previous", "current"}` (frontend `ChatNoticeCard`, `chat.notice.*`). The task path (`bridge.run_acp_once`) does the same, writes a refused pin into the task's chat as `chat_error`, and marks its prompts `attribution: "mc"` + `origin: {kind: "task"|"nudge"}` so the chat shows them as task events, not as operator bubbles.
 - Socket server: `$OMP_HOME/acp-chat.sock` (path configurable via `--socket`), newline-delimited JSON; each connection = one request/one response.
 
@@ -73,6 +73,7 @@ else MC writes for the chat lives one level deeper:
 | preview channel (`PreviewEventSink`) | `<folder>/.mc/previews/` — always next to the transcript copy in use (`PreviewEventSink.beside`): an old copy the daemon resumed in place because the move did not run keeps its preview in `<folder>/previews/`, where the backend looks for it (`omp_chat.preview_channel`) |
 | tool pictures (`write_media`) | `<folder>/.mc/media/` (next to the transcript copy) |
 | state mirror | `<folder>/acp-chat-state.json` (unchanged) |
+| pointer to the open conversation | `<folder>/acp-chat.json` in the container since S1-R4 (before: the unmounted `$OMP_HOME`); Hermes: its workspace |
 
 **Why a folder, and why this one.** omp 18.10.1 treats every `*.jsonl` whose
 first line (or second, after a title line) is `{"type": "session", "id":
@@ -168,6 +169,57 @@ the new image, not on `docker start` (that starts the old image's code); the
 backend reads both places until then. Hermes moves its copies at the next
 start of its chat daemon. Way back: stop the agent, `--rollback --all` on the
 host, then the previous image.
+
+### What survives what (S1-R4, 20.10.2026)
+
+The daemon remembers the open conversation in the pointer `acp-chat.json`
+(`{"sessionId", "transcript"}`). In the container it lives in the session
+folder next to `acp-chat-state.json`, on the mount
+`~/.mc/agents/<slug>/omp-sessions` (`build_session` sets
+`state_dir = sessions_dir`). Before S1-R4 it lived in `$OMP_HOME`, which is
+not mounted: every recreate (each new image) threw it away and the chat
+started over without a word. Hermes keeps its pointer in its workspace.
+
+**Which conversation a start resumes** (`ChatSession._read_persisted`) — the
+first source that names a session id **and** a transcript wins:
+
+1. the pointer `<folder>/acp-chat.json`;
+2. the state mirror `<folder>/acp-chat-state.json` — the way over the deploy
+   of S1-R4: the old image kept its pointer in `$OMP_HOME`, but already wrote
+   this file on the mount.
+
+`$OMP_HOME/acp-chat.json` is never read: a new image always means a recreate,
+so it is empty there, and a stale one must never win over the mirror. The
+transcript is then followed to `.mc/` (`sink_migration.remap`). Every session
+switch (start, `/new`, reset) writes the pointer **before** the state mirror
+names the new session, so the first source is never older than the second.
+Fields of the pointer the daemon does not know (P4 adds `homeSessionId`) stay
+when it is rewritten.
+
+| What happens | The open conversation |
+|---|---|
+| restart in the same container (`docker restart`, or the chat daemon started again) | goes on: `session/load` from the pointer, same transcript file |
+| recreate (new image, `compose up --force-recreate`) | goes on: the pointer is on the mount (the first start after the S1-R4 deploy takes the state mirror) |
+| the omp child dies (`process_exit`) | goes on: the daemon respawns it and loads the session it had in memory; the replay stays out of the chat (`_muted_replay`) |
+| any of the three after a **model switch** since the last turn | a new conversation and the card `session_reset` / `model_missing`, naming the old model |
+| the pointer's transcript is gone (also not in `.mc/`) | a new conversation and the card `session_reset` / `transcript_missing` |
+| no pointer and no state mirror, but an earlier chat copy (`bridge: "acp"`, no `taskId`) in the tree | a new conversation and the notice `chat_started_fresh` |
+| a brand-new agent, or only task copies / omp's own files in the tree | a new conversation, no card |
+
+In one sentence: **the conversation goes on as long as the model is the same
+as at its last turn; otherwise there is a visible card.** omp (since 18.6.3)
+refuses `session/load` under ACP with "Could not restore model
+`<provider>/<id>`" when the session's last model is not in `models.yml` —
+without a UI there is no fallback to another model. A runtime switch renders
+only the new model into `models.yml`, so every model switch makes the open
+conversation unloadable after a restart, recreate or crash (ADR-086, harness
+and runtime switchable at any time). How a conversation continues on another
+model is decided in P4; until then the card says what happened and the old
+files stay on disk.
+
+The pictures of a conversation (omp's `blobs/` folder) survive a recreate
+only with the mount from S1-R8 (`docker/omp-bridge/README.md`, "What lives
+where").
 
 ### Control protocol (socket and HTTP share the schema)
 
