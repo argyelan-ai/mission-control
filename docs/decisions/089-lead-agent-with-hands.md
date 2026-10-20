@@ -291,6 +291,65 @@ agent and the local omp agent — may grow, inside a closed feature list, a
 budget per package and stop points. §5 (omp over ACP as the local brain) is
 unchanged. The text above is not rewritten.
 
+## Nachtrag (2026-10-20) — §4: what "automatic delivery" to the local omp agent covers
+
+Decided on 2026-10-20 (the operator delegated this decision). §4 says that
+automatic delivery of jobs to the local omp agent resumes only after the
+security step B4. The code already draws a line inside that sentence; the
+text did not. This note states the line. It changes no behaviour.
+
+(a) **The agent stays paused until B4.** The local omp agent keeps
+    `operational_mode=paused` until B4 (ROADMAP E4) is done. Its chat keeps
+    working, as §4 and ADR-090 say.
+(b) **Off until B4: automatic delivery.** That is push dispatch — MC handing
+    a card to the agent on its own initiative. The dispatch paths ask
+    `check_dispatch_allowed` (`backend/app/services/operations.py`, rule
+    `R-paused-no-dispatch` in `docs/produkt/regeln.yaml`), which refuses a
+    paused agent. The card is not lost: it stays in the inbox, still
+    assigned. `mc delegate` to a paused agent is refused outright (HTTP 503,
+    `agent_delegate_task` in `backend/app/routers/agent_scoped.py`).
+    Automatic routing of a card without an assignee counts as automatic
+    delivery too. A card created in the app without an agent is left
+    unassigned unless lead auto-assign is on (`_leave_unassigned_for_operator`
+    in `backend/app/routers/tasks.py`), and where routing runs it picks the
+    orchestrator or the board lead first (`find_dispatch_target` in
+    `backend/app/services/dispatch.py`). The router does not read the mode
+    itself; closing that gap is a separate fix.
+(c) **On while paused: cards assigned to it by name, fetched by its own
+    poll.** A card that the operator or the lead agent explicitly assigns to
+    the local omp agent — on the card in the app, or with `mc reassign` — is
+    picked up by the agent's poll: `/agent/me/poll` (`agent_poll` in
+    `backend/app/routers/agents.py`) does not read `operational_mode`. This
+    is how the agent gets small jobs without a PR while it is paused. It was
+    checked live on 2026-10-20: cards assigned to the paused agent went from
+    the inbox to done. The poll keeps its own gates — dependencies, held or
+    stopped cards, the update drain (ADR-094) and the runtime-readiness check
+    (ADR-097) — and never takes an unassigned card or one assigned to
+    another agent.
+(d) **Limits while paused, stated plainly.** Push dispatch stops before
+    workspace preparation. A card the poll claims at once therefore runs in
+    the agent's workspace root (the bridge's fallback,
+    `docker/omp-bridge/bridge.py`); only a card that waits longer gets its
+    workspace prepared first, by the undispatched-card watcher
+    (`_check_undispatched_tasks` in
+    `backend/app/services/watchdog/task_monitor.py`), which does not read
+    the mode either and only acts on cards already assigned. Both happened
+    live on 2026-10-20. That fits small jobs without a PR; repository work
+    stays with heads (`mc reassign` does prepare the workspace). The
+    stuck-turn and silent-card watchers skip paused agents
+    (`_check_stuck_in_progress` in `backend/app/services/task_runner.py`;
+    `_check_silent_cards` and `_check_silent_mailbox` in
+    `backend/app/services/watchdog/task_monitor.py`), so a card the agent
+    takes and then leaves silent is not reported on its own. Whoever
+    assigned it watches it.
+(e) **Pinned by a test.** `backend/tests/test_paused_agent_poll_claim.py`:
+    push refuses the paused agent and leaves the card assigned in the inbox;
+    the agent's poll then delivers that card; the poll takes no unassigned
+    or foreign card. If either side changes, the test goes red, and this
+    note changes in the same PR.
+(f) **At B4** the agent goes back to `active` and push dispatch reaches it
+    again. The text above is not rewritten.
+
 ## References
 
 - Autonomy levels: `backend/app/services/autonomy.py` (`AUTONOMY_DEFAULTS`,
