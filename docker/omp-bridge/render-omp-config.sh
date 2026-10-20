@@ -216,6 +216,12 @@ fi
 # chip shows it (a fixed placeholder until 19.10.2026). Same plain form as the
 # id line, so any id that parses there parses as the name. (No comment inside
 # the heredoc below: it is unquoted, backticks there would run as commands.)
+# contextWindow + maxTokens: MC decides both from the runtime row
+# (backend/app/routers/internal.py, omp_max_output_tokens). maxTokens follows
+# the window: local models an eighth of it, at most 131072; cloud endpoints at
+# most 32768. Do not cap or recompute it here, or the two places drift. The
+# 262144/32768 fallback applies only when MC knows no window for the runtime:
+# unknown model, so the cautious old pair, never a guessed larger budget.
 # 600: die Datei trägt den API-Schlüssel (apiKey).
 _atomic_write "${MODELS_DIR}/models.yml" 600 <<YAML
 providers:

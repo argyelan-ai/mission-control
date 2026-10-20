@@ -26,6 +26,53 @@ logger = logging.getLogger("mc.internal")
 router = APIRouter(prefix="/api/v1/internal", tags=["internal"])
 
 
+#: Highest answer budget (one turn's output, thinking included) MC gives a
+#: local model: four times the old cap. Vendors suggest more for their longest
+#: reasoning runs (the DeepSeek V4.1 Flash model card recommends max_tokens of
+#: at least 256K). Not free: omp sends the budget as the request's output limit
+#: (``max_completion_tokens``) on EVERY request, and an engine with one shared
+#: context pool reserves prompt + that limit for each request when it admits it
+#: (TensorFold's DeepSeek family: one pool for all parallel streams). So a
+#: bigger budget costs pool room on every request, even a short one, not only
+#: on long turns: fewer long prompts fit side by side, and kept prompt caches
+#: are dropped sooner. A trade-off between answer room and pool room, not a
+#: model limit. 65536 would halve that cost but give the highest effort only
+#: twice the room that already ran out at the default effort.
+LOCAL_MAX_OUTPUT_TOKENS = 131072
+#: The previous fixed cap. Still the whole rule for cloud endpoints, and the
+#: floor for local ones.
+CLOUD_MAX_OUTPUT_TOKENS = 32768
+
+
+def omp_max_output_tokens(context_window: int, *, local: bool) -> int:
+    """omp's ``maxTokens`` for a model with this context window.
+
+    Model- and harness-neutral: it reads only the window and whether the
+    runtime runs on one of our own boxes, never a model name.
+
+    * Cloud: half the window, at most 32768 (unchanged). A managed API sets
+      its own output cap and may refuse a larger request.
+    * Local: an eighth of the window, at most 131072, never below the cloud
+      rule. Until 20.10.2026 local models had the cloud cap too; a local
+      DeepSeek with a 1M window thought past 32768 tokens at the default
+      effort and returned empty answers.
+
+    Why an eighth: windows up to 262144 keep exactly their old budget, so
+    only large windows change (today the 1M slot, which gets the full
+    131072). And a raised budget stays below the share of the window omp
+    keeps free before it compacts (15 %, at least 16384 tokens): a budget
+    above that share makes omp trim the request to its own estimate of the
+    free room, and engines that refuse rather than trim (vLLM, TensorFold)
+    fail the turn when the estimate runs low. Small windows keep their old
+    budget because lowering it frees no prompt room under omp's compaction
+    and would only cut answers short.
+    """
+    cloud = min(context_window // 2, CLOUD_MAX_OUTPUT_TOKENS)
+    if not local:
+        return cloud
+    return min(LOCAL_MAX_OUTPUT_TOKENS, max(context_window // 8, cloud))
+
+
 async def build_runtime_env(
     runtime: "Runtime | None",
     session: AsyncSession,
@@ -108,11 +155,12 @@ async def build_runtime_env(
         # No per-runtime override field exists on the `runtimes` table today
         # (checked: no config/extra JSON column) — if one is added later,
         # read it here and let it win over this type-based default.
-        _is_slow_local_runtime = (
+        # The same test decides the answer budget below (omp_max_output_tokens).
+        _is_local_runtime = (
             runtime.runtime_type in ("vllm_docker", "llamacpp_docker", "lmstudio", "unsloth")
             or (runtime.runtime_type == "openai_compatible" and runtime.host_id is not None)
         )
-        if _is_slow_local_runtime:
+        if _is_local_runtime:
             # 04.09.2026: raised 600 → 1800 s. Prefill on a 26k-token prompt
             # alone took 58 s of total silence; hidden reasoning runs minutes.
             # The hook heartbeats through that window now, this is the net
@@ -131,12 +179,16 @@ async def build_runtime_env(
         # sized turns to a 262k window and asked for the full window as output —
         # which exceeds the smaller model's real cap (HTTP 400) and derails
         # multi-turn. Source the window from the runtime row so it always
-        # matches the served model; reserve at least half for prompt/history and
-        # cap output at 32k so a single turn can't consume the whole window.
+        # matches the served model. The answer budget follows the window
+        # (omp_max_output_tokens): local models get room to think, cloud
+        # endpoints keep the 32k cap. omp itself still trims a request to the
+        # room left in the window.
         _ctx_window = runtime.max_context_len or runtime.preferred_context_len
         if _ctx_window:
             tokens["OMP_CONTEXT_WINDOW"] = str(_ctx_window)
-            tokens["OMP_MAX_TOKENS"] = str(min(_ctx_window // 2, 32768))
+            tokens["OMP_MAX_TOKENS"] = str(
+                omp_max_output_tokens(_ctx_window, local=_is_local_runtime)
+            )
 
         # Vision-Fähigkeit (W3, 06.09.2026): omp entscheidet PRO MODELL anhand
         # der ``input``-Liste in models.yml, ob es bildfähig ist — fehlt sie,
