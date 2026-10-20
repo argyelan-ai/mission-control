@@ -5,14 +5,12 @@ on:
   workflow_dispatch:
 jobs:
   exp:
-    name: exp n=${{ matrix.n }} dist=${{ matrix.dist }} rep=${{ matrix.rep }}
+    name: exp new-config rep=${{ matrix.rep }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        n: [4, 8]
-        dist: [load, worksteal]
-        rep: [1, 2]
+        rep: [1, 2, 3, 4, 5, 6]
     defaults:
       run:
         working-directory: backend
@@ -24,10 +22,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: CPU
-        run: nproc; lscpu | grep -E "Model name|^CPU\(s\)"; free -g
+        run: lscpu | grep "Model name"
       - name: Install dependencies
+        env:
+          UV_SYSTEM_PYTHON: "1"
         run: |
-          pip install -r requirements.lock
-          pip install --no-deps -e .
+          python -m pip install uv==0.11.2
+          uv pip install -r requirements.lock
+          uv pip install --no-deps -e .
       - name: Run tests
-        run: /usr/bin/time -v pytest -x --tb=short -q -n ${{ matrix.n }} --dist ${{ matrix.dist }} --durations=40 2>&1 | tail -120
+        run: pytest -x --tb=short -q -n auto --dist worksteal --durations=25

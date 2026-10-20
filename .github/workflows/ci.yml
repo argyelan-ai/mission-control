@@ -59,13 +59,22 @@ jobs:
 
       # Same pinned versions as the backend image (backend/Dockerfile):
       # the lock first, then the app itself without re-resolving anything.
+      # uv (which generated requirements.lock) installs the identical pins in
+      # seconds instead of pip's ~40 s — this job is a required merge-queue
+      # check with a 10-minute timeout, every second counts.
       - name: Install dependencies
+        env:
+          UV_SYSTEM_PYTHON: "1"  # into setup-python's interpreter, no venv
         run: |
-          pip install -r requirements.lock
-          pip install --no-deps -e .
+          python -m pip install uv==0.11.2
+          uv pip install -r requirements.lock
+          uv pip install --no-deps -e .
 
+      # --dist worksteal: idle workers take queued tests from busy ones, so the
+      # run no longer waits on one worker that drew the slow subprocess tests
+      # (mc-head watchdogs, backup.sh) at the end. Same tests, same count.
       - name: Run tests
-        run: pytest -x --tb=short -q -n auto
+        run: pytest -x --tb=short -q -n auto --dist worksteal
 
   backend-postgres:
     name: Backend Tests (Postgres lane)
