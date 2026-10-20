@@ -112,7 +112,7 @@ COPY sink_migration.py    /opt/omp-bridge/sink_migration.py
 # "model is not answering" rule. Without this line neither the task driver
 # nor the chat daemon starts.
 COPY model_errors.py      /opt/omp-bridge/model_errors.py
-COPY acp_model.py        /opt/omp-bridge/acp_model.py
+COPY acp_model.py         /opt/omp-bridge/acp_model.py
 COPY acp_chat_ctl.py      /opt/omp-bridge/acp_chat_ctl.py
 COPY context_detect.py    /opt/omp-bridge/context_detect.py
 COPY turn-end-hook.mjs    /opt/omp-bridge/turn-end-hook.mjs
