@@ -990,10 +990,17 @@ def test_19_rollback_all_works_without_a_readable_list(tmp_path, bad):
 
 
 def test_20_a_lock_dated_in_the_future_does_not_hold_forever(tmp_path):
+    """A lock time ten days ahead (a clock jump, garbage) is no time: the
+    lock is judged by its file time — at most ten minutes, never ten days."""
     root = tmp_path / "sessions"
     p = build_tree(root)
-    _lock(root, pid=1, age_s=-10 * 86400, host="another-machine")
+    lock = _lock(root, pid=1, age_s=-10 * 86400, host="another-machine")
 
+    fresh = sink_migration.migrate(root)
+    assert fresh.status == "locked" and "future" in fresh.detail, \
+        "a lock file written just now still guards a possibly live run"
+    old = time.time() - sink_migration.LOCK_STALE_S - 60
+    os.utime(lock, (old, old))
     report = sink_migration.migrate(root)
 
     assert report.status == "ok", report.detail
