@@ -364,7 +364,9 @@ update drain (ADR-094) and the runtime-readiness check (ADR-097). It never
 takes an unassigned card or one assigned to another agent. The system
 modes HALTED and DRAINING and the planning-phase gate live only in
 `check_dispatch_allowed`, so they do not hold a poll claim, for this agent
-or for any other.
+or for any other. *(Superseded for HALTED and DRAINING by the next
+Nachtrag, "the system mode holds every path"; the planning-phase gate
+part still holds.)*
 
 **(d) Limits while paused: known gaps, not intended behaviour.**
 
@@ -424,6 +426,84 @@ same PR.
 
 **(g) At B4** the agent goes back to `active` and push dispatch reaches it
 again. The text above is not rewritten.
+
+## Nachtrag (2026-10-20) — the system mode holds every path that hands a card out
+
+Decided on 2026-10-20 by the development lead the operator delegated to.
+The note above, (c), named a gap: the system mode (HALTED / DRAINING, set
+with `PUT /api/v1/system/mode`) lived only in `check_dispatch_allowed`, so
+the emergency brake did not stop an agent that polls. This note closes the
+gap for the system mode. It does not change agent rules: (a) to (f) stay
+as written.
+
+**(a) One rule, every path.** `system_mode_refusal` in
+`backend/app/services/operations.py` (rule `R-system-mode-holds-poll` in
+`docs/produkt/regeln.yaml`) decides it. HALTED holds every card. DRAINING
+holds every card except the automatic continuation flows (subtask, review
+hand-off, rework). Every path that hands a card out asks it:
+
+- push dispatch, through `check_dispatch_allowed` (unchanged);
+- the agent's own poll (`agent_poll` in `backend/app/routers/agents.py`),
+  for every card it would hand out: a fresh inbox card, a phase approval, a
+  dispatched card whose prompt never arrived, and the restart of an
+  orphaned run. The held answer is `state=idle` with `system_halted` or
+  `system_draining` and a `detail`, like the update drain's answer. For a
+  fresh card the poll asks its gates in push dispatch's order: HALTED, the
+  MC update drain (ADR-094), runtime readiness (ADR-097), DRAINING;
+- the undispatched-card watcher (`_check_undispatched_tasks` in
+  `backend/app/services/watchdog/task_monitor.py`): it leaves a held card
+  untouched, with no workspace preparation and no `dispatched_at`;
+- pull dispatch (`GET /api/v1/agent/boards/{board_id}/tasks/next` in
+  `backend/app/routers/agent_task_status.py`): it answers 204, as for "no
+  work". It also respects the MC update drain now.
+
+Paused stays an agent rule outside this one. A paused agent still takes a
+card assigned to it by name in normal mode ((c) above). While the system is
+HALTED it is held like every other agent.
+
+**(b) A card in flight keeps its answer.** A card the poll has already
+handed to this agent, under its current attempt and without an ACK yet, is
+in the agent's session. The poll keeps answering the same `new_task` with
+the same attempt, so nothing new goes out. An `idle` answer would be worse:
+the bridges read `idle` as "card gone", drop their dedup (one also resets
+its session, `poll.sh` drops its task lock) and paste the card a second
+time after the halt. The poll records each delivery in Redis
+(`RedisKeys.poll_delivered`, agent and attempt). `dispatched_at` cannot
+tell, because push dispatch and the watcher stamp it without delivering.
+A new attempt, a card reassigned to another agent, and the orphan restart
+(a fresh attempt for an ACKed card) are not in flight and are held.
+
+**(c) The ladders wait.** The ACK ladder (silent retry with a new attempt,
+then an operator escalation) and the pending ladder
+(`_check_dispatch_ack` in `backend/app/services/task_runner.py`) skip a
+card that the system mode or the MC update drain holds. Nothing was
+allowed to deliver it, so a missing ACK is not the agent's fault. The
+ladders keep skipping it for one ACK timeout plus margin after the hold
+ends (`RedisKeys.dispatch_system_hold`), so the first poll after the hold
+delivers the card before a ladder reads its old `dispatched_at`. A card
+that is really lost still escalates after that window.
+
+**(d) Recovery is not held.** `/agent/me/active-task-recovery` gives an
+agent back the card it already owns, with that card's attempt. Each poller
+calls it only once, when it starts (`poll.sh`, the omp bridge and the host
+poll template). If it were held, the card would not come back for the rest
+of that run, and a Board Lead's card has no orphan restart behind it.
+Running work is not the brake's to stop. The orphan restart is different:
+it hands out a fresh attempt, and the poll asks it again on every round,
+so it is held and resumes after the halt.
+
+**(e) What HALTED does not stop.** A turn that is already running (the stop
+button stops it); comments and thread messages, which still come with a
+held poll answer, and the wake-ups they cause. The app has no control for
+the system mode yet: the client helper exists, but no page calls it
+(`docs/produkt/landkarte.yaml`, "platform leftovers"). The mode is set
+through the API.
+
+**(f) Pinned by tests.** `backend/tests/test_poll_respects_system_halt.py`
+(the poll: every path, the order of its gates, a card in flight, parity
+with push dispatch, pool hygiene) and
+`backend/tests/test_system_mode_holds_every_path.py` (watcher, ladders,
+pull dispatch, recovery not held).
 
 ## References
 
