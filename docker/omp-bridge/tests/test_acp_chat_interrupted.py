@@ -26,6 +26,20 @@ Contract (docs/specs/chat-over-acp.md, "Interrupted turns"):
 * `ACPEventMapper.map_chat_error(..., data=None)`: extra card fields;
   `code`/`detail` stay; without `data` the line is byte for byte the old one.
 
+Critic round (20.10.2026):
+
+* "Send again" only for the operator's own text. A prompt says who wrote it
+  (`origin`): `"operator"` — the composer — or `"task"`/`"nudge"` — Mission
+  Control. A prompt that says nothing (an older caller, hermes-bridge's
+  dispatch, the omp bridge's wake-up) is NOT the operator's: no `retryText`,
+  and the card does not claim that nothing was resent (hermes-bridge
+  delivers a task again on its own). Fail-closed: a forgotten tag costs a
+  button, never a second run of a task.
+* `process_exit` offers the text only when the reply never came.
+* A retired session writes nothing from ANY thread (the ACP reader too).
+* The interrupted job stays in the mirror (`interrupted`) until its card is
+  on disk: a stop during the next start never loses it.
+
 Every assertion reads what the backend reads: the state mirror and the
 JSONL transcript the chat view tails.
 """
@@ -62,7 +76,10 @@ INTERRUPTED_TEXT = (
     "The chat restarted while a reply was running — nothing was resent "
     "automatically."
 )
+#: The card for a turn the operator did not write: no claim about resending.
+NEUTRAL_TEXT = "The chat restarted while a reply was running."
 LIMIT = 8000
+OPERATOR = "operator"
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -94,7 +111,8 @@ def wait_for(predicate, timeout=3.0) -> bool:
     return predicate()
 
 
-def die_mid_reply(tmp_path: Path, text: str, *, held=()) -> tuple[Path, FakeClient]:
+def die_mid_reply(tmp_path: Path, text: str, *, held=(),
+                  origin=OPERATOR) -> tuple[Path, FakeClient]:
     """A daemon that stops while a reply runs: the turn blocks, the daemon is
     closed (container stop, bridge reload), then the blocked call returns —
     the retired session must leave its mirror as it was. Returns the
@@ -104,10 +122,10 @@ def die_mid_reply(tmp_path: Path, text: str, *, held=()) -> tuple[Path, FakeClie
                         turns=[{"chunks": ["part of a reply"], "gate": gate}])
     sess = make_session(tmp_path, client)
     sess.start()
-    assert sess.prompt(text, mode="queue")["ok"] is True
+    assert sess.prompt(text, mode="queue", origin=origin)["ok"] is True
     assert wait_for(lambda: sess.state()["busy"])
     for item in held:
-        assert sess.prompt(item, mode="queue").get("queued") is True
+        assert sess.prompt(item, mode="queue", origin=OPERATOR).get("queued") is True
     assert wait_for(lambda: text in user_texts(read_lines(sess.transcript_path)))
     transcript = sess.transcript_path
     sess.close()
@@ -223,7 +241,9 @@ def test_3_an_older_daemon_without_current_gives_a_card_without_text(tmp_path, c
     again.close()
     found = cards(again.transcript_path, "turn_interrupted")
     assert len(found) == 1
-    assert found[0]["content"] == INTERRUPTED_TEXT
+    # Who wrote that turn is unknown (an older image kept no `current`):
+    # no claim that nothing was resent — Hermes' bridge resends tasks.
+    assert found[0]["content"] == NEUTRAL_TEXT
     assert "retryText" not in found[0]["data"], "no text known — no button"
     assert found[0]["data"]["detail"] == "turn unknown"
     assert prompts(client) == []
@@ -253,8 +273,8 @@ class DyingClient(FakeClient):
         raise acp_client.ACPError("omp acp stdout closed unexpectedly")
 
 
-def child_dies(tmp_path: Path, text: str):
-    dying = DyingClient(session_result=SESSION_RESULT)
+def child_dies(tmp_path: Path, text: str, *, origin=OPERATOR, dying=None):
+    dying = dying or DyingClient(session_result=SESSION_RESULT)
     respawned = FakeClient(session_result=SESSION_RESULT)
     made = [dying, respawned]
     sess = acp_chat.ChatSession(
@@ -264,7 +284,7 @@ def child_dies(tmp_path: Path, text: str):
         sessions_dir=tmp_path / "sessions",
     )
     sess.start()
-    sess.prompt(text)
+    sess.prompt(text, origin=origin)
     assert sess.wait_idle(timeout=5)
     time.sleep(0.1)
     return sess, dying, respawned
@@ -299,14 +319,15 @@ def test_5_current_is_null_after_the_turn_and_the_next_job_becomes_current(tmp_p
     sess.start()
     try:
         assert mirror(sess)["current"] is None, "idle after start"
-        sess.prompt("first", mode="queue")
+        sess.prompt("first", mode="queue", origin=OPERATOR)
         assert wait_for(lambda: sess.state()["busy"])
         cur = mirror(sess)["current"]
-        assert {k: cur[k] for k in ("kind", "turn", "text", "truncated")} == {
-            "kind": "prompt", "turn": 1, "text": "first", "truncated": False}
+        assert {k: cur[k] for k in ("kind", "turn", "text", "truncated", "origin")} == {
+            "kind": "prompt", "turn": 1, "text": "first", "truncated": False,
+            "origin": OPERATOR}
         assert isinstance(cur["startedAt"], str) and cur["startedAt"]
-        assert sess.prompt("second", mode="queue").get("queued") is True
-        assert sess.prompt("third", mode="queue").get("queued") is True
+        assert sess.prompt("second", mode="queue", origin=OPERATOR).get("queued") is True
+        assert sess.prompt("third", mode="queue", origin=OPERATOR).get("queued") is True
         assert mirror(sess)["current"]["text"] == "first", "a queued job is not current"
         first_gate.set()
         assert wait_for(lambda: (mirror(sess)["current"] or {}).get("text") == "second")
@@ -458,7 +479,11 @@ def test_6_hermes_restart_card_and_the_retired_session_writes_nothing(tmp_path):
         assert new is not old and len(made) == 2
 
         found = cards(transcript, "turn_interrupted")
-        assert len(found) == 1 and found[0]["data"]["retryText"] == "hang me"
+        assert len(found) == 1
+        # The request names no origin (hermes_acp_chat does not pass one on
+        # yet): not provably the operator's text -> no button (fail-closed).
+        assert "retryText" not in found[0]["data"]
+        assert found[0]["content"] == NEUTRAL_TEXT
         assert prompts(made[1]) == [], "the restart sent the text again"
 
         # The new session is busy with the operator's next message ...
@@ -499,7 +524,7 @@ def test_7_a_text_over_8000_characters_gives_a_card_without_retry_text(
     client = FakeClient(session_result=SESSION_RESULT, turns=[{"gate": gate}])
     sess = make_session(tmp_path, client)
     sess.start()
-    sess.prompt(text)
+    sess.prompt(text, origin=OPERATOR)
     assert wait_for(lambda: sess.state()["busy"])
     cur = mirror(sess)["current"]
     if whole:
@@ -589,6 +614,317 @@ def test_8c_an_open_thought_still_comes_before_a_card_with_data(monkeypatch):
     entries = mapper.map_chat_error("process_exit", "x", data={"retryText": "again"})
     assert entries[0]["message"]["content"][0]["type"] == "thinking"
     assert entries[-1]["data"]["retryText"] == "again"
+
+
+
+# ── 9. critic round: "Send again" only for the operator's own text ─────────
+
+
+DISPATCH = ("[MC DISPATCH] task_id=t1 board_id=b1 attempt_id=a1\n"
+            "ACK NOW: mc_patch_task(task_id=t1, attempt_id=a1)")
+
+
+@pytest.mark.parametrize("origin", [None, "task", "nudge", "something-else", 7, {"k": 1}],
+                         ids=["none", "task", "nudge", "unknown-word", "int", "dict"])
+def test_9a_a_turn_not_from_the_operator_gets_a_card_without_the_text(tmp_path, origin):
+    transcript, _ = die_mid_reply(tmp_path, DISPATCH, origin=origin)
+    again, client = restart(tmp_path)
+    again.close()
+    found = cards(transcript, "turn_interrupted")
+    assert len(found) == 1, "the interruption is still visible"
+    assert "retryText" not in found[0]["data"], (
+        "a text the operator did not write must never be offered to send again")
+    assert found[0]["content"] == NEUTRAL_TEXT, (
+        "no claim that nothing was resent — Hermes' bridge resends a task itself")
+    assert prompts(client) == []
+
+
+@pytest.mark.parametrize("origin", ["task", "nudge"])
+def test_9b_a_tagged_mc_prompt_is_an_mc_line_not_an_operator_bubble(tmp_path, origin):
+    client = FakeClient(session_result=SESSION_RESULT, turns=[{"chunks": ["ok"]}])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    try:
+        sess.prompt(DISPATCH, origin=origin)
+        assert sess.wait_idle(timeout=5)
+        users = [e for e in read_lines(sess.transcript_path)
+                 if e.get("type") == "message" and e["message"].get("role") == "user"]
+        assert len(users) == 1
+        assert users[0]["message"]["attribution"] == "mc"
+        assert users[0]["message"]["origin"]["kind"] == origin
+    finally:
+        sess.close()
+
+
+@pytest.mark.parametrize("origin", [None, OPERATOR, "weird"])
+def test_9b2_an_operator_or_untagged_prompt_stays_the_operators_bubble(tmp_path, origin):
+    client = FakeClient(session_result=SESSION_RESULT, turns=[{"chunks": ["ok"]}])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    try:
+        sess.prompt("a question", origin=origin)
+        assert sess.wait_idle(timeout=5)
+        users = [e for e in read_lines(sess.transcript_path)
+                 if e.get("type") == "message" and e["message"].get("role") == "user"]
+        assert len(users) == 1
+        assert users[0]["message"]["attribution"] == "user"
+        assert "origin" not in users[0]["message"]
+    finally:
+        sess.close()
+
+
+def test_9c_hermes_dispatch_is_never_offered_to_send_again(tmp_path):
+    """Critic finding (major): hermes-bridge's dispatch and comment prompts
+    go through ChatDaemon.prompt -> ChatSession.prompt. A restart mid-turn
+    must not offer the dispatch text (stale attempt id, a second run)."""
+    hermes = _hermes_module()
+    gate = threading.Event()
+    clients = [FakeClient(session_result=SESSION_RESULT, turns=[{"gate": gate}]),
+               FakeClient(session_result=SESSION_RESULT)]
+    made: list = []
+    workspace = tmp_path / "workspace"
+    sessions_dir = workspace / "omp-sessions" / "--work--"
+    sessions_dir.mkdir(parents=True)
+
+    def factory():
+        client = clients[len(made)]
+        made.append(client)
+        return acp_chat.ChatSession(
+            client_factory=lambda: client, cwd=str(tmp_path / "work"),
+            state_dir=workspace, sessions_dir=sessions_dir, driver="hermes",
+            permission_policy="yolo",
+        )
+
+    daemon = hermes.ChatDaemon(factory)
+    daemon.start()
+    old = daemon.session
+    try:
+        assert daemon.prompt(DISPATCH)["ok"] is True  # the machine path
+        assert wait_for(lambda: old.state()["busy"])
+        transcript = old.transcript_path
+        daemon.stop()
+        gate.set()
+        assert old.wait_idle(timeout=5)
+        daemon.start()
+        found = cards(transcript, "turn_interrupted")
+        assert len(found) == 1
+        assert "retryText" not in found[0]["data"]
+        assert found[0]["content"] == NEUTRAL_TEXT
+        assert prompts(made[1]) == []
+    finally:
+        gate.set()
+        daemon.stop()
+
+
+def test_9d_the_socket_request_carries_the_origin(tmp_path):
+    """The control protocol: `{"op": "prompt", "origin": "operator"}` is
+    the composer; the omp bridge's wake-up sends `{"op": "prompt", "text"}`
+    only — never offered again."""
+    gate = threading.Event()
+    client = FakeClient(session_result=SESSION_RESULT, turns=[{"gate": gate}])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    answer = acp_chat.dispatch(sess, {"op": "prompt", "text": "typed by me",
+                                      "mode": "queue", "origin": OPERATOR})
+    assert answer["ok"] is True
+    assert wait_for(lambda: sess.state()["busy"])
+    assert mirror(sess)["current"]["origin"] == OPERATOR
+    assert acp_chat.dispatch(sess, {"op": "prompt", "text": "wake up, new messages",
+                                    "mode": "queue"}).get("queued") is True
+    assert [j.get("origin") for j in mirror(sess)["queue"]] == [None]
+    transcript = sess.transcript_path
+    sess.close()
+    gate.set()
+    assert sess.wait_idle(timeout=5)
+    again, _ = restart(tmp_path)
+    again.close()
+    found = cards(transcript, "turn_interrupted")
+    assert len(found) == 1 and found[0]["data"]["retryText"] == "typed by me"
+
+
+def test_9e_a_queued_job_keeps_its_origin_until_it_runs(tmp_path):
+    first = threading.Event()
+    client = FakeClient(session_result=SESSION_RESULT,
+                        turns=[{"gate": first}, {"gate": threading.Event()}])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    try:
+        sess.prompt(DISPATCH, mode="queue")  # Mission Control, untagged
+        assert wait_for(lambda: sess.state()["busy"])
+        assert mirror(sess)["current"]["origin"] is None
+        assert sess.prompt("mine", mode="queue", origin=OPERATOR).get("queued") is True
+        first.set()
+        assert wait_for(lambda: (mirror(sess)["current"] or {}).get("text") == "mine")
+        assert mirror(sess)["current"]["origin"] == OPERATOR
+    finally:
+        first.set()
+        sess.close()
+
+
+def test_9f_process_exit_of_a_turn_not_from_the_operator_has_no_text(tmp_path):
+    sess, _, _ = child_dies(tmp_path, DISPATCH, origin=None)
+    try:
+        found = cards(sess.transcript_path, "process_exit")
+        assert len(found) == 1 and "retryText" not in found[0]["data"]
+    finally:
+        sess.close()
+
+
+# ── 4b. critic round: the reply landed, then the child died ────────────────
+
+
+class DiesAfterReplyClient(FakeClient):
+    """The reply comes back whole; the omp child exits right after it."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._proc = _Proc()
+
+    def prompt(self, session_id, text, timeout=600.0):
+        result = super().prompt(session_id, text, timeout)
+        self._proc.dead = True
+        return result
+
+
+def test_4b_process_exit_after_a_complete_reply_offers_nothing(tmp_path):
+    dying = DiesAfterReplyClient(session_result=SESSION_RESULT,
+                                 turns=[{"chunks": ["the full answer"]}])
+    sess, _, respawned = child_dies(tmp_path, "question", dying=dying)
+    try:
+        lines = read_lines(sess.transcript_path)
+        answers = [e for e in lines if e.get("type") == "message"
+                   and e["message"].get("role") == "assistant"]
+        assert answers, "the reply landed"
+        found = cards(sess.transcript_path, "process_exit")
+        assert len(found) == 1, "the dead child is still reported"
+        assert "retryText" not in found[0]["data"], (
+            "the question was answered — no button under it")
+        assert prompts(respawned) == []
+    finally:
+        sess.close()
+
+
+# ── 6b. critic round: the retired session's ACP reader writes nothing ──────
+
+
+def test_6b_the_retired_sessions_reader_thread_writes_nothing(tmp_path):
+    """close() wakes the prompt wait first, then waits up to 5 s for the
+    child; its reader thread still dispatches buffered updates. None of them
+    may rewrite the mirror (busy:false would hide the interruption) or add
+    a line to the shared transcript."""
+    gate = threading.Event()
+    old_client = FakeClient(session_result=SESSION_RESULT, turns=[{"gate": gate}])
+    old = make_session(tmp_path, old_client)
+    old.start()
+    old.prompt("cut off", origin=OPERATOR)
+    assert wait_for(lambda: old.state()["busy"])
+    transcript = old.transcript_path
+    old.close()
+    gate.set()
+    assert old.wait_idle(timeout=5)
+    state_before = old.state_file.read_bytes()
+    lines_before = read_lines(transcript)
+
+    # Buffered updates the reader thread still hands over after close().
+    old_client.fire({"sessionId": "sid-1", "update": {
+        "sessionUpdate": "session_info_update", "title": "late title"}})
+    old_client.fire({"sessionId": "sid-1", "update": {
+        "sessionUpdate": "config_option_update",
+        "configOptions": SESSION_RESULT["configOptions"]}})
+    old_client.fire({"sessionId": "sid-1", "update": {
+        "sessionUpdate": "agent_message_chunk", "messageId": "m9",
+        "content": {"type": "text", "text": "a late chunk"}}})
+    old_client.fire({"sessionId": "sid-1", "update": {
+        "sessionUpdate": "tool_call", "toolCallId": "c1", "title": "late tool",
+        "status": "pending"}})
+
+    assert old.state_file.read_bytes() == state_before, "the retired session rewrote the mirror"
+    assert read_lines(transcript) == lines_before, "the retired session wrote a line"
+
+    again, client = restart(tmp_path)
+    again.close()
+    found = cards(transcript, "turn_interrupted")
+    assert len(found) == 1 and found[0]["data"]["retryText"] == "cut off"
+    assert prompts(client) == []
+
+
+def test_6c_after_close_no_shared_file_is_touched(tmp_path):
+    client = FakeClient(session_result=SESSION_RESULT)
+    sess = make_session(tmp_path, client)
+    sess.start()
+    sess.close()
+    files = [sess.state_file, sess.persist_file, sess.transcript_path, sess.preview_path]
+
+    def snapshot():
+        return {str(f): (f.read_bytes() if f.exists() else None) for f in files}
+
+    before = snapshot()
+    assert before[str(sess.state_file)] is not None
+    sess._write_state()
+    sess._write_persisted()
+    sess._emit_error("rpc_error", "late")
+    sess._emit_transcript(sess._mapper.map_chat_notice("x", "late"))
+    sess._emit_preview(sess._mapper.map_chat_notice("x", "late"))
+    assert snapshot() == before
+
+
+# ── 10. critic round: the interruption is never used up before its card ───
+
+
+def test_10_a_stop_before_the_card_keeps_the_interruption(tmp_path, monkeypatch):
+    seed_mirror(tmp_path, busy=True, current={
+        "kind": "prompt", "turn": 4, "text": "lost?", "truncated": False,
+        "startedAt": "x", "origin": OPERATOR})
+
+    class Killed(BaseException):
+        pass
+
+    def killed(self, current):
+        raise Killed()
+
+    real = acp_chat.ChatSession._report_interrupted_turn
+    monkeypatch.setattr(acp_chat.ChatSession, "_report_interrupted_turn", killed)
+    client = FakeClient(session_result=SESSION_RESULT)
+    first = make_session(tmp_path, client)
+    with pytest.raises(Killed):
+        first.start()  # the daemon dies after the mirror was rewritten
+    on_disk = mirror(first)
+    first.close()
+    assert on_disk["busy"] is False, "the start did rewrite the mirror"
+    assert (on_disk.get("interrupted") or {}).get("text") == "lost?", (
+        "the interruption must stay in the mirror until its card is written")
+    monkeypatch.setattr(acp_chat.ChatSession, "_report_interrupted_turn", real)
+
+    again, client2 = restart(tmp_path)
+    try:
+        found = cards(again.transcript_path, "turn_interrupted")
+        assert len(found) == 1 and found[0]["data"]["retryText"] == "lost?"
+        assert mirror(again)["interrupted"] is None, "reported -> cleared"
+        assert prompts(client2) == []
+    finally:
+        again.close()
+    third, _ = restart(tmp_path)
+    third.close()
+    assert len(cards(third.transcript_path, "turn_interrupted")) == 1
+
+
+def test_10b_a_pending_new_survives_a_stop_too(tmp_path, monkeypatch):
+    seed_mirror(tmp_path, busy=False, interrupted={
+        "kind": "new_session", "turn": None, "text": "", "startedAt": "x",
+        "origin": OPERATOR})
+    again, _ = restart(tmp_path)
+    again.close()
+    lost = cards(again.transcript_path, "queue_lost")
+    assert len(lost) == 1 and lost[0]["content"].splitlines()[1:] == ["- /new"]
+    assert mirror(again)["interrupted"] is None
+
+
+@pytest.mark.parametrize("pending", [None, "not-a-dict", 3])
+def test_10c_no_pending_interruption_no_card(tmp_path, pending):
+    seed_mirror(tmp_path, busy=False, interrupted=pending)
+    again, _ = restart(tmp_path)
+    again.close()
+    assert cards(again.transcript_path, "turn_interrupted") == []
 
 
 if __name__ == "__main__":  # pragma: no cover
