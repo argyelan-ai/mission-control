@@ -39,7 +39,7 @@ import { MemberRowContainer } from "./MemberRow";
 import { ActionBar } from "./ActionBar";
 import { PhaseBar } from "./PhaseBar";
 import { shortModelTitle } from "./modelTitle";
-import { crashReasonKey, formatCrashTime } from "./crashFormat";
+import { crashLikelyOutOfMemory, crashReasonKey, formatCrashTime } from "./crashFormat";
 import { useAppStore } from "@/lib/store";
 import { headOnBoxes, useHeadOccupancy } from "@/components/heads/HeadOccupancy";
 import { useHeadPairsForLabels } from "@/components/heads/HeadStateCard";
@@ -147,9 +147,14 @@ export function Stage({
   // bare "unreachable". The watcher writes them into the live snapshot.
   const crash = status === "failed" && live?.status === "failed" && live.reason_code ? live : null;
   const crashTime = crash ? formatCrashTime(crash.at, locale) : null;
-  const crashReason = crash
+  const crashReasonText = crash
     ? t(`crashReason.${crashReasonKey(crash.reason_code, crash.exit_code)}`, { code: crash.exit_code ?? "" })
     : null;
+  // Exit 137 (SIGKILL): "…, probably out of memory" — a hint, not a reason.
+  const crashReason =
+    crash && crashReasonText && crashLikelyOutOfMemory(crash.reason_code, crash.exit_code)
+      ? t("crashReasonLikelyOom", { reason: crashReasonText })
+      : crashReasonText;
   const crashWhere = crash?.box ? t("crashOnBox", { box: crash.box }) : "";
   const crashFollowUp = crash
     ? [

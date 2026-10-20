@@ -115,8 +115,11 @@ def sentences(code: str, *, display: str, box: str | None, at: str | None,
         cause_de = "der Speicherwächter des Rezepts hat die Engine beendet"
         cause_en = "the recipe's memory guard ended the engine"
     elif code == EXIT and exit_code == 137:
-        cause_de = "Engine hart beendet (Exit 137, SIGKILL — z. B. ein Speicherwächter)"
-        cause_en = "engine killed (exit 137, SIGKILL — e.g. a memory guard)"
+        # SIGKILL: on a GPU box almost always the kernel OOM killer or the
+        # recipe's memory guard — a hint (operator decision 2026-10-20), not
+        # a reason code: the box did not confirm memory, so it stays ``exit``.
+        cause_de = "Engine hart beendet (Exit 137, SIGKILL — vermutlich Speicher voll)"
+        cause_en = "engine killed (exit 137, SIGKILL — probably out of memory)"
     elif code == EXIT and exit_code is not None:
         cause_de = f"Engine beendet (Exit {exit_code})"
         cause_en = f"engine exited (exit {exit_code})"

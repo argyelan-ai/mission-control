@@ -89,7 +89,7 @@ describe("Stage — title + corner", () => {
     renderWithQuery(<Stage runtime={rt} live={live} members={[{ host: makeHost({ slug: "spark", display_name: "DGX Spark" }), role: "head" }]} onOpenCockpit={() => {}} />);
     expect(await screen.findByText("down")).toBeInTheDocument();
     const line = screen.getByTestId("stage-now-line");
-    expect(line).toHaveTextContent("Down since 17:20 on Box A · engine exited (exit 137)");
+    expect(line).toHaveTextContent("Down since 17:20 on Box A · engine exited (exit 137), probably out of memory");
     expect(line).toHaveAttribute("title", "Killed");
     expect(screen.getByTestId("stage-crash-followup")).toHaveTextContent(
       "Box autostart off — will not restart by itself · 2 running tasks wait (comment with reason)",
@@ -97,6 +97,26 @@ describe("Stage — title + corner", () => {
     expect(screen.getByTestId("stage-card")).toHaveAttribute("data-status", "failed");
     // Trouble actions: restart is the primary button.
     expect(screen.getByTestId("restart-now")).toBeInTheDocument();
+  });
+
+  // Decision 2026-10-20: exit 137 (SIGKILL) adds "probably out of memory" —
+  // only on the "exit" reason; an OOM reason already says it, other exit
+  // codes say nothing about memory.
+  it.each([
+    ["exit", 1, "engine exited (exit 1)"],
+    ["oom", 137, "out of memory (OOM)"],
+    ["kernel_oom", 137, "kernel ran out of memory (OOM)"],
+  ])("reason %s with exit %s: no memory hint added", async (code, exitCode, text) => {
+    const rt = makeRuntime({ display_name: "DeepSeek V4.1", state: "stopped" });
+    const live = {
+      reachable: false, served_model: null, latency_ms: null, last_probe_at: "", consecutive_failures: 1, drift: false,
+      status: "failed", reason: "x", reason_code: code, exit_code: exitCode, box: "Box A", at: null,
+      log_line: null, autostart: false, tasks_commented: 0,
+    };
+    renderWithQuery(<Stage runtime={rt} live={live} members={[{ host: makeHost({}), role: "head" }]} onOpenCockpit={() => {}} />);
+    const line = await screen.findByTestId("stage-now-line");
+    expect(line).toHaveTextContent(`Down on Box A · ${text}`);
+    expect(line).not.toHaveTextContent("probably out of memory");
   });
 
   it("a dead duo with autostart on: worker hint, autostart only 'may', unknown reason", async () => {

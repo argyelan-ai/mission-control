@@ -38,3 +38,12 @@ export function crashReasonKey(code: string | null | undefined, exitCode?: numbe
     : "unknown";
   return known === "exit" && exitCode != null ? "exitCode" : known;
 }
+
+/** Exit 137 is a SIGKILL. On a GPU box that is almost always the kernel OOM
+ *  killer or the recipe's memory guard, so the card adds "probably out of
+ *  memory" (operator decision 2026-10-20). Only a hint on the plain "exit"
+ *  reason: `oom` / `kernel_oom` / `guard` already name the cause, and the
+ *  backend's reason code stays `exit` — the box did not confirm memory. */
+export function crashLikelyOutOfMemory(code: string | null | undefined, exitCode?: number | null): boolean {
+  return crashReasonKey(code, exitCode) === "exitCode" && exitCode === 137;
+}

@@ -3466,6 +3466,7 @@
       "crashAutostartOn": "Box autostart on — MC may try a restart",
       "crashTasksCommented": "{count, plural, one {# running task waits (comment with reason)} other {# running tasks wait (comment with reason)}}",
       "crashDuoWorker": "The worker on the second box may still be running — Stop clears both boxes",
+      "crashReasonLikelyOom": "{reason}, probably out of memory",
       "crashReason": {
         "guard": "stopped by the recipe's memory guard",
         "oom": "out of memory (OOM)",

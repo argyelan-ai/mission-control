@@ -3466,6 +3466,7 @@
       "crashAutostartOn": "Box-Autostart an — MC darf einen Neustart versuchen",
       "crashTasksCommented": "{count, plural, one {# laufender Task wartet (Kommentar mit Grund)} other {# laufende Tasks warten (Kommentar mit Grund)}}",
       "crashDuoWorker": "Der Worker auf der zweiten Box läuft evtl. noch — Stoppen räumt beide Boxen",
+      "crashReasonLikelyOom": "{reason}, vermutlich Speicher voll",
       "crashReason": {
         "guard": "vom Speicherwächter des Rezepts beendet",
         "oom": "kein Speicher mehr (OOM)",

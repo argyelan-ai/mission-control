@@ -215,8 +215,8 @@ async def test_refused_with_exited_anchor_is_a_death_at_the_first_probe(async_se
     assert d.detail["consecutive_failures"] == 1
     assert d.detail["failure"] == FAIL_REFUSED
     assert d.detail["box"] == "Box A"
-    assert d.title.startswith("dsv gestoppt auf Box A: Engine hart beendet (Exit 137")
-    assert d.detail["reason_en"].startswith("dsv stopped on Box A: engine killed (exit 137")
+    assert d.title.startswith("dsv gestoppt auf Box A: Engine hart beendet (Exit 137, SIGKILL — vermutlich Speicher voll)")
+    assert d.detail["reason_en"].startswith("dsv stopped on Box A: engine killed (exit 137, SIGKILL — probably out of memory)")
     assert d.detail["log_line"] == "Killed"            # built-in marker, existing reader
     # Explanation used the crash-loop reader, scoped to the current boot.
     assert any(c.startswith("docker logs --since 2026-10-19T09:00:00Z --tail 200 dsv-tf")
@@ -704,11 +704,29 @@ def test_reason_sentences_name_box_and_time():
             engine_death.EXIT, display="DeepSeek", box="Box A",
             at="2026-10-19T18:44:25Z", exit_code=137, marker=None,
         )
-    assert de == "DeepSeek gestoppt auf Box A: Engine hart beendet (Exit 137, SIGKILL — z. B. ein Speicherwächter) um 20:44"
-    assert en == "DeepSeek stopped on Box A: engine killed (exit 137, SIGKILL — e.g. a memory guard) at 20:44"
+    # Operator decision 2026-10-20: exit 137 adds "probably out of memory".
+    assert de == "DeepSeek gestoppt auf Box A: Engine hart beendet (Exit 137, SIGKILL — vermutlich Speicher voll) um 20:44"
+    assert en == "DeepSeek stopped on Box A: engine killed (exit 137, SIGKILL — probably out of memory) at 20:44"
     assert set(engine_death.REASON_CODES) == {
         "guard", "oom", "kernel_oom", "exit", "member_down", "crash_loop", "unknown",
     }
+
+
+@pytest.mark.parametrize("code,exit_code", [
+    (engine_death.EXIT, 1),
+    (engine_death.EXIT, None),
+    (engine_death.OOM, 137),
+    (engine_death.UNKNOWN, 137),
+])
+def test_memory_hint_only_on_a_plain_exit_137(code, exit_code):
+    """The hint is a guess from SIGKILL: an OOM reason already says it, and
+    other exit codes say nothing about memory. The reason code never changes."""
+    de, en = engine_death.sentences(
+        code, display="DeepSeek", box=None, at=None, exit_code=exit_code, marker=None,
+    )
+    assert "Speicher voll" not in de
+    assert "probably out of memory" not in en
+    assert engine_death.classify(oom_killed=False, exit_code=137, marker=None) == engine_death.EXIT
 
 
 # ── node-agent report first (§3.2) ───────────────────────────────────────
