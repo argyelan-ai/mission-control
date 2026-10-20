@@ -6,13 +6,19 @@ Until now a human (the board lead or the operator) found those by hand, days
 later. This gate checks the claim on the server, at the moment of the status
 change, so ``mc finish --force`` or a raw PATCH cannot walk around it.
 
-What is checked (only for cards that carry a PR). The gate fetches its own
-evidence — what the agent sends along is a claim to compare, never the proof:
+What is checked. The gate fetches its own evidence — what the agent sends
+along is a claim to compare, never the proof. A card that names no PR is not
+skipped: ``discover_pr`` looks in the card's own data (source card, the "PR
+erstellt:" note, the card's branch on GitHub); a code card without any PR is
+itself a finding (``pr_missing``, see ``code_card_level``).
 
   a) ``pr_url`` points at a PR that really exists on GitHub, it is OPEN (for
-     ``done``: OPEN or MERGED), its branch is the card's ``branch_name`` and
-     no unrelated card already holds it — a foreign, merged, green PR does
-     not prove anything about this card.
+     ``done``: OPEN or MERGED), it changes at least one file, no unrelated
+     card already holds it, it runs on no other open card's branch, and on
+     the card's branch (``branch_name`` or the workspace branch
+     ``task/<slug>``). Another name: a PR older than the card is foreign; a
+     newer one needs a second tie to close the card (the card id in the PR
+     title/body or MC's own "PR erstellt:" note) — timing alone is no proof.
   b) the SHA the agent reported (``head_sha``, sent by the mc CLI on the
      developer's move to ``review``) is the PR head on GitHub. The server
      records the PR head itself on every checked move (``head_sha`` in the
@@ -20,12 +26,17 @@ evidence — what the agent sends along is a claim to compare, never the proof:
      not depend on the agent reporting anything.
   c) the required CI checks are green.
   d) after the last "change" feedback (MC ``changes_requested`` or a GitHub
-     *Request changes*) the PR really changed: the head moved away from the
-     SHA recorded when the card last entered review, and the diff between
-     the two is not empty (an empty commit or a faked commit date does not
-     count). Cards without such a record fall back to commit timestamps.
+     *Request changes*) the PR really changed: its own diff (file + blob per
+     changed file, ``diff_fp``) differs from the one recorded when the card
+     last entered review — an empty commit, a merge from main or the same
+     content force-pushed does not count, nor does a faked commit date.
+     Without a recorded diff the compare is read (see ``fetch_real_change``);
+     without any record, commit timestamps. "Could not tell" is a visible
+     notice (``change_unverifiable``), never a silent pass.
   e) review → done is closed by someone other than the developer, who left
-     his own verdict on the card (a reflection does not count); a reviewer
+     his own verdict on the card (a reflection or progress note does not
+     count); the developer closing his own PR card straight from work, with
+     no review anywhere, is refused (``skip_review`` cards exempt); a reviewer
      the agent names must exist, must not be the developer and must have
      commented himself — MC card first, GitHub second (never the PR author's
      own login: the fleet pushes with one shared account).
@@ -42,7 +53,8 @@ sample (1–2 finishes a week), so the flip waits for real evidence.
 
 Fail-open, but loud: without a GitHub token, when GitHub cannot be reached
 (every ``gh`` call has a time limit) or when the token cannot see the repo,
-nothing is blocked — the card gets a visible warning instead, because an
+nothing is blocked — the card gets a visible warning instead (also a PR
+lookup that failed: ``pr_lookup_unavailable``, never ``pr_missing``), because an
 outage must not freeze every PR card on the board (same reasoning as the
 ADR gate's inconclusive-lookup path).
 
@@ -92,11 +104,23 @@ MIN_SHA_LEN = 7
 #: Same card, same finding codes within this window → no second comment.
 DEDUP_WINDOW = timedelta(minutes=30)
 
-#: Comment types that are not a reviewer's verdict.
-_NOT_A_VERDICT = {"reflection", "system"}
+#: Comment types that are not a reviewer's verdict: the reflection (``mc
+#: finish`` writes one right before its PATCH) and status chatter ("schaue
+#: mir das an …") — a verdict is review / feedback / message / handoff / …
+_NOT_A_VERDICT = {"reflection", "system", "progress", "subtask_completed", "checkpoint",
+                  "blocker"}
+
+#: Commits walked one by one when no diff fingerprint is on record.
+MAX_COMMITS_WALKED = 5
+
+#: Branches a PR never runs FROM — a card on these is no PR card.
+_NOT_A_PR_BRANCH = {"main", "master", "deploy-main", "develop"}
+
+_PR_CREATED_MARKER = "PR erstellt:"
 
 _GH_PR_FIELDS = (
-    "number,state,url,author,headRefName,headRefOid,statusCheckRollup,commits,reviews,comments"
+    "number,title,body,state,url,author,createdAt,headRefName,headRefOid,changedFiles,statusCheckRollup,commits,"
+    "reviews,comments"
 )
 
 _CI_RED = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}
@@ -134,6 +158,10 @@ class ProofGateResult:
     head_sha: str | None = None
     head_branch: str | None = None
     pr_state: str | None = None
+    #: Fingerprint of the PR's own diff (file + blob per changed file) — a
+    #: merge from main, an empty commit or a same-content force-push leave
+    #: it unchanged, a real change does not.
+    diff_fp: str | None = None
 
     @property
     def hard(self) -> list[Finding]:
@@ -208,14 +236,18 @@ def effective_mode(today: date | None = None, checks_so_far: int | None = None) 
 
 
 async def count_checks(session) -> int:
-    """Checked transitions so far (every checked move emits one event)."""
-    from sqlalchemy import func
+    """Cards the gate has checked so far (the rollout sample).
+
+    Cards, not events: every refused retry emits its own event, so a looping
+    agent would otherwise fill the sample on its own.
+    """
+    from sqlalchemy import distinct, func
 
     from app.models.activity import ActivityEvent
 
     try:
         return int((await session.exec(
-            select(func.count()).select_from(ActivityEvent)
+            select(func.count(distinct(ActivityEvent.task_id)))
             .where(ActivityEvent.event_type == PROOF_GATE_EVENT)
         )).one())
     except Exception:  # noqa: BLE001 — counting must never break a PATCH
@@ -232,6 +264,77 @@ async def resolve_mode(session, today: date | None = None) -> str:
     if flip is None or (today or datetime.now(timezone.utc).date()) < flip:
         return "warn"
     return effective_mode(today, await count_checks(session))
+
+
+async def caught_by_stats(session, days: int = 30) -> dict:
+    """Who caught false finish reports in the last ``days`` days.
+
+    Reads the ``gefangen_von`` field from the activity log — no new table:
+    ``task.proof_gate`` events with at least one hard finding count for
+    ``tor`` (would have blocked in enforce), ``task.review_rejected`` events
+    for the role / lead / operator that sent the card back. Rejections from
+    before the field existed count as ``unbekannt``. The ratio tor : rest is
+    the measure whether the machine catches what people used to catch.
+
+    Counted per card, not per event: an agent retrying a refused move five
+    times is one catch (``tor``) and one card per finding code; the raw
+    number of gate events is reported as ``attempts``. A rejection counts
+    once per card and catcher.
+    """
+    from app.models.activity import ActivityEvent
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))
+    rows = (await session.exec(
+        select(ActivityEvent.id, ActivityEvent.task_id, ActivityEvent.event_type,
+               ActivityEvent.detail).where(
+            ActivityEvent.event_type.in_((PROOF_GATE_EVENT, "task.review_rejected")),  # type: ignore[union-attr]
+            ActivityEvent.created_at >= cutoff,
+        )
+    )).all()
+    caught_keys = set(CAUGHT_BY_VALUES) | {"unbekannt"}
+    caught_cards: dict[str, set] = {key: set() for key in caught_keys}
+    finding_cards: dict[str, set] = {}
+    checked, blocked_cards, hard_cards, notice_cards = set(), set(), set(), set()
+    attempts = 0
+    for event_id, task_id, etype, detail in rows:
+        detail = detail if isinstance(detail, dict) else {}
+        card = task_id or event_id  # an event without a card counts on its own
+        if etype == PROOF_GATE_EVENT:
+            attempts += 1
+            checked.add(card)
+            if detail.get("blocked"):
+                blocked_cards.add(card)
+            levels = set()
+            for f in detail.get("findings") or []:
+                if not isinstance(f, dict):
+                    continue
+                levels.add(f.get("level"))
+                if f.get("level") in (HARD, NOTICE):
+                    finding_cards.setdefault(f.get("code") or "?", set()).add(card)
+            if HARD in levels:
+                hard_cards.add(card)
+            elif NOTICE in levels:
+                notice_cards.add(card)
+            continue
+        who = detail.get("gefangen_von")
+        caught_cards[who if who in caught_keys else "unbekannt"].add(card)
+    caught_cards["tor"] |= hard_cards
+    caught = {key: len(caught_cards[key]) for key in (*CAUGHT_BY_VALUES, "unbekannt")}
+    findings = {code: len(cards) for code, cards in finding_cards.items()}
+    from app.config import settings
+
+    return {
+        "window_days": max(1, int(days)),
+        "checks": len(checked),
+        "attempts": attempts,
+        "blocked": len(blocked_cards),
+        "notices": len(notice_cards - hard_cards),
+        "caught_by": caught,
+        "findings": dict(sorted(findings.items(), key=lambda kv: -kv[1])),
+        "mode": _configured_mode(),
+        "enforce_after": (getattr(settings, "proof_gate_enforce_after", "") or None),
+        "enforce_min_checks": int(getattr(settings, "proof_gate_enforce_min_checks", 15) or 0),
+    }
 
 
 def caught_by_for_actor(actor_agent) -> str:
@@ -337,22 +440,128 @@ async def fetch_required_checks(owner: str, repo: str, number: int, token: str) 
     return data if isinstance(data, list) and data else None
 
 
-async def fetch_changed_files(owner: str, repo: str, base_sha: str, head_sha: str,
-                              token: str) -> int | None:
-    """Number of files that differ between two commits, None if unknown."""
+def diff_fingerprint(lines: list[str]) -> str | None:
+    """Stable hash of ``"<file> <blob sha> <status>"`` lines (order-free)."""
+    rows = sorted({ln.strip() for ln in lines if ln and ln.strip()})
+    if not rows:
+        return None
+    import hashlib
+
+    return hashlib.sha256("\n".join(rows).encode()).hexdigest()[:20]
+
+
+async def fetch_diff_fingerprint(owner: str, repo: str, number: int, token: str) -> str | None:
+    """Fingerprint of the PR's own diff, None if unknown.
+
+    The PR files API lists what the PR changes against its merge base, with
+    the blob each file ends up as. "Update branch" (merging main in) moves
+    the merge base, not the PR's own changes; an empty commit changes no
+    blob — both leave the fingerprint as it was.
+    """
+    try:
+        rc, out, _err = await _gh(
+            token, "api", f"repos/{owner}/{repo}/pulls/{number}/files", "--paginate",
+            "--jq", '.[] | "\\(.filename) \\(.sha) \\(.status)"',
+        )
+    except GithubUnavailable:
+        return None
+    if rc != 0:
+        return None
+    return diff_fingerprint((out or "").splitlines())
+
+
+async def fetch_real_change(owner: str, repo: str, base_sha: str, head_sha: str,
+                            token: str) -> bool | None:
+    """Did anything real land between two commits? None = unknown.
+
+    Used when no diff fingerprint is on record for the old head.
+
+    - linear history, only own commits: the compare's file list IS the new
+      work — any file means a real change, however many commits;
+    - merge commits in between (a merge from main brings files that are not
+      this card's work): the own commits are walked, empty ones skipped,
+      up to ``MAX_COMMITS_WALKED`` — beyond that it is unknown;
+    - rewritten history (force-push): an identical tree is the same content
+      pushed again, anything else is unknown (the three-dot compare shows
+      the whole PR again, not what changed).
+    """
     try:
         rc, out, _err = await _gh(
             token, "api", f"repos/{owner}/{repo}/compare/{base_sha}...{head_sha}",
-            "--jq", ".files | length",
+            "--jq", "{status: .status, files: (.files | length), "
+                    "commits: [.commits[] | {sha: .sha, p: (.parents | length)}]}",
         )
     except GithubUnavailable:
         return None
     if rc != 0:
         return None
     try:
-        return int((out or "").strip())
-    except ValueError:
+        data = json.loads(out or "{}")
+        files = int(data.get("files") or 0)
+        status = str(data.get("status") or "").lower()
+        commits = [c for c in data.get("commits") or [] if isinstance(c, dict)]
+    except (ValueError, TypeError, AttributeError):
         return None
+    if status not in ("ahead", "identical"):
+        trees = []
+        for sha in (base_sha, head_sha):
+            try:
+                rc, out, _err = await _gh(
+                    token, "api", f"repos/{owner}/{repo}/commits/{sha}", "--jq", ".commit.tree.sha",
+                )
+            except GithubUnavailable:
+                return None
+            if rc != 0 or not (out or "").strip():
+                return None
+            trees.append(out.strip())
+        return False if trees[0] == trees[1] else None
+    if files == 0:
+        return False
+    own = [c.get("sha") for c in commits if int(c.get("p") or 0) <= 1 and c.get("sha")]
+    if not own:
+        return False  # only merge commits ("Update branch")
+    if len(own) == len(commits):
+        return True  # linear, own commits only: the compare's files are the new work
+    for sha in list(reversed(own))[:MAX_COMMITS_WALKED]:
+        try:
+            rc, out, _err = await _gh(
+                token, "api", f"repos/{owner}/{repo}/commits/{sha}", "--jq", ".files | length",
+            )
+        except GithubUnavailable:
+            return None
+        if rc != 0:
+            return None
+        try:
+            if int((out or "0").strip()) > 0:
+                return True
+        except ValueError:
+            return None
+    return False if len(own) <= MAX_COMMITS_WALKED else None
+
+
+async def find_prs_for_branch(owner: str, repo: str, branch: str,
+                              token: str) -> list[dict] | None:
+    """PRs running from ``branch`` (any state, newest first).
+
+    ``[]`` = GitHub answered: there is none. ``None`` = could not look
+    (timeout, gh error, GitHub 5xx) — never read as "no PR".
+    """
+    try:
+        rc, out, _err = await _gh(
+            token, "pr", "list", "--repo", f"{owner}/{repo}", "--head", branch,
+            "--state", "all", "--json", "number,url,state", "--limit", "10",
+        )
+    except GithubUnavailable:
+        return None
+    if rc != 0:
+        return None
+    try:
+        rows = json.loads(out or "[]")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(rows, list):
+        return None
+    return [r for r in rows if isinstance(r, dict) and r.get("url")]
 
 
 def classify_required(checks: list[dict]) -> str:
@@ -490,6 +699,16 @@ async def resolve_pr_ref(session, task, updates: dict) -> tuple[str | None, tupl
     if not pr_number:
         return None, None
 
+    full_name = await _repo_full_name(session, task)
+    if not full_name:
+        return None, None
+    owner, repo_name = full_name.split("/", 1)
+    url = f"https://github.com/{owner}/{repo_name}/pull/{int(pr_number)}"
+    return url, (owner, repo_name, int(pr_number))
+
+
+async def _repo_full_name(session, task) -> str | None:
+    """``owner/name`` of the card's repo (registry repo first, then project)."""
     full_name = None
     if getattr(task, "repo_id", None):
         from app.models.repo import Repo
@@ -502,10 +721,110 @@ async def resolve_pr_ref(session, task, updates: dict) -> tuple[str | None, tupl
         project = await session.get(Project, task.project_id)
         full_name = getattr(project, "github_repo_name", None) if project else None
     if not full_name or "/" not in full_name:
-        return None, None
+        return None
+    return full_name
+
+
+async def discover_pr(session, task, token: str) -> tuple[str | None, str]:
+    """The card's PR when the card itself names none: (url, where found).
+
+    The agent does not have to hand the PR over — the server looks where the
+    card's own data points: the source card of a review card, the "PR
+    erstellt:" marker the project path writes, the card's branch on GitHub.
+
+    ``(None, "unknown")`` = the branch could not be looked at (no token, no
+    repo on the card, GitHub error) — "could not look" is not "no PR".
+    ``(None, "")`` = looked everywhere, nothing there.
+    """
+    from app.models.task import Task, TaskComment
+    from app.services.pr_merge_monitor import parse_pr_url
+
+    source_id = getattr(task, "source_task_id", None)
+    if source_id:
+        source = await session.get(Task, source_id)
+        if source is not None:
+            url, ref = await resolve_pr_ref(session, source, {})
+            if url and ref:
+                return url, "source_task"
+    rows = (await session.exec(
+        select(TaskComment.content).where(
+            TaskComment.task_id == task.id,
+            TaskComment.author_type == "system",
+            TaskComment.content.like(f"%{_PR_CREATED_MARKER}%"),  # type: ignore[union-attr]
+        ).order_by(TaskComment.created_at.desc()).limit(1)
+    )).all()
+    for content in rows:
+        for url in _PR_URL_IN_TEXT.findall(content or ""):
+            if parse_pr_url(url):
+                return url, "marker"
+    branch = (getattr(task, "branch_name", None) or "").strip()
+    if not branch or branch in _NOT_A_PR_BRANCH:
+        return None, ("" if token else "unknown")
+    full_name = await _repo_full_name(session, task) if token else None
+    if not full_name:
+        return None, "unknown"
     owner, repo_name = full_name.split("/", 1)
-    url = f"https://github.com/{owner}/{repo_name}/pull/{int(pr_number)}"
-    return url, (owner, repo_name, int(pr_number))
+    rows = await find_prs_for_branch(owner, repo_name, branch, token)
+    if rows is None:
+        return None, "unknown"
+    # An open PR first (the newest PR on a reused branch name can be the
+    # previous card's merged one); a PR another card already holds is that
+    # card's work, not this one's.
+    rows = sorted(rows, key=lambda r: 0 if str(r.get("state") or "").upper() == "OPEN" else 1)
+    for row in rows:
+        url = str(row["url"])
+        if parse_pr_url(url) and await _pr_on_other_card(session, task, url) is None:
+            return url, "branch"
+    return None, ""
+
+
+async def _card_branches(session, task) -> set[str]:
+    """Branch names that belong to this card: the one it carries and the
+    ones MC's workspaces push (``task/<slug>``), also of its source card."""
+    from app.services.git_service import slugify_project, slugify_workspace_slug
+
+    cards = [task]
+    source_id = getattr(task, "source_task_id", None)
+    if source_id:
+        from app.models.task import Task
+
+        source = await session.get(Task, source_id)
+        if source is not None:
+            cards.append(source)
+    names: set[str] = set()
+    for card in cards:
+        if getattr(card, "branch_name", None):
+            names.add(card.branch_name.strip())
+        title = getattr(card, "title", None) or ""
+        if title:
+            names.add(f"task/{slugify_workspace_slug(title)}")
+            names.add(f"task/{slugify_project(title)}")
+    return names
+
+
+def code_card_level(task, target_status: str) -> str | None:
+    """How loud "no PR" is for this card: HARD | NOTICE | INFO | None.
+
+    HARD:   a code_change card on a known repo — it produces a PR by design.
+    NOTICE: other code hints (code_change, a work branch).
+    INFO:   only a repo on the card (investigations run on repos too).
+    None:   no code hint at all — research, ops, briefings.
+    Project cards moving to review get their PR created right after the
+    gate, in the same PATCH — not a finding there.
+    """
+    if target_status == "review" and getattr(task, "project_id", None):
+        return None
+    branch = (getattr(task, "branch_name", None) or "").strip()
+    work_branch = bool(branch) and branch not in _NOT_A_PR_BRANCH
+    code = getattr(task, "delegation_type", None) == "code_change"
+    has_repo = bool(getattr(task, "repo_id", None) or getattr(task, "project_id", None))
+    if code and has_repo and (work_branch or not branch):
+        return HARD
+    if code or work_branch:
+        return NOTICE
+    if has_repo:
+        return INFO
+    return None
 
 
 # ── MC-side evidence ────────────────────────────────────────────────────
@@ -576,7 +895,13 @@ async def _board_agent_by_name(session, task, name: str):
 
 
 async def _developer(session, task):
-    """The agent who built the card (server-side, never the agent's word)."""
+    """The agent who built the card (server-side, never the agent's word).
+
+    The board lead is never the developer here: ``find_last_developer`` can
+    name him after an automated in_progress → review move (dry run
+    2026-10-19), and the lead closes cards as part of his job — calling him
+    the developer would refuse his close as a self-review.
+    """
     try:
         from app.services.work_context import find_last_developer
 
@@ -585,7 +910,8 @@ async def _developer(session, task):
             from app.models.task import Task
 
             target = await session.get(Task, task.source_task_id) or task
-        return await find_last_developer(session, target)
+        developer = await find_last_developer(session, target)
+        return None if getattr(developer, "is_board_lead", False) else developer
     except Exception:  # noqa: BLE001 — a lookup failure must not break the PATCH
         logger.info("proof_gate: Entwickler nicht ermittelbar fuer %s", task.id, exc_info=True)
         return None
@@ -608,6 +934,68 @@ async def _independent_review_exists(session, task, developer_id, pr: dict) -> b
     return _github_approved_by_other(pr)
 
 
+def _related_ids(task) -> set:
+    """Cards that share a PR or branch with ``task`` by design: itself, its
+    source card (review card), its parent."""
+    return {x for x in (task.id, getattr(task, "source_task_id", None),
+                        getattr(task, "parent_task_id", None)) if x}
+
+
+def _is_related(other, related: set) -> bool:
+    return (other.id in related or getattr(other, "source_task_id", None) in related
+            or getattr(other, "parent_task_id", None) in related)
+
+
+async def _branch_of_other_card(session, task, branch: str):
+    """An UNRELATED, still open card whose branch this is, or None.
+
+    Its own ``branch_name`` or the workspace branch MC pushes for it
+    (``task/<slug>``). Finished cards do not own a branch any more — a
+    re-dispatched follow-up reuses the name by design.
+    """
+    from app.models.task import Task
+    from app.services.git_service import slugify_project, slugify_workspace_slug
+
+    branch = (branch or "").strip()
+    if not branch or branch in _NOT_A_PR_BRANCH:
+        return None
+    related = _related_ids(task)
+    slug = branch[len("task/"):] if branch.startswith("task/") else None
+    rows = (await session.exec(
+        select(Task).where(Task.id != task.id, Task.status != "done")
+    )).all()
+    for other in rows:
+        if _is_related(other, related):
+            continue
+        if (other.branch_name or "").strip() == branch:
+            return other
+        if slug and other.title and slug in (slugify_workspace_slug(other.title),
+                                             slugify_project(other.title)):
+            return other
+    return None
+
+
+async def _pr_tied_to_card(session, task, pr: dict, pr_url: str) -> bool:
+    """A second signal, independent of timing, that this PR is this card's:
+    the PR names the card (id prefix in title or body), or MC itself wrote
+    the "PR erstellt:" note with this PR on the card."""
+    from app.models.task import TaskComment
+
+    text = f"{pr.get('title') or ''}\n{pr.get('body') or ''}".lower()
+    ids = [task.id] + ([task.source_task_id] if getattr(task, "source_task_id", None) else [])
+    if any(str(i).lower()[:8] in text for i in ids):
+        return True
+    rows = (await session.exec(
+        select(TaskComment.content).where(
+            TaskComment.task_id == task.id,
+            TaskComment.author_type == "system",
+            TaskComment.content.like(f"%{_PR_CREATED_MARKER}%"),  # type: ignore[union-attr]
+        )
+    )).all()
+    return any(_same_pr(url, pr_url) for content in rows
+               for url in _PR_URL_IN_TEXT.findall(content or ""))
+
+
 async def _pr_on_other_card(session, task, pr_url: str):
     """An UNRELATED card that already holds this PR, or None.
 
@@ -622,13 +1010,11 @@ async def _pr_on_other_card(session, task, pr_url: str):
     rows = (await session.exec(
         select(Task).where(Task.id != task.id, Task.pr_url.like(f"%/pull/{m.group(1)}%"))  # type: ignore[union-attr]
     )).all()
-    related = {x for x in (task.id, getattr(task, "source_task_id", None),
-                           getattr(task, "parent_task_id", None)) if x}
+    related = _related_ids(task)
     for other in rows:
         if not _same_pr(other.pr_url, pr_url):
             continue
-        if (other.id in related or other.source_task_id in related
-                or other.parent_task_id in related):
+        if _is_related(other, related):
             continue
         return other
     return None
@@ -683,6 +1069,25 @@ async def _claimed_pr_urls(session, task, actor_agent, since: datetime | None) -
     return urls[:3]
 
 
+async def _real_change_since(owner: str, repo: str, old_detail: dict, new_sha: str,
+                             new_fp: str | None, token: str) -> bool | None:
+    """Real change between a recorded snapshot and the current head?
+
+    The PR's diff fingerprint first (both recorded: identical = nothing
+    real happened, whatever the commits say), else walk the new commits
+    skipping merge and empty ones. None = could not tell (fail-open).
+    """
+    old_sha = str(old_detail.get("head_sha") or "").lower()
+    if old_sha and old_sha == new_sha:
+        return False
+    old_fp = old_detail.get("diff_fp")
+    if old_fp and new_fp:
+        return old_fp != new_fp
+    if not old_sha:
+        return None
+    return await fetch_real_change(owner, repo, old_sha, new_sha, token)
+
+
 # ── The verdict ─────────────────────────────────────────────────────────
 
 
@@ -734,13 +1139,48 @@ async def evaluate_proof_gate(
         return result
 
     pr_url, ref = await resolve_pr_ref(session, task, updates)
+    token = ""
+    where = ""
+    if pr_url is None:
+        # The card names no PR. The server looks for it itself — what the
+        # agent leaves away is no reason to skip the check.
+        token = await _github_token(session)
+        found, where = await discover_pr(session, task, token)
+        if found:
+            from app.services.pr_merge_monitor import parse_pr_url
+
+            pr_url, ref = found, parse_pr_url(found)
+            result.findings.append(Finding(
+                "pr_not_on_card", NOTICE,
+                f"Karte nennt keinen PR — das Tor hat {found} selbst gefunden "
+                f"({ {'branch': 'Branch der Karte', 'marker': 'PR-erstellt-Notiz', 'source_task': 'Ursprungskarte'}.get(where, where) }) "
+                "und prueft ihn. `pr_url` auf der Karte setzen.",
+            ))
     result.pr_url = pr_url
     if pr_url is None:
-        # (f) no PR on the card — but the agent's text may still claim one
-        token = await _github_token(session) if actor_agent is not None else ""
-        if token:
+        # b) a code card without any PR is itself a finding — but only when
+        # the server could look: no token or a GitHub error is no proof that
+        # the PR is missing (fail-open, loud).
+        level = code_card_level(task, target_status)
+        if level == HARD and where == "unknown":
+            result.findings.append(Finding(
+                "pr_lookup_unavailable", NOTICE,
+                f"Code-Karte ohne PR auf der Karte, und das Tor konnte Branch "
+                f"'{getattr(task, 'branch_name', None) or '-'}' auf GitHub nicht pruefen "
+                "(kein Token, kein Repo auf der Karte oder GitHub-Fehler) — ungeprueft "
+                "zugelassen. `pr_url` auf der Karte setzen.",
+            ))
+        elif level is not None:
+            result.findings.append(Finding(
+                "pr_missing", level,
+                f"Code-Karte ohne PR: weder auf der Karte, noch als PR-Notiz, noch auf "
+                f"Branch '{getattr(task, 'branch_name', None) or '-'}' auf GitHub gefunden — "
+                f"'{target_status}' ohne PR belegt keine Code-Aenderung.",
+            ))
+        # (f) the agent's text may still claim one
+        if token and actor_agent is not None:
             await _check_claims(session, task, result, actor_agent, token, None)
-            result.checked = bool(result.findings)
+        result.checked = bool(result.findings)
         return result
     result.checked = True
 
@@ -752,7 +1192,7 @@ async def evaluate_proof_gate(
         ))
         return result
 
-    token = await _github_token(session)
+    token = token or await _github_token(session)
     if not token:
         result.findings.append(Finding(
             "no_github_token", NOTICE,
@@ -800,12 +1240,44 @@ async def evaluate_proof_gate(
             f"PR #{number} ist {state} — '{target_status}' braucht einen "
             f"{' oder '.join(allowed)}-PR. Ein geschlossener oder fremder PR belegt nichts.",
         ))
-    card_branch = (getattr(task, "branch_name", None) or "").strip()
-    if card_branch and remote_branch and card_branch != remote_branch:
+    owner_card = await _branch_of_other_card(session, task, remote_branch)
+    if owner_card is not None:
+        # The PR runs on the branch of another card still in work — that is
+        # the colleague's PR, whatever this card's own branch says.
         result.findings.append(Finding(
-            "pr_branch_mismatch", HARD,
+            "pr_branch_of_other_card", HARD,
+            f"PR #{number} laeuft auf Branch '{remote_branch}' der offenen Karte "
+            f"'{(owner_card.title or '')[:60]}' ({str(owner_card.id)[:8]}) — "
+            "ein fremder PR belegt diese Karte nicht.",
+        ))
+    card_branch = (getattr(task, "branch_name", None) or "").strip()
+    if (owner_card is None and card_branch and remote_branch
+            and remote_branch not in await _card_branches(session, task)):
+        # Agents pick their own branch names and MC's workspace pushes
+        # `task/<slug>` — a different name alone is no foreign PR (dry run
+        # 2026-10-19: 6 of 8 real code cards). But "opened after the card"
+        # only proves timing: a colleague's fresh PR qualifies too. A PR
+        # opened BEFORE the card is foreign (createdAt is GitHub's clock);
+        # a newer one needs a second signal (the PR names the card, or MC
+        # created it for this card) to close the card — moving to review
+        # without one stays a notice, the reviewer looks at the PR.
+        pr_created = _parse_ts(pr.get("createdAt"))
+        card_created = _parse_ts(getattr(task, "created_at", None))
+        older = pr_created is None or card_created is None or pr_created < card_created
+        tied = (not older) and await _pr_tied_to_card(session, task, pr, pr_url)
+        hard = older or (target_status == "done" and not tied)
+        if older:
+            why = " — und der PR ist aelter als die Karte: nicht der PR dieser Karte."
+        elif tied:
+            why = " — der PR nennt die Karte; Branch auf der Karte nachtragen."
+        else:
+            why = (" — nichts verbindet den PR mit dieser Karte. Karten-ID "
+                   f"'{str(task.id)[:8]}' in Titel oder Beschreibung des PR schreiben"
+                   + (" (ohne das kein 'done')." if target_status == "done" else "."))
+        result.findings.append(Finding(
+            "pr_branch_mismatch", HARD if hard else NOTICE,
             f"PR #{number} laeuft auf Branch '{remote_branch}', die Karte auf "
-            f"'{card_branch}' — das ist nicht der PR dieser Karte.",
+            f"'{card_branch}'" + why,
         ))
     other = await _pr_on_other_card(session, task, pr_url)
     if other is not None:
@@ -814,6 +1286,17 @@ async def evaluate_proof_gate(
             f"PR #{number} gehoert schon zur Karte '{(other.title or '')[:60]}' "
             f"({str(other.id)[:8]}) — ein PR belegt nur die eigene Karte.",
         ))
+
+    # b) a PR that changes nothing proves no work (an empty branch pushed
+    # only to get a PR number) — and the server's own record of what the PR
+    # changes, for (d) and the review→done comparison
+    changed_files = pr.get("changedFiles")
+    if isinstance(changed_files, int) and changed_files == 0 and state != "MERGED":
+        result.findings.append(Finding(
+            "pr_empty", HARD,
+            f"PR #{number} aendert keine einzige Datei — ein leerer PR belegt keine Arbeit.",
+        ))
+    result.diff_fp = await fetch_diff_fingerprint(owner, repo, number, token)
 
     # (b) the agent's reported SHA is the pushed head — only the developer's
     # move to review: at review→done the reviewer's local checkout may lag
@@ -866,20 +1349,29 @@ async def evaluate_proof_gate(
         before = next((d for ts, d in snapshots if ts is not None and ts <= last_change), None)
         if before is not None and remote_sha:
             old_sha = str(before["head_sha"]).lower()
+            real = await _real_change_since(owner, repo, before, remote_sha, result.diff_fp, token)
             if old_sha == remote_sha:
                 result.findings.append(Finding(
                     "no_commit_after_change", HARD,
                     f"Seit dem Change-Feedback ({last_change:%Y-%m-%d %H:%M} UTC) steht "
                     f"PR #{number} unveraendert auf {remote_sha[:12]} — erst den Change umsetzen.",
                 ))
-            else:
-                changed = await fetch_changed_files(owner, repo, old_sha, remote_sha, token)
-                if changed == 0:
-                    result.findings.append(Finding(
-                        "no_commit_after_change", HARD,
-                        f"Seit dem Change-Feedback kam auf PR #{number} nur ein leerer Stand "
-                        f"({old_sha[:12]} → {remote_sha[:12]}, 0 Dateien geaendert).",
-                    ))
+            elif real is False:
+                result.findings.append(Finding(
+                    "no_commit_after_change", HARD,
+                    f"Seit dem Change-Feedback kam auf PR #{number} keine echte Aenderung "
+                    f"({old_sha[:12]} → {remote_sha[:12]}): nur leere Commits, ein Merge von "
+                    "main oder derselbe Inhalt neu gepusht.",
+                ))
+            elif real is None:
+                # could not tell — never a silent pass (fail-open, loud)
+                result.findings.append(Finding(
+                    "change_unverifiable", NOTICE,
+                    f"Ob seit dem Change-Feedback auf PR #{number} wirklich etwas geaendert "
+                    f"wurde, konnte das Tor nicht pruefen ({old_sha[:12]} → {remote_sha[:12]}: "
+                    "Vergleich fehlgeschlagen, Historie umgeschrieben oder zu viele Commits) — "
+                    "der Reviewer muss es selbst ansehen.",
+                ))
         else:
             # no server record from before the change (older card) → timestamps
             last_commit = _last_commit_at(pr)
@@ -899,6 +1391,13 @@ async def evaluate_proof_gate(
     since = await _last_review_entry_at(session, task)
     developer = await _developer(session, task)
     developer_id = getattr(developer, "id", None)
+    if developer_id is None and old_status != "review":
+        # the log names nobody — the card's own assignee built it (unless
+        # that is the board lead, see ``_developer``)
+        assignee = getattr(task, "assigned_agent_id", None)
+        if assignee and not (actor_agent is not None and actor_agent.id == assignee
+                             and getattr(actor_agent, "is_board_lead", False)):
+            developer_id = assignee
     if reviewer:
         named = await _board_agent_by_name(session, task, reviewer)
         if named is not None and developer_id and named.id == developer_id:
@@ -934,23 +1433,40 @@ async def evaluate_proof_gate(
                     "auf der Karte (eine Reflexion zaehlt nicht) — "
                     "`mc approve --feedback \"…\"` benutzen.",
                 ))
-        elif old_status != "review" and not reviewer:
+        elif old_status != "review" and not getattr(task, "skip_review", False):
+            # The reviewer is determined here, not named by the agent: an
+            # approve in MC, a done review card of someone else, or an
+            # approve on GitHub by another login. The developer closing his
+            # own PR card without any of these skipped the review.
             if not await _independent_review_exists(session, task, developer_id, pr):
+                own = bool(developer_id) and actor_agent.id == developer_id
                 result.findings.append(Finding(
-                    "no_independent_review", NOTICE,
+                    "no_independent_review", HARD if own else NOTICE,
                     f"'{getattr(task, 'title', '')[:60]}' geht ohne Review direkt auf done — "
-                    "kein Approve in MC, keine Review-Karte, kein Approve eines anderen auf GitHub.",
+                    "kein Approve in MC, keine Review-Karte, kein Approve eines anderen auf GitHub."
+                    + (" Der Entwickler schliesst seine eigene PR-Karte." if own else ""),
                 ))
 
-    # review → done: did the PR move after the reviewer saw it?
+    # review → done: did the PR really change after it entered review? A
+    # merge from main or an empty commit does not count; real changes the
+    # review may not have seen are shown (the server cannot know which
+    # stand the reviewer read, so this stays a notice).
     if target_status == "done" and snapshots and remote_sha:
         seen = str(snapshots[0][1]["head_sha"]).lower()
         if seen != remote_sha:
-            result.findings.append(Finding(
-                "head_moved_since_review", NOTICE,
-                f"PR #{number} steht jetzt auf {remote_sha[:12]}, beim Eintritt in Review "
-                f"stand er auf {seen[:12]} — der Review galt evtl. einem aelteren Stand.",
-            ))
+            real = await _real_change_since(owner, repo, snapshots[0][1], remote_sha,
+                                            result.diff_fp, token)
+            if real is False:
+                result.findings.append(Finding(
+                    "head_moved_since_review", INFO,
+                    f"PR #{number} bewegte sich seit dem Review nur durch Merge/leere Commits.",
+                ))
+            else:
+                result.findings.append(Finding(
+                    "head_moved_since_review", NOTICE,
+                    f"PR #{number} steht jetzt auf {remote_sha[:12]}, beim Eintritt in Review "
+                    f"stand er auf {seen[:12]} — der Review galt evtl. einem aelteren Stand.",
+                ))
 
     # (f) other PRs quoted in the agent's own text
     await _check_claims(session, task, result, actor_agent, token, pr_url)
@@ -984,6 +1500,7 @@ def _event_detail(result: ProofGateResult) -> dict:
         "pr_state": result.pr_state,
         "head_sha": result.head_sha,
         "head_branch": result.head_branch,
+        "diff_fp": result.diff_fp,
         "findings": [f.as_dict() for f in result.findings],
     }
 

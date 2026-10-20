@@ -101,7 +101,14 @@ def _gh(pr: dict | None = None, *, rc: int = 0, err: str = "", required=None,
             raise _asyncio.TimeoutError()
         if args[1] == "api":
             if "/compare/" in args[2]:
-                return (0, str(compare_files), "") if compare_files is not None else (1, "", "boom")
+                if compare_files is None:
+                    return 1, "", "boom"
+                return 0, json.dumps({"status": "ahead", "files": compare_files,
+                                      "commits": [{"sha": "c" * 40, "p": 1}]}), ""
+            if "/commits/" in args[2]:
+                return 0, str(compare_files or 0), ""
+            if "/pulls/" in args[2] and args[2].endswith("/files"):
+                return 1, "", "no fingerprint in round-1 fakes"
             return (0, "example-org/example-repo", "") if repo_visible else (1, "", "HTTP 404: Not Found")
         if rc:
             return rc, "", err
@@ -215,7 +222,9 @@ async def test_clean_case_passes_without_any_warning(client, fake_redis, gate_mo
     assert task.status == "review"
     assert comments == [] and events == []
     # the gate really asked GitHub — with the resolved token, not the process env
-    assert [c[0][2] for c in gh.calls] == ["view", "checks"]
+    # view, the PR's own files (diff fingerprint), required checks
+    assert [c[0][2] for c in gh.calls] == [
+        "view", "repos/example-org/example-repo/pulls/42/files", "checks"]
     args, env = gh.calls[0]
     assert "--repo" in args and "example-org/example-repo" in args
     assert env["GH_TOKEN"] == "tok"
