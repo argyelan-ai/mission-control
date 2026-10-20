@@ -714,3 +714,409 @@ def test_a_broken_list_is_kept_aside_never_overwritten(tmp_path, bad):
     assert report.status == "error" and "list" in report.detail
     assert p["mc_a"].exists()
     assert (root / sink_migration.LIST_NAME).read_text(encoding="utf-8") == bad
+
+
+# ── review: the move never leaves the root ──────────────────────────────────
+#
+# The session folders are the agent's own bind mount: from inside its
+# container the agent can plant a symlink there. The operator runs the move
+# on the HOST, with the host's rights — a followed symlink would move MC
+# copies (or files the agent crafted with MC's header) into any host folder,
+# and a crafted list would let ``rollback`` pull host files into the tree.
+
+
+def _outside(tmp_path: Path) -> Path:
+    """A folder next to the sessions root, never inside it."""
+    target = tmp_path / "elsewhere" / "--workspace--"
+    target.mkdir(parents=True)
+    return target
+
+
+def _files_under(path: Path) -> list[str]:
+    return sorted(p.relative_to(path).as_posix() for p in path.rglob("*"))
+
+
+def test_17_a_symlinked_mc_folder_sends_nothing_out_of_the_root(tmp_path):
+    root = tmp_path / "sessions"
+    ws = root / "--workspace--"
+    real = mc_copy(ws, "sid-x1", 1_700_000_000.0, ts="2026-01-01T00-00-00")
+    planted = mc_copy(ws, "sid-inj", 1_700_000_001.0, ts="2026-01-01T00-00-01")
+    outside = _outside(tmp_path)
+    os.symlink("../../elsewhere/--workspace--", ws / ".mc")
+    assert (ws / ".mc").resolve() == outside.resolve()
+
+    report = sink_migration.migrate(root)
+
+    assert _files_under(outside) == [], "a copy left the sessions root"
+    assert real.exists() and planted.exists()
+    assert report.moved == []
+    assert {"path": "--workspace--/.mc", "reason": "unsafe_target"} in report.skipped
+    # The host run in the deploy window: same answer, and it says so.
+    applied = _cli("--root", str(root), "--apply")
+    assert _files_under(outside) == []
+    assert "unsafe_target" in applied.stdout
+
+
+def test_17b_a_symlinked_media_folder_keeps_the_pictures_home(tmp_path):
+    root = tmp_path / "sessions"
+    ws = root / "--workspace--"
+    copy = mc_copy(ws, "sid-1", 1_700_000_000.0)
+    picture = ws / "media" / ("c" * 64 + ".png")
+    picture.parent.mkdir()
+    picture.write_bytes(b"png")
+    outside = _outside(tmp_path)
+    (ws / ".mc").mkdir()
+    os.symlink(str(outside), ws / ".mc" / "media")
+
+    report = sink_migration.migrate(root)
+
+    assert _files_under(outside) == [], "a picture left the sessions root"
+    assert picture.exists()
+    assert not copy.exists() and (ws / ".mc" / copy.name).is_file(), \
+        "the copy itself still moves into the real .mc/"
+    assert {"path": "--workspace--/.mc/media", "reason": "unsafe_target"} in report.skipped
+
+
+def test_17c_a_file_in_place_of_the_mc_folder_skips_the_folder(tmp_path):
+    root = tmp_path / "sessions"
+    ws = root / "--workspace--"
+    copy = mc_copy(ws, "sid-1", 1_700_000_000.0)
+    (ws / ".mc").write_text("not a folder", encoding="utf-8")
+
+    report = sink_migration.migrate(root)
+
+    assert report.status == "ok" and copy.exists()
+    assert {"path": "--workspace--/.mc", "reason": "unsafe_target"} in report.skipped
+
+
+def test_17d_a_folder_turned_symlink_after_planning_is_refused_at_the_move(
+        tmp_path, monkeypatch):
+    """The move itself checks again: every folder between the root and the
+    target must be a real folder at the moment of the rename."""
+    root = tmp_path / "sessions"
+    ws = root / "--workspace--"
+    copy = mc_copy(ws, "sid-1", 1_700_000_000.0)
+    outside = _outside(tmp_path)
+    real_plan = sink_migration._plan
+
+    def plan_then_swap(r):
+        planned = real_plan(r)
+        os.symlink(str(outside), ws / ".mc")
+        return planned
+
+    monkeypatch.setattr(sink_migration, "_plan", plan_then_swap)
+    report = sink_migration.migrate(root)
+
+    assert _files_under(outside) == []
+    assert copy.exists()
+    assert {"path": "--workspace--/" + copy.name, "reason": "unsafe_target"} in report.skipped
+
+
+def _crafted_list(root: Path, moved: list[dict]) -> None:
+    (root / sink_migration.LIST_NAME).write_text(json.dumps({
+        "version": 1, "runs": [{"action": "migrate", "status": "done",
+                                "moved": moved, "media": []}]}), encoding="utf-8")
+
+
+def test_17e_a_crafted_list_cannot_pull_host_files_in_or_push_copies_out(tmp_path):
+    root = tmp_path / "sessions"
+    ws = root / "--workspace--"
+    ws.mkdir(parents=True)
+    outside = _outside(tmp_path)
+    secret = outside / "secret.txt"
+    secret.write_text("host only", encoding="utf-8")
+    os.symlink(str(outside), ws / "link")
+    copy = mc_copy(ws / ".mc", "sid-1", 1_700_000_000.0)
+    _crafted_list(root, [
+        # in: "move back" a host file through the symlink into the tree
+        {"from": "--workspace--/stolen.txt", "to": "--workspace--/link/secret.txt"},
+        # out: "move back" a copy through the symlink out of the tree
+        {"from": "--workspace--/link/" + copy.name, "to": "--workspace--/.mc/" + copy.name},
+    ])
+
+    report = sink_migration.rollback(root)
+
+    assert secret.read_text(encoding="utf-8") == "host only"
+    assert not (ws / "stolen.txt").exists()
+    assert copy.exists() and _files_under(outside) == ["secret.txt"]
+    reasons = {(e["path"], e["reason"]) for e in report.skipped}
+    assert ("--workspace--/link/secret.txt", "unsafe_target") in reasons
+    assert ("--workspace--/.mc/" + copy.name, "unsafe_target") in reasons
+
+
+def test_17f_rollback_all_never_follows_a_symlinked_media_folder(tmp_path):
+    root = tmp_path / "sessions"
+    ws = root / "--workspace--"
+    picture = ws / ".mc" / "media" / ("e" * 64 + ".png")
+    picture.parent.mkdir(parents=True)
+    picture.write_bytes(b"png")
+    mc_copy(ws / ".mc", "sid-1", 1_700_000_000.0)
+    outside = _outside(tmp_path)
+    os.symlink(str(outside), ws / "media")
+
+    report = sink_migration.rollback(root, all_mc=True)
+
+    assert _files_under(outside) == []
+    assert picture.exists()
+    assert ("--workspace--/.mc/media/" + picture.name, "unsafe_target") in {
+        (e["path"], e["reason"]) for e in report.skipped}
+
+
+def test_17g_the_list_never_writes_through_a_planted_temp_name(tmp_path):
+    """The list is rewritten through a temp file at the root. A symlink the
+    agent planted under a guessable temp name must not be followed."""
+    root = tmp_path / "sessions"
+    build_tree(root)
+    outside = _outside(tmp_path)
+    victim = outside / "victim.txt"
+    victim.write_text("keep me", encoding="utf-8")
+    for name in (f"{sink_migration.LIST_NAME}.{os.getpid()}.tmp",
+                 f"{sink_migration.LIST_NAME}.tmp"):
+        os.symlink(str(victim), root / name)
+
+    report = sink_migration.migrate(root)
+
+    assert report.status == "ok", report.detail
+    assert victim.read_text(encoding="utf-8") == "keep me"
+    assert len(read_list(root)["runs"]) == 1
+
+
+def test_17h_a_symlinked_list_is_refused_like_a_broken_one(tmp_path):
+    root = tmp_path / "sessions"
+    p = build_tree(root)
+    outside = _outside(tmp_path)
+    foreign = outside / "foreign.json"
+    foreign.write_text(json.dumps({"version": 1, "runs": []}), encoding="utf-8")
+    os.symlink(str(foreign), root / sink_migration.LIST_NAME)
+
+    report = sink_migration.migrate(root)
+
+    assert report.status == "error" and "list" in report.detail
+    assert p["mc_a"].exists()
+    assert json.loads(foreign.read_text(encoding="utf-8")) == {"version": 1, "runs": []}
+
+
+# ── review: nothing named like a session can hang the move ──────────────────
+
+
+def _returns_within(fn, seconds: float = 2.0):
+    """Run ``fn`` in a thread; fail when it is still running after
+    ``seconds`` (a blocking open of a FIFO never returns)."""
+    import threading
+
+    box: dict = {}
+
+    def run():
+        box["value"] = fn()
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert not worker.is_alive(), f"{fn} still blocked after {seconds} s"
+    return box.get("value")
+
+
+def _unblock(path: Path) -> None:
+    """Open the FIFO's write end once so a reader stuck in open() returns
+    (keeps a failing test from leaving a thread behind)."""
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_NONBLOCK)
+        os.close(fd)
+    except OSError:
+        pass
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+def test_18_a_fifo_lock_or_list_never_hangs_the_run(tmp_path):
+    root = tmp_path / "sessions"
+    build_tree(root)
+    lock = root / sink_migration.LOCK_NAME
+    os.mkfifo(lock)
+    try:
+        report = _returns_within(lambda: sink_migration.migrate(root))
+        assert report.status in ("locked", "ok")
+    finally:
+        _unblock(lock)
+    if lock.exists():
+        lock.unlink()
+    listing = root / sink_migration.LIST_NAME
+    if listing.exists():
+        listing.unlink()
+    os.mkfifo(listing)
+    try:
+        report = _returns_within(lambda: sink_migration.migrate(root, dry_run=True))
+        assert report.status == "error"
+    finally:
+        _unblock(listing)
+
+
+# ── review: the way back works with a damaged list ──────────────────────────
+
+
+@pytest.mark.parametrize("bad", ["{broken", "[]"])
+def test_19_rollback_all_works_without_a_readable_list(tmp_path, bad):
+    """``--rollback --all`` needs no list: it finds MC's copies in ``.mc/``
+    by their header. A damaged list must not block the way back; it stays
+    as it is, and the run goes into a fresh list beside it."""
+    root = tmp_path / "sessions"
+    build_tree(root)
+    before = tree_state(root, skip_meta=True)
+    sink_migration.migrate(root)
+    (root / sink_migration.LIST_NAME).write_text(bad, encoding="utf-8")
+
+    assert sink_migration.rollback(root).status == "error", \
+        "without --all the list is needed"
+    back = sink_migration.rollback(root, all_mc=True)
+
+    assert back.status == "ok", back.detail
+    assert {k: v for k, v in tree_state(root, skip_meta=True).items()
+            if not k.startswith(".mc-sink-migration.")} == before
+    assert (root / sink_migration.LIST_NAME).read_text(encoding="utf-8") == bad
+    assert {"path": sink_migration.LIST_NAME, "reason": "list_unreadable"} in back.skipped
+    fresh = [p for p in root.iterdir()
+             if p.name.startswith(".mc-sink-migration.") and p.name.endswith(".json")
+             and p.name != sink_migration.LIST_NAME]
+    assert len(fresh) == 1 and fresh[0].name in back.detail
+    runs = json.loads(fresh[0].read_text(encoding="utf-8"))["runs"]
+    assert [r["action"] for r in runs] == ["rollback"] and runs[0]["all"] is True
+    assert len(runs[0]["moved"]) == len(MOVED)
+    # Never a session for the backend or omp either.
+    assert not fresh[0].name.endswith(".jsonl")
+    # A new move still refuses until the operator has looked at the list.
+    assert sink_migration.migrate(root).status == "error"
+
+
+# ── review: a lock from the future, a lock that cannot be made ──────────────
+
+
+def test_20_a_lock_dated_in_the_future_does_not_hold_forever(tmp_path):
+    root = tmp_path / "sessions"
+    p = build_tree(root)
+    _lock(root, pid=1, age_s=-10 * 86400, host="another-machine")
+
+    report = sink_migration.migrate(root)
+
+    assert report.status == "ok", report.detail
+    assert not p["mc_a"].exists()
+    assert "future" in report.detail
+
+
+def test_20b_a_contentless_lock_with_a_future_mtime_is_stale(tmp_path):
+    root = tmp_path / "sessions"
+    build_tree(root)
+    lock = root / sink_migration.LOCK_NAME
+    lock.write_text("", encoding="utf-8")
+    future = time.time() + 10 * 86400
+    os.utime(lock, (future, future))
+    assert sink_migration.migrate(root).status == "ok"
+
+
+def test_20c_a_lock_within_the_clock_slack_still_holds(tmp_path):
+    """Host and container clocks may differ by a few seconds — a lock a
+    little in the future is a live run, not garbage."""
+    root = tmp_path / "sessions"
+    build_tree(root)
+    _lock(root, pid=999_999, age_s=-5, host="another-machine")
+    assert sink_migration.migrate(root).status == "locked"
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root ignores folder permissions")
+def test_20d_a_lock_that_cannot_be_created_is_an_error_not_locked(tmp_path):
+    root = tmp_path / "sessions"
+    p = build_tree(root)
+    root.chmod(0o555)
+    try:
+        report = sink_migration.migrate(root)
+        cli = _cli("--root", str(root), "--apply")
+    finally:
+        root.chmod(0o755)
+    assert report.status == "error", (report.status, report.detail)
+    assert "lock" in report.detail
+    assert cli.returncode == 1 and "status: error" in cli.stdout
+    assert p["mc_a"].exists()
+
+
+# ── review: what the list records ───────────────────────────────────────────
+
+
+def test_21_the_list_records_moves_and_command_line_skips_only(tmp_path):
+    """The rule the spec states: a run that moved something is recorded; a
+    command-line run that only skipped something too (a refused move stays
+    on record); a run with nothing to do, or a daemon run that only
+    skipped, is not (it would repeat at every start)."""
+    root = tmp_path / "sessions"
+    p = build_tree(root)
+    sink_migration.migrate(root, runner="cli")
+    assert len(read_list(root)["runs"]) == 1
+    assert _cli("--root", str(root), "--apply").returncode == 0
+    assert len(read_list(root)["runs"]) == 1, "nothing to do: not recorded"
+    clash = mc_copy(root / "--workspace--", "sid-a", 1_700_000_900.0)  # same name again
+    assert clash.name == p["mc_a"].name
+    sink_migration.migrate(root, runner="daemon")
+    assert len(read_list(root)["runs"]) == 1, "a daemon skip repeats at every start"
+    sink_migration.migrate(root, runner="cli")
+    runs = read_list(root)["runs"]
+    assert len(runs) == 2 and runs[1]["skipped"] == [
+        {"path": "--workspace--/" + clash.name, "reason": "target_exists"}]
+
+
+def test_21b_a_daemon_start_with_nothing_to_move_writes_nothing_at_the_root(
+        tmp_path, monkeypatch):
+    """Every chat-daemon start runs the safety net. With nothing to move it
+    must not create (and remove) the lock at every start."""
+    root = tmp_path / "agent" / "sessions"
+    folder = root / "--workspace--"
+    mc_copy(folder / ".mc", "sid-done", 1_700_000_000.0)   # moved long ago
+    omp_file(folder, "sid-done", 1_700_000_000.0)
+    taken: list = []
+    real_acquire = sink_migration._acquire
+    monkeypatch.setattr(sink_migration, "_acquire",
+                        lambda *a, **kw: taken.append(a) or real_acquire(*a, **kw))
+    report = sink_migration.migrate(root, runner="daemon")
+    assert report.status == "ok" and taken == []
+    assert sorted(p.name for p in root.iterdir()) == ["--workspace--"]
+    # A real move still takes the lock.
+    mc_copy(folder, "sid-new", 1_700_000_100.0)
+    assert sink_migration.migrate(root, runner="daemon").counts()["moved"] == 1
+    assert len(taken) == 1
+
+
+# ── review: one header rule, not two ────────────────────────────────────────
+
+
+def test_22_the_move_uses_the_bridge_header_rule_itself():
+    """No second copy of omp's header rule in production code: the move
+    imports it from ``acp_chat_events`` (tests/omp_listing_rule.py stays the
+    independent twin)."""
+    assert sink_migration.session_header is acp_chat_events.session_header
+    assert sink_migration.is_mc_header is acp_chat_events.is_mc_header
+    assert sink_migration.MC_SINK_DIRNAME is acp_chat_events.MC_SINK_DIRNAME
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "def session_header" not in source and "_HEADER_BYTES" not in source
+
+
+# ── review: pictures move only next to MC copies ────────────────────────────
+
+
+def test_23_media_moves_only_in_folders_that_hold_an_mc_copy(tmp_path):
+    """A wrong ``--root`` (one level too high) must not move unrelated
+    ``media/`` folders: pictures follow MC's copies, nothing else."""
+    root = tmp_path / "sessions"
+    lonely = root / "unrelated" / "media" / ("a" * 64 + ".png")
+    omp_only = root / "--omp-only--" / "media" / ("b" * 64 + ".png")
+    for picture in (lonely, omp_only):
+        picture.parent.mkdir(parents=True)
+        picture.write_bytes(b"png")
+    omp_file(root / "--omp-only--", "sid-omp", 1_700_000_000.0)
+    # Copies moved by an earlier run, a picture written after it: it follows.
+    late = root / "--moved-before--" / "media" / ("c" * 64 + ".png")
+    mc_copy(root / "--moved-before--" / ".mc", "sid-old", 1_700_000_000.0)
+    late.parent.mkdir(parents=True)
+    late.write_bytes(b"png")
+
+    report = sink_migration.migrate(root)
+
+    assert lonely.exists() and omp_only.exists()
+    assert not late.exists()
+    assert [e["from"] for e in report.media] == ["--moved-before--/media/" + late.name]

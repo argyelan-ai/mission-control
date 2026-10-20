@@ -24,6 +24,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
@@ -278,3 +280,149 @@ def test_omp_session_file_is_omps_file_even_in_an_old_tree(tmp_path):
     assert sess._omp_session_file() == omp_own
     omp_own.unlink()
     assert sess._omp_session_file() is None
+
+
+# ── review: a symlinked .mc/ is never written through ──────────────────────
+
+
+def test_1d_a_symlinked_mc_folder_degrades_to_a_noop_sink(tmp_path):
+    """``.mc`` must be a real folder: one the agent replaced by a symlink is
+    refused (the sinks degrade to a no-op) instead of followed."""
+    folder = tmp_path / "--w--"
+    folder.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    os.symlink(str(elsewhere), folder / ".mc")
+    sink = acp_chat_events.ChatEventSink(folder, "s")
+    preview = acp_chat_events.PreviewEventSink(folder, "s")
+    sink.write(["{}"])
+    preview.write(["{}"])
+    assert sink.path is None and preview.path is None
+    assert list(elsewhere.iterdir()) == []
+
+
+# ── review: a FIFO named like a session never blocks a lookup ──────────────
+
+
+def _returns_within(fn, seconds: float = 2.0):
+    import threading
+
+    box: dict = {}
+
+    def run():
+        box["value"] = fn()
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert not worker.is_alive(), f"still blocked after {seconds} s"
+    return box.get("value")
+
+
+def _fifo(path: Path) -> Path:
+    os.mkfifo(path)
+    return path
+
+
+def _unblock(path: Path) -> None:
+    try:
+        os.close(os.open(str(path), os.O_WRONLY | os.O_NONBLOCK))
+    except OSError:
+        pass
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+def test_12e_a_fifo_never_blocks_the_header_check_or_find_sink(tmp_path):
+    folder = tmp_path / "--workspace--"
+    folder.mkdir()
+    fifo = _fifo(folder / "zzz_sid1.jsonl")
+    try:
+        assert _returns_within(lambda: acp_chat_events.is_mc_sink(fifo)) is False
+        assert _returns_within(lambda: acp_chat_events.session_header(fifo)) is None
+        assert _returns_within(lambda: acp_chat_events.find_sink(folder, "sid1")) is None
+    finally:
+        _unblock(fifo)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+def test_omp_session_file_never_blocks_on_a_fifo(tmp_path):
+    """The tool-name lookup runs during a turn: a FIFO named like the
+    session must not stall the chat."""
+    folder = tmp_path / "sessions"
+    folder.mkdir()
+    omp_own = _omp_file(folder, "sid-1")
+    os.utime(omp_own, (1_000_000, 1_000_000))
+    fifo = _fifo(folder / "zzz_sid-1.jsonl")
+    client = FakeClient(session_result={**SESSION_RESULT, "sessionId": "sid-1"})
+    sess = acp_chat.ChatSession(
+        client_factory=lambda: client, cwd="/workspace",
+        state_dir=tmp_path / "state", sessions_dir=folder,
+    )
+    sess._session_id = "sid-1"
+    try:
+        assert _returns_within(sess._omp_session_file) == omp_own
+        assert _returns_within(lambda: sess._resolve_tool_name("call-1")) is None
+    finally:
+        _unblock(fifo)
+
+
+# ── review: the preview sits next to the transcript in use ─────────────────
+
+
+def test_2b_a_resumed_old_place_copy_keeps_its_preview_beside_it(tmp_path):
+    """When the move did not run (here: a fresh lock), the daemon resumes the
+    copy at the OLD place. The backend finds the preview next to the
+    transcript it tails (``omp_chat.preview_channel``: ``<transcript
+    folder>/previews/``) — so the preview must go there, not to ``.mc/``."""
+    import socket
+    import time
+
+    import sink_migration
+
+    backend = ROOT.parent.parent / "backend"
+    if str(backend) not in sys.path:
+        sys.path.insert(0, str(backend))
+    from app.services import omp_chat
+
+    root = tmp_path / "agent" / "sessions"
+    folder = root / "--workspace--"
+    folder.mkdir(parents=True)
+    legacy = _legacy_copy(folder, "sid-1")
+    (root / sink_migration.LOCK_NAME).write_text(json.dumps(
+        {"pid": os.getppid(), "at": time.time(),
+         "host": socket.gethostname()}), encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "acp-chat.json").write_text(
+        json.dumps({"sessionId": "sid-1", "transcript": str(legacy)}), encoding="utf-8")
+    client = FakeClient(session_result={**SESSION_RESULT, "sessionId": "sid-new"})
+    sess = acp_chat.ChatSession(
+        client_factory=lambda: client, cwd="/workspace",
+        state_dir=tmp_path / "state", sessions_dir=folder,
+    )
+    sess.start()
+    try:
+        assert sess.transcript_path == legacy, "the move was skipped: old place"
+        assert sess._preview.path is not None
+        assert sess._preview.path.parent == folder / "previews"
+        sess._preview.write([json.dumps({"type": "custom_message",
+                                         "customType": "acp-preview"})])
+        assert omp_chat.preview_channel(legacy) == sess._preview.path
+        assert not (folder / ".mc" / "previews").exists()
+    finally:
+        sess.close()
+
+
+def test_2c_a_new_session_keeps_its_preview_beside_it_in_the_mc_folder(tmp_path):
+    folder = tmp_path / "agent" / "sessions" / "--workspace--"
+    folder.mkdir(parents=True)
+    client = FakeClient(session_result={**SESSION_RESULT, "sessionId": "sid-1"})
+    sess = acp_chat.ChatSession(
+        client_factory=lambda: client, cwd="/workspace",
+        state_dir=tmp_path / "state", sessions_dir=folder,
+    )
+    sess.start()
+    try:
+        assert sess.transcript_path.parent == folder / ".mc"
+        assert sess._preview.path.parent == folder / ".mc" / "previews"
+    finally:
+        sess.close()
