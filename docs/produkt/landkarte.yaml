@@ -313,6 +313,19 @@ features:
       - "PUT /api/v1/settings/{key}"
       # Version + update hint in the settings footer.
       - "GET /api/v1/system/version"
+      # Self-update card, Settings → About (ADR-094, update plan PR 5;
+      # MCUpdateCard.tsx): lights, the password sheet, phase bar, restart
+      # gap, history. Admin only and behind MC_SELF_UPDATE_ENABLED (off)
+      # until the button passed acceptance; step-up GET decides whether the
+      # button is offered, POST confirms the password in the sheet.
+      - "GET /api/v1/auth/step-up"
+      - "POST /api/v1/auth/step-up"
+      - "POST /api/v1/system/update/preflight"
+      - "POST /api/v1/system/update/start"
+      - "GET /api/v1/system/update/status"
+      - "POST /api/v1/system/update/rollback"
+      - "POST /api/v1/system/update/resume"
+      - "GET /api/v1/system/update/history"
       # Intelligence analysis-window config + manual trigger (intelligence
       # tab); the insights page also reads the config (listed in F-insights).
       - "PUT /api/v1/intelligence/config"
@@ -350,6 +363,8 @@ features:
       - user_settings
       # config_checks = latest result per checked setting (check registry).
       - config_checks
+      # system_updates = the self-update history the update card lists.
+      - system_updates
   - id: F-memory
     name: "Memory: the vault"
     ui: {route: [/memory, /memory/graph]}
@@ -713,31 +728,15 @@ internal:
   # /api/v1/agent/me/telegram endpoint (FileCard telegram action). No bare
   # /api/v1/agent endpoint exists.
   - "endpoint:* /api/v1/agent/*"
-  # Step-up re-authentication (services/step_up.py, ADR-094 decision 9): a
-  # building block without its own screen. The self-update card (Settings →
-  # System) will ask GET whether to show its button and POST the password in
-  # its confirm sheet; no UI calls it yet.
-  - "endpoint:GET /api/v1/auth/step-up"
-  - "endpoint:POST /api/v1/auth/step-up"
   # Proof gate stats (routers/activity.py, #891): who caught false finish
   # reports (gefangen_von) — the gate, a reviewer role, the lead or the
   # operator. Read-only numbers for the proof-gate evaluation; no screen
   # shows them yet.
   - "endpoint:GET /api/v1/activity/proof-gate/stats"
-  # Self-update API (routers/system_update.py, ADR-094, update plan PR 4c):
-  # behind MC_SELF_UPDATE_ENABLED (off) until the button passed acceptance.
-  # The update card in Settings → System (plan PR 5) is its only consumer
-  # and does not exist yet. system_state holds the drain the update engine
-  # writes through psql and the work it held back; system_updates is the
-  # history the card will show.
-  - "endpoint:POST /api/v1/system/update/preflight"
-  - "endpoint:POST /api/v1/system/update/start"
-  - "endpoint:GET /api/v1/system/update/status"
-  - "endpoint:POST /api/v1/system/update/rollback"
-  - "endpoint:POST /api/v1/system/update/resume"
-  - "endpoint:GET /api/v1/system/update/history"
+  # system_state holds the drain the update engine writes through psql and
+  # the work it held back (ADR-094 §7) — no screen reads it directly; the
+  # update card shows the drain through GET /system/update/status.
   - "table:system_state"
-  - "table:system_updates"
   # Schedule heatmap and upcoming firings: client helpers exist
   # (api.schedule.getHeatmap/getUpcoming) but no component calls them —
   # the schedule page renders ScheduleHeatmap with empty data and the job

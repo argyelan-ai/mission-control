@@ -48,6 +48,7 @@ import { NightShiftTab } from "@/components/settings/NightShiftTab";
 import { PhoneAccountPanel } from "@/components/settings/PhoneAccountPanel";
 import { BoardsCard } from "@/components/settings/BoardsCard";
 import { PhoneSectionList } from "@/components/settings/PhoneSectionList";
+import { MCUpdateCard, useUpdateCardGate } from "@/components/settings/MCUpdateCard";
 import { GROUP_ORDER, SECTIONS, sectionHref } from "@/components/settings/sections";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -2245,16 +2246,25 @@ function ShortcutsSection() {
 
 function AboutSection() {
   const t = useTranslations("settings.about");
+  const currentUser = useAppStore((s) => s.currentUser);
+  const isAdmin = currentUser?.role === "admin";
   const { data: version } = useQuery({
     queryKey: ["system-version"],
     queryFn: api.system.version,
     staleTime: 60 * 60 * 1000,
   });
+  // The update card (ADR-094) — admins only, and only while the backend's
+  // feature switch is on. While it is on screen it carries the "update
+  // available" line, so the System card below drops its own (K3).
+  const updateGate = useUpdateCardGate(isAdmin);
+  const cardCarriesUpdate = updateGate === "shown" || updateGate === "managed";
   return (
     <SectionMotion sectionKey="about">
       <SectionHeader title={t("title")} description={t("description")} />
 
       <div className="space-y-6">
+        {isAdmin && <MCUpdateCard version={version} />}
+
         {/* System info */}
         <div className="mc-card p-6" style={cardStyle}>
           <h3
@@ -2278,7 +2288,7 @@ function AboutSection() {
                 </span>
               </div>
             ))}
-            {version?.update_available && version.release_url && (
+            {!cardCarriesUpdate && version?.update_available && version.release_url && (
               <div className="flex items-center justify-between pt-2" style={{ borderTop: "1px solid var(--color-border)" }}>
                 <span className="text-sm" style={{ color: "var(--color-warning)" }}>
                   {t("updateAvailable", { version: version.latest ?? "" })}

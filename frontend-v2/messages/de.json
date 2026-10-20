@@ -2376,6 +2376,196 @@
         "unknown": "Die Prüfung ist fehlgeschlagen. Den Grund kennt MC nicht.",
         "details": "Details vom Server (englisch)"
       }
+    },
+    "update": {
+      "title": "Updates",
+      "available": "Version {latest} ist verfügbar · du hast {current}",
+      "upToDate": "MC {current} ist aktuell.",
+      "whatsNew": "Was ist neu",
+      "check": "Update prüfen",
+      "checkAgain": "Erneut prüfen",
+      "checking": "Prüft das Gerät … das kann bis zu einer Minute dauern.",
+      "checkError": "Die Prüfung hat keine Antwort bekommen. Gleich noch einmal versuchen.",
+      "ready": "Bereit zum Update — verändert wurde noch nichts.",
+      "blocked": "{count, plural, one {Eine Prüfung ist rot} other {# Prüfungen sind rot}} — so lange bleibt das Update gesperrt. Verändert wurde nichts.",
+      "okCount": "{count, plural, one {# Prüfung grün} other {# Prüfungen grün}}",
+      "updateNow": "Jetzt updaten",
+      "details": "Details",
+      "copyCommand": "Befehl kopieren",
+      "copied": "Kopiert",
+      "onMachine": "Auf dem Gerät, im Installationsordner:",
+      "statusUnknown": "Der Update-Stand ist gerade nicht abrufbar.",
+      "retry": "Erneut versuchen",
+      "noPassword": "Dieses Konto hat kein Passwort und kann ein Update nicht bestätigen. Update im Terminal:",
+      "localToken": "Nur ein echtes Admin-Konto kann ein Update bestätigen, kein Skript-Token. Update im Terminal:",
+      "stepUpUnavailable": "Bestätigen mit Passwort geht gerade nicht. Update im Terminal:",
+      "managed": "Diese Installation wird über die Deploy-Prozedur aktualisiert, nicht von hier.",
+      "preparing": "Update auf {target} wird vorbereitet …",
+      "preparingNoTarget": "Update wird vorbereitet …",
+      "waiting": "Wartet auf Ruhe: {what}.",
+      "waitingQuiet": "Wartet auf Ruhe …",
+      "waitingTasks": "{count, plural, one {# Aufgabe läuft} other {# Aufgaben laufen}} noch",
+      "waitingRounds": "{count, plural, one {# Gruppenchat-Runde läuft} other {# Gruppenchat-Runden laufen}} noch",
+      "waitingHint": "MC vergibt so lange keine neue Arbeit; Laufendes darf fertig werden.",
+      "cancel": "Update abbrechen",
+      "running": "Update auf {target} läuft",
+      "stepOf": "Schritt {n} von 5 · {step}",
+      "steps": {
+        "download": "Laden",
+        "backup": "Sichern",
+        "switch": "Umschalten",
+        "restart": "Neustart",
+        "verify": "Prüfen"
+      },
+      "restartSoon": "Gleich startet MC neu — diese Seite meldet sich danach von selbst.",
+      "staleNote": "Der Update-Dienst antwortet gerade nicht; das Update läuft auf dem Gerät weiter.",
+      "rollingBack": "Update fehlgeschlagen bei „{step}“ — MC wird auf {from} zurückgesetzt …",
+      "rollingBackNoStep": "Update fehlgeschlagen — MC wird auf {from} zurückgesetzt …",
+      "restarting": "MC startet neu, diese Seite meldet sich gleich.",
+      "restartingSince": "Fragt seit {minutes} min nach",
+      "restartTimeout": "MC antwortet seit 25 Minuten nicht. Auf dem Gerät nachsehen, im Installationsordner:",
+      "askAgain": "Erneut fragen",
+      "success": "MC {version} läuft",
+      "successBackup": "Die Sicherung vom {when} bleibt 14 Tage.",
+      "reloading": "Die Seite lädt gleich neu.",
+      "goBack": "Zurück auf {version}",
+      "rolledBack": "Update fehlgeschlagen bei „{step}“. MC wurde automatisch auf {from} zurückgesetzt; deine Daten sind auf dem Stand vor dem Update.",
+      "rolledBackNoStep": "Update fehlgeschlagen. MC wurde automatisch auf {from} zurückgesetzt; deine Daten sind auf dem Stand vor dem Update.",
+      "rolledBackRequested": "MC wurde wie gewünscht auf {from} zurückgesetzt.",
+      "goingBack": "MC wird auf {from} zurückgesetzt …",
+      "copyLog": "Log kopieren",
+      "logCopied": "Log kopiert",
+      "aborted": {
+        "network": "Download fehlgeschlagen. MC läuft unverändert auf {current}.",
+        "cancelled": "Update abgebrochen. MC läuft unverändert auf {current}.",
+        "interrupted": "Das Update wurde vor dem Umschalten unterbrochen. MC läuft unverändert auf {current}.",
+        "error": "Das Update hat vor dem Umschalten angehalten. MC läuft unverändert auf {current}."
+      },
+      "retryNote": "Ein fehlgeschlagener Download zählt nicht gegen das Tageslimit.",
+      "interrupted": "Das Update wurde unterbrochen und wird fortgesetzt.",
+      "resumeNow": "Jetzt fortsetzen",
+      "resumeFailed": "Fortsetzen hat nicht geklappt. Auf dem Gerät: ./install.sh --resume",
+      "interruptedNoBridge": "Das Update wurde unterbrochen. MC vergibt keine neue Arbeit, bis es fertig ist. Auf dem Gerät, im Installationsordner:",
+      "rollbackFailed": "Das Update ist fehlgeschlagen, und auch das Zurücksetzen ist gescheitert. MC vergibt keine neue Arbeit. Auf dem Gerät, im Installationsordner:",
+      "checks": {
+        "generic": "Prüfung „{id}“",
+        "bridge": {
+          "ok": "Der Update-Dienst auf dem Gerät antwortet",
+          "fail": "Der Update-Dienst (cli-bridge) auf dem Gerät antwortet nicht oder ist zu alt"
+        },
+        "linger": {
+          "ok": "Die Bridge läuft auch nach Abmelden und Neustart weiter",
+          "fail": "Die Bridge stoppt beim Abmelden — ein unterbrochenes Update könnte nicht fertig werden"
+        },
+        "detach": {
+          "ok": "Das Update läuft losgelöst von der Bridge",
+          "warn": "Das Update läuft in einer eigenen Sitzung (systemd-run fehlt)"
+        },
+        "install": {
+          "ok": "Installationsordner gefunden",
+          "fail": "Das ist kein vollständiger Mission-Control-Installationsordner"
+        },
+        "channel": {
+          "ok": "Kanal stable",
+          "fail": "Kanal edge — edge wird im Terminal aktualisiert"
+        },
+        "lock": {
+          "ok": "Kein anderes Update läuft",
+          "fail": "Ein anderes Update läuft oder wurde unterbrochen"
+        },
+        "docker": {
+          "ok": "Docker antwortet",
+          "fail": "Docker antwortet nicht"
+        },
+        "project": {
+          "ok": "Ein Mission-Control-Stack auf diesem Gerät",
+          "warn": "Der Stack heisst nicht mission-control — die Agenten-Steuerung von MC setzt diesen Namen voraus",
+          "fail": "Ein zweiter Mission-Control-Stack läuft auf diesem Gerät"
+        },
+        "checkout": {
+          "ok": "Keine lokalen Änderungen am Code",
+          "fail": "Lokale Änderungen am Code — das Umschalten würde verweigert"
+        },
+        "release": {
+          "ok": "Das Ziel ist ein veröffentlichtes Release",
+          "fail": "Die Release-Liste ist nicht abrufbar oder das Ziel ungültig — später erneut versuchen"
+        },
+        "database": {
+          "ok": "Die Datenbank antwortet",
+          "fail": "Die Datenbank antwortet nicht — sie wird vorher gesichert und muss laufen"
+        },
+        "work": {
+          "ok": "Keine laufende Arbeit",
+          "warn": "Arbeit läuft — das Update wartet, bis sie fertig ist",
+          "fail": "Laufende Arbeit konnte nicht gezählt werden"
+        },
+        "disk": {
+          "ok": "Genug freier Speicherplatz",
+          "warn": "Freier Speicherplatz unbekannt",
+          "fail": "Zu wenig Speicherplatz für die neuen Images und die Sicherung"
+        },
+        "step_up": {
+          "ok": "Du kannst mit deinem Passwort bestätigen",
+          "fail": "Diese Anmeldung kann nicht mit Passwort bestätigen — Update im Terminal"
+        },
+        "schedules": {
+          "ok": "Kein Zeitplan in den nächsten 15 Minuten fällig",
+          "fail": "Ein Zeitplan ist in den nächsten 15 Minuten fällig — danach updaten oder ihn pausieren"
+        },
+        "group_rounds": {
+          "warn": "Gruppenchat-Runden laufen — das Update wartet auf sie"
+        },
+        "loops": {
+          "warn": "Loops sind aktiv — die laufende Runde wird abgewartet, die nächste startet nach dem Update"
+        },
+        "engine": {
+          "fail": "Der Update-Motor hat einen Fehler gemeldet"
+        }
+      },
+      "sheet": {
+        "startTitle": "Auf {target} updaten",
+        "startBody": "MC ist ca. 2–10 Minuten nicht erreichbar (Raspberry Pi bis 20). Vorher wird automatisch gesichert. Laufende Arbeit wird nicht abgebrochen.",
+        "startConfirm": "Update starten",
+        "cancelTitle": "Update abbrechen?",
+        "cancelBody": "Das Update stoppt vor dem Umschalten; verändert wird nichts.",
+        "cancelConfirm": "Update abbrechen",
+        "rollbackTitle": "Zurück auf {from}?",
+        "rollbackBody": "MC geht zurück auf {from}, und die Datenbank kommt aus der Sicherung vom {when}. Alles, was seitdem geschrieben wurde, geht verloren — Aufgaben, Chats, Einstellungen.",
+        "rollbackConfirm": "Zurücksetzen",
+        "password": "Passwort bestätigen",
+        "passwordHint": "Noch einmal, weil das das laufende MC ersetzt.",
+        "close": "Schliessen",
+        "errors": {
+          "wrongPassword": "Falsches Passwort.",
+          "tooManyAttempts": "Zu viele Versuche. Bitte 15 Minuten warten.",
+          "stepUpRequired": "Die Bestätigung ist abgelaufen — bitte das Passwort noch einmal eingeben.",
+          "unavailable": "Bestätigen geht gerade nicht (Redis antwortet nicht).",
+          "noPassword": "Dieses Konto hat kein Passwort. Dafür bitte das Terminal nutzen.",
+          "busy": "Auf dem Gerät läuft schon ein anderes Update.",
+          "rateLimited": "In den letzten 24 Stunden wurden {used} von {limit} Updates gestartet. Morgen wieder möglich.",
+          "refused": "Das angebotene Release hat sich geändert. Bitte erneut prüfen.",
+          "preflightFailed": "Eine Prüfung ist rot geworden — verändert wurde nichts.",
+          "bridgeUnreachable": "Der Update-Dienst auf dem Gerät antwortet nicht. Gestartet wurde nichts.",
+          "doorToken": "Der Update-Dienst lehnt den Schlüssel von MC ab. Bridge neu einrichten:",
+          "engine": "Der Update-Motor hat einen Fehler gemeldet.",
+          "tooLate": "Zu spät zum Abbrechen — das Update ist schon beim Umschalten und setzt sich bei einem Fehler selbst zurück.",
+          "unknown": "Das hat nicht geklappt. Bitte erneut versuchen."
+        },
+        "upToDate": "MC ist schon auf dem neuesten Release."
+      },
+      "history": {
+        "toggle": "Verlauf ({count})",
+        "outcome": {
+          "done": "aktualisiert",
+          "rolled_back": "zurückgesetzt",
+          "aborted": "abgebrochen",
+          "rollback_failed": "Rückweg gescheitert",
+          "running": "läuft"
+        },
+        "by": "von {name}",
+        "terminal": "im Terminal",
+        "bridge": "vom Gerät fortgesetzt"
+      }
     }
   },
   "skills": {

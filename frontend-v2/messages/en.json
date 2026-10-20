@@ -2376,6 +2376,196 @@
         "unknown": "The test failed for a reason MC does not know.",
         "details": "Details from the server"
       }
+    },
+    "update": {
+      "title": "Updates",
+      "available": "Version {latest} is available · you have {current}",
+      "upToDate": "MC {current} is up to date.",
+      "whatsNew": "What's new",
+      "check": "Check for the update",
+      "checkAgain": "Check again",
+      "checking": "Checking the machine … this can take up to a minute.",
+      "checkError": "The check got no answer. Try again in a moment.",
+      "ready": "Ready to update — nothing has been changed yet.",
+      "blocked": "{count, plural, one {One check is red} other {# checks are red}} — the update stays locked until {count, plural, one {it is} other {they are}} fixed. Nothing was changed.",
+      "okCount": "{count, plural, one {# check passed} other {# checks passed}}",
+      "updateNow": "Update now",
+      "details": "Details",
+      "copyCommand": "Copy command",
+      "copied": "Copied",
+      "onMachine": "On the machine, in the install folder:",
+      "statusUnknown": "The update status cannot be read right now.",
+      "retry": "Try again",
+      "noPassword": "This account has no password, so it cannot confirm an update. Update in the terminal:",
+      "localToken": "Only a real admin login can confirm an update, not a script token. Update in the terminal:",
+      "stepUpUnavailable": "Confirming with a password is not possible right now. Update in the terminal:",
+      "managed": "This install is updated through its deploy procedure, not from here.",
+      "preparing": "Getting the update to {target} ready …",
+      "preparingNoTarget": "Getting the update ready …",
+      "waiting": "Waiting for quiet: {what}.",
+      "waitingQuiet": "Waiting for quiet …",
+      "waitingTasks": "{count, plural, one {# task is} other {# tasks are}} still running",
+      "waitingRounds": "{count, plural, one {# group-chat round is} other {# group-chat rounds are}} still running",
+      "waitingHint": "MC hands out no new work meanwhile; running work may finish.",
+      "cancel": "Cancel the update",
+      "running": "Updating to {target}",
+      "stepOf": "Step {n} of 5 · {step}",
+      "steps": {
+        "download": "Download",
+        "backup": "Back up",
+        "switch": "Switch",
+        "restart": "Restart",
+        "verify": "Check"
+      },
+      "restartSoon": "MC restarts in a moment — this page reconnects on its own.",
+      "staleNote": "The update service does not answer right now; the update carries on on the machine.",
+      "rollingBack": "The update failed at “{step}” — MC is being set back to {from} …",
+      "rollingBackNoStep": "The update failed — MC is being set back to {from} …",
+      "restarting": "MC is restarting, this page reconnects in a moment.",
+      "restartingSince": "Asking again since {minutes} min",
+      "restartTimeout": "MC has not answered for 25 minutes. Look on the machine, in the install folder:",
+      "askAgain": "Ask again",
+      "success": "MC {version} is running",
+      "successBackup": "The backup from {when} is kept for 14 days.",
+      "reloading": "This page reloads in a moment.",
+      "goBack": "Back to {version}",
+      "rolledBack": "The update failed at “{step}”. MC was set back to {from} automatically; your data is as it was before the update.",
+      "rolledBackNoStep": "The update failed. MC was set back to {from} automatically; your data is as it was before the update.",
+      "rolledBackRequested": "MC was set back to {from}, as you asked.",
+      "goingBack": "Setting MC back to {from} …",
+      "copyLog": "Copy log",
+      "logCopied": "Log copied",
+      "aborted": {
+        "network": "The download failed. MC still runs {current}, unchanged.",
+        "cancelled": "The update was cancelled. MC still runs {current}, unchanged.",
+        "interrupted": "The update was interrupted before the switch. MC still runs {current}, unchanged.",
+        "error": "The update stopped before the switch. MC still runs {current}, unchanged."
+      },
+      "retryNote": "A failed download does not count against the daily limit.",
+      "interrupted": "The update was interrupted and is being resumed.",
+      "resumeNow": "Resume now",
+      "resumeFailed": "Resuming did not work. On the machine: ./install.sh --resume",
+      "interruptedNoBridge": "The update was interrupted. MC hands out no new work until it is finished. On the machine, in the install folder:",
+      "rollbackFailed": "The update failed, and setting MC back failed too. MC hands out no new work. On the machine, in the install folder:",
+      "checks": {
+        "generic": "Check “{id}”",
+        "bridge": {
+          "ok": "The update service on the machine answers",
+          "fail": "The update service (cli-bridge) on the machine does not answer or is too old"
+        },
+        "linger": {
+          "ok": "The bridge keeps running after logout and reboot",
+          "fail": "The bridge stops at logout — an interrupted update could not finish"
+        },
+        "detach": {
+          "ok": "The update runs detached from the bridge",
+          "warn": "The update runs in its own session (systemd-run is missing)"
+        },
+        "install": {
+          "ok": "Install folder found",
+          "fail": "This is not a complete Mission Control install folder"
+        },
+        "channel": {
+          "ok": "Channel stable",
+          "fail": "Channel edge — edge installs are updated in the terminal"
+        },
+        "lock": {
+          "ok": "No other update running",
+          "fail": "Another update is running or was interrupted"
+        },
+        "docker": {
+          "ok": "Docker answers",
+          "fail": "Docker does not answer"
+        },
+        "project": {
+          "ok": "One Mission Control stack on this machine",
+          "warn": "The stack is not named mission-control — MC's agent control assumes that name",
+          "fail": "A second Mission Control stack runs on this machine"
+        },
+        "checkout": {
+          "ok": "No local changes to the code",
+          "fail": "Local changes to the code — the switch would refuse"
+        },
+        "release": {
+          "ok": "The target is a published release",
+          "fail": "The release list cannot be read or the target is not valid — try again later"
+        },
+        "database": {
+          "ok": "The database answers",
+          "fail": "The database does not answer — it is backed up first, so it must run"
+        },
+        "work": {
+          "ok": "No running work",
+          "warn": "Work is running — the update waits until it is done",
+          "fail": "Running work could not be counted"
+        },
+        "disk": {
+          "ok": "Enough free disk space",
+          "warn": "Free disk space unknown",
+          "fail": "Not enough disk space for the new images and the backup"
+        },
+        "step_up": {
+          "ok": "You can confirm with your password",
+          "fail": "This login cannot confirm with a password — update in the terminal"
+        },
+        "schedules": {
+          "ok": "No scheduled job due within 15 minutes",
+          "fail": "A scheduled job is due within 15 minutes — update after it ran, or snooze it"
+        },
+        "group_rounds": {
+          "warn": "Group-chat rounds are running — the update waits for them"
+        },
+        "loops": {
+          "warn": "Loops are active — the current round is waited for, the next starts after the update"
+        },
+        "engine": {
+          "fail": "The update engine reported an error"
+        }
+      },
+      "sheet": {
+        "startTitle": "Update to {target}",
+        "startBody": "MC is unreachable for about 2–10 minutes (up to 20 on a Raspberry Pi). A backup is taken first, automatically. Running work is not cut off.",
+        "startConfirm": "Start the update",
+        "cancelTitle": "Cancel the update?",
+        "cancelBody": "The update stops before the switch; nothing is changed.",
+        "cancelConfirm": "Cancel the update",
+        "rollbackTitle": "Back to {from}?",
+        "rollbackBody": "MC goes back to {from} and the database comes back from the backup of {when}. Everything written since then is lost — tasks, chats, settings.",
+        "rollbackConfirm": "Set back",
+        "password": "Confirm your password",
+        "passwordHint": "Once more, because this replaces the running MC.",
+        "close": "Close",
+        "errors": {
+          "wrongPassword": "Wrong password.",
+          "tooManyAttempts": "Too many attempts. Wait 15 minutes.",
+          "stepUpRequired": "The confirmation expired — enter your password again.",
+          "unavailable": "Confirming is not possible right now (Redis does not answer).",
+          "noPassword": "This account has no password. Use the terminal for this.",
+          "busy": "Another update is running on the machine.",
+          "rateLimited": "{used} of {limit} updates started in the last 24 hours. Try again tomorrow.",
+          "refused": "The offered release has changed. Check again.",
+          "preflightFailed": "A check turned red — nothing was changed.",
+          "bridgeUnreachable": "The update service on the machine does not answer. Nothing was started.",
+          "doorToken": "The update service rejected MC's key. Set the bridge up again:",
+          "engine": "The update engine reported an error.",
+          "tooLate": "Too late to cancel — the update is past the switch and sets itself back if it fails.",
+          "unknown": "That did not work. Try again."
+        },
+        "upToDate": "MC is already on the newest release."
+      },
+      "history": {
+        "toggle": "History ({count})",
+        "outcome": {
+          "done": "updated",
+          "rolled_back": "set back",
+          "aborted": "cancelled",
+          "rollback_failed": "way back failed",
+          "running": "running"
+        },
+        "by": "by {name}",
+        "terminal": "in the terminal",
+        "bridge": "resumed by the machine"
+      }
     }
   },
   "skills": {
