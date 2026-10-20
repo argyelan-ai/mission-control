@@ -1507,6 +1507,8 @@ def open_regular(path: Path) -> Optional[Any]:
         return None
     try:
         if stat.S_ISREG(os.fstat(fd).st_mode):
+            if hasattr(os, "set_blocking"):
+                os.set_blocking(fd, True)  # from here on an ordinary handle
             return os.fdopen(fd, "r", encoding="utf-8", errors="replace")
     except OSError:
         pass
