@@ -10,21 +10,30 @@ The chain, each link checked against the live logs:
   1. The runtime watcher's stale-model net (``_sync_stale_agent_models``)
      counted an ARCHIVED cli-bridge agent that still carried the previous
      model as "stale". ``mark_agents_for_sync`` skips archived agents, so the
-     archived row never got fixed — and the net flagged every other agent on
-     the runtime again after each 600 s guard window.
+     archived row never got fixed — and the net flagged EVERY agent on the
+     runtime again after each 600 s guard window.
   2. The host sync (``sync_host_agent_model``) then wrote ``agent.env`` with
      unchanged content → launchd restarted the bridge (start 1), and the
      adapter reload restarted it again (start 2).
+
+The same shape returns with any LIVE agent that cannot converge (give-up
+cooldown, failing health check): as long as the net flags the whole runtime,
+a converged host agent gets an ``adapter.reload`` (a process restart) every
+window, with ``agent.env`` untouched. So "stale" and "flagged" are one set,
+chosen by one filter (``runtime_propagation.is_model_sync_target``).
 
 Covered here, each with a counter-case:
 
   * the writer skips identical content (mtime and inode untouched) and writes
     changed content exactly once, in place (same inode — no tmp+rename, which
-    would detach a single-file bind mount), owner-only,
+    would detach a single-file bind mount), owner-only, as the exact bytes it
+    compares against; provisioning uses the same writer (built once),
   * a repeated host model sync leaves ``agent.env`` untouched, a real model
     change still rewrites it,
-  * the watcher's net ignores archived agents, but still flags a live agent
-    that carries an old model.
+  * the watcher's net ignores archived agents and host agents without an
+    adapter, flags only the stale agents (a stale host agent included), and
+    a stuck live agent never restarts a converged host agent over three
+    guard windows — end to end through the real flagging and sync passes.
 
 Test data: box-a / agent-a / org/neu. No network, no Docker.
 """
