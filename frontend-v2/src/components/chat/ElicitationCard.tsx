@@ -21,13 +21,14 @@
  * Signal: warning frame only while the card waits for the operator ("needs
  * you", K8); once settled it is a quiet row.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MessageCircleQuestion } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
+import { recordOnboardingMilestone } from "@/lib/onboardingMetrics";
 import {
   isElicitationNotPendingError,
   type ElicitationChoice,
@@ -121,6 +122,14 @@ export function ElicitationCard({ ev, result, agentId }: ElicitationCardProps) {
   const status = result?.status ?? (gone ? "expired" : sent?.status ?? null);
   const open = status == null;
   const interactive = open && agentId != null;
+
+  // Onboarding metric (Welle 3, PR 3-4): time to the first live question
+  // card. `agentId != null` excludes a head's read-only transcript view —
+  // only a card the operator could actually act on counts.
+  useEffect(() => {
+    if (agentId != null) void recordOnboardingMilestone("first_question_card");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function submit(action: "accept" | "decline" | "cancel", content?: Answers) {
     if (!agentId || sending) return;

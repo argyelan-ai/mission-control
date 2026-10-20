@@ -9,6 +9,12 @@ import { AUTH_TOKEN_KEY, api, setStoredUser } from "@/lib/api";
 import { postLoginPath } from "@/lib/firstRun";
 import { AmbientBackground } from "@/components/layout/AmbientBackground";
 import { C, alpha } from "@/lib/colors";
+import {
+  flushPendingOnboardingMetrics,
+  markOnboardingStart,
+  recordOnboardingError,
+  recordOnboardingMilestone,
+} from "@/lib/onboardingMetrics";
 
 const _BRAND = process.env.NEXT_PUBLIC_BRAND || "Mission.Control";
 const _dot = _BRAND.lastIndexOf(".");
@@ -32,6 +38,9 @@ export default function LoginPage() {
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    // Best-effort "onboarding started" marker (lib/onboardingMetrics.ts) —
+    // the base every later milestone's elapsed time is measured from.
+    markOnboardingStart();
     api.auth
       .setupRequired()
       .then((res) => {
@@ -81,6 +90,14 @@ export default function LoginPage() {
 
       localStorage.setItem(AUTH_TOKEN_KEY, res.access_token);
       setStoredUser(res.user);
+      // Onboarding metrics (Welle 3, PR 3-4): first flush whatever was
+      // buffered locally while there was no session yet (e.g. a failed
+      // attempt's "login_failed"/"register_failed" — see
+      // lib/onboardingMetrics.ts), then record the success itself.
+      // Fire-and-forget — never blocks navigation.
+      void flushPendingOnboardingMetrics().then(() =>
+        recordOnboardingMilestone("login"),
+      );
       // First registration -> setup wizard; a later login goes there too
       // while the wizard is still pending (lib/firstRun.ts).
       router.replace(await postLoginPath(mode === "register" ? "register" : "login"));
@@ -89,6 +106,9 @@ export default function LoginPage() {
         err instanceof Error ? err.message : t("connectionFailed");
       setError(msg.replace(/^"/, "").replace(/"$/, ""));
       setLoading(false);
+      // Fixed code only — never the raw message, which can carry server
+      // text (see lib/onboardingMetrics.ts privacy rule).
+      void recordOnboardingError(mode === "register" ? "register_failed" : "login_failed");
     }
   }
 

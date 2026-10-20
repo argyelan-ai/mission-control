@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
@@ -8,6 +9,7 @@ import { Settings, LogOut, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { api, clearToken } from "@/lib/api";
 import { ThemeCycleButton } from "@/components/shared/ThemeSwitch";
+import { recordOnboardingMilestone } from "@/lib/onboardingMetrics";
 
 const MONO = { fontFamily: "var(--font-p2-mono)" };
 
@@ -28,6 +30,15 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
     queryFn: api.system.status,
     refetchInterval: 30_000,
   });
+
+  // Onboarding metric (Welle 3, PR 3-4): the sidebar mounts right after
+  // login, on every page — a reliable single place to catch "an agent came
+  // online" the first time this install's status poll sees one.
+  useEffect(() => {
+    if (status && (status.agents?.online ?? 0) > 0) {
+      void recordOnboardingMilestone("first_agent_online");
+    }
+  }, [status]);
 
   // Gateway was retired (ADR-039) — health now reflects the core dependencies.
   const dbOk = status?.components?.database?.status === "ok";

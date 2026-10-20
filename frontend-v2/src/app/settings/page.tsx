@@ -48,6 +48,7 @@ import { NightShiftTab } from "@/components/settings/NightShiftTab";
 import { PhoneAccountPanel } from "@/components/settings/PhoneAccountPanel";
 import { BoardsCard } from "@/components/settings/BoardsCard";
 import { PhoneSectionList } from "@/components/settings/PhoneSectionList";
+import { SetupReportCard } from "@/components/settings/SetupReportCard";
 import { GROUP_ORDER, SECTIONS, sectionHref } from "@/components/settings/sections";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -2324,6 +2325,8 @@ function AboutSection() {
             </a>
           </div>
         </div>
+
+        <SetupReportCard />
 
         {/* Credits */}
         <div

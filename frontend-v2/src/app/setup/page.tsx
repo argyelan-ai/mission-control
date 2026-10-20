@@ -16,6 +16,7 @@ import { AmbientBackground } from "@/components/layout/AmbientBackground";
 import { C, alpha } from "@/lib/colors";
 import { CheckReason } from "@/components/shared/CheckStatus";
 import { isValueRejected } from "@/lib/checkReason";
+import { recordOnboardingError, recordOnboardingMilestone } from "@/lib/onboardingMetrics";
 
 import type { ConfigCheckItem, GithubConfigUpdate, Priority, TaskStatus } from "@/lib/types";
 
@@ -158,6 +159,9 @@ export default function SetupWizardPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : t("saveFailed"));
       setSaving(false);
+      // Onboarding metric (Welle 3, PR 3-4): a fixed code only, never the
+      // raw message (see lib/onboardingMetrics.ts privacy rule).
+      void recordOnboardingError("setup_key_save_failed");
       return;
     }
     setTestingKey(true);
@@ -170,13 +174,18 @@ export default function SetupWizardPage() {
         // Only a refused value is locked; a test that did not get through
         // (timeout, network, rate limit) may be retried with the same value.
         setRejectedValue(isValueRejected(problem.item) ? value : null);
+        // `reason` is already a closed, machine-readable vocabulary
+        // (checkReason.ts) — safe to reuse as the error code as-is.
+        void recordOnboardingError(`setup_key_${problem.item.reason ?? "unknown"}`);
       } else {
         setError(t("checkFailed", { error: problem.error }));
+        void recordOnboardingError("setup_key_check_unreachable");
       }
       return;
     }
     setRejectedValue(null);
     setKeySaved(true);
+    void recordOnboardingMilestone("first_key_green");
     setStep(3);
   }
 
