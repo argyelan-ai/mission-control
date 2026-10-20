@@ -462,6 +462,9 @@ async def _bump_failures(key: str) -> int:
     try:
         redis = await get_redis()
         fails = int(await redis.incr(key))
+        # Always reset to the full _FAIL_TTL: _retry_too_soon reads the time
+        # since this failure as _FAIL_TTL - ttl. A different lifetime here
+        # (or a conditional expire) breaks the SYNC_RETRY_SPACING pace.
         await redis.expire(key, _FAIL_TTL)
         return fails
     except Exception:  # noqa: BLE001 — Redis optional; worst case we retry forever

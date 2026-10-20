@@ -514,7 +514,8 @@ die. A row whose anchor never ran (the GLM row on 2026-10-19) gets no death,
 no notification and no restart — whether or not its eviction marker has
 expired. One engine death produces exactly one death. The slot row follows its
 recipe row (11.1). Whether the last answer was a row's own is remembered
-durably (days), not only in the live snapshot (3 probe intervals), so an
+durably (days), not only in the live snapshot (3 probe intervals, at least
+270 s since the 2026-10-20 note in §11.2), so an
 outage that began while the backend was down is still judged per row. A
 matching model id counts as own only when no other row on the port carries
 the same id; otherwise the anchor decides.
@@ -587,9 +588,15 @@ preceded by the slot row's plain alarm for the same outage.
 *Note 2026-10-20 (tick 30 s):* the plain alarm (3 probes, 60–90 s) can now
 come before a death that the anchor confirms later in the 270 s window. That
 death then follows as the error with the cause: two `runtime.unreachable`
-events for that outage, the first without a cause. At the 90 s tick the
-window ended at the threshold, so this could not happen; dropping the death
-instead would lose its cause and the task comments (§11.5).
+events for that outage in the activity feed, the first without a cause. At
+the 90 s tick the window ended at the threshold, so this could not happen;
+dropping the death instead would lose its cause and the task comments
+(§11.5). The alert channel still gets **one** notification, the one with the
+cause: both events share the alert-dedup key `runtime.unreachable|<slug>`,
+and the dedup treats a more urgent severity for the same key as news, not as
+a repeat (`discord_notify`). The error is sent at once, takes over the key's
+one-hour window, and the plain warning still waiting in the digest is
+dropped.
 
 11.5 **Work does not fail silently**: agents bound to a dead runtime keep
 their queued work; delivery waits while the runtime is down (relates to open
