@@ -57,7 +57,7 @@ acp_chat_ctl.py <op>  (CLI shim used by docker exec)      ·      hermes-bridge.
 - Running task in the agent chat (20.10.2026): the agent chat shows the chat daemon's session only (#898); a task runs in a session of its own (bridge header `taskId`). `GET /agents/{id}/chat/task-activity` reads that session through the same adapter (`find_task_session`, `tasks_in_own_session`) and the chat renders it as a separate "From the task" block — delivery, the newest steps, the running thought, more inbox tasks. Harnesses whose task runs inside the chat answer `applies: false` — Claude Code, omp under the native driver, and Hermes (over ACP the hermes-bridge hands a task to the chat daemon itself).
 - `configOptions` (from `session/new`/`session/load` result and `config_option_update` notifications) and `available_commands_update` are kept in memory and mirrored to `sessions_dir/acp-chat-state.json` after every change.
 - Permissions: `OMP_ACP_PERMISSIONS` policy (yolo → allow), same helper as the bridge.
-- Errors → transcript `custom_message` line, `customType: "chat_error"`, content = human text, plus `data: {"code": ..., "detail": ...}`. Codes: `rpc_error` (JSON-RPC error on prompt/config), `provider_error` (`401`/`403`/`429`/quota text detected in the error or in the final agent text when the turn produced no text), `empty_turn` (turn ended with stopReason `end_turn` and zero agent text), `process_exit` (child died; daemon restarts it and re-loads the session), `busy`, `session_reset` (the conversation to resume could not be opened; `detail` is `transcript_missing` when its transcript is gone, `model_missing` when omp cannot restore the session's model — the content then names the model —, otherwise the exception), `queue_full` (20 messages already held), `new_session_failed` (`session/new` refused; the current session continues), `queue_lost` (a restart dropped held jobs), `cancelled` is NOT an error (it produces a normal end-of-turn).
+- Errors → transcript `custom_message` line, `customType: "chat_error"`, content = human text, plus `data: {"code": ..., "detail": ...}`. Codes: `rpc_error` (JSON-RPC error on prompt/config), `provider_error` (`401`/`403`/`429`/quota text detected in the error or in the final agent text when the turn produced no text), `empty_turn` (turn ended with stopReason `end_turn` and zero agent text), `process_exit` (child died; daemon restarts it and re-loads the session), `busy`, `session_reset` (the conversation to resume could not be opened; `detail` is `transcript_missing` when its transcript is gone, `model_missing` when omp cannot restore the session's model — the content then names the model, and `data.model` carries the name for the card in the UI language —, otherwise the exception), `queue_full` (20 messages already held), `new_session_failed` (`session/new` refused; the current session continues), `queue_lost` (a restart dropped held jobs), `cancelled` is NOT an error (it produces a normal end-of-turn).
 - Model pin (incident 19.10.2026): every `session/new` and `session/load` pins the selector read from the CURRENT `omp.env` (`acp_model.current_selector` — a runtime switch re-renders that file in the running container; the daemon's boot env goes stale). A selector the session does not offer is replaced by the offered model of the same provider and the chat gets a `custom_message` line `customType: "chat_notice"`, `data: {"code": "model_fallback", "previous", "current"}` (frontend `ChatNoticeCard`, `chat.notice.*`). The task path (`bridge.run_acp_once`) does the same, writes a refused pin into the task's chat as `chat_error`, and marks its prompts `attribution: "mc"` + `origin: {kind: "task"|"nudge"}` so the chat shows them as task events, not as operator bubbles.
 - Socket server: `$OMP_HOME/acp-chat.sock` (path configurable via `--socket`), newline-delimited JSON; each connection = one request/one response.
 
@@ -188,21 +188,33 @@ first source that names a session id **and** a transcript wins:
    of S1-R4: the old image kept its pointer in `$OMP_HOME`, but already wrote
    this file on the mount.
 
+One exception: a state mirror that is **strictly newer** than the pointer and
+names **another** session wins over the pointer (logged as "following the
+state mirror"). Every session switch (start, `/new`, reset) writes the pointer
+**before** the state mirror names the new session — in the same locked step as
+the switch, so no socket thread can write the mirror in between. A newer
+mirror naming another session therefore means the pointer stopped being
+written: a rollback to an image before S1-R4 (it writes only the mirror) and a
+forward deploy after it, or a pointer write that failed (only a log line).
+Reopening the pointer's session then would silently undo the conversation the
+operator had open last. A newer mirror naming the same session is normal
+operation and changes nothing.
+
 `$OMP_HOME/acp-chat.json` is never read: a new image always means a recreate,
 so it is empty there, and a stale one must never win over the mirror. The
-transcript is then followed to `.mc/` (`sink_migration.remap`). Every session
-switch (start, `/new`, reset) writes the pointer **before** the state mirror
-names the new session, so the first source is never older than the second.
-Fields of the pointer the daemon does not know (P4 adds `homeSessionId`) stay
-when it is rewritten.
+transcript is then followed to `.mc/` (`sink_migration.remap`); a path the
+file system refuses (too long, a folder the daemon may not enter) counts as a
+missing transcript, never as a crash at boot. Fields of the pointer the daemon
+does not know (P4 adds `homeSessionId`) stay when it is rewritten.
 
 | What happens | The open conversation |
 |---|---|
 | restart in the same container (`docker restart`, or the chat daemon started again) | goes on: `session/load` from the pointer, same transcript file |
 | recreate (new image, `compose up --force-recreate`) | goes on: the pointer is on the mount (the first start after the S1-R4 deploy takes the state mirror) |
 | the omp child dies (`process_exit`) | goes on: the daemon respawns it and loads the session it had in memory; the replay stays out of the chat (`_muted_replay`) |
-| any of the three after a **model switch** since the last turn | a new conversation and the card `session_reset` / `model_missing`, naming the old model |
-| the pointer's transcript is gone (also not in `.mc/`) | a new conversation and the card `session_reset` / `transcript_missing` |
+| rollback to the image before S1-R4, then forward again | goes on with the conversation that was open last: the newer state mirror wins over the pointer from before the rollback |
+| any of the three after a **model switch** since the last turn | a new conversation and the card `session_reset` / `model_missing`, naming the old model (in the text and as `data.model`) |
+| the pointer's transcript is gone (also not in `.mc/`), or the file system refuses its path | a new conversation and the card `session_reset` / `transcript_missing` |
 | no pointer and no state mirror, but an earlier chat copy (`bridge: "acp"`, no `taskId`) in the tree | a new conversation and the notice `chat_started_fresh` |
 | a brand-new agent, or only task copies / omp's own files in the tree | a new conversation, no card |
 
