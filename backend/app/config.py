@@ -531,7 +531,13 @@ class Settings(BaseSettings):
 
     # Runtime & Model Management v1 (ADR-054) — background /v1/models probing.
     runtime_watcher_enabled: bool = True
-    runtime_watcher_interval: int = 90  # seconds between probe ticks
+    # Seconds between probe ticks. 30 since 2026-10-20 (operator decision; was
+    # 90): an engine that dies is declared at the next probe (ADR-096 §11.2),
+    # so the tick is the detection time. What one tick leaves for readers
+    # between ticks keeps its old wall-clock floor (runtime_watcher
+    # STATE_TTL_FLOOR / FAIL_COUNT_TTL_FLOOR); the alarm threshold stays
+    # 3 probes (UNREACHABLE_EVENT_THRESHOLD).
+    runtime_watcher_interval: int = 30
 
     # Runtimes-Buehne v2, PR 1 (docs/specs/runtimes-buehne-v2.md §6/§7) —
     # Prometheus token-counter poller feeding the card's heat strip.
