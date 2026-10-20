@@ -70,7 +70,7 @@ else MC writes for the chat lives one level deeper:
 | What | Where |
 |---|---|
 | transcript copy (`ChatEventSink`, the file the chat view reads) | `<folder>/.mc/<ts>_<sessionId>.jsonl` — header unchanged (`type`, `version`, `id`, `timestamp`, `cwd`, `bridge: "acp"`, `taskId`) |
-| preview channel (`PreviewEventSink`) | `<folder>/.mc/previews/` |
+| preview channel (`PreviewEventSink`) | `<folder>/.mc/previews/` — always next to the transcript copy in use (`PreviewEventSink.beside`): an old copy the daemon resumed in place because the move did not run keeps its preview in `<folder>/previews/`, where the backend looks for it (`omp_chat.preview_channel`) |
 | tool pictures (`write_media`) | `<folder>/.mc/media/` (next to the transcript copy) |
 | state mirror | `<folder>/acp-chat-state.json` (unchanged) |
 
@@ -83,8 +83,13 @@ one id. MC's copy carries exactly that header, so before S1-R3 omp listed
 every chat session twice and often loaded MC's copy instead of its own file
 (live 20.10.2026: "ACP session load was cancelled" for the current chat; the
 daemon then started a new session without a word). `<folder>/.mc/x.jsonl`
-lies two levels below the root, outside both globs; the leading dot also
-keeps it out of a recursive search (Bun skips dot names unless asked).
+lies two levels below the root, outside both globs — that alone keeps omp
+18.10.1 away (checked with omp 18.10.1 on a copy of a session tree: with MC's
+copies in `.mc/`, `session/list` with and without `cwd` showed only omp's
+files). The leading dot is a second guard in case a later omp searches
+recursively: Bun's docs say `Bun.Glob` skips dot names unless `dot: true`,
+and a local Bun 1.3 does so — not checked at the Bun build inside omp's
+binary, so it is an assumption, not a proof.
 Changing the header would mean rewriting old files, and a new extension would
 change every `*.jsonl` reader — moving the file changes neither.
 
@@ -93,8 +98,10 @@ change every `*.jsonl` reader — moving the file changes neither.
 `backend/tests/test_mc_sink_dirname_contract.py` — backend and bridge share no
 code). `acp_chat_events.find_sink(folder, sessionId)` returns MC's copy:
 `.mc/` first, then the old place, never omp's own file (only a header with
-`bridge: "acp"` counts). The backend reads both places, so it must be
-deployed before a bridge that writes to `.mc/`. The chat daemon looks up
+`bridge: "acp"` counts; never blocks on a FIFO named like a session). The
+backend reads both places, so it must be deployed before a bridge that
+writes to `.mc/`. `.mc` must be a real folder: a symlink there is refused
+(the sinks write nothing), never followed. The chat daemon looks up
 tool names in omp's own file in the session folder and never takes a file
 with MC's header for it.
 
@@ -104,8 +111,18 @@ library only, Python 3.9+, the same file in the image and in a checkout):
 - In each folder directly under the sessions root (no dot folders, no
   symlinks) every `*.jsonl` directly in the folder with `bridge: "acp"` in its
   header moves to `<folder>/.mc/<same name>`; `<folder>/media/*` moves to
-  `<folder>/.mc/media/`. One rename each, on the same file system, so the
-  modification time stays (the backend ranks sessions by it).
+  `<folder>/.mc/media/` — only in a folder that holds an MC copy (moved now
+  or before), so a wrong `--root` moves no unrelated pictures. One rename
+  each, on the same file system, so the modification time stays (the
+  backend ranks sessions by it).
+- It never leaves the root. The session folders are the agent's own mount,
+  so the agent can plant a symlink there, and the operator runs the move on
+  the host with the host's rights. Every folder between the root and a
+  source or target must be a real folder — checked when planning and again
+  at each rename; a `.mc` or `.mc/media` that is a symlink or a file skips
+  that folder with reason `unsafe_target`. Only regular files move. The list
+  is written through a fresh `O_EXCL` temp file; a list or lock that is a
+  symlink or a FIFO is never followed or waited on.
 - Never: delete, overwrite (an existing target is skipped with a reason),
   touch a subfolder (`previews/`, omp's artifact folders — also those with
   MC's name pattern), a dot file (omp's `.<name>.jsonl.lock.os`),
@@ -115,18 +132,29 @@ library only, Python 3.9+, the same file in the image and in a checkout):
   16.09.2026) moves like any other and is marked `mixed` with the count and
   types of omp's lines.
 - The list `<root>/.mc-sink-migration.json` (never `.jsonl` — the backend's
-  `*.jsonl` search would read it as a session) records every run that moved
-  something and every command-line run: `{from, to, sessionId, task, mixed}`
-  per file, paths relative to the root (host and container see different
-  absolute paths). It is rewritten atomically, written before the first move
-  and again after the last, so a crash in between stays traceable.
+  `*.jsonl` search would read it as a session) records a run that moved
+  something; a command-line run also when it only skipped something (a
+  refused move stays on record). A run with nothing to do is not recorded,
+  nor a daemon run that only skipped (it would repeat at every start). Per
+  file `{from, to, sessionId, task, mixed}`, paths relative to the root (host
+  and container see different absolute paths). It is rewritten atomically,
+  written before the first move and again after the last, so a crash in
+  between stays traceable. A list that cannot be read stops `--apply` and a
+  plain `--rollback`.
 - The lock `<root>/.mc-sink-migration.lock` (`O_EXCL`) holds pid, time and
   host. Older than 10 minutes, or of a dead process on the same host → taken
-  over; otherwise the run stops with `locked`.
+  over; otherwise the run stops with `locked`. A lock time more than a
+  minute in the future is garbage: the file's own time counts instead. A
+  lock that cannot be created or removed (permissions) is `error`, not
+  `locked`. The chat daemon plans read-only first and takes the lock only
+  when something is to move.
 - `rollback` moves each listed file back when its old place is free;
   `--all` also moves back copies written into `.mc/` after the move, and
-  `.mc/media/*`. `remap(path)` sends an old pointer to the moved file (and a
-  pointer into `.mc/` back after a rollback).
+  `.mc/media/*`. `--all` needs no list (it finds MC's copies by their
+  header): with a damaged list it still runs, leaves that list untouched and
+  records its run in a fresh `.mc-sink-migration.<time>.json` beside it.
+  `remap(path)` sends an old pointer to the moved file (and a pointer into
+  `.mc/` back after a rollback).
 - Command line: `python3 sink_migration.py --root <sessions root>
   (--dry-run | --apply | --rollback [--all]) [--json]`; exit 0 ok, 1 error,
   3 locked.
