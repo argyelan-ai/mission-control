@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * ApprovalCard — renders a permission_prompt's ChatPrompt as a warning-accented
- * card: question text, one button per option, plus a quiet escape hatch to the
+ * ApprovalCard — renders a permission_prompt's ChatPrompt as an accent-framed
+ * card (waiting for the operator = the brightest tone, never ochre — E12): question text, one button per option, plus a quiet escape hatch to the
  * raw terminal for anyone who doesn't trust the paraphrase.
  *
  * Buttons are single-shot: a click disables the whole card immediately so a
@@ -15,6 +15,7 @@
  * operator finds what to tap. The voice itself never answers the card.
  */
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
 import type { ChatPrompt } from "@/lib/chatTypes";
 
@@ -30,6 +31,7 @@ interface ApprovalCardProps {
 const ATTENTION_PULSE_MS = 2_000;
 
 export function ApprovalCard({ prompt, onAnswer, onShowTerminal, attention = false }: ApprovalCardProps) {
+  const t = useTranslations("chat.approval");
   const [answered, setAnswered] = useState(false);
   const [pulsing, setPulsing] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -60,7 +62,7 @@ export function ApprovalCard({ prompt, onAnswer, onShowTerminal, attention = fal
       ref={ref}
       data-attention={attention}
       className={`flex flex-col gap-3 rounded-lg border px-4 py-3 ${pulsing ? "motion-safe:animate-pulse" : ""}`}
-      style={{ borderColor: C.warning, backgroundColor: C.bgElevated }}
+      style={{ borderColor: C.borderAccent, backgroundColor: C.bgElevated }}
     >
       <p className="text-sm leading-snug" style={{ color: C.textPrimary }}>
         {prompt.question}
@@ -73,7 +75,7 @@ export function ApprovalCard({ prompt, onAnswer, onShowTerminal, attention = fal
             disabled={answered}
             onClick={() => handleAnswer(option.key)}
             className="rounded-md border px-3 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-            style={{ borderColor: C.warning, color: C.textPrimary }}
+            style={{ borderColor: C.borderActive, color: C.textPrimary }}
           >
             {option.label}
           </button>
@@ -85,7 +87,7 @@ export function ApprovalCard({ prompt, onAnswer, onShowTerminal, attention = fal
         className="self-start text-xs underline decoration-dotted underline-offset-2"
         style={{ color: C.textMuted }}
       >
-        Im Terminal prüfen
+        {t("checkTerminal")}
       </button>
     </div>
   );

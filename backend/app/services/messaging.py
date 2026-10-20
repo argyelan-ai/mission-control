@@ -265,11 +265,15 @@ async def open_questions(
     *,
     thread_id: uuid.UUID | None = None,
     to: str | None = None,
+    sender_id: uuid.UUID | None = None,
 ) -> list[Message]:
-    """List open (awaiting=True) questions, optionally filtered by thread and target."""
+    """List open (awaiting=True) questions, optionally filtered by thread,
+    target and asking agent (the chat's question card, one agent at a time)."""
     stmt = select(Message).where(Message.message_type == "question")
     if thread_id is not None:
         stmt = stmt.where(Message.thread_id == thread_id)
+    if sender_id is not None:
+        stmt = stmt.where(Message.sender_id == sender_id)
     stmt = stmt.order_by(Message.created_at)
 
     result = await session.exec(stmt)

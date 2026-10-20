@@ -3742,6 +3742,20 @@
       "notOpen": "Diese Rückfrage ist nicht mehr offen.",
       "failed": "Antwort nicht gesendet — bitte nochmal versuchen."
     },
+    "operatorQuestion": {
+      "aria": "Dein Agent fragt dich",
+      "other": "Andere Antwort…",
+      "placeholder": "Deine Antwort",
+      "send": "Antwort senden",
+      "answeredWith": "Beantwortet: {answer}",
+      "resumes": "der Task läuft weiter",
+      "notOpen": "Diese Frage wurde schon beantwortet.",
+      "failed": "Antwort nicht gesendet — bitte nochmal.",
+      "elsewhereHint": "Beantworte sie auf ihrer eigenen Karte — dort steht, was passiert.",
+      "openElsewhere": "Öffnen",
+      "waiting": "Wartet auf eine Antwort",
+      "more": "{count, plural, one {# weitere Frage wartet} other {# weitere Fragen warten}}"
+    },
     "mode": {
       "label": "Modus",
       "plan": "Plan",
@@ -3751,6 +3765,9 @@
       "failed": "Modus nicht gewechselt — bitte nochmal versuchen.",
       "busy": "Der Agent arbeitet gerade — wechsle den Modus, wenn die Antwort fertig ist.",
       "questionOpen": "Erst die offene Rückfrage beantworten, dann den Modus wechseln."
+    },
+    "approval": {
+      "checkTerminal": "Im Terminal prüfen"
     }
   },
   "heads": {

@@ -837,3 +837,27 @@ export function extractErrorMessage(err: unknown): string | null {
     return null;
   }
 }
+
+/** An open question of an agent to the operator (`GET /chat/questions`, E11):
+ *  `mc question`, a blocking `mc ask` to the operator, or any other pending
+ *  approval. Harness-neutral — the same for every agent. `answerable` false =
+ *  a kind with consequences the chat card cannot state (installs, blockers):
+ *  it links to its own card instead. */
+export interface OperatorQuestion {
+  id: string;
+  source: "approval" | "thread";
+  kind: string;
+  answerable: boolean;
+  question: string;
+  options: string[];
+  default: string | null;
+  blocking: boolean;
+  task_id: string | null;
+  task_title: string | null;
+  created_at: string;
+}
+
+/** 409 from `/chat/questions/{id}/answer`: answered elsewhere meanwhile. */
+export function isQuestionNotOpenError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("question_not_open");
+}

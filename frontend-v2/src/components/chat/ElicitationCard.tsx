@@ -18,8 +18,9 @@
  * holds (its turn ended, the chat restarted) answers 409 — the card then says
  * so instead of failing.
  *
- * Signal: warning frame only while the card waits for the operator ("needs
- * you", K8); once settled it is a quiet row.
+ * Signal: accent frame only while the card waits for the operator ("needs
+ * you", K8 — the brightest tone, never ochre, never a pulse: E12); once
+ * settled it is a quiet row.
  */
 import { useMemo, useState } from "react";
 import { MessageCircleQuestion } from "lucide-react";
@@ -191,14 +192,14 @@ export function ElicitationCard({ ev, result, agentId }: ElicitationCardProps) {
         aria-label={t("aria")}
         className="flex flex-col gap-3 rounded-lg px-3 py-3"
         style={{
-          border: `1px solid ${interactive ? C.warning : C.border}`,
+          border: `1px solid ${interactive ? C.borderAccent : C.border}`,
           background: interactive ? C.bgElevated : "transparent",
         }}
       >
         <div className="flex items-start gap-2">
           {/* One text line high, so the icon sits on the first line. */}
           <span className="flex h-5 shrink-0 items-center" aria-hidden="true">
-            <MessageCircleQuestion size={15} style={{ color: interactive ? C.warning : C.textMuted }} />
+            <MessageCircleQuestion size={15} style={{ color: interactive ? C.accent : C.textMuted }} />
           </span>
           {/* One column for text AND its "Show more": ClampedContent renders
               the toggle as a sibling, which in this row became a second

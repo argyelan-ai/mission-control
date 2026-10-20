@@ -6,7 +6,7 @@
  *   2. clicking an option calls onAnswer with that option's key
  *   3. buttons disable after a click (single-shot) until a new prompt object
  *      (fresh state event) arrives, which re-enables them
- *   4. "Im Terminal prüfen" link calls onShowTerminal
+ *   4. "Check in the terminal" link calls onShowTerminal
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
@@ -75,7 +75,7 @@ describe("ApprovalCard", () => {
     render(
       <ApprovalCard prompt={PROMPT} onAnswer={vi.fn()} onShowTerminal={onShowTerminal} />,
     );
-    fireEvent.click(screen.getByText("Im Terminal prüfen"));
+    fireEvent.click(screen.getByText("Check in the terminal"));
     expect(onShowTerminal).toHaveBeenCalledTimes(1);
   });
 });

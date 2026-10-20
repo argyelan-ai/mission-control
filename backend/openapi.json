@@ -1209,6 +1209,24 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/chat/questions": {
+      "get": {
+        "operationId": "get_agent_questions_api_v1_agents__agent_id__chat_questions_get",
+        "summary": "Get Agent Questions",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/questions/{question_id}/answer": {
+      "post": {
+        "operationId": "post_agent_question_answer_api_v1_agents__agent_id__chat_questions__question_id__answer_post",
+        "summary": "Post Agent Question Answer",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/chat/queue/clear": {
       "post": {
         "operationId": "post_chat_queue_clear_api_v1_agents__agent_id__chat_queue_clear_post",

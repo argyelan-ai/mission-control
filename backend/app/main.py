@@ -55,6 +55,7 @@ install_log_redaction()
 from app.routers import (
     activity,
     agent_chat,
+    agent_questions,
     agent_comments,
     agent_scoped,
     agent_task_status,
@@ -469,6 +470,7 @@ app.include_router(browser_live.router)
 app.include_router(browser_sessions.router)  # /api/v1/browser-sessions — one browser area per agent session / head run (ADR-088)
 app.include_router(cli_terminal.router)
 app.include_router(agent_chat.router)  # /api/v1/agents/{id}/chat/history|stream — Sessions Chat View (Task A4)
+app.include_router(agent_questions.router)  # /api/v1/agents/{id}/chat/questions — question card for every agent (E11)
 app.include_router(consensus.router)
 app.include_router(schedule.router)
 app.include_router(voice.router)
