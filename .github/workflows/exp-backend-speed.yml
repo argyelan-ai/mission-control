@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rep: [1, 2, 3, 4, 5, 6]
+        rep: [1, 2, 3, 4]
     defaults:
       run:
         working-directory: backend
@@ -26,9 +26,16 @@ jobs:
       - name: Install dependencies
         env:
           UV_SYSTEM_PYTHON: "1"
+          UV_COMPILE_BYTECODE: "1"
         run: |
           python -m pip install uv==0.11.2
           uv pip install -r requirements.lock
           uv pip install --no-deps -e .
+      - name: Collect cold
+        run: /usr/bin/time -f "COLLECT-COLD %e s" pytest --collect-only -q -p no:cacheprovider | tail -1
+      - name: compileall
+        run: /usr/bin/time -f "COMPILEALL %e s" python -m compileall -q -j 4 app tests ../jarvis_core > /dev/null
+      - name: Collect warm
+        run: /usr/bin/time -f "COLLECT-WARM %e s" pytest --collect-only -q -p no:cacheprovider | tail -1
       - name: Run tests
-        run: pytest -x --tb=short -q -n auto --dist worksteal --durations=25
+        run: pytest -x --tb=short -q -n auto --dist worksteal --durations=0 --durations-min=0.05
