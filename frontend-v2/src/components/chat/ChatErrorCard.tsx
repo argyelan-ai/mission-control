@@ -202,10 +202,12 @@ export function ChatErrorCard({ ev }: ChatErrorCardProps) {
         )}
         {showLink && (
           // Part of the text, at its left edge — never in the button's row.
+          // 44 px at every width like the button below: one finger-target
+          // rule in the card (K11), a tablet is a finger, too.
           <Link
             href="/runtimes"
             data-testid="chat-error-runtimes-link"
-            className="inline-flex min-h-11 md:min-h-9 items-center gap-1 text-sm font-medium"
+            className="inline-flex min-h-11 items-center gap-1 text-sm font-medium"
             style={{ color: C.accent }}
           >
             {t("error.runtimesLink")}
@@ -217,13 +219,16 @@ export function ChatErrorCard({ ev }: ChatErrorCardProps) {
           // hairline across the content, then the button over the full width,
           // label centred. Nothing wraps next to it at 320 px or large text.
           // 44 px at every width (K11); the line in the calm border tone, the
-          // card's red frame already carries the signal (K6).
+          // card's red frame already carries the signal (K6). The hover
+          // surface gets the controls' radius (DESIGN.md Buttons, rounded-md)
+          // at its two free corners only: its top edge IS the hairline and
+          // stays straight, the bottom echoes the card's own corners.
           <button
             type="button"
             data-testid="chat-error-resend"
             onClick={handleResend}
             disabled={sent}
-            className="mt-2 flex w-full min-h-11 items-center justify-center gap-2 text-sm font-medium transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-default disabled:hover:bg-transparent"
+            className="mt-2 flex w-full min-h-11 items-center justify-center gap-2 rounded-b-md text-sm font-medium transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-default disabled:hover:bg-transparent"
             style={{ color: sent ? C.textMuted : C.accent, borderTop: `1px solid ${C.border}` }}
           >
             {sent ? <Check size={14} aria-hidden="true" /> : <RotateCcw size={14} aria-hidden="true" />}
