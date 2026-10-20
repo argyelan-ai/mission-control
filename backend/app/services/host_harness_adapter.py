@@ -613,8 +613,12 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
 
         existing.setdefault("OMP_PROFILE", omp_host_profile(slug))
 
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text(_format_env_file(existing))
+    # Only when the bytes change: a host bridge may watch agent.env (launchd
+    # WatchPaths), and a same-content rewrite restarted it on every sync
+    # round (live 2026-10-20) — see agent_env_writer.
+    from app.services.agent_env_writer import write_env_file_if_changed
+
+    write_env_file_if_changed(env_path, _format_env_file(existing))
 
     if is_host_omp:
         from app.services.host_provisioning import render_omp_host_models_yml

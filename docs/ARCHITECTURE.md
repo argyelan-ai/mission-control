@@ -728,6 +728,19 @@ cli-bridge agent `pending_runtime_sync = true`
 Migration `0141`). Unreachable endpoints only update live status;
 `runtime.unreachable` fires after 3 consecutive failed probes.
 
+**Stale-model net** (`RuntimeWatcher._sync_stale_agent_models`, ADR-078
+follow-up): the row is right, but a bound agent's `agents.model` still
+differs. The net flags **only those agents**
+(`mark_agents_for_sync(..., only_ids=…)`), at most once per runtime per
+`AGENT_MODEL_GUARD_TTL` (600 s). "Stale" and "flagged" use one filter,
+`runtime_propagation.is_model_sync_target` (cli-bridge agents, host agents
+with a registered adapter, never archived ones). Both rules come from a live
+loop (2026-10-20): an archived agent no sync can reach stayed "stale"
+forever, and flagging the whole runtime each window restarted a converged
+host bridge about every 10.5 minutes, all day. Host agents' `agent.env` is
+written only when its bytes change (`services/agent_env_writer.py`), because
+a launchd `WatchPaths` job restarts on every write.
+
 **Propagation** (`services/runtime_propagation.py`) runs a sync pass at the
 end of every tick: idle flagged agents get `sync_docker_agent_files()` +
 a **plain `docker restart`** (re-runs the container entrypoint →
