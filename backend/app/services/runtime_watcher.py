@@ -1206,16 +1206,18 @@ class RuntimeWatcher:
 
         When to ask the box, at most once per probe and only up to the
         threshold: at once on ``connection refused`` (nothing listens — the
-        fast path), from the 2nd failed probe on any other failure, and at the
-        threshold. The row's own anchor decides: exited / gone → death at THIS
-        probe; running, or not checkable (box mid-stall, SSH down) → no death,
-        the threshold rule applies unchanged. Never starts or stops anything.
+        fast path), and at the threshold on any other failure (a timeout is
+        what a stalling box produces too, so the threshold of 3 applies
+        unchanged — ADR-096 §11.2). The row's own anchor decides: exited /
+        gone → death at THIS probe; running, or not checkable (box mid-stall,
+        SSH down) → no death, the plain threshold alarm. Never starts or
+        stops anything.
         """
         if runtime.is_slot or not was_own or runtime.serving_since is None:
             return None
         if fails > UNREACHABLE_EVENT_THRESHOLD:
             return None  # decided long ago — no SSH every tick of a long outage
-        if not (failure == FAIL_REFUSED or fails >= 2):
+        if not (failure == FAIL_REFUSED or fails >= UNREACHABLE_EVENT_THRESHOLD):
             return None
         if await get_stop_intent(runtime.slug, redis) is not None:
             return None

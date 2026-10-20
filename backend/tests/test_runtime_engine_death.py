@@ -6,8 +6,9 @@ a cause, three times — once per row sharing the Spark's ``:8000``.
 
 Contract pinned here:
 - §11.2 speed: connection refused + own anchor exited → death at THAT probe;
-  any other failure + anchor exited → at the 2nd probe; anchor running or not
-  askable → no death, the threshold of 3 stays.
+  any other failure (timeout: a stalling box looks the same) → the threshold
+  of 3 unchanged, where the anchor still explains it; anchor running or not
+  askable → no death, the plain threshold alarm.
 - §11.1 planned vs. unplanned: a durable stop intent without TTL; a manual
   stop is never a death and never undone by auto-recovery; only the
   runtime's own start lifts it.
@@ -233,16 +234,26 @@ async def test_refused_with_exited_anchor_is_a_death_at_the_first_probe(async_se
 
 
 @pytest.mark.asyncio
-async def test_timeout_with_exited_anchor_is_a_death_at_the_second_probe(async_session, fake_redis):
+async def test_timeout_with_exited_anchor_waits_for_the_threshold(async_session, fake_redis):
+    """ADR-096 §11.2: only connection refused is the fast path. A timeout —
+    which a stalling box also produces — keeps the threshold of 3 unchanged;
+    at the threshold the anchor still explains the death (one death event,
+    not a plain alarm)."""
     await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
     box = FakeBox()
     probe = Probe(failure=FAIL_TIMEOUT)
     with _stack(box, fake_redis, probe):
         clock = await _measure(async_session, probe, model="DeepSeek-V4.1")
-    assert clock.decided_at - clock.died_at == 2 * INTERVAL
-    assert (await _deaths(async_session))[0].detail["consecutive_failures"] == 2
-    # The first timeout did not even ask the box (a stalling box looks like that).
+    assert clock.decided_at - clock.died_at == UNREACHABLE_EVENT_THRESHOLD * INTERVAL
+    deaths = await _deaths(async_session)
+    assert len(deaths) == 1
+    assert deaths[0].detail["consecutive_failures"] == UNREACHABLE_EVENT_THRESHOLD
+    assert deaths[0].detail["failure"] == FAIL_TIMEOUT
+    # Timeouts before the threshold did not ask the box at all.
     assert box.inspects == 1
+    # No plain alarm next to the death.
+    assert [e for e in await _events(async_session, "runtime.unreachable")
+            if not (e.detail or {}).get("engine_death")] == []
 
 
 @pytest.mark.asyncio
