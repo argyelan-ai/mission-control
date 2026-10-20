@@ -34,7 +34,7 @@ def _host_ref(host: Host | None) -> dict | None:
 async def worker_host_ids(session: AsyncSession, runtime_id, head_host_id) -> list:
     """Die Boxen aus ``runtime_hosts``, die NICHT der Head sind.
 
-    ``set_runtime_members`` schreibt den Head bewusst mit in die Tabelle, also
+    ``runtime_membership.set_members`` schreibt den Head bewusst mit (rank 0), also
     wird er hier abgezogen — sonst zählte eine Solo-Zeile mit Head-Eintrag als
     Verbund.
     """
