@@ -40,7 +40,7 @@ backend  agent_chat_input.py ── headless_chat? ──► ChatTransport
    │                                              └─ HttpCtlTransport    (POST http://host.docker.internal:18794/chat/<op>)   ← Hermes
    │
    ▼ reads (mount ~/.mc/agents/<slug>/omp-sessions/<encoded-cwd>/)
-transcript *.jsonl  ·  previews/*.jsonl  ·  acp-chat-state.json
+.mc/*.jsonl (transcript copy)  ·  .mc/previews/*.jsonl  ·  .mc/media/  ·  acp-chat-state.json
    ▲
    │ writes
 acp_chat.py --serve   (long-lived chat daemon; one `omp acp` / `hermes acp` child, one ACP session, session/load on restart)
@@ -51,7 +51,7 @@ acp_chat_ctl.py <op>  (CLI shim used by docker exec)      ·      hermes-bridge.
 ### Component: `docker/omp-bridge/acp_chat.py` (chat daemon)
 
 - `ChatSession(client_factory, cwd, state_dir, sessions_dir)` — pure-Python core, testable with a fake ACP process (`tests/fake_acp_server.py`) or an in-memory fake client.
-- Startup: read `state_dir/acp-chat.json` (`{"sessionId", "transcript"}`); `initialize`; try `session/load` with the stored id → on success append to the stored transcript file (history survives restarts); on failure `session/new`, new transcript file, and emit `chat_error{code:"session_reset"}`.
+- Startup: move MC copies an older image left next to omp's files into `.mc/` (see "Storage" below); read `state_dir/acp-chat.json` (`{"sessionId", "transcript"}`) and follow a pointer to a moved file (`sink_migration.remap`); `initialize`; try `session/load` with the stored id → on success append to the stored transcript file (history survives restarts); on failure `session/new`, new transcript file, and emit `chat_error{code:"session_reset"}`. When the move did not run (lock held by a live run, unreadable list, error) the chat shows a `chat_notice` with `code: "sink_migration_skipped"` and the chat starts anyway.
 - Uses `acp_chat_events.ACPEventMapper` + `ChatEventSink` + `PreviewEventSink` exactly like `run_acp_once` (user line via `map_user_prompt`, streaming previews, ONE final assistant line with usage).
 - Thinking (20.10.2026): a thought's preview line carries `data: {"block": "thinking", "chars": <full size>, "startedAt": <iso>}` and only the END of the thought as `content` (≤ 2 000 chars — the file grows linearly). The backend passes these on the `preview` SSE event; the chat shows "Thinking · ≈N tokens · m:ss" instead of an answer preview. When the thought ends (next answer chunk, tool call, plan, the turn's final line or a chat error) ONE assistant line with a `{"type": "thinking", "thinking", "durationMs"}` block lands in the transcript. Usage/config updates do not end a thought.
 - Running task in the agent chat (20.10.2026): the agent chat shows the chat daemon's session only (#898); a task runs in a session of its own (bridge header `taskId`). `GET /agents/{id}/chat/task-activity` reads that session through the same adapter (`find_task_session`, `tasks_in_own_session`) and the chat renders it as a separate "From the task" block — delivery, the newest steps, the running thought, more inbox tasks. Harnesses whose task runs inside the chat answer `applies: false` — Claude Code, omp under the native driver, and Hermes (over ACP the hermes-bridge hands a task to the chat daemon itself).
@@ -60,6 +60,86 @@ acp_chat_ctl.py <op>  (CLI shim used by docker exec)      ·      hermes-bridge.
 - Errors → transcript `custom_message` line, `customType: "chat_error"`, content = human text, plus `data: {"code": ..., "detail": ...}`. Codes: `rpc_error` (JSON-RPC error on prompt/config), `provider_error` (`401`/`403`/`429`/quota text detected in the error or in the final agent text when the turn produced no text), `empty_turn` (turn ended with stopReason `end_turn` and zero agent text), `process_exit` (child died; daemon restarts it and re-loads the session), `busy`, `session_reset`, `queue_full` (20 messages already held), `new_session_failed` (`session/new` refused; the current session continues), `queue_lost` (a restart dropped held jobs), `cancelled` is NOT an error (it produces a normal end-of-turn).
 - Model pin (incident 19.10.2026): every `session/new` and `session/load` pins the selector read from the CURRENT `omp.env` (`acp_model.current_selector` — a runtime switch re-renders that file in the running container; the daemon's boot env goes stale). A selector the session does not offer is replaced by the offered model of the same provider and the chat gets a `custom_message` line `customType: "chat_notice"`, `data: {"code": "model_fallback", "previous", "current"}` (frontend `ChatNoticeCard`, `chat.notice.*`). The task path (`bridge.run_acp_once`) does the same, writes a refused pin into the task's chat as `chat_error`, and marks its prompts `attribution: "mc"` + `origin: {kind: "task"|"nudge"}` so the chat shows them as task events, not as operator bubbles.
 - Socket server: `$OMP_HOME/acp-chat.sock` (path configurable via `--socket`), newline-delimited JSON; each connection = one request/one response.
+
+### Storage: MC's copy lives in `<folder>/.mc/` (S1-R3, 20.10.2026)
+
+A session folder (`<sessions root>/<encoded cwd>/`, e.g. `--workspace--`) holds
+omp's own session files and MC's state mirror `acp-chat-state.json`. Everything
+else MC writes for the chat lives one level deeper:
+
+| What | Where |
+|---|---|
+| transcript copy (`ChatEventSink`, the file the chat view reads) | `<folder>/.mc/<ts>_<sessionId>.jsonl` — header unchanged (`type`, `version`, `id`, `timestamp`, `cwd`, `bridge: "acp"`, `taskId`) |
+| preview channel (`PreviewEventSink`) | `<folder>/.mc/previews/` |
+| tool pictures (`write_media`) | `<folder>/.mc/media/` (next to the transcript copy) |
+| state mirror | `<folder>/acp-chat-state.json` (unchanged) |
+
+**Why a folder, and why this one.** omp 18.10.1 treats every `*.jsonl` whose
+first line (or second, after a title line) is `{"type": "session", "id":
+<string>}` as one of its sessions. It lists them with `Bun.Glob("*.jsonl")`
+per folder (`SessionManager.list`) and `Bun.Glob("*/*.jsonl")` over the root
+(`listAll`), and load / resume / fork take the **younger** of two files with
+one id. MC's copy carries exactly that header, so before S1-R3 omp listed
+every chat session twice and often loaded MC's copy instead of its own file
+(live 20.10.2026: "ACP session load was cancelled" for the current chat; the
+daemon then started a new session without a word). `<folder>/.mc/x.jsonl`
+lies two levels below the root, outside both globs; the leading dot also
+keeps it out of a recursive search (Bun skips dot names unless asked).
+Changing the header would mean rewriting old files, and a new extension would
+change every `*.jsonl` reader — moving the file changes neither.
+
+**Contract.** `acp_chat_events.MC_SINK_DIRNAME` and the backend's
+`omp_chat._MC_SINK_DIRNAME` are both `".mc"` (checked as text by
+`backend/tests/test_mc_sink_dirname_contract.py` — backend and bridge share no
+code). `acp_chat_events.find_sink(folder, sessionId)` returns MC's copy:
+`.mc/` first, then the old place, never omp's own file (only a header with
+`bridge: "acp"` counts). The backend reads both places, so it must be
+deployed before a bridge that writes to `.mc/`. The chat daemon looks up
+tool names in omp's own file in the session folder and never takes a file
+with MC's header for it.
+
+**Moving old copies** — `docker/omp-bridge/sink_migration.py` (standard
+library only, Python 3.9+, the same file in the image and in a checkout):
+
+- In each folder directly under the sessions root (no dot folders, no
+  symlinks) every `*.jsonl` directly in the folder with `bridge: "acp"` in its
+  header moves to `<folder>/.mc/<same name>`; `<folder>/media/*` moves to
+  `<folder>/.mc/media/`. One rename each, on the same file system, so the
+  modification time stays (the backend ranks sessions by it).
+- Never: delete, overwrite (an existing target is skipped with a reason),
+  touch a subfolder (`previews/`, omp's artifact folders — also those with
+  MC's name pattern), a dot file (omp's `.<name>.jsonl.lock.os`),
+  `acp-chat-state.json`, `acp-chat.json` or omp's files, or create a `.bak`
+  name (omp renames `*.jsonl.<x>.bak` back into sessions).
+- A copy omp also wrote into ("mixed file", three on the fleet from
+  16.09.2026) moves like any other and is marked `mixed` with the count and
+  types of omp's lines.
+- The list `<root>/.mc-sink-migration.json` (never `.jsonl` — the backend's
+  `*.jsonl` search would read it as a session) records every run that moved
+  something and every command-line run: `{from, to, sessionId, task, mixed}`
+  per file, paths relative to the root (host and container see different
+  absolute paths). It is rewritten atomically, written before the first move
+  and again after the last, so a crash in between stays traceable.
+- The lock `<root>/.mc-sink-migration.lock` (`O_EXCL`) holds pid, time and
+  host. Older than 10 minutes, or of a dead process on the same host → taken
+  over; otherwise the run stops with `locked`.
+- `rollback` moves each listed file back when its old place is free;
+  `--all` also moves back copies written into `.mc/` after the move, and
+  `.mc/media/*`. `remap(path)` sends an old pointer to the moved file (and a
+  pointer into `.mc/` back after a rollback).
+- Command line: `python3 sink_migration.py --root <sessions root>
+  (--dry-run | --apply | --rollback [--all]) [--json]`; exit 0 ok, 1 error,
+  3 locked.
+
+**When it runs.** The real move runs on the host in a deploy window, with the
+agent stopped and no task in progress: `--dry-run` (counts only), then
+`--apply`, numbers checked, only then the new image and the recreate. The
+chat daemon runs the same move at every start, before it reads its pointer —
+only a safety net. Switched-off agents move on their next **recreate** with
+the new image, not on `docker start` (that starts the old image's code); the
+backend reads both places until then. Hermes moves its copies at the next
+start of its chat daemon. Way back: stop the agent, `--rollback --all` on the
+host, then the previous image.
 
 ### Control protocol (socket and HTTP share the schema)
 
