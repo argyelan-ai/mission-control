@@ -60,13 +60,31 @@ def parse_pr_url(url: str | None) -> tuple[str, str, int] | None:
     return m.group(1), m.group(2), int(m.group(3))
 
 
-async def _run_gh(*args: str) -> tuple[int, str, str]:
+async def _run_gh(
+    *args: str, env: dict | None = None, timeout: float | None = None,
+) -> tuple[int, str, str]:
+    """Run ``gh``. ``env`` lets a caller hand in the resolved token (vault >
+    env, ADR-055) — the proof gate (services/proof_gate.py) reuses this.
+
+    ``timeout`` (seconds): a hung ``gh`` is killed and ``asyncio.TimeoutError``
+    raised — a caller inside a request (the proof gate) must not hang the
+    request with it.
+    """
     proc = await asyncio.create_subprocess_exec(
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        await proc.wait()
+        raise
     return proc.returncode or 0, stdout.decode().strip(), stderr.decode().strip()
 
 

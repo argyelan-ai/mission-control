@@ -127,6 +127,9 @@ app.config.settings = app.config.Settings(
     grok_harvest_path=str(_TEST_HARVEST_ROOT / "unified.jsonl"),
     grok_sessions_path=str(_TEST_HARVEST_ROOT / "grok-sessions"),
     hermes_state_db_path=str(_TEST_HARVEST_ROOT / "state.db"),
+    # Beweis-Tor off by default: tests that exercise it set warn/enforce
+    # themselves (tests/test_proof_gate.py) — no other test may reach gh.
+    proof_gate_mode="off",
 )
 
 # Now import app modules
