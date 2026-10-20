@@ -25,7 +25,10 @@ is treated as all-scopes for backward-compat). Injection adds a
 Services whose resolved image is ``OMP_IMAGE`` (ADR-045 headless harness)
 additionally get an omp session-transcript mount (see
 ``_OMP_SESSIONS_TARGET`` / ``_ensure_omp_sessions_volume``) — without it the
-token harvester never sees omp's JSONL transcripts.
+token harvester never sees omp's JSONL transcripts — and a mount of omp's
+image folder (``_OMP_BLOBS_TARGET`` / ``_ensure_omp_blobs_volume``), so a
+recreate keeps a conversation's images. For the live file the backend also
+creates both host folders (``ensure_omp_host_dirs``).
 
 Atomic write: rendered to a tmpfile (`<path>.tmp`), then `os.replace()` on the
 target. The previous file is moved to `<path>.bak` first.
@@ -373,6 +376,21 @@ _SHARED_MCP_VOLUME_TEMPLATE = "      - ${HOME}/.mc/mcp-screenshots:/shared-mcp:r
 # entrypoint's OMP_PROFILE=mc-agent convention (docker/omp-bridge/entrypoint.sh).
 _OMP_SESSIONS_TARGET = "/home/agent/.omp/profiles/mc-agent/agent/sessions"
 
+# omp's image folder (decision H7, S1-R8): omp stores the images of a
+# conversation in <agent-dir>/blobs (omp's getBlobsDir = agentSubdir("blobs")),
+# the sibling of the sessions folder above. Unmounted, a recreate kept the
+# conversation (sessions are on the host) but threw its images away. The
+# source sits below ${HOME}/.mc/ — inside the allowed root of ADR-095
+# decision 2 (accepted, not built yet: its allowlist PR must list this mount).
+_OMP_BLOBS_TARGET = "/home/agent/.omp/profiles/mc-agent/agent/blobs"
+
+# A mount line of one of the two per-agent omp host folders. The backend
+# creates those folders before a (re)create — see ensure_omp_host_dirs.
+_OMP_HOST_DIR_LINE_RE = re.compile(
+    r"^\s*-\s*\$\{HOME\}/\.mc/agents/(?P<slug>[a-z0-9_-]+)/"
+    r"(?P<dir>omp-sessions|omp-blobs):/home/agent/\.omp/"
+)
+
 
 def _find_block_range(
     body_lines: list[str], key: str
@@ -523,6 +541,73 @@ def _ensure_omp_sessions_volume(body_lines: list[str], slug: str) -> list[str]:
             body.append("    volumes:")
             body.append(line)
     return body
+
+
+def _omp_blobs_volume_line(slug: str) -> str:
+    """The one image-folder mount line — shared by the rewrite path and the
+    append path so the two can never drift apart."""
+    return f"      - ${{HOME}}/.mc/agents/{slug}/omp-blobs:{_OMP_BLOBS_TARGET}:rw"
+
+
+def _ensure_omp_blobs_volume(body_lines: list[str], slug: str) -> list[str]:
+    """Mounts omp's image folder (``blobs``) for omp-harness services.
+
+    Same insert-only pattern and same marker check as
+    ``_ensure_omp_sessions_volume``. The marker leaves out the ``:rw`` mode,
+    so a hand-written line without it counts as present too. Called only for
+    services whose resolved image is ``OMP_IMAGE``.
+    """
+    marker = f"/.mc/agents/{slug}/omp-blobs:{_OMP_BLOBS_TARGET}"
+    body = list(body_lines)
+    if marker not in "\n".join(body):
+        line = _omp_blobs_volume_line(slug)
+        vol_range = _find_block_range(body, "volumes")
+        if vol_range is not None:
+            _, end = vol_range
+            body.insert(end, line)
+        else:
+            body.append("    volumes:")
+            body.append(line)
+    return body
+
+
+def _agents_host_root() -> Path:
+    """``HOME_HOST/.mc/agents`` as the backend sees it. The backend container
+    mounts ``HOME_HOST/.mc`` under the same path (docker-compose.yml), so this
+    is the folder Docker binds into the agent containers."""
+    return Path(settings.home_host) / ".mc" / "agents"
+
+
+def ensure_omp_host_dirs(content: str, agents_root: Path) -> list[Path]:
+    """Create the host folders behind every omp mount in *content*.
+
+    Nobody created ``omp-sessions`` before: Docker Desktop makes a missing
+    bind source on its own, on Linux the Docker daemon would make it as root.
+    The backend runs as the host user (PUID/PGID), so creating them here gives
+    them the same owner as every other ``~/.mc`` folder, and they exist before
+    the next recreate.
+
+    Only folders named in a mount line are created, slugs are limited to
+    ``[a-z0-9_-]`` by the regex (no ``..``), existing folders and their content
+    are left alone. Best effort: an error is logged and never blocks the
+    compose write. Returns the folders that exist afterwards.
+    """
+    ensured: list[Path] = []
+    for line in content.splitlines():
+        m = _OMP_HOST_DIR_LINE_RE.match(line)
+        if not m:
+            continue
+        folder = agents_root / m.group("slug") / m.group("dir")
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning(
+                "compose_renderer could not create omp host folder %s: %s",
+                folder, exc,
+            )
+            continue
+        ensured.append(folder)
+    return ensured
 
 
 def _ensure_kimi_config_volume(body_lines: list[str], slug: str) -> list[str]:
@@ -912,9 +997,12 @@ def _rewrite_compose(
             body_lines = _ensure_vault_entries(body_lines, slug)
 
         # omp headless harness (ADR-045) needs its session-transcript dir
-        # mounted so the token harvester can see it — see _OMP_SESSIONS_TARGET.
+        # mounted so the token harvester can see it — see _OMP_SESSIONS_TARGET —
+        # and its image folder, so a recreate keeps a conversation's images
+        # (S1-R8) — see _OMP_BLOBS_TARGET.
         if _image_is(final_image, "mc-omp-agent"):
             body_lines = _ensure_omp_sessions_volume(body_lines, slug)
+            body_lines = _ensure_omp_blobs_volume(body_lines, slug)
 
         # kimi harness needs its KIMI_CODE_HOME mount (config + OAuth files).
         if _image_is(final_image, "mc-kimi-agent"):
@@ -1077,6 +1165,7 @@ def _build_new_agent_block(
     lines.append(_REFERENCES_VOLUME_TEMPLATE)
     if _image_is(image, "mc-omp-agent"):
         lines.append(f"      - ${{HOME}}/.mc/agents/{slug}/omp-sessions:{_OMP_SESSIONS_TARGET}")
+        lines.append(_omp_blobs_volume_line(slug))
     if _image_is(image, "mc-kimi-agent"):
         lines.append(f"      - ${{HOME}}/.mc/agents/{slug}/kimi-config:/home/agent/.kimi-code")
     if is_vault_writer:
@@ -1300,6 +1389,9 @@ async def write_compose_agents(
 
         previous = target.read_text(encoding="utf-8") if target.exists() else ""
         if previous == rendered:
+            # Unchanged file, but a folder may have gone missing — this
+            # render is the step right before a recreate.
+            _ensure_live_omp_host_dirs(target, rendered)
             return {
                 "path": str(target),
                 "backup": str(bak),
@@ -1333,6 +1425,7 @@ async def write_compose_agents(
         os.chmod(tmp, COMPOSE_FILE_MODE)
         os.replace(tmp, target)
         logger.info("compose_renderer wrote %s (%d bytes)", target, len(rendered))
+        _ensure_live_omp_host_dirs(target, rendered)
         return {
             "path": str(target),
             "backup": str(bak),
@@ -1341,6 +1434,21 @@ async def write_compose_agents(
         }
     finally:
         await redis.delete(COMPOSE_WRITE_LOCK_KEY)
+
+
+def _ensure_live_omp_host_dirs(target: Path, rendered: str) -> None:
+    """Create the omp host folders, but only for the file the stack runs on.
+
+    A render into any other path (tests, a scratch copy) describes no real
+    container — creating folders in the operator's agents directory for it
+    would be litter. Never raises (see ensure_omp_host_dirs).
+    """
+    if Path(target) != Path(DEFAULT_COMPOSE_PATH):
+        return
+    try:
+        ensure_omp_host_dirs(rendered, _agents_host_root())
+    except Exception:  # best effort — the compose write already happened
+        logger.exception("compose_renderer could not ensure omp host folders")
 
 
 def _restore_empty_services_map(content: str) -> str:

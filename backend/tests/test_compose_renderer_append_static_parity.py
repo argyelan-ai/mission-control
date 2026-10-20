@@ -116,6 +116,7 @@ services:
       - AGENT_NAME=worker-d
       - MC_API_URL=${MC_API_URL:-http://backend:8000}
       - MC_TOKEN=${MC_TOKEN_WORKER_D}
+      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
     volumes:
       - ${HOME}/.mc/agents/worker-d/claude-config:/home/agent/.claude
       - ${HOME}/.mc/mcp-servers:/mc-servers:ro
