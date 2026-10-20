@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { Brain, ChevronRight } from "lucide-react";
 import { C } from "@/lib/colors";
 import type { PreviewEvent } from "@/lib/chatTypes";
+import { formatSpan } from "@/lib/taskDetail/stateLine";
 import { estimateTokens, formatElapsed } from "./thinkingFormat";
 
 /**
@@ -48,23 +49,34 @@ export const LiveThinkingRow = memo(function LiveThinkingRow({ preview }: { prev
   const elapsed = Number.isNaN(startedMs)
     ? null
     : formatElapsed((quiet ? lastMs : now) - startedMs);
+  // K10: the repo's one form for "how long silent" — a span ("silent for
+  // 2 min" / "still seit 2 min"), never a second m:ss clock (review UI-6).
+  const quietText = quiet ? t("thinkingQuiet", { span: formatSpan(quietMs / 1000, locale) ?? "" }) : null;
 
+  // No live region around the ticking clock (review R4/UI-3: a screen reader
+  // read "1:47", "1:48", … every second). One calm status says only
+  // "Thinking" or how long it has been silent — it changes at most once a
+  // minute.
   return (
-    <div className="w-full px-4" data-testid="live-thinking" aria-live="polite">
+    <div className="w-full px-4" data-testid="live-thinking">
+      <span role="status" className="sr-only">
+        {quietText ? `${t("thinkingLive")} · ${quietText}` : t("thinkingLive")}
+      </span>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         className="w-full min-h-11 flex items-center gap-2 text-left bg-transparent border-0 p-0 cursor-pointer text-xs"
       >
-        <Brain size={14} className={`shrink-0 ${quiet ? "" : "animate-pulse motion-reduce:animate-none"}`} style={{ color: C.textMuted }} aria-hidden="true" />
+        {/* 13 px + gap-2 like ToolRow / ThinkingRow: one text edge (review UI-7). */}
+        <Brain size={13} className={`shrink-0 ${quiet ? "" : "animate-pulse motion-reduce:animate-none"}`} style={{ color: C.textMuted }} aria-hidden="true" />
         <span className="min-w-0 truncate">
           <span style={{ color: C.textSecondary }}>{t("thinkingLive")}</span>
           {tokens && <span className="tabular-nums" style={{ color: C.textMuted }}> · {tokens}</span>}
           {elapsed && <span className="tabular-nums" style={{ color: C.textMuted }}> · {elapsed}</span>}
-          {quiet && (
+          {quietText && (
             <span className="tabular-nums" style={{ color: C.textMuted }}>
-              {" · "}{t("thinkingQuiet", { time: formatElapsed(quietMs) })}
+              {" · "}{quietText}
             </span>
           )}
         </span>
@@ -76,13 +88,14 @@ export const LiveThinkingRow = memo(function LiveThinkingRow({ preview }: { prev
         />
       </button>
       {open && (
-        <div
-          data-testid="live-thinking-text"
-          className="ml-6 pb-2 flex flex-col justify-end overflow-hidden max-h-[calc(8*1.6*12px)]"
-        >
-          <p className="m-0 text-xs italic leading-relaxed whitespace-pre-wrap break-words max-w-[76ch]" style={{ color: C.textMuted }}>
-            {preview.text}
-          </p>
+        <div data-testid="live-thinking-text" className="flex gap-2 pb-2">
+          {/* Spacer in icon width: the text starts on the label's edge. */}
+          <span data-indent="" className="w-[13px] shrink-0" aria-hidden="true" />
+          <div className="min-w-0 flex flex-col justify-end overflow-hidden max-h-[calc(8*1.6*12px)]">
+            <p className="m-0 text-xs italic leading-relaxed whitespace-pre-wrap break-words max-w-[76ch]" style={{ color: C.textMuted }}>
+              {preview.text}
+            </p>
+          </div>
         </div>
       )}
     </div>

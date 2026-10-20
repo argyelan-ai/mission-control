@@ -65,6 +65,30 @@ describe("TaskActivityBlock", () => {
     expect(screen.getByTestId("chat-task-activity")).not.toHaveTextContent(/waiting/);
   });
 
+  // Review UI-9: "Compact" hides the chat's own tool and thinking rows — the
+  // task block followed its own fixed "normal" and showed them anyway.
+  it("Compact hides the task's steps like the chat's own, keeps the live parts", () => {
+    mockActivity.mockReturnValue(running({
+      events: [
+        ...(running() as Extract<TaskActivity, { applies: true }>).events,
+        { kind: "message", uuid: "a3", ts: "2026-10-20T09:00:30Z", role: "assistant", text: "Zwischenstand: Liste steht." },
+      ] as never,
+    }));
+    render(<TaskActivityBlock agentId="agent-1" detailLevel="compact" />);
+    const block = screen.getByTestId("chat-task-activity");
+    expect(block).not.toHaveTextContent("$ mc ack d3e397c0");
+    expect(block).not.toHaveTextContent("Thought · 0:15");
+    expect(block).toHaveTextContent("Zwischenstand: Liste steht.");
+    expect(screen.getByTestId("live-thinking")).toBeInTheDocument();
+    expect(block).toHaveTextContent("1 more task waiting");
+  });
+
+  it("Normal shows the steps", () => {
+    mockActivity.mockReturnValue(running());
+    render(<TaskActivityBlock agentId="agent-1" detailLevel="normal" />);
+    expect(screen.getByTestId("chat-task-activity")).toHaveTextContent("$ mc ack d3e397c0");
+  });
+
   it("renders nothing when the chat itself shows the task (or there is none)", () => {
     mockActivity.mockReturnValue({ applies: false });
     const { container } = render(<TaskActivityBlock agentId="agent-1" />);

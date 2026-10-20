@@ -1442,6 +1442,22 @@ describe("ChatView", () => {
     expect(screen.queryByTestId("chat-task-activity")).not.toBeInTheDocument();
   });
 
+  // Review UI-9: the chat's detail setting reaches the task block.
+  it("Kompakt gilt auch fuer den Aufgaben-Block: keine Werkzeug-Schritte", async () => {
+    const { useTaskActivity } = await import("@/hooks/useTaskActivity");
+    vi.mocked(useTaskActivity).mockReturnValue({
+      applies: true, taskId: "task-42", hasSession: true, deliveredAt: null, queued: 0, preview: null,
+      events: [{ kind: "tool", uuid: "t1", ts: "2026-10-20T09:00:00Z", name: "bash", title: "$ npm test",
+                 detail: {}, result: "ok", status: "done", toolUseId: "c1" }] as never,
+    });
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    const { unmount } = renderChatView({ detailLevel: "compact", workingOn: { taskId: "task-42", title: "Login reparieren" } });
+    expect(screen.getByTestId("chat-task-activity")).not.toHaveTextContent("$ npm test");
+    unmount();
+    renderChatView({ workingOn: { taskId: "task-42", title: "Login reparieren" } });
+    expect(screen.getByTestId("chat-task-activity")).toHaveTextContent("$ npm test");
+  });
+
   it("deckelt die ACP-Vorschau in der Hoehe, damit nichts springt", () => {
     mockUseChatStream.mockReturnValue(
       mkStream({

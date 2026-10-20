@@ -29,12 +29,14 @@ import { LiveThinkingRow } from "./LiveThinkingRow";
 import { ThinkingRow } from "./ThinkingRow";
 import { ToolRow } from "./ToolRow";
 
-function StepRow({ ev }: { ev: TimelineChatEvent }) {
+type DetailLevel = "compact" | "normal" | "verbose";
+
+function StepRow({ ev, detailLevel }: { ev: TimelineChatEvent; detailLevel: DetailLevel }) {
   switch (ev.kind) {
     case "tool":
-      return <ToolRow ev={ev} detailLevel="normal" />;
+      return <ToolRow ev={ev} detailLevel={detailLevel} />;
     case "thinking":
-      return <ThinkingRow ev={ev} detailLevel="normal" />;
+      return <ThinkingRow ev={ev} detailLevel={detailLevel} />;
     case "message":
       return (
         <p className="m-0 px-4 py-1 text-xs line-clamp-3 break-words" style={{ color: C.textSecondary }}>
@@ -50,13 +52,25 @@ function stepKey(ev: TimelineChatEvent): string {
   return ev.kind === "tool" ? `tool:${ev.toolUseId ?? ev.uuid}` : `${ev.kind}:${ev.uuid}`;
 }
 
-export function TaskActivityBlock({ agentId }: { agentId: string }) {
+export function TaskActivityBlock({
+  agentId,
+  detailLevel = "normal",
+}: {
+  agentId: string;
+  /** The chat's detail setting: "Compact" hides tool and thinking steps
+   *  here as it does in the chat (review UI-9); the live thought, an answer
+   *  being written and the waiting tasks stay. */
+  detailLevel?: DetailLevel;
+}) {
   const t = useTranslations("sessions");
   const locale = useLocale();
   const activity = useTaskActivity(agentId);
   if (!activity || !activity.applies) return null;
 
-  const { events, preview, queued, deliveredAt } = activity;
+  const { preview, queued, deliveredAt } = activity;
+  const events = detailLevel === "compact"
+    ? activity.events.filter((ev) => ev.kind === "message")
+    : activity.events;
   return (
     <section
       data-testid="chat-task-activity"
@@ -74,7 +88,7 @@ export function TaskActivityBlock({ agentId }: { agentId: string }) {
         )}
       </div>
       {events.map((ev) => (
-        <StepRow key={stepKey(ev)} ev={ev} />
+        <StepRow key={stepKey(ev)} ev={ev} detailLevel={detailLevel} />
       ))}
       {preview && preview.block === "thinking" && <LiveThinkingRow preview={preview} />}
       {preview && preview.block !== "thinking" && (

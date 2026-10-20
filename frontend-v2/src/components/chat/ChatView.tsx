@@ -1293,7 +1293,7 @@ export function ChatView({
             {/* Was die laufende Aufgabe tut — eigener Block, nie in den Chat
                 gemischt (seit #898 zeigt der Chat nur die Chat-Sitzung; eine
                 ACP-Aufgabe laeuft in einer eigenen). */}
-            {!head && agent && workingOn && <TaskActivityBlock agentId={agent.id} />}
+            {!head && agent && workingOn && <TaskActivityBlock agentId={agent.id} detailLevel={detailLevel} />}
 
             {/* The run-record summary card — only once the head has ended
                 AND actually wrote one (`run.run_record`, the same boolean
