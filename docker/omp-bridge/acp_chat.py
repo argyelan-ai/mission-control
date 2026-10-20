@@ -113,6 +113,22 @@ _TURN_INTERRUPTED_TEXT = (
     "The chat restarted while a reply was running — nothing was resent "
     "automatically."
 )
+#: The same card for a turn the operator did not write (or nobody knows who
+#: did): no claim about resending — hermes-bridge delivers a task again on
+#: its own after a restart.
+_TURN_INTERRUPTED_NEUTRAL_TEXT = "The chat restarted while a reply was running."
+
+#: Who wrote a prompt (`prompt(..., origin=)`, the control protocol's
+#: `origin` field). ORIGIN_OPERATOR: the operator's own message (the
+#: composer) — the only text a card ever offers to send again. "task" /
+#: "nudge": Mission Control wrote it (the names of the task path,
+#: `ACPEventMapper.map_user_prompt`); the chat line is then an MC event, not
+#: an operator bubble. Anything else, or nothing (an older caller,
+#: hermes-bridge's dispatch, the omp bridge's wake-up): unknown — shown as
+#: before, never offered again. Fail-closed: a caller that forgets to say
+#: who wrote it costs a button, never a second run of a task.
+ORIGIN_OPERATOR = "operator"
+_MC_ORIGINS = ("task", "nudge")
 _STATE_FILENAME = "acp-chat-state.json"
 _PERSIST_FILENAME = "acp-chat.json"
 _DEFAULT_SOCKET_NAME = "acp-chat.sock"
@@ -251,6 +267,11 @@ class ChatSession:
         # (`_current_entry`), None when idle. A daemon that stops mid-turn
         # leaves it on disk; the next start turns it into a card (S1-R5).
         self._current: Optional[dict] = None
+        # The job a PREVIOUS daemon was running when it stopped, from its
+        # mirror, until start() has written its card: the mirror keeps it as
+        # `interrupted` meanwhile, so a stop in between never loses it.
+        # `{}` = busy without `current` (an image before S1-R5).
+        self._unreported: Optional[dict] = None
         self._worker: Optional[threading.Thread] = None
         self._closed = False
 
@@ -296,7 +317,11 @@ class ChatSession:
         lost = self._previous_queue()
         lost_questions = self._previous_elicitations()
         # The same for the job it was running: its reply never came (S1-R5).
+        # It stays in the mirror (`interrupted`) until its card is written —
+        # _connect rewrites the mirror long before that.
         interrupted = self._previous_current()
+        with self._lock:
+            self._unreported = interrupted
         if interrupted is not None and interrupted.get("kind") == "new_session":
             # A `/new` that never ran is one more job the restart dropped —
             # it belongs on the card that lists those, first in line.
@@ -323,6 +348,12 @@ class ChatSession:
             self._report_interrupted_turn(interrupted)
         if lost:
             self._report_lost_queue(lost)
+        if self._unreported is not None:
+            # Its card is on disk now. A stop right here shows it once more
+            # on the next start — twice is better than never.
+            with self._lock:
+                self._unreported = None
+            self._write_state()
         for elicitation_id in lost_questions:
             # Their JSON-RPC request died with the old child: the card must
             # say "no longer open" instead of offering buttons that can
@@ -523,24 +554,36 @@ class ChatSession:
         """The job a previous daemon was running when it stopped: the state
         mirror's `current` while `busy` was true. `{}` when it was busy but
         names no job (an image before S1-R5 wrote no `current`) — None when
-        it was idle, or the mirror is missing or unreadable. Never blocks,
-        never raises."""
+        it was idle, or the mirror is missing or unreadable. An
+        `interrupted` job a start before could not report yet comes first
+        (no prompt is served before start() returns, so both cannot be
+        set). Never blocks, never raises."""
         state = _read_json_object(self.state_file)
+        pending = state.get("interrupted")
+        if isinstance(pending, dict):
+            return dict(pending)
         if state.get("busy") is not True:
             return None
         current = state.get("current")
         return dict(current) if isinstance(current, dict) else {}
 
     def _report_interrupted_turn(self, current: dict) -> None:
-        """One card for the reply a restart cut off. It offers the operator's
-        text (`retryText`) when the mirror kept all of it; nothing is ever
-        sent again on its own — not here, not anywhere in start()."""
+        """One card for the reply a restart cut off. It offers the text
+        (`retryText`) only when the operator wrote it and the mirror kept all
+        of it; nothing is ever sent again on its own — not here, not
+        anywhere in start(). Only for the operator's turn does the card say
+        that nothing was resent: a task hermes-bridge dispatched comes again
+        on its own, and an older image did not say who wrote the turn."""
         turn = current.get("turn")
         detail = f"turn {turn}" if isinstance(turn, int) and not isinstance(turn, bool) \
             else "turn unknown"
-        text = current.get("text") if current.get("kind") == "prompt" else None
-        self._emit_error(TURN_INTERRUPTED, detail, text=_TURN_INTERRUPTED_TEXT,
-                         data=retry_data(text))
+        by_operator = current.get("kind") == "prompt" \
+            and current.get("origin") == ORIGIN_OPERATOR
+        self._emit_error(
+            TURN_INTERRUPTED, detail,
+            text=_TURN_INTERRUPTED_TEXT if by_operator else _TURN_INTERRUPTED_NEUTRAL_TEXT,
+            data=retry_data(current.get("text")) if by_operator else None,
+        )
 
     def _previous_elicitations(self) -> list[str]:
         """Card ids a previous daemon still held open, from its state mirror."""
@@ -621,18 +664,23 @@ class ChatSession:
     # control ops (the socket protocol)
     # ------------------------------------------------------------------
 
-    def prompt(self, text: str, mode: str = MODE_NOW) -> dict:
+    def prompt(self, text: str, mode: str = MODE_NOW, origin: Any = None) -> dict:
         """Start ONE turn — or, with `mode="queue"` while a turn runs, hold
         the message and run it when that turn ends. Returns immediately; turns
-        run in the worker."""
+        run in the worker.
+
+        `origin`: who wrote it — ORIGIN_OPERATOR, "task"/"nudge", or nothing
+        (unknown). Only the operator's text is ever offered to send again
+        (`_origin_of`)."""
         text = str(text or "")
         mode = mode or MODE_NOW
+        origin = _origin_of(origin)
         if mode not in _MODES:
             return {"ok": False, "error": "bad_mode", "detail": str(mode)}
         with self._lock:
             if self._busy:
                 if mode == MODE_QUEUE and not self._closed:
-                    return self._enqueue_locked("prompt", text)
+                    return self._enqueue_locked("prompt", text, origin)
                 # Rejected, and the operator sees why — silently dropping a
                 # typed message is the worst possible failure here.
                 self._emit_error(
@@ -642,7 +690,7 @@ class ChatSession:
                 return {"ok": False, "error": "busy"}
             if self._closed or self._client is None:
                 return {"ok": False, "error": "not_started"}
-            job = self._claim_locked({"kind": "prompt", "text": text})
+            job = self._claim_locked(_job("prompt", text, origin))
         self._write_state()
         self._spawn(job)
         return {"ok": True, "turn": job["turn"]}
@@ -850,6 +898,8 @@ class ChatSession:
                     for job in self._queue
                 ],
                 "current": dict(self._current) if self._current else None,
+                "interrupted": dict(self._unreported)
+                if self._unreported is not None else None,
                 "elicitations": [
                     {"id": e["id"], "at": e["at"], "message": e["message"][:200]}
                     for e in self._elicitations.values()
@@ -888,7 +938,7 @@ class ChatSession:
     # the worker: one job, then everything queued behind it
     # ------------------------------------------------------------------
 
-    def _enqueue_locked(self, kind: str, text: str) -> dict:
+    def _enqueue_locked(self, kind: str, text: str, origin: Optional[str] = None) -> dict:
         """Hold one job behind the running turn. Caller holds `_lock`."""
         if len(self._queue) >= MAX_QUEUE:
             self._emit_error(
@@ -897,8 +947,7 @@ class ChatSession:
                      "Wait for the reply or take some back.",
             )
             return {"ok": False, "error": "queue_full"}
-        job = {"id": uuid.uuid4().hex[:12], "kind": kind, "text": text,
-               "at": _now_iso()}
+        job = {"id": uuid.uuid4().hex[:12], **_job(kind, text, origin), "at": _now_iso()}
         self._queue.append(job)
         position = len(self._queue)
         self._write_state()
@@ -934,7 +983,7 @@ class ChatSession:
                 if job["kind"] == "new_session":
                     self._renew_session()
                 else:
-                    self._run_turn(job["text"], job["turn"])
+                    self._run_turn(job["text"], job["turn"], job.get("origin"))
             except Exception:  # noqa: BLE001 — one broken job must not strand the queue busy
                 logger.exception("chat job %s failed", job.get("kind"))
             with self._lock:
@@ -1017,7 +1066,7 @@ class ChatSession:
     # the turn
     # ------------------------------------------------------------------
 
-    def _run_turn(self, text: str, turn: int) -> None:
+    def _run_turn(self, text: str, turn: int, origin: Optional[str] = None) -> None:
         result = None
         error_text = ""
         self._mapper.begin_turn()
@@ -1026,7 +1075,10 @@ class ChatSession:
         try:
             with self._lock:
                 client, sid = self._client, self._session_id
-            self._emit_transcript(self._mapper.map_user_prompt(text))
+            # A prompt Mission Control wrote is its event in the chat, not
+            # an operator bubble — the same line the task path writes.
+            self._emit_transcript(self._mapper.map_user_prompt(
+                text, origin=origin if origin in _MC_ORIGINS else None))
             result = client.prompt(sid, text, timeout=self._prompt_timeout)
         except Exception as exc:  # noqa: BLE001 — a dead turn must still report
             error_text = f"{exc}"
@@ -1072,13 +1124,17 @@ class ChatSession:
             ))
 
         if not self._client_alive():
-            # The card offers the text of the turn that died; the respawn
-            # below only reloads the session — it never sends it again.
+            # The card offers the text of the turn that died — the
+            # operator's, and only when its reply never came (`result` is
+            # None): a child that exits right after a complete reply leaves
+            # nothing to send again. The respawn below only reloads the
+            # session — it never sends it again.
+            offer = result is None and origin == ORIGIN_OPERATOR
             self._emit_error(
                 "process_exit",
                 error_text or f"child exited during turn {turn}",
                 text="The ACP process died — reconnecting the session.",
-                data=retry_data(text),
+                data=retry_data(text) if offer else None,
             )
             self._restart_child()
         else:
@@ -1297,24 +1353,33 @@ class ChatSession:
     # ------------------------------------------------------------------
 
     def _emit_transcript(self, entries: list[dict]) -> None:
-        if not entries or self._sink is None:
+        """Under `_lock`, like `_write_state`: once close() has set
+        `_closed`, no thread of this session — the worker, the ACP reader,
+        the pump — writes into the transcript the next session shares."""
+        if not entries:
             return
-        try:
-            # P2: tool pictures land next to the transcript (media/), the
-            # line keeps only their reference.
-            self._sink.write(acp_chat_events.ACPEventMapper.dump(
-                entries, media_writer=self._sink.write_media
-            ))
-        except Exception:  # noqa: BLE001 — the chat view never kills the turn
-            logger.exception("transcript write failed")
+        with self._lock:
+            if self._closed or self._sink is None:
+                return
+            try:
+                # P2: tool pictures land next to the transcript (media/), the
+                # line keeps only their reference.
+                self._sink.write(acp_chat_events.ACPEventMapper.dump(
+                    entries, media_writer=self._sink.write_media
+                ))
+            except Exception:  # noqa: BLE001 — the chat view never kills the turn
+                logger.exception("transcript write failed")
 
     def _emit_preview(self, entries: list[dict]) -> None:
-        if not entries or self._preview is None:
+        if not entries:
             return
-        try:
-            self._preview.write(acp_chat_events.ACPEventMapper.dump(entries))
-        except Exception:  # noqa: BLE001
-            logger.exception("preview write failed")
+        with self._lock:
+            if self._closed or self._preview is None:
+                return
+            try:
+                self._preview.write(acp_chat_events.ACPEventMapper.dump(entries))
+            except Exception:  # noqa: BLE001
+                logger.exception("preview write failed")
 
     def _emit_error(self, code: str, detail: str = "", text: Optional[str] = None,
                     data: Optional[dict] = None) -> None:
@@ -1381,9 +1446,16 @@ class ChatSession:
         sharing ONE tmp file truncated each other's half-written file and
         renamed it into place (torn JSON, review #777). The lock also keeps
         snapshot and rename in order, so an older snapshot can never land
-        after a newer one."""
+        after a newer one.
+
+        A retired session (`_closed`) writes nothing — from any thread. Its
+        ACP reader still hands over buffered updates while close() waits
+        for the child; one of them rewriting the mirror with `busy: false`
+        would hide the reply it cut off from the next start (S1-R5)."""
         target = self.state_file
         with self._lock:
+            if self._closed:
+                return
             payload = self.state()
             tmp = target.with_name(f"{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
             try:
@@ -1444,6 +1516,9 @@ class ChatSession:
         `homeSessionId`) stay as they are. Never copies the state mirror."""
         target = self.persist_file
         with self._lock:
+            if self._closed:
+                # Retired: the pointer belongs to the next session now.
+                return
             payload = _read_json_object(target)
             payload["sessionId"] = self._session_id
             payload["transcript"] = str(self.transcript_path) if self.transcript_path else ""
@@ -1467,11 +1542,30 @@ def retry_data(text: Any) -> dict:
     return {}
 
 
+def _origin_of(value: Any) -> Optional[str]:
+    """A prompt's `origin` as the session keeps it: ORIGIN_OPERATOR, one of
+    `_MC_ORIGINS`, or None (unknown — anything else, a missing field, a
+    value of the wrong type from the socket)."""
+    if value == ORIGIN_OPERATOR or value in _MC_ORIGINS:
+        return str(value)
+    return None
+
+
+def _job(kind: str, text: str, origin: Optional[str] = None) -> dict:
+    """A job for the worker; `origin` only when known, so a job of an
+    unknown author looks exactly as it did before."""
+    job = {"kind": kind, "text": text}
+    if origin is not None:
+        job["origin"] = origin
+    return job
+
+
 def _current_entry(job: dict) -> dict:
     """The mirror's `current` for a claimed job: `{kind, turn, text,
-    truncated, startedAt}`. `text` is the whole prompt, or None with
+    truncated, startedAt, origin}`. `text` is the whole prompt, or None with
     `truncated: true` when it is longer than RETRY_TEXT_MAX_CHARS. Same
-    protection class as the held texts in `queue`."""
+    protection class as the held texts in `queue`. `origin` decides at the
+    next start whether the card may offer the text again."""
     kind = job.get("kind")
     text = str(job.get("text") or "") if kind == "prompt" else ""
     whole = len(text) <= RETRY_TEXT_MAX_CHARS
@@ -1481,6 +1575,7 @@ def _current_entry(job: dict) -> dict:
         "text": text if whole else None,
         "truncated": not whole,
         "startedAt": _now_iso(),
+        "origin": job.get("origin"),
     }
 
 
@@ -1723,7 +1818,9 @@ def dispatch(session: ChatSession, request: dict) -> dict:
     """One control request -> one response (spec's op table)."""
     op = request.get("op")
     if op == "prompt":
-        return session.prompt(request.get("text") or "", request.get("mode") or MODE_NOW)
+        # `origin` (optional): who wrote the text — see ORIGIN_OPERATOR.
+        return session.prompt(request.get("text") or "", request.get("mode") or MODE_NOW,
+                              origin=request.get("origin"))
     if op == "new_session":
         return session.new_session(request.get("mode") or MODE_NOW)
     if op == "queue_clear":
