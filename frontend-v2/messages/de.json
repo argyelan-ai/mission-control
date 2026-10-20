@@ -432,8 +432,8 @@
           "failed": "Aufgabe fehlgeschlagen",
           "aborted": "Aufgabe abgebrochen"
         },
-        "waitingModel": "wartet auf sein Modell",
-        "waitingFirstAnswer": "zugestellt, wartet auf die erste Antwort des Modells"
+        "waitingModel": "wartet auf das Modell",
+        "waitingFirstAnswer": "zugestellt, wartet auf das Modell"
       },
       "resultFallbackShort": "Letzte Agenten-Notiz:",
       "factHeartbeat": "Lebenszeichen",

@@ -167,8 +167,10 @@ export function deriveStateLine({
   }
 
   if (card?.kind === "waiting_model") {
+    // The model does not answer: the same warning tone as the chat's
+    // "Waiting for the model" (K10). Delivered and answering: still calm.
     return {
-      tone: statusTone,
+      tone: card.ready ? statusTone : "warning",
       word: statusWord,
       detail: { key: card.ready ? "waitingFirstAnswer" : "waitingModel", values: {} },
     };

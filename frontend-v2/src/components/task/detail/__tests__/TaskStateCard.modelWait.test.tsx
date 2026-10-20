@@ -24,7 +24,7 @@ describe("TaskStateCard — waiting for the model", () => {
     renderCard({ kind: "waiting_model", ready: false, delivered: true, runtime: "BOX-A :8000", reason: "x" });
     expect(screen.getByTestId("task-state-card")).toHaveAttribute("data-kind", "waiting_model");
     expect(screen.getByText("BOX-A :8000 does not answer.")).toBeInTheDocument();
-    expect(screen.getByText(/Nothing is broken in the task/)).toBeInTheDocument();
+    expect(screen.getByText(/Nothing is wrong with the task/)).toBeInTheDocument();
   });
 
   it("without a runtime name it still says the model does not answer", () => {

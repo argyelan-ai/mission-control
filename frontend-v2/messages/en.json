@@ -432,8 +432,8 @@
           "failed": "task failed",
           "aborted": "task aborted"
         },
-        "waitingModel": "waiting for its model",
-        "waitingFirstAnswer": "delivered, waiting for the model's first answer"
+        "waitingModel": "waiting for the model",
+        "waitingFirstAnswer": "delivered, waiting for the model"
       },
       "resultFallbackShort": "Latest agent note:",
       "factHeartbeat": "Sign of life",
@@ -452,7 +452,7 @@
       },
       "modelWaitDown": "{runtime} does not answer.",
       "modelWaitDownUnnamed": "The model does not answer.",
-      "modelWaitHint": "Nothing is broken in the task. It starts as soon as the model answers again."
+      "modelWaitHint": "Nothing is wrong with the task. It starts as soon as the model answers again."
     },
     "pipelineTitle": "Pipeline",
     "pipelineFailedCount": "{count} failed",
