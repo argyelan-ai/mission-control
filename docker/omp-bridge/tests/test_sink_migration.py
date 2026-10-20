@@ -557,8 +557,10 @@ def test_14f_daemon_start_under_a_fresh_lock_shows_a_notice_and_logs(tmp_path, c
     sess.close()
 
     assert legacy.exists(), "a locked run must not move anything"
+    # S1-R4: no pointer, but an earlier chat copy in the tree -> the chat
+    # also says that a new conversation started.
     assert _cards(sess.transcript_path, acp_chat_events.CHAT_NOTICE_CUSTOM_TYPE) == [
-        "sink_migration_skipped"]
+        "chat_started_fresh", "sink_migration_skipped"]
     assert any("sink migration" in r.getMessage() and "locked" in r.getMessage()
                for r in caplog.records), [r.getMessage() for r in caplog.records]
     assert sess.state()["sessionId"] == "sid-1", "the chat itself keeps working"
