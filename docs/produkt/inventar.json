@@ -147,6 +147,7 @@
     "GET /api/v1/boards/{board_id}/tasks/{task_id}/git-diff",
     "GET /api/v1/boards/{board_id}/tasks/{task_id}/git-info",
     "GET /api/v1/boards/{board_id}/tasks/{task_id}/hierarchy",
+    "GET /api/v1/boards/{board_id}/tasks/{task_id}/model-wait",
     "GET /api/v1/boards/{board_id}/tasks/{task_id}/timeline",
     "GET /api/v1/boards/{board_id}/tasks/{task_id}/workspace/content",
     "GET /api/v1/boards/{board_id}/tasks/{task_id}/workspace/list",
