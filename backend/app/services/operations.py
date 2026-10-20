@@ -4,6 +4,8 @@ Operational Controls — System Mode, Dispatch Guards, Stop/Resume.
 Central place for all operational-control logic:
 - System Mode (active/draining/halted) via Redis
 - Dispatch Guard (check_dispatch_allowed) — DRY for all 5 dispatch entry points
+- System-mode gate (system_mode_refusal) — the HALTED/DRAINING rule, shared
+  by the dispatch guard and the agent's poll claim
 - Stop Run / Resume Task Run
 - Continuation Flow Detection (explicit via dispatch_intent)
 """
@@ -106,6 +108,37 @@ def is_continuation_flow(task: Task) -> bool:
     return getattr(task, "dispatch_intent", "root") in CONTINUATION_INTENTS
 
 
+# ── System-mode gate (shared by push dispatch and the poll claim) ──────
+
+#: Refusal reasons of the system mode (check_dispatch_allowed and the poll).
+SYSTEM_HALTED_REASON = "System HALTED"
+SYSTEM_DRAINING_REASON = "System DRAINING — nur automatische Flows erlaubt"
+
+
+def system_mode_refusal(system_mode: str, task: Task) -> str | None:
+    """May MC hand ``task`` to an agent in ``system_mode``? System-wide only.
+
+    Returns the refusal reason, or None when the mode lets the card through:
+    HALTED holds every card, DRAINING holds every card except the automatic
+    continuation flows (subtask, review hand-off, rework).
+
+    One rule for every path that hands a card out: push dispatch
+    (check_dispatch_allowed below) and the paths that do not go through
+    check_dispatch_allowed — the agent's own poll claim (routers/agents.py
+    agent_poll), the undispatched-card watcher (watchdog/task_monitor.py)
+    and pull dispatch (routers/agent_task_status.py get_next_task). The
+    ACK and pending ladders (task_runner._check_dispatch_ack) skip a card
+    it holds. Agent rules (paused, runtime readiness) stay out of here:
+    they differ per path.
+    """
+    # rule: R-system-mode-holds-poll - one system-mode rule for every path that hands a card out
+    if system_mode == "halted":
+        return SYSTEM_HALTED_REASON
+    if system_mode == "draining" and not is_continuation_flow(task):
+        return SYSTEM_DRAINING_REASON
+    return None
+
+
 # ── Dispatch Guard ─────────────────────────────────────────────────────
 
 async def check_dispatch_allowed(
@@ -128,10 +161,13 @@ async def check_dispatch_allowed(
     existing unit tests call this without a session.
     """
     system_mode = await get_system_mode()
+    # HALTED (step 1) and DRAINING (step 5) come from the shared rule; the
+    # priority order between them stays as listed above.
+    system_refusal = system_mode_refusal(system_mode, task)
 
     # 1. System HALTED
-    if system_mode == "halted":
-        return False, "System HALTED"
+    if system_refusal == SYSTEM_HALTED_REASON:
+        return False, system_refusal
 
     # 1.5 MC update drain (ADR-094 decision 7). Lives in Postgres, not in the
     # Redis system mode above: a FLUSHALL must not lift it, and it travels
@@ -193,8 +229,8 @@ async def check_dispatch_allowed(
             )
 
     # 5. System DRAINING — only automatic continuation flows
-    if system_mode == "draining" and not is_continuation_flow(task):
-        return False, "System DRAINING — nur automatische Flows erlaubt"
+    if system_refusal:
+        return False, system_refusal
 
     return True, ""
 

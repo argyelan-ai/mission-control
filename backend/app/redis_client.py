@@ -339,6 +339,18 @@ class RedisKeys:
         in the task.orphaned_run_redispatched event detail."""
         return f"mc:poll:orphan_redispatch_count:{task_id}"
 
+    @staticmethod
+    def poll_delivered(task_id: str) -> str:
+        """Delivery mark: ``<agent id>|<attempt id>|<dispatched_at>`` of the
+        last time /agent/me/poll handed this card out as ``new_task``. A card
+        is in flight while its current dispatch carries this agent's mark and
+        no ACK yet; the system-mode gate lets such a card keep its answer
+        instead of holding it (the bridges read ``idle`` as "card gone").
+        ``dispatched_at`` cannot tell this: push dispatch and the
+        undispatched-card watcher stamp it without delivering. The poll
+        sets the TTL."""
+        return f"mc:task:{task_id}:poll_delivered"
+
     # ── Scheduler ────────────────────────────────────────────────────────
     @staticmethod
     def scheduler_lock() -> str:
@@ -386,6 +398,17 @@ class RedisKeys:
         margin, so a genuinely-never-acked resume still escalates once the
         suppression window elapses."""
         return f"mc:dispatch:resume_suppress:{task_id}"
+
+    @staticmethod
+    def dispatch_system_hold(task_id: str) -> str:
+        """Set by _check_dispatch_ack on every pass while the system mode
+        (HALTED / DRAINING) or the MC update drain holds this card: no path
+        may hand it out, so "not ACKed" / "never delivered" is the system's
+        doing and both ladders wait. TTL = the agent's ack timeout + margin,
+        so the ladders keep waiting that long after the hold ends — the
+        first poll after it delivers the card before a ladder reads its old
+        dispatched_at."""
+        return f"mc:dispatch:system_hold:{task_id}"
 
     @staticmethod
     def dispatch_turn_wait(task_id: str) -> str:

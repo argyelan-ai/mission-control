@@ -764,12 +764,28 @@ async def get_next_task(
     """Pull-based task dispatch: agent fetches the next available task.
 
     Returns 200 with task + context when work is available.
-    Returns 204 when the agent is busy or there's no work.
+    Returns 204 when the agent is busy or there's no work — including while
+    the system mode (HALTED / DRAINING) or the MC update drain holds it.
     """
     from starlette.responses import Response
 
     if agent.board_id != board_id:
         raise HTTPException(status_code=403, detail="Agent not assigned to this board")
+
+    # rule: R-system-mode-holds-poll - pull dispatch holds cards like push dispatch
+    # This claim sets in_progress itself and never asks
+    # check_dispatch_allowed, so it asks the system-wide gates itself: the
+    # MC update drain (ADR-094) here, the system mode per candidate below.
+    # Agent rules stay out: it only ever takes cards assigned to this agent.
+    from app.services import update_drain
+    from app.services.operations import get_system_mode, system_mode_refusal
+
+    if (await update_drain.current(session)).active:
+        return Response(status_code=204)
+    # Pool hygiene (incident 2026-09-14): the mode lives in Redis — release
+    # the read transaction before awaiting it.
+    await session.commit()
+    system_mode = await get_system_mode()
 
     # 1. Agent busy? (has an active in_progress task)
     active = (await session.exec(
@@ -806,6 +822,10 @@ async def get_next_task(
 
     # 3. Check dependencies + root guard + take the first available task
     for task in candidates:
+        # HALTED holds every card, DRAINING all but the continuation flows.
+        if system_mode_refusal(system_mode, task):
+            continue
+
         if not await _dependencies_met(session, task):
             continue
 

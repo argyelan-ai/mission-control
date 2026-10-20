@@ -3001,6 +3001,109 @@ def _task_still_dispatchable(task: Task, agent: Agent) -> bool:
     return task.status not in ("done", "failed") and task.assigned_agent_id == agent.id
 
 
+#: Poll answer flag per held system mode — same shape as the update drain's
+#: ``update_drain`` flag: ``state=idle`` + flag + ``detail``.
+_SYSTEM_MODE_POLL_FLAGS = {"halted": "system_halted", "draining": "system_draining"}
+
+
+#: Lifetime of a delivery mark (RedisKeys.poll_delivered). The mark only
+#: matters while its card waits for the ACK under a held system mode; a
+#: week outlasts any halt.
+_POLL_DELIVERED_TTL_SECONDS = 86400 * 7
+
+
+def _poll_delivery_mark(agent: Agent, task: Task) -> str | None:
+    """``<agent id>|<attempt id>|<dispatched_at>``: one delivery of one
+    dispatch to one agent. ``dispatched_at`` ties the mark to that dispatch:
+    a healer that resets the run for a fresh dispatch clears it (Tier-3
+    recovery, the stale-dispatch reset), even where it keeps the attempt."""
+    if not task.dispatch_attempt_id or task.dispatched_at is None:
+        return None
+    from app.utils import ensure_aware
+
+    return f"{agent.id}|{task.dispatch_attempt_id}|{ensure_aware(task.dispatched_at).isoformat()}"
+
+
+async def _mark_poll_delivered(session: AsyncSession, agent: Agent, task: Task) -> None:
+    """Record that this poll hands ``task`` to ``agent`` under its current
+    attempt. Best effort: without the mark, a held system mode holds the
+    card like one never delivered."""
+    mark = _poll_delivery_mark(agent, task)
+    if mark is None:
+        return
+    # Pool hygiene (incident 2026-09-14): release the read transaction
+    # before the Redis await. Every write above has been committed.
+    await session.commit()
+    try:
+        redis = await get_redis()
+        await redis.set(
+            RedisKeys.poll_delivered(str(task.id)), mark, ex=_POLL_DELIVERED_TTL_SECONDS,
+        )
+    except Exception as e:  # noqa: BLE001 — the delivery itself must not fail
+        logger.warning("Poll delivery mark for task %s not written: %s", task.id, e)
+
+
+async def _poll_in_flight(agent: Agent, task: Task) -> bool:
+    """Did the poll already hand this attempt of ``task`` to ``agent``, with
+    no ACK yet? Then the prompt is in the agent's session: the card is in
+    flight. ``dispatched_at`` cannot tell this (push dispatch and the
+    undispatched-card watcher stamp it without delivering)."""
+    mark = _poll_delivery_mark(agent, task)
+    if mark is None or task.ack_at is not None:
+        return False
+    try:
+        redis = await get_redis()
+        seen = await redis.get(RedisKeys.poll_delivered(str(task.id)))
+    except Exception:  # noqa: BLE001 — no mark readable: treat as not delivered
+        return False
+    if isinstance(seen, bytes):
+        seen = seen.decode()
+    return seen == mark
+
+
+async def _system_mode_hold(
+    session: AsyncSession,
+    agent: Agent,
+    task: Task,
+    *,
+    mode: str | None = None,
+) -> dict | None:
+    """The system mode (HALTED / DRAINING) for a card the poll is about to
+    hand out. The poll claim does not go through check_dispatch_allowed, so
+    it asks the same rule itself (operations.system_mode_refusal): the
+    emergency brake holds polling agents exactly like push dispatch.
+
+    Returns the poll answer that holds the card, or None when the mode lets
+    it through. A held card stays untouched, so the first poll after the
+    halt delivers it — nothing to catch up. Agent rules (paused) stay out:
+    a paused agent still takes a card assigned to it by name.
+
+    A card already in flight (``_poll_in_flight``: delivered by the poll to
+    this agent under this attempt, no ACK yet) keeps its answer: the same
+    ``new_task`` with the same attempt hands out nothing new, and the
+    bridges read ``idle`` as "card gone" (they drop their dedup, grok resets
+    its session, poll.sh drops CURRENT_TASK_ID and its task lock) and would
+    paste it again after the halt. An ACKed card is never in flight, so the
+    restart of an orphaned run (a fresh attempt) is always held.
+
+    ``mode``: the system mode the caller has read already, else read here.
+    """
+    from app.services.operations import get_system_mode, system_mode_refusal
+
+    # Pool hygiene (incident 2026-09-14): the mode and the delivery mark
+    # live in Redis — release the read transaction before awaiting them.
+    # Read phase, nothing uncommitted.
+    await session.commit()
+    if mode is None:
+        mode = await get_system_mode()
+    reason = system_mode_refusal(mode, task)
+    if reason is None:
+        return None
+    if await _poll_in_flight(agent, task):
+        return None
+    return {"state": "idle", _SYSTEM_MODE_POLL_FLAGS[mode]: True, "detail": reason}
+
+
 async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, task: Task) -> dict | None:
     """Fix 2 (Poll-Luecke, 07.09.2026 incident): detect an ORPHANED RUN.
 
@@ -3016,6 +3119,8 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
       proves the LLM turn ran.
 
     Fresh signal  → None (caller reports `working`).
+    System HALTED/DRAINING holds the card (_system_mode_hold) → None too:
+    the restart waits for the first poll after the halt.
     Stale/missing → orphan handling: ack_at cleared, fresh
     dispatch_attempt_id (set_dispatch_attempt_id, reason poll_orphan_run),
     Redis counter incremented (endlos-redispatch guard), event
@@ -3073,6 +3178,16 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
     # Nothing is uncommitted here (read phase), so commit releases the
     # connection's transaction before the awaits.
     await session.commit()
+
+    # System mode (HALTED / DRAINING): restarting the run hands out a fresh
+    # attempt, i.e. new work, even when this poll delivered the current
+    # attempt itself (the card is ACKed, so never in flight). While the
+    # system holds it, the caller keeps reporting `working` and the card
+    # stays untouched — this check runs on every poll, so the first poll
+    # after the halt restarts it.
+    if await _system_mode_hold(session, agent, task) is not None:
+        return None
+
     redis = await get_redis()
     if not await try_claim_heal(redis, str(task.id)):
         logger.info(
@@ -3139,6 +3254,7 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
         agent.current_task_id = task.id
         session.add(agent)
         await session.commit()
+    await _mark_poll_delivered(session, agent, task)
     return {
         "state": "new_task",
         "orphaned_run_redispatched": True,
@@ -3178,6 +3294,12 @@ async def agent_poll(
     - working: agent has in_progress or blocked task → poll.sh does nothing
     - new_task: claimed a new inbox task → poll.sh pastes prompt to tmux
     - idle: nothing to do
+
+    An `idle` answer may say why a card is held, with one flag plus `detail`:
+    `runtime_not_ready`, `update_drain`, `system_halted` or `system_draining`.
+    The card stays untouched; a later poll delivers it. Under HALTED or
+    DRAINING a card this poll already delivered (same agent, same attempt,
+    no ACK yet) keeps its `new_task` answer instead.
 
     Every response additionally includes `new_comments` (a list) — new user
     comments on active tasks that the agent hasn't seen yet. poll.sh pastes
@@ -3256,6 +3378,9 @@ async def agent_poll(
         .limit(1)
     )
     approval_task = approval_result.first()
+    # The system mode as read by the fresh-card path's gates (None: the
+    # system-mode gate below reads it itself).
+    _gate_mode: str | None = None
     if approval_task is not None:
         task = approval_task
     else:
@@ -3421,19 +3546,48 @@ async def agent_poll(
                     task = candidate
                     break
 
-            # Runtime-readiness gate (power-managed backends, e.g. a Wake-on-LAN box
-            # unsloth). Don't inject a fresh inbox task into the session while
-            # the agent's LLM backend is asleep — the task stays inbox (parked)
-            # until the box is woken + the model is serving. Only affects agents
-            # bound to a power_managed runtime; every other agent passes through
-            # (fail-open). Only the fresh-inbox path is gated — recovery and
-            # phase_approval claims above are untouched. See runtime_readiness.py.
+            # The fresh card's gates, in push dispatch's order
+            # (check_dispatch_allowed): HALTED, the MC update drain, runtime
+            # readiness, then DRAINING at the system-mode gate below. The
+            # held answer names the gate push dispatch would name.
             if task is not None:
+                from app.services.operations import get_system_mode
                 from app.services.runtime_readiness import runtime_ready_for_agent
-                # Pool hygiene (incident 2026-09-14): the readiness gate
-                # awaits Redis and — on a cache miss — a live HTTP probe of
-                # the runtime. Not DB work: commit the read transaction
-                # first so no pool connection is pinned across those awaits.
+                # Pool hygiene (incident 2026-09-14): the mode lives in Redis,
+                # and the readiness gate awaits Redis and — on a cache miss —
+                # a live HTTP probe of the runtime. Not DB work: commit the
+                # read transaction first so no pool connection is pinned
+                # across those awaits.
+                await session.commit()
+                _gate_mode = await get_system_mode()
+                # HALTED first: the operator's own switch is the reason, not
+                # a model that happens to be down too.
+                if _gate_mode == "halted":
+                    _held = await _system_mode_hold(session, agent, task, mode=_gate_mode)
+                    if _held is not None:
+                        return {**_held, **_poll_extra}
+                # MC update drain (ADR-094 decision 7): this claim bypasses
+                # check_dispatch_allowed, so it asks the drain itself. The
+                # card stays inbox and is claimed by the first poll after the
+                # update — nothing to catch up.
+                from app.services import update_drain
+                if (await update_drain.current(session)).active:
+                    return {
+                        "state": "idle",
+                        "update_drain": True,
+                        "detail": update_drain.REASON,
+                        **_poll_extra,
+                    }
+                # Runtime-readiness gate (power-managed backends, e.g. a
+                # Wake-on-LAN box unsloth). Don't inject a fresh inbox task
+                # into the session while the agent's LLM backend is asleep —
+                # the task stays inbox (parked) until the box is woken + the
+                # model is serving. Only affects agents bound to a
+                # power_managed runtime; every other agent passes through
+                # (fail-open). Only the fresh-inbox path is gated — recovery
+                # and phase_approval claims above are untouched. See
+                # runtime_readiness.py. The drain read above was DB work:
+                # release it before the readiness awaits.
                 await session.commit()
                 # include_local (ADR-097): a local runtime whose model does
                 # not answer holds the claim too — delivered is not working.
@@ -3445,18 +3599,6 @@ async def agent_poll(
                         "state": "idle",
                         "runtime_not_ready": True,
                         "detail": _rt_reason,
-                        **_poll_extra,
-                    }
-                # MC update drain (ADR-094 decision 7): this claim bypasses
-                # check_dispatch_allowed, so it asks the drain itself. The
-                # card stays inbox and is claimed by the first poll after the
-                # update — nothing to catch up.
-                from app.services import update_drain
-                if (await update_drain.current(session)).active:
-                    return {
-                        "state": "idle",
-                        "update_drain": True,
-                        "detail": update_drain.REASON,
                         **_poll_extra,
                     }
 
@@ -3478,6 +3620,15 @@ async def agent_poll(
             task.id, agent.id, task.status, task.assigned_agent_id,
         )
         return {"state": "idle", **_poll_extra}
+
+    # rule: R-system-mode-holds-poll - the poll claim holds cards like push dispatch under HALTED/DRAINING
+    # System mode (HALTED / DRAINING) — the last gate before any card leaves
+    # this poll: phase approval, an undelivered active card, a fresh inbox
+    # card (whose mode was read above, before its other gates). Same rule as
+    # push dispatch; a card already in flight keeps its answer.
+    _held = await _system_mode_hold(session, agent, task, mode=_gate_mode)
+    if _held is not None:
+        return {**_held, **_poll_extra}
 
     # 3. Claim the task. Two paths:
     #    - inbox: only set dispatched_at (if still None) — status stays
@@ -3613,6 +3764,9 @@ async def agent_poll(
         )
         prompt = f"{prompt}\n\n{_hint}"
 
+    # This attempt is now in the agent's session: a held system mode lets
+    # it keep this answer until the ACK (_system_mode_hold).
+    await _mark_poll_delivered(session, agent, task)
     return {
         "state": "new_task",
         "task": {
