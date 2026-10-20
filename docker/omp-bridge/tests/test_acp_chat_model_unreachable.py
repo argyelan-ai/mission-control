@@ -315,6 +315,18 @@ def test_3c_another_wrapper_wording_the_retried_attempts_line_still_counts(tmp_p
     assert codes(lines) == ["model_unreachable"]
 
 
+@pytest.mark.parametrize("retries", ["Retry budget exhausted after 10 retries: ",
+                                     "retry budget exhausted after 1 retry:"])
+def test_3e_omps_wrapper_alone_is_enough(retries):
+    """Without the attempts' lines (not in what was read): omp's wrapper is
+    taken off its final line, and what is left is the ACP text."""
+    verdict = model_errors().classify_chat_turn(
+        stop_reason="refusal", final_text=ECONN_TEXT,
+        omp_line=omp_assistant("error", error=retries + ECONN_TEXT)["message"])
+    assert verdict.kind == "model_unreachable"
+    assert verdict.hide_reply and verdict.reply == ""
+
+
 def test_3d_omps_line_glued_onto_the_models_words_is_cut_off(tmp_path):
     """Live (3 of 13 MC copies): the model wrote a sentence, then omp's line
     follows without a separator. The bubble keeps the model's words only;

@@ -1146,8 +1146,9 @@ class ChatSession:
         stop_reason = getattr(result, "stopReason", "") if result is not None else ""
         alive = self._client_alive()
         # Did the model answer at all (S1-R6)? Decided BEFORE the reply line
-        # is written: when the reply text is only omp's error line, there is
-        # no reply bubble — the card below says it instead.
+        # is written: omp's error line is cut off the end of the reply (the
+        # card below says it instead); when nothing is left, there is no
+        # reply bubble.
         verdict = self._judge_turn(
             stop_reason, final_text, error_text,
             getattr(result, "usage", None) if result is not None else None, omp_mark,
@@ -1157,7 +1158,7 @@ class ChatSession:
             # An empty text still goes through the mapper: it writes no
             # bubble but closes a thought that is still open (#902).
             self._emit_transcript(self._mapper.map_final_assistant_message(
-                "" if verdict.hide_reply else final_text,
+                final_text if verdict.reply is None else verdict.reply,
                 stop_reason="stop" if stop_reason == "end_turn" else "",
             ))
 
@@ -1385,19 +1386,21 @@ class ChatSession:
         except OSError:
             return None, 0
 
-    def _omp_turn_line(self, mark: tuple[Optional[Path], int]) -> Optional[dict]:
-        """The `message` of omp's line that ended this turn, from omp's OWN
-        session file — None when there is none (no file, unreadable, a file
-        that shrank, or no final line within the short wait)."""
+    def _omp_turn_line(self, mark: tuple[Optional[Path], int]
+                       ) -> "Optional[model_errors.OmpTurnEnd]":
+        """omp's line that ended this turn (and its retried attempts), from
+        omp's OWN session file — None when there is none (no file,
+        unreadable, a file that shrank, or no final line within the short
+        wait)."""
         for attempt in range(self._OMP_LINE_TRIES):
             path = self._omp_session_file()
             if path is not None:
                 start = mark[1] if mark[0] == path else 0
                 lines = _read_lines_from(path, start)
                 if lines is not None:
-                    message = model_errors.final_assistant_message(lines)
-                    if message is not None:
-                        return message
+                    end = model_errors.omp_turn_end(lines)
+                    if end is not None:
+                        return end
             if attempt + 1 < self._OMP_LINE_TRIES:
                 time.sleep(self._OMP_LINE_WAIT_S)
         return None
@@ -1407,12 +1410,13 @@ class ChatSession:
                     ) -> "model_errors.ChatTurnVerdict":
         """`model_errors.classify_chat_turn` with omp's line of this turn —
         read only for a turn that ends like a lost model or has no text."""
-        omp_line = None
+        end = None
         if model_errors.needs_omp_line(stop_reason, final_text, error_text):
-            omp_line = self._omp_turn_line(mark)
+            end = self._omp_turn_line(mark)
         return model_errors.classify_chat_turn(
             stop_reason=stop_reason, final_text=final_text, error_text=error_text,
-            usage=usage, omp_line=omp_line,
+            usage=usage, omp_line=end.message if end is not None else None,
+            omp_retried=end.retried if end is not None else (),
         )
 
     def _on_elicitation(self, rpc_id: Any, params: dict) -> None:
