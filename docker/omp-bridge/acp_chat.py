@@ -42,6 +42,7 @@ Run: `python3 acp_chat.py --serve [--socket PATH]` (tmux window 3).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -54,7 +55,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Iterator, Mapping, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -77,6 +78,14 @@ _PREVIEW_GROWTH_CHARS = 200
 _PREVIEW_INTERVAL_S = 0.25
 
 _STATE_VERSION = 1
+
+#: Session updates that only change the daemon's STATE (mirrored into
+#: acp-chat-state.json), never a chat line of their own. While omp replays a
+#: loaded session they are the only updates applied (`_muted_replay`).
+_STATE_UPDATES = frozenset({
+    "config_option_update", "available_commands_update",
+    "current_mode_update", "session_info_update",
+})
 
 #: `prompt`/`new_session` modes. `now` refuses while a turn runs — the
 #: contract of the machine callers (bridge wake-ups retry on their own poll).
@@ -214,6 +223,13 @@ class ChatSession:
 
         self._full_text: list[str] = []
         self._throttle: dict = {"chars": -10 ** 9, "at": 0.0, "pending": None}
+        # True while `session/load` runs (`_muted_replay`). omp answers a
+        # load by replaying the WHOLE stored conversation as session/update
+        # notifications before it replies (live 20.10.2026: 96 for one chat,
+        # 66 of them tool lines). Nothing of it is new: none of it may reach
+        # the transcript, the preview or the turn text. Counted per kind.
+        self._replaying = False
+        self._replayed: dict[str, int] = {}
         # P1: trailing flush of withheld live tool output (see
         # acp_chat_events.ToolOutputPump) — one per daemon, started in
         # start(), stopped in close().
@@ -270,7 +286,8 @@ class ChatSession:
         reset_detail = ""
         if stored_id and stored_transcript and Path(stored_transcript).exists():
             try:
-                client.load_session(stored_id, self._cwd)
+                with self._muted_replay():
+                    client.load_session(stored_id, self._cwd)
                 self._session_id = stored_id
                 self._mapper.set_session_id(stored_id)
                 self._sink = acp_chat_events.ChatEventSink.appending(
@@ -298,6 +315,44 @@ class ChatSession:
                 reset_detail,
                 text="Previous chat session could not be loaded — "
                      "started a new one (history starts over).",
+            )
+
+    @contextlib.contextmanager
+    def _muted_replay(self) -> Iterator[None]:
+        """Mute the chat while omp replays a session it loads.
+
+        The ACP client handles stdout strictly in order on its reader thread
+        and calls the event callbacks synchronously; omp replies to
+        `session/load` only after the last replayed update. So everything
+        `_on_event` sees inside this block is replay: only state updates are
+        applied (`_STATE_UPDATES`), nothing goes through the mapper.
+
+        Every caller of `_connect` gets this — start() after a daemon
+        restart AND `_restart_child` after a crash of the omp child, where
+        the transcript is the one the chat already shows (before S1-R2 the
+        reload appended every old tool line to it a second time).
+
+        `finally`: the switch also closes when the load fails, or the next
+        session's turns would be muted for good. After it, no turn is in
+        flight, so the mapper's turn buffers are emptied: the next card
+        (queue_lost, session_reset, ...) must never carry a thought that
+        was open before the load (#902 flushes a thought before a card)."""
+        with self._lock:
+            self._replaying = True
+            self._replayed = {}
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._replaying = False
+                counts, self._replayed = self._replayed, {}
+            self._mapper.begin_turn()
+            muted = {k: v for k, v in counts.items() if k not in _STATE_UPDATES}
+            kept = {k: v for k, v in counts.items() if k in _STATE_UPDATES}
+            logger.info(
+                "load replayed %d updates (muted): %s%s",
+                sum(counts.values()), _format_counts(muted) or "none",
+                f"; applied as state: {_format_counts(kept)}" if kept else "",
             )
 
     def _previous_queue(self) -> list[dict]:
@@ -879,34 +934,23 @@ class ChatSession:
         try:
             update = params.get("update") or {}
             su = update.get("sessionUpdate")
-            if su in ("agent_message_chunk", "agent_thought_chunk"):
+            with self._lock:
+                replaying = self._replaying
+                if replaying:
+                    kind = su if isinstance(su, str) and su else "unknown"
+                    self._replayed[kind] = self._replayed.get(kind, 0) + 1
+            # isinstance first: `su` comes from the agent, and a list or a
+            # dict there would make the set lookup raise.
+            if isinstance(su, str) and su in _STATE_UPDATES:
+                self._apply_state_update(update, su)
+            if replaying:
+                # A load's replay (see _muted_replay): state only — no
+                # mapper, no transcript, no preview, no turn text.
+                return
+            if su == "agent_message_chunk":
                 content = update.get("content") or {}
-                if content.get("type") == "text" and su == "agent_message_chunk":
+                if content.get("type") == "text":
                     self._full_text.append(content.get("text") or "")
-            elif su == "config_option_update":
-                self._set_config_options(update.get("configOptions"))
-                self._write_state()
-            elif su == "available_commands_update":
-                self._set_commands(update.get("availableCommands"))
-                self._write_state()
-            elif su == "current_mode_update":
-                # P3: plan mode on/off. The configOptions row is what the
-                # backend's mode capabilities read; the mapper below also
-                # writes a quiet `acp-mode` line for the live chip.
-                mode_id = update.get("currentModeId")
-                if isinstance(mode_id, str) and mode_id:
-                    with self._lock:
-                        for opt in self._config_options:
-                            if opt.get("id") == "mode":
-                                opt["currentValue"] = mode_id
-                    self._write_state()
-            elif su == "session_info_update":
-                info = {k: update.get(k) for k in ("title", "updatedAt")
-                        if isinstance(update.get(k), str)}
-                if info:
-                    with self._lock:
-                        self._session_info = {**self._session_info, **info}
-                    self._write_state()
 
             for entry in self._mapper.map_update(params, stream=True):
                 if not acp_chat_events.is_volatile(entry):
@@ -929,6 +973,34 @@ class ChatSession:
                     self._throttle["pending"] = entry
         except Exception:  # noqa: BLE001 — a broken update must not kill the turn
             logger.exception("event handling failed")
+
+    def _apply_state_update(self, update: dict, su: str) -> None:
+        """One of `_STATE_UPDATES` -> in-memory state + the state mirror.
+        No chat line here: outside a replay the mapper writes the quiet
+        `acp-mode` line for `current_mode_update` (the live chip)."""
+        if su == "config_option_update":
+            self._set_config_options(update.get("configOptions"))
+            self._write_state()
+        elif su == "available_commands_update":
+            self._set_commands(update.get("availableCommands"))
+            self._write_state()
+        elif su == "current_mode_update":
+            # P3: plan mode on/off. The configOptions row is what the
+            # backend's mode capabilities read.
+            mode_id = update.get("currentModeId")
+            if isinstance(mode_id, str) and mode_id:
+                with self._lock:
+                    for opt in self._config_options:
+                        if opt.get("id") == "mode":
+                            opt["currentValue"] = mode_id
+                self._write_state()
+        elif su == "session_info_update":
+            info = {k: update.get(k) for k in ("title", "updatedAt")
+                    if isinstance(update.get(k), str)}
+            if info:
+                with self._lock:
+                    self._session_info = {**self._session_info, **info}
+                self._write_state()
 
     def _on_permission(self, params: dict) -> str:
         """Delegate to the bridge's policy helper — ONE decision path for
@@ -1143,6 +1215,11 @@ class ChatSession:
             os.replace(tmp, self.persist_file)
         except OSError:
             logger.warning("session id not persisted: %s", self.persist_file)
+
+
+def _format_counts(counts: Mapping[str, int]) -> str:
+    """`{"tool_call": 33, ...}` -> `"tool_call=33, ..."`, sorted by kind."""
+    return ", ".join(f"{kind}={count}" for kind, count in sorted(counts.items()))
 
 
 def _classify_turn(stop_reason: str, final_text: str, error_text: str) -> tuple[
