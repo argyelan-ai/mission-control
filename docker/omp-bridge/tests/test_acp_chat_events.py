@@ -407,6 +407,8 @@ def test_sink_writes_session_file_in_omp_layout(tmp_path):
     assert directory.name == "--workspace-foo--"
     sink = acp_chat_events.ChatEventSink(directory, "sess-1")
     assert sink.path is not None and sink.path.name.endswith("_sess-1.jsonl")
+    # MC's copy sits in <folder>/.mc/, never next to omp's file (S1-R3).
+    assert sink.path.parent == directory / acp_chat_events.MC_SINK_DIRNAME
     sink.write(['{"type":"message","id":"acp00001"}'])
     content = sink.path.read_text(encoding="utf-8").splitlines()
     assert len(content) == 2  # session header + one event
@@ -729,7 +731,8 @@ def test_preview_sink_prunes_to_three_newest_files(tmp_path):
     BEFORE writing its own, so a long-running omp-agent's preview dir (and
     the tailer's per-tick glob over it) stays bounded."""
     session_dir = tmp_path / "sess"
-    pdir = session_dir / "previews"
+    # The preview channel lives under <folder>/.mc/ with the copy (S1-R3).
+    pdir = session_dir / acp_chat_events.MC_SINK_DIRNAME / "previews"
     pdir.mkdir(parents=True)
     # 5 pre-existing files, oldest to newest via mtime.
     paths = [pdir / f"old{i}.jsonl" for i in range(5)]
@@ -754,7 +757,7 @@ def test_preview_sink_prune_swallows_unlink_errors(tmp_path, monkeypatch):
     never crash sink construction — fail-closed per Review #473 N1: an
     unpruned file is a nuisance, a dead preview channel is not."""
     session_dir = tmp_path / "sess"
-    pdir = session_dir / "previews"
+    pdir = session_dir / acp_chat_events.MC_SINK_DIRNAME / "previews"
     pdir.mkdir(parents=True)
     for i in range(4):
         (pdir / f"old{i}.jsonl").write_text("{}\n", encoding="utf-8")

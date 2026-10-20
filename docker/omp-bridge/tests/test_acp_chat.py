@@ -1023,10 +1023,12 @@ def test_new_session_closes_the_old_session_before_the_new_file_exists(tmp_path)
     persist into the old session's file while disposing it, so the close must
     come first — otherwise the old session could out-rank the new one."""
     files_at_close: list[int] = []
+    # MC's copies live in <folder>/.mc/ (S1-R3).
+    copies = tmp_path / "sessions" / acp_chat_events.MC_SINK_DIRNAME
 
     class _Client(FakeClient):
         def close_session(self, session_id, timeout=30.0):
-            files_at_close.append(len(list((tmp_path / "sessions").glob("*.jsonl"))))
+            files_at_close.append(len(list(copies.glob("*.jsonl"))))
             return super().close_session(session_id, timeout)
 
     client = _Client(session_result=SESSION_RESULT, new_ids=["sid-1", "sid-2"])
@@ -1036,7 +1038,7 @@ def test_new_session_closes_the_old_session_before_the_new_file_exists(tmp_path)
     assert sess.wait_idle(timeout=5)
     sess.close()
     assert files_at_close == [1], "new transcript was created before session/close"
-    assert len(list((tmp_path / "sessions").glob("*.jsonl"))) == 2
+    assert len(list(copies.glob("*.jsonl"))) == 2
     print("PASS test_new_session_closes_the_old_session_before_the_new_file_exists")
 
 

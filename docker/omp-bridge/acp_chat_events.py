@@ -83,14 +83,20 @@ backend/tests/test_omp_chat.py):
 
   * ACP PREVIEW (Vorschau-Kanal, Folge-PR zu #471): agent text/thought
     chunks NEVER touch this transcript file. They stream into a SIBLING
-    file — ``previews/<ts>_<sessionId>_<uniq>.jsonl`` in the SAME session
-    directory — that the backend's tailer (transcript_chat.ChatTailerManager
+    file — ``previews/<ts>_<sessionId>_<uniq>.jsonl`` next to the
+    transcript copy (both under ``<session folder>/.mc/``) — that the
+    backend's tailer (transcript_chat.ChatTailerManager
     via omp_chat.preview_channel) tails as a pure volatile channel,
     broadcasting ``kind: "preview", source: "acp"`` SSE frames. Nothing
     preview-shaped is ever written here, so read_history and the permanent
     timeline stay clean by construction (before: custom_message
     "acp-preview" lines lived in this JSONL and every reader had to filter
     them out).
+
+  * WHERE (S1-R3): the copy, its ``previews/`` and its ``media/`` live in
+    ``<session folder>/.mc/``, never next to omp's own file of the same
+    session — omp would take the copy for its session and load it
+    (``MC_SINK_DIRNAME``). ``sink_migration.py`` moves older copies there.
 
 FAIL-CLOSED PRIVACY: session_dir() derives the target directory from
 PI_CODING_AGENT_DIR + the pinned OMP_ACP_CWD only; nothing from prompt,
@@ -104,10 +110,12 @@ notice, a parser must not die on them).
 """
 from __future__ import annotations
 
+import errno
 import json
 import math
 import os
 import re
+import stat
 import threading
 import time
 import uuid
@@ -139,6 +147,28 @@ PLAN_CUSTOM_TYPE = "acp-plan"
 CHAT_ERROR_CUSTOM_TYPE = "chat_error"
 #: A notice the operator must see, not an error (map_chat_notice).
 CHAT_NOTICE_CUSTOM_TYPE = "chat_notice"
+
+#: MC's display copy of a session (``ChatEventSink``), its preview channel
+#: and its pictures live in ``<session folder>/.mc/`` — never next to omp's
+#: own session file (S1-R3, docs/specs/chat-over-acp.md "Storage").
+#: omp 18.10.1 takes every ``*.jsonl`` whose first line is
+#: ``{"type": "session", "id": <string>}`` for one of its sessions (MC's
+#: header passes) and finds them with ``Bun.Glob("*.jsonl")`` per folder
+#: (``SessionManager.list``) and ``Bun.Glob("*/*.jsonl")`` over the root
+#: (``listAll``). Load and resume take the YOUNGER of two files with one id
+#: — often MC's copy: live 20.10.2026 the current chat failed to load ("ACP
+#: session load was cancelled") and silently started over. Two levels below
+#: the root, ``.mc/`` is outside both globs — that alone keeps omp 18.10.1
+#: away from it. The leading dot is a second guard for a recursive search
+#: some later omp might run: Bun's docs say ``Bun.Glob`` skips dot names
+#: unless ``dot: true`` (a local Bun 1.3 agrees; NOT checked at the Bun
+#: build inside omp's binary — an assumption). The
+#: backend reads the same name (``omp_chat._MC_SINK_DIRNAME``, pinned by
+#: backend/tests/test_mc_sink_dirname_contract.py); ``sink_migration.py``
+#: moves the copies written before.
+MC_SINK_DIRNAME = ".mc"
+#: The longest session header line read (a header is a few hundred bytes).
+_HEADER_BYTES = 65536
 
 _TITLE_TRUNCATE_LEN = 200
 
@@ -1451,10 +1481,117 @@ def session_dir(
     return path
 
 
+def mc_sink_dir(folder: Path) -> Path:
+    """``<folder>/.mc`` (``MC_SINK_DIRNAME``) — created, then returned.
+
+    Raises OSError when it cannot be created (a file in its place, a
+    read-only tree) or is not a real folder (a symlink — the session folder
+    is the agent's own mount, and MC never writes where a link points); the
+    sinks catch that and degrade to a no-op, like an unwritable sessions
+    tree."""
+    target = Path(folder) / MC_SINK_DIRNAME
+    target.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink() or not target.is_dir():
+        raise OSError(errno.ENOTDIR, "not a real folder", str(target))
+    return target
+
+
+def open_regular(path: Path) -> Optional[Any]:
+    """``path`` opened for reading as text when it is a regular file, else
+    None. Never blocks: a FIFO named like a session would hang a plain
+    ``open()`` until a writer comes (non-blocking open, then a type check on
+    the open file). The caller closes the handle. Never raises."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            if hasattr(os, "set_blocking"):
+                os.set_blocking(fd, True)  # from here on an ordinary handle
+            return os.fdopen(fd, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+    os.close(fd)
+    return None
+
+
+def session_header(path: Path) -> Optional[dict]:
+    """The session header of a JSONL file — line 1, or line 2 when line 1 is
+    a ``{"type": "title"}`` line (omp's own rule) — or None when the file has
+    none (not a session for omp either) or is no regular file. Never raises,
+    never blocks."""
+    fh = open_regular(path)
+    if fh is None:
+        return None
+    try:
+        with fh:
+            first, second = fh.readline(_HEADER_BYTES), fh.readline(_HEADER_BYTES)
+    except (OSError, ValueError):
+        return None
+    lines = []
+    for raw in (first, second):
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            value = None
+        lines.append(value if isinstance(value, dict) else None)
+    header = lines[1] if lines[0] is not None and lines[0].get("type") == "title" else lines[0]
+    if header is None or header.get("type") != "session" or not isinstance(header.get("id"), str):
+        return None
+    return header
+
+
+def is_mc_header(header: Optional[dict]) -> bool:
+    """A session header MC wrote: it names the bridge (``"bridge": "acp"``,
+    written by ``ChatEventSink``). omp never writes that key (live
+    20.10.2026: 266 copies with it, 468 omp files without)."""
+    return header is not None and header.get("bridge") == "acp"
+
+
+def is_mc_sink(path: Path) -> bool:
+    """MC's display copy: a regular file whose session header names the
+    bridge (``is_mc_header``)."""
+    return is_mc_header(session_header(path))
+
+
+def find_sink(folder: Path, session_id: str) -> Optional[Path]:
+    """MC's copy of session ``session_id`` in session folder ``folder``.
+
+    ``<folder>/.mc/`` first, then the old place next to omp's file (a tree
+    ``sink_migration`` has not moved yet). Only a file whose header names
+    the bridge counts, so omp's own file is never returned. Several copies
+    of one id: the newest by modification time. The id is compared as text
+    (never a glob pattern). The one lookup for P4's list, resume and fork
+    (chat package Stage 1), so they never pick omp's file by mistake."""
+    if not session_id:
+        return None
+    suffix = f"_{session_id}.jsonl"
+    for place in (Path(folder) / MC_SINK_DIRNAME, Path(folder)):
+        try:
+            names = [p for p in place.iterdir()
+                     if p.name.endswith(suffix) and not p.name.startswith(".")]
+        except OSError:
+            continue
+        dated = []
+        for path in names:
+            if not is_mc_sink(path):
+                continue
+            try:
+                dated.append((path.stat().st_mtime, str(path), path))
+            except OSError:
+                continue
+        if dated:
+            return max(dated)[2]
+    return None
+
+
 class ChatEventSink:
     """Appends mapped events as JSONL into the omp sessions tree, one file per
-    ACP session (``<ts>_<sessionId>.jsonl``, the same shape omp writes so
-    find_active_session ranks it like any native session).
+    ACP session: ``<session folder>/.mc/<ts>_<sessionId>.jsonl``
+    (``MC_SINK_DIRNAME`` explains why not next to omp's own file). The
+    header is the one the bridge always wrote — every backend reader of it
+    (``bridge``, ``taskId``, ``cwd``) stays the same.
 
     - append-only, whole lines, one ``write`` call per batch (the tailer
       polls at 0.3 s and reads byte-wise — partial multi-byte UTF-8 across
@@ -1477,7 +1614,6 @@ class ChatEventSink:
         self._path: Optional[Path] = None
         if directory is not None:
             ts = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
-            candidate = directory / f"{ts}_{self._session_id}.jsonl"
             header = {
                 "type": "session",
                 "version": 3,
@@ -1489,6 +1625,7 @@ class ChatEventSink:
             if task_id:
                 header["taskId"] = task_id
             try:
+                candidate = mc_sink_dir(directory) / f"{ts}_{self._session_id}.jsonl"
                 with open(candidate, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps(header, ensure_ascii=False) + "\n")
                 self._path = candidate
@@ -1522,7 +1659,10 @@ class ChatEventSink:
 
     def write_media(self, name: str, data: bytes) -> bool:
         """One tool picture into ``<transcript dir>/media/<name>`` (chat
-        package P2). ``name`` must be ``<sha256>.<png|jpg|webp|gif>`` — the
+        package P2) — ``<session folder>/.mc/media/`` for a copy in ``.mc/``,
+        the old ``<session folder>/media/`` for a copy a not yet moved tree
+        resumed (``appending``): the backend looks next to the transcript.
+        ``name`` must be ``<sha256>.<png|jpg|webp|gif>`` — the
         hash the mapper computed, so the same picture is one file. Atomic
         (temp file + rename), idempotent, never raises: False = not stored
         (the caller then drops the reference)."""
@@ -1589,7 +1729,12 @@ class ChatEventSink:
 
 class PreviewEventSink:
     """The VOLATILE preview channel (Folge-PR zu #471): appends the mapper's
-    preview flushes to ``<session_dir>/previews/<ts>_<sessionId>_<uniq>.jsonl``
+    preview flushes to
+    ``<session_dir>/.mc/previews/<ts>_<sessionId>_<uniq>.jsonl`` (S1-R3:
+    always next to the transcript copy in use, see ``beside`` — under
+    ``.mc/`` for a new copy, the old ``previews/`` for an old copy resumed
+    in place; the move never touches ``previews/``, it only ever held a few
+    volatile files)
     — a SIBLING of the transcript file, in a subdirectory
     ``find_active_session``/``_SESSION_GLOBS`` never scan, so the backend's
     history/rollover logic cannot mistake preview lines for transcript
@@ -1620,12 +1765,22 @@ class PreviewEventSink:
     #: retention policy.
     _KEEP = 3
 
-    def __init__(self, directory: Optional[Path], session_id: str):
+    def __init__(
+        self,
+        directory: Optional[Path],
+        session_id: str,
+        *,
+        previews_dir: Optional[Path] = None,
+    ):
+        """``directory``: the session folder — the file goes to
+        ``<directory>/.mc/previews/``. ``previews_dir``: the exact folder
+        instead (``beside``)."""
         self._session_id = session_id or "acp-session"
         self._path: Optional[Path] = None
-        if directory is not None:
+        if directory is not None or previews_dir is not None:
             try:
-                pdir = directory / "previews"
+                pdir = (Path(previews_dir) if previews_dir is not None
+                        else mc_sink_dir(directory) / "previews")
                 pdir.mkdir(parents=True, exist_ok=True)
                 self._prune(pdir)
                 ts = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
@@ -1633,6 +1788,18 @@ class PreviewEventSink:
                 self._path = pdir / f"{ts}_{self._session_id}_{uniq}.jsonl"
             except OSError:
                 self._path = None
+
+    @classmethod
+    def beside(cls, transcript: Optional[Path], session_id: str) -> "PreviewEventSink":
+        """The preview channel next to the transcript copy IN USE:
+        ``<transcript folder>/previews/`` — where the backend looks
+        (``omp_chat.preview_channel``). For a new copy that is
+        ``.mc/previews/``; for an old copy the daemon resumed in place
+        (``ChatEventSink.appending``, the move did not run) it is the old
+        ``<session folder>/previews/``. No transcript: a no-op sink."""
+        if transcript is None:
+            return cls(None, session_id)
+        return cls(None, session_id, previews_dir=Path(transcript).parent / "previews")
 
     @staticmethod
     def _prune(pdir: Path) -> None:
