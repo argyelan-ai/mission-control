@@ -27,8 +27,12 @@ router = APIRouter(prefix="/api/v1/internal", tags=["internal"])
 
 
 #: Highest answer budget (one turn's output, thinking included) MC gives a
-#: local model. 131072 is DeepSeek V4's own default for its highest effort
-#: ("max"); its default with ordinary thinking is 65536.
+#: local model: four times the old cap. Vendors suggest more for their longest
+#: reasoning runs (the DeepSeek V4.1 Flash model card benchmarks its highest
+#: effort with at least 256K), but at local decode speeds (tens of tokens per
+#: second) 131072 tokens already hold one of the engine's parallel slots for
+#: about half an hour. A trade-off between answer room and slot time, not a
+#: model limit.
 LOCAL_MAX_OUTPUT_TOKENS = 131072
 #: The previous fixed cap. Still the whole rule for cloud endpoints, and the
 #: floor for local ones.

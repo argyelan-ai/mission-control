@@ -4,8 +4,7 @@ the context window for local models instead of a fixed 32768.
 Incident (2026-10-20): a local DeepSeek V4.1 Flash with a 1M window thought
 past 32768 tokens at the default effort ("high"). Twice the engine stopped at
 ``max_tokens`` while the model was still thinking, so the visible answer was
-empty. DeepSeek's own defaults are 65536 tokens with thinking and 131072 at
-the highest effort ("max"); MC capped every local model at 32768.
+empty. MC capped every model, local or cloud, at 32768.
 
 The rule is model- and harness-neutral (ADR-086/093): it reads only the
 runtime row (window + local/cloud), never a model name.
@@ -61,7 +60,7 @@ def test_cloud_budget_is_unchanged(window):
 @pytest.mark.parametrize("window", [4_096, 32_768, 100_000, 200_000, 400_000, 1_048_576, 2_097_152])
 def test_local_budget_bounds(window):
     """The answer never takes more than half the window and never more than
-    131072 tokens (DeepSeek's own default for its highest effort)."""
+    131072 tokens (the ceiling that bounds how long one turn holds a slot)."""
     from app.routers.internal import omp_max_output_tokens
 
     budget = omp_max_output_tokens(window, local=True)
