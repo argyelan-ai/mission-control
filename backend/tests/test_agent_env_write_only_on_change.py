@@ -109,6 +109,31 @@ def test_missing_file_is_created_owner_only(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_non_ascii_content_converges_after_one_write(tmp_path):
+    """The write produces exactly the bytes the comparison checks against —
+    otherwise a value outside ASCII would make every sync write again."""
+    from app.services.agent_env_writer import write_env_file_if_changed
+
+    path = tmp_path / "agent.env"
+    content = "LABEL='Grüße – ok ✓'\n"
+
+    assert write_env_file_if_changed(path, content) is True
+    assert path.read_bytes() == content.encode("utf-8")
+    _age(path)
+    assert write_env_file_if_changed(path, content) is False
+    assert path.stat().st_mtime_ns == OLD_NS
+
+
+def test_provisioning_uses_the_one_owner_only_writer():
+    """Built once: the owner-only open/fchmod/write rule for secret agent
+    files lives in agent_env_writer — host provisioning (agent.env,
+    models.yml, .mcp.json) calls that, it does not carry its own copy."""
+    from app.services import agent_env_writer, host_provisioning
+
+    assert host_provisioning.write_owner_only_file is agent_env_writer.write_owner_only_file
+    assert "O_TRUNC" not in Path(host_provisioning.__file__).read_text()
+
+
 # ── 2. The host model sync uses it ───────────────────────────────────────────
 
 
@@ -195,7 +220,7 @@ async def test_host_model_sync_still_writes_a_real_model_change(
     assert "MC_AGENT_TOKEN='aa11aa11'" in env_path.read_text()
 
 
-# ── 3. The watcher's net ignores archived agents ─────────────────────────────
+# ── 3. The watcher's net flags exactly the stale agents ──────────────────────
 
 
 def _fake_get_redis(fake_redis):
@@ -205,9 +230,7 @@ def _fake_get_redis(fake_redis):
     return _get
 
 
-async def _slot_with_agents(
-    session: AsyncSession, *, stale_archived: bool
-) -> Runtime:
+async def _slot(session: AsyncSession) -> Runtime:
     host = Host(slug="box-a", display_name="BOX-A", kind="ssh", ssh_host="192.0.2.10")
     session.add(host)
     await session.commit()
@@ -226,25 +249,45 @@ async def _slot_with_agents(
     session.add(slot)
     await session.commit()
     await session.refresh(slot)
-    # The live shape: a host agent and a cli-bridge agent already on the
-    # served model, plus a cli-bridge agent that still carries the old one.
-    session.add(
-        Agent(name="agent-host", slug="agent-host", role="developer",
-              agent_runtime="host", harness="hermes", model="org/neu",
-              runtime_id=slot.id)
+    return slot
+
+
+async def _bind(
+    session: AsyncSession,
+    slot: Runtime,
+    name: str,
+    *,
+    model: str | None,
+    agent_runtime: str = "cli-bridge",
+    harness: str = "omp",
+    archived: bool = False,
+) -> Agent:
+    agent = Agent(
+        name=name,
+        slug=name,
+        role="developer",
+        agent_runtime=agent_runtime,
+        harness=harness,
+        model=model,
+        runtime_id=slot.id,
+        archived_at=utcnow() if archived else None,
     )
-    session.add(
-        Agent(name="agent-a", slug="agent-a", role="developer",
-              agent_runtime="cli-bridge", harness="omp", model="org/neu",
-              runtime_id=slot.id)
-    )
-    session.add(
-        Agent(name="agent-old", slug="agent-old", role="developer",
-              agent_runtime="cli-bridge", harness="omp", model="org/alt",
-              runtime_id=slot.id,
-              archived_at=utcnow() if stale_archived else None)
-    )
+    session.add(agent)
     await session.commit()
+    await session.refresh(agent)
+    return agent
+
+
+async def _slot_with_agents(
+    session: AsyncSession, *, stale_archived: bool
+) -> Runtime:
+    """The live shape: a host agent and a cli-bridge agent already on the
+    served model, plus a cli-bridge agent that still carries the old one."""
+    slot = await _slot(session)
+    await _bind(session, slot, "agent-host", model="org/neu",
+                agent_runtime="host", harness="hermes")
+    await _bind(session, slot, "agent-a", model="org/neu")
+    await _bind(session, slot, "agent-old", model="org/alt", archived=stale_archived)
     return slot
 
 
@@ -261,6 +304,29 @@ async def _tick(session, fake_redis, *, flagged: int):
     ) as mock_mark:
         await watcher.tick(session=session)
     return mock_mark
+
+
+async def _tick_real_flagging(session, redis) -> None:
+    """One tick with the REAL ``mark_agents_for_sync`` — only the sync pass
+    after it is stubbed, so the flags it set stay visible to the test."""
+    watcher = RuntimeWatcher(interval=90)
+    with patch(
+        "app.services.runtime_watcher.probe_runtime_model_info",
+        new=AsyncMock(return_value=ProbedModel("org/neu", None)),
+    ), patch(
+        "app.services.runtime_watcher.get_redis", _fake_get_redis(redis)
+    ), patch(
+        "app.services.runtime_watcher.sync_pending_agents", new=AsyncMock()
+    ):
+        await watcher.tick(session=session)
+
+
+async def _flags(session: AsyncSession, *agents: Agent) -> dict[str, bool]:
+    out = {}
+    for agent in agents:
+        await session.refresh(agent)
+        out[agent.name] = bool(agent.pending_runtime_sync)
+    return out
 
 
 @pytest.mark.asyncio
@@ -284,8 +350,110 @@ async def test_watcher_net_still_flags_a_live_agent_with_an_old_model(
     """Counter-case: the same old model on a live agent is still caught."""
     slot = await _slot_with_agents(async_session, stale_archived=False)
 
-    mock_mark = await _tick(async_session, fake_redis, flagged=3)
+    mock_mark = await _tick(async_session, fake_redis, flagged=1)
 
     assert mock_mark.await_count == 1
     assert mock_mark.await_args.args[1].id == slot.id
     assert await fake_redis.get(RedisKeys.runtime_agent_model_guard(slot.slug))
+
+
+@pytest.mark.asyncio
+async def test_watcher_net_flags_only_the_stale_agent(async_session, fake_redis):
+    """One live agent with an old model must not drag the whole runtime into
+    a sync. Before: the net flagged EVERY agent on the runtime, so a converged
+    host agent got a full sync plus a process restart (adapter reload) once
+    per guard window for as long as one other agent stayed stale."""
+    slot = await _slot(async_session)
+    host_agent = await _bind(async_session, slot, "agent-host", model="org/neu",
+                             agent_runtime="host", harness="hermes")
+    current = await _bind(async_session, slot, "agent-a", model="org/neu")
+    stale = await _bind(async_session, slot, "agent-old", model="org/alt")
+
+    await _tick_real_flagging(async_session, fake_redis)
+
+    assert await _flags(async_session, host_agent, current, stale) == {
+        "agent-host": False,
+        "agent-a": False,
+        "agent-old": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_watcher_net_flags_a_stale_host_agent(async_session, fake_redis):
+    """A host agent with an adapter is synced exactly like a cli-bridge agent
+    (``_sync_one`` writes its model back), so its own old model counts too.
+    Before, the net only reached host agents as a side effect of some
+    cli-bridge agent on the same runtime being stale."""
+    slot = await _slot(async_session)
+    host_agent = await _bind(async_session, slot, "agent-host", model="org/alt",
+                             agent_runtime="host", harness="hermes")
+    current = await _bind(async_session, slot, "agent-a", model="org/neu")
+
+    await _tick_real_flagging(async_session, fake_redis)
+
+    assert await _flags(async_session, host_agent, current) == {
+        "agent-host": True,
+        "agent-a": False,
+    }
+    assert await fake_redis.get(RedisKeys.runtime_agent_model_guard(slot.slug))
+
+
+@pytest.mark.asyncio
+async def test_watcher_net_ignores_a_host_agent_without_an_adapter(
+    async_session, fake_redis
+):
+    """Counter-case: a host agent no sync can reach (no adapter registered for
+    its harness) never counts as stale — ``mark_agents_for_sync`` would skip
+    it, so it would hold the guard forever without anything changing."""
+    slot = await _slot(async_session)
+    await _bind(async_session, slot, "agent-host", model="org/alt",
+                agent_runtime="host", harness="no-such-harness")
+
+    mock_mark = await _tick(async_session, fake_redis, flagged=0)
+
+    mock_mark.assert_not_awaited()
+    assert await fake_redis.get(RedisKeys.runtime_agent_model_guard(slot.slug)) is None
+
+
+@pytest.mark.asyncio
+async def test_a_stuck_agent_never_restarts_a_converged_host_agent(
+    async_session, isolate_redis_singleton, tmp_path, monkeypatch
+):
+    """The full loop, end to end through the real flagging and sync passes.
+
+    A live cli-bridge agent that cannot converge (here: in the give-up
+    cooldown after three failed syncs) stays "stale" for good. The net
+    re-fires after every guard window. Each round must reach only that agent
+    — the host agent on the right model must get no process restart at all.
+    Before: one host restart per window (~137 a day), with ``agent.env``
+    untouched, through ``adapter.reload``."""
+    from app.services import runtime_propagation
+    from app.services.host_harness_adapter import HOST_ADAPTERS
+
+    redis = isolate_redis_singleton
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))  # never the real ~/.mc
+    slot = await _slot(async_session)
+    host_agent = await _bind(async_session, slot, "agent-host", model="org/neu",
+                             agent_runtime="host", harness="hermes")
+    stuck = await _bind(async_session, slot, "agent-stuck", model="org/alt")
+    await redis.set(RedisKeys.agent_model_sync_giveup(str(stuck.id)), "1", ex=900)
+
+    reload = AsyncMock(return_value={"ok": True})
+    mark = AsyncMock(wraps=runtime_propagation.mark_agents_for_sync)
+    watcher = RuntimeWatcher(interval=90)
+    guard = RedisKeys.runtime_agent_model_guard(slot.slug)
+    with patch.object(HOST_ADAPTERS["hermes"], "reload", new=reload), patch(
+        "app.services.runtime_watcher.probe_runtime_model_info",
+        new=AsyncMock(return_value=ProbedModel("org/neu", None)),
+    ), patch(
+        "app.services.runtime_watcher.get_redis", _fake_get_redis(redis)
+    ), patch("app.services.runtime_watcher.mark_agents_for_sync", new=mark):
+        for _ in range(3):
+            await watcher.tick(session=async_session)
+            assert await redis.get(guard)  # the net did fire this window
+            await redis.delete(guard)  # the 600 s guard window runs out
+
+    assert mark.await_count == 3  # three windows, the net fired in each
+    reload.assert_not_awaited()
+    await async_session.refresh(host_agent)
+    assert host_agent.pending_runtime_sync is False

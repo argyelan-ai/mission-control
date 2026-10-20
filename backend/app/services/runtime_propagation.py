@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Collection
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -153,34 +154,59 @@ def reload_omp_config(agent: Agent, env: dict[str, str] | None = None) -> dict[s
     return {"status": "reloaded", "container": container_name}
 
 
-async def mark_agents_for_sync(session: AsyncSession, runtime: Runtime) -> int:
-    """Flag every cli-bridge agent bound to ``runtime`` for a model re-sync.
+def is_model_sync_target(agent: Agent, runtime: Runtime) -> bool:
+    """Is ``agent`` one that a model sync on ``runtime`` acts on?
 
-    Host agents (launchd-managed) are flagged too when their harness has an
-    adapter registered (ADR-064) — ``_sync_one`` reloads them in place via the
-    adapter. Host agents without an adapter are skipped — the model-changed
-    activity event is their only notification. Returns the number of flagged
-    agents.
+    The ONE filter for both sides of the sync: ``mark_agents_for_sync`` flags
+    only these agents, and the watcher's stale-model net
+    (``runtime_watcher._sync_stale_agent_models``) counts only these as
+    stale. Two filters that drift apart loop: an agent the net counts but no
+    sync can reach stays "stale" forever and re-fires the net every guard
+    window (live 2026-10-20: an archived agent did exactly that, and every
+    round restarted a host bridge).
+
+    * cli-bridge agents: yes.
+    * host (launchd) agents: only when their harness has an adapter
+      registered (ADR-064) — ``_sync_one`` reloads them in place via the
+      adapter. Without one, the model-changed activity event is their only
+      notification.
+    * archived agents: never. Live incident 02.10.2026 (PR #739 fallout): an
+      archived agent's container is stopped on purpose; flagging it meant the
+      next watcher tick (or a force-sync-agents call) restarted it —
+      resurrecting a deliberately shut-down agent. There is nothing to reload.
     """
-    from app.services.host_harness_adapter import get_adapter
+    if agent.archived_at is not None:
+        return False
+    if agent.agent_runtime == "cli-bridge":
+        return True
+    if agent.agent_runtime == "host":
+        from app.services.host_harness_adapter import get_adapter
 
+        return get_adapter(agent.harness or derive_harness(runtime)) is not None
+    return False
+
+
+async def mark_agents_for_sync(
+    session: AsyncSession,
+    runtime: Runtime,
+    *,
+    only_ids: Collection[uuid.UUID] | None = None,
+) -> int:
+    """Flag the agents bound to ``runtime`` for a model re-sync.
+
+    Flags every agent ``is_model_sync_target`` accepts — or, with
+    ``only_ids``, only those of them. A runtime-wide change (new model, new
+    context window) flags everyone; the watcher's stale-model net passes the
+    agents it found stale, so one agent that cannot converge never drags
+    the others through a sync (and a host agent through a process restart)
+    once per guard window. Returns the number of flagged agents.
+    """
     result = await session.exec(select(Agent).where(Agent.runtime_id == runtime.id))
     flagged = 0
     for agent in result.all():
-        if agent.archived_at is not None:
-            # Live incident 02.10.2026 (PR #739 fallout): an archived agent's
-            # container is stopped on purpose. Flagging it for sync meant the
-            # next watcher tick (or a force-sync-agents call) would restart
-            # it — resurrecting a deliberately shut-down agent. Archived
-            # agents get no notification either; there is nothing to reload.
+        if only_ids is not None and agent.id not in only_ids:
             continue
-        if agent.agent_runtime == "cli-bridge":
-            pass
-        elif agent.agent_runtime == "host" and get_adapter(
-            agent.harness or derive_harness(runtime)
-        ) is not None:
-            pass
-        else:
+        if not is_model_sync_target(agent, runtime):
             continue
         agent.pending_runtime_sync = True
         session.add(agent)

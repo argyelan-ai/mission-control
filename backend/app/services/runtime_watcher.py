@@ -89,6 +89,7 @@ from app.services.runtime_model_resolver import (
     session_scope,
 )
 from app.services.runtime_propagation import (
+    is_model_sync_target,
     mark_agents_for_sync,
     recreate_pending_agents,
     sync_pending_agents,
@@ -677,16 +678,20 @@ class RuntimeWatcher:
         bound = (
             await session.exec(select(Agent).where(Agent.runtime_id == runtime.id))
         ).all()
-        # Archived agents never count: mark_agents_for_sync skips them on
-        # purpose, so their model is never updated — an archived agent with
-        # the previous model stayed "stale" forever and re-flagged every live
-        # agent on the runtime once per guard window (live 2026-10-20: a host
-        # bridge restarted every ~10.5 min, all day).
+        # Stale and flagged are the SAME set (live 2026-10-20: a host bridge
+        # restarted every ~10.5 min, all day):
+        # * counted are only agents a sync can reach (is_model_sync_target,
+        #   the filter mark_agents_for_sync uses too) — an archived agent with
+        #   the previous model was never synced, stayed "stale" forever and
+        #   re-fired the net once per guard window;
+        # * flagged are only the stale ones (only_ids) — flagging the whole
+        #   runtime sent every converged agent through a sync, and a host
+        #   agent through a process restart (adapter reload), each window for
+        #   as long as ONE agent could not converge.
         stale = [
             agent
             for agent in bound
-            if agent.agent_runtime == "cli-bridge"
-            and agent.archived_at is None
+            if is_model_sync_target(agent, runtime)
             and not agent.pending_runtime_sync
             and (agent.model or "").strip()
             and agent.model.strip() != model
@@ -701,11 +706,14 @@ class RuntimeWatcher:
         )
         if not claimed:
             return
-        flagged = await mark_agents_for_sync(session, runtime)
+        flagged = await mark_agents_for_sync(
+            session, runtime, only_ids={agent.id for agent in stale}
+        )
         logger.info(
-            "runtime %s: %s Agent(en) trugen noch ein anderes Modell als %r — "
-            "%s für den Sync geflaggt",
-            runtime.slug, len(stale), model, flagged,
+            "runtime %s: %s Agent(en) trugen noch ein anderes Modell als %r "
+            "(%s) — %s für den Sync geflaggt",
+            runtime.slug, len(stale), model,
+            ", ".join(agent.name for agent in stale), flagged,
         )
 
     async def _refresh_slot_grace(
