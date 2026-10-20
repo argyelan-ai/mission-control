@@ -67,8 +67,8 @@ start_caddy() {
         "$IMAGE" >/dev/null
     CONTAINERS="$CONTAINERS $name"
     PORT="$(docker port "$name" 80/tcp | head -1 | sed 's/.*://')"
-    local i code
-    for i in $(seq 1 50); do
+    local _ code
+    for _ in $(seq 1 50); do
         code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health" || :)"
         [ "$code" != "000" ] && return 0
         sleep 0.2
