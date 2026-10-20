@@ -709,3 +709,103 @@ def test_reason_sentences_name_box_and_time():
     assert set(engine_death.REASON_CODES) == {
         "guard", "oom", "kernel_oom", "exit", "member_down", "crash_loop", "unknown",
     }
+
+
+# ── node-agent report first (§3.2) ───────────────────────────────────────
+
+async def _host_with_agent(session, anchors: list[dict], *, fresh=True) -> Host:
+    host = Host(slug=f"box-{uuid.uuid4().hex[:4]}", display_name="Box A", kind="ssh",
+                ssh_host="192.0.2.10",
+                agent_device_state={"anchors": anchors},
+                agent_device_state_updated_at=datetime.now(timezone.utc)
+                - (timedelta(seconds=0) if fresh else timedelta(hours=1)))
+    session.add(host)
+    await session.commit()
+    await session.refresh(host)
+    return host
+
+
+@pytest.mark.asyncio
+async def test_node_agent_running_needs_no_ssh_and_is_no_death(async_session, fake_redis):
+    host = await _host_with_agent(async_session, [
+        {"kind": "container", "name": "dsv-tf", "state": "running"},
+        {"kind": "process", "name": "dsv-tf", "state": "stopped"},
+    ])
+    rt = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    rt.host_id = host.id
+    async_session.add(rt)
+    await async_session.commit()
+    box = FakeBox()
+    probe = Probe(failure=FAIL_REFUSED)
+    with _stack(box, fake_redis, probe):
+        clock = await _measure(async_session, probe, model="DeepSeek-V4.1", max_ticks=2)
+    assert clock.decided_at is None
+    assert box.inspects == 0
+
+
+@pytest.mark.asyncio
+async def test_node_agent_stopped_is_a_death_even_when_ssh_fails(async_session, fake_redis):
+    host = await _host_with_agent(async_session, [
+        {"kind": "container", "name": "dsv-tf", "state": "stopped"},
+        {"kind": "process", "name": "dsv-tf", "state": "stopped"},
+    ])
+    rt = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    rt.host_id = host.id
+    async_session.add(rt)
+    await async_session.commit()
+    probe = Probe(failure=FAIL_REFUSED)
+    with _stack(FakeBox(ssh_fails=True), fake_redis, probe):
+        clock = await _measure(async_session, probe, model="DeepSeek-V4.1")
+    assert clock.decided_at - clock.died_at == INTERVAL
+    d = (await _deaths(async_session))[0]
+    assert d.detail["reason_code"] == engine_death.UNKNOWN
+    assert d.detail["box"] == "Box A"
+
+
+@pytest.mark.asyncio
+async def test_slot_row_is_not_silenced_by_an_old_switched_away_recipe(async_session, fake_redis):
+    """Slot + running recipe without a checkable anchor + an old recipe that
+    was switched away: a box stall still raises exactly one alarm."""
+    slot = await _rt(async_session, slug="box-slot", model="Hand-Model", is_slot=True,
+                     runtime_type="openai_compatible")
+    old = await _rt(async_session, slug="glm", model="GLM-5.3", process="glm-tf")
+    async def _get_redis():
+        return fake_redis
+    with patch("app.services.runtime_grace.get_redis", _get_redis):
+        await runtime_grace.mark_stop_intent(old.slug, runtime_grace.INTENT_SWITCHED_AWAY, by="x")
+    probe = Probe(failure=FAIL_TIMEOUT)
+
+    async def _own(self, session, runtime):
+        return runtime.slug != "glm"
+
+    with _stack(FakeBox(ssh_fails=True), fake_redis, probe), \
+            patch.object(RuntimeWatcher, "_served_answer_is_own", _own):
+        await _measure(async_session, probe, model="Hand-Model", max_ticks=4)
+    alarms = await _events(async_session, "runtime.unreachable")
+    assert [a.detail["slug"] for a in alarms] == [slot.slug]
+
+
+@pytest.mark.asyncio
+async def test_operator_stop_on_a_shared_port_raises_nothing_from_any_row(async_session, fake_redis):
+    """Operator stops DeepSeek; slot row and the GLM row that never ran share
+    the port. Live 19.10. they would have alarmed — now all three stay quiet."""
+    await _rt(async_session, slug="box-slot", model="DeepSeek-V4.1", is_slot=True,
+              runtime_type="openai_compatible")
+    dsv = await _rt(async_session, slug="dsv", model="DeepSeek-V4.1")
+    await _rt(async_session, slug="glm", model="GLM-5.3", process="glm-tf")
+
+    async def _own(self, session, runtime):
+        return runtime.slug != "glm"
+
+    probe = Probe(failure=FAIL_REFUSED)
+    watcher = RuntimeWatcher(interval=INTERVAL)
+    with _stack(FakeBox(), fake_redis, probe), \
+            patch.object(RuntimeWatcher, "_served_answer_is_own", _own), \
+            patch.object(runtime_manager, "stop_ssh_process", AsyncMock(return_value={"ok": True, "message": "s"})):
+        probe.served = "DeepSeek-V4.1"
+        await watcher.tick(session=async_session)
+        await runtime_manager.stop_runtime(dsv.to_registry_dict(), host=BOX)
+        probe.served = None
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 1):
+            await watcher.tick(session=async_session)
+    assert await _events(async_session, "runtime.unreachable") == []

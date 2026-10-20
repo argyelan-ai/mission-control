@@ -410,7 +410,9 @@ class RuntimeWatcher:
                 **(engine_death.live_fields(death) if death else {}),
             )
             if fails == UNREACHABLE_EVENT_THRESHOLD and death is None:
-                if await self._plain_alarm_wanted(session, redis, runtime, was_own=was_own):
+                if await self._plain_alarm_wanted(
+                    session, redis, runtime, was_own=was_own, last_served=last_served,
+                ):
                     message = (
                         f"{runtime.slug}: endpoint unreachable "
                         f"({fails} consecutive probes)"
@@ -1328,6 +1330,7 @@ class RuntimeWatcher:
                 host_row = await session.get(Host, runtime.host_id)
             except Exception:  # noqa: BLE001
                 host_row = None
+        reported = device_state.ANCHOR_UNKNOWN
         if host_row is not None:
             out["box"] = host_row.display_name or host_row.slug
             reported = device_state.handle_status(
@@ -1335,6 +1338,10 @@ class RuntimeWatcher:
             )
             if reported == device_state.ANCHOR_RUNNING:
                 return {**out, "state": "running", "source": "node_agent"}
+        # A fresh node-agent "stopped" (every handle, both kinds) is evidence
+        # on its own when SSH cannot add the exit details.
+        agent_gone = {**out, "state": "gone", "source": "node_agent"} \
+            if reported == device_state.ANCHOR_STOPPED else None
         try:
             host = await resolve_host_for_runtime(session, runtime)
         except Exception:  # noqa: BLE001
@@ -1342,7 +1349,7 @@ class RuntimeWatcher:
         if host is not None and "box" not in out:
             out["box"] = getattr(host, "display_name", None) or getattr(host, "slug", None)
         if host is None or not ssh_capable(host):
-            return {**out, "state": "unknown", "why": "no_ssh"}
+            return agent_gone or {**out, "state": "unknown", "why": "no_ssh"}
         out["host"] = host
         docker_unreadable = False
         for name in names:
@@ -1356,7 +1363,7 @@ class RuntimeWatcher:
                 )
             except Exception as exc:  # noqa: BLE001 — box stalling = cannot tell
                 logger.debug("engine-death: inspect failed for %s: %s", runtime.slug, exc)
-                return {**out, "state": "unknown", "why": "ssh_failed"}
+                return agent_gone or {**out, "state": "unknown", "why": "ssh_failed"}
             if ec == 0 and (stdout or "").strip():
                 parsed = _parse_state_inspect(stdout)
                 if parsed["status"] in ("running", "restarting", "created", "paused"):
@@ -1379,7 +1386,8 @@ class RuntimeWatcher:
         return {**out, "state": "gone"}
 
     async def _plain_alarm_wanted(
-        self, session: AsyncSession, redis, runtime: Runtime, *, was_own: bool
+        self, session: AsyncSession, redis, runtime: Runtime, *, was_own: bool,
+        last_served: str | None = None,
     ) -> bool:
         """The plain ``runtime.unreachable`` at the threshold — once per
         endpoint outage, never for planned silence (ADR-096 §11.1/§11.4).
@@ -1404,8 +1412,13 @@ class RuntimeWatcher:
                 )
             )).all())
         if runtime.is_slot:
+            # Quiet only when the recipe that SERVED last was stopped on
+            # purpose — an older recipe switched away hours ago must not
+            # silence the outage of whatever ran after it.
             for sib in siblings:
                 if sib.is_slot:
+                    continue
+                if last_served and sib.model_identifier != last_served:
                     continue
                 if await get_stop_intent(sib.slug, redis) is not None:
                     return False
