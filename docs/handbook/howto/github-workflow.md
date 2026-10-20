@@ -143,6 +143,78 @@ Two deliberate failure modes, so the gate is not simply "everything stops":
 No new migration or autonomy config is needed: `approvals.action_type` is free
 text and unknown action types default to `L3` (approval required).
 
+### Proof gate (Beweis-Tor) on review/done
+
+When an agent moves a card to `review` or `done`, the server checks the claim
+before the status changes. It fetches the evidence itself — what the agent
+sends along is only a claim to compare. The card does not even have to name
+its PR: without `pr_url`/`pr_number` the gate looks for it in the card's own
+data (the source card of a review card, the `PR erstellt:` note, the card's
+branch on GitHub — an open PR first, never one another card already holds)
+and checks what it finds (`pr_not_on_card`, notice). "Could not look" is not
+"no PR": without a token or when GitHub answers with an error the gate says so
+(`pr_lookup_unavailable`, notice) instead of refusing the card.
+
+| Check | Finding | Blocks in `enforce` |
+|---|---|---|
+| The PR exists (a repo the token cannot see is only a notice) | `pr_not_found`, `pr_url_invalid` · `repo_not_visible` (notice) | yes · no |
+| A code card has a PR at all: `code_change` on a repo blocks; a work branch or `code_change` without repo is a notice; a repo alone is only logged. Only when GitHub really answered "none" — a failed lookup is `pr_lookup_unavailable` | `pr_missing` · `pr_lookup_unavailable` (notice) | yes (code_change + repo) · no |
+| The PR is this card's: OPEN (for `done` OPEN or MERGED), not held by an unrelated card | `pr_not_open`, `pr_on_other_card` | yes |
+| The PR runs on the card's branch (`branch_name` or MC's workspace branch `task/<slug>`). A PR on the branch of another open card is that card's. Another name: a PR older than the card is someone else's; a newer one is a notice on `review`, and on `done` it needs a second tie — the card id (first 8 characters) in the PR title or body, or MC's own `PR erstellt:` note | `pr_branch_of_other_card` · `pr_branch_mismatch` | yes · yes (older PR, or `done` without tie) |
+| The PR changes at least one file | `pr_empty` | yes |
+| On the developer's move to `review`: a SHA he reports (≥ 7 chars) is the PR head | `sha_mismatch` | yes |
+| The **required** CI checks are green (all checks if the repo has none) | `ci_red`; `ci_pending` on `done` | yes |
+| After the last change request (MC `changes_requested` or GitHub *Request changes*) the PR really changed. The server compares the PR's own diff (file + blob per changed file) with the one it recorded at the last review entry: an empty commit, a merge from `main` ("Update branch") or the same content force-pushed is no change. Without a recorded diff it reads the compare: own linear commits with files are a change; with merges in between it walks the own commits (empty ones skipped); a rewritten history with the same tree is no change. When it cannot tell (compare failed, history rewritten, too many commits), it says so | `no_commit_after_change` · `change_unverifiable` (notice) | yes · no |
+| review → done is closed by someone other than the developer (the board lead never counts as the developer), with his own verdict on the card (a reflection or a progress note does not count) | `self_review`, `reviewer_silent` | yes |
+| `done` straight from work, by the developer himself, with no review anywhere (no approve in MC, no review card closed by someone else, no approve by another GitHub login); cards with `skip_review` are exempt. By someone else: notice | `no_independent_review` | yes (developer) |
+| A reviewer the agent names (`--reviewer`) is not the developer and commented himself — MC card, or GitHub without the PR author's login | `reviewer_is_developer`, `reviewer_silent` | yes |
+| A PR URL the agent quotes in his own comments exists — also on cards without `pr_url` | `claimed_pr_not_found` | yes |
+| The PR's own diff changed after it entered review (merges/empty commits are ignored) | `head_moved_since_review` | no (notice) |
+
+Every checked move writes one `task.proof_gate` event: `info` when clean,
+`warning` with findings. Its detail holds the PR head the server saw
+(`head_sha`) — that record, not the agent's word, is what the change-request
+check compares against later.
+
+`PROOF_GATE_MODE` = `off` · `warn` (default: comment on the card + a
+`warning` event, the transition still happens) · `enforce` (HTTP 422, the
+card keeps its status). `PROOF_GATE_ENFORCE_AFTER=<ISO date>` turns `warn`
+into `enforce` from that day on — but only once the gate has checked at least
+`PROOF_GATE_ENFORCE_MIN_CHECKS` (default 15) moves; at 1–2 finishes a week a
+date alone is no sample. Read the `warning` events before that point: every
+hard finding there is either a real catch or a false alarm to fix first.
+
+A refused `approve` (e.g. CI still running) keeps the reviewer's verdict as
+his own comment on the card; approve again once CI is green. The same refusal
+is written to the card once per 30 minutes, not once per attempt.
+
+The mc CLI sends the local `HEAD` and branch on `mc review` / `mc done` /
+`mc finish` (only from a named branch). `mc finish --force` / `mc done
+--force` only close open checklist items on your side; there is no request
+field that skips the gate, unknown fields are refused.
+
+Fail-open, but loud: without a GitHub token, when GitHub cannot be reached
+(each `gh` call is cut off after 10 s) or when the token cannot see the repo,
+nothing is blocked and the card gets a visible warning instead.
+
+Counting: every gate finding carries `gefangen_von: "tor"` in the event
+detail; `task.review_rejected` events carry `rolle`, `boss` or `mark`
+(`live` is reserved for findings from a live probe). The tally per catcher,
+per finding code and the check count toward the enforce flip — all counted
+per **card**, so an agent retrying a refused move five times is one catch
+(the raw number of gate events is `attempts`):
+`GET /api/v1/activity/proof-gate/stats?days=30` (logged-in user). Weekly
+numbers straight from the database:
+
+```sql
+select date_trunc('week', created_at)::date as week, event_type,
+       detail->>'gefangen_von' as caught_by, count(*)
+from activity_events
+where event_type = 'task.review_rejected'
+   or (event_type = 'task.proof_gate' and severity = 'warning')
+group by 1, 2, 3 order by 1, 2;
+```
+
 Ad-hoc tasks with no project share a single `mc-workspace` repo rather than
 leaving orphaned branches scattered across project repos.
 

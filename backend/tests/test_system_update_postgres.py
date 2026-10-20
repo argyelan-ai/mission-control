@@ -60,7 +60,7 @@ class _Recorder:
 
 
 def _fake_engine(eng_mod, recorder: _Recorder):
-    journal = SimpleNamespace(run_id=RUN_ID, data={}, save=lambda: None)
+    journal = SimpleNamespace(run_id=RUN_ID, data={}, save=lambda: None, phase="drain", event=lambda *a, **k: None)
     return SimpleNamespace(journal=journal, drain_ttl=3600, psql=recorder, say=lambda m: None)
 
 

@@ -142,6 +142,16 @@ CHAT_NOTICE_CUSTOM_TYPE = "chat_notice"
 
 _TITLE_TRUNCATE_LEN = 200
 
+#: A thought's preview line carries only the END of the thought (operator
+#: finding 20.10.2026): every line used to carry the WHOLE thought — 1 097
+#: lines / 33 MB of preview file in five minutes of DeepSeek reasoning — and
+#: the chat only ever shows the last lines of a running thought anyway.
+#: ``data.chars`` keeps the full size, so the chat can still say how much.
+THINKING_PREVIEW_TAIL_CHARS = 2000
+#: A finished thought kept in the transcript is capped: head + tail survive
+#: (the plan at the start, the conclusion at the end), the middle is cut.
+_THINKING_KEEP_CHARS = 12000
+
 # Chat package P3 — question cards and plan mode.
 # A question omp asks over ACP (`elicitation/create`, form mode): ONE
 # ``custom_message`` line carrying the question text (``content``, so an
@@ -277,6 +287,14 @@ def strip_ansi(text: str) -> str:
     return _CTRL_RE.sub("", s)
 
 
+#: Updates that end a running thought (the model moved on). Bookkeeping
+#: updates (usage, config, commands, session info) do not: omp can send them
+#: in the middle of a long thought.
+_THOUGHT_ENDING_UPDATES = frozenset({
+    "agent_message_chunk", "tool_call", "tool_call_update", "plan",
+})
+
+
 def is_volatile(entry: dict[str, Any]) -> bool:
     """True for lines that belong on the PREVIEW channel, never the
     transcript: text previews and live tool output. Both callers
@@ -332,6 +350,27 @@ def _now_iso() -> str:
         .isoformat(timespec="milliseconds")
         .replace("+00:00", "Z")
     )
+
+
+def _tail_on_boundary(text: str, limit: int) -> str:
+    """The last ``limit`` chars of ``text``, starting at a line or word
+    boundary when one is near (a preview should not open mid-word)."""
+    if len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    # The EARLIEST boundary in reach (review R3: max() skipped the cut
+    # whenever the first newline lay deeper than the window).
+    cuts = [i for i in (tail.find("\n"), tail.find(" ")) if 0 <= i < 200]
+    if cuts:
+        tail = tail[min(cuts) + 1:]
+    return tail
+
+
+def _keep_thought(text: str) -> str:
+    if len(text) <= _THINKING_KEEP_CHARS:
+        return text
+    half = _THINKING_KEEP_CHARS // 2
+    return text[:half] + "\n…\n" + text[-half:]
 
 
 def _trunc(text: Any, limit: int = _RESULT_TRUNCATE_LEN) -> str:
@@ -475,6 +514,10 @@ class ACPEventMapper:
     _live: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Injectable monotonic clock (tests drive the throttle deterministically).
     clock: Callable[[], float] = field(default=time.monotonic)
+    # The thought being streamed right now (stream mode): its messageId key,
+    # its start (ISO for the chat, monotonic for the duration). It is kept
+    # ONCE in the transcript when it ends — see ``_flush_thought``.
+    _open_thought: Optional[dict[str, Any]] = None
     # map_update runs on the ACP reader thread, ToolOutputPump on its own:
     # one re-entrant lock keeps the live state and the entry ids consistent.
     _lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
@@ -524,6 +567,18 @@ class ACPEventMapper:
 
     def _map_one(self, update: dict[str, Any], stream: bool) -> list[dict[str, Any]]:
         su = update.get("sessionUpdate")
+        if su in _THOUGHT_ENDING_UPDATES or (
+            su == "agent_thought_chunk" and self._other_thought(update)
+        ):
+            # The model stopped thinking (it answers, calls a tool, plans) or
+            # began a new thought: keep the finished one first, so the
+            # transcript reads in the order it happened.
+            return self._flush_thought() + self._map_one_inner(update, su, stream)
+        return self._map_one_inner(update, su, stream)
+
+    def _map_one_inner(
+        self, update: dict[str, Any], su: Any, stream: bool
+    ) -> list[dict[str, Any]]:
         if su == "agent_message_chunk":
             if stream:
                 return self._preview_chunk(update, "text")
@@ -552,6 +607,45 @@ class ACPEventMapper:
         # session_info_update / anything unknown — no chat value
         # (the chat daemon mirrors them into its state file instead).
         return []
+
+    def _other_thought(self, update: dict[str, Any]) -> bool:
+        if self._open_thought is None:
+            return False
+        message_id = update.get("messageId")
+        key = message_id if isinstance(message_id, str) and message_id else "_anon"
+        return key != self._open_thought["key"]
+
+    def _flush_thought(self) -> list[dict[str, Any]]:
+        """The open thought -> ONE permanent assistant ``thinking`` line
+        (``durationMs`` = how long the model thought), or [] when none is
+        open. Called when the thought ends: the next answer chunk, tool call
+        or plan, the turn's final line, a chat error. The backend parser
+        (omp_chat) already turns a ``thinking`` block into the chat's
+        ``thinking`` event — the history keeps "thought for 1:45"."""
+        open_thought, self._open_thought = self._open_thought, None
+        if open_thought is None:
+            return []
+        text = self._thought_by_message.pop(open_thought["key"], "")
+        if not text.strip():
+            return []
+        duration_ms = max(0, int(round((self.clock() - open_thought["mono"]) * 1000)))
+        return [
+            {
+                "type": "message",
+                "id": self._next_id(),
+                "parentId": None,
+                "timestamp": _now_iso(),
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "thinking",
+                        "thinking": _keep_thought(text),
+                        "durationMs": duration_ms,
+                    }],
+                    "model": None,
+                },
+            }
+        ]
 
     def map_mode(self, mode_id: Any) -> list[dict[str, Any]]:
         """``current_mode_update`` -> one quiet ``custom``/``acp-mode`` line.
@@ -670,6 +764,7 @@ class ACPEventMapper:
         """
         self._text_by_message.clear()
         self._thought_by_message.clear()
+        self._open_thought = None
         self._prompt_usage = None
 
     def set_session_id(self, session_id: Optional[str]) -> None:
@@ -835,7 +930,7 @@ class ACPEventMapper:
         session_reset.
         """
         body = text or detail or code
-        return [
+        return self._flush_thought() + [
             {
                 "type": "custom_message",
                 "customType": CHAT_ERROR_CUSTOM_TYPE,
@@ -958,18 +1053,32 @@ class ACPEventMapper:
         key = message_id if isinstance(message_id, str) and message_id else "_anon"
         store = self._text_by_message if block_type == "text" else self._thought_by_message
         store[key] = store.get(key, "") + text
-        return [
-            {
-                "type": "custom_message",
-                "customType": PREVIEW_CUSTOM_TYPE,
-                "content": store[key],
-                "display": True,
-                "attribution": "agent",
-                "id": self._next_id(),
-                "parentId": None,
-                "timestamp": _now_iso(),
+        line: dict[str, Any] = {
+            "type": "custom_message",
+            "customType": PREVIEW_CUSTOM_TYPE,
+            "content": store[key],
+            "display": True,
+            "attribution": "agent",
+            "id": self._next_id(),
+            "parentId": None,
+            "timestamp": _now_iso(),
+        }
+        if block_type == "thinking":
+            # The chat must SAY the model is thinking (20.10.2026: minutes of
+            # reasoning looked like "nothing happens"): mark the line, carry
+            # the size and the start, and only the end of the text.
+            if self._open_thought is None or self._open_thought["key"] != key:
+                self._open_thought = {
+                    "key": key, "iso": line["timestamp"], "mono": self.clock(),
+                }
+            whole = store[key]
+            line["content"] = _tail_on_boundary(whole, THINKING_PREVIEW_TAIL_CHARS)
+            line["data"] = {
+                "block": "thinking",
+                "chars": len(whole),
+                "startedAt": self._open_thought["iso"],
             }
-        ]
+        return [line]
 
     def map_final_assistant_message(
         self, final_text: str, *, stop_reason: str = "stop"
@@ -985,9 +1094,10 @@ class ACPEventMapper:
         terminal reasons land here: a cancelled/error turn keeps the probe
         conservative via the non-terminal default the caller passes.
         """
+        thought = self._flush_thought()
         text = str(final_text or "")
         if not text.strip():
-            return []
+            return thought
         entry: dict[str, Any] = {
             "type": "message",
             "id": self._next_id(),
@@ -1003,7 +1113,7 @@ class ACPEventMapper:
         usage = self._usage_block()
         if usage is not None:
             entry["message"]["usage"] = usage
-        return [entry]
+        return thought + [entry]
 
     def _tool_seed(self, update: dict[str, Any]) -> list[dict[str, Any]]:
         tool_call_id = update.get("toolCallId")

@@ -1609,6 +1609,19 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-19** — **Terminal door + crash matrix (ADR-094, update plan PR 2c):** on the stable
+  channel `install.sh --update`, `--rollback` and `--resume` only run `scripts/mc_update.py`
+  (`mc_update_door`: the install's own engine, else the one next to the installer, else main's)
+  with stdin closed and the engine's lines unchanged, then name the next step per exit code;
+  python3 ≥ 3.9 is part of the prerequisites report (`MC_PYTHON`). `mc_update_guard_open_run`
+  reads `status --json` before anything restarts the stack (`--update` offers the resume at a
+  terminal; installer re-run and edge update stop; `rollback_failed` sends to `--rollback`).
+  Edge keeps the installer's own path. The engine records its install folder (resume/rollback
+  from another folder → 409), writes the drain into the journal before the row, and `resume`
+  without an open run tidies ended runs (leftover drain, private copies).
+  `scripts/tests/test_mc_update_crash.py` kills the engine before and after every journal write
+  (found by a probe run, `MC_UPDATE_TEST_CRASH_SAVE` / `MC_UPDATE_TEST_SAVE_LOG`), at the named
+  inner points and inside the resume, and checks the end state (CI job `mc-update-crash`).
 - **2026-10-19** — **Pre-update backup + R2 (ADR-094, update plan PR 2b):** the engine's
   `backup` phase runs `backup.sh preupdate` (database + pins + encrypted `.env`, prefix
   `mc_backup_preupdate_*`, own rotation 3 / 14 days, no `~/.mc` archive) from a copy of the

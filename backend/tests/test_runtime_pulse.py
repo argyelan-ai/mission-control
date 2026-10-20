@@ -1,15 +1,20 @@
 """Runtime Pulse (Runtimes-Buehne v2, PR 1 — docs/specs/runtimes-buehne-v2.md §6/§7).
 
 Covers: Prometheus metric parsing (vLLM counter, SGLang counter fallback,
-SGLang gauge fallback), tok/s computation across two probes (delta for
-counters, direct value for the sglang:gen_throughput gauge — confirmed live
-against a running SGLang box, 06.09.2026), ring trim to 180 points, the
+SGLang gauge fallback, TensorFold's GLM health counter, and its native
+server — live scrape 20.10.2026 — whose speed is the engine's own rate from
+GET /health), tok/s computation across probes (delta for counters, a
+restart costs one 0 point; direct value for the sglang:gen_throughput gauge
+— confirmed live against a running SGLang box, 06.09.2026; the native
+build without a spike or dip on either handover of a finished reply, and
+without a guess when /health has no rate), ring trim to 180 points, the
 GET /hosts/{id}/pulse endpoint (empty + populated), and that unreachable
 hosts are skipped without ever probing them.
 """
 import json
 import time
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,7 +23,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.models.host import Host
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys
-from app.services.runtime_pulse import RuntimePulse, parse_token_counter
+from app.services.runtime_pulse import RuntimePulse, advance_rate, parse_token_counter
 from tests.conftest import test_engine
 
 _VLLM_METRICS = """
@@ -90,17 +95,17 @@ async def _mark_reachable(fake_redis, slug: str, reachable: bool = True) -> None
 
 def test_parse_vllm_counter():
     result = parse_token_counter(_VLLM_METRICS)
-    assert result == ("vllm", 12345.0, "counter")
+    assert result[:3] == ("vllm", 12345.0, "counter")
 
 
 def test_parse_sums_multiple_label_series():
     result = parse_token_counter(_VLLM_MULTI_LABEL_METRICS)
-    assert result == ("vllm", 150.0, "counter")
+    assert result[:3] == ("vllm", 150.0, "counter")
 
 
 def test_parse_sglang_counter_fallback_when_no_vllm():
     result = parse_token_counter(_SGLANG_COUNTER_METRICS)
-    assert result == ("sglang", 500.0, "counter")
+    assert result[:3] == ("sglang", 500.0, "counter")
 
 
 def test_parse_sglang_gauge_fallback_is_a_rate():
@@ -108,7 +113,7 @@ def test_parse_sglang_gauge_fallback_is_a_rate():
     live against a running SGLang box (06.09.2026). Only used when the
     counter metric is absent (priority order in _METRIC_CANDIDATES)."""
     result = parse_token_counter(_SGLANG_GAUGE_METRICS)
-    assert result == ("sglang", 87.3, "rate")
+    assert result[:3] == ("sglang", 87.3, "rate")
 
 
 _TENSORFOLD_METRICS = """\
@@ -129,48 +134,179 @@ def test_parse_tensorfold_counter():
     result = parse_token_counter(_TENSORFOLD_METRICS)
     # The streaming counter (running replies included), not the
     # finished-replies counter tensorfold:generation_tokens_total (4392).
-    assert result == ("tensorfold", 44.0, "counter")
+    assert result[:3] == ("tensorfold", 44.0, "counter")
 
 
 def test_parse_returns_none_for_unknown_metrics():
     assert parse_token_counter(_NO_KNOWN_METRICS) is None
 
 
-# ── tok/s delta computation ────────────────────────────────────────────────
+# TensorFold's native (Zig) server, as the DeepSeek-V4.1-Flash two-Spark
+# recipe runs it — a verbatim excerpt of a live scrape (20.10.2026). It has
+# no tensorfold_health:* family at all; the finished-replies counter and the
+# in-flight gauge are the only generated-token figures.
+_TENSORFOLD_NATIVE_METRICS = """\
+# HELP tensorfold:requests_running Requests in prefill or decode.
+# TYPE tensorfold:requests_running gauge
+tensorfold:requests_running 0
+# HELP tensorfold:requests_waiting Requests queued or held until a lane is free.
+# TYPE tensorfold:requests_waiting gauge
+tensorfold:requests_waiting 0
+# HELP tensorfold:generation_tokens_running Generated tokens held by live streams.
+# TYPE tensorfold:generation_tokens_running gauge
+tensorfold:generation_tokens_running 0
+# HELP tensorfold:prompt_tokens_total Prompt tokens of finished requests.
+# TYPE tensorfold:prompt_tokens_total counter
+tensorfold:prompt_tokens_total 7957562
+# HELP tensorfold:generation_tokens_total Generated tokens of finished requests.
+# TYPE tensorfold:generation_tokens_total counter
+tensorfold:generation_tokens_total 216401
+# HELP tensorfold:kv_cache_usage_ratio Tokens in a stream cache divided by that stream's context window.
+# TYPE tensorfold:kv_cache_usage_ratio gauge
+tensorfold:kv_cache_usage_ratio{pool="0"} 0
+# HELP tensorfold:mtp_drafted_total Draft tokens verified on finished requests.
+# TYPE tensorfold:mtp_drafted_total counter
+tensorfold:mtp_drafted_total 223506
+"""
 
 
-@pytest.mark.asyncio
-async def test_first_probe_reports_zero_tps(fake_redis):
-    poller = RuntimePulse(interval=5)
-    tps = await poller._compute_tps(fake_redis, "host-1", engine="vllm", counter=100.0, now=time.time())
+def _native(total: int, running: int) -> str:
+    """The native excerpt with other token figures (one request in flight)."""
+    return (
+        _TENSORFOLD_NATIVE_METRICS
+        .replace("tensorfold:generation_tokens_total 216401", f"tensorfold:generation_tokens_total {total}")
+        .replace("tensorfold:generation_tokens_running 0", f"tensorfold:generation_tokens_running {running}")
+        .replace("tensorfold:requests_running 0", f"tensorfold:requests_running {1 if running else 0}")
+    )
+
+
+def test_parse_tensorfold_native_build_takes_the_engine_rate():
+    """Native build (no tensorfold_health:*): its /metrics has no figure
+    whose delta is the speed, so the reading only names the build — the
+    poller then asks the engine for its own rate (GET /health)."""
+    result = parse_token_counter(_native(216401, 5904))
+    assert result is not None
+    assert (result.engine, result.kind) == ("tensorfold", "engine_rate")
+    assert result.source == "tensorfold:generation_tokens_running"
+
+
+def test_parse_tensorfold_native_idle_scrape_is_available():
+    """The verbatim idle scrape is a reading too — before the fix it was
+    None, so the card said 'no data' while the box was idle."""
+    result = parse_token_counter(_TENSORFOLD_NATIVE_METRICS)
+    assert result is not None
+    assert (result.engine, result.kind) == ("tensorfold", "engine_rate")
+
+
+def test_parse_tensorfold_finished_counter_alone_is_not_a_speed_source():
+    """Without the native server's in-flight gauge the finished-replies
+    counter is all there is, and it only jumps when a reply ends (0 tok/s
+    while working, then a spike) — no reading beats a wrong one."""
+    only_finished = "\n".join(
+        line for line in _TENSORFOLD_NATIVE_METRICS.splitlines()
+        if "generation_tokens_running" not in line
+    )
+    assert parse_token_counter(only_finished) is None
+
+
+def test_parse_tensorfold_health_counter_keeps_priority_over_the_native_gauge():
+    """A build that has both (the GLM-5.3 recipe's health family next to the
+    native names) keeps its streaming health counter — no /health call."""
+    both = _TENSORFOLD_METRICS + "tensorfold:generation_tokens_running 120\n"
+    result = parse_token_counter(both)
+    assert result[:3] == ("tensorfold", 44.0, "counter")
+    assert result.source == "tensorfold_health:completion_tokens_total"
+
+
+# ── tok/s delta computation (advance_rate) ────────────────────────────────
+
+_SRC = "vllm:generation_tokens_total"
+
+
+def _run(readings, *, source=_SRC, step=5.0, prev=None):
+    """Feed readings 5 s apart through advance_rate like the poller does."""
+    ring: list[float] = []
+    t = 1000.0
+    for counter in readings:
+        tps, prev = advance_rate(prev, source=source, counter=float(counter), now=t)
+        ring.append(tps)
+        t += step
+    return ring, prev
+
+
+def test_first_probe_reports_zero_tps():
+    tps, sample = advance_rate(None, source=_SRC, counter=100.0, now=time.time())
+    assert tps == 0.0
+    assert sample["counter"] == 100.0 and sample["source"] == _SRC
+
+
+def test_second_probe_computes_rate():
+    ring, _ = _run([100, 600])
+    assert ring == [0.0, 100.0]  # (600-100)/5
+
+
+def test_counter_reset_clamps_to_zero():
+    ring, _ = _run([1000, 50])
+    assert ring == [0.0, 0.0]
+
+
+def test_engine_restart_costs_one_zero_point_then_counts_from_the_new_start():
+    # 1000 → engine restart → 50 → 550: the drop reports 0 and the new count
+    # is the baseline, so the next probe rates 500 tokens / 5 s.
+    ring, _ = _run([500, 1000, 50, 550])
+    assert ring == [0.0, 100.0, 0.0, 100.0]
+
+
+def test_source_change_resets_rate_to_zero():
+    _, prev = _run([100])
+    tps, _ = advance_rate(prev, source="sglang:generation_tokens_total", counter=200.0, now=2000.0)
     assert tps == 0.0
 
 
-@pytest.mark.asyncio
-async def test_second_probe_computes_rate(fake_redis):
-    poller = RuntimePulse(interval=5)
-    t0 = time.time()
-    await poller._write_sample(fake_redis, "host-1", t=t0, counter=100.0, engine="vllm")
-    tps = await poller._compute_tps(fake_redis, "host-1", engine="vllm", counter=600.0, now=t0 + 5.0)
-    assert tps == 100.0  # (600-100)/5
-
-
-@pytest.mark.asyncio
-async def test_counter_reset_clamps_to_zero(fake_redis):
-    poller = RuntimePulse(interval=5)
-    t0 = time.time()
-    await poller._write_sample(fake_redis, "host-1", t=t0, counter=1000.0, engine="vllm")
-    tps = await poller._compute_tps(fake_redis, "host-1", engine="vllm", counter=50.0, now=t0 + 5.0)
+def test_same_engine_other_counter_resets_rate_to_zero():
+    """Two counters of one engine do not compare: a sample from the GLM
+    build's health counter is no baseline for another TensorFold counter."""
+    _, prev = _run([5000], source="tensorfold_health:completion_tokens_total")
+    tps, _ = advance_rate(prev, source="tensorfold:some_other_counter", counter=216401.0, now=1005.0)
     assert tps == 0.0
 
 
-@pytest.mark.asyncio
-async def test_engine_change_resets_rate_to_zero(fake_redis):
-    poller = RuntimePulse(interval=5)
-    t0 = time.time()
-    await poller._write_sample(fake_redis, "host-1", t=t0, counter=100.0, engine="vllm")
-    tps = await poller._compute_tps(fake_redis, "host-1", engine="sglang", counter=200.0, now=t0 + 5.0)
+def test_sample_written_before_this_change_reports_zero_once():
+    legacy = {"t": 1000.0, "counter": 100.0, "engine": "vllm"}  # no "source" yet
+    tps, sample = advance_rate(legacy, source=_SRC, counter=600.0, now=1005.0)
     assert tps == 0.0
+    tps, _ = advance_rate(sample, source=_SRC, counter=1100.0, now=1010.0)
+    assert tps == 100.0
+
+
+# Why the native build's speed is NOT read from /metrics. A steady 40 tok/s;
+# one reply (3 200 tokens) ends in the middle of a 5 s window.
+_REQUEST_ENDS_MID_WINDOW = [
+    # (finished_total, running)
+    (216401, 2800),
+    (216401, 3000),
+    (216401 + 3200, 0),
+    (216401 + 3200, 200),
+    (216401 + 3200, 400),
+]
+
+
+def test_finished_counter_alone_would_have_jumped():
+    """The finished counter alone reads 0 while the reply streams and
+    640 tok/s the moment it ends."""
+    ring, _ = _run([total for total, _ in _REQUEST_ENDS_MID_WINDOW])
+    assert ring == [0.0, 0.0, 640.0, 0.0, 0.0]
+
+
+def test_finished_plus_running_jumps_on_either_handover():
+    """finished + running is steady only when both figures change at the
+    same moment, and in the engine they do not (see the _OVERLAP_ / _GAP_
+    scenarios below): one order dips and spikes, the other spikes and dips —
+    the spike as big as the reply over the probe interval."""
+    overlap, _ = _run([t + r for t, r, _ in _OVERLAP_AFTER_A_FINISHED_REPLY])
+    gap, _ = _run([t + r for t, r, _ in _GAP_BEFORE_A_FINISHED_REPLY])
+    assert overlap == [0.0, 40.0, 40.0, 1180.0, 0.0, 40.0]
+    assert gap == [0.0, 40.0, 0.0, 680.0, 40.0]
 
 
 # ── Ring trim ────────────────────────────────────────────────────────────
@@ -269,6 +405,203 @@ async def test_poller_sglang_gauge_used_directly_as_tps_no_delta(async_session, 
     # No counter-delta sample was written for a rate metric.
     sample = await fake_redis.get(RedisKeys.host_pulse_sample(str(host.id)))
     assert sample is None
+
+
+def _health(rate: float | None) -> dict:
+    """GET /health of the native server. ``live.decode_tokens_per_second`` is
+    the engine's own rate (tokens delivered in its last 2 s / 2, counted in
+    lane_host.zig noteDecoded). ``None`` = the body a server with API keys
+    on sends: no ``live`` block at all."""
+    if rate is None:
+        return {"status": "ok"}
+    return {
+        "status": "ok", "model": "m", "model_ids": ["m"], "max_batch_size": 4, "warming": False,
+        "memory": {}, "live": {"connections": 1, "waiting": 0,
+                               "decode_tokens_per_second": rate, "prefill_tokens_per_second": 0.0},
+    }
+
+
+def _engine_client(scrapes):
+    """An httpx.AsyncClient stand-in for one box: per tick, the /metrics text
+    and the /health body (``scrapes`` = [(metrics_text, health_body)])."""
+    metrics = iter([text for text, _ in scrapes])
+    health = iter([body for _, body in scrapes])
+
+    async def _get(url, **_):
+        if url.endswith("/metrics"):
+            return MagicMock(status_code=200, text=next(metrics))
+        if url.endswith("/health"):
+            body = next(health)
+            resp = MagicMock(status_code=200, text=json.dumps(body))
+            resp.json = MagicMock(return_value=body)
+            return resp
+        raise AssertionError(f"unexpected probe {url}")
+
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=_get)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    return client
+
+
+async def _ticks(poller, session, fake_redis, scrapes, *, t0=1_000_000.0, step=5.0, ledger=None):
+    """One poller tick per scrape, ``step`` seconds apart on the poller's own
+    clock (only the module's ``time`` is replaced). Returns the client."""
+    client = _engine_client(scrapes)
+    clock = SimpleNamespace(now=t0)
+    with patch("app.services.runtime_pulse.get_redis", _fake_get_redis(fake_redis)), \
+         patch("app.services.runtime_pulse.token_ledger", ledger or MagicMock(observe=AsyncMock())), \
+         patch("app.services.runtime_pulse.time", SimpleNamespace(time=lambda: clock.now)), \
+         patch("httpx.AsyncClient", return_value=client):
+        for _ in scrapes:
+            await poller.tick(session=session)
+            clock.now += step
+    return client
+
+
+async def _ring(fake_redis, host) -> list[float]:
+    raw = await fake_redis.lrange(RedisKeys.host_pulse(str(host.id)), 0, -1)
+    return [json.loads(p)["tps"] for p in raw]
+
+
+@pytest.mark.asyncio
+async def test_poller_tensorfold_native_build_shows_speed(async_session, fake_redis):
+    """The live bug (20.10.2026): a box on TensorFold's native server stayed
+    'available: false' — the strip empty, the speed tile '–'. The engine's
+    own rate is real from the first probe on (no earlier sample needed)."""
+    host = await _mk_host(async_session, slug="duo-head")
+    rt = await _mk_slot_runtime(async_session, host, slug="duo-slot")
+    await _mark_reachable(fake_redis, rt.slug, reachable=True)
+
+    client = await _ticks(RuntimePulse(interval=5), async_session, fake_redis, [
+        (_native(216401, 2800), _health(40.0)),
+        (_native(216401, 3000), _health(41.5)),
+    ])
+
+    meta = json.loads(await fake_redis.get(RedisKeys.host_pulse_meta(str(host.id))))
+    assert meta["available"] is True
+    assert meta["engine"] == "tensorfold"
+    assert await _ring(fake_redis, host) == [40.0, 41.5]
+    urls = [call.args[0] for call in client.get.await_args_list]
+    assert urls == ["http://192.0.2.10:8000/metrics", "http://192.0.2.10:8000/health"] * 2
+
+
+# The two handovers of one finished reply (N = 5900 tokens) between the
+# native server's figures, both seen in the engine source (TensorFold
+# lane_host.zig run loop + server/chat.zig): the HTTP thread adds the reply
+# to the finished counter when it leaves; the in-flight gauge is only
+# recomputed by noteLive(), which runs AFTER admitOne() has prefilled the
+# next queued request. A box with all 4 lanes busy and one request waiting:
+_OVERLAP_AFTER_A_FINISHED_REPLY = [
+    # (finished_total, running, engine decode tok/s on /health)
+    (216401, 5500, 40.0),
+    (216401, 5700, 40.0),
+    (216401, 5900, 40.0),
+    (216401 + 5900, 5900, 0.0),  # counted twice: finished, and still "running" while the next prompt prefills
+    (216401 + 5900, 80, 40.0),  # gauge recomputed; the next reply streams
+    (216401 + 5900, 280, 40.0),
+]
+# ...and the other order: the gauge recomputed before the HTTP thread has
+# added the reply to the finished counter.
+_GAP_BEFORE_A_FINISHED_REPLY = [
+    (216401, 2800, 40.0),
+    (216401, 3000, 40.0),
+    (216401, 0, 40.0),  # the reply left the gauge, not yet in the finished counter
+    (216401 + 3200, 200, 40.0),
+    (216401 + 3200, 400, 40.0),
+]
+
+
+@pytest.mark.asyncio
+async def test_poller_native_build_overlap_after_a_finished_reply_is_no_spike(async_session, fake_redis):
+    """Critic finding (PR #909): with finished + running the overlap gave a
+    1 180 tok/s point and a 0 after it, and the one bright cell dimmed every
+    other cell of the strip for 15 minutes (HeatStrip ceiling = max cell).
+    The engine's own decode rate has no handover in it."""
+    host = await _mk_host(async_session, slug="duo-head")
+    rt = await _mk_slot_runtime(async_session, host, slug="duo-slot")
+    await _mark_reachable(fake_redis, rt.slug, reachable=True)
+
+    await _ticks(RuntimePulse(interval=5), async_session, fake_redis, [
+        (_native(total, running), _health(rate)) for total, running, rate in _OVERLAP_AFTER_A_FINISHED_REPLY
+    ])
+
+    ring = await _ring(fake_redis, host)
+    assert ring == [40.0, 40.0, 40.0, 0.0, 40.0, 40.0]
+    assert max(ring) < 100.0
+
+
+@pytest.mark.asyncio
+async def test_poller_native_build_gap_before_a_finished_reply_is_no_dip(async_session, fake_redis):
+    host = await _mk_host(async_session, slug="duo-head")
+    rt = await _mk_slot_runtime(async_session, host, slug="duo-slot")
+    await _mark_reachable(fake_redis, rt.slug, reachable=True)
+
+    await _ticks(RuntimePulse(interval=5), async_session, fake_redis, [
+        (_native(total, running), _health(rate)) for total, running, rate in _GAP_BEFORE_A_FINISHED_REPLY
+    ])
+
+    assert await _ring(fake_redis, host) == [40.0] * 5
+
+
+@pytest.mark.asyncio
+async def test_poller_native_build_without_a_live_rate_shows_no_speed_but_books_tokens(async_session, fake_redis):
+    """With API keys on, the native server's /health says only
+    {"status": "ok"}. Then there is no honest speed: no point, 'available:
+    false' — never the finished + running guess. The box tokens (/metrics,
+    open with keys on too) are still booked."""
+    host = await _mk_host(async_session, slug="duo-head")
+    rt = await _mk_slot_runtime(async_session, host, slug="duo-slot")
+    await _mark_reachable(fake_redis, rt.slug, reachable=True)
+    ledger = MagicMock(observe=AsyncMock())
+
+    await _ticks(RuntimePulse(interval=5), async_session, fake_redis, [
+        (_native(216401, 2800), _health(None)),
+        (_native(216401, 3000), _health(None)),
+    ], ledger=ledger)
+
+    meta = json.loads(await fake_redis.get(RedisKeys.host_pulse_meta(str(host.id))))
+    assert meta["available"] is False
+    assert await _ring(fake_redis, host) == []
+    assert ledger.observe.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_poller_native_build_health_error_shows_no_speed_but_books_tokens(async_session, fake_redis):
+    host = await _mk_host(async_session, slug="duo-head")
+    rt = await _mk_slot_runtime(async_session, host, slug="duo-slot")
+    await _mark_reachable(fake_redis, rt.slug, reachable=True)
+    ledger = MagicMock(observe=AsyncMock())
+
+    async def _get(url, **_):
+        if url.endswith("/metrics"):
+            return MagicMock(status_code=200, text=_native(216401, 2800))
+        raise TimeoutError("health timed out")
+
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=_get)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with patch("app.services.runtime_pulse.get_redis", _fake_get_redis(fake_redis)), \
+         patch("app.services.runtime_pulse.token_ledger", ledger), \
+         patch("httpx.AsyncClient", return_value=client):
+        await RuntimePulse(interval=5).tick(session=async_session)  # must not raise
+
+    meta = json.loads(await fake_redis.get(RedisKeys.host_pulse_meta(str(host.id))))
+    assert meta["available"] is False
+    assert await _ring(fake_redis, host) == []
+    ledger.observe.assert_awaited_once()
+
+
+@pytest.mark.parametrize("bad", [-3.0, "40", True, float("nan"), float("inf"), None])
+def test_engine_rate_reader_rejects_what_is_not_a_rate(bad):
+    from app.services.runtime_pulse import engine_rate_from_health
+
+    assert engine_rate_from_health({"live": {"decode_tokens_per_second": bad}}) is None
+    assert engine_rate_from_health({"live": "x"}) is None
+    assert engine_rate_from_health(["live"]) is None
+    assert engine_rate_from_health({"live": {"decode_tokens_per_second": 0}}) == 0.0
+    assert engine_rate_from_health({"live": {"decode_tokens_per_second": 162.4}}) == 162.4
 
 
 @pytest.mark.asyncio

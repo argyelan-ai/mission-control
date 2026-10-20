@@ -12,7 +12,7 @@
 #
 # Red for a line that runs a push when:
 #  1. it is not `git -C <dir> push`, or the command is a variable (`$G -C . push`),
-#  2. it uses --no-verify,
+#  2. it uses --no-verify, or sets core.hooksPath (`git -c core.hooksPath=… push`),
 #  3. it forces without a lease (`-f`, `--force`, `+branch`),
 #  4. its output is piped into tail/head/grep/sed/awk/cut, or redirected away
 #     (`>/dev/null`, `&>`, `2>&1 >file`; `2>&1` alone is fine),
@@ -30,9 +30,14 @@ export GUARD_NAME=push-gate
 
 S='[[:space:]]'
 Q="[\"']"
-RE_PUSH="(^|[;&|(]|$Q|$S)git($S+-C$S+[^[:space:]]+)?($S+-[^[:space:]]+)*$S+push($S|\$)"
-RE_VAR_PUSH="(^|[;&|(]|$Q|$S)[\$][{]?[A-Za-z_][A-Za-z0-9_]*[}]?($S+-C$S+[^[:space:]]+)?$S+push($S|\$)"
-RE_PUSH_C="git$S+-C$S+[^[:space:]]+$S+push"
+# Git options before the sub-command: `-C <dir>`, `-c <k=v>`, `--git-dir <p>`, … or any `-x`.
+# (Only `-C` was allowed before; `git -c k=v push` then hid the push from the gate.)
+VALOPT="(-C|-c|--git-dir|--work-tree|--namespace|--config-env)"
+GITOPTS="($S+$VALOPT$S+[^[:space:]]+|$S+-[^[:space:]]+)*"
+RE_PUSH="(^|[;&|(]|$Q|$S)git$GITOPTS$S+push($S|\$)"
+RE_VAR_PUSH="(^|[;&|(]|$Q|$S)[\$][{]?[A-Za-z_][A-Za-z0-9_]*[}]?$GITOPTS$S+push($S|\$)"
+RE_PUSH_C="git($S+$VALOPT$S+[^[:space:]]+|$S+-[^[:space:]]+)*$S+-C$S+[^[:space:]]+$GITOPTS$S+push"
+RE_HOOKSPATH="core[.]hookspath"
 RE_SCAN_CMD="^$S*(python3?$S+)?[^[:space:]]*privacy-scan(\\.py)?($S|\$)"
 RE_HELP="$S(--help|-h)($S|\$)"
 RE_CUT="push[^|]*\\|$S*(tail|head|grep|sed|awk|cut)($S|\$)"
@@ -108,6 +113,10 @@ check_line() {
   fi
   if [[ $after == *--no-verify* ]]; then
     hit "$1" "$2" "--no-verify skips the pre-push hook"
+  fi
+  # on the raw line: quotes would hide `-c "core.hooksPath=…"` in the unquoted copy
+  if [[ "$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')" =~ $RE_HOOKSPATH ]]; then
+    hit "$1" "$2" "core.hooksPath on a push line switches the pre-push hook off"
   fi
   if [[ $after =~ $RE_FORCE ]] && [[ $after != *--force-with-lease* ]]; then
     hit "$1" "$2" "force-push without --force-with-lease can overwrite someone else's commits"

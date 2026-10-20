@@ -1899,6 +1899,9 @@ async def handle_review_rejection(
 
     Returns: ReviewRejectionResult (developer + outcome, see above).
     """
+    # Beweis-Tor statistics: who caught the false finish report (services/proof_gate.py)
+    from app.services.proof_gate import caught_by_for_actor
+
     from app.routers.agent_scoped import _find_last_developer
 
     # Rejection counter (only for agent rejections)
@@ -1998,6 +2001,7 @@ async def handle_review_rejection(
             session, "task.review_rejected",
             f"Review abgelehnt: '{task.title}' — kein Entwickler ermittelbar, an Board Lead weitergeleitet",
             board_id=board_id, task_id=task.id,
+            detail={"gefangen_von": caught_by_for_actor(rejecting_agent)},
             severity="warning",
         )
         from app.services.dispatch import auto_dispatch_task
@@ -2057,6 +2061,7 @@ async def handle_review_rejection(
             f"Review abgelehnt: '{task.title}' — Dispatch fuer {original_dev.name} "
             f"blockiert ({reason}), wartet in Inbox",
             board_id=board_id, task_id=task.id, agent_id=original_dev.id,
+            detail={"gefangen_von": caught_by_for_actor(rejecting_agent)},
             severity="warning",
         )
         return ReviewRejectionResult(original_dev, "dispatch_blocked")
@@ -2107,6 +2112,7 @@ async def handle_review_rejection(
             session, "task.review_rejected",
             f"Review abgelehnt: '{task.title}' in Queue fuer {original_dev.name} (busy)",
             board_id=board_id, task_id=task.id, agent_id=original_dev.id,
+            detail={"gefangen_von": caught_by_for_actor(rejecting_agent)},
         )
     else:
         # Set status to inbox — the agent must ACK (PATCH status: in_progress)
@@ -2125,6 +2131,7 @@ async def handle_review_rejection(
             session, "task.review_rejected",
             f"Review abgelehnt: '{task.title}' zurueck an {original_dev.name}",
             board_id=board_id, task_id=task.id, agent_id=original_dev.id,
+            detail={"gefangen_von": caught_by_for_actor(rejecting_agent)},
         )
         # Re-dispatch after review rejection.
         # Post Phase 29 / Gateway-Sunset: no gateway_agent_id gate, no RPC.

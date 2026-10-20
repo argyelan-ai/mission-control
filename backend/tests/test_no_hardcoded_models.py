@@ -110,6 +110,7 @@ marker and the path allowlist are each proven to suppress a hit.
 from __future__ import annotations
 
 import ast
+import functools
 import io
 import re
 import tokenize
@@ -308,6 +309,16 @@ def _is_known_unfixed(path: str, line: str) -> bool:
     return any(path == p and needle in line for p, needle in KNOWN_UNFIXED_HARDCODES)
 
 
+@functools.cache
+def _repo_scan() -> tuple[tuple[tuple[str, int, str], ...], tuple[tuple[str, str], ...]]:
+    """One scan of SCAN_ROOTS per test process, shared by the three repo-wide
+    tests below (each used to walk + tokenize + parse the whole tree again:
+    ~5 s apiece on CI). Returns (findings, unparseable) as immutable copies;
+    the tmp_path self-tests further down still call the scanner directly."""
+    findings = scan_for_hardcoded_models(SCAN_ROOTS)
+    return tuple(findings), tuple(UNPARSEABLE)
+
+
 def test_no_new_hardcoded_models():
     """Fails if a hardcoded model-ID literal appears in executable code.
 
@@ -316,7 +327,7 @@ def test_no_new_hardcoded_models():
     out-of-scope hardcodes (KNOWN_UNFIXED_HARDCODES) are reported separately
     as an expected, tracked gap rather than silently ignored.
     """
-    findings = scan_for_hardcoded_models(SCAN_ROOTS)
+    findings, _ = _repo_scan()
 
     unexpected = [
         (path, line_no, line)
@@ -342,11 +353,11 @@ def test_no_unparseable_python_files():
     A file that neither tokenizes nor parses is skipped by the scanner, which
     would create a silent blind spot. Report it loudly instead.
     """
-    scan_for_hardcoded_models(SCAN_ROOTS)
-    assert not UNPARSEABLE, (
+    _, unparseable = _repo_scan()
+    assert not unparseable, (
         "Python file(s) could not be parsed and were therefore NOT scanned for "
         "hardcoded model IDs — fix the syntax or explicitly allowlist the "
-        "path:\n" + "\n".join(f"  {p}: {why}" for p, why in UNPARSEABLE)
+        "path:\n" + "\n".join(f"  {p}: {why}" for p, why in unparseable)
     )
 
 
@@ -359,7 +370,7 @@ def test_known_gap_still_matches_expected_shape():
     absorbed into test_no_new_hardcoded_models going green for the wrong
     reason.
     """
-    findings = scan_for_hardcoded_models(SCAN_ROOTS)
+    findings, _ = _repo_scan()
     known_paths = {p for p, _ in KNOWN_UNFIXED_HARDCODES}
     matched_paths = {path for path, _, line in findings if _is_known_unfixed(path, line)}
     missing = known_paths - matched_paths

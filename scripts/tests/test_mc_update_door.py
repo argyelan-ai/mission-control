@@ -96,6 +96,21 @@ def wait_lock_free(world: World, timeout: float = 40.0) -> None:
     raise AssertionError("the run never let go of the lock")
 
 
+def wait_exit_file(path: Path, timeout: float = 40.0) -> str:
+    """The job's exit code, once the job shell has written it.
+
+    The engine lets go of the lock and writes its last journal entry BEFORE it
+    exits; only then does the job shell write ``<job>.exit`` (tmp + mv). A free
+    lock is therefore no sign that the file is there yet - wait for the file.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return path.read_text().strip()
+        time.sleep(0.05)
+    raise AssertionError(f"the job never wrote {path.name}")
+
+
 def fabricate_run(world: World, *, source="bridge", phase="done", kind=None, hours_ago=1.0) -> str:
     created = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours_ago)
     run_id = created.strftime("%Y%m%dT%H%M%SZ") + "-" + os.urandom(3).hex()
@@ -258,7 +273,7 @@ def test_start_runs_detached_to_done(world, door):
     assert world.head_tag() == "v0.2.0"
     out_file = world.state / "bridge" / f"start-{run_id}.out"
     assert oct(out_file.stat().st_mode & 0o777) == "0o600"
-    assert (world.state / "bridge" / f"start-{run_id}.exit").read_text().strip() == "0"
+    assert wait_exit_file(world.state / "bridge" / f"start-{run_id}.exit") == "0"
 
 
 def test_start_when_already_on_the_latest_release(world, door):

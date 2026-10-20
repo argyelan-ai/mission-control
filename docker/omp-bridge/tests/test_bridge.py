@@ -62,6 +62,23 @@ def test_finish_with_sentinel_decides_finish():
     assert "blocker" not in kinds
 
 
+def test_finish_path_late_ack_needs_no_acp_helper(monkeypatch):
+    """The finish path acks late when no `session` line claimed the run. classify()
+    never returns FINISH without a session today, so the branch is defensive — but
+    it called `_flush_notes`, a helper that only exists in the ACP driver
+    (NameError, found 20.10.2026). Force the branch: it must ack once, then finish."""
+    with open(os.path.join(FIX, "finish-with-sentinel.ndjson"), encoding="utf-8") as fh:
+        lines = [l for l in fh if '"type": "session"' not in l]
+    monkeypatch.setattr(bridge, "classify", lambda _o: bridge.Classification(
+        Kind.FINISH, retryable=False, reason="finish", detail=""))
+    lc = LoggingLifecycle(sink=lambda _c: None)
+    action = drive_run(io.StringIO("".join(lines)), lc, task_id="T1",
+                       board_requires_review=True, retries_left=0)
+    assert action.action == "finish", action
+    kinds = [c[0] for c in lc.calls]
+    assert kinds.count("ack") == 1 and kinds.index("ack") < kinds.index("finish")
+
+
 def test_finish_without_review_goes_done():
     action, _ = _decide(os.path.join(FIX, "finish-with-sentinel.ndjson"), review=False)
     assert action.action == "finish"

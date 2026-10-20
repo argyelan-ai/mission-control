@@ -4318,8 +4318,10 @@ async def agent_heartbeat(
     NEW task → the agent appeared "idle" to the operator even though it was
     working, Boss/operator could carelessly dispatch it a 2nd task). Fix:
     heartbeat checks the task table for an active assigned task (status
-    `in_progress`). If yes → status stays `working`, current_task_id gets
-    synced to the task, last_task_activity_at gets stamped. This way the
+    `in_progress`, a held `waiting` task, or — ADR-097 — the delivered,
+    not yet claimed card the bridge reports with the same attempt). If
+    yes → status stays `working`, current_task_id gets synced to the task,
+    last_task_activity_at gets stamped. This way the
     agent row converges to the truth by the next heartbeat at the latest.
     `blocked`/`review`/`done`/`failed` are NOT "actively working" — for
     those, the payload status is respected.
@@ -4366,6 +4368,27 @@ async def agent_heartbeat(
             ).limit(1)
         )
         active_task = _wait_res.first()
+
+    # Delivered, not yet claimed (ADR-097; review Z1, 20.10.2026): the
+    # bridge reports the turn's task and attempt from the first second,
+    # while the model loads or does its prefill — the card is still inbox.
+    # Same rule as the withdrawn-task guard (_delivered_not_yet_claimed):
+    # that card IS this agent's live work. Without this the else-branch
+    # below cleared current_task_id within 30 s, and the chat's task block
+    # and "Working on <task>" row vanished until the model's first ACK.
+    if active_task is None and payload.task_id and payload.attempt_id:
+        try:
+            _turn_tid = uuid.UUID(str(payload.task_id))
+        except (ValueError, AttributeError):
+            _turn_tid = None
+        if _turn_tid is not None:
+            _delivered = await session.get(_Task, _turn_tid)
+            if (
+                _delivered is not None
+                and _delivered.assigned_agent_id == agent.id
+                and _delivered_not_yet_claimed(_delivered, payload.attempt_id)
+            ):
+                active_task = _delivered
 
     # Fix 3: capture the pre-self-heal active-task pointer — the Bug-18
     # self-heal below clears current_task_id for blocked/stopped tasks

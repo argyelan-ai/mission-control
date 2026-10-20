@@ -53,6 +53,9 @@ function circleOf(label: string): HTMLElement {
 }
 
 vi.mock("@/hooks/useChatStream", () => ({ useChatStream: vi.fn() }));
+// The task block (20.10.2026) asks the backend on its own — stubbed, so these
+// tests keep running without a QueryClientProvider.
+vi.mock("@/hooks/useTaskActivity", () => ({ useTaskActivity: vi.fn(() => null) }));
 // Heads-in-Chats (PR 2) branch: no test in this file passes a `head` prop
 // (that's ChatView.head.test.tsx's job), but every render still calls this
 // hook unconditionally (rules of hooks) — mocked the same way
@@ -683,7 +686,7 @@ describe("ChatView", () => {
 
     expect(screen.getByText("Hallo!")).toBeInTheDocument();
     expect(screen.queryByText("Read foo.py")).not.toBeInTheDocument();
-    expect(screen.queryByText("Denkt nach…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Thought")).not.toBeInTheDocument();
     // No group chip either — Kompakt hides the activity entirely, it doesn't
     // trade a wall of rows for a wall of chips.
     expect(screen.queryByTestId("tool-group")).not.toBeInTheDocument();
@@ -702,11 +705,11 @@ describe("ChatView", () => {
     const chip = screen.getByRole("button", { name: /tool used/ });
     expect(chip).toHaveTextContent(/thought/);
     expect(screen.queryByText("Read foo.py")).not.toBeInTheDocument();
-    expect(screen.queryByText("Denkt nach…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Thought")).not.toBeInTheDocument();
 
     await user.click(chip);
     expect(screen.getByText("Read foo.py")).toBeInTheDocument();
-    expect(screen.getByText("Denkt nach…")).toBeInTheDocument();
+    expect(screen.getByText("Thought")).toBeInTheDocument();
     // Rows themselves are still collapsed at Normal — that's Ausführlich's job.
     expect(screen.queryByText(/file_path/)).not.toBeInTheDocument();
   });
@@ -1394,6 +1397,65 @@ describe("ChatView", () => {
     expect(screen.getByText("Hallo!").compareDocumentPosition(row)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING
     );
+  });
+
+  it("zeigt einen laufenden Gedanken als Denkzeile, nicht als Antwort-Vorschau", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [MSG],
+        state: { kind: "state", status: "working", prompt: null },
+        preview: {
+          kind: "preview", uuid: null, ts: "2026-10-20T09:00:00Z", source: "acp",
+          text: "Plan: erst lesen.", block: "thinking", chars: 400, startedAt: "2026-10-20T08:59:00Z",
+        },
+      })
+    );
+    renderChatView();
+    expect(screen.queryByTestId("preview-row")).not.toBeInTheDocument();
+    const row = screen.getByTestId("live-thinking");
+    expect(row).toHaveTextContent("Thinking");
+    expect(row).toHaveTextContent("≈100 tokens");
+    expect(screen.getByText("Hallo!").compareDocumentPosition(row)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  it("zeigt die laufende Aufgabe als eigenen Block, nur wenn ein Task gebunden ist", async () => {
+    const { useTaskActivity } = await import("@/hooks/useTaskActivity");
+    vi.mocked(useTaskActivity).mockReturnValue({
+      applies: true, taskId: "task-42", hasSession: true, deliveredAt: null, queued: 0,
+      events: [], preview: {
+        kind: "preview", uuid: null, ts: "2026-10-20T09:00:00Z", source: "acp",
+        text: "…", block: "thinking", chars: 23_600,
+      },
+    });
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    const { unmount } = renderChatView({ workingOn: { taskId: "task-42", title: "Login reparieren" } });
+    const block = screen.getByTestId("chat-task-activity");
+    expect(block).toHaveTextContent("≈5,900 tokens");
+    // Never part of the conversation: after the chat's own timeline.
+    expect(screen.getByText("Hallo!").compareDocumentPosition(block)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+    unmount();
+    renderChatView();
+    expect(screen.queryByTestId("chat-task-activity")).not.toBeInTheDocument();
+  });
+
+  // Review UI-9: the chat's detail setting reaches the task block.
+  it("Kompakt gilt auch fuer den Aufgaben-Block: keine Werkzeug-Schritte", async () => {
+    const { useTaskActivity } = await import("@/hooks/useTaskActivity");
+    vi.mocked(useTaskActivity).mockReturnValue({
+      applies: true, taskId: "task-42", hasSession: true, deliveredAt: null, queued: 0, preview: null,
+      events: [{ kind: "tool", uuid: "t1", ts: "2026-10-20T09:00:00Z", name: "bash", title: "$ npm test",
+                 detail: {}, result: "ok", status: "done", toolUseId: "c1" }] as never,
+    });
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    const { unmount } = renderChatView({ detailLevel: "compact", workingOn: { taskId: "task-42", title: "Login reparieren" } });
+    expect(screen.getByTestId("chat-task-activity")).not.toHaveTextContent("$ npm test");
+    unmount();
+    renderChatView({ workingOn: { taskId: "task-42", title: "Login reparieren" } });
+    expect(screen.getByTestId("chat-task-activity")).toHaveTextContent("$ npm test");
   });
 
   it("deckelt die ACP-Vorschau in der Hoehe, damit nichts springt", () => {

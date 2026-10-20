@@ -50,3 +50,26 @@ def _isolate_mc_context_file(tmp_path, request):
             os.environ.pop("MC_CONTEXT_ENV_PATH", None)
         else:
             os.environ["MC_CONTEXT_ENV_PATH"] = prev_env
+
+
+@pytest.fixture(autouse=True)
+def _no_local_git_head(request):
+    """`_patch_status` reports the local git head on review/done (Beweis-Tor).
+    The suite runs inside a git checkout, so without this every PATCH body
+    would carry the test runner's own SHA. Tests that exercise the evidence
+    itself (test_proof_gate_evidence.py) opt out with the marker."""
+    if request.node.get_closest_marker("real_git_head") is not None:
+        yield
+        return
+    from mc_cli import commands
+
+    original = commands._local_git_head
+    commands._local_git_head = lambda: (None, None)
+    try:
+        yield
+    finally:
+        commands._local_git_head = original
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "real_git_head: keep mc's real local-git-head lookup")

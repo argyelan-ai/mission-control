@@ -1,0 +1,2 @@
+# `-c k=v` before push, and no -C <worktree>.
+python3 scripts/privacy-scan.py && git -c push.default=current push origin feat/example

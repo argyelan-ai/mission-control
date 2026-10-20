@@ -116,6 +116,8 @@ features:
       - "* /api/v1/boards/*/tasks/{task_id}/git-diff"
       - "* /api/v1/boards/*/tasks/{task_id}/git-info"
       - "* /api/v1/boards/*/tasks/{task_id}/hierarchy"
+      # The task card's model-wait block (ADR-097 addendum, #897).
+      - "* /api/v1/boards/*/tasks/{task_id}/model-wait"
       - "* /api/v1/boards/*/tasks/{task_id}/promote"
       - "* /api/v1/boards/*/tasks/{task_id}/resume"
       - "* /api/v1/boards/*/tasks/{task_id}/review"
@@ -726,6 +728,11 @@ internal:
   # /api/v1/agent/me/telegram endpoint (FileCard telegram action). No bare
   # /api/v1/agent endpoint exists.
   - "endpoint:* /api/v1/agent/*"
+  # Proof gate stats (routers/activity.py, #891): who caught false finish
+  # reports (gefangen_von) — the gate, a reviewer role, the lead or the
+  # operator. Read-only numbers for the proof-gate evaluation; no screen
+  # shows them yet.
+  - "endpoint:GET /api/v1/activity/proof-gate/stats"
   # system_state holds the drain the update engine writes through psql and
   # the work it held back (ADR-094 §7) — no screen reads it directly; the
   # update card shows the drain through GET /system/update/status.

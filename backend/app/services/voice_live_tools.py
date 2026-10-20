@@ -344,6 +344,10 @@ _STATE_WORD = {
     "idle": "idle",
     "permission_prompt": "waiting_for_approval",
     "waiting_input": "waiting_for_answer",
+    # ACP task channel (follow-up to ADR-097): a task turn runs / a delivered
+    # task waits for its model.
+    "task_working": "working",
+    "waiting_model": "waiting_for_model",
 }
 
 

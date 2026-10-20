@@ -534,7 +534,7 @@ def test_r2_without_the_backup_fails_safe_and_can_be_finished_later(world: World
     assert world.head_tag() == "v0.2.0"              # no old code on the new schema
     assert world.get_state()["drain"] is not None    # stays in no-new-work mode
     assert "db_history" not in world.get_state()     # nothing dropped
-    assert "mc_update.py rollback" in r.stdout
+    assert "./install.sh --rollback" in r.stdout
     # The operator puts the backup back and asks for the way back.
     for f in hidden.iterdir():
         shutil.move(str(f), str(world.backups / f.name))
@@ -838,6 +838,42 @@ def test_resume_without_an_open_run_does_nothing(world: World):
     r = world.run("resume")
     assert r.returncode == 0 and "nothing to resume" in r.stdout
     assert len(world.calls()) == n
+
+
+def test_resume_from_another_install_is_refused(world: World):
+    """The journal lives in the user's home, shared by every install of that
+    user: a resume from another folder must not switch that folder's code."""
+    assert world.run("start", fault="up.intent").returncode == 137
+    other = world.tmp / "other-install"
+    other.mkdir()
+    n = len(world.calls())
+    r = world.run("resume", "--repo", str(other))
+    assert r.returncode == 9, r.stdout + r.stderr
+    assert "another Mission Control install" in r.stderr
+    assert world.journal()["phase"] == "up"
+    assert len(world.calls()) == n
+    r = world.run("rollback", "--repo", str(other))
+    assert r.returncode == 9, r.stdout + r.stderr
+    assert world.run("resume").returncode == 0
+    assert world.journal()["phase"] == "done"
+
+
+def test_no_new_update_on_top_of_a_failed_way_back(world: World):
+    """rollback_failed ends a run, but leaves the install half way (drain on,
+    maybe new code on a restored database). A new update would record that
+    state as its "before" — so it is refused until --rollback finished."""
+    world.patch_state(health_for_tag={"0.2.0": "unhealthy"}, restore_fail=True)
+    assert world.run("start").returncode == 4
+    failed = world.journal()["run_id"]
+    world.patch_state(restore_fail=False, health_for_tag={})
+    n = len(world.calls())
+    r = world.run("start")
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "./install.sh --rollback" in r.stdout
+    assert world.journal()["run_id"] == failed
+    assert not any(c[:1] == ["compose"] and c[3:4] in (["up"], ["pull"], ["stop"]) for c in world.calls()[n:])
+    pf = json.loads(world.run("preflight", "--json").stdout)
+    assert any(c["id"] == "lock" and c["status"] == "fail" for c in pf["checks"])
 
 
 def test_preflight_refuses_while_a_run_is_interrupted(world: World):
@@ -1174,3 +1210,24 @@ def test_status_json_is_filtered(world: World):
 def test_contract_names_the_journal_schema():
     out = subprocess.run([sys.executable, str(ENGINE), "--contract"], capture_output=True, text=True)
     assert json.loads(out.stdout)["journal_schema"] == 1
+
+
+def test_the_real_migration_chain_is_read_by_the_engine(tmp_path: Path):
+    """verify_release refuses a target whose migration chain it cannot read
+    (one head, the database's schema in it). If the spelling of the real
+    chain ever drifts away from what the engine parses, every update would
+    abort — so the engine reads this repository's own chain here."""
+    import re
+    mod = _load_engine_module()
+    eng = mod.Engine(ROOT, tmp_path / "state")
+    revs, downs = eng.alembic_chain("HEAD")
+    on_disk = set()
+    for f in (ROOT / "backend" / "alembic" / "versions").glob("*.py"):
+        m = re.search(r"""^revision(?::\s*str)?\s*=\s*['"]([^'"]+)['"]""", f.read_text(), re.M)
+        if m:
+            on_disk.add(m.group(1))
+    assert len(on_disk) > 100          # the chain is really there
+    assert revs == on_disk
+    head = eng.alembic_head("HEAD")
+    assert head in on_disk and head not in downs
+

@@ -247,6 +247,9 @@ export interface ThinkingEvent {
   ts: string;
   text: string;
   sidechain: boolean;
+  /** How long the model thought, when the harness recorded it (omp bridge,
+   *  20.10.2026). Absent = unknown — then no duration is shown. */
+  durationMs?: number;
 }
 
 export interface CommandEvent {
@@ -333,7 +336,17 @@ export interface ChatPrompt {
 
 export interface StateEvent {
   kind: "state";
-  status: "working" | "idle" | "waiting_input" | "permission_prompt" | "unknown";
+  // ACP agents, task channel (follow-up to ADR-097): task_working = a task
+  // turn runs (the chat itself is free — no Stop, no queued echo);
+  // waiting_model = a task was delivered, its model has not answered yet.
+  status:
+    | "working"
+    | "task_working"
+    | "idle"
+    | "waiting_input"
+    | "waiting_model"
+    | "permission_prompt"
+    | "unknown";
   prompt: ChatPrompt | null;
   /** The probe's liveness verdict, published with every `state` frame — also on
    *  a hidden tab, since the backend probes regardless of focus. `null`/absent
@@ -359,7 +372,35 @@ export interface PreviewEvent {
   ts: string;
   text: string;
   source: "pane" | "acp";
+  /** `"thinking"`: the model is THINKING, this is the end of its running
+   *  thought — never an answer (operator finding 20.10.2026: minutes of
+   *  reasoning looked like "nothing happens"). Absent = answer text. */
+  block?: "thinking";
+  /** The running thought's full size in characters (`text` is only its end). */
+  chars?: number;
+  /** When the running thought began (ISO) — the chat counts up from here. */
+  startedAt?: string;
 }
+
+/** `GET /agents/{id}/chat/task-activity` — what the agent's RUNNING task does,
+ *  for the chat's task block. Since #898 the chat shows the chat session only;
+ *  an ACP task runs in a session of its own. `applies: false` = no task, or
+ *  the harness runs the task inside the chat (then the chat shows it). */
+export type TaskActivity =
+  | { applies: false }
+  | {
+      applies: true;
+      taskId: string;
+      /** A session file of the task exists (the run has started writing). */
+      hasSession: boolean;
+      deliveredAt: string | null;
+      /** The task session's newest timeline events (tool/thinking/assistant message). */
+      events: TimelineChatEvent[];
+      /** The task session's live preview — a running thought or answer — or null. */
+      preview: PreviewEvent | null;
+      /** More tasks of this agent waiting in the inbox. */
+      queued: number;
+    };
 
 /** Eine Hintergrund-Meldung der CLI: ein Subagent oder ein Hintergrund-Befehl
  *  ist fertig. Sie steht im Transkript als Nachricht mit der Rolle `user` —
