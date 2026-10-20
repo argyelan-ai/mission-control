@@ -291,6 +291,140 @@ agent and the local omp agent — may grow, inside a closed feature list, a
 budget per package and stop points. §5 (omp over ACP as the local brain) is
 unchanged. The text above is not rewritten.
 
+## Nachtrag (2026-10-20) — §4: what "automatic delivery" to the local omp agent covers
+
+Decided on 2026-10-20 (the operator delegated this decision). §4 says that
+automatic delivery of jobs to the local omp agent resumes only after the
+security step B4. The code already draws a line inside that sentence; the
+text did not. This note states the line as the code draws it today,
+including its gaps. It changes no behaviour.
+
+**(a) The agent stays paused until B4.** The local omp agent keeps
+`operational_mode=paused` until B4 (ROADMAP E4) is done. Its chat keeps
+working, as §4 and ADR-090 say.
+
+**(b) Off until B4: automatic delivery.** That means MC choosing the agent
+for a card, or pushing a card to it on its own initiative. These paths ask
+`check_dispatch_allowed` (`backend/app/services/operations.py`, rule
+`R-paused-no-dispatch` in `docs/produkt/regeln.yaml`), which refuses a
+paused agent:
+
+- `auto_dispatch_task` (`backend/app/services/dispatch.py`), for a new card
+  and for the operator's re-assign on the card in the app;
+- `mc delegate`, refused outright with HTTP 503 (`agent_delegate_task` in
+  `backend/app/routers/agent_scoped.py`);
+- review hand-off and rework (`backend/app/services/task_lifecycle.py`).
+
+The card is not lost: it stays in the inbox, still assigned.
+
+Automatic routing of a card without an assignee also counts as automatic
+delivery. A card created in the app without an agent stays unassigned
+unless lead auto-assign is on (`_leave_unassigned_for_operator` in
+`backend/app/routers/tasks.py`). Where routing runs, it picks the
+orchestrator or the board lead first (`find_dispatch_target` in
+`backend/app/services/dispatch.py`). The router does not read the mode
+itself; closing that gap is a separate fix.
+
+Three paths do **not** ask `check_dispatch_allowed`. Each of them reaches a
+paused agent, but only with a card that is already assigned to it:
+
+- the agent's own poll (c);
+- the undispatched-card watcher (`_check_undispatched_tasks` in
+  `backend/app/services/watchdog/task_monitor.py`). For a cli-bridge agent
+  it does what push dispatch does there, on a later watcher pass once the
+  agent has no other card in flight: it prepares the workspace
+  (`dispatch_to_cli_bridge` in `backend/app/services/cli_bridge_runner.py`)
+  and stamps `dispatched_at`;
+- `mc reassign` (`backend/app/routers/agent_task_status.py`), which
+  prepares the workspace right after assigning.
+
+Delivery into the agent's session is always the poll.
+
+**(c) On while paused: any card assigned to it by name, fetched by its own
+poll.** `/agent/me/poll` (`agent_poll` in `backend/app/routers/agents.py`,
+rule `R-paused-poll-takes-assigned`) does not read `operational_mode`. The
+next poll claims the card, whoever assigned it:
+
+- the operator, on the card in the app;
+- the lead agent, with `mc reassign`;
+- a scheduled job or automation that names the agent (`_do_create_task` in
+  `backend/app/services/scheduler.py`);
+- a bench-studio run (`backend/app/verticals/bench_studio/orchestrator.py`);
+- a review rework that hands the card back to the agent that built it.
+
+This decision allows that. Each of these sources names the agent on
+purpose: the operator set up the job or bench run with it, and a rework
+goes back to the card's own builder. Before B4 this is how the agent gets
+small jobs without a PR. It was checked live on 2026-10-20: cards assigned
+to the paused agent, created by the operator in the app and by a
+bench-studio run, went from the inbox to done.
+
+The poll keeps its own gates: dependencies, held or stopped cards, the
+update drain (ADR-094) and the runtime-readiness check (ADR-097). It never
+takes an unassigned card or one assigned to another agent. The system
+modes HALTED and DRAINING and the planning-phase gate live only in
+`check_dispatch_allowed`, so they do not hold a poll claim, for this agent
+or for any other.
+
+**(d) Limits while paused: known gaps, not intended behaviour.**
+
+1. *Unprepared workspace.* A refused push stops before workspace
+   preparation, which in `auto_dispatch_task` runs only after the guard.
+   The poll runs every few seconds, so it usually claims the card at once.
+   Such a card arrives with no `workspace_path` and runs in the agent's
+   workspace root, the bridge's fallback (`docker/omp-bridge/bridge.py`).
+   The bridge's guard only checks that this folder exists. A card is
+   prepared before the claim only when `mc reassign` assigned it (it
+   prepares right after assigning), or when the undispatched-card watcher
+   reaches it before the poll does. Live on 2026-10-19 and 2026-10-20 both
+   kinds happened: cards claimed at once without a workspace, and cards
+   that waited while the agent finished another one and were prepared by
+   the watcher. For a
+   repository-bound card this is the failure class of the 2026-09-13
+   incident (`docs/dispatch-path-parity.md` row 24: in an unprepared folder
+   an agent cloned the repository by short name and opened its PRs on the
+   wrong repository). Until a follow-up fixes this, the paused agent gets
+   only small jobs without a repository, and repository work stays with
+   heads. Nothing enforces this yet: the app still lets the operator assign
+   a repository-bound card to it.
+   The follow-up: prepare the workspace when the push is refused because
+   the agent is paused, or have the poll hold the claim until the workspace
+   is prepared.
+2. *Nobody watches a silent card.* The stuck-turn and silent-card watchers
+   skip paused agents (`_check_stuck_in_progress` in
+   `backend/app/services/task_runner.py`; `_check_silent_cards` and
+   `_check_silent_mailbox` in `backend/app/services/watchdog/task_monitor.py`).
+   A card the agent takes and then leaves silent is not reported. The
+   operator who assigned a card watches it. For a card from a scheduled
+   job, an automation or a bench run, nobody does. The follow-up: these
+   watchers also cover cards that a paused agent has claimed.
+3. *Display.* When the undispatched-card watcher prepares a card, it marks
+   the paused agent `run_state=running`, so the agent can show as running
+   while it is paused.
+
+**(e) Every paused agent, not only the local omp agent.** The poll line in
+(c) holds for every paused agent whose poller runs. Today that includes a
+paused host agent. A paused agent whose poller does not run keeps every
+assigned card in its inbox. ADR-085 §5 ("paused agents receive no
+dispatch"), rule `R-paused-no-dispatch` and the ROADMAP E0 acceptance line
+all mean push dispatch through `check_dispatch_allowed`. The rule text and
+the ROADMAP line now say so.
+
+**(f) Pinned by tests.** `backend/tests/test_paused_agent_poll_claim.py`
+pins four things:
+
+- push refuses the paused agent and leaves the card assigned in the inbox;
+- the agent's poll then delivers that card;
+- the poll takes no unassigned or foreign card;
+- the undispatched-card watcher prepares an assigned card for the paused
+  agent, and the poll still delivers it.
+
+If any of these changes, a test goes red, and this note changes in the
+same PR.
+
+**(g) At B4** the agent goes back to `active` and push dispatch reaches it
+again. The text above is not rewritten.
+
 ## References
 
 - Autonomy levels: `backend/app/services/autonomy.py` (`AUTONOMY_DEFAULTS`,

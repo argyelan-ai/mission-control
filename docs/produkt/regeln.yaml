@@ -25,14 +25,27 @@ rules:
     checked: 2026-09-26
 
   - id: R-paused-no-dispatch
-    says: "A paused agent receives no dispatch."
-    source: "ADR-085 section 5 (quiet mode)"
+    says: "A paused agent receives no push dispatch: check_dispatch_allowed refuses it, and a card assigned to it stays in its inbox, still assigned. Its own poll is R-paused-poll-takes-assigned."
+    source: "ADR-085 section 5 (quiet mode); ADR-089 Nachtrag 2026-10-20 (b), (e)"
     owner: backend/app/services/operations.py
     applies_to: ["backend/app/services/operations.py", "backend/app/services/task_runner.py"]
     enforced_by:
       - {test: "backend/tests/test_operations.py::test_check_dispatch_agent_paused"}
+      - {test: "backend/tests/test_paused_agent_poll_claim.py::test_paused_agent_gets_its_assigned_card_by_poll_after_push_refused"}
     status: active
-    checked: 2026-09-26
+    checked: 2026-10-20
+
+  - id: R-paused-poll-takes-assigned
+    says: "The agent poll does not read operational_mode: a paused agent whose poller runs still claims a card assigned to it by name, never an unassigned or foreign one; the undispatched-card watcher prepares such a card."
+    source: "ADR-089 Nachtrag 2026-10-20 (b), (c), (e)"
+    owner: backend/app/routers/agents.py
+    applies_to: ["backend/app/routers/agents.py", "backend/app/services/watchdog/task_monitor.py"]
+    enforced_by:
+      - {test: "backend/tests/test_paused_agent_poll_claim.py::test_paused_agent_gets_its_assigned_card_by_poll_after_push_refused"}
+      - {test: "backend/tests/test_paused_agent_poll_claim.py::test_paused_agent_poll_takes_only_cards_assigned_to_it"}
+      - {test: "backend/tests/test_paused_agent_poll_claim.py::test_undispatched_watcher_prepares_assigned_card_of_paused_agent"}
+    status: active
+    checked: 2026-10-20
 
   - id: R-local-first-default
     says: "The head launcher pre-selects a local pair and never falls back to a cloud pair on its own."
