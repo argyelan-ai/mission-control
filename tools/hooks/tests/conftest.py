@@ -44,8 +44,17 @@ def commit(repo, rel, text, msg="change"):
     git(repo, "commit", "-q", "-m", msg)
 
 
+def worktree(repo, branch, path):
+    """A second checkout of the same repository with <branch> (new, from HEAD)."""
+    git(repo, "worktree", "add", "-q", "-b", branch, str(path))
+    return path
+
+
 def run_hook(name, command, cwd=None, env_extra=None):
     env = dict(os.environ)
+    # the session running the tests must not leak its own repo into the hook
+    for k in ("MC_HOOK_REPO", "CLAUDE_PROJECT_DIR", "MC_TEST_GATE_BUDGET", "MC_TEST_GATE_MAX_FILES"):
+        env.pop(k, None)
     env["MC_TEST_GATE_PYTHON"] = sys.executable
     env["MC_TEST_GATE_TIMEOUT"] = "60"
     env.update(env_extra or {})
