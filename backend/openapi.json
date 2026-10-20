@@ -1245,6 +1245,15 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/chat/task-activity": {
+      "get": {
+        "operationId": "get_chat_task_activity_api_v1_agents__agent_id__chat_task_activity_get",
+        "summary": "Get Chat Task Activity",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/cli-sessions": {
       "get": {
         "operationId": "list_cli_sessions_api_v1_agents__agent_id__cli_sessions_get",
