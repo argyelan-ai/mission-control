@@ -360,17 +360,26 @@ function pushOrReplace(state: ChatReducerState, ev: TimelineChatEvent): ChatRedu
   return { ...state, events, index };
 }
 
+/** States in which the CHAT itself runs no turn (a task turn of an ACP agent
+ *  runs beside it, follow-up to ADR-097). */
+const CHAT_AT_REST: ReadonlySet<StateEvent["status"]> = new Set(["idle", "task_working", "waiting_model"]);
+
 export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatReducerState {
   switch (event.kind) {
-    case "state":
+    case "state": {
       /* Ruht der Agent, gibt es nichts mehr vorzuschauen — was dann noch im
-         Fach stuende, hat das Transkript nie bestaetigt. */
+         Fach stuende, hat das Transkript nie bestaetigt. Der CHAT ruht auch,
+         waehrend nur eine Aufgabe laeuft oder auf ihr Modell wartet
+         (ACP, Review Z3): ein dabei gestoppter Chat-Zug darf nicht als
+         laufend stehen bleiben. */
+      const chatAtRest = CHAT_AT_REST.has(event.status);
       return {
         ...state,
         state: event,
-        preview: event.status === "idle" ? null : state.preview,
-        toolOutputs: event.status === "idle" ? NO_TOOL_OUTPUTS : state.toolOutputs,
+        preview: chatAtRest ? null : state.preview,
+        toolOutputs: chatAtRest ? NO_TOOL_OUTPUTS : state.toolOutputs,
       };
+    }
     case "preview":
       return { ...state, preview: event };
     case "tool_output": {

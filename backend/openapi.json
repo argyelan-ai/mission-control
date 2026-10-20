@@ -2213,6 +2213,15 @@
         ]
       }
     },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/model-wait": {
+      "get": {
+        "operationId": "get_task_model_wait_api_v1_boards__board_id__tasks__task_id__model_wait_get",
+        "summary": "Get Task Model Wait",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
     "/api/v1/boards/{board_id}/tasks/{task_id}/promote": {
       "post": {
         "operationId": "promote_task_api_v1_boards__board_id__tasks__task_id__promote_post",

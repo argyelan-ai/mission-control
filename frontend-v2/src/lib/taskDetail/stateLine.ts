@@ -166,6 +166,16 @@ export function deriveStateLine({
     return { tone: statusTone, word: statusWord, detail: span ? { key: "endedAgo", values: { span } } : null };
   }
 
+  if (card?.kind === "waiting_model") {
+    // The model does not answer: the same warning tone as the chat's
+    // "Waiting for the model" (K10). Delivered and answering: still calm.
+    return {
+      tone: card.ready ? statusTone : "warning",
+      word: statusWord,
+      detail: { key: card.ready ? "waitingFirstAnswer" : "waitingModel", values: {} },
+    };
+  }
+
   // No card: inbox, review, anything else.
   if (task.status === "inbox") return { tone: statusTone, word: statusWord, detail: { key: "notStarted", values: {} } };
   return { tone: statusTone, word: statusWord, detail: agentName ? { key: "with", values: { name: agentName } } : null };

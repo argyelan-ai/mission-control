@@ -333,7 +333,17 @@ export interface ChatPrompt {
 
 export interface StateEvent {
   kind: "state";
-  status: "working" | "idle" | "waiting_input" | "permission_prompt" | "unknown";
+  // ACP agents, task channel (follow-up to ADR-097): task_working = a task
+  // turn runs (the chat itself is free — no Stop, no queued echo);
+  // waiting_model = a task was delivered, its model has not answered yet.
+  status:
+    | "working"
+    | "task_working"
+    | "idle"
+    | "waiting_input"
+    | "waiting_model"
+    | "permission_prompt"
+    | "unknown";
   prompt: ChatPrompt | null;
   /** The probe's liveness verdict, published with every `state` frame — also on
    *  a hidden tab, since the backend probes regardless of focus. `null`/absent

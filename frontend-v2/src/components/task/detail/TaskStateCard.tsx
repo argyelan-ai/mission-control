@@ -17,6 +17,9 @@
  *   RUNNING    the last step in plain words, no surface.
  *   RESULT     the resolution (2–3 lines) + the PR link — the PR shows here once.
  *   FAILED     a surface with the error in plain words + Open log.
+ *   WAITING FOR MODEL  inbox task whose model does not answer: what does
+ *              not answer + "nothing is broken", no surface (nothing to
+ *              click here — the model is started on the runtimes page).
  *   HEAD       HeadStateCard (the head's own next step + ONE main action).
  *
  * A surface only where the operator has to act (K8); the status colour sits
@@ -224,6 +227,21 @@ export function TaskStateCard({
           <MessageSquareReply size={16} aria-hidden />
           {t("detail.reply")}
         </button>
+      </Block>
+    );
+  }
+
+  if (card.kind === "waiting_model") {
+    // Model answers, first answer pending: the state line says it (K3).
+    if (card.ready) return null;
+    return (
+      <Block kind="waiting_model">
+        <p className={NEXT_TEXT} style={{ color: C.textSecondary }}>
+          {card.runtime ? t("detail.modelWaitDown", { runtime: card.runtime }) : t("detail.modelWaitDownUnnamed")}
+        </p>
+        <p className="text-sm" style={{ color: C.textMuted }}>
+          {t("detail.modelWaitHint")}
+        </p>
       </Block>
     );
   }

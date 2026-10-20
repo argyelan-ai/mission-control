@@ -12,7 +12,7 @@
  *   State line   ● Blocked · alpha asked 42 min ago — deriveStateLine()
  *   Next step    only when there is one: NEEDS YOU (embedded ApprovalCard or
  *                blocker + Reply) / RUNNING (last step) / RESULT (resolution +
- *                PR) / FAILED (error + Open log) / head — deriveStateCard()
+ *                PR) / FAILED (error + Open log) / WAITING FOR MODEL / head — deriveStateCard()
  *   Actions      run control + review (TaskActions), only when relevant
  *   Tabs         Summary · Comments · Deliverables · (Workspace) ·
  *                (Transcript) · Timeline · History — sticky, sentence case
@@ -811,6 +811,16 @@ export function TaskDetailBody({
     refetchInterval: 15_000,
   });
 
+  // Delivered is not working (follow-up to ADR-097): an assigned inbox task
+  // may be waiting for its agent's model — the card says so.
+  const waitsForStart = task.status === "inbox" && !!task.assigned_agent_id;
+  const { data: modelWait = null } = useQuery({
+    queryKey: ["task-model-wait", boardId, task.id],
+    queryFn: () => api.tasks.modelWait(boardId, task.id),
+    enabled: waitsForStart,
+    refetchInterval: 15_000,
+  });
+
   // Shared query key with TaskComments — feeds the state card (last step,
   // blocker reason, resolution) and is a cache hit on the Comments tab.
   const { data: comments = [] } = useQuery({
@@ -869,6 +879,7 @@ export function TaskDetailBody({
     runRecord: runRecord ?? null,
     headRun: latestHeadRun,
     openQuestion: needsYouStatus ? openQuestion : null,
+    modelWait: waitsForStart ? modelWait : null,
   });
   const stateLine = deriveStateLine({ task, card: stateCard, agents, locale });
 

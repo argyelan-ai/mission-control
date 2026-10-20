@@ -783,6 +783,9 @@ export const api = {
       list: (boardId: string, taskId: string) =>
         request<TaskChecklistItem[]>(`/api/v1/boards/${boardId}/tasks/${taskId}/checklist`),
     },
+    /** Is this assigned inbox task waiting for its agent's model? */
+    modelWait: (boardId: string, taskId: string) =>
+      request<import("./types").TaskModelWait>(`/api/v1/boards/${boardId}/tasks/${taskId}/model-wait`),
     gitInfo: (boardId: string, taskId: string) =>
       request<TaskGitInfo>(`/api/v1/boards/${boardId}/tasks/${taskId}/git-info`),
     gitDiff: (boardId: string, taskId: string, commit: string) =>
