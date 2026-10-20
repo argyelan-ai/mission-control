@@ -21,7 +21,8 @@ fail as a whole ("Internal error: Connection error.").
   the END of the reply; the model's own words stay.
 
 Both read ``MODEL_UNREACHABLE_RE`` and ``UNREACHABLE_TAIL_CHARS`` from here —
-one source. Standard library only, Python 3.9+: the host's Hermes chat
+one source. The chat alone adds ``MODEL_STOPPED_RE`` (the engine stopped
+mid-request), and only on omp's own error line. Standard library only, Python 3.9+: the host's Hermes chat
 daemon imports this through ``acp_chat.py`` with the system Python.
 """
 from __future__ import annotations
