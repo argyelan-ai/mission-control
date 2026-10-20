@@ -116,6 +116,8 @@ features:
       - "* /api/v1/boards/*/tasks/{task_id}/git-diff"
       - "* /api/v1/boards/*/tasks/{task_id}/git-info"
       - "* /api/v1/boards/*/tasks/{task_id}/hierarchy"
+      # The task card's model-wait block (ADR-097 addendum, #897).
+      - "* /api/v1/boards/*/tasks/{task_id}/model-wait"
       - "* /api/v1/boards/*/tasks/{task_id}/promote"
       - "* /api/v1/boards/*/tasks/{task_id}/resume"
       - "* /api/v1/boards/*/tasks/{task_id}/review"
