@@ -5,16 +5,15 @@ Incident context 2026-04-23 (DNA task, Boss): Boss had workspace_path=
 crashed with PermissionError, the operator got a cryptic blocker message.
 """
 
-from pathlib import Path
 
 import pytest
 
+from app.config import settings
 from app.services.dispatch import is_backend_writable_path
 
-# is_backend_writable_path prefixes against settings.home_host, which
-# defaults to the real Path.home() — match that dynamically instead of a
-# hardcoded machine-specific path.
-HOME = str(Path.home())
+# is_backend_writable_path prefixes against settings.home_host — in tests the
+# stand-in host home from conftest, never the real one — so match that.
+HOME = settings.home_host
 
 
 class TestIsBackendWritablePath:
