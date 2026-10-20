@@ -882,7 +882,6 @@ def drive_run(
                 # mc finish requires in_progress; a finishing run had output.
                 lifecycle.ack(task_id)
                 acked = True
-                _flush_notes()
             lifecycle.finish(task_id, outcome.reflection_block or "", review=action.review)
         else:
             if action.action == "retry":
