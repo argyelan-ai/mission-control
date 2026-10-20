@@ -29,15 +29,15 @@ router = APIRouter(prefix="/api/v1/internal", tags=["internal"])
 #: Highest answer budget (one turn's output, thinking included) MC gives a
 #: local model: four times the old cap. Vendors suggest more for their longest
 #: reasoning runs (the DeepSeek V4.1 Flash model card recommends max_tokens of
-#: at least 256K). Not free: the budget is sent as ``max_tokens`` on EVERY
-#: request, and an engine with one shared context pool reserves prompt +
-#: max_tokens for each request when it admits it (TensorFold's DeepSeek family:
-#: one pool for all parallel streams). So a bigger budget costs pool room on
-#: every request, even a short one, not only on long turns: fewer long prompts
-#: fit side by side, and kept prompt caches are dropped sooner. A trade-off
-#: between answer room and pool room, not a model limit. 65536 would halve that
-#: cost but give the highest effort only twice the room that already ran out at
-#: the default effort.
+#: at least 256K). Not free: omp sends the budget as the request's output limit
+#: (``max_completion_tokens``) on EVERY request, and an engine with one shared
+#: context pool reserves prompt + that limit for each request when it admits it
+#: (TensorFold's DeepSeek family: one pool for all parallel streams). So a
+#: bigger budget costs pool room on every request, even a short one, not only
+#: on long turns: fewer long prompts fit side by side, and kept prompt caches
+#: are dropped sooner. A trade-off between answer room and pool room, not a
+#: model limit. 65536 would halve that cost but give the highest effort only
+#: twice the room that already ran out at the default effort.
 LOCAL_MAX_OUTPUT_TOKENS = 131072
 #: The previous fixed cap. Still the whole rule for cloud endpoints, and the
 #: floor for local ones.
