@@ -13,7 +13,8 @@ events come from the adapter's own parser via ``read_history`` — the same
 normalized events the chat renders — and the live preview from the adapter's
 preview channel (a running thought is a ``preview`` with ``block:
 "thinking"``). A harness whose task runs INSIDE the chat (Claude Code, omp
-under the native driver) answers ``applies: false``: its chat shows the task.
+under the native driver, Hermes — over ACP its bridge hands the task to the
+chat daemon) answers ``applies: false``: its chat shows the task.
 
 Whether the model answers at all is not this block's business — the chat's
 status line says that (#897, "Wartet auf das Modell").

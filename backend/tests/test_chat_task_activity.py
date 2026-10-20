@@ -11,8 +11,8 @@ with that the ACP task session, its delivery, tools and thoughts left the chat.
 the last few timeline events of the task's own session (same parser as the
 chat), the task session's live preview (a running thought included) and how
 many more tasks wait in the agent's inbox. A harness whose tasks run INSIDE the
-chat (Claude Code, native omp) answers ``applies: false`` — its chat already
-shows the task.
+chat (Claude Code, native omp, Hermes) answers ``applies: false`` — its chat
+already shows the task.
 
 Folder layout and header shapes follow the live sessions tree of an omp agent of 20.10.2026
 (ids made up).
@@ -106,8 +106,8 @@ def acp_driver(monkeypatch):
 async def _setup(make_agent, make_board, make_task, tmp_path, monkeypatch, *, harness="omp",
                  status="in_progress", **agent_kw):
     board = await make_board(slug=f"b-{os.urandom(3).hex()}")
-    agent = await make_agent(name="Alpha", slug="alpha", agent_runtime="cli-bridge", harness=harness,
-                             **agent_kw)
+    agent_kw.setdefault("agent_runtime", "cli-bridge")
+    agent = await make_agent(name="Alpha", slug="alpha", harness=harness, **agent_kw)
     now = datetime.now(timezone.utc)
     task = await make_task(board.id, title="Port the checklist", status=status,
                            assigned_agent_id=agent.id, dispatched_at=now - timedelta(minutes=3),
@@ -297,6 +297,46 @@ async def test_harness_whose_task_runs_in_the_chat_does_not_apply(
     )
     body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/task-activity")).json()
     assert body == {"applies": False}
+
+
+@pytest.mark.asyncio
+async def test_hermes_over_acp_runs_its_task_in_the_chat_and_does_not_apply(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch
+):
+    """Review R1: the hermes-bridge hands an ACP task to the CHAT daemon
+    (``deliver_prompt`` -> ``daemon.prompt``) — the operator sees the work in
+    the chat itself. A task block above it was an empty box ("delivered N
+    minutes ago", no steps) that polled every 2 s."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "hermes_driver", "acp", raising=False)
+    _board, agent, task, root, now = await _setup(
+        make_agent, make_board, make_task, tmp_path, monkeypatch, harness="hermes",
+        agent_runtime="host",
+    )
+    ws = root / "--workspace--"
+    _write(ws / f"2026-10-20T03-36-53_{CHAT_SID}.jsonl",
+           [_sink_header(CHAT_SID, _iso(now)), _dispatch(_iso(now), str(task.id))])
+    body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/task-activity")).json()
+    assert body == {"applies": False}
+
+
+def test_only_omp_runs_tasks_in_sessions_of_their_own(monkeypatch):
+    from app.config import settings
+    from app.services.transcript_adapters import adapter_for
+
+    monkeypatch.setattr(settings, "hermes_driver", "acp", raising=False)
+    monkeypatch.setattr(settings, "omp_driver_default", "acp", raising=False)
+
+    class _A:
+        def __init__(self, runtime, harness):
+            self.agent_runtime, self.harness = runtime, harness
+
+    hermes = adapter_for(_A("host", "hermes"))
+    assert hermes.tasks_in_own_session() is False
+    assert hermes.find_task_session is None
+    omp = adapter_for(_A("cli-bridge", "omp"))
+    assert omp.tasks_in_own_session() is True and callable(omp.find_task_session)
 
 
 @pytest.mark.asyncio
