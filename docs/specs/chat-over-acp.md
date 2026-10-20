@@ -57,7 +57,7 @@ acp_chat_ctl.py <op>  (CLI shim used by docker exec)      ·      hermes-bridge.
 - Running task in the agent chat (20.10.2026): the agent chat shows the chat daemon's session only (#898); a task runs in a session of its own (bridge header `taskId`). `GET /agents/{id}/chat/task-activity` reads that session through the same adapter (`find_task_session`, `tasks_in_own_session`) and the chat renders it as a separate "From the task" block — delivery, the newest steps, the running thought, more inbox tasks. Harnesses whose task runs inside the chat answer `applies: false` — Claude Code, omp under the native driver, and Hermes (over ACP the hermes-bridge hands a task to the chat daemon itself).
 - `configOptions` (from `session/new`/`session/load` result and `config_option_update` notifications) and `available_commands_update` are kept in memory and mirrored to `sessions_dir/acp-chat-state.json` after every change.
 - Permissions: `OMP_ACP_PERMISSIONS` policy (yolo → allow), same helper as the bridge.
-- Errors → transcript `custom_message` line, `customType: "chat_error"`, content = human text, plus `data: {"code": ..., "detail": ...}`. Codes: `rpc_error` (JSON-RPC error on prompt/config), `provider_error` (`401`/`403`/`429`/quota text detected in the error or in the final agent text when the turn produced no text), `empty_turn` (turn ended with stopReason `end_turn` and zero agent text), `process_exit` (child died; daemon restarts it and re-loads the session — `data.retryText` carries the operator's text of the turn that died, when its reply never came), `turn_interrupted` (the daemon restarted while a reply ran; `detail` is `turn <n>` or `turn unknown`, `data.retryText` the operator's text — see "Interrupted turns"), `busy`, `session_reset` (the conversation to resume could not be opened; `detail` is `transcript_missing` when its transcript is gone, `model_missing` when omp cannot restore the session's model — the content then names the model, and `data.model` carries the name for the card in the UI language —, otherwise the exception), `queue_full` (20 messages already held), `new_session_failed` (`session/new` refused; the current session continues), `queue_lost` (a restart dropped held jobs, and a `/new` that was running), `cancelled` is NOT an error (it produces a normal end-of-turn). Extra fields of a card go through `ACPEventMapper.map_chat_error(code, detail, text, data=None)`: they never replace `code` or `detail`, a `None` value is left out, and without `data` the line is exactly the one before S1-R5.
+- Errors → transcript `custom_message` line, `customType: "chat_error"`, content = human text, plus `data: {"code": ..., "detail": ...}`. Codes: `rpc_error` (JSON-RPC error on prompt/config), `provider_error` (`401`/`403`/`429`/quota text detected in the error or in the final agent text when the turn produced no text), `empty_turn` (turn ended with stopReason `end_turn` and zero agent text), `process_exit` (child died; daemon restarts it and re-loads the session — `data.retryText` carries the operator's text of the turn that died, when its reply never came), `turn_interrupted` (the daemon restarted while a reply ran; `detail` is `turn <n>` or `turn unknown`, `data.retryText` the operator's text — see "Interrupted turns"), `model_unreachable` (the model's endpoint does not answer — omp's own error line says so, or the prompt failed with it; `detail` is omp's line, `data.retryText` the operator's text; decided before `provider_error`, `rpc_error` and `empty_turn` — see "The model is not answering"), `busy`, `session_reset` (the conversation to resume could not be opened; `detail` is `transcript_missing` when its transcript is gone, `model_missing` when omp cannot restore the session's model — the content then names the model, and `data.model` carries the name for the card in the UI language —, otherwise the exception), `queue_full` (20 messages already held), `new_session_failed` (`session/new` refused; the current session continues), `queue_lost` (a restart dropped held jobs, and a `/new` that was running), `cancelled` is NOT an error (it produces a normal end-of-turn), and neither is a turn omp's own line calls aborted. Extra fields of a card go through `ACPEventMapper.map_chat_error(code, detail, text, data=None)`: they never replace `code` or `detail`, a `None` value is left out, and without `data` the line is exactly the one before S1-R5.
 - Model pin (incident 19.10.2026): every `session/new` and `session/load` pins the selector read from the CURRENT `omp.env` (`acp_model.current_selector` — a runtime switch re-renders that file in the running container; the daemon's boot env goes stale). A selector the session does not offer is replaced by the offered model of the same provider and the chat gets a `custom_message` line `customType: "chat_notice"`, `data: {"code": "model_fallback", "previous", "current"}` (frontend `ChatNoticeCard`, `chat.notice.*`). The task path (`bridge.run_acp_once`) does the same, writes a refused pin into the task's chat as `chat_error`, and marks its prompts `attribution: "mc"` + `origin: {kind: "task"|"nudge"}` so the chat shows them as task events, not as operator bubbles.
 - Socket server: `$OMP_HOME/acp-chat.sock` (path configurable via `--socket`), newline-delimited JSON; each connection = one request/one response.
 
@@ -300,6 +300,57 @@ changed files — must not run twice without the operator deciding it.
   "Send again" button sends it through the normal send path, once, and only
   on the newest such card (S1-R7).
 - No code path sends a prompt from `start()` or from the child restart.
+
+### The model is not answering (S1-R6, 20.10.2026)
+
+When the model's endpoint is gone (the engine stopped, the box is off),
+omp 18.10.1 retries, gives up and sends its error line as ordinary text
+(`agent_message_chunk`). The ACP stop reason is then `refusal` (omp's
+pattern `refus(al|ed)` matches "ECONNREFUSED") or `end_turn` ("Unable to
+connect …" without ECONNREFUSED) — never `error`. Before S1-R6 the chat
+showed that line as the agent's answer. Now it is a card.
+
+- **The signal is omp's own session file** (the file named after the
+  session, next to `.mc/`). omp writes every failed turn there as an
+  assistant line with `stopReason: "error"` and `errorMessage`; an attempt
+  it retried carries `retryRecovery.status` `superseded` or `recovered`, an
+  abort is `stopReason: "aborted"`. After the turn the daemon reads what
+  omp wrote since the job was claimed and takes the turn's final line: the
+  last message line, when it is an assistant line that ends a turn (not a
+  tool call, not a retried attempt, not followed by a user line). Whether
+  omp's line is on disk when the prompt reply arrives is not proven, so the
+  read tries 5 × 100 ms. It reads only for a turn whose text names a lost
+  model or that has no text: an ordinary answer never waits.
+- **One pattern** for the chat and the task path: `MODEL_UNREACHABLE_RE`
+  and `UNREACHABLE_TAIL_CHARS = 300` live in `docker/omp-bridge/model_errors.py`
+  (standard library, Python 3.9+); `bridge.py` (#897, tasks) imports them.
+
+| the turn | the chat shows |
+|---|---|
+| omp's final line is `error`, its `errorMessage` matches, the reply text IS that line | **no** reply bubble, ONE `chat_error` card `model_unreachable` |
+| the same after a real answer (the reply has more text than omp's line) | the reply bubble stays, plus the card |
+| the prompt fails with a matching error ("Internal error: Connection error.") | the card `model_unreachable` (before S1-R6: `rpc_error`) |
+| omp's final line is `aborted` ("Interrupted by user", "Operation aborted") | no card at all, like Stop (no `empty_turn` either) |
+| omp's final line is `error` with any other message (401, 429, a stream timeout) | as before S1-R6 — its own card is a later step |
+| omp's final line is a real answer | as before: a model that talks about a refused connection stays an answer |
+| no final line from omp (no file, unreadable, nothing written in time; Hermes has no omp file) | the text rule: the END of the text (300 characters) matches AND the stop reason is `refusal` OR the reply carries no `usage` at all (omp sends none for a turn without tokens). The bubble is hidden only without `usage`: tokens mean the model spoke |
+
+- The card: content "The model is not answering — check the Runtimes
+  page. Your message is not lost.", `data: {"code": "model_unreachable",
+  "detail": <omp's line, at most 240 characters>, "retryText": <the
+  operator's whole text>}`. `retryText` follows the rules of
+  `turn_interrupted`: only for `origin: "operator"`, only the whole text
+  (at most 8000 characters). For any other origin the card has no
+  `retryText` and says only "The model is not answering — check the
+  Runtimes page." The frontend links the card to the Runtimes page (S1-R7).
+- No chat state "waiting for the model": the turn is over and the card
+  says it. `waiting_model` stays a phase of the task channel (#897).
+- **Deliberate difference to the task path:** the task path has no omp line
+  to ask; it reads the END of the turn's text, guarded by the completion
+  sentinel. A model's own answer whose end talks about a refused
+  connection is "unreachable" there and an answer in the chat. For every
+  #897 template with omp's error line both say the same — the parity table
+  in `docker/omp-bridge/tests/test_acp_chat_model_unreachable.py`.
 
 ### Control protocol (socket and HTTP share the schema)
 
