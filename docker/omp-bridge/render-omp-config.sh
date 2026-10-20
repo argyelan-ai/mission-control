@@ -326,11 +326,15 @@ gmi-cloud google google-antigravity google-gemini-cli google-vertex groq helmcod
 huggingface kilo kimi-code litellm lm-studio meta minimax minimax-code
 minimax-code-cn mistral moonshot muse-code nanogpt novita nvidia ollama
 ollama-cloud openai openai-codex opencode-go opencode-zen openrouter qianfan
-qwen-portal sakana siliconflow siliconflow-cn singularityapi-dev
+sakana siliconflow siliconflow-cn singularityapi-dev
 singularityapi-tech snowflake stepfun synthetic together typesafe umans venice
 vercel-ai-gateway vllm wafer-serverless xai xai-oauth xiaomi
 xiaomi-token-plan-ams xiaomi-token-plan-cn xiaomi-token-plan-sgp yolo-auto zai
 zenmux zhipu-coding-plan"
+# Eine Provider-ID, die wie ein Modellname aussieht: sie SPERRT einen Provider,
+# sie wählt kein Modell — darum die Freigabe-Marke für
+# backend/tests/test_no_hardcoded_models.py auf genau dieser Zeile.
+_OMP_BUILTIN_PROVIDERS="${_OMP_BUILTIN_PROVIDERS} qwen-portal"  # model-catalog: allow
 
 if command -v omp >/dev/null 2>&1; then
     # JSON über python3 statt von Hand: Modell-IDs dürfen `/`, `:` usw.
