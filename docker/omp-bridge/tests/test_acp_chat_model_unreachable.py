@@ -25,16 +25,27 @@ Contract (docs/specs/chat-over-acp.md, "The model is not answering"):
    ``model_unreachable``; ``detail`` = omp's line (at most 240 characters),
    ``data.retryText`` = the operator's whole text (S1-R5 rules: only the
    operator's own text, at most 8000 characters, never cut).
-2. The reply text IS omp's error line -> no reply bubble. A real reply
-   before the error -> the bubble stays and the card comes too.
+2. omp's error line is cut off the END of the reply text, the bubble shows
+   what is left: nothing (no bubble) when the text was only omp's line, the
+   model's own words when it wrote before. Live (omp 18.10.1, 13 of 13 MC
+   copies): after retries omp's file says ``Retry budget exhausted after N
+   retries: <line>`` while the ACP text carries only ``<line>`` — the
+   attempt's own message — and in 3 of 13 it is glued onto the model's
+   last sentence without a separator.
 3. A prompt that fails with a matching error -> ``model_unreachable``,
    not ``rpc_error``.
-4. An abort (omp's line ``aborted``, or the abort wording) -> no card.
-5. Any other error (401, 429, ...) -> as before S1-R6 (its own card later).
+4. An abort (omp's line ``aborted``) -> no card. An ``error`` line that
+   merely says "aborted" is not an abort.
+5. The engine stopped mid-request (omp's OWN error line: "stream timed
+   out", "stream stalled", "socket connection was closed") -> the same
+   card; never from the text alone and never in the task path.
+   Any other error (401, 429, ...) -> as before S1-R6 (its own card later).
 6. Only when omp's file gives no answer (missing, unreadable, no final
    line in time): the END of the text (300 characters) must match AND the
    ACP stop reason is ``refusal`` OR the reply has no ``usage`` at all
-   (omp sends none for a turn without tokens — never "0 tokens").
+   (omp sends none for a turn without tokens — never "0 tokens"). The
+   bubble is hidden only without ``usage`` and only when the card's
+   ``detail`` holds the whole text — no word is ever lost.
 7. omp's file is read from where it ended when the turn started: a line
    of an earlier turn never counts. omp's flush at the turn's end is not
    proven, so the read waits a moment for the final line.
@@ -71,7 +82,9 @@ from test_acp_chat import (  # noqa: E402
 #: and in omp's session files (live 20.10.2026).
 ECONN_TEXT = "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
 UNABLE_TEXT = "Unable to connect. Is the computer able to access the url?"
-BUDGET_TEXT = "Retry budget exhausted after 10 retries: " + UNABLE_TEXT
+BUDGET_PREFIX = "Retry budget exhausted after 10 retries: "
+BUDGET_TEXT = BUDGET_PREFIX + UNABLE_TEXT
+BUDGET_ECONN = BUDGET_PREFIX + ECONN_TEXT
 AUTH_TEXT = "401 Unauthorized: the API key was not accepted."
 
 CARD_TEXT = ("The model is not answering — check the Runtimes page. "
@@ -136,6 +149,15 @@ def omp_tool_result() -> dict:
 
 def omp_reply(text: str) -> dict:
     return omp_assistant("stop", content=[{"type": "text", "text": text}])
+
+
+def omp_gave_up(inner: str, *, retries: int = 3, final: str = "") -> list[dict]:
+    """omp 18.10.1 after retries, as in its files (live 20.10.2026): one
+    ``superseded`` line per attempt with the attempt's own message, then
+    the final line ``Retry budget exhausted after N retries: <inner>``. The
+    ACP text of such a turn is ``inner`` — never the final line."""
+    return ([omp_assistant("error", error=inner, retry="superseded") for _ in range(retries)]
+            + [omp_assistant("error", error=final or BUDGET_PREFIX + inner)])
 
 
 class OmpClient(FakeClient):
@@ -223,17 +245,29 @@ def replies(lines) -> list[str]:
 
 
 def test_1_econnrefused_line_is_a_card_not_a_reply(tmp_path):
+    """The live shape (10 of 13 MC copies): the ACP text is the attempt's
+    line, omp's final line wraps it in "Retry budget exhausted ..."."""
     lines, sess = run_turn(tmp_path, {
         "chunks": [ECONN_TEXT], "stopReason": "refusal",  # no usage: 0 tokens
-        "omp": [omp_assistant("error", error=ECONN_TEXT)],
+        "omp": omp_gave_up(ECONN_TEXT),
     })
     assert replies(lines) == [], "omp's error line must not read as the agent's answer"
     assert codes(lines) == ["model_unreachable"]
     card = cards(lines)[0]
     assert card["content"] == CARD_TEXT
-    assert card["data"]["detail"] == ECONN_TEXT
+    assert card["data"]["detail"] == BUDGET_ECONN
     assert card["data"]["retryText"] == PROMPT
     assert sess.state()["lastError"]["code"] == "model_unreachable"
+
+
+def test_1b_without_retries_the_text_is_omps_final_line_itself(tmp_path):
+    lines, _ = run_turn(tmp_path, {
+        "chunks": [ECONN_TEXT], "stopReason": "refusal",
+        "omp": [omp_assistant("error", error=ECONN_TEXT)],
+    })
+    assert replies(lines) == []
+    assert codes(lines) == ["model_unreachable"]
+    assert cards(lines)[0]["data"]["detail"] == ECONN_TEXT
 
 
 def test_2_unable_to_connect_after_tools_is_a_card(tmp_path):
@@ -241,11 +275,11 @@ def test_2_unable_to_connect_after_tools_is_a_card(tmp_path):
     omp ends ``end_turn``; the model worked first (tools, tokens)."""
     lines, _ = run_turn(tmp_path, {
         "chunks": [UNABLE_TEXT], "stopReason": "end_turn", "usage": USAGE,
-        "omp": [omp_tool_use(), omp_tool_result(), omp_assistant("error", error=UNABLE_TEXT)],
+        "omp": [omp_tool_use(), omp_tool_result(), *omp_gave_up(UNABLE_TEXT)],
     })
     assert replies(lines) == []
     assert codes(lines) == ["model_unreachable"]
-    assert cards(lines)[0]["data"]["detail"] == UNABLE_TEXT
+    assert cards(lines)[0]["data"]["detail"] == BUDGET_TEXT
 
 
 def test_2b_an_empty_reply_with_omps_error_line_is_the_card_not_empty_turn(tmp_path):
@@ -256,17 +290,43 @@ def test_2b_an_empty_reply_with_omps_error_line_is_the_card_not_empty_turn(tmp_p
     assert codes(lines) == ["model_unreachable"]
 
 
-def test_3_retry_budget_line_is_a_card(tmp_path):
-    attempts = [omp_assistant("error", error=UNABLE_TEXT, retry="superseded")
-                for _ in range(3)]
+@pytest.mark.parametrize("acp_text", [UNABLE_TEXT, BUDGET_TEXT], ids=["inner-line", "whole-line"])
+def test_3_retry_budget_line_is_a_card(tmp_path, acp_text):
+    """omp's file: "Retry budget exhausted ...: <line>"; the ACP text: the
+    inner line (live) — or, should omp ever send it, the whole line."""
     lines, _ = run_turn(tmp_path, {
-        "chunks": [BUDGET_TEXT], "stopReason": "end_turn", "usage": USAGE,
-        "omp": [omp_tool_use(), omp_tool_result(), *attempts,
-                omp_assistant("error", error=BUDGET_TEXT)],
+        "chunks": [acp_text], "stopReason": "end_turn", "usage": USAGE,
+        "omp": [omp_tool_use(), omp_tool_result(), *omp_gave_up(UNABLE_TEXT)],
     })
     assert replies(lines) == []
     assert codes(lines) == ["model_unreachable"]
     assert cards(lines)[0]["data"]["detail"] == BUDGET_TEXT
+
+
+def test_3c_another_wrapper_wording_the_retried_attempts_line_still_counts(tmp_path):
+    """Not tied to omp's current prefix: the text that ends with the line of
+    an attempt omp retried in this turn is omp's, whatever the final line
+    wraps it in."""
+    lines, _ = run_turn(tmp_path, {
+        "chunks": [UNABLE_TEXT], "stopReason": "end_turn",
+        "omp": omp_gave_up(UNABLE_TEXT, final="Gave up (10 attempts) - " + UNABLE_TEXT),
+    })
+    assert replies(lines) == []
+    assert codes(lines) == ["model_unreachable"]
+
+
+def test_3d_omps_line_glued_onto_the_models_words_is_cut_off(tmp_path):
+    """Live (3 of 13 MC copies): the model wrote a sentence, then omp's line
+    follows without a separator. The bubble keeps the model's words only;
+    omp's line is in the card."""
+    before = "Empty output - I check the CLI."
+    lines, _ = run_turn(tmp_path, {
+        "chunks": [before, UNABLE_TEXT], "stopReason": "end_turn", "usage": USAGE,
+        "omp": [omp_reply(before), omp_tool_use(), omp_tool_result(),
+                *omp_gave_up(UNABLE_TEXT)],
+    })
+    assert replies(lines) == [before]
+    assert codes(lines) == ["model_unreachable"]
 
 
 def test_3b_the_detail_is_at_most_240_characters(tmp_path):
@@ -321,13 +381,24 @@ def test_5_a_real_answer_about_connection_refused_stays_a_reply(tmp_path, answer
 
 def test_6_a_real_reply_then_the_error_keeps_the_reply_and_adds_the_card(tmp_path):
     before = "I started the test run and read the first results."
-    text = before + "\n\n" + ECONN_TEXT
     lines, _ = run_turn(tmp_path, {
         "chunks": [before, "\n\n" + ECONN_TEXT], "stopReason": "refusal", "usage": USAGE,
         "omp": [omp_reply(before), omp_tool_use(), omp_tool_result(),
-                omp_assistant("error", error=ECONN_TEXT)],
+                *omp_gave_up(ECONN_TEXT)],
     })
-    assert replies(lines) == [text], "the model's own words must stay"
+    assert replies(lines) == [before], "the model's own words stay, omp's line is the card"
+    assert codes(lines) == ["model_unreachable"]
+
+
+def test_6b_the_error_wording_inside_the_models_words_is_never_cut(tmp_path):
+    """Only omp's line at the very END is cut: the same words earlier in the
+    model's answer stay."""
+    text = ("Before: " + UNABLE_TEXT + " That was yesterday's log.")
+    lines, _ = run_turn(tmp_path, {
+        "chunks": [text], "stopReason": "end_turn", "usage": USAGE,
+        "omp": [omp_tool_use(), omp_tool_result(), *omp_gave_up(UNABLE_TEXT)],
+    })
+    assert replies(lines) == [text]
     assert codes(lines) == ["model_unreachable"]
 
 
@@ -357,6 +428,17 @@ def test_8_an_abort_is_no_card(tmp_path, wording):
     })
     assert codes(lines) == []
     assert replies(lines) == []
+
+
+def test_8c_an_error_line_that_says_aborted_is_not_an_abort(tmp_path):
+    """Only omp's ``aborted`` line is an abort. An ``error`` line with the
+    abort wording and no text is what it was before S1-R6: an empty turn
+    the operator must see, not a silent end."""
+    lines, _ = run_turn(tmp_path, {
+        "chunks": [], "stopReason": "end_turn",
+        "omp": [omp_assistant("error", error="Request was aborted.")],
+    })
+    assert codes(lines) == ["empty_turn"]
 
 
 def test_8b_stop_pressed_is_no_card(tmp_path):
@@ -398,6 +480,37 @@ def test_9c_without_omps_file_refusal_after_work_keeps_the_reply_and_adds_the_ca
     assert codes(lines) == ["model_unreachable"]
 
 
+def test_9e_without_omps_file_a_short_text_is_hidden_only_whole_in_the_card(tmp_path):
+    """The text rule can misread a short reply without ``usage`` (Hermes'
+    slash commands send none). Then the card's ``detail`` holds the whole
+    text: hidden, never lost."""
+    text = "I checked the proxy: the upstream returned 502 Bad Gateway."
+    lines, _ = run_turn(tmp_path, {
+        "chunks": [text], "stopReason": "end_turn",
+    }, omp_file=False)
+    assert replies(lines) == []
+    assert cards(lines, "model_unreachable")[0]["data"]["detail"] == text
+
+
+def test_9f_without_omps_file_a_text_longer_than_the_detail_keeps_its_bubble(tmp_path):
+    text = ("Proxy check. " * 30) + "The upstream returned 502 Bad Gateway."
+    lines, _ = run_turn(tmp_path, {
+        "chunks": [text], "stopReason": "end_turn",
+    }, omp_file=False)
+    assert replies(lines) == [text], "the card cannot show it all: the words stay"
+    assert codes(lines) == ["model_unreachable"]
+
+
+def test_9g_without_omps_file_a_stopped_engine_is_never_read_from_the_text(tmp_path):
+    """"stream timed out" counts only on omp's own error line: in a model's
+    text it is far too common."""
+    lines, _ = run_turn(tmp_path, {
+        "chunks": ["OpenAI completions stream timed out while waiting for the first event"],
+        "stopReason": "end_turn",
+    }, omp_file=False)
+    assert "model_unreachable" not in codes(lines)
+
+
 def test_9d_without_omps_file_the_word_early_in_a_long_text_is_no_card(tmp_path):
     text = "ECONNREFUSED was in yesterday's log.\n" + ("Analysis. " * 60)
     lines, _ = run_turn(tmp_path, {
@@ -422,6 +535,10 @@ def test_10_one_source_for_the_pattern():
     holders = sorted(p.name for p in ROOT.glob("*.py")
                      if "ehostunreach" in p.read_text(encoding="utf-8"))
     assert holders == ["model_errors.py"], holders
+    # The engine-stopped words are the chat's, on omp's own line only: the
+    # task path's pattern stays #897's.
+    assert not bridge.MODEL_UNREACHABLE_RE.search(STALL_TEXTS[0])
+    assert not hasattr(bridge, "MODEL_STOPPED_RE")
 
 
 # ── 11. parity with the task path (#897) ────────────────────────────────────
@@ -467,6 +584,12 @@ PARITY = [
      True, None, omp_assistant("error", error=ECONN_TEXT), True, True),
     ("unable to connect, end_turn", UNABLE_TEXT, "end_turn", True, None,
      omp_assistant("error", error=UNABLE_TEXT), True, True),
+    # The live shape: the text carries the attempt's line, omp's final line
+    # wraps it (10 of 13 MC copies).
+    ("live: inner line, omp gave up", ECONN_TEXT, "refusal", False, None,
+     omp_assistant("error", error=BUDGET_ECONN), True, True),
+    ("live: words, then the inner line glued", "Ich lese den Code." + UNABLE_TEXT,
+     "end_turn", True, None, omp_assistant("error", error=BUDGET_TEXT), True, True),
     ("prompt fails: connection error", "", "", False, "Internal error: Connection error.",
      None, True, True),
     ("real finish mentioning the word", _finish_mentioning_the_word(), "end_turn", True,
@@ -484,6 +607,14 @@ PARITY = [
     # answered — a model's answer is never turned into a card.
     ("DIFFERENT: the model's own answer ends on the word", _TALKING_END, "end_turn", True,
      None, omp_reply(_TALKING_END), True, False),
+    # Deliberate difference: the engine stopped mid-request. The chat has
+    # omp's own error line and says so; the task path keeps its own
+    # handling (a transient error, the completion contract, #897).
+    ("DIFFERENT: the engine stopped mid-request",
+     "OpenAI completions stream timed out while waiting for the first event", "end_turn",
+     True, None,
+     omp_assistant("error", error="OpenAI completions stream timed out while waiting for the first event"),
+     False, True),
 ]
 
 
@@ -504,6 +635,50 @@ def test_11_parity_with_the_task_path(row):
         assert task == chat, f"{name}: the chat and the task path disagree"
 
 
+# ── 12. the engine stopped mid-request (omp's own line only) ────────────────
+
+
+#: omp's words when the endpoint took the request but stopped answering
+#: (live, final error lines with 0 output tokens, 19 in the files).
+STALL_TEXTS = [
+    "OpenAI completions stream timed out while waiting for the first event",
+    "OpenAI completions stream stalled while waiting for the next event",
+    "The socket connection was closed unexpectedly. For more information, "
+    "pass `verbose: true` in the second argument to fetch()",
+]
+
+
+@pytest.mark.parametrize("stall", STALL_TEXTS, ids=["first-event", "stalled", "socket"])
+def test_12_the_engine_stopped_mid_request_is_the_card(tmp_path, stall):
+    lines, _ = run_turn(tmp_path, {
+        "chunks": [stall], "stopReason": "end_turn", "usage": USAGE,
+        "omp": [omp_tool_use(), omp_tool_result(), *omp_gave_up(stall)],
+    })
+    assert replies(lines) == []
+    assert codes(lines) == ["model_unreachable"]
+    assert stall[:60] in cards(lines)[0]["data"]["detail"]
+
+
+def test_12b_the_engine_stopped_after_the_models_words_keeps_them(tmp_path):
+    before = "Now writing the single-file scene."
+    lines, _ = run_turn(tmp_path, {
+        "chunks": [before, STALL_TEXTS[1]], "stopReason": "end_turn", "usage": USAGE,
+        "omp": [omp_assistant("error", error=STALL_TEXTS[1])],
+    })
+    assert replies(lines) == [before]
+    assert codes(lines) == ["model_unreachable"]
+
+
+def test_12c_a_real_answer_about_a_timed_out_stream_stays_an_answer(tmp_path):
+    answer = "The test failed: the stream timed out after 30 s, I raised the limit."
+    lines, _ = run_turn(tmp_path, {
+        "chunks": [answer], "stopReason": "end_turn", "usage": USAGE,
+        "omp": [omp_reply(answer)],
+    })
+    assert replies(lines) == [answer]
+    assert codes(lines) == []
+
+
 # ── 13–14. reading omp's file at the right place and time ───────────────────
 
 
@@ -512,7 +687,7 @@ def test_13_omps_line_written_just_after_the_reply_still_counts(tmp_path):
     lines, _ = run_turn(tmp_path, {
         "chunks": [UNABLE_TEXT], "stopReason": "end_turn", "usage": USAGE,
         "omp": [omp_tool_use(), omp_tool_result()],
-        "omp_late": [omp_assistant("error", error=UNABLE_TEXT)], "late_s": 0.15,
+        "omp_late": omp_gave_up(UNABLE_TEXT), "late_s": 0.15,
     })
     assert codes(lines) == ["model_unreachable"]
     assert replies(lines) == []
@@ -620,6 +795,15 @@ def test_17d_an_earlier_turns_final_line_before_this_turns_user_line_never_count
     follows it, so it is not this turn's end."""
     raw = _raw(omp_assistant("error", error=ECONN_TEXT), omp_user("the next question"))
     assert model_errors().final_assistant_message(raw) is None
+
+
+def test_17e_the_turn_end_names_the_lines_of_the_attempts_omp_retried():
+    errors = model_errors()
+    end = errors.omp_turn_end(_raw(
+        omp_assistant("error", error="an earlier turn", retry="superseded"),
+        omp_user("q"), *omp_gave_up(UNABLE_TEXT, retries=2)))
+    assert end is not None and end.message["errorMessage"] == BUDGET_TEXT
+    assert end.retried == (UNABLE_TEXT, UNABLE_TEXT), "only this turn's attempts"
 
 
 def test_17c_broken_and_half_written_lines_are_skipped():
