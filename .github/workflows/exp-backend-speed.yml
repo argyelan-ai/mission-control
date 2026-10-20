@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rep: [1, 2, 3]
+        rep: [1, 2, 3, 4, 5, 6]
     defaults:
       run:
         working-directory: backend
@@ -31,7 +31,7 @@ jobs:
           python -m pip install uv==0.11.2
           uv pip install -r requirements.lock
           uv pip install --no-deps -e .
-      - name: compileall
-        run: /usr/bin/time -f "COMPILEALL %e s" python -m compileall -q -j 4 app tests ../jarvis_core > /dev/null
+      - name: Precompile bytecode
+        run: python -m compileall -q -j 0 app tests ../jarvis_core
       - name: Run tests
-        run: /usr/bin/time -f "TIME %e s wall, %U user, %S sys, %P cpu" pytest -x --tb=short -q -n auto --dist worksteal -v --durations=0 --durations-min=0
+        run: /usr/bin/time -f "TIME %e s wall, %P cpu" pytest -x --tb=short -n logical --dist worksteal --durations=15 -p no:cacheprovider | grep -vE "PASSED|SKIPPED|XFAIL" 

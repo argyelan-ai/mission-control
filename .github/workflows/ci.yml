@@ -64,17 +64,27 @@ jobs:
       # check with a 10-minute timeout, every second counts.
       - name: Install dependencies
         env:
-          UV_SYSTEM_PYTHON: "1"  # into setup-python's interpreter, no venv
+          UV_SYSTEM_PYTHON: "1"     # into setup-python's interpreter, no venv
+          UV_COMPILE_BYTECODE: "1"  # pip did this by default; uv does not
         run: |
           python -m pip install uv==0.11.2
           uv pip install -r requirements.lock
           uv pip install --no-deps -e .
 
+      # Compile the repo's own modules once, in parallel. Otherwise every
+      # xdist worker compiles all of app/ and tests/ itself while collecting
+      # (measured on CI: 36 s cold vs 13 s warm collection per worker).
+      - name: Precompile bytecode
+        run: python -m compileall -q -j 0 app tests ../jarvis_core
+
+      # -n logical, NOT -n auto: with psutil installed, "auto" counts PHYSICAL
+      # cores, and the 4-vCPU ubuntu-latest runner reports 2 — every run so far
+      # logged "created: 2/2 workers" and left half the machine idle.
       # --dist worksteal: idle workers take queued tests from busy ones, so the
-      # run no longer waits on one worker that drew the slow subprocess tests
+      # run does not wait on one worker that drew the slow subprocess tests
       # (mc-head watchdogs, backup.sh) at the end. Same tests, same count.
       - name: Run tests
-        run: pytest -x --tb=short -q -n auto --dist worksteal
+        run: pytest -x --tb=short -q -n logical --dist worksteal
 
   backend-postgres:
     name: Backend Tests (Postgres lane)
