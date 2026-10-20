@@ -552,8 +552,8 @@ class Settings(BaseSettings):
 
     # Engine death (ADR-096 §11, runtime_watcher._maybe_declare_death): an
     # engine whose row served its own answer and is gone without a stop intent
-    # is declared dead — at once on connection refused, from the 2nd failed
-    # probe otherwise — when its own anchor (node-agent / docker inspect /
+    # is declared dead — at once on connection refused, at the threshold of 3
+    # otherwise (a timeout) — when its own anchor (node-agent / docker inspect /
     # handle check) confirms it exited. One runtime.unreachable with the cause
     # (severity error), status "failed" + reason on the card, one comment on
     # each task in progress (the work stays where it is). Restart stays the
