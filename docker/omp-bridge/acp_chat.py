@@ -189,6 +189,11 @@ class ChatSession:
         # result, config_option_update). config() compares it across its
         # request: a push that arrived meanwhile beats the reply.
         self._config_pushes = 0
+        # One config request at a time, request AND apply: replies are not
+        # ordered against each other, only against pushes. Never held by the
+        # ACP reader thread (it only takes `_lock` for pushes), so waiting
+        # for a reply under it cannot block that reply. Taken before `_lock`.
+        self._config_lock = threading.Lock()
         self._commands: list[dict] = []
         self._last_error: Optional[dict] = None
         # Jobs waiting behind the running turn, oldest first:
@@ -475,7 +480,23 @@ class ChatSession:
         after session/new — and the effort chip kept the levels of the
         model the session opened on. A reply without a full set (`{}`, or
         `[]` from an agent with no typed options) keeps today's way: only
-        the value just set is written into the known list."""
+        the value just set is written into the known list.
+
+        When the push stays, the value written into it is the one the reply
+        names, not the requested one: an agent may run another value than
+        asked (omp clamps a level the model lacks — `medium` on a
+        low/high/max model comes back as `low`), and only the reported value
+        is on the ladder. The requested value is the fallback.
+
+        Calls run one at a time (`_config_lock`): with two requests out at
+        once — the operator's chip while `_pin_model` runs — a thinking
+        reply built before a model switch could land after the model reply
+        and bring back the old model and its ladder."""
+        with self._config_lock:
+            return self._config_locked(option_id, value)
+
+    def _config_locked(self, option_id: str, value: Any) -> dict:
+        """config() body. Caller holds `_config_lock`, not `_lock`."""
         with self._lock:
             client, sid = self._client, self._session_id
             pushes = self._config_pushes
@@ -499,9 +520,14 @@ class ChatSession:
             if reply is not None and self._config_pushes == pushes:
                 self._config_options = reply
             else:
+                current = next(
+                    (o.get("currentValue") for o in reply or []
+                     if o.get("id") == option_id and o.get("currentValue") is not None),
+                    value,
+                )
                 for opt in self._config_options:
                     if opt.get("id") == option_id:
-                        opt["currentValue"] = value
+                        opt["currentValue"] = current
             options = json.loads(json.dumps(self._config_options))
         self._write_state()
         return {"ok": True, "configOptions": options}

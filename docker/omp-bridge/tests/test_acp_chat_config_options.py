@@ -17,7 +17,10 @@ does not have (and hid the ones it has).
 Rules pinned here:
   * a full reply (it names the option just set) replaces the list;
   * a push that arrives while the request is out, or after it, wins over the
-    reply — the agent's own push is never overwritten;
+    reply — the agent's own push is never overwritten; the value written into
+    it is the one the agent reports, not the one requested;
+  * config calls go out one at a time, so an older reply never lands after a
+    newer one;
   * a reply without a usable list (`{}`, or `[]` as `hermes acp` answers,
     live-checked) leaves the list as it was, as before.
 
@@ -267,7 +270,147 @@ def test_a_push_during_the_request_is_kept(tmp_path):
     print("PASS test_a_push_during_the_request_is_kept")
 
 
-# ── 3. a reply without a usable list changes nothing ────────────────────────
+def test_a_push_during_the_request_keeps_the_value_the_agent_reports(tmp_path):
+    """An agent may run a different value than the one requested: omp clamps
+    a level the model does not offer (live 20.10.2026, omp 18.10.1: `medium`
+    on a low/high/max model is reported back as `low`, both in its push and
+    in its reply). The state must name the level the agent runs — one the
+    ladder contains — not the requested one, or the chip shows no level."""
+    pushed = option_set(NEXT_MODEL, NEXT_LADDER, thinking="low")
+
+    def clamped(key, value):
+        return {"configOptions": option_set(NEXT_MODEL, NEXT_LADDER, thinking="low")}
+
+    client = ReplyClient(
+        session_result=SESSION_RESULT, reply=clamped,
+        during=lambda key, value: push(client, pushed),
+    )
+    sess = make_session(tmp_path, client)
+    sess.start()
+    try:
+        answer = sess.config("thinking", "medium")
+        assert answer["ok"] is True
+        rows = {o["id"]: o for o in answer["configOptions"]}
+        assert rows["thinking"]["currentValue"] == "low"
+        thinking = state_file_option(sess, "thinking")
+        assert ladder(thinking) == NEXT_LADDER
+        assert thinking["currentValue"] == "low"
+    finally:
+        sess.close()
+    print("PASS test_a_push_during_the_request_keeps_the_value_the_agent_reports")
+
+
+def test_a_reply_row_without_a_value_falls_back_to_the_request(tmp_path):
+    """A reply that names the option but carries no `currentValue` for it
+    says nothing about the value: the requested one is written, as before."""
+    pushed = option_set(NEXT_MODEL, NEXT_LADDER, thinking="high")
+
+    def no_value(key, value):
+        rows = option_set(NEXT_MODEL, NEXT_LADDER)
+        for row in rows:
+            if row["id"] == "thinking":
+                row.pop("currentValue")
+        return {"configOptions": rows}
+
+    client = ReplyClient(
+        session_result=SESSION_RESULT, reply=no_value,
+        during=lambda key, value: push(client, pushed),
+    )
+    sess = make_session(tmp_path, client)
+    sess.start()
+    try:
+        assert sess.config("thinking", "max")["ok"] is True
+        assert state_file_option(sess, "thinking")["currentValue"] == "max"
+    finally:
+        sess.close()
+    print("PASS test_a_reply_row_without_a_value_falls_back_to_the_request")
+
+
+# ── 3. overlapping config calls apply in the order the agent ran them ───────
+
+
+def test_overlapping_configs_never_apply_an_older_reply_last(tmp_path):
+    """Two config calls at once (the operator's chip while the daemon pins
+    the model) and no push in between: the replies are not ordered against
+    each other. A thinking reply built BEFORE a model switch must not land
+    after the model reply — the state would name the old model and its
+    ladder while the agent runs the new one. Config calls go out one at a
+    time: the model request waits until the thinking reply is applied."""
+    agent = {"model": START_MODEL}
+    thinking_out = threading.Event()
+    release_thinking = threading.Event()
+    model_out = threading.Event()
+
+    def ladder_of(model):
+        return NEXT_LADDER if model == NEXT_MODEL else START_LADDER
+
+    def reply(key, value):
+        if key == "model":
+            agent["model"] = value
+            model_out.set()
+            return {"configOptions": option_set(value, ladder_of(value))}
+        # The set as the agent sees it when it handles the request —
+        # handed back late, after the test lets it go.
+        built = option_set(agent["model"], ladder_of(agent["model"]), thinking=value)
+        thinking_out.set()
+        release_thinking.wait(timeout=5)
+        return {"configOptions": built}
+
+    client = ReplyClient(session_result=SESSION_RESULT, reply=reply)
+    sess = make_session(tmp_path, client)
+    sess.start()
+    results = {}
+    slow = threading.Thread(
+        target=lambda: results.update(thinking=sess.config("thinking", "low")))
+    fast = threading.Thread(
+        target=lambda: results.update(model=sess.config("model", NEXT_MODEL)))
+    try:
+        slow.start()
+        assert thinking_out.wait(timeout=5)
+        fast.start()
+        overlapped = model_out.wait(timeout=0.3)
+        release_thinking.set()
+        slow.join(timeout=5)
+        fast.join(timeout=5)
+        assert not slow.is_alive() and not fast.is_alive()
+        assert results["thinking"]["ok"] is True
+        assert results["model"]["ok"] is True
+        assert state_file_option(sess, "model")["currentValue"] == NEXT_MODEL
+        assert ladder(state_file_option(sess, "thinking")) == NEXT_LADDER
+        assert not overlapped, "model request went out while the thinking one was open"
+    finally:
+        release_thinking.set()
+        slow.join(timeout=5)
+        fast.join(timeout=5)
+        sess.close()
+    print("PASS test_overlapping_configs_never_apply_an_older_reply_last")
+
+
+def test_a_refused_config_does_not_block_the_next_one(tmp_path):
+    """A failed request releases the queue: the next config goes out."""
+    def flaky(key, value):
+        if key == "model":
+            raise RuntimeError("session/set_config_option failed: unknown model")
+        return omp_like_reply(key, value)
+
+    client = ReplyClient(session_result=SESSION_RESULT, reply=flaky)
+    sess = make_session(tmp_path, client)
+    sess.start()
+    try:
+        assert sess.config("model", "prov/nope")["ok"] is False
+        done = {}
+        worker = threading.Thread(
+            target=lambda: done.update(sess.config("thinking", "max")))
+        worker.start()
+        worker.join(timeout=5)
+        assert not worker.is_alive(), "second config hung behind the refused one"
+        assert done.get("ok") is True
+    finally:
+        sess.close()
+    print("PASS test_a_refused_config_does_not_block_the_next_one")
+
+
+# ── 4. a reply without a usable list changes nothing ────────────────────────
 
 
 def _assert_list_kept(tmp_path, answer: dict) -> None:
