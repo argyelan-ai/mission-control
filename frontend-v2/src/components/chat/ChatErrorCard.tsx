@@ -200,35 +200,35 @@ export function ChatErrorCard({ ev }: ChatErrorCardProps) {
             {t("error.resendQuote", { text: retryText })}
           </ClampedContent>
         )}
-        {(showLink || showResend) && (
-          <div className="mt-1 flex flex-wrap items-center gap-x-4">
-            {showLink && (
-              <Link
-                href="/runtimes"
-                data-testid="chat-error-runtimes-link"
-                className="inline-flex min-h-11 md:min-h-9 items-center gap-1 text-sm font-medium"
-                style={{ color: C.accent }}
-              >
-                {t("error.runtimesLink")}
-                <ChevronRight size={14} aria-hidden="true" />
-              </Link>
-            )}
-            {showResend && (
-              // ml-auto, not justify-between: when the row wraps (narrow
-              // phone, large text) the button stays at the right edge.
-              <button
-                type="button"
-                data-testid="chat-error-resend"
-                onClick={handleResend}
-                disabled={sent}
-                className="-mr-2 ml-auto inline-flex min-h-11 md:min-h-9 items-center gap-2 rounded-md px-2 text-sm font-medium transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-default disabled:hover:bg-transparent"
-                style={{ color: sent ? C.textMuted : C.accent }}
-              >
-                {sent ? <Check size={14} aria-hidden="true" /> : <RotateCcw size={14} aria-hidden="true" />}
-                {sent ? t("error.resent") : t("error.resend")}
-              </button>
-            )}
-          </div>
+        {showLink && (
+          // Part of the text, at its left edge — never in the button's row.
+          <Link
+            href="/runtimes"
+            data-testid="chat-error-runtimes-link"
+            className="inline-flex min-h-11 md:min-h-9 items-center gap-1 text-sm font-medium"
+            style={{ color: C.accent }}
+          >
+            {t("error.runtimesLink")}
+            <ChevronRight size={14} aria-hidden="true" />
+          </Link>
+        )}
+        {showResend && (
+          // Layout B (operator choice 20.10.): the card's last row — a
+          // hairline across the content, then the button over the full width,
+          // label centred. Nothing wraps next to it at 320 px or large text.
+          // 44 px at every width (K11); the line in the calm border tone, the
+          // card's red frame already carries the signal (K6).
+          <button
+            type="button"
+            data-testid="chat-error-resend"
+            onClick={handleResend}
+            disabled={sent}
+            className="mt-2 flex w-full min-h-11 items-center justify-center gap-2 text-sm font-medium transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-default disabled:hover:bg-transparent"
+            style={{ color: sent ? C.textMuted : C.accent, borderTop: `1px solid ${C.border}` }}
+          >
+            {sent ? <Check size={14} aria-hidden="true" /> : <RotateCcw size={14} aria-hidden="true" />}
+            {sent ? t("error.resent") : t("error.resend")}
+          </button>
         )}
       </div>
     </div>
