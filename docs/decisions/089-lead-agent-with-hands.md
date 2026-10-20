@@ -433,8 +433,9 @@ Decided on 2026-10-20 by the development lead the operator delegated to.
 The note above, (c), named a gap: the system mode (HALTED / DRAINING, set
 with `PUT /api/v1/system/mode`) lived only in `check_dispatch_allowed`, so
 the emergency brake did not stop an agent that polls. This note closes the
-gap for the system mode. It does not change agent rules: (a) to (f) stay
-as written.
+gap for the system mode. It does not change agent rules: the notes (a) to
+(g) of the earlier Nachtrag stay as written, except the part of (c) marked
+superseded above.
 
 **(a) One rule, every path.** `system_mode_refusal` in
 `backend/app/services/operations.py` (rule `R-system-mode-holds-poll` in
@@ -461,6 +462,12 @@ Paused stays an agent rule outside this one. A paused agent still takes a
 card assigned to it by name in normal mode ((c) above). While the system is
 HALTED it is held like every other agent.
 
+The planning-phase gate also stays out of this rule. It is not a system
+mode but a property of one card (`dispatch_phase == "planning"`), it only
+applies behind `enable_dispatch_gating`, which is off by default
+(`backend/app/config.py`), and the undispatched-card watcher already leaves
+planning cards alone in its query. It stays in `check_dispatch_allowed`.
+
 **(b) A card in flight keeps its answer.** A card the poll has already
 handed to this agent, under its current attempt and without an ACK yet, is
 in the agent's session. The poll keeps answering the same `new_task` with
@@ -475,15 +482,25 @@ agent, a run a healer reset for a fresh dispatch (Tier-3 recovery clears
 `dispatched_at` and `ack_at` but keeps the attempt) and the orphan restart
 (a fresh attempt for an ACKed card) are not in flight and are held.
 
-**(c) The ladders wait.** The ACK ladder (silent retry with a new attempt,
-then an operator escalation) and the pending ladder
-(`_check_dispatch_ack` in `backend/app/services/task_runner.py`) skip a
-card that the system mode or the MC update drain holds. Nothing was
-allowed to deliver it, so a missing ACK is not the agent's fault. The
-ladders keep skipping it for one ACK timeout plus margin after the hold
-ends (`RedisKeys.dispatch_system_hold`), so the first poll after the hold
-delivers the card before a ladder reads its old `dispatched_at`. A card
-that is really lost still escalates after that window.
+**(c) The ladders and the silent-mailbox alarm wait.** The ACK ladder
+(silent retry with a new attempt, then an operator escalation) and the
+pending ladder (`_check_dispatch_ack` in
+`backend/app/services/task_runner.py`) skip a card that the system mode or
+the MC update drain holds. Nothing was allowed to deliver it, so a missing
+ACK is not the agent's fault. The ladders keep skipping it for one ACK
+timeout plus margin after the hold ends (`RedisKeys.dispatch_system_hold`),
+so the first poll after the hold delivers the card before a ladder reads
+its old `dispatched_at`. A card that is really lost still escalates after
+that window.
+
+The silent-mailbox watcher (`_check_silent_mailbox` in
+`backend/app/services/watchdog/task_monitor.py`) does not count such a card
+either, while it is held or in that same window. Otherwise an agent whose
+inbox holds only held cards looks like a dead mailbox: a "STILLE SCHLANGE"
+note to the Board Lead 15 minutes into every hold, and the stage-2
+escalation to the operator (`_check_lead_notify_escalations`) 30 minutes
+after that. A card the mode lets through (a subtask under DRAINING) still
+counts.
 
 **(d) Recovery is not held.** `/agent/me/active-task-recovery` gives an
 agent back the card it already owns, with that card's attempt. Each poller
@@ -496,8 +513,14 @@ so it is held and resumes after the halt.
 
 **(e) What HALTED does not stop.** A turn that is already running (the stop
 button stops it); comments and thread messages, which still come with a
-held poll answer, and the wake-ups they cause. The app has no control for
-the system mode yet: the client helper exists, but no page calls it
+held poll answer, and the wake-ups they cause. The healers read no system
+mode and keep running: orphan recovery (`backend/app/services/watchdog/core.py`)
+and the stale and stuck in-progress checks with their tiered recovery and
+nudges (`backend/app/services/task_runner.py`). A re-dispatch they start
+goes through `auto_dispatch_task`, which push dispatch's gate refuses while
+HALTED, and the poll holds the card a healer reset ((b) above). This is
+older than this note and stays out of it. The app has no control for the
+system mode yet: the client helper exists, but no page calls it
 (`docs/produkt/landkarte.yaml`, "platform leftovers"). The mode is set
 through the API.
 
@@ -505,7 +528,7 @@ through the API.
 (the poll: every path, the order of its gates, a card in flight, parity
 with push dispatch, pool hygiene) and
 `backend/tests/test_system_mode_holds_every_path.py` (watcher, ladders,
-pull dispatch, recovery not held).
+silent-mailbox alarm and its stage 2, pull dispatch, recovery not held).
 
 ## References
 

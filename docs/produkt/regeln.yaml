@@ -48,7 +48,7 @@ rules:
     checked: 2026-10-20
 
   - id: R-system-mode-holds-poll
-    says: "The system mode holds a card on every path that hands one out, not only push dispatch: the agent poll, the undispatched-card watcher and pull dispatch ask the same rule (HALTED holds every card, DRAINING every card but the continuation flows). A card the poll already delivered and that waits for its ACK keeps its answer. The ACK and pending ladders wait while a card is held and for one ACK timeout after the hold. Agent rules (paused) are not part of it."
+    says: "The system mode holds a card on every path that hands one out, not only push dispatch: the agent poll, the undispatched-card watcher and pull dispatch ask the same rule (HALTED holds every card, DRAINING every card but the continuation flows). A card the poll already delivered and that waits for its ACK keeps its answer. The ACK and pending ladders and the silent-mailbox alarm wait while a card is held and for one ACK timeout after the hold. Agent rules (paused) are not part of it."
     source: "ADR-089 Nachtrag 2026-10-20, the system mode holds every path that hands a card out"
     owner: backend/app/services/operations.py
     applies_to: ["backend/app/services/operations.py", "backend/app/routers/agents.py", "backend/app/routers/agent_task_status.py", "backend/app/services/task_runner.py", "backend/app/services/watchdog/task_monitor.py"]
@@ -58,6 +58,7 @@ rules:
       - {test: "backend/tests/test_poll_respects_system_halt.py::test_a_card_already_delivered_keeps_its_answer_while_held"}
       - {test: "backend/tests/test_system_mode_holds_every_path.py::test_watcher_does_not_prepare_a_card_the_system_holds"}
       - {test: "backend/tests/test_system_mode_holds_every_path.py::test_ack_ladder_waits_while_the_system_holds_the_card"}
+      - {test: "backend/tests/test_system_mode_holds_every_path.py::test_silent_mailbox_does_not_report_a_card_the_system_holds"}
       - {test: "backend/tests/test_system_mode_holds_every_path.py::test_pull_dispatch_claims_nothing_while_halted"}
     status: active
     checked: 2026-10-20

@@ -16,6 +16,10 @@ alone left three neighbours that read no mode:
   margin after the hold ends, so the first poll after it can deliver.
 - Pull dispatch (``GET /agent/boards/{id}/tasks/next``) claimed a card
   straight to ``in_progress``: now held by the same rule (204).
+- The silent-mailbox watcher (``_check_silent_mailbox``) counted a held
+  card as queued work nobody pulls: a note to the Board Lead 15 min into
+  the hold, an operator escalation 30 min later. It now skips held cards
+  and those in the ladders' grace window.
 
 Decided, not held: ``/agent/me/active-task-recovery``. Every poller calls it
 once at its own start (poll.sh FIRST_POLL, the omp bridge, the host poll
