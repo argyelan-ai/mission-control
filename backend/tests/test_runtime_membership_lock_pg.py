@@ -149,3 +149,50 @@ async def test_startup_audit_does_not_write_back_a_stale_worker_over_a_new_start
             await asyncio.wait_for(start_task[0], timeout=10)
 
     assert await _rows(rt.id) == [("head", 0, a.id), ("worker", 1, c.id)]
+
+
+async def test_the_repair_decides_on_the_row_it_locked_not_on_its_first_read(session):
+    """The topology half of the race: between the audit's first read and its
+    lock, a start of the same duo drops the legacy worker field (its member
+    rows come later). The repair must decide on the locked, re-read row —
+    no legacy field any more → nothing to fill, no W1 rows, no event saying
+    box-b is now in use."""
+    from app.models.activity import ActivityEvent
+
+    a, b, _ = await _boxes(session)
+    rt = await _runtime(
+        session, "legacy-duo", a, topology={"nodes": 2, "worker_host_id": str(b.id)}
+    )
+
+    async def drop_legacy_field() -> None:
+        async with _new_session() as s:
+            runtime = await s.get(Runtime, rt.id)
+            runtime.topology = rm.without_legacy_worker(dict(runtime.topology))
+            s.add(runtime)
+            await s.commit()
+
+    injected: list[bool] = []
+    real_recipe_for = rm._recipe_for
+
+    async def recipe_for_with_race(sess, runtime):
+        if not injected:
+            injected.append(True)
+            await drop_legacy_field()  # no lock held yet on the first read
+        return await real_recipe_for(sess, runtime)
+
+    async with _new_session() as audit_session:
+        with patch.object(rm, "_recipe_for", recipe_for_with_race):
+            findings = await rm.membership_audit(audit_session, repair=True)
+
+    assert injected
+    assert [f.code for f in findings] == ["members_incomplete"]
+    assert await _rows(rt.id) == []
+    async with _new_session() as s:
+        events = (
+            await s.exec(
+                select(ActivityEvent).where(
+                    ActivityEvent.event_type == "runtime.members_repaired"
+                )
+            )
+        ).all()
+    assert events == []
