@@ -53,6 +53,7 @@ from pathlib import Path
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+from app.services import docker_gateway
 
 logger = logging.getLogger("mc.claude_account")
 
@@ -90,9 +91,12 @@ CODE_RE = re.compile(r"^[A-Za-z0-9_\-#.~]{1,512}$")
 def _docker(args: list[str], timeout: float, input: str | None = None) -> tuple[int, str]:
     """Run ``docker <args>`` (``input`` goes to stdin) and return (exit code, stdout+stderr)."""
     try:
-        proc = subprocess.run(
-            ["docker", *args], capture_output=True, text=True, timeout=timeout, input=input
+        proc = docker_gateway.run(
+            args, capture_output=True, text=True, timeout=timeout, input=input
         )
+    except docker_gateway.DockerDeferred as exc:
+        # Update drain: the login container is not started; say why.
+        return 1, str(exc)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 1, f"{type(exc).__name__}"
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")

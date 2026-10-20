@@ -1,0 +1,2 @@
+# Bypass found by the critic (2026-10-19): a force-push without a lease.
+python3 scripts/privacy-scan.py && git -C . push -f

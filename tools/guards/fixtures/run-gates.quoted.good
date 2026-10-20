@@ -1,0 +1,7 @@
+# Separators inside quotes are data, not command chains (critic finding #5).
+python3 -c "import sys; print(1)"
+echo "a;b || c & d"
+printf '%s\n' 'select 1;'
+# A pipe is fine: the gates run with pipefail, so a red command stays red.
+true | tail -1
+echo x 2>&1 | grep -c x &>/dev/null

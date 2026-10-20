@@ -155,6 +155,16 @@ function resolveDisplay(
         return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: activity.title, pulse: true };
       }
       return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: `${workingWord}…`, pulse: true };
+    case "task_working":
+      // A task turn of an ACP agent runs through the bridge, not the chat
+      // (follow-up to ADR-097). `activity` is the CHAT's open tool: the
+      // task's tools never reach the chat's events (#898), and the chat is
+      // not busy here — an open chat tool is a stale one (review Z3/UI-2).
+      return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: t("taskWorking"), pulse: true };
+    case "waiting_model":
+      // A task is delivered, the agent's model has not answered yet (box off,
+      // still loading) — honest, and not the agent's fault.
+      return { dotColor: C.warning, textColor: STATUS_TEXT.warning, label: t("waitingForModel"), pulse: false };
     case "waiting_input":
       // An open question (ACP card, P3) or a CLI menu waits on the operator,
       // not on the model — say so instead of "Thinking…" (live 13.10.2026).
@@ -208,6 +218,9 @@ export function StatusLine({
   const workingWord = useWorkingWord(connected && state?.status === "working" && !sending);
   const display = resolveDisplay(state, connected, aliveness, sending, workingWord, activity, t);
   const working = !sending && aliveness !== "ended" && connected && state?.status === "working";
+  // Only a running CHAT turn shows its tool title (mono, one line).
+  const toolRuns = !sending && aliveness !== "ended" && connected && !!activity
+    && state?.status === "working";
   // Buchstaben-Lauf nur fuer das Verb; ein Werkzeug-Titel steht ruhig da
   // (Monospace, eine Zeile, abgeschnitten — nichts springt).
   const showVerb = working && !activity;
@@ -231,8 +244,8 @@ export function StatusLine({
       />
       <span
         data-testid="status-label"
-        className={activity && working ? "font-mono truncate" : undefined}
-        title={activity && working ? activity.title : undefined}
+        className={toolRuns ? "font-mono truncate" : undefined}
+        title={toolRuns ? activity?.title : undefined}
       >
         {showVerb ? <LetterWord word={workingWord} /> : display.label}
       </span>

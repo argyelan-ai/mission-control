@@ -15,8 +15,9 @@ why the token is required on every endpoint.
 
 ## Which endpoints are open
 
-Only `GET /ping` answers without a token. It returns `{"status": "ok"}` and
-nothing else — a port scan reveals the same. `GET /health` needs the token,
+Only `GET /ping` answers without a token. It returns `{"status": "ok",
+"api_version": 1}` and nothing else — liveness plus the version of the update
+door below. `GET /health` needs the token,
 so MC's "helper reachable" checks also prove that the token matches.
 
 ## Where the token lives
@@ -53,10 +54,10 @@ so MC's "helper reachable" checks also prove that the token matches.
 - `scripts/mc-mcp.py` in agent mode never reads the token; it only calls
   `/ping`.
 
-Create the file without starting the helper:
+Create the files (bridge + update door) without starting the helper:
 
 ```bash
-python3 scripts/cli-bridge.py --init-token     # prints the path, never the token
+python3 scripts/cli-bridge.py --init-token     # prints the paths, never a token
 ```
 
 ## Bind address per platform
@@ -66,17 +67,63 @@ delivers connections to `host.docker.internal` on the host's loopback (the
 helper sees them coming from `127.0.0.1`), so the backend container still
 reaches the helper, while other machines on the LAN do not.
 
-**Linux:** `host.docker.internal` is mapped to `host-gateway` (see
-`extra_hosts` in `docker-compose.yml`), which is the docker bridge address —
-usually `172.17.0.1` (`docker network inspect bridge`). A helper on
-`127.0.0.1` is not reachable from the container. Bind to the bridge address:
+**Linux:** a helper on `127.0.0.1` is not reachable from the container. Let
+the installer set it up — from inside the install folder:
 
 ```bash
-CLI_BRIDGE_BIND=172.17.0.1 make bridge-install
+./install.sh --bridge
 ```
 
-`0.0.0.0` also works but exposes the port to the network; if you need it, put
-a host firewall in front. The token protects the helper in every case.
+It binds the helper to the **gateway of MC's own Docker network**
+(`docker network inspect mission-control_default`, e.g. `172.18.0.1`): the
+backend container reaches that address, other machines on the LAN do not.
+Because `host.docker.internal` (`host-gateway`) points at a *different*
+address (the default `docker0` bridge, usually `172.17.0.1`), the installer
+also writes `FREE_CODE_BRIDGE_URL=http://<gateway>:18792` into `.env` and
+recreates `backend` + `mc-worker`, which read it (`docker-compose.yml`).
+
+- The gateway belongs to the network: `docker compose down` removes the
+  network, and the next `up` can give it another subnet. The helper then
+  cannot bind and its service retries; `./install.sh --bridge` moves it to
+  the new address. `./install.sh --update` notices the mismatch (also on
+  installs from before the update door, which never set
+  `FREE_CODE_BRIDGE_URL`) but only moves the helper after a `y` at the
+  terminal or with `MC_BRIDGE=yes` — moving it restarts the helper and
+  recreates `backend` + `mc-worker`, so pick a moment when no agent works.
+  `MC_BRIDGE=no` or `--non-interactive` leave it alone and print the command.
+- The helper's systemd unit uses `KillMode=process`: restarting or
+  reinstalling it stops the helper only, never the tmux server of the host
+  agents or an update it started. The installer loads the new unit before it
+  stops the old helper, so this holds for the first reinstall too.
+- **Linger** (`sudo loginctl enable-linger <user>`): without it the user's
+  services stop at logout and do not start after a reboot. The installer
+  offers it and runs it only after an explicit `y`; unattended installs set
+  `MC_BRIDGE_LINGER=yes`. The update preflight shows a red check while it is
+  off, and the door refuses to start an update (422) — a logout would stop
+  the job mid-switch, and an update interrupted by a power cut could not
+  finish.
+
+By hand, the same as the installer does: `CLI_BRIDGE_BIND=<gateway>
+make bridge-install` plus `FREE_CODE_BRIDGE_URL` in `.env`. `0.0.0.0` also
+works but exposes the port to the network; if you need it, put a host
+firewall in front. The token protects the helper in every case.
+
+## The update door (`/mc-update/*`, ADR-094)
+
+The helper also carries the door through which **Settings → System** updates
+MC (`scripts/mc_update_door.py`). It has its **own token scope**:
+
+| | |
+|---|---|
+| Header | `X-MC-Update-Token` — the bridge token does not open the door, and the update token opens nothing else |
+| Token file | `~/.mc/secrets/mc-update.token` (0600, created on first start or by `--init-token`; override `MC_UPDATE_TOKEN_FILE`). Deliberately **no** environment variable: `.env` is readable inside agent containers |
+| Routes | exactly five: `POST /mc-update/preflight`, `POST /mc-update/start` (`{"expected_target": "vX.Y.Z"}`), `GET /mc-update/status[?run=<id>]`, `POST /mc-update/rollback` (`{"run_id"?}`), `POST /mc-update/resume` (`{"run_id"?}`) — no tag, ref, URL or command is taken from a request; the engine picks the target and only compares |
+| Answers | `401` token · `404` unknown route · `405` wrong method · `409` `MC_UPDATE_MANAGED=deploy` or another target than the engine's · `422` a preflight check failed (nothing changed) · `423` a run is live or interrupted · `429` more than `MC_UPDATE_MAX_STARTS_PER_DAY` (default 3) starts in 24 h — preflight, status, resume, rollback, terminal runs and starts that failed on the network before the switch do not count |
+| Detached | the engine runs outside the helper: Linux `systemd-run --user` (own unit `mc-update-<job>`), otherwise a double fork in a new session; the engine's output and exit code land in `~/.mc/update/bridge/`; the service units add `KillMode=process` / `AbandonProcessGroup`. Restarting the helper never stops an update |
+| Start routine | when the helper starts, an interrupted run (journal open, lock holder dead) is resumed once `docker info` answers (max. 10 min); with no open run, a drain no run owns any more is lifted |
+
+`GET /ping` answers `{"status": "ok", "api_version": 1}` — the version of
+the door, so MC can tell an old helper apart.
 
 ## Rollout on an existing install (no downtime)
 

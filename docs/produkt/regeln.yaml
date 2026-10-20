@@ -327,6 +327,25 @@ rules:
     status: active
     checked: 2026-10-16
 
+  - id: R-proof-gate-finish
+    says: "An agent's move to review/done on a card with a PR is checked on the server with evidence it fetches itself: the PR exists, is open (done: open or merged), is this card's PR, a reported SHA is the pushed head, the required CI checks are green, the PR really changed after the last change request (against the head the server recorded), review->done is closed by someone other than the developer with his own verdict, PR URLs quoted in the agent's comments exist. warn = card comment + task.proof_gate warning event, enforce = 422; no request field skips it; the date flip waits for PROOF_GATE_ENFORCE_MIN_CHECKS checked moves."
+    source: "Beweis-Tor (team measure 2026-10-19: false finish reports were found by hand)"
+    owner: backend/app/services/proof_gate.py
+    applies_to: ["backend/app/services/proof_gate.py", "backend/app/routers/agent_task_status.py", "scripts/mc-cli/mc_cli/commands.py"]
+    enforced_by:
+      - {test: "backend/tests/test_proof_gate.py::test_sabotage_enforce_refuses_with_422"}
+      - {test: "backend/tests/test_proof_gate.py::test_no_commit_after_change_request"}
+      - {test: "backend/tests/test_proof_gate.py::test_reviewer_closes_without_own_comment"}
+      - {test: "backend/tests/test_proof_gate.py::test_clean_case_passes_without_any_warning"}
+      - {test: "backend/tests/test_proof_gate.py::test_missing_token_fails_open_with_visible_warning"}
+      - {test: "backend/tests/test_proof_gate.py::test_no_server_side_force_switch"}
+      - {test: "backend/tests/test_proof_gate.py::test_merged_foreign_pr_does_not_prove_a_review"}
+      - {test: "backend/tests/test_proof_gate.py::test_unchanged_head_after_change_request_despite_fake_commit_date"}
+      - {test: "backend/tests/test_proof_gate.py::test_developer_cannot_close_his_own_review"}
+      - {test: "backend/tests/test_proof_gate.py::test_pr_claimed_in_comment_must_exist"}
+    status: active
+    checked: 2026-10-19
+
 rejected:
   - id: X-own-control-room
     idea: "An own control-room UI, job page or coordinator for heads"

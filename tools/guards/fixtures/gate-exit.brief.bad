@@ -1,0 +1,2 @@
+# Inline code in a brief that hides the exit code is still red.
+Run: `bash ~/.claude/skills/mc-deploy/preflight.sh | tail -1; docker compose -p mission-control up --build -d backend`

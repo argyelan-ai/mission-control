@@ -923,3 +923,100 @@ describe("isSafeChallengeActionEndpoint (F3)", () => {
     expect(isSafeChallengeActionEndpoint("")).toBe(false);
   });
 });
+
+// ── Why does an entry wait? (fix-vorschlag 19.10. point 7 + critic) ──────
+//
+// A running agent entry used to show only a spinner, even when its fleet
+// task was blocked on a question or sat "in progress" with nobody working.
+// The detail endpoint now carries a derived entry.task_state; the card says
+// what is going on and links to the task.
+
+describe("ChallengeDetail — entry task state", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shows a blocked entry's question and a task link instead of a bare spinner", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "generating",
+        entries: [
+          makeEntry({
+            source_kind: "agent",
+            status: "generating",
+            video_path: null,
+            task_id: "t-1",
+            task_state: {
+              task_id: "t-1",
+              task_status: "blocked",
+              blocker_reason: "Unknown ACP model: mc-openai/GLM-5.3-Flash-EXL3",
+              blocked_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+              last_activity_at: null,
+            },
+          }),
+        ],
+      })
+    );
+    renderDetail();
+    expect(await screen.findByText("Blocked — waiting for an answer")).toBeTruthy();
+    expect(screen.getByText("Unknown ACP model: mc-openai/GLM-5.3-Flash-EXL3")).toBeTruthy();
+    const link = screen.getByRole("link", { name: /Open task/ });
+    expect(link.getAttribute("href")).toBe("/tasks?task=t-1");
+    expect(screen.queryByText("Generating…")).toBeNull();
+  });
+
+  it("warns when an in-progress entry shows no sign of life for a while", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "generating",
+        entries: [
+          makeEntry({
+            source_kind: "agent",
+            status: "generating",
+            video_path: null,
+            task_id: "t-2",
+            task_state: {
+              task_id: "t-2",
+              task_status: "in_progress",
+              blocker_reason: null,
+              blocked_at: null,
+              last_activity_at: new Date(Date.now() - 25 * 60_000).toISOString(),
+            },
+          }),
+        ],
+      })
+    );
+    renderDetail();
+    expect(await screen.findByText(/Last sign of life: 25 minutes ago/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Open task/ }).getAttribute("href")).toBe(
+      "/tasks?task=t-2"
+    );
+  });
+
+  it("keeps the plain spinner while the task shows recent activity", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "generating",
+        entries: [
+          makeEntry({
+            source_kind: "agent",
+            status: "generating",
+            video_path: null,
+            task_id: "t-3",
+            task_state: {
+              task_id: "t-3",
+              task_status: "in_progress",
+              blocker_reason: null,
+              blocked_at: null,
+              last_activity_at: new Date(Date.now() - 60_000).toISOString(),
+            },
+          }),
+        ],
+      })
+    );
+    renderDetail();
+    expect(await screen.findByText("Generating…")).toBeTruthy();
+    expect(screen.queryByText(/Last sign of life/)).toBeNull();
+    expect(screen.queryByRole("link", { name: /Open task/ })).toBeNull();
+  });
+});

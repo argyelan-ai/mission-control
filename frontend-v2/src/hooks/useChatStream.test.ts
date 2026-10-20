@@ -284,6 +284,70 @@ describe("Live-Vorschau (preview) — eigenes Fach, nie Zeitachse", () => {
     state = chatReducer(state, { kind: "session_changed" });
     expect(state.preview).toBeNull();
   });
+
+  // Review Z3: a chat turn that ends while a TASK turn runs (the operator
+  // stops it mid answer) reports task_working / waiting_model, not idle —
+  // the chat is at rest all the same, its half answer must not stay.
+  it.each(["task_working", "waiting_model"] as const)(
+    "verfaellt auch, wenn der Chat ruht und nur eine Aufgabe laeuft (%s)",
+    (status) => {
+      let state = chatReducer(createInitialChatState(), preview("Halbe Antw"));
+      state = chatReducer(state, { kind: "state", status: "working", prompt: null });
+      state = chatReducer(state, { kind: "state", status, prompt: null });
+      expect(state.preview).toBeNull();
+    },
+  );
+});
+
+describe("laufender Gedanke (preview.block = thinking, 20.10.2026)", () => {
+  const thought = (text: string): PreviewEvent => ({
+    kind: "preview", uuid: null, ts: "2026-10-20T09:00:00Z", text, source: "acp",
+    block: "thinking", chars: text.length, startedAt: "2026-10-20T08:59:00Z",
+  });
+  const answer = (text: string): PreviewEvent =>
+    ({ kind: "preview", uuid: null, ts: "2026-10-20T09:00:01Z", text, source: "acp" });
+  const tool: ToolEvent = {
+    kind: "tool", uuid: "t1", ts: "2026-10-20T09:00:02Z", name: "bash", title: "$ ls",
+    detail: null, result: null, status: "pending", toolUseId: "call-1",
+  } as unknown as ToolEvent;
+  const done: ThinkingEvent = {
+    kind: "thinking", uuid: "th1", ts: "2026-10-20T09:00:02Z", text: "fertig gedacht",
+    sidechain: false, durationMs: 60_000,
+  };
+
+  it("liegt im Vorschau-Fach mit Groesse und Beginn", () => {
+    const state = chatReducer(createInitialChatState(), thought("ich denke"));
+    expect(state.preview?.block).toBe("thinking");
+    expect(state.preview?.startedAt).toBe("2026-10-20T08:59:00Z");
+    expect(state.events).toHaveLength(0);
+  });
+
+  it("endet mit dem naechsten Werkzeugaufruf", () => {
+    let state = chatReducer(createInitialChatState(), thought("ich denke"));
+    state = chatReducer(state, tool);
+    expect(state.preview).toBeNull();
+    expect(state.events).toHaveLength(1);
+  });
+
+  it("endet, wenn der fertige Gedanke im Verlauf steht — nie doppelt", () => {
+    let state = chatReducer(createInitialChatState(), thought("ich denke"));
+    state = chatReducer(state, done);
+    expect(state.preview).toBeNull();
+    expect(state.events.map((e) => e.kind)).toEqual(["thinking"]);
+  });
+
+  it("wird von der beginnenden Antwort ersetzt", () => {
+    let state = chatReducer(createInitialChatState(), thought("ich denke"));
+    state = chatReducer(state, answer("Die Antwort"));
+    expect(state.preview?.block).toBeUndefined();
+    expect(state.preview?.text).toBe("Die Antwort");
+  });
+
+  it("eine Antwort-Vorschau ueberlebt einen Werkzeugaufruf weiter wie bisher", () => {
+    let state = chatReducer(createInitialChatState(), answer("Ich schaue nach"));
+    state = chatReducer(state, tool);
+    expect(state.preview?.text).toBe("Ich schaue nach");
+  });
 });
 
 describe("gemischte Bloecke unter einer uuid (omp)", () => {
@@ -826,6 +890,13 @@ describe("Live-Werkzeugausgabe (tool_output) — eigenes Fach je Werkzeugaufruf"
     expect(chatReducer(st, idle).toolOutputs).toEqual({});
     const rollover: SessionChangedEvent = { kind: "session_changed" };
     expect(chatReducer(st, rollover).toolOutputs).toEqual({});
+    // Review Z3: the chat at rest while a task runs counts the same.
+    for (const status of ["task_working", "waiting_model"] as const) {
+      expect(chatReducer(st, { kind: "state", status, prompt: null }).toolOutputs).toEqual({});
+    }
+    // A question or an approval belongs to a running chat turn: kept.
+    expect(chatReducer(st, { kind: "state", status: "permission_prompt", prompt: null }).toolOutputs)
+      .toEqual(st.toolOutputs);
   });
 
   it("Seed: History-Werkzeug mit Ergebnis vor gepufferter Live-Ausgabe -> nichts Veraltetes", () => {

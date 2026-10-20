@@ -185,6 +185,15 @@ class ChatSession:
         self._busy = False
         self._turn = 0
         self._config_options: list[dict] = []
+        # Counts every option list the agent hands over on its own (session
+        # result, config_option_update). config() compares it across its
+        # request: a push that arrived meanwhile beats the reply.
+        self._config_pushes = 0
+        # One config request at a time, request AND apply: replies are not
+        # ordered against each other, only against pushes. Never held by the
+        # ACP reader thread (it only takes `_lock` for pushes), so waiting
+        # for a reply under it cannot block that reply. Taken before `_lock`.
+        self._config_lock = threading.Lock()
         self._commands: list[dict] = []
         self._last_error: Optional[dict] = None
         # Jobs waiting behind the running turn, oldest first:
@@ -459,9 +468,38 @@ class ChatSession:
         `mode` is refused while a question is open or a turn runs (P3 live
         test 13.10.2026): switching plan mode off under an open plan card
         left omp's request unanswered, the turn hung until the prompt
-        timeout, and the model then looped on a proposal nobody awaited."""
+        timeout, and the model then looped on a proposal nobody awaited.
+
+        The reply is ACP's `configOptions`: the full option set after the
+        change. A model switch changes more than its own row — the new model
+        brings its own thinking levels. The reply's set is taken unless the
+        agent pushed a `config_option_update` while the request was out or
+        right after it: that push is the agent's own word and stays. Live
+        20.10.2026: omp 18.10.1 drops the push when a model switch starts
+        inside its 50 ms bootstrap guard — the pin in `_pin_model` right
+        after session/new — and the effort chip kept the levels of the
+        model the session opened on. A reply without a full set (`{}`, or
+        `[]` from an agent with no typed options) keeps today's way: only
+        the value just set is written into the known list.
+
+        When the push stays, the value written into it is the one the reply
+        names, not the requested one: an agent may run another value than
+        asked (omp clamps a level the model lacks — `medium` on a
+        low/high/max model comes back as `low`), and only the reported value
+        is on the ladder. The requested value is the fallback.
+
+        Calls run one at a time (`_config_lock`): with two requests out at
+        once — the operator's chip while `_pin_model` runs — a thinking
+        reply built before a model switch could land after the model reply
+        and bring back the old model and its ladder."""
+        with self._config_lock:
+            return self._config_locked(option_id, value)
+
+    def _config_locked(self, option_id: str, value: Any) -> dict:
+        """config() body. Caller holds `_config_lock`, not `_lock`."""
         with self._lock:
             client, sid = self._client, self._session_id
+            pushes = self._config_pushes
             if option_id == "mode":
                 if self._elicitations:
                     return {"ok": False, "error": "question_open"}
@@ -470,17 +508,26 @@ class ChatSession:
         if client is None or not sid:
             return {"ok": False, "error": "not_started"}
         try:
-            client.set_config_option(sid, option_id, value)
+            answer = client.set_config_option(sid, option_id, value)
         except Exception as exc:  # noqa: BLE001 — any failure is chat-visible
             detail = f"{exc}"
             code = "provider_error" if _PROVIDER_ERROR_RE.search(detail) else "rpc_error"
             self._emit_error(code, detail,
                              text=f"Einstellung {option_id}={value!r} abgelehnt: {detail}")
             return {"ok": False, "error": code, "detail": detail}
+        reply = self._full_option_set(answer, option_id)
         with self._lock:
-            for opt in self._config_options:
-                if opt.get("id") == option_id:
-                    opt["currentValue"] = value
+            if reply is not None and self._config_pushes == pushes:
+                self._config_options = reply
+            else:
+                current = next(
+                    (o.get("currentValue") for o in reply or []
+                     if o.get("id") == option_id and o.get("currentValue") is not None),
+                    value,
+                )
+                for opt in self._config_options:
+                    if opt.get("id") == option_id:
+                        opt["currentValue"] = current
             options = json.loads(json.dumps(self._config_options))
         self._write_state()
         return {"ok": True, "configOptions": options}
@@ -1024,6 +1071,24 @@ class ChatSession:
         copied = json.loads(json.dumps([o for o in options if isinstance(o, dict)]))
         with self._lock:
             self._config_options = copied
+            self._config_pushes += 1
+
+    @staticmethod
+    def _full_option_set(answer: Any, option_id: str) -> Optional[list]:
+        """The option set from a `session/set_config_option` reply, as a
+        copy — or `None` when the reply carries no full set.
+
+        A full set names the option that was just set. Anything else is a
+        placeholder, not the agent's state: `hermes acp` answers every set
+        with `configOptions: []` (no typed options yet), and taking that
+        would wipe the model row and the effort chip."""
+        options = answer.get("configOptions") if isinstance(answer, dict) else None
+        if not isinstance(options, list):
+            return None
+        rows = [o for o in options if isinstance(o, dict)]
+        if not any(o.get("id") == option_id for o in rows):
+            return None
+        return json.loads(json.dumps(rows))
 
     def _set_commands(self, commands: Any) -> None:
         if not isinstance(commands, list):
@@ -1362,11 +1427,10 @@ def request(socket_path: str, payload: dict, timeout: float = 30.0) -> dict:
 
 
 def model_selector(env: "Mapping[str, str]") -> Optional[str]:
-    """OMP_ACP_MODEL (explicit override) > OMP_MODEL_SELECTOR (entrypoint-
-    rendered) > mc-openai/<OPENAI_MODEL> — the same precedence as
-    launch-omp.sh and bridge._acp_model_selector, so chat and task sessions
-    of one agent can never drift onto different models. None when nothing
-    is set (the caller decides whether that is a boot error)."""
+    """Alias of :func:`acp_model.selector_from` — the ONE selector rule the
+    task bridge and launch-omp.sh follow too, so chat and task sessions of
+    one agent can never drift onto different models. None when nothing is
+    set (the caller decides whether that is a boot error)."""
     return acp_model.selector_from(env)
 
 
@@ -1378,8 +1442,8 @@ def build_session() -> ChatSession:
     model = acp_model.current_selector(os.environ)
     if model is None:
         # No baked-in default: a missing model is a boot error, not a silent
-        # fallback to omp's built-in provider catalog (ADR-054, as in
-        # bridge._default_model_selector).
+        # fallback to omp's built-in provider catalog (ADR-054, same rule as
+        # acp_model.current_selector(required=True) on the task path).
         raise RuntimeError(
             "OMP_MODEL_SELECTOR / OPENAI_MODEL not set — entrypoint must "
             "render models.yml first; refusing to open a chat session on "

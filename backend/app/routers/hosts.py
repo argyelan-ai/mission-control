@@ -634,6 +634,22 @@ async def delete_host(
                 f"with host_id=null or another host UUID), then delete."
             ),
         )
+    # A duo's worker box is bound too (ADR-096): deleting it would cascade its
+    # ``runtime_hosts`` row away in the database — a membership change past
+    # the one writer (runtime_membership) and its lock.
+    from app.services import runtime_membership
+
+    member_of = await runtime_membership.worker_of_runtimes(session, host.id)
+    if member_of:
+        slugs = ", ".join(sorted(set(member_of)))
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Host '{host.slug}' is the worker box of {slugs}. Give that runtime "
+                f"another worker or make it a one-box runtime first "
+                f"(PATCH /api/v1/runtimes/db/{{slug}}), then delete."
+            ),
+        )
     await session.delete(host)
     await session.commit()
     return None

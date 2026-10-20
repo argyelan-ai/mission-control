@@ -1,0 +1,3 @@
+# Real shape (from the 60-day transcript replay): the printed rc is the one of tail, not of the scan,
+# and the next command runs anyway.
+python3 scripts/privacy-scan.py 2>&1 | tail -3; echo "privacy rc=$?"

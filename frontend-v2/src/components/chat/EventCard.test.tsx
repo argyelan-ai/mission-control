@@ -39,6 +39,14 @@ describe("EventCard", () => {
     expect(screen.getByTestId("motif")).toHaveAttribute("data-kind", "woge");
   });
 
+  it("calls a correction re-dispatch a correction, with its task title", () => {
+    render(<EventCard {...mk({ kind: "task", title: "Beweis #414", redispatch: true })} live={false} />);
+    const btn = screen.getByRole("button", { name: /Correction/ });
+    expect(btn).toHaveTextContent("Beweis #414");
+    expect(btn).not.toHaveTextContent(/^Task/);
+    expect(screen.getByTestId("motif")).toHaveAttribute("data-kind", "woge");
+  });
+
   it("falls back to the sender when there is no title", () => {
     render(<EventCard {...mk({ kind: "inbox", title: null }, { teammate: "00000003__a1b2.msg" })} live={false} />);
     expect(screen.getByRole("button")).toHaveTextContent("00000003__a1b2.msg");

@@ -1,0 +1,2 @@
+# Bypass found by the critic (2026-10-19): the push output is thrown away.
+python3 scripts/privacy-scan.py && git -C . push origin feat/x 2>&1 >/dev/null

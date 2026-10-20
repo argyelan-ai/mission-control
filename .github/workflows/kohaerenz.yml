@@ -22,6 +22,10 @@ jobs:
     name: kz check (warning only)
     if: ${{ vars.KZ_REPO != '' && !contains(github.event.pull_request.labels.*.name, 'kz-skip') }}
     runs-on: ubuntu-latest
+    # gate-audit: soft - Hinweis, kein Gate (Entscheid 19.10.2026, tools/guards/GATES.md).
+    # Rot heisst hier fast immer "PR-Text unvollstaendig" (kz pr:section), nicht
+    # "Code kaputt"; scharf schalten heisst Pflicht-Check im Ruleset + merge_group-
+    # Trigger - das ist Roter Faden E4 und Operator-Entscheid, nicht dieser Job.
     continue-on-error: true
     steps:
       # Full history: the diff checks (anchors, drift, pr) need origin/main.

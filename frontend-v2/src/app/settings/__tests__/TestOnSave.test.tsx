@@ -71,6 +71,12 @@ vi.mock("@/lib/store", () => ({
 
 import SettingsPage from "../page";
 
+// The whole Settings page renders and userEvent types into it: on CI these
+// tests take 2.5–5.3 s each, right at vitest's 5 s default — "saving a new
+// key …" timed out at 5019 / 5254 ms in two merge-queue runs (20.10.2026).
+// Same budget as the sibling Settings page tests; no assertion changes.
+vi.setConfig({ testTimeout: 20_000 });
+
 function renderPage() {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

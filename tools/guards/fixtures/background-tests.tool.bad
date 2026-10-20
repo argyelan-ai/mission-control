@@ -1,0 +1,3 @@
+Run the backend tests with the Bash tool:
+  command: "cd backend && pytest -q", run_in_background: true
+Then write the report.

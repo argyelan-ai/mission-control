@@ -393,6 +393,53 @@ describe("Composer", () => {
       expect(modelRow("Broken").textContent?.trim()).toBe("Broken");
     });
 
+    // ACP agents (omp): the option is provider-qualified ("mc-openai/X"), the
+    // usage event names the bare model ("X"), and the label is a real model
+    // id — no longer the short "MC model" placeholder (live 19.10.2026).
+    const ACP_CAPS = {
+      effortLevels: [],
+      canSwitchEffort: false,
+      modelOptions: [
+        { command: "mc-openai/GLM-5.3-Flash-EXL3-very-long", label: "GLM-5.3-Flash-EXL3-very-long", contextWindow: null },
+        { command: "mc-openai/Qwen3.8-27B", label: "Qwen3.8-27B", contextWindow: null },
+      ],
+      model: "mc-openai/GLM-5.3-Flash-EXL3-very-long",
+    };
+
+    it("marks the running model when usage names it without its provider", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer agentId="a1" usage={mkUsage({ model: "GLM-5.3-Flash-EXL3-very-long" })}
+          capabilities={ACP_CAPS} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await user.click(screen.getByTestId("model-chip"));
+      expect(modelRow("GLM-5.3")).toHaveAttribute("aria-selected", "true");
+      expect(modelRow("Qwen3.8")).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("never takes a provider-less name as a match for a different model", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer agentId="a1" usage={mkUsage({ model: "27B" })}
+          capabilities={ACP_CAPS} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await user.click(screen.getByTestId("model-chip"));
+      expect(modelRow("Qwen3.8")).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("sizes the list to real model names and keeps the full name in the tooltip", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer agentId="a1" usage={null} capabilities={ACP_CAPS} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      await user.click(screen.getByTestId("model-chip"));
+      const list = screen.getByRole("listbox");
+      expect(list.className).toContain("w-max");
+      expect(list.className).toContain("max-w-72");
+      expect(list.className).not.toMatch(/(^|\s)w-36(\s|$)/);
+      expect(modelRow("GLM-5.3")).toHaveAttribute("title", "GLM-5.3-Flash-EXL3-very-long");
+    });
+
     it("sends the reported command, not the label", async () => {
       const onSend = vi.fn();
       const user = userEvent.setup();

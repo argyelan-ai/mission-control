@@ -29,6 +29,7 @@ import logging
 import subprocess
 
 from app.config import settings
+from app.services import docker_gateway
 
 logger = logging.getLogger("mc.disk_preflight")
 
@@ -127,8 +128,8 @@ def build_cache_cleanup() -> None:
     """
     keep = settings.build_cache_keep_gb
     try:
-        proc = subprocess.run(
-            ["docker", "builder", "prune", "--force", "--keep-storage", f"{keep}g"],
+        proc = docker_gateway.run(
+            ["builder", "prune", "--force", "--keep-storage", f"{keep}g"],
             capture_output=True,
             text=True,
             timeout=120,

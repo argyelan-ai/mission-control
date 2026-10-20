@@ -320,6 +320,23 @@ git log --oneline origin/main..HEAD
 config belongs in `.env` and `docker-compose.override.yml` (both gitignored),
 not in tracked files.
 
+### `./install.sh --update` says an update was interrupted
+
+**Cause** — an earlier update run did not finish (power cut, closed terminal,
+killed process). Its journal in `~/.mc/update/` says where it stopped; until it
+is finished, the installer starts no new update and does not boot the stack on
+top of it.
+
+```bash
+./install.sh --resume
+```
+
+**Fix** — the resume decides from the journal: stopped before the code switch →
+it ends with nothing changed; after it → it completes the update or goes back
+to the previous version. When the message says the way back itself failed, fix
+the cause it names (often disk space or a stopped database) and run
+`./install.sh --rollback`.
+
 ### `./backup.sh restore` says "No backup found"
 
 **Cause** — restore looks in `./backups/` relative to the current directory

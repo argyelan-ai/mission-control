@@ -1,0 +1,3 @@
+# The agent starts the suite in the background and reports right away.
+cd backend && pytest -q &
+echo "waiting for the background run"

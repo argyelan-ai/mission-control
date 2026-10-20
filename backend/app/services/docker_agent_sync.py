@@ -41,6 +41,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.runtime import Runtime
+from app.services import docker_gateway
 from app.services.disk_preflight import build_preflight_error as disk_build_preflight_error
 from app.services.template_renderer import build_agent_context, render_agent_file
 
@@ -1083,7 +1084,7 @@ def restart_docker_agent_container(
         # file references ${MC_TOKEN_*}, ${OPENAI_API_KEY_*} etc. that live in
         # docker/.env.agents — without it those expand to empty and agents come
         # up with no auth token (mc CLI then dies with 'MC_AGENT_TOKEN missing').
-        cmd = ["docker", "compose", "-p", COMPOSE_PROJECT_NAME]
+        cmd = ["compose", "-p", COMPOSE_PROJECT_NAME]
         for env_file in (env_main, env_agents, env_shared):
             if env_file.is_file():
                 cmd.extend(["--env-file", str(env_file)])
@@ -1106,7 +1107,7 @@ def restart_docker_agent_container(
         if host_home:
             run_env["HOME"] = host_home
         try:
-            proc = subprocess.run(
+            proc = docker_gateway.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -1125,6 +1126,10 @@ def restart_docker_agent_container(
                 "container": container_name,
                 "mode": "recreate",
             }
+        except docker_gateway.DockerDeferred as e:
+            # Update drain (ADR-094 §7): nothing ran. An error status keeps
+            # every caller on its failure path (switch rollback, 500 to UI).
+            return {"status": f"error: {e}", "container": container_name, "mode": "recreate"}
         except Exception as e:
             logger.error("force_recreate(%s) failed: %s", container_name, e)
             return {
@@ -1143,8 +1148,8 @@ def restart_docker_agent_container(
 
     try:
         # docker restart -t 5 container_name
-        proc = subprocess.run(
-            ["docker", "restart", "-t", "5", container_name],
+        proc = docker_gateway.run(
+            ["restart", "-t", "5", container_name],
             capture_output=True,
             text=True,
             # 60s: a cold omp container (puppeteer natives, model bootstrap)
@@ -1166,6 +1171,8 @@ def restart_docker_agent_container(
             "container": container_name,
             "mode": "restart",
         }
+    except docker_gateway.DockerDeferred as e:
+        return {"status": f"error: {e}", "container": container_name, "mode": "restart"}
     except Exception as e:
         logger.error("restart_docker_agent_container(%s) failed: %s", container_name, e)
         return {"status": f"error: {e}", "container": container_name, "mode": "restart"}
@@ -1268,8 +1275,8 @@ def _agent_container_cmd(agent: "Agent | str", docker_args: list[str], action: s
         f"{action} must only ever target mc-agent-* containers, got {container_name}"
     )
     try:
-        proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
-            ["docker", *docker_args, container_name],
+        proc = docker_gateway.run(  # fixed argv, no shell
+            [*docker_args, container_name],
             capture_output=True, text=True, check=False, timeout=60,
         )
         if proc.returncode == 0:

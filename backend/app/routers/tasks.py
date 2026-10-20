@@ -1407,6 +1407,50 @@ async def get_task_checklist(
     return result.all()
 
 
+@router.get("/boards/{board_id}/tasks/{task_id}/model-wait")
+async def get_task_model_wait(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Is this not-yet-started task waiting for its agent's MODEL? For the
+    task card (follow-up to ADR-097, delivered is not working): an assigned
+    ``inbox`` task is either delivered and waiting for the model's first
+    answer, or held because the model does not answer. Same decision the
+    poll and the ACK ladder use (``runtime_readiness``, cached, fail-open,
+    local runtimes included) — but a read: no timeline note.
+
+    ``applies`` is false for every other task; the card then shows nothing."""
+    task = await session.get(Task, task_id)
+    if not task or task.board_id != board_id:
+        raise HTTPException(status_code=404, detail="Task nicht gefunden")
+    result = {"applies": False, "delivered": False, "ready": True,
+              "runtime": None, "reason": None}
+    if task.status != "inbox" or task.assigned_agent_id is None:
+        return result
+    agent = await session.get(Agent, task.assigned_agent_id)
+    if agent is None:
+        return result
+    from app.models.runtime import Runtime
+    from app.services.runtime_readiness import runtime_ready_for_agent
+
+    runtime = await session.get(Runtime, agent.runtime_id) if agent.runtime_id else None
+    delivered = task.dispatched_at is not None
+    runtime_name = runtime.display_name if runtime else None
+    # Pool hygiene: the gate awaits Redis and maybe an HTTP probe — release
+    # the read transaction first (read phase, nothing uncommitted).
+    await session.commit()
+    ready, reason = await runtime_ready_for_agent(
+        agent, session, include_local=True, notify=False,
+    )
+    result.update(
+        applies=True, delivered=delivered, ready=bool(ready),
+        runtime=runtime_name, reason=reason,
+    )
+    return result
+
+
 @router.get("/boards/{board_id}/tasks/{task_id}/git-info")
 async def get_task_git_info_endpoint(
     board_id: uuid.UUID,
@@ -1677,7 +1721,10 @@ async def update_task(
             allowed, reason = await check_dispatch_allowed(task, agent, session)
             if not allowed:
                 logger.info("Manual re-dispatch blocked: '%s' — %s", task.title, reason)
-                _dispatch_allowed = False
+                from app.services.operations import UPDATE_DRAIN_REASON
+                # An MC update only holds the dispatch back: auto_dispatch_task
+                # records it and the drain's catch-up delivers it afterwards.
+                _dispatch_allowed = reason == UPDATE_DRAIN_REASON
 
         # Phase 29: Re-dispatch via auto_dispatch_task (cli-bridge / host / claude-code
         # runtimes). Gateway-only path removed.
@@ -1952,6 +1999,7 @@ _ACTIVITY_KIND_MAP: dict[str, str] = {
     "task.dispatch_fallback": "dispatch",
     "task.dispatch_pending": "dispatch",
     "task.dispatch_queued": "dispatch",
+    "task.dispatch_held_runtime_down": "dispatch",
     "task.dispatch_runtime_unsupported": "dispatch",
     "task.unblock_redispatched": "dispatch",
     "task.unblock_requeued": "dispatch",

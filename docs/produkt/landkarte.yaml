@@ -116,6 +116,8 @@ features:
       - "* /api/v1/boards/*/tasks/{task_id}/git-diff"
       - "* /api/v1/boards/*/tasks/{task_id}/git-info"
       - "* /api/v1/boards/*/tasks/{task_id}/hierarchy"
+      # The task card's model-wait block (ADR-097 addendum, #897).
+      - "* /api/v1/boards/*/tasks/{task_id}/model-wait"
       - "* /api/v1/boards/*/tasks/{task_id}/promote"
       - "* /api/v1/boards/*/tasks/{task_id}/resume"
       - "* /api/v1/boards/*/tasks/{task_id}/review"
@@ -711,6 +713,31 @@ internal:
   # /api/v1/agent/me/telegram endpoint (FileCard telegram action). No bare
   # /api/v1/agent endpoint exists.
   - "endpoint:* /api/v1/agent/*"
+  # Step-up re-authentication (services/step_up.py, ADR-094 decision 9): a
+  # building block without its own screen. The self-update card (Settings →
+  # System) will ask GET whether to show its button and POST the password in
+  # its confirm sheet; no UI calls it yet.
+  - "endpoint:GET /api/v1/auth/step-up"
+  - "endpoint:POST /api/v1/auth/step-up"
+  # Proof gate stats (routers/activity.py, #891): who caught false finish
+  # reports (gefangen_von) — the gate, a reviewer role, the lead or the
+  # operator. Read-only numbers for the proof-gate evaluation; no screen
+  # shows them yet.
+  - "endpoint:GET /api/v1/activity/proof-gate/stats"
+  # Self-update API (routers/system_update.py, ADR-094, update plan PR 4c):
+  # behind MC_SELF_UPDATE_ENABLED (off) until the button passed acceptance.
+  # The update card in Settings → System (plan PR 5) is its only consumer
+  # and does not exist yet. system_state holds the drain the update engine
+  # writes through psql and the work it held back; system_updates is the
+  # history the card will show.
+  - "endpoint:POST /api/v1/system/update/preflight"
+  - "endpoint:POST /api/v1/system/update/start"
+  - "endpoint:GET /api/v1/system/update/status"
+  - "endpoint:POST /api/v1/system/update/rollback"
+  - "endpoint:POST /api/v1/system/update/resume"
+  - "endpoint:GET /api/v1/system/update/history"
+  - "table:system_state"
+  - "table:system_updates"
   # Schedule heatmap and upcoming firings: client helpers exist
   # (api.schedule.getHeatmap/getUpcoming) but no component calls them —
   # the schedule page renders ScheduleHeatmap with empty data and the job

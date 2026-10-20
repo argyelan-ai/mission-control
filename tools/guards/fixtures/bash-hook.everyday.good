@@ -1,0 +1,9 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "python3 -c \"import sys; print(1)\"; ls -la; npm run build 2>&1 | tail -5",
+  "run_in_background": false
+ }
+}

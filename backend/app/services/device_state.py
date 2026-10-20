@@ -37,6 +37,27 @@ MTU_RANGE = (1_500, 9_000)                      # Ethernet-Standard … Jumbo-Fr
 # ausfallen, bevor die Ampel meckert — kurze Netzhänger bleiben ruhig.
 STALE_AFTER_S = 120
 
+# Positivliste für laufende Engines (ADR-096 §3.2, Mehrbox-Runtimes): MC
+# schickt im Soll `watch` = [{kind, name}], der node-agent meldet für genau
+# diese Namen running/stopped/unknown. IDENTISCH zu
+# scripts/node-agent/mc-node-agent.py (ANCHOR_KINDS, WATCH_MAX,
+# ANCHOR_NAME_MAX, ANCHOR_NAME_CHARS) — Paritätstest in
+# tests/test_node_anchor_api.py.
+ANCHOR_KINDS = ("container", "process")
+WATCH_MAX = 16
+ANCHOR_NAME_MAX = 64
+ANCHOR_NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
+# Namen, die auf JEDER Box laufen — als Anker hiessen sie "running" für immer.
+ANCHOR_NAME_DENY = frozenset((
+    "sh", "bash", "dash", "zsh", "ash", "fish", "python", "node", "perl", "ruby", "java",
+    "env", "sudo", "su", "uv", "uvx", "tmux", "screen", "init", "systemd", "cron",
+    "docker", "dockerd", "containerd", "containerd-shim",
+    "runc", "ssh", "sshd", "tailscaled", "nvidia-smi", "containerd-shim-runc-v2",
+))
+ANCHOR_RUNNING = "running"
+ANCHOR_STOPPED = "stopped"
+ANCHOR_UNKNOWN = "unknown"
+
 # Ampel-Farben. Englische Codes, damit die Oberfläche sie ohne Übersetzung
 # als Schlüssel für ihre i18n-Texte nutzen kann.
 STATUS_GREEN = "green"
@@ -130,3 +151,105 @@ def compute_status(
         return {"status": STATUS_YELLOW, "reason": "pending", "diff": diff, "age_s": age_s}
 
     return {"status": STATUS_GREEN, "reason": "in_sync", "diff": [], "age_s": age_s}
+
+
+def valid_anchor_name(name: object) -> bool:
+    """Name eines Ankers: 1..ANCHOR_NAME_MAX Zeichen aus ANCHOR_NAME_CHARS,
+    erstes Zeichen Buchstabe/Ziffer, nicht in ANCHOR_NAME_DENY. Gleiche Regel
+    wie im node-agent."""
+    if not isinstance(name, str) or not (1 <= len(name) <= ANCHOR_NAME_MAX):
+        return False
+    if name[0] in "_.-":
+        return False
+    if not all(ch in ANCHOR_NAME_CHARS for ch in name):
+        return False
+    # Ohne Gross/Klein und ohne Versionsendung: `Python3.12` ist `python`.
+    lowered = name.lower()
+    return lowered not in ANCHOR_NAME_DENY and lowered.rstrip("0123456789.") not in ANCHOR_NAME_DENY
+
+
+def anchor_status(
+    current: dict[str, Any] | None,
+    reported_at: datetime | None,
+    kind: str,
+    name: str,
+    now: datetime | None = None,
+) -> str:
+    """Läuft dieser Anker? ``running`` / ``stopped`` / ``unknown``.
+
+    Grundsatz (ADR-096 §3.2): **nie ein falsches "running"**. ``unknown``,
+    wenn die Box nichts gemeldet hat, die Meldung älter als STALE_AFTER_S
+    ist, der Anker nicht in der Meldung steht (alter Agent, noch kein
+    ``watch``) oder der Agent selbst "unknown" sagt (z.B. kein Docker-
+    Leserecht). Der Leser (Runtime-Status, PR 3) baut darauf ``degraded``.
+    """
+    now = now or utcnow()
+    if not current or reported_at is None:
+        return ANCHOR_UNKNOWN
+    if (now - ensure_aware(reported_at)).total_seconds() > STALE_AFTER_S:
+        return ANCHOR_UNKNOWN
+    anchors = current.get("anchors")
+    if not isinstance(anchors, list):
+        return ANCHOR_UNKNOWN
+    for entry in anchors:
+        if isinstance(entry, dict) and entry.get("kind") == kind and entry.get("name") == name:
+            state = entry.get("state")
+            return state if state in (ANCHOR_RUNNING, ANCHOR_STOPPED) else ANCHOR_UNKNOWN
+    return ANCHOR_UNKNOWN
+
+
+def handle_watch_entries(handles: list[str]) -> list[dict[str, str]]:
+    """Positivliste für generische Handles: jeder Name als Container UND als
+    Prozess.
+
+    MCs Handle-Vertrag (``runtime_manager._ssh_handle_names`` /
+    ``anchor_running``): ``process_name`` trägt einen Prozess- ODER einen
+    Containernamen, geprüft wird jeder Name auf beide Arten. Wer `watch` aus
+    Runtime-Handles baut (PR 6), nimmt diese Funktion — sonst liest ein
+    Container-Handle als Prozess für immer "stopped".
+    """
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in handles:
+        name = (raw or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append({"kind": "container", "name": name})
+        out.append({"kind": "process", "name": name})
+    return out
+
+
+def handle_status(
+    current: dict[str, Any] | None,
+    reported_at: datetime | None,
+    names: list[str],
+    now: datetime | None = None,
+) -> str:
+    """Läuft eine Runtime-Engine laut node-agent? Dieselbe ODER-Regel wie
+    ``runtime_manager.anchor_running``: jeder Handle wird als Container UND als
+    Prozess nachgeschlagen, ein Treffer genügt.
+
+    - ``running``: irgendein Nachschlag sagt running (frische Meldung).
+    - ``stopped``: ALLE Nachschläge (beide Arten, alle Handles) sagen stopped.
+    - sonst ``unknown`` — auch wenn eine Art fehlt (Schreiber hat nur eine Art
+      in `watch` gelegt): "stopped" wäre dann geraten.
+
+    Grenze: ein Anker heisst "ein Container/Prozess dieses Namens läuft", NICHT
+    "diese Runtime läuft" — mehrere Rezepte teilen sich Namen. Leser
+    kombinieren das mit der Identität, die der Kopf ausliefert.
+    """
+    lookups: list[str] = []
+    for raw in names:
+        name = (raw or "").strip()
+        if not name:
+            continue
+        for kind in ANCHOR_KINDS:
+            lookups.append(anchor_status(current, reported_at, kind, name, now=now))
+    if not lookups:
+        return ANCHOR_UNKNOWN
+    if ANCHOR_RUNNING in lookups:
+        return ANCHOR_RUNNING
+    if all(state == ANCHOR_STOPPED for state in lookups):
+        return ANCHOR_STOPPED
+    return ANCHOR_UNKNOWN

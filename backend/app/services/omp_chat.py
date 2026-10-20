@@ -84,12 +84,14 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any
 
 from app.services.transcript_chat import (
     _LIVE_WINDOW_SECONDS,
     _truncate_detail,
     _truncate_title,
+    preview_event,
     resolve_context_window,
 )
 from app.services.token_harvester import _host_home
@@ -168,45 +170,229 @@ def resolve_transcript_dir(agent) -> Path | None:
     return _host_home() / ".mc" / "agents" / slug / _SESSIONS_DIRNAME
 
 
-def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
-    """Neueste ``*.jsonl``-Session unter ``tdir``.
+#: Name der Zustandsdatei des Chat-Daemons (``docker/omp-bridge/acp_chat.py``
+#: ``_STATE_FILENAME``). Er schreibt sie neben sein Transkript; ihr Feld
+#: ``transcript`` ist der ZEIGER auf die Chat-Sitzung (docs/specs/chat-over-
+#: acp.md). Gilt fuer jeden ACP-Chat-Daemon, der dieses Transkriptformat
+#: schreibt (omp im Container, Hermes auf dem Host).
+CHAT_STATE_FILENAME = "acp-chat-state.json"
 
-    Anders als beim Claude-Adapter wird EINE Ebene tief gesucht: omp legt je
-    Arbeitsverzeichnis einen eigenen Unterordner an (``--workspace--``,
-    ``--workspace-bench-…--``) und schreibt die Session-Datei dort hinein.
-    Ein Agent kann Sessions in mehreren solchen Ordnern haben (der omp-Agent hat
-    sechs) — die aktive ist schlicht die zuletzt geschriebene ueber alle
-    hinweg.
+#: Arbeitsverzeichnisse IM CONTAINER, in denen unter ACP nur TASKS laufen
+#: (Task-Worktrees, Task-Ordner). Bewusst am Container-Layout verankert, nicht
+#: an einem beliebigen Pfad-Segment: ein Host-Chat (Hermes), dessen eigener
+#: Pfad zufaellig ``worktrees`` enthaelt, ist kein Task.
+_TASK_CWD_PREFIXES = ("/workspace/worktrees/", "/workspace/_tasks/")
 
-    Rueckgabe wie beim Claude-Adapter: ``(pfad, meta)`` mit
-    ``{"sessionId", "mtime", "live"}``. ``None``, wenn es das Verzeichnis
-    nicht gibt oder keine Session darin liegt.
-    """
-    if not tdir.is_dir():
-        return None
 
-    # Rangfolge nach dem Zeitstempel des LETZTEN EINTRAGS, nicht nach mtime —
-    # eine beruehrte Altdatei wuerde sonst die laufende Sitzung verdecken
-    # (siehe transcript_chat.last_entry_timestamp; derselbe Fehler galt hier).
-    from app.services.transcript_chat import last_entry_timestamp
-
-    newest_path: Path | None = None
+def chat_state_file(tdir: Path) -> Path | None:
+    """Die juengste ``acp-chat-state.json`` unter ``tdir`` (Wurzel oder eine
+    Ebene tief), oder ``None``. Ein Agent kann mehrere cwd-Ordner haben —
+    die zuletzt geschriebene Datei ist die des laufenden Daemons."""
+    newest: Path | None = None
     newest_mtime = -1.0
-    newest_rank = -1.0
-    for pattern in _SESSION_GLOBS:
-        for candidate in tdir.glob(pattern):
+    for pattern in (CHAT_STATE_FILENAME, f"*/{CHAT_STATE_FILENAME}"):
+        try:
+            candidates = list(tdir.glob(pattern))
+        except OSError:
+            continue
+        for candidate in candidates:
             try:
                 mtime = candidate.stat().st_mtime
             except OSError:
                 continue
-            entry_ts = last_entry_timestamp(candidate)
-            rank = mtime if entry_ts is None else entry_ts
-            if (rank, mtime) > (newest_rank, newest_mtime):
-                newest_rank = rank
+            if mtime > newest_mtime:
                 newest_mtime = mtime
-                newest_path = candidate
+                newest = candidate
+    return newest
 
-    if newest_path is None:
+
+def _pointed_chat_transcript(tdir: Path) -> Path | None:
+    """Die Transkript-Datei, die der Chat-Daemon als SEINE Sitzung nennt.
+
+    Der Daemon schreibt den Pfad aus SEINER Sicht (im Container
+    ``/home/agent/.omp/...``) — auf dem Host zaehlen nur der Dateiname und
+    der cwd-Ordner. Aufgeloest wird darum ausschliesslich INNERHALB von
+    ``tdir``: zuerst ``<tdir>/<ordner>/<datei>``, dann neben der
+    Zustandsdatei. Ein Zeiger, der aus dem Baum hinauszeigt oder auf eine
+    (noch) fehlende Datei, zaehlt nicht — dann gilt der Rueckfall."""
+    state_file = chat_state_file(tdir)
+    if state_file is None:
+        return None
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return None
+    raw = state.get("transcript") if isinstance(state, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    pointed = PurePosixPath(raw.replace("\\", "/"))
+    name = pointed.name
+    if not name.endswith(".jsonl") or name in (".", ".."):
+        return None
+    folder = pointed.parent.name
+    candidates = []
+    if folder and folder not in (".", ".."):
+        candidates.append(tdir / folder / name)
+    candidates.append(state_file.parent / name)
+    try:
+        root = tdir.resolve()
+    except OSError:
+        return None
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if root not in resolved.parents:
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+#: Sitzungen, die als Task-Sitzung ERKANNT sind, je ``(ordner, sitzungs-id)``.
+#: Nur positive Antworten werden gemerkt: Task-Sein aendert sich nie zurueck,
+#: aber der Kopf mit ``taskId`` (Bridge-Datei) kann eine Sekunde NACH omps
+#: eigener Datei erscheinen — ein gemerktes "nein" waere dann falsch.
+_TASK_SESSION_CACHE: set[tuple[str, str]] = set()
+
+
+def _cwd_is_task_dir(cwd: str | None) -> bool:
+    if not cwd:
+        return False
+    norm = cwd.replace("\\", "/").rstrip("/") + "/"
+    return norm.startswith(_TASK_CWD_PREFIXES)
+
+
+def is_task_session(path: Path) -> bool:
+    """Gehoert ``path`` zu einer Task-Sitzung (nicht zum Chat)?
+
+    Ja, wenn irgendeine Datei DERSELBEN Sitzung im selben Ordner einen
+    ``taskId`` im Kopf traegt (das schreibt nur der Bridge-Sink des
+    Task-Pfads — omps eigene Datei hat ihn nie) oder wenn die Sitzung in
+    einem Task-Arbeitsverzeichnis laeuft (Worktree, Task-Ordner)."""
+    session_id = session_id_for(path)
+    key = (str(path.parent), session_id)
+    if key in _TASK_SESSION_CACHE:
+        return True
+    try:
+        siblings = [path] + [
+            s for s in path.parent.glob(f"*{session_id}.jsonl") if s != path
+        ]
+    except OSError:
+        siblings = [path]
+    answer = False
+    for sibling in siblings:
+        if session_id_for(sibling) != session_id:
+            continue
+        header = _session_header(sibling)
+        if header is None:
+            continue
+        if header.get("taskId") or _cwd_is_task_dir(header.get("cwd")):
+            answer = True
+            break
+    if answer:
+        if len(_TASK_SESSION_CACHE) > 4096:
+            _TASK_SESSION_CACHE.clear()
+        _TASK_SESSION_CACHE.add(key)
+    return answer
+
+
+def _session_mtime(path: Path) -> float:
+    """Juengste mtime ueber alle Dateien DERSELBEN Sitzung im Ordner — unter
+    ACP schreiben omp und der Bridge-Sink je eine eigene Datei, und
+    ``live`` soll die Sitzung meinen, nicht die eine Datei."""
+    session_id = session_id_for(path)
+    best = -1.0
+    try:
+        files = [path] + list(path.parent.glob(f"*{session_id}.jsonl"))
+    except OSError:
+        files = [path]
+    for f in files:
+        if session_id_for(f) != session_id:
+            continue
+        try:
+            best = max(best, f.stat().st_mtime)
+        except OSError:
+            continue
+    return best
+
+
+#: Laufzeit, unter der ein Harness mit omp-Transkripten seinen Chat fuehren
+#: KANN — exakt die zwei Faelle, fuer die :func:`resolve_transcript_dir` ein
+#: Verzeichnis liefert. Damit fragt :func:`chat_runs_over_acp` dieselbe
+#: Entscheidungsfunktion wie jeder andere ACP-Konsument
+#: (``acp_chat_transport.headless_chat_kind``), statt eine zweite zu pflegen.
+_RUNTIME_FOR_HARNESS = {HARNESS: "cli-bridge", "hermes": "host"}
+
+
+def chat_runs_over_acp(harness: str | None) -> bool:
+    """Fuehrt ein Agent dieses Harness seinen Chat ueber den ACP-Daemon?
+
+    Nur dann gibt es einen Zeiger (``acp-chat-state.json``), der etwas
+    bedeutet, und nur dann laufen Tasks in EIGENEN Sitzungen neben dem Chat.
+    Unter dem nativen Treiber (Rueckweg ``OMP_DRIVER_DEFAULT=native`` bzw.
+    ``HERMES_DRIVER`` != acp) tippt der Operator in die TUI in Fenster 0, die
+    die Bridge fuer einen Task mit dem Task-cwd neu startet — dort ist eine
+    Worktree-Sitzung sehr wohl der Chat, und eine liegengebliebene
+    Zustandsdatei aus einer frueheren ACP-Zeit zeigt auf eine tote Sitzung.
+    Der Treiber haengt nur am Harness und an globalen Schaltern, darum
+    reicht der Harness."""
+    from app.services.acp_chat_transport import headless_chat_kind
+
+    runtime = _RUNTIME_FOR_HARNESS.get(harness or "")
+    if runtime is None:
+        return False
+    probe = SimpleNamespace(agent_runtime=runtime, harness=harness)
+    return headless_chat_kind(probe) is not None
+
+
+def find_active_session(
+    tdir: Path, *, acp_chat: bool | None = None
+) -> tuple[Path, dict[str, Any]] | None:
+    """Die CHAT-Sitzung unter ``tdir`` — die, die der Agenten-Chat zeigt.
+
+    ``acp_chat`` sagt, ob der Chat ueber den ACP-Daemon laeuft. ``None``
+    (der omp-Adapter): zur Aufrufzeit aus dem Treiber des omp-Harness
+    (:func:`chat_runs_over_acp`). Der Hermes-Adapter setzt es aus
+    ``HERMES_DRIVER``.
+
+    ``acp_chat=False`` (nativer Treiber, auch der Flotten-Rueckweg
+    ``OMP_DRIVER_DEFAULT=native``): die zuletzt geschriebene Sitzung, nichts
+    ausgenommen und kein Zeiger — das Verhalten vor dieser Aenderung.
+
+    ``acp_chat=True``:
+
+    1. Der Zeiger des Chat-Daemons (``acp-chat-state.json`` → ``transcript``)
+       entscheidet. Ein ACP-Agent fuehrt Chat und Tasks PARALLEL: beide
+       schreiben Transkripte in denselben Baum, oft im Sekundentakt. "Die
+       neueste Datei" sprang darum zwischen Chat und Task hin und her
+       (Operator-Befund 19.10.2026: "als wuerde er zwischen zwei Sessions
+       wechseln") — Verlauf, Live-Strom und Status-Badge gleich mit. Nach
+       ``/new`` schreibt der Daemon den neuen Zeiger, und der Chat folgt.
+    2. Ohne Zeiger (TUI-Treiber, Daemon hat noch nicht geschrieben, Zeiger
+       auf eine fehlende Datei): die zuletzt geschriebene Sitzung — aber NIE
+       eine Task-Sitzung (:func:`is_task_session`).
+
+    omp legt je Arbeitsverzeichnis einen Unterordner an (``--workspace--``,
+    ``--workspace-worktrees-…--``) — gesucht wird darum eine Ebene tief.
+
+    Rueckgabe wie beim Claude-Adapter: ``(pfad, meta)`` mit
+    ``{"sessionId", "mtime", "live"}``. ``None``, wenn es das Verzeichnis
+    nicht gibt oder keine Chat-Sitzung darin liegt.
+    """
+    if not tdir.is_dir():
+        return None
+
+    if acp_chat is None:
+        acp_chat = chat_runs_over_acp(HARNESS)
+    if acp_chat:
+        chosen = _pointed_chat_transcript(tdir)
+        if chosen is None:
+            chosen = _newest_session(tdir, skip_tasks=True)
+    else:
+        chosen = _newest_session(tdir, skip_tasks=False)
+    if chosen is None:
         return None
 
     # Under OMP_DRIVER=acp one session has TWO files (see session_id_for):
@@ -216,13 +402,40 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     # file is created first and often written last), and the chat then
     # tailed omp's file: no card until a reload, status "ended" (P3 live
     # test 13.10.2026).
-    newest_path = bridge_sibling(newest_path)
+    chosen = bridge_sibling(chosen)
+    mtime = _session_mtime(chosen)
 
-    return newest_path, {
-        "sessionId": newest_path.stem,
-        "mtime": datetime.fromtimestamp(newest_mtime, tz=timezone.utc).isoformat(),
-        "live": (time.time() - newest_mtime) < _LIVE_WINDOW_SECONDS,
+    return chosen, {
+        "sessionId": chosen.stem,
+        "mtime": datetime.fromtimestamp(max(mtime, 0.0), tz=timezone.utc).isoformat(),
+        "live": (time.time() - mtime) < _LIVE_WINDOW_SECONDS,
     }
+
+
+def _newest_session(tdir: Path, *, skip_tasks: bool) -> Path | None:
+    """Die zuletzt geschriebene Sitzung — mit ``skip_tasks`` (ACP-Rueckfall
+    ohne Zeiger) ohne Task-Sitzungen.
+
+    Rangfolge nach dem Zeitstempel des LETZTEN EINTRAGS, nicht nach mtime —
+    eine beruehrte Altdatei wuerde sonst die laufende Sitzung verdecken
+    (siehe transcript_chat.last_entry_timestamp)."""
+    from app.services.transcript_chat import last_entry_timestamp
+
+    ranked: list[tuple[float, float, Path]] = []
+    for pattern in _SESSION_GLOBS:
+        for candidate in tdir.glob(pattern):
+            try:
+                mtime = candidate.stat().st_mtime
+            except OSError:
+                continue
+            entry_ts = last_entry_timestamp(candidate)
+            rank = mtime if entry_ts is None else entry_ts
+            ranked.append((rank, mtime, candidate))
+    ranked.sort(key=lambda r: (r[0], r[1]), reverse=True)
+    for _rank, _mtime, candidate in ranked:
+        if not skip_tasks or not is_task_session(candidate):
+            return candidate
+    return None
 
 
 def session_scan_root(session_path: Path) -> Path:
@@ -383,6 +596,55 @@ def bridge_sibling(path: Path) -> Path:
         if sibling != path and session_id_for(sibling) == session_id and is_bridge_file(sibling):
             return sibling
     return path
+
+
+#: ``find_task_session`` answers, by ``(path, inode)``: the task id in the
+#: file's bridge header (``""`` = a header without one). The header never
+#: changes once written; a file without a header yet is not cached.
+_TASK_ID_CACHE: dict[tuple[str, int], str] = {}
+
+
+def find_task_session(tdir: Path, task_id: str, since: float | None = None) -> Path | None:
+    """The newest session file of ``task_id`` under ``tdir``, or ``None``.
+
+    Under ACP a task runs in its OWN session beside the chat (#898 keeps the
+    chat on the chat daemon's session). The bridge writes ``taskId`` into
+    the header of the task run's file; every attempt (continue nudge,
+    re-dispatch) is a new session, so the newest match is the live one.
+    ``since`` (epoch seconds, e.g. the task's dispatch time minus a slack)
+    skips files last written before it without opening them."""
+    want = (task_id or "").strip().lower()
+    if not want or not tdir.is_dir():
+        return None
+    best: tuple[float, Path] | None = None
+    for pattern in _SESSION_GLOBS:
+        try:
+            candidates = list(tdir.glob(pattern))
+        except OSError:
+            continue
+        for candidate in candidates:
+            try:
+                st = candidate.stat()
+            except OSError:
+                continue
+            if since is not None and st.st_mtime < since:
+                continue
+            if best is not None and st.st_mtime <= best[0]:
+                continue
+            key = (str(candidate), st.st_ino)
+            found = _TASK_ID_CACHE.get(key)
+            if found is None:
+                header = _session_header(candidate)
+                if header is None:
+                    continue
+                raw = header.get("taskId")
+                found = raw.strip().lower() if isinstance(raw, str) else ""
+                if len(_TASK_ID_CACHE) > 4096:
+                    _TASK_ID_CACHE.clear()
+                _TASK_ID_CACHE[key] = found
+            if found == want:
+                best = (st.st_mtime, candidate)
+    return best[1] if best else None
 
 
 def prefers_sibling(new_path: Path, current_path: Path) -> bool:
@@ -644,7 +906,12 @@ def _strip_read_format(content: str) -> str:
 
 _TASK_FILE_RE = re.compile(r"^task-.*\.md$")
 _INBOX_FILE_RE = re.compile(r"^\d{6,}__.*\.msg$")
-_NEW_TASK_RE = re.compile(r"^# New Task:\s*(?P<title>.+?)\s*$", re.MULTILINE)
+# Header of an MC dispatch prompt (dispatch_message_builder): ``New Task`` on
+# the first dispatch, ``CORRECTION NEEDED`` on a re-dispatch after a review
+# change — both are a task, the second one a correction run.
+_NEW_TASK_RE = re.compile(
+    r"^# (?P<header>New Task|CORRECTION NEEDED):\s*(?P<title>.+?)\s*$", re.MULTILINE,
+)
 
 
 def _mention_source(name: str | None, content: str) -> dict[str, Any] | None:
@@ -667,7 +934,10 @@ def _mention_source(name: str | None, content: str) -> dict[str, Any] | None:
         return None
     if _TASK_FILE_RE.match(name):
         m = _NEW_TASK_RE.search(content)
-        return {"kind": "task", "title": m.group("title") if m else None}
+        source: dict[str, Any] = {"kind": "task", "title": m.group("title") if m else None}
+        if m and m.group("header") == "CORRECTION NEEDED":
+            source["redispatch"] = True
+        return source
     if "nudge" in name:
         return {"kind": "nudge", "title": None}
     if _INBOX_FILE_RE.match(name):
@@ -815,12 +1085,24 @@ class OmpLineParser:
             # turn and the chat showed 8000 characters of briefing as the
             # operator's own bubble (incident 19.10.2026, bench task).
             kind = (origin or {}).get("kind")
+            m = _NEW_TASK_RE.search(text)
             if kind not in ("task", "nudge"):
-                kind = "task" if _NEW_TASK_RE.search(text) or task_session else "nudge"
+                kind = "task" if m or task_session else "nudge"
+            elif kind == "nudge" and m and m.group("header") == "CORRECTION NEEDED":
+                # Bridges before 19.10.2026 guessed the origin from the text
+                # and knew only "# New Task:" — a correction re-dispatch
+                # landed as an untitled nudge. The header is unambiguous.
+                kind = "task"
             title = None
+            redispatch = False
             if kind == "task":
-                m = _NEW_TASK_RE.search(text)
-                title = m.group("title") if m else None
+                title = (origin or {}).get("title") or (m.group("title") if m else None)
+                redispatch = bool((origin or {}).get("redispatch")) or bool(
+                    m and m.group("header") == "CORRECTION NEEDED"
+                )
+            source: dict[str, Any] = {"kind": kind, "title": title}
+            if redispatch:
+                source["redispatch"] = True
             return [
                 {
                     "kind": "message",
@@ -828,7 +1110,7 @@ class OmpLineParser:
                     "ts": ts,
                     "role": "teammate",
                     "teammate": None,
-                    "source": {"kind": kind, "title": title},
+                    "source": source,
                     "text": text[:_MENTION_TRUNCATE_LEN],
                     "model": None,
                     "sidechain": False,
@@ -951,15 +1233,19 @@ class OmpLineParser:
                 text = block.get("thinking")
                 if text is None:
                     continue
-                events.append(
-                    {
-                        "kind": "thinking",
-                        "uuid": entry_id,
-                        "ts": ts,
-                        "text": text,
-                        "sidechain": False,
-                    }
-                )
+                thinking_ev: dict[str, Any] = {
+                    "kind": "thinking",
+                    "uuid": entry_id,
+                    "ts": ts,
+                    "text": text,
+                    "sidechain": False,
+                }
+                # The omp bridge records how long a thought took (20.10.2026);
+                # omp's own files do not — then the key is simply absent.
+                duration = block.get("durationMs")
+                if isinstance(duration, int) and not isinstance(duration, bool) and duration >= 0:
+                    thinking_ev["durationMs"] = duration
+                events.append(thinking_ev)
             elif btype == "toolCall":
                 name = block.get("name")
                 if not name:
@@ -1201,15 +1487,7 @@ class OmpLineParser:
         # timeline. Stacking them as teammate messages doubled the answer
         # in the history and grew the transcript quadratically.
         if custom_type == "acp-preview":
-            return [
-                {
-                    "kind": "preview",
-                    "uuid": None,
-                    "ts": ts,
-                    "text": content[:_RESULT_TRUNCATE_LEN],
-                    "source": "acp",
-                }
-            ]
+            return [preview_event(content, ts, d.get("data"))]
         if custom_type == "acp-tool-output":
             # Chat package P1: a running tool's output so far (the bridge's
             # volatile snapshot). Never a timeline row: it rides its own

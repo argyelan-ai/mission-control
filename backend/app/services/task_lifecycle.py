@@ -1619,11 +1619,28 @@ async def handle_review_handoff(
         return None
 
     # Set dispatch_intent + operational controls guard
+    _intent_before = task.dispatch_intent
     task.dispatch_intent = "review_handoff"
     from app.services.operations import check_dispatch_allowed
     allowed, reason = await check_dispatch_allowed(task, reviewer, session)
     if not allowed:
         logger.info("Review-Handoff blocked: '%s' — %s", task.title, reason)
+        from app.services.operations import UPDATE_DRAIN_REASON
+        if reason == UPDATE_DRAIN_REASON:
+            # The card stays with its author until the catch-up; marked as a
+            # review card it would park the developer like a reviewer.
+            task.dispatch_intent = _intent_before
+            # Held back by an MC update, not refused: the hand-off itself is
+            # recorded and run again once the drain is gone
+            # (update_drain.catch_up). Without it the card would stay on
+            # review with its author and nobody would ever pick a reviewer.
+            from app.services import update_drain
+            await update_drain.defer(
+                update_drain.KIND_REVIEW_HANDOFF, task.id, bind=session.bind,
+                run_id=(await update_drain.current()).run_id,
+                detail={"developer_id": str(developer.id) if developer else (
+                    str(task.assigned_agent_id) if task.assigned_agent_id else None)},
+            )
         return None
 
     # Release the developer lock (clear current_task_id)
@@ -1882,6 +1899,9 @@ async def handle_review_rejection(
 
     Returns: ReviewRejectionResult (developer + outcome, see above).
     """
+    # Beweis-Tor statistics: who caught the false finish report (services/proof_gate.py)
+    from app.services.proof_gate import caught_by_for_actor
+
     from app.routers.agent_scoped import _find_last_developer
 
     # Rejection counter (only for agent rejections)
@@ -1981,6 +2001,7 @@ async def handle_review_rejection(
             session, "task.review_rejected",
             f"Review abgelehnt: '{task.title}' — kein Entwickler ermittelbar, an Board Lead weitergeleitet",
             board_id=board_id, task_id=task.id,
+            detail={"gefangen_von": caught_by_for_actor(rejecting_agent)},
             severity="warning",
         )
         from app.services.dispatch import auto_dispatch_task
@@ -2040,6 +2061,7 @@ async def handle_review_rejection(
             f"Review abgelehnt: '{task.title}' — Dispatch fuer {original_dev.name} "
             f"blockiert ({reason}), wartet in Inbox",
             board_id=board_id, task_id=task.id, agent_id=original_dev.id,
+            detail={"gefangen_von": caught_by_for_actor(rejecting_agent)},
             severity="warning",
         )
         return ReviewRejectionResult(original_dev, "dispatch_blocked")
@@ -2090,6 +2112,7 @@ async def handle_review_rejection(
             session, "task.review_rejected",
             f"Review abgelehnt: '{task.title}' in Queue fuer {original_dev.name} (busy)",
             board_id=board_id, task_id=task.id, agent_id=original_dev.id,
+            detail={"gefangen_von": caught_by_for_actor(rejecting_agent)},
         )
     else:
         # Set status to inbox — the agent must ACK (PATCH status: in_progress)
@@ -2108,6 +2131,7 @@ async def handle_review_rejection(
             session, "task.review_rejected",
             f"Review abgelehnt: '{task.title}' zurueck an {original_dev.name}",
             board_id=board_id, task_id=task.id, agent_id=original_dev.id,
+            detail={"gefangen_von": caught_by_for_actor(rejecting_agent)},
         )
         # Re-dispatch after review rejection.
         # Post Phase 29 / Gateway-Sunset: no gateway_agent_id gate, no RPC.

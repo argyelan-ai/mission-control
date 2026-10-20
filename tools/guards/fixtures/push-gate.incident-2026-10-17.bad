@@ -1,0 +1,3 @@
+# The real command from 2026-10-17 (transcript, worktree path shortened to $WT):
+# a force-push without a lease, no scan, and its output cut to one line.
+git -C $WT push -q --force origin docs-v2:docs/backup-restore-truth 2>&1 | tail -1

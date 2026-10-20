@@ -783,6 +783,9 @@ export const api = {
       list: (boardId: string, taskId: string) =>
         request<TaskChecklistItem[]>(`/api/v1/boards/${boardId}/tasks/${taskId}/checklist`),
     },
+    /** Is this assigned inbox task waiting for its agent's model? */
+    modelWait: (boardId: string, taskId: string) =>
+      request<import("./types").TaskModelWait>(`/api/v1/boards/${boardId}/tasks/${taskId}/model-wait`),
     gitInfo: (boardId: string, taskId: string) =>
       request<TaskGitInfo>(`/api/v1/boards/${boardId}/tasks/${taskId}/git-info`),
     gitDiff: (boardId: string, taskId: string, commit: string) =>
@@ -837,6 +840,9 @@ export const api = {
      *  `thumb` = small WebP for the card, `full` = metadata-free original. */
     mediaUrl: (agentId: string, mediaId: string, variant: "thumb" | "full" = "thumb"): string =>
       `${BASE_URL}/api/v1/agents/${encodeURIComponent(agentId)}/chat/media/${encodeURIComponent(mediaId)}?variant=${variant}`,
+    /** What the agent's running task does (chat task block, 20.10.2026). */
+    taskActivity: (agentId: string) =>
+      request<import("./chatTypes").TaskActivity>(`/api/v1/agents/${agentId}/chat/task-activity`),
     history: (agentId: string, params?: { limit?: number; beforeUuid?: string }) => {
       const qs = new URLSearchParams();
       if (params?.limit != null) qs.set("limit", String(params.limit));

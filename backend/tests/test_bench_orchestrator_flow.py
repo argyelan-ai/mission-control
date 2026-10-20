@@ -355,6 +355,304 @@ async def test_reconcile_marks_failed_agent_tasks(
     assert ch.status == "failed"  # only entry failed -> all failed
 
 
+# ── blocked is temporary: never finalize the entry (critic 19.10.) ────────
+
+
+async def _seed_blocked(session, make_board, make_task, **task_kw):
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="blocked", **task_kw)
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "Pagoda", "source_kind": "agent",
+             "status": "generating", "task_id": task.id},
+        ],
+    )
+    return board, task, ch, entries
+
+
+@pytest.mark.asyncio
+async def test_reconcile_keeps_blocked_entry_generating(
+    session, monkeypatch, make_board, make_task
+):
+    """A blocked task is temporary (task_lifecycle: "blocked is ALWAYS
+    temporary"; the Lead's triage PATCHes it back to in_progress and it is
+    redispatched). Reconcile must NOT finalize the entry — otherwise the
+    later delivery is silently discarded (critic finding 19.10., blocker)."""
+    _, _, ch, entries = await _seed_blocked(session, make_board, make_task)
+    monkeypatch.setattr(orchestrator, "record_entry", AsyncMock())
+    await orchestrator.reconcile_challenge(session, ch, entries)
+    await session.refresh(entries[0])
+    await session.refresh(ch)
+    assert entries[0].status == "generating"
+    assert entries[0].error is None
+    assert ch.status == "generating"
+
+
+@pytest.mark.asyncio
+async def test_blocked_then_resolved_then_done_collects_delivery(
+    session, tmp_path, monkeypatch, make_board, make_task
+):
+    """The critic's exact repro: task blocked -> Studio GET (reconcile) ->
+    Lead resolves the blocker -> agent delivers index.html -> task done ->
+    on_task_done must collect it (was: entry=failed, delivery dropped)."""
+    from app.models.deliverable import TaskDeliverable
+    from app.models.task import Task
+
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    monkeypatch.setattr(orchestrator, "record_entry",
+                        AsyncMock(return_value={"video_path": "/v.mp4", "screenshot_path": "/s.png"}))
+    monkeypatch.setattr(orchestrator, "compose_challenge", AsyncMock(return_value="/g.mp4"))
+    _, task, ch, entries = await _seed_blocked(session, make_board, make_task)
+
+    await orchestrator.reconcile_challenge(session, ch, entries)  # Studio polls
+
+    src = tmp_path / "agent-out" / "index.html"
+    src.parent.mkdir(parents=True)
+    src.write_text("<html>pagoda</html>")
+    session.add(TaskDeliverable(task_id=task.id, deliverable_type="file",
+                                title="index.html", path=str(src)))
+    db_task = await session.get(Task, task.id)
+    db_task.status = "done"
+    session.add(db_task)
+    await session.commit()
+
+    await orchestrator.on_task_done(session, db_task)
+
+    await session.refresh(entries[0])
+    await session.refresh(ch)
+    assert entries[0].status in ("generated", "rendered"), entries[0].error
+    assert entries[0].artifact_path is not None
+    assert ch.status == "review"
+
+
+@pytest.mark.asyncio
+async def test_entry_task_states_blocked_reason_from_approval(
+    session, make_board, make_task, fake_redis, monkeypatch
+):
+    """The Studio shows WHY an entry waits: the pending blocker_decision
+    question wins."""
+    from app.models.approval import Approval
+
+    _use_fake_redis(monkeypatch, fake_redis)
+    board, task, ch, entries = await _seed_blocked(session, make_board, make_task)
+    session.add(Approval(
+        board_id=board.id, task_id=task.id, action_type="blocker_decision",
+        description="Unknown ACP model: mc-openai/GLM-5.3-Flash-EXL3",
+        status="pending",
+    ))
+    await session.commit()
+
+    states = await orchestrator.entry_task_states(session, entries)
+    st = states[entries[0].id]
+    assert st["task_status"] == "blocked"
+    assert st["blocker_reason"] == "Unknown ACP model: mc-openai/GLM-5.3-Flash-EXL3"
+
+
+@pytest.mark.asyncio
+async def test_entry_task_states_blocked_reason_from_triage_payload(
+    session, make_board, make_task, fake_redis, monkeypatch
+):
+    """Lead-triage phase (stage 1): no operator approval exists yet — the
+    question lives in the parked triage payload (critic finding, minor)."""
+    from app.services.blocker_triage import store_triage_payload
+
+    _use_fake_redis(monkeypatch, fake_redis)
+    _, task, ch, entries = await _seed_blocked(session, make_board, make_task)
+    await store_triage_payload(task.id, {"question": "Which model id should I use?"})
+
+    states = await orchestrator.entry_task_states(session, entries)
+    assert states[entries[0].id]["blocker_reason"] == "Which model id should I use?"
+
+
+@pytest.mark.asyncio
+async def test_entry_task_states_blocked_reason_from_comment(
+    session, make_board, make_task, fake_redis, monkeypatch
+):
+    """No approval, no triage payload (Redis TTL/outage) -> the agent's own
+    latest blocker comment."""
+    from app.models.task import TaskComment
+
+    _use_fake_redis(monkeypatch, fake_redis)
+    _, task, ch, entries = await _seed_blocked(session, make_board, make_task)
+    session.add(TaskComment(task_id=task.id, author_type="agent",
+                            comment_type="blocker", content="Port 8000 refuses connections"))
+    await session.commit()
+
+    states = await orchestrator.entry_task_states(session, entries)
+    assert states[entries[0].id]["blocker_reason"] == "Port 8000 refuses connections"
+
+
+@pytest.mark.asyncio
+async def test_entry_task_states_in_progress_reports_last_activity(
+    session, make_board, make_task, fake_redis, monkeypatch
+):
+    """Silent in_progress (Mark's addendum 1: 'delivered' is not 'working'):
+    the Studio gets the server-observed last sign of life, same evidence as
+    the silent-card watchdog."""
+    _use_fake_redis(monkeypatch, fake_redis)
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    started = datetime.now(timezone.utc) - timedelta(minutes=25)
+    task = await make_task(board.id, title="[Bench] x", status="in_progress",
+                           started_at=started)
+    _, entries = await _seed(
+        session,
+        entry_specs=[{"model_label": "Pagoda", "source_kind": "agent",
+                      "status": "generating", "task_id": task.id}],
+    )
+    states = await orchestrator.entry_task_states(session, entries)
+    st = states[entries[0].id]
+    assert st["task_status"] == "in_progress"
+    assert st["blocker_reason"] is None
+    assert abs((st["last_activity_at"] - started).total_seconds()) < 1
+
+
+@pytest.mark.asyncio
+async def test_entry_task_states_skips_finished_entries(session, make_board, make_task):
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="done")
+    _, entries = await _seed(
+        session,
+        entry_specs=[{"model_label": "A", "source_kind": "agent",
+                      "status": "generated", "task_id": task.id}],
+    )
+    assert await orchestrator.entry_task_states(session, entries) == {}
+
+
+@pytest.mark.asyncio
+async def test_on_task_done_readopts_reopened_aborted_entry(
+    session, tmp_path, monkeypatch, make_board, make_task
+):
+    """aborted/failed tasks can be reopened (task_status: ABORTED ->
+    IN_PROGRESS/INBOX, FAILED -> INBOX). If the reopened task then delivers,
+    the entry that reconcile had finalized must take the result back
+    instead of discarding it (critic finding, minor)."""
+    from app.models.deliverable import TaskDeliverable
+
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    monkeypatch.setattr(orchestrator, "record_entry",
+                        AsyncMock(return_value={"video_path": "/v.mp4", "screenshot_path": "/s.png"}))
+    monkeypatch.setattr(orchestrator, "compose_challenge", AsyncMock(return_value="/g.mp4"))
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="aborted")
+    ch, entries = await _seed(
+        session,
+        entry_specs=[{"model_label": "A", "source_kind": "agent",
+                      "status": "generating", "task_id": task.id}],
+    )
+    await orchestrator.reconcile_challenge(session, ch, entries)
+    await session.refresh(ch)
+    assert ch.status == "failed"
+
+    src = tmp_path / "out" / "index.html"
+    src.parent.mkdir(parents=True)
+    src.write_text("<html>late</html>")
+    session.add(TaskDeliverable(task_id=task.id, deliverable_type="file",
+                                title="index.html", path=str(src)))
+    task.status = "done"
+    await session.commit()
+
+    await orchestrator.on_task_done(session, task)
+    await session.refresh(entries[0])
+    await session.refresh(ch)
+    assert entries[0].artifact_path is not None
+    assert ch.status == "review"
+
+
+@pytest.mark.asyncio
+async def test_on_task_done_does_not_readopt_operator_stopped_entry(
+    session, tmp_path, monkeypatch, make_board, make_task
+):
+    """An entry the operator stopped stays stopped — the operator's decision
+    wins over a late delivery."""
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="done")
+    ch, entries = await _seed(
+        session,
+        entry_specs=[{"model_label": "A", "source_kind": "agent", "status": "failed",
+                      "error": orchestrator.STOPPED_BY_OPERATOR, "task_id": task.id}],
+    )
+    await orchestrator.on_task_done(session, task)
+    await session.refresh(entries[0])
+    assert entries[0].status == "failed"
+    assert entries[0].error == orchestrator.STOPPED_BY_OPERATOR
+
+
+@pytest.mark.asyncio
+async def test_retry_entry_retires_old_blocked_task_and_its_approval(
+    session, monkeypatch, make_board, make_task
+):
+    """Retry dispatches a NEW task — the old blocked one must not linger with
+    an open blocker_decision approval that keeps reminding Mark and, if
+    answered later, makes the agent do the same work twice (critic, major)."""
+    from app.models.approval import Approval
+    from app.models.task import Task
+
+    monkeypatch.setattr("app.database.engine", test_engine)
+    monkeypatch.setattr(orchestrator, "dispatch_agent_entry", AsyncMock())
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="blocked")
+    approval = Approval(board_id=board.id, task_id=task.id,
+                        action_type="blocker_decision", description="q", status="pending")
+    session.add(approval)
+    await session.commit()
+    ch, entries = await _seed(
+        session,
+        entry_specs=[{"model_label": "A", "source_kind": "agent", "status": "failed",
+                      "error": "agent task failed", "task_id": task.id}],
+    )
+
+    await orchestrator.retry_entry(entries[0].id)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        old = await s.get(Task, task.id)
+        appr = await s.get(Approval, approval.id)
+    assert old.status == "failed"
+    assert appr.status == "superseded"
+    orchestrator.dispatch_agent_entry.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_retire_entry_task_leaves_non_blocked_tasks_alone(
+    session, make_board, make_task
+):
+    from app.models.task import Task
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="in_progress")
+    assert await orchestrator.retire_blocked_entry_task(
+        session, task.id, reason="bench_entry_retried") is False
+    fresh = await session.get(Task, task.id)
+    await session.refresh(fresh)
+    assert fresh.status == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_marks_failed_on_aborted_task(
+    session, monkeypatch, make_board, make_task
+):
+    """Mark's addendum (19.10., point 1 wording "blocked/abgebrochen"):
+    an operator-aborted agent task is the same kind of silent-never-fires
+    terminal as 'failed' — the entry must not hang on 'generating'."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="aborted")
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "Pagoda", "source_kind": "agent",
+             "status": "generating", "task_id": task.id},
+        ],
+    )
+    monkeypatch.setattr(orchestrator, "record_entry", AsyncMock())
+    await orchestrator.reconcile_challenge(session, ch, entries)
+    await session.refresh(entries[0])
+    await session.refresh(ch)
+    assert entries[0].status == "failed"
+    assert entries[0].error == "agent task aborted"
+    assert ch.status == "failed"
+
+
 @pytest.mark.asyncio
 async def test_reconcile_marks_failed_when_task_deleted(session, monkeypatch):
     """When the underlying task is deleted, the FK SET NULLs task_id but the

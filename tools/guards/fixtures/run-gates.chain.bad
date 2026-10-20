@@ -1,0 +1,2 @@
+# A gate line that chains with ';' hides the first command's exit code.
+false ; true

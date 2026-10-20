@@ -89,7 +89,10 @@ def reason_box_is_worker(runtime_name: str) -> str:
 
 
 def reason_worker_not_free(slug: str) -> str:
-    return f"Box '{slug}' steht als zweite Box nicht zur Verfügung (belegt, aus oder ohne SSH-Zugang)"
+    return (
+        f"Box '{slug}' steht als zweite Box nicht zur Verfügung "
+        f"(belegt, aus, schläft bei Bedarf oder ohne SSH-Zugang)"
+    )
 
 
 #: Machine code of the 409 for a paused instance — the dialog turns it into
@@ -380,7 +383,17 @@ def worker_candidates(hosts: list[Host], head: Host, exclusive_busy: set[uuid.UU
     eine Vorbelegung — eine Head-Box steht trotzdem in der Liste, sie
     kommt nur später.
     """
-    free = [h for h in hosts if h.id != head.id and h.id not in exclusive_busy]
+    # Dieselbe Regel wie ``runtime_membership.member_capable``: eine
+    # ausgeschaltete oder bei Bedarf schlafende Box wird nie als Worker
+    # angeboten. Sonst legte ein Start die Instanz an und scheiterte erst
+    # danach am 422 der Mitgliedschaft — eine halbe Zeile (Kritik 19.10.).
+    from app.services.runtime_membership import member_capable
+
+    free = [
+        h
+        for h in hosts
+        if h.id != head.id and h.id not in exclusive_busy and member_capable(h)
+    ]
     free.sort(key=lambda h: (0 if h.role == "worker" else 1, h.ui_order, h.slug))
     return [{"host_id": str(h.id), "slug": h.slug, "role": h.role} for h in free]
 
@@ -996,8 +1009,31 @@ def foreign_exclusive_busy(state: FleetState, head: Host) -> set[uuid.UUID]:
     return {
         hid
         for hid, rts in state.occupied.items()
-        if any(rt.exclusive_memory and rt.host_id != head.id for rt in rts)
+        if any(
+            rt.exclusive_memory
+            and rt.host_id != head.id
+            and not _plain_solo_on(state, rt, hid)
+            for rt in rts
+        )
     }
+
+
+def _plain_solo_on(state: FleetState, rt: Runtime, box_id: uuid.UUID) -> bool:
+    """Is ``rt`` a one-box runtime whose own box is ``box_id``?
+
+    Such a solo is evictable for a duo start exactly like the old duo in
+    Duo->Duo: the start frees the worker box first (``ensure_exclusive_host``
+    with ``host_id``), then the head. Mark 19.10.: Solo<->Duo on the same
+    boxes must work with engines running. A duo of ANOTHER head (as head or as
+    worker) stays busy — stopping it would take a box away from a third one.
+    """
+    from app.services.runtime_membership import topology_nodes
+
+    return (
+        rt.host_id == box_id
+        and not state.members.get(rt.id)
+        and topology_nodes(rt.topology) < 2
+    )
 
 
 def duo_worker_candidates(
@@ -1119,25 +1155,109 @@ async def _require_ssh_alive(host: Host) -> None:
 
 
 async def set_runtime_members(
+    session: AsyncSession,
+    runtime: Runtime,
+    head: Host,
+    worker: Host,
+    *,
+    running: bool | None = None,
+    commit: bool = True,
+) -> None:
+    """Record a duo's two boxes — kept for one release; the writer moved.
+
+    ``runtime_hosts`` is written only by :mod:`app.services.runtime_membership`
+    (ADR-096 §1). This wrapper keeps the old call shape (head + worker) and
+    turns a refused write into :class:`RecipeStartError` with the same status
+    and sentence.
+    """
+    from app.services import runtime_membership
+
+    try:
+        await runtime_membership.set_members(
+            session,
+            runtime,
+            runtime_membership.duo(head.id, worker.id),
+            running=running,
+            commit=commit,
+        )
+    except runtime_membership.MembershipError as exc:
+        raise RecipeStartError(exc.status, exc.detail) from exc
+
+
+async def clear_runtime_members(
+    session: AsyncSession, runtime: Runtime, *, running: bool | None = None, commit: bool = True
+) -> None:
+    """Demote a duo to solo — kept for one release; see :func:`set_runtime_members`."""
+    from app.services import runtime_membership
+
+    try:
+        await runtime_membership.clear_members(session, runtime, running=running, commit=commit)
+    except runtime_membership.MembershipError as exc:
+        raise RecipeStartError(exc.status, exc.detail) from exc
+
+
+async def recorded_worker_id(session: AsyncSession, runtime_id: uuid.UUID) -> uuid.UUID | None:
+    """The worker box ``runtime_hosts`` holds for this runtime, if any."""
+    from app.services import runtime_membership
+
+    return await runtime_membership.recorded_worker_id(session, runtime_id)
+
+
+def reason_duo_role_conflict(box_slug: str, other_runtime: str) -> str:
+    return (
+        f"Box '{box_slug}' would be head in one duo and worker in another "
+        f"('{other_runtime}') — two duos in opposite directions evict each "
+        f"other on every start. Use the same head/worker direction."
+    )
+
+
+async def check_duo_pair(
     session: AsyncSession, runtime: Runtime, head: Host, worker: Host
 ) -> None:
-    """Der Schreibpfad für ``runtime_hosts`` — idempotent.
+    """May ``worker`` be this duo's second box? Same rule as the recipe start.
 
-    Bis P3 wurde diese Tabelle nur GELESEN (ADR-077, Befund 2). Geschrieben
-    wird sie hier und nur hier: erst die alten Mitgliedschaften DIESER Instanz
-    weg, dann Head (rank 0) und Worker (rank 1) neu. Löschen-dann-schreiben
-    statt Upsert, weil sonst der Wechsel der Worker-Box in die Unique-Regel
-    (runtime_id, node_rank) liefe.
+    For the DB-CRUD path (POST/PATCH /runtimes/db). Two checks, no new rule:
+
+    1. **The recipe-start candidate rule** — :func:`duo_worker_candidates`
+       (SSH-capable, not the head, not held by a foreign RUNNING exclusive
+       instance). Only the instances that could actually block the worker box
+       are probed — a CRUD write should not probe the whole fleet.
+    2. **One direction per pair** — a box that is the head of one duo must
+       not be the worker of another (and vice versa). Two duos on the same
+       pair in the same direction stay allowed (live: two recipes on one
+       head→worker pair). Opposite directions make every start of one evict
+       the other on both boxes — the watcher's autostart then flaps them.
+
+    Raises :class:`RecipeStartError` (409) with one sentence.
     """
-    existing = (
-        await session.exec(select(RuntimeHost).where(RuntimeHost.runtime_id == runtime.id))
-    ).all()
-    for row in existing:
-        await session.delete(row)
-    await session.flush()
-    session.add(RuntimeHost(runtime_id=runtime.id, host_id=head.id, role="head", node_rank=0))
-    session.add(RuntimeHost(runtime_id=runtime.id, host_id=worker.id, role="worker", node_rank=1))
-    await session.commit()
+    recipes, hosts, runtimes, members = await _load_fleet(session)
+    others = [rt for rt in runtimes if rt.id != runtime.id]
+
+    for rt in others:
+        worker_ids = {m.host_id for m in members.get(rt.id, []) if m.role == "worker"}
+        if not worker_ids:
+            continue
+        if rt.host_id == worker.id:
+            raise RecipeStartError(409, reason_duo_role_conflict(worker.slug, rt.slug))
+        if head.id in worker_ids:
+            raise RecipeStartError(409, reason_duo_role_conflict(head.slug, rt.slug))
+
+    resolved_by_host_id = {h.id: resolved_host_from_row(h) for h in hosts if host_can_ssh(h)}
+    could_block = [
+        rt
+        for rt in others
+        if rt.exclusive_memory
+        and rt.host_id != head.id
+        and worker.id in runtime_host_ids(rt, members)
+    ]
+    probes = await asyncio.gather(
+        *(probe_running(rt, host=resolved_by_host_id.get(rt.host_id)) for rt in could_block),
+        return_exceptions=True,
+    )
+    running_by_id = {rt.id: (result is True) for rt, result in zip(could_block, probes)}
+    state = FleetState(recipes, hosts, runtimes, members, running_by_id)
+    if not any(c["host_id"] == str(worker.id) for c in duo_worker_candidates(state, head, runtime)):
+        raise RecipeStartError(409, reason_worker_not_free(worker.slug))
 
 
 async def start_recipe_on_host(
@@ -1229,10 +1349,16 @@ async def start_recipe_on_host(
         await _end_transaction(session)
         already = await runtime_manager.already_running(instance.model_dump(), host=resolved)
         if already is not None:
+            # Nothing to switch — but the membership must be true (ADR-096
+            # §1.3): a running duo without rows is filled from known data
+            # (an explicit worker or the legacy topology field); a running duo
+            # asked to move to another worker box is a 409, never a silent
+            # rewrite while the engine still uses the old box.
+            worker_id = await _fill_running_members(
+                session, instance, host, nodes, worker_host_id, state
+            )
             if paused:
                 await _resume_paused_instance(session, instance)
-            topology = instance.topology if isinstance(instance.topology, dict) else {}
-            worker_id = _as_uuid(topology.get("worker_host_id"))
             worker_row = state.host_by_id.get(worker_id) if worker_id else None
             return {
                 "ok": True,
@@ -1254,6 +1380,12 @@ async def start_recipe_on_host(
         if not recipe_env_ready(recipe):
             raise RecipeStartError(422, REASON_NO_ENV_MAP)
         candidates = duo_worker_candidates(state, host, instance)
+        if not worker_host_id and instance is not None:
+            # A known duo restarts with ITS worker (runtime_hosts), not with
+            # whichever free box happens to come first in the list.
+            recorded = await recorded_worker_id(session, instance.id)
+            if recorded is not None:
+                worker_host_id = str(recorded)
         if worker_host_id:
             match = next((c for c in candidates if c["host_id"] == str(worker_host_id)), None)
             if match is None:
@@ -1284,8 +1416,15 @@ async def start_recipe_on_host(
         # dieser Box, belegt sie aber trotzdem (Mitgliedschaft, siehe
         # runtime_host_ids). Ohne diese Prüfung zöge ein Solo-Start dem
         # laufenden Verbund die Box unter den Füssen weg.
+        #
+        # Mark 19.10. (Solo<->Duo on the same boxes): a solo that claims the
+        # box exclusively EVICTS the duo — ``start_runtime`` →
+        # ``ensure_exclusive_host`` also stops runtimes that use this box as a
+        # member, through the duo's own stop command (both boxes). Only a
+        # solo that does not claim the box would load next to the duo's
+        # worker; that one stays refused.
         blocker = next(iter(state.worker_member_runtimes(host.id)), None)
-        if blocker is not None:
+        if blocker is not None and not recipe_claims_box(recipe, instance):
             raise RecipeStartError(409, reason_box_is_worker(blocker.display_name))
 
     # Head launcher (docs/specs/head-launcher.md §6.7): never pull an engine
@@ -1337,17 +1476,22 @@ async def start_recipe_on_host(
 
     env_written: list[str] = []
     if worker is not None:
-        # Die Topologie der Instanz hält fest, WELCHE zweite Box gemeint ist —
-        # der Wächter startet den Verbund später mit genau dieser wieder.
-        topology = dict(instance.topology or {})
-        topology.update(
-            {"nodes": nodes, "recipe_slug": recipe.slug, "worker_host_id": str(worker.id)}
-        )
+        # WELCHE zweite Box gemeint ist, steht ab jetzt nur in runtime_hosts
+        # (ADR-096 §1.5) — der Wächter startet den Verbund später mit genau
+        # dieser wieder. ``topology`` trägt nur noch Anzahl + Rezept; ein
+        # alter ``worker_host_id``-Eintrag fällt dabei weg.
+        from app.services import runtime_membership
+
+        topology = runtime_membership.without_legacy_worker(dict(instance.topology or {})) or {}
+        topology.update({"nodes": nodes, "recipe_slug": recipe.slug})
         instance.topology = topology
         session.add(instance)
         await session.commit()
         await session.refresh(instance)
-        await set_runtime_members(session, instance, host, worker)
+        # Not running: ``already_running`` said so above (or the instance is
+        # new). Occupancy is NOT checked here — the worker box is evicted
+        # right below, that is how Duo→Duo on the same boxes works.
+        await set_runtime_members(session, instance, host, worker, running=False)
         await _end_transaction(session)
 
         await _require_ssh_alive(host)
@@ -1478,6 +1622,53 @@ async def start_recipe_on_host(
             "unknown": lock_unknown,
         },
     }
+
+
+async def _fill_running_members(
+    session: AsyncSession,
+    instance: Runtime,
+    host: Host,
+    nodes: int,
+    worker_host_id: str | None,
+    state: "FleetState",
+) -> uuid.UUID | None:
+    """The already-running branch: verify or fill the members of a running duo.
+
+    * solo recipe → nothing to do (solo runtimes have no rows);
+    * rows exist → keep them; a different named worker is a 409;
+    * no rows → fill from known data: the named worker, else the legacy
+      ``topology.worker_host_id``. No known worker → leave it (the watcher
+      reports ``members_incomplete``); never guess a box.
+    """
+    from app.services import runtime_membership
+
+    if nodes < 2:
+        return None
+    recorded = await recorded_worker_id(session, instance.id)
+    named = _as_uuid(worker_host_id)
+    if recorded is not None:
+        if named is not None and named != recorded:
+            current = state.host_by_id.get(recorded)
+            raise RecipeStartError(
+                409,
+                f"'{instance.slug}' läuft mit der Worker-Box "
+                f"'{current.slug if current else recorded}' — erst stoppen, dann "
+                "die Boxen ändern",
+            )
+        return recorded
+    topology = instance.topology if isinstance(instance.topology, dict) else {}
+    known = named or _as_uuid(topology.get(runtime_membership.LEGACY_WORKER_KEY))
+    if known is None or known not in state.host_by_id:
+        return None
+    worker = state.host_by_id[known]
+    if runtime_membership.topology_nodes(instance.topology) != nodes:
+        topology = dict(topology)
+        topology["nodes"] = nodes
+        instance.topology = topology
+        session.add(instance)
+    await set_runtime_members(session, instance, host, worker, running=True)
+    await _end_transaction(session)
+    return known
 
 
 def _as_uuid(value: Any) -> uuid.UUID | None:

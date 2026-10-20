@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 
 VALID_SYSTEM_MODES = {"active", "draining", "halted"}
 
+#: check_dispatch_allowed's reason while an MC update drains the system.
+UPDATE_DRAIN_REASON = "MC update in progress — dispatch resumes after it"
+
 
 async def get_system_mode() -> str:
     """Read current System Mode from Redis. Fail-open: 'active' on error."""
@@ -114,6 +117,7 @@ async def check_dispatch_allowed(
 
     Priority order:
     1. System HALTED → blocks everything
+    1.5 MC update drain (Postgres, ADR-094) → blocks everything new
     2. Task run_control → blocks this task
     3. Agent PAUSED → blocks this agent
     3.5 Runtime-Readiness → power-managed backend (Wake-on-LAN box) must be awake
@@ -128,6 +132,16 @@ async def check_dispatch_allowed(
     # 1. System HALTED
     if system_mode == "halted":
         return False, "System HALTED"
+
+    # 1.5 MC update drain (ADR-094 decision 7). Lives in Postgres, not in the
+    # Redis system mode above: a FLUSHALL must not lift it, and it travels
+    # with the pre-update backup. Unlike DRAINING it also holds continuation
+    # flows — the update switches code once running work reaches zero, and a
+    # review hand-off started now would be cut off. Fresh read when a session
+    # is passed, the watcher's cache otherwise.
+    from app.services import update_drain
+    if (await update_drain.current(session)).active:
+        return False, UPDATE_DRAIN_REASON
 
     # 2. Task run_control
     if task.run_control in ("manual_hold", "stopped"):

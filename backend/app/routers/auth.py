@@ -302,6 +302,74 @@ async def complete_first_run(
     return {"wizard_pending": False}
 
 
+# ── Step-up re-authentication (services/step_up.py, ADR-094) ────────────────
+
+
+class StepUpRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+
+
+@router.get("/step-up")
+async def step_up_availability(
+    request: Request,
+    current_user: User = Depends(require_user),
+):
+    """Can THIS session confirm a dangerous action with its password?
+
+    The UI asks before it shows a button that needs step-up: accounts
+    without a password and LOCAL_AUTH_TOKEN callers get no button (v1),
+    the reason says why."""
+    from app.services import step_up
+
+    reason = step_up.unavailable_reason(request, current_user)
+    return {
+        "available": reason is None,
+        "reason": reason,
+        "ttl_seconds": step_up.STEP_UP_TTL_SECONDS,
+    }
+
+
+@router.post("/step-up")
+async def step_up_confirm(
+    payload: StepUpRequest,
+    request: Request,
+    current_user: User = Depends(require_user),
+):
+    """Confirm the password again and get a single-use step-up token
+    (valid 5 minutes) for ONE dangerous request (header ``X-MC-Step-Up``).
+
+    Same brake as /login: failures count against the caller's IP — shared
+    with failed logins — and against the account itself, 5 per 15 minutes."""
+    from app.services import step_up
+
+    reason = step_up.unavailable_reason(request, current_user)
+    if reason is not None:
+        raise step_up.refusal(status.HTTP_403_FORBIDDEN, reason)
+
+    # Real client IP — see the note in login().
+    client_ip = request.client.host if request.client else "unknown"
+    account_key = f"user:{current_user.id}"
+    _check_rate_limit(client_ip)
+    _check_rate_limit(account_key)
+
+    if not verify_password(payload.password, current_user.password_hash or ""):
+        _record_failed_attempt(client_ip)
+        _record_failed_attempt(account_key)
+        raise step_up.refusal(status.HTTP_401_UNAUTHORIZED, step_up.WRONG_PASSWORD)
+
+    # Only the account's own counter is reset: a success here must not wipe
+    # failed logins other people made from the same address.
+    _clear_attempts(account_key)
+    try:
+        token = await step_up.issue(
+            user_id=str(current_user.id),
+            token_version=current_user.token_version or 0,
+        )
+    except Exception as exc:  # noqa: BLE001 — Redis down
+        raise step_up.refusal(status.HTTP_503_SERVICE_UNAVAILABLE, step_up.UNAVAILABLE) from exc
+    return {"step_up_token": token, "expires_in": step_up.STEP_UP_TTL_SECONDS}
+
+
 class StreamTicketRequest(BaseModel):
     # The exact path of the SSE/WebSocket endpoint the ticket is for,
     # e.g. "/api/v1/agents/stream". No query string, no host.

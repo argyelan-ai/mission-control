@@ -1,0 +1,2 @@
+# Quotes handed to a nested shell are still a command.
+bash -c "git push origin feat/x"

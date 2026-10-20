@@ -8,6 +8,10 @@ set -euo pipefail
 #
 # Usage:
 #   ./backup.sh                          create a backup
+#   ./backup.sh preupdate                the backup the update engine takes right
+#                                        before it switches versions (ADR-094):
+#                                        database + pins + encrypted .env, no ~/.mc
+#                                        archive; own prefix and rotation
 #   ./backup.sh list [--full]            list backups (newest first) with a check;
 #                                        --full also reads every data archive (slow)
 #   ./backup.sh dir                      print the backup folder
@@ -15,7 +19,9 @@ set -euo pipefail
 #                                        this run would use (debugging "service
 #                                        db is not running")
 #   ./backup.sh restore [file] [--yes]   restore the newest valid backup, or <file>
-#                       [--no-safety-copy]
+#                       [--no-safety-copy] [--keep-env]
+#                                        --keep-env: never touch .env (the update
+#                                        engine puts its own copy back)
 #
 # Settings (environment variable, or a line in .env next to this script):
 #   MC_BACKUP_DIR    where backups go. Default: $HOME/mc-backups — outside the
@@ -43,6 +49,12 @@ set -euo pipefail
 #                    backup run in a terminal asks; an unattended run skips
 #                    .env and says so. Keep the passphrase outside this machine
 #                    (password manager): without it the .env copy is useless.
+#
+# Pre-update backups (mc_backup_preupdate_<time>.sql.gz + mc_pins_preupdate_…
+# + mc_env_preupdate_… when a passphrase is set) are kept apart from the daily
+# ones: the daily rotation never removes them, and they have their own — the
+# newest 3, none older than 14 days (an update can be undone for 14 days).
+# The ~/.mc archive is left out on purpose: an update does not change ~/.mc.
 #
 # Backups written before MC_BACKUP_DIR existed live in ./backups. They are still
 # listed and restorable, and count towards MC_BACKUP_KEEP: once enough newer
@@ -75,6 +87,8 @@ LEGACY_DIR="$REPO_DIR/backups"
 DB_NAME="mission_control"
 DB_USER="mc"
 PRE_RESTORE_KEEP=3
+PREUPDATE_KEEP=3
+PREUPDATE_MAX_DAYS=14
 STOP_SERVICES=(backend mc-worker)
 ENV_FILE="$REPO_DIR/.env"
 ENV_MARKER="MC-ENV-BACKUP v1"
@@ -186,6 +200,11 @@ data_archive_for() {
 env_archive_for() {
     local f="${1/mc_backup_/mc_env_}"
     printf '%s' "${f%.sql.gz}.env.enc"
+}
+
+pins_file_for() {
+    local f="${1/mc_backup_/mc_pins_}"
+    printf '%s' "${f%.sql.gz}.txt"
 }
 
 # Value of NAME in a .env text (last assignment wins, quotes stripped).
@@ -303,10 +322,12 @@ check_free_space() {
     fi
 }
 
-# make_backup <prefix>  — writes mc_backup_<prefix><ts>.sql.gz (+ mc_data_…)
-# to temporary names, checks them, then renames. Sets LAST_BACKUP.
+# make_backup <prefix> [nodata]  — writes mc_backup_<prefix><ts>.sql.gz
+# (+ mc_data_… unless "nodata", + mc_env_… with a passphrase) to temporary
+# names, checks them, then renames. Sets LAST_BACKUP.
 make_backup() {
-    local prefix="$1" ts db tmp_db data tmp_data size
+    local prefix="$1" with_data=1 ts db tmp_db data tmp_data size
+    [[ "${2:-}" == "nodata" ]] && with_data=0
     ensure_backup_dir
     ts="$(date +%Y-%m-%d_%H-%M-%S)"
     db="$BACKUP_DIR/mc_backup_${prefix}${ts}.sql.gz"
@@ -327,7 +348,9 @@ make_backup() {
 
     # ~/.mc is the real data home (ADR-022): agent configs, vault, skills,
     # MCP servers, deliverables. Errors here are not hidden.
-    if [[ -d "$MC_DATA_DIR" ]]; then
+    if [[ "$with_data" == 0 ]]; then
+        echo "MC data ($MC_DATA_DIR) is not part of this backup."
+    elif [[ -d "$MC_DATA_DIR" ]]; then
         echo "Backing up MC data ($MC_DATA_DIR)..."
         local tar_err="$tmp_data.err" rc=0
         PARTIALS+=("$tar_err")
@@ -381,6 +404,63 @@ make_backup() {
     LAST_BACKUP="$db"
 }
 
+# The versions the install runs right now — no secrets, plain text — so a
+# pre-update backup says which code and images belong to its database.
+write_pins() {
+    local db="$1" pins tmp schema
+    pins="$(pins_file_for "$db")"
+    tmp="$pins.partial"
+    PARTIALS+=("$tmp")
+    schema="$(dc exec -T db psql -U "$DB_USER" -d "$DB_NAME" -tAc 'select version_num from alembic_version' 2>/dev/null | tr -d '[:space:]')" || schema=""
+    {
+        echo "# Mission Control pins at $(date -u +%Y-%m-%dT%H:%M:%SZ) — belongs to $(basename "$db")"
+        echo "GIT_TAG=$(git -C "$REPO_DIR" describe --tags --exact-match HEAD 2>/dev/null || true)"
+        echo "GIT_COMMIT=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
+        echo "SCHEMA=$schema"
+        echo "MC_CHANNEL=$(cfg MC_CHANNEL "")"
+        echo "MC_IMAGE_TAG=$(cfg MC_IMAGE_TAG "")"
+        echo "MC_AGENT_IMAGE_TAG=$(cfg MC_AGENT_IMAGE_TAG "")"
+    } > "$tmp"
+    mv -f -- "$tmp" "$pins"
+    echo "Pins: $pins"
+}
+
+# Older than <days> by modification time (find -mmin works on GNU and BSD).
+older_than_days() {
+    [[ -n "$(find "$1" -maxdepth 0 -mmin +$(($2 * 24 * 60)) 2>/dev/null)" ]]
+}
+
+# Pre-update sets: the newest PREUPDATE_KEEP, none older than
+# PREUPDATE_MAX_DAYS. The set just written (<keep>) always stays.
+rotate_preupdate() {
+    local keep_file="$1" f n=0 removed=0 g
+    while IFS= read -r f; do
+        [[ -n "$f" ]] || continue
+        # Only sets that stay count towards the newest PREUPDATE_KEEP.
+        if [[ "$f" == "$keep_file" ]] || { [[ "$n" -lt "$PREUPDATE_KEEP" ]] && ! older_than_days "$f" "$PREUPDATE_MAX_DAYS"; }; then
+            n=$((n + 1))
+            continue
+        fi
+        for g in "$f" "$(pins_file_for "$f")" "$(env_archive_for "$f")" "$(data_archive_for "$f")"; do
+            rm -f -- "$g"
+        done
+        removed=$((removed + 1))
+    done < <(find_backups 'mc_backup_preupdate_*.sql.gz')
+    if [[ "$removed" -gt 0 ]]; then
+        echo "Removed $removed old pre-update backup(s) (keeping the newest $PREUPDATE_KEEP, at most $PREUPDATE_MAX_DAYS days)."
+    fi
+    return 0
+}
+
+cmd_preupdate() {
+    [[ -f "$ENV_FILE" ]] && get_passphrase backup
+    make_backup "preupdate_" nodata
+    write_pins "$LAST_BACKUP"
+    rotate_preupdate "$LAST_BACKUP"
+    # The update engine reads this line; keep its wording.
+    echo "Pre-update backup: $LAST_BACKUP"
+}
+
 cmd_backup() {
     [[ -f "$ENV_FILE" ]] && get_passphrase backup
     make_backup ""
@@ -409,7 +489,7 @@ cmd_list() {
             data="+ data $(du -h "$data" | cut -f1)"
         fi
         printf '%-8s %s  %s %s\n' "$status" "$f" "$(du -h "$f" | cut -f1)" "$data"
-    done < <(list_dumps; find_backups 'mc_backup_pre-restore_*.sql.gz')
+    done < <(list_dumps; find_backups 'mc_backup_preupdate_*.sql.gz'; find_backups 'mc_backup_pre-restore_*.sql.gz')
     [[ "$found" == 1 ]] || echo "No backups found."
 }
 
@@ -423,11 +503,12 @@ running_services() {
 }
 
 cmd_restore() {
-    local file="" yes=0 safety=1 arg
+    local file="" yes=0 safety=1 keep_env=0 arg
     for arg in "$@"; do
         case "$arg" in
             --yes|-y) yes=1 ;;
             --no-safety-copy) safety=0 ;;
+            --keep-env) keep_env=1 ;;
             -*) die "unknown option: $arg" ;;
             *) file="$arg" ;;
         esac
@@ -465,7 +546,7 @@ cmd_restore() {
 
     local envf new_env="" restore_env=0
     envf="$(env_archive_for "$file")"
-    if [[ -f "$envf" ]]; then
+    if [[ -f "$envf" && "$keep_env" == 0 ]]; then
         get_passphrase restore
         if [[ -n "$PASSPHRASE" ]]; then
             command -v openssl >/dev/null 2>&1 || die "this backup holds an encrypted .env, but openssl is not installed — nothing changed."
@@ -485,6 +566,8 @@ cmd_restore() {
     fi
     if [[ "$restore_env" == 1 ]]; then
         echo "  .env:     $envf  (the current .env is kept as .env.backup-pre-restore-<time>)"
+    elif [[ "$keep_env" == 1 ]]; then
+        echo "  .env:     --keep-env — the current .env stays."
     elif [[ -f "$envf" ]]; then
         echo "  .env:     not restored (no passphrase) — the current .env stays."
     else
@@ -592,10 +675,11 @@ cmd_restore() {
 
 case "${1:-}" in
     ""|backup) cmd_backup ;;
+    preupdate) cmd_preupdate ;;
     list) shift; cmd_list "$@" ;;
     dir) printf '%s\n' "$BACKUP_DIR" ;;
     project) printf '%s\n' "$PROJECT_NAME" ;;
     restore) shift; cmd_restore "$@" ;;
     -h|--help|help) awk 'NR > 3 && /^#/ { sub(/^# ?/, ""); print; next } NR > 3 { exit }' "$0" ;;
-    *) die "unknown command: $1 (use: backup, list, dir, project, restore)" ;;
+    *) die "unknown command: $1 (use: backup, preupdate, list, dir, project, restore)" ;;
 esac

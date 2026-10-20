@@ -117,6 +117,7 @@ from app.services.file_indexer import file_indexer
 from app.services.obsidian_export import obsidian_export
 from app.services.scheduler import scheduler
 from app.services.runtime_schedule_service import runtime_schedule_service
+from app.services import runtime_membership
 from app.services.runtime_watcher import runtime_watcher
 from app.services.runtime_pulse import runtime_pulse
 from app.services.heads.sync import heads_sync
@@ -196,6 +197,10 @@ async def start_background_services(app: Any) -> None:
         app.state.obsidian_export_started = False
         logger.info("Phase 7 (obsidian_export) DISABLED — Vault is now Source of Truth (M.2)")
     await runtime_schedule_service.start()
+    # ADR-096 §2: repair runtime members from known data BEFORE the watcher
+    # starts — its duo autostart reads runtime_hosts, and the first cycle must
+    # never see half-repaired rows. Awaited, never raises.
+    await runtime_membership.startup_audit()
     await runtime_watcher.start()  # Runtime & Model Management v1 (ADR-054)
     await runtime_pulse.start()  # Runtimes-Buehne v2 PR 1 — tok/s heat strip poller
     # Head launcher: mirror head states onto task cards (idles while
@@ -409,6 +414,18 @@ async def prepare_process() -> None:
             await apply_ai_provider_overrides(_ai_session)
     except Exception as e:
         logger.warning("ai provider overrides at startup failed (env defaults stay): %s", e)
+    # Update drain (ADR-094 decision 7): wire the Docker gateway to the
+    # Postgres drain, read it once before this process hands out any work,
+    # then keep it fresh. The process that runs the background services also
+    # catches up work the drain held back. Never fatal: without it the
+    # manual MC_UPDATE_DRAIN switch still guards Docker calls.
+    try:
+        from app.config import settings as _settings
+        from app.services import update_drain
+
+        await update_drain.start(catch_up_work=_settings.enable_background_services)
+    except Exception as e:
+        logger.warning("update drain watcher failed to start (non-fatal): %s", e)
 
 
 

@@ -13,7 +13,10 @@ GET    /sessions
 GET    /status/{task_id}
 GET    /output/{task_id}
 DELETE /sessions/{task_id}
-GET    /ping                 liveness only, no auth (answers {"status": "ok"})
+GET    /ping                 liveness only, no auth (answers {"status": "ok", "api_version": N})
+*      /mc-update/*          the update door (scripts/mc_update_door.py, ADR-094):
+                             five routes, its own token X-MC-Update-Token
+
 
 Auth: every endpoint except /ping — and every WebSocket PTY attach on
 WS_PORT — requires the header ``X-MC-Bridge-Token`` with the shared secret.
@@ -25,8 +28,9 @@ Bind: CLI_BRIDGE_BIND (default 127.0.0.1). Docker Desktop on macOS forwards
 host.docker.internal to the host's loopback, so the backend container still
 reaches it; Linux hosts need the docker bridge address (see the doc above).
 
-Run ``python3 scripts/cli-bridge.py --init-token`` to create the token file
-without starting the servers (prints the path, never the token).
+Run ``python3 scripts/cli-bridge.py --init-token`` to create the token files
+(bridge + update door) without starting the servers (prints the paths, never
+a token).
 """
 import asyncio
 import fcntl
@@ -50,6 +54,10 @@ from pathlib import Path
 import time
 from typing import Optional
 import uuid
+
+# The update door lives next to this file (same checkout, same version).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mc_update_door as _door_mod  # noqa: E402
 
 # Overridable so a second instance can run for tests/migrations; the backend
 # side stays on the default (free_code_bridge_url / host.docker.internal:18792).
@@ -157,11 +165,17 @@ TMUX_BIN = (
 )
 
 
-def _check_tmux():
+def _check_tmux() -> bool:
+    """tmux runs the host agents. Missing tmux is a warning, not a crash: the
+    bridge also carries the update door, which a machine without host agents
+    (a Raspberry Pi, a NAS) still needs."""
     if not os.path.isfile(TMUX_BIN):
-        raise RuntimeError("tmux nicht gefunden — bitte installieren: brew install tmux")
+        log("WARN: tmux not found — host agents cannot start until it is installed "
+            "(macOS: brew install tmux · Debian/Raspberry Pi OS: sudo apt install -y tmux)")
+        return False
     result = _sp.run([TMUX_BIN, "-V"], capture_output=True, text=True)
     log(f"tmux version: {result.stdout.strip()}")
+    return True
 
 
 active_sessions: dict[str, str] = {}  # task_id -> tmux session name
@@ -1022,10 +1036,39 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "unauthorized"}, status=401)
         return False
 
+    def _is_door(self) -> bool:
+        p = self.path.split("?", 1)[0]
+        return p == "/mc-update" or p.startswith("/mc-update/")
+
+    def _door(self):
+        """/mc-update/* — the update door with its own token (never the
+        bridge token). No door loaded → 401, fail closed."""
+        door = UPDATE_DOOR
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0 or length > _door_mod.MAX_BODY:
+            self._json({"error": "body too large"}, status=413)
+            return
+        body = self.rfile.read(length) if length else b""
+        if door is None:
+            self._json({"error": "unauthorized"}, status=401)
+            return
+        status, data = door.handle(self.command, self.path, self.headers, body)
+        if status == 401:
+            log(f"AUTH: rejected {self.command} {self.path.split('?', 1)[0]} "
+                f"from {self.client_address[0]} (missing or wrong {_door_mod.TOKEN_HEADER})")
+        self._json(data, status=status)
+
     def do_GET(self):
-        # Liveness only: tells a caller nothing a port scan would not.
+        # Liveness only: tells a caller nothing a port scan would not — plus
+        # the door's API version, so MC can say "update the bridge" plainly.
         if self.path == "/ping":
-            self._json({"status": "ok"})
+            self._json({"status": "ok", "api_version": _door_mod.API_VERSION})
+            return
+        if self._is_door():
+            self._door()
             return
         if not self._authorized():
             return
@@ -1126,6 +1169,9 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
+        if self._is_door():
+            self._door()
+            return
         if not self._authorized():
             return
         if self.path == "/start":
@@ -1344,6 +1390,9 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_DELETE(self):
+        if self._is_door():
+            self._door()
+            return
         if not self._authorized():
             return
         if self.path.startswith("/provision/"):
@@ -1529,6 +1578,39 @@ def _make_http_server(host: str, port: int) -> ThreadingHTTPServer:
     return server
 
 
+# ── update door (ADR-094) ───────────────────────────────────────────────────
+# Set in main(). None = no door → every /mc-update request is 401.
+UPDATE_DOOR: Optional["_door_mod.Door"] = None
+UPDATE_TOKEN_FILE = _door_mod.default_token_file()
+
+
+def _make_update_door(bridge_token: Optional[str]) -> Optional["_door_mod.Door"]:
+    """The door for the install this bridge runs from (MC_REPO_PATH wins)."""
+    try:
+        token = _door_mod.load_or_create_token(UPDATE_TOKEN_FILE)
+    except (_door_mod.WeakTokenError, OSError) as e:
+        log(f"ERROR: update door closed — {e}")
+        return None
+    repo = Path(os.environ.get("MC_REPO_PATH", "").strip() or REPO_ROOT)
+    state = Path(os.environ.get("MC_UPDATE_HOME", "").strip() or (HOME / ".mc" / "update")).expanduser()
+    return _door_mod.Door(repo=repo, state=state, token=token, bridge_token=bridge_token, log=log)
+
+
+def _start_update_door(door: "_door_mod.Door", docker_wait: float = 600.0) -> threading.Thread:
+    """Start routine: finish an interrupted update once Docker answers.
+
+    In a thread — the bridge serves agents while it waits for Docker."""
+    def _run():
+        try:
+            state = door.boot(docker_wait=docker_wait)
+            log(f"mc-update boot routine: {state.get('state')}")
+        except Exception as e:  # never take the bridge down with it
+            log(f"ERROR mc-update boot routine: {e}")
+    t = threading.Thread(target=_run, name="mc-update-boot", daemon=True)
+    t.start()
+    return t
+
+
 async def _run_ws_server():
     async with _ws_serve(BIND, WS_PORT):
         log(f"WS PTY server listening on ws://{BIND}:{WS_PORT} (token required)")
@@ -1547,13 +1629,16 @@ if __name__ == "__main__":
             # only its path (the value never goes to stdout or the log).
             _load_or_create_token(TOKEN_FILE)
             print(TOKEN_FILE)
+            _door_mod.load_or_create_token(UPDATE_TOKEN_FILE)
+            print(UPDATE_TOKEN_FILE)
             sys.exit(0)
         log(f"CLI Agent Bridge starting on port {PORT}")
         BRIDGE_TOKEN = _load_or_create_token(TOKEN_FILE)
-    except WeakTokenError as e:
+    except (WeakTokenError, _door_mod.WeakTokenError) as e:
         log(f"FATAL: {e} — refusing to start (see docs/setup/cli-bridge-auth.md)")
         sys.exit(2)
     _check_tmux()
+    UPDATE_DOOR = _make_update_door(BRIDGE_TOKEN)
     ws_thread = threading.Thread(target=_start_ws_server, daemon=True)
     ws_thread.start()
     log(f"WS PTY server started on port {WS_PORT}")
@@ -1562,6 +1647,20 @@ if __name__ == "__main__":
     for agent_dir in (AGENTS_DIR.iterdir() if AGENTS_DIR.is_dir() else []):
         if agent_dir.is_dir() and (agent_dir / "settings.json").exists() and (agent_dir / "worker.sh").exists():
             _start_worker_session(agent_dir.name)
-    server = _make_http_server(BIND, PORT)
+    try:
+        server = _make_http_server(BIND, PORT)
+    except OSError as e:
+        # Linux binds to the gateway of MC's Docker network; it exists only
+        # once Docker has created that network (after boot, after `compose
+        # down`). The service manager restarts us; say what to do if it stays.
+        log(f"FATAL: cannot listen on {BIND}:{PORT} ({e}). If {BIND} is a Docker network "
+            "gateway, Docker may not be up yet (the service retries), or the network got "
+            "another address — re-run ./install.sh --bridge in the install folder.")
+        sys.exit(1)
+    # The boot routine only after a successful bind: while the gateway is
+    # missing, systemd restarts us every few seconds, and each restart must
+    # not leave another routine (docker info / drain-sweep children) behind.
+    if UPDATE_DOOR is not None:
+        _start_update_door(UPDATE_DOOR)
     log(f"Listening on http://{BIND}:{PORT} (token required except /ping)")
     server.serve_forever()

@@ -1,0 +1,10 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "cat notes.md > /tmp/handoff.md",
+  "run_in_background": false
+ }
+}
