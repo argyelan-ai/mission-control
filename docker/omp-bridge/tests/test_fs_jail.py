@@ -376,6 +376,145 @@ def test_no_session_rejects_the_deliverables_root_too():
         assert not os.path.exists(os.path.join(deliv, "x.txt"))
 
 
+def test_sibling_folder_with_a_shared_prefix_is_rejected():
+    """The check is "inside the folder", not "starts with the same letters":
+    `<cwd>-ref` (a real sibling mount next to /workspace in an agent
+    container) and `<deliverables>2` share the root's name as a prefix but
+    lie outside it. Read and write are refused there, nothing is made."""
+    with _dirs("omp-fs-cwd-", "omp-fs-deliv-") as (cwd, deliv):
+        siblings = [cwd + "-ref", deliv + "2"]
+        try:
+            for sib in siblings:
+                os.makedirs(sib)
+                with open(os.path.join(sib, "secret.txt"), "w", encoding="utf-8") as f:
+                    f.write("original")
+            with _deliverables_config(env=deliv):
+                client, sent = _jailed_client(cwd)
+            for sib in siblings:
+                for method, params in (
+                        ("fs/read_text_file", {"path": os.path.join(sib, "secret.txt")}),
+                        ("fs/write_text_file", {"path": os.path.join(sib, "secret.txt"),
+                                                "content": "hacked"}),
+                        ("fs/write_text_file", {"path": os.path.join(sib, TASK_ID, "x.txt"),
+                                                "content": "x"})):
+                    sent.clear()
+                    _fs_request(client, method, params)
+
+                    err = _error(sent)
+                    assert err is not None and err["code"] == -32002, (sib, method, sent)
+                with open(os.path.join(sib, "secret.txt"), encoding="utf-8") as f:
+                    assert f.read() == "original", sib
+                assert not os.path.exists(os.path.join(sib, TASK_ID)), sib
+        finally:
+            for sib in siblings:
+                shutil.rmtree(sib, ignore_errors=True)
+
+
+def test_every_fs_request_gets_exactly_one_reply():
+    """omp waits for the answer to each fs request; the reader loop only logs
+    an exception and sends nothing, so an unanswered request hangs the tool
+    call. A file that is not UTF-8 (omp's own binary check looks at the first
+    bytes only), a NUL byte in the path, or params of the wrong shape each
+    get one error reply — which makes omp fall back to its own disk read."""
+    with _dirs("omp-fs-cwd-", "omp-fs-deliv-") as (cwd, deliv):
+        for folder in (cwd, deliv):
+            with open(os.path.join(folder, "bin.dat"), "wb") as f:
+                f.write(b"ok so far \xff\xfe\x00\x80")
+        with _deliverables_config(env=deliv):
+            client, sent = _jailed_client(cwd)
+        cases = [
+            ("fs/read_text_file", {"path": os.path.join(deliv, "bin.dat")}),
+            ("fs/read_text_file", {"path": os.path.join(cwd, "bin.dat")}),
+            ("fs/read_text_file", {"path": os.path.join(deliv, "a\x00b.txt")}),
+            ("fs/write_text_file", {"path": os.path.join(deliv, TASK_ID, "a\x00b.txt"),
+                                    "content": "x"}),
+            ("fs/read_text_file", ["not", "an", "object"]),
+        ]
+        for method, params in cases:
+            sent.clear()
+            client._dispatch({"jsonrpc": "2.0", "id": 7, "method": method,
+                              "params": params})
+
+            err = _error(sent)
+            assert err is not None, (method, params, sent)
+            assert isinstance(err["code"], int) and err["message"], err
+
+
+def test_bad_write_content_gets_an_error_and_leaves_nothing_behind():
+    """content that is not a string, or text that cannot be written as UTF-8
+    (a lone surrogate passes json.loads), is refused before anything is
+    made: no file, and no task folder left empty behind. A content that is
+    not a string is named as such (-32602, invalid params), so the model
+    can see what it got wrong."""
+    with _dirs("omp-fs-cwd-", "omp-fs-deliv-") as (cwd, deliv):
+        with _deliverables_config(env=deliv):
+            client, sent = _jailed_client(cwd)
+        for content, code in ((None, -32602), (5, -32602), (["x"], -32602),
+                              ("half \ud800 text", -32000)):
+            for root in (cwd, deliv):
+                target = os.path.join(root, TASK_ID, "index.html")
+                sent.clear()
+                _fs_request(client, "fs/write_text_file",
+                            {"path": target, "content": content})
+
+                err = _error(sent)
+                assert err is not None and err["code"] == code, (content, root, sent)
+                assert not os.path.exists(os.path.join(root, TASK_ID)), (content, root)
+
+
+def test_symlinked_deliverables_root_is_resolved():
+    """The root is stored resolved: when MC_DELIVERABLES_DIR is a link to the
+    real folder, a write through the link path lands in the real folder."""
+    with _dirs("omp-fs-cwd-", "omp-fs-deliv-", "omp-fs-links-") as (cwd, deliv, links):
+        link = os.path.join(links, "deliverables")
+        os.symlink(deliv, link)
+        assert acp_client.deliverables_roots({"MC_DELIVERABLES_DIR": link}) == (deliv,)
+        with _deliverables_config(env=link):
+            client, sent = _jailed_client(cwd)
+
+        _fs_request(client, "fs/write_text_file",
+                    {"path": os.path.join(link, TASK_ID, "index.html"), "content": "ok"})
+
+        assert _error(sent) is None, sent
+        with open(os.path.join(deliv, TASK_ID, "index.html"), encoding="utf-8") as f:
+            assert f.read() == "ok"
+
+
+def test_missing_deliverables_root_is_not_served():
+    """A configured root that does not exist (the host has no /deliverables)
+    is no root: nothing is served there, and a write does not create it."""
+    with _dirs("omp-fs-cwd-", "omp-fs-deliv-") as (cwd, deliv):
+        missing = os.path.join(deliv, "not-mounted")
+        assert acp_client.deliverables_roots({"MC_DELIVERABLES_DIR": missing}) == ()
+        for env, default in ((missing, "/never-used"), (None, missing)):
+            with _deliverables_config(env=env, default=default):
+                assert acp_client.deliverables_roots() == (), (env, default)
+                client, sent = _jailed_client(cwd)
+
+            _fs_request(client, "fs/write_text_file",
+                        {"path": os.path.join(missing, TASK_ID, "x.txt"), "content": "x"})
+
+            err = _error(sent)
+            assert err is not None and err["code"] == -32002, (env, sent)
+            assert not os.path.exists(missing)
+
+
+def test_write_into_a_new_subfolder_of_the_cwd_makes_the_folders():
+    """A write makes the missing folders on its way — inside the cwd too, not
+    only in /deliverables (before, `/workspace/cube/index.html` failed with
+    ENOENT when `cube/` did not exist yet)."""
+    with _dirs("omp-fs-cwd-") as (cwd,):
+        with _deliverables_config(env=""):
+            client, sent = _jailed_client(cwd)
+        target = os.path.join(cwd, "new", "deep", "x.txt")
+
+        _fs_request(client, "fs/write_text_file", {"path": target, "content": "x"})
+
+        assert _error(sent) is None, sent
+        with open(target, encoding="utf-8") as f:
+            assert f.read() == "x"
+
+
 def test_default_root_matches_the_backend_contract():
     """The default is not a second truth: it is the mount target the compose
     renderer gives every agent container (ADR-022) and the first path the

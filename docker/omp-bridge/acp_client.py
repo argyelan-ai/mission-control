@@ -352,9 +352,27 @@ class ACPClient:
         return choice
 
     def _handle_fs_request(self, msg: dict) -> None:
+        """Answer one fs/* request with exactly one reply.
+
+        omp waits for this answer; the reader loop only logs an exception
+        and sends nothing, so an unanswered request would hang the tool call.
+        Whatever breaks (a file that is not UTF-8, a NUL byte in the path,
+        params of the wrong shape) becomes an error reply instead — omp then
+        falls back to its own disk access.
+        """
         rid = msg["id"]
-        params = msg.get("params") or {}
         method = msg.get("method", "")
+        try:
+            reply = self._fs_reply(method, msg.get("params") or {})
+        except Exception as exc:  # noqa: BLE001 — one reply per request, whatever broke
+            logger.warning("fs request %s failed: %s: %s", method, type(exc).__name__, exc)
+            reply = {"error": {"code": -32000, "message": str(exc) or type(exc).__name__}}
+        self._send_raw({"jsonrpc": "2.0", "id": rid, **reply})
+
+    def _fs_reply(self, method: str, params: Any) -> dict:
+        """The reply body (``result`` or ``error``) for one fs/* request."""
+        if method not in ("fs/read_text_file", "fs/write_text_file"):
+            return {"error": {"code": -32601, "message": f"unhandled {method}"}}
         # Review #464 Major: fs/read_text_file + fs/write_text_file are
         # restricted to the session's realpath(cwd) plus the deliverables
         # root(s) (deliverables_roots). A symlink or `..` escape resolves
@@ -363,43 +381,36 @@ class ACPClient:
         # jail (no session yet) -> reject, whatever the extra roots are.
         jail = self._fs_jail
         path = params.get("path")
-        if method in ("fs/read_text_file", "fs/write_text_file"):
-            if not jail or not isinstance(path, str) or not path:
-                self._send_raw({"jsonrpc": "2.0", "id": rid,
-                                "error": {"code": -32002,
-                                          "message": "fs request before session/new (no cwd jail)"}})
-                return
-            real = os.path.realpath(path)
-            extra = self._fs_extra_roots
-            if not any(_inside(real, root) for root in (jail, *extra)):
-                message = f"path {path!r} outside session cwd {jail!r}"
-                if extra:
-                    message += " and outside the deliverables root " + ", ".join(
-                        repr(root) for root in extra)
-                self._send_raw({"jsonrpc": "2.0", "id": rid,
-                                "error": {"code": -32002, "message": message}})
-                return
-        try:
-            if method == "fs/read_text_file":
-                with open(real, "r", encoding="utf-8") as f:
-                    self._send_raw({"jsonrpc": "2.0", "id": rid,
-                                    "result": {"content": f.read()}})
-            elif method == "fs/write_text_file":
-                # The first file of a task goes to /deliverables/<task_id>/,
-                # a folder nobody made yet. `real` passed the check above and
-                # realpath leaves no `..` and no symlink in its missing tail,
-                # so every folder made here lies inside an allowed root.
-                os.makedirs(os.path.dirname(real), exist_ok=True)
-                with open(real, "w", encoding="utf-8") as f:
-                    f.write(params.get("content", ""))
-                self._send_raw({"jsonrpc": "2.0", "id": rid, "result": {}})
-            else:
-                self._send_raw({"jsonrpc": "2.0", "id": rid,
-                                "error": {"code": -32601,
-                                          "message": f"unhandled {method}"}})
-        except OSError as exc:
-            self._send_raw({"jsonrpc": "2.0", "id": rid,
-                            "error": {"code": -32000, "message": str(exc)}})
+        if not jail or not isinstance(path, str) or not path:
+            return {"error": {"code": -32002,
+                              "message": "fs request before session/new (no cwd jail)"}}
+        real = os.path.realpath(path)
+        extra = self._fs_extra_roots
+        if not any(_inside(real, root) for root in (jail, *extra)):
+            message = f"path {path!r} outside session cwd {jail!r}"
+            if extra:
+                message += " and outside the deliverables root " + ", ".join(
+                    repr(root) for root in extra)
+            return {"error": {"code": -32002, "message": message}}
+        if method == "fs/read_text_file":
+            with open(real, "r", encoding="utf-8") as f:
+                return {"result": {"content": f.read()}}
+        content = params.get("content", "")
+        if not isinstance(content, str):
+            return {"error": {"code": -32602,
+                              "message": "fs/write_text_file: content must be a string"}}
+        # Encode first: text that is no valid UTF-8 (a lone surrogate passes
+        # json.loads) fails here, before any folder or file is made.
+        data = content.encode("utf-8")
+        # The first file of a task goes to /deliverables/<task_id>/, a folder
+        # nobody made yet (and a new subfolder of the cwd, the same). `real`
+        # passed the check above and realpath leaves no `..` and no symlink
+        # in its missing tail, so every folder made here lies inside an
+        # allowed root.
+        os.makedirs(os.path.dirname(real), exist_ok=True)
+        with open(real, "wb") as f:
+            f.write(data)
+        return {"result": {}}
 
     def _send_raw(self, obj: dict) -> None:
         proc = self._ensure_process()
