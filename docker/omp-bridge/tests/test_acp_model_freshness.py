@@ -230,7 +230,9 @@ def test_daemon_new_session_follows_a_switch_that_happened_while_it_ran(tmp_path
         lines = read_lines(sess.transcript_path)
         assert not entries_of_type(lines, "custom_message", "chat_error")
         notices = entries_of_type(lines, "custom_message", "chat_notice")
-        assert notices and notices[0]["data"]["current"] == "New-Model-2"
+        # The new conversation's own card comes first (incident 21.10.2026).
+        fallback = [n for n in notices if n["data"]["code"] == "model_fallback"]
+        assert fallback and fallback[0]["data"]["current"] == "New-Model-2"
     finally:
         sess.close()
 

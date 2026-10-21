@@ -18,11 +18,15 @@ import { ChatResendContext, type ChatResend } from "./chatResend";
 import { C } from "@/lib/colors";
 import type { MessageEvent } from "@/lib/chatTypes";
 import de from "../../../messages/de.json";
+import en from "../../../messages/en.json";
 
 const { createTranslator } = await vi.importActual<typeof import("next-intl")>("next-intl");
 /** The global mock answers in English only — German strings are checked
  *  through the REAL translator against messages/de.json. */
 const tDe = createTranslator({ locale: "de", messages: de, namespace: "chat" }) as unknown as (
+  key: string
+) => string;
+const tEn = createTranslator({ locale: "en", messages: en, namespace: "chat" }) as unknown as (
   key: string
 ) => string;
 
@@ -339,21 +343,40 @@ describe("Chat-Fehlerkarte — Nochmal senden (S1-R7)", () => {
     );
 
     expect(screen.getByTestId("chat-error-body")).toHaveTextContent(
-      "The conversation ran on a model that is not set up right now. A new conversation started; the old one is kept."
+      "The previous conversation ran on a model that is not set up right now."
     );
     // K3: the sub-code chose the sentence — it is not printed a second time.
     expect(screen.queryByTestId("chat-error-detail")).not.toBeInTheDocument();
     expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
     expect(tDe("error.session_reset_model_missingBody")).toBe(
-      "Das Gespräch lief auf einem Modell, das gerade nicht eingetragen ist. Ein neues Gespräch hat begonnen, das alte bleibt gespeichert."
+      "Das vorherige Gespräch lief auf einem Modell, das gerade nicht eingetragen ist."
     );
+  });
+
+  it("session_reset says only WHY — the new-conversation card above it says that one began (K3, K10)", () => {
+    // Critic finding (incident 21.10.2026): amber "New conversation started
+    // · the previous one is saved" and right below a red "Session restarted
+    // · … a new conversation started, the old one is kept" — the same thing
+    // twice, with two nouns. One noun ("conversation"), one statement each.
+    renderCard(mkError({ error: { code: "session_reset", detail: "model_missing" } }));
+
+    expect(screen.getByTestId("chat-error-code")).toHaveTextContent("Conversation not resumed");
+    expect(tDe("error.session_reset")).toBe("Gespräch nicht fortgesetzt");
+    for (const key of [
+      "error.session_resetBody",
+      "error.session_reset_model_missingBody",
+      "error.session_reset_transcript_missingBody",
+    ]) {
+      expect(tEn(key)).not.toMatch(/new conversation|new one|session/i);
+      expect(tDe(key)).not.toMatch(/neues|Sitzung/i);
+    }
   });
 
   it("session_reset with detail transcript_missing has its own sentence", () => {
     renderCard(mkError({ error: { code: "session_reset", detail: "transcript_missing" } }));
 
     expect(screen.getByTestId("chat-error-body")).toHaveTextContent(
-      "The history of the last conversation was not found. A new conversation started."
+      "The history of the previous conversation was not found."
     );
     expect(screen.queryByTestId("chat-error-detail")).not.toBeInTheDocument();
   });

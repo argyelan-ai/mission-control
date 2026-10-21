@@ -29,6 +29,7 @@ class _FakeTransport:
 
     def __init__(self, answers: dict | None = None):
         self.calls: list[tuple] = []
+        self.request_ids: list = []
         self._answers = answers or {}
 
     def _answer(self, op: str) -> dict:
@@ -38,8 +39,9 @@ class _FakeTransport:
         self.calls.append(("prompt", text, mode))
         return self._answer("prompt")
 
-    async def new_session(self, mode: str | None = None) -> dict:
+    async def new_session(self, mode: str | None = None, request_id: str | None = None) -> dict:
         self.calls.append(("new_session", mode))
+        self.request_ids.append(request_id)
         return self._answer("new_session")
 
     async def queue_clear(self) -> dict:
@@ -183,8 +185,13 @@ async def test_send_text_new_and_clear_open_a_real_new_session(
     running turn), never a prompt."""
     from app.services import agent_chat_input
 
-    await agent_chat_input.send_text(acp_agent, typed)
+    reset = await agent_chat_input.send_text(acp_agent, typed)
     assert fake_transport.calls == [("new_session", "queue")]
+    # The request names itself, so the daemon's card and its record point at
+    # the activity event of who asked (incident 21.10.2026).
+    (request_id,) = fake_transport.request_ids
+    assert reset is not None and reset.request_id == request_id
+    assert reset.command == typed.strip().lower()
 
 
 async def test_send_text_new_goes_to_the_agent_when_it_advertises_new(

@@ -262,7 +262,11 @@ class ChatDaemon:
                 answer = session.prompt(text, mode) if mode else session.prompt(text)
             elif op == "new_session":
                 mode = payload.get("mode")
-                answer = session.new_session(mode) if mode else session.new_session()
+                # `requestId`: which request of MC's backend asked — the
+                # session puts it on the card and into `resets` (incident
+                # 21.10.2026); it checks the shape itself.
+                extra = {"request_id": payload["requestId"]} if payload.get("requestId") else {}
+                answer = session.new_session(mode, **extra) if mode else session.new_session(**extra)
             elif op == "queue_clear":
                 answer = session.queue_clear()
             elif op == "cancel":

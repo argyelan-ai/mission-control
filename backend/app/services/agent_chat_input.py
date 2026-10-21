@@ -143,6 +143,7 @@ import logging
 import re
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 import websockets as ws_client
@@ -153,6 +154,12 @@ from app.services.acp_chat_transport import (
     headless_chat_kind,
     read_acp_chat_state,
     transport_for,
+)
+from app.services.chat_reset_audit import (
+    HANDLED_BY_HARNESS,
+    HANDLED_BY_TERMINAL,
+    ChatReset,
+    bounded_id,
 )
 from app.services.harness_catalog import (
     discover_effort_support,
@@ -680,18 +687,31 @@ def _acp_advertised_commands(state: dict | None) -> list[dict]:
     ]
 
 
-async def _acp_session_reset_command(agent, text: str) -> str | None:
-    """``"new"``/``"clear"``, wenn ``text`` genau einer dieser Befehle ist UND
-    der Agent ihn nicht selbst anbietet — dann erledigt MC ihn. Sonst
-    ``None``: ``/clear den Cache`` ist eine gewoehnliche Nachricht, und ein
-    Harness mit eigenem ``/new`` behaelt seinen."""
+def _session_clearing_word(text: str) -> str | None:
+    """``"new"``/``"clear"`` when ``text`` is exactly one of these commands
+    (case and surrounding space aside), else None. ``/clear den Cache`` is an
+    ordinary message. The same rule for every agent: what MC turns into a
+    new ACP session, and what it records as a reset sent to a terminal
+    (incident 21.10.2026)."""
     word = text.strip().lower()
     if not word.startswith("/") or word[1:] not in _ACP_SESSION_RESET_COMMANDS:
         return None
-    state = await asyncio.to_thread(read_acp_chat_state, agent)
-    if any(c["name"].lower() == word[1:] for c in _acp_advertised_commands(state)):
-        return None
     return word[1:]
+
+
+async def _acp_session_reset_command(agent, text: str) -> tuple[str, dict | None, bool] | None:
+    """``("new"|"clear", Zustand, eigener Befehl)``, wenn ``text`` genau einer
+    dieser Befehle ist. ``eigener Befehl``: der Agent bietet ihn selbst an —
+    dann geht er als Text an den Harness (der behaelt seinen); sonst erledigt
+    MC ihn (der gelesene Zustand nennt die Sitzung, die er ersetzt). ``None``
+    fuer jeden anderen Text: ``/clear den Cache`` ist eine gewoehnliche
+    Nachricht."""
+    word = _session_clearing_word(text)
+    if word is None:
+        return None
+    state = await asyncio.to_thread(read_acp_chat_state, agent)
+    own = any(c["name"].lower() == word for c in _acp_advertised_commands(state))
+    return word, state, own
 
 
 def _acp_config_option(state: dict | None, option_id: str) -> tuple[list[dict], str | None]:
@@ -825,9 +845,14 @@ async def _wait_for_send_readiness(agent) -> None:
     raise AgentStartingError()
 
 
-async def send_text(agent, text: str) -> None:
-    """Types ``text`` into the agent's live session. Single-line text is sent
-    as one literal ``tmux send-keys -l`` call; multi-line text is wrapped in
+async def send_text(agent, text: str) -> ChatReset | None:
+    """Types ``text`` into the agent's live session. Returns a ``ChatReset``
+    when ``text`` was exactly ``/new`` or ``/clear`` — MC turned it into a new
+    chat session (headless agents), or passed it on to the agent's own
+    command or its terminal — and the caller records who sent it
+    (``chat_reset_audit.chat_input_event``); ``None`` otherwise.
+
+    Single-line text is sent as one literal ``tmux send-keys -l`` call; multi-line text is wrapped in
     a bracketed-paste sequence (so the target CLI treats it as one paste
     instead of one line per Enter-triggered send-keys call). BOTH cases are
     followed by a separate ``Enter`` call to submit — a literal ``-l`` send
@@ -873,19 +898,47 @@ async def send_text(agent, text: str) -> None:
         # Lenken MITTEN im Zug gibt es ueber ACP nicht: ein zweites
         # ``session/prompt`` bricht bei omp den laufenden Zug ab.
         transport = transport_for(agent)
-        if await _acp_session_reset_command(agent, text):
-            answer = await transport.new_session(mode="queue")
+        reset_command = await _acp_session_reset_command(agent, text)
+        if reset_command and not reset_command[2]:
+            word, state, _own = reset_command
+            # Names this request in the daemon's card and its ``resets``
+            # record; the audit completes the activity event by it
+            # (chat_reset_audit). A reset without it is "not sent by MC".
+            request_id = uuid.uuid4().hex
+            answer = await transport.new_session(mode="queue", request_id=request_id)
             if not answer.get("ok"):
+                # Refused (``queue_full`` already shows as a card): nothing
+                # was reset, nothing to record.
                 _raise_for_acp_refusal(answer.get("error"), slug)
-            return
+                return None
+            previous = bounded_id(answer.get("previousSessionId")) \
+                or bounded_id((state or {}).get("sessionId"))
+            reset = ChatReset(
+                command=f"/{word}",
+                previous_session_id=previous,
+                queued=bool(answer.get("queued")),
+                request_id=request_id,
+                queue_id=bounded_id(answer.get("queueId")),
+            )
+            # A log line too: the activity event is written by the caller
+            # (the router knows who sent it).
+            logger.info("acp chat: reset %s accepted (slug=%s, previous=%s, queued=%s, "
+                        "request=%s)", reset.command, slug, reset.previous_session_id,
+                        reset.queued, request_id)
+            return reset
         answer = await transport.prompt(text, mode="queue")
         if not answer.get("ok"):
             # Zurueck kommt hier nur eine Absage, die der Daemon schon als
             # Karte zeigt (``queue_full``); jede andere wird zur Ausnahme.
             _raise_for_acp_refusal(answer.get("error"), slug)
-            return
+            return None
         note_sent(str(getattr(agent, "id", "") or slug), text)
-        return
+        if reset_command:
+            # The agent's OWN ``/new``/``/clear``: it runs it, MC records who
+            # sent it (the daemon's ``resets`` names no session change then).
+            return ChatReset(command=f"/{reset_command[0]}", previous_session_id=None,
+                             queued=False, handled_by=HANDLED_BY_HARNESS)
+        return None
 
     if kind == "docker":
         from app.services.transcript_adapters import PANE_PROBED_HARNESSES
@@ -919,7 +972,7 @@ async def send_text(agent, text: str) -> None:
             await _run_docker_exec(_docker_argv(slug, "-l", "--", text))
         await _run_docker_exec(_docker_argv(slug, "Enter"))
         note_sent(str(getattr(agent, "id", "") or slug), text)
-        return
+        return _terminal_reset(text)
 
     # kind == "boss" — same shape as the docker path (literal text, multi-line
     # as one bracketed paste, then a named Enter), delivered by the bridge via
@@ -930,6 +983,18 @@ async def send_text(agent, text: str) -> None:
         typed = text
     await _send_boss_keys([{"literal": typed}, {"named": "Enter"}])
     note_sent(str(getattr(agent, "id", "") or slug), text)
+    return _terminal_reset(text)
+
+
+def _terminal_reset(text: str) -> ChatReset | None:
+    """A ``/new``/``/clear`` typed into a TUI agent's terminal: its CLI runs
+    it (the chat follows the new transcript as a rollover). MC cannot tell
+    the new session, but it records who sent it (incident 21.10.2026)."""
+    word = _session_clearing_word(text)
+    if word is None:
+        return None
+    return ChatReset(command=f"/{word}", previous_session_id=None, queued=False,
+                     handled_by=HANDLED_BY_TERMINAL)
 
 
 # Was zuletzt je Agent eingetippt wurde — fuer die Live-Vorschau des

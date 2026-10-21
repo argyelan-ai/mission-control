@@ -758,6 +758,10 @@ class Settings(BaseSettings):
     # Todo -> checklist sync (services/checklist_todo_sync.py): how often the
     # working agents' chat transcripts are checked for a new todo snapshot.
     chat_todo_sync_interval: int = 20
+    # Chat reset audit (services/chat_reset_audit.py): how often the headless
+    # agents' chat state mirrors are read for resets — who asked, or that MC
+    # did not (incident 21.10.2026). One small file read per agent.
+    chat_reset_audit_interval: int = 30
     # Browser sessions (ADR-088, lifecycle step + operator decisions
     # 2026-10-06). The loop runs in the background-services process.
     # browser_sessions_root holds each session's last image

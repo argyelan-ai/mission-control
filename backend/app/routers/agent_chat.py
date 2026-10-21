@@ -62,6 +62,7 @@ from app.services import chat_actions, chat_media, commit_llm
 from app.services.activity import emit_event
 from app.services.chat_changes import aggregate_changes
 from app.services.chat_diff import capture_texts
+from app.services.chat_reset_audit import CHAT_SESSION_RESET_EVENT, chat_input_event
 from app.services.chat_task_activity import task_activity
 from app.services.sse import _sse_generator, sse_response
 from app.services.transcript_adapters import adapter_for
@@ -723,8 +724,32 @@ def _refused(e: chat_actions.Refused) -> JSONResponse:
     return JSONResponse(status_code=e.status, content=e.body())
 
 
-def _actor(user: Any) -> dict[str, Any]:
-    return {"actor": "operator", "userId": str(getattr(user, "id", "") or "") or None}
+def _actor(user: Any, request: Request | None = None) -> dict[str, Any]:
+    """Who sent a chat request — the ONE actor shape of every ``chat.*``
+    activity event (committed, PR opened, reverted, refused, session reset).
+
+    ``actor``: ``"operator"`` for a logged-in user; ``"token"`` for
+    ``LOCAL_AUTH_TOKEN`` and ``"service"`` for the host MCP service's JWT —
+    both act as the first admin, and a script must never read as the
+    operator typing (incident 21.10.2026). ``userId`` the account it acts
+    as, ``actorName`` the user's name or the credential's, ``actingAs`` the
+    account's name for a token, ``auth`` the credential kind
+    (``app.auth.AUTH_*``; with ``request``). Senders that are no request —
+    the chat daemon itself, a reset from outside MC — are written by
+    ``services/chat_reset_audit`` with the same ``actor`` key."""
+    from app.auth import AUTH_LOCAL_TOKEN, AUTH_SERVICE_JWT, auth_method
+
+    method = auth_method(request) if request is not None else None
+    user_id = str(getattr(user, "id", "") or "") or None
+    name = getattr(user, "name", None) or None
+    if method == AUTH_LOCAL_TOKEN:
+        who = {"actor": "token", "actorName": "LOCAL_AUTH_TOKEN", "actingAs": name}
+    elif method == AUTH_SERVICE_JWT:
+        who = {"actor": "service", "actorName": "service token", "actingAs": name}
+    else:
+        who = {"actor": "operator", "actorName": name}
+    return {**who, "userId": user_id,
+            **({"auth": method} if method else {})}
 
 
 async def _audit(session: AsyncSession, agent: Agent, event_type: str, title: str,
@@ -833,6 +858,7 @@ def _action_availability(folders: "_ChatFolders") -> dict[str, Any]:
 async def post_chat_revert(
     agent_id: uuid.UUID,
     body: ChatRevertBody,
+    request: Request,
     current_user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -842,7 +868,7 @@ async def post_chat_revert(
     overwritten — when the file changed since the chat's last edit
     (``changed_externally``). A repeat after success answers ``already``."""
     agent = await _load_agent_or_404(agent_id, session)
-    audit = {**_actor(current_user), "path": body.path[:500]}
+    audit = {**_actor(current_user, request), "path": body.path[:500]}
     if not body.confirm:
         return JSONResponse(status_code=400, content={"reason": "confirm_required"})
     if _agent_busy(agent_id):
@@ -977,6 +1003,7 @@ async def get_chat_commit_draft(
 async def post_chat_commit(
     agent_id: uuid.UUID,
     body: ChatCommitBody,
+    request: Request,
     current_user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -987,7 +1014,7 @@ async def post_chat_commit(
         return JSONResponse(status_code=400, content={"reason": "confirm_required"})
     if _agent_busy(agent_id):
         return JSONResponse(status_code=409, content={"reason": "agent_busy"})
-    audit = _actor(current_user)
+    audit = _actor(current_user, request)
     try:
         repo, _folders = await _chat_repo_or_refuse(agent, session)
         result = await asyncio.to_thread(chat_actions.commit_all, repo, body.message[:10_000])
@@ -1024,6 +1051,7 @@ async def get_chat_pr_draft(
 async def post_chat_pr(
     agent_id: uuid.UUID,
     body: ChatPrBody,
+    request: Request,
     current_user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -1038,7 +1066,7 @@ async def post_chat_pr(
         return JSONResponse(status_code=400, content={"reason": "title_required"})
     if _agent_busy(agent_id):
         return JSONResponse(status_code=409, content={"reason": "agent_busy"})
-    audit = _actor(current_user)
+    audit = _actor(current_user, request)
     from app.services.git_service import git_service  # lazy: dispatch import cycle
 
     try:
@@ -1102,6 +1130,7 @@ async def _open_pr_for_branch(git_service: Any, cwd: str, branch: str) -> str | 
 async def post_chat_input(
     agent_id: uuid.UUID,
     body: ChatInputBody,
+    request: Request,
     current_user=Depends(require_role(Role.ADMIN)),
     session: AsyncSession = Depends(get_session),
 ):
@@ -1119,7 +1148,9 @@ async def post_chat_input(
     slash command would install/modify a plugin, marketplace, MCP server or
     skill — the operator-approval-card flow for that does not exist yet
     (decided 12.10.2026), so chat refuses it outright rather than letting
-    the agent's own CLI act on it unsupervised."""
+    the agent's own CLI act on it unsupervised. A ``/new`` or ``/clear`` that
+    became a new chat session is recorded as the activity event
+    ``chat.session_reset`` with who sent it (incident 21.10.2026)."""
     agent = await _load_agent_or_404(agent_id, session)
 
     if not body.text or not body.text.strip():
@@ -1135,7 +1166,7 @@ async def post_chat_input(
         )
 
     try:
-        await send_text(agent, body.text)
+        reset = await send_text(agent, body.text)
     except InstallCommandBlockedError as e:
         return JSONResponse(
             status_code=409,
@@ -1161,6 +1192,9 @@ async def post_chat_input(
         return _acp_unreachable(e)
     except BossDeliveryError as e:
         return _boss_delivery_failed(e)
+    if reset is not None:
+        title, detail = chat_input_event(reset, _actor(current_user, request))
+        await _audit(session, agent, CHAT_SESSION_RESET_EVENT, title, detail)
 
 
 @router.post("/agents/{agent_id}/chat/queue/clear")
