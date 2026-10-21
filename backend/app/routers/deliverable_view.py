@@ -37,6 +37,16 @@ token is readable by it (it is in the page's own URL):
   no symlinks at all. Only regular files are served (no FIFO, no device).
   ``..`` and hidden names (``.env``, ``.git``) are refused by name. A
   folder that changes under a cached check is a 403, never a 500.
+  **Known limit — hard links are not detected.** A hard link is not a
+  link one could see; it IS the file. So one inside the folder that names
+  a file elsewhere on the same filesystem is served. Accepted: only
+  someone who writes into this folder can make one, the target must sit on
+  the same filesystem (from inside a container: on the same mount), and on
+  Linux with ``fs.protected_hardlinks`` (the usual default) they must own
+  the target or be allowed to read and write it — so that writer could
+  have copied those bytes into the deliverable anyway. Refusing
+  ``st_nlink > 1`` would also refuse every ordinary file that merely has a
+  second name.
 * **Every answer carries the sandbox as a header**, so the page runs in an
   opaque origin even when the URL is opened as its own tab: CSP
   ``sandbox allow-scripts`` (no ``allow-same-origin``), ``nosniff``,
@@ -582,20 +592,24 @@ class _ViewRoute(APIRoute):
             )
 
 
-_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
+# At most 18 digits per number: more than any file size (10^18 bytes), and
+# int() never sees a number it refuses (Python stops at 4300 digits with a
+# ValueError, which would be a 500). A longer number does not match, so the
+# range is ignored like any other malformed one.
+_RANGE_RE = re.compile(r"bytes=(\d{0,18})-(\d{0,18})")
 _CHUNK = 64 * 1024
 
 
 def _byte_range(request: Request, size: int) -> tuple[int, int] | None:
     """The one byte range to serve, as (first, last), or ``None`` for the
-    whole file. A malformed range, another unit, several ranges or an
-    ``If-Range`` (this route sends no validator) are ignored — RFC 9110
-    allows that, and media players only ever ask for one range. 416 when
-    the range lies past the end."""
+    whole file. A malformed range, another unit, several ranges, a number
+    longer than 18 digits or an ``If-Range`` (this route sends no validator)
+    are ignored — RFC 9110 allows that, and media players only ever ask for
+    one range. 416 when the range lies past the end."""
     spec = (request.headers.get("range") or "").replace(" ", "")
     if not spec or "if-range" in request.headers:
         return None
-    m = _RANGE_RE.match(spec)
+    m = _RANGE_RE.fullmatch(spec)
     if not m or m.group(1) == m.group(2) == "":
         return None
     unsatisfiable = HTTPException(

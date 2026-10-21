@@ -25,6 +25,7 @@ What these tests pin (security review focus):
 """
 from __future__ import annotations
 
+import logging
 import os
 import time
 import uuid
@@ -1061,20 +1062,37 @@ async def test_an_unsatisfiable_range_is_416_with_the_headers(auth_client, zone)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("spec", ["bytes=abc", "bytes=5-2", "items=0-1", "bytes=0-1,4-5", "bytes=-"])
-async def test_a_range_the_route_does_not_serve_gets_the_whole_file(auth_client, zone, spec):
-    """A malformed range, another unit or several ranges are ignored (RFC 9110
-    allows it): the whole file, 200, with the page's headers — never a 400
-    without them."""
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "bytes=abc",
+        "bytes=5-2",
+        "items=0-1",
+        "bytes=0-1,4-5",
+        "bytes=-",
+        # Numbers no file size needs. Python's int() refuses more than 4300
+        # digits (ValueError), which used to end in a 500 and an ERROR
+        # traceback per request.
+        pytest.param("bytes=" + "1" * 5000 + "-", id="huge-first"),
+        pytest.param("bytes=0-" + "9" * 5000, id="huge-last"),
+        pytest.param("bytes=-" + "9" * 5000, id="huge-suffix"),
+    ],
+)
+async def test_a_range_the_route_does_not_serve_gets_the_whole_file(auth_client, zone, spec, caplog):
+    """A malformed range, another unit, several ranges or a number longer
+    than any file size are ignored (RFC 9110 allows it): the whole file, 200,
+    with the page's headers — never a 400 without them, never a 500."""
     url, folder, (_, task_id, _) = await _site(auth_client, zone)
     token = _token_of(url)
     (zone / str(task_id) / "clip.mp4").write_bytes(bytes(range(10)))
 
-    resp = await _anon_get(auth_client, folder + "clip.mp4", headers={"Range": spec})
+    with caplog.at_level(logging.ERROR, logger="app.routers.deliverable_view"):
+        resp = await _anon_get(auth_client, folder + "clip.mp4", headers={"Range": spec})
 
-    assert resp.status_code == 200, (spec, resp.status_code)
+    assert resp.status_code == 200, (spec[:40], resp.status_code)
     assert resp.content == bytes(range(10))
     _assert_file_headers(resp, token)
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
 @pytest.mark.asyncio
