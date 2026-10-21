@@ -111,6 +111,10 @@ features:
       - "* /api/v1/boards/*/tasks/{task_id}/dependencies"
       - "* /api/v1/boards/*/tasks/{task_id}/deliverables"
       - "* /api/v1/boards/*/tasks/{task_id}/deliverables/{deliverable_id}/*"
+      # A multi-file HTML deliverable in the task detail's preview frame: the
+      # signed, short-lived folder URL minted by …/deliverables/{id}/view-url
+      # (routers/deliverable_view.py, called by HtmlPreview).
+      - "GET /api/v1/deliverable-view/{token}/{file_path}"
       - "* /api/v1/boards/*/tasks/{task_id}/dispatch"
       - "* /api/v1/boards/*/tasks/{task_id}/events"
       - "* /api/v1/boards/*/tasks/{task_id}/git-diff"

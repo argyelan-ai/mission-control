@@ -232,7 +232,11 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
                     onOpenInFinder={showFinder ? reveal : undefined}
                   />
                 ) : fileUrl && d.path ? (
-                  <FilePreview fileUrl={fileUrl} path={d.path} />
+                  <FilePreview
+                    fileUrl={fileUrl}
+                    path={d.path}
+                    htmlFolderUrl={() => api.tasks.deliverables.viewUrl(boardId, taskId, d.id)}
+                  />
                 ) : null}
               </div>
             </div>

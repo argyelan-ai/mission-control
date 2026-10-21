@@ -8,11 +8,12 @@
  *
  *  - Click to run. Before the tap there is NO frame: the box shows only a
  *    "Run page" button. Nothing of the page is parsed until then — no
- *    script, no markup, no request. A sandboxed srcdoc frame runs in MC's
- *    own process (on iOS always), so a `for(;;){}` in the page freezes all
- *    of MC, and so does pure markup without any script: an SVG `<use>` tree
- *    that expands to millions of nodes froze MC for more than 45 s even in a
- *    frame with sandbox="" (Chromium and WebKit). In WebKit the page's
+ *    script, no markup, no request (a multi-file page's folder URL is not
+ *    even minted). A sandboxed frame runs in MC's own process (on iOS
+ *    always), so a `for(;;){}` in the page freezes all of MC, and so does
+ *    pure markup without any script: an SVG `<use>` tree that expands to
+ *    millions of nodes froze MC for more than 45 s even in a frame with
+ *    sandbox="" (Chromium and WebKit). In WebKit the page's
  *    `history.back()` moves the whole tab, and every https: image, style or
  *    frame the page loads tells that host that the operator opened it (see
  *    Known limits). None of this may happen just because the operator
@@ -25,20 +26,34 @@
  *    token), cookies or DOM. Without `allow-top-navigation*`,
  *    `allow-popups*`, `allow-forms` and `allow-modals` it cannot navigate MC
  *    to a new URL, open windows, submit forms or block the app with alert().
- *  - The content goes in as `srcdoc`, never as a URL. A `blob:` URL would
- *    carry MC's origin and runs un-sandboxed the moment someone opens it in
- *    its own tab ("open frame in new tab"); `about:srcdoc` cannot be opened
- *    that way.
+ *  - The content goes in as `srcdoc`, never as a `blob:` URL. A `blob:` URL
+ *    would carry MC's origin and runs un-sandboxed the moment someone opens
+ *    it in its own tab ("open frame in new tab"); `about:srcdoc` cannot be
+ *    opened that way.
+ *  - The one exception is a multi-file page of a deliverable (it links its
+ *    own `style.css`, `logo.png`, `app.js`, `about.html` — `hasFolderRefs`).
+ *    A srcdoc frame has no folder to load those from, so the caller hands in
+ *    `folderUrl`: after the tap it mints a short-lived signed URL of the
+ *    page's folder (backend `routers/deliverable_view.py`) and the frame
+ *    loads FROM it, with the same `sandbox="allow-scripts"`. That URL opens
+ *    only this one folder, read-only, for minutes, and the server sends the
+ *    sandbox as a CSP header too — so even "open frame in new tab" stays
+ *    sandboxed, and the page's sources are its folder plus https:. Minting
+ *    fails or takes longer than `HTML_PREVIEW_MINT_TIMEOUT_MS` → srcdoc.
+ *    Root-absolute references (`/assets/app.js`, a bundler's default base)
+ *    point at MC's own origin, not the folder: such a page renders without
+ *    those files.
  *  - MC draws a label above the frame and in the fullscreen header: "Agent
  *    page · isolated preview – never enter passwords here". The page can draw
  *    anything inside its frame, a fake MC login included, but it cannot
  *    paint over MC's own chrome.
- *  - `buildPreviewDocument` puts a guard head in front of the page:
+ *  - `buildPreviewDocument` puts a guard head in front of a srcdoc page:
  *      · `<base href="about:srcdoc">` — a srcdoc page otherwise resolves
  *        relative URLs against MC's own URL: an in-page link (`#pricing`)
  *        would load MC itself into the frame, and `logo.png` would be fetched
  *        from MC. With this base, `#links` stay in the page and relative
- *        files resolve to nothing (multi-file pages are a separate feature).
+ *        files resolve to nothing (a deliverable's files come from its
+ *        folder URL, above).
  *      · `no-referrer` — asks that the page's requests carry no Referer
  *        header. Chromium keeps to it; in WebKit the page can turn it off
  *        again (see Known limits).
@@ -140,6 +155,82 @@ export function buildPreviewDocument(html: string): string {
   return GUARD_HEAD + html;
 }
 
+// ── Does the page need the files next to it? ───────────────────────────────
+
+/**
+ * A reference that resolves into the page's own folder: `style.css`,
+ * `img/a.png`, `../shared/x.js`, `about.html`. Not: `#anchors`, `?query`,
+ * any `scheme:` (https:, data:, mailto:, javascript:), `//host` and
+ * `/root` paths — the last two point at a host or at MC's origin, never at
+ * the folder.
+ */
+function isFolderRef(raw: string): boolean {
+  const v = raw.trim();
+  if (!v || v.startsWith("#") || v.startsWith("?") || v.startsWith("/")) return false;
+  return !/^[a-z][a-z0-9+.-]*:/i.test(v);
+}
+
+/** `url(…)` and `@import "…"` targets in CSS text. A forward-only scan: each
+ *  step moves on, so it stays linear on any input (no regex backtracking). */
+function cssHasFolderRef(css: string): boolean {
+  const lower = css.toLowerCase();
+  for (let i = lower.indexOf("url("); i !== -1; ) {
+    const end = css.indexOf(")", i + 4);
+    if (end === -1) break; // no ")" left: no later url( can close either
+    const inner = css.slice(i + 4, end).trim();
+    const target = inner.length >= 2 && (inner[0] === '"' || inner[0] === "'") && inner.endsWith(inner[0])
+      ? inner.slice(1, -1)
+      : inner;
+    if (isFolderRef(target)) return true;
+    i = lower.indexOf("url(", end + 1);
+  }
+  for (let i = lower.indexOf("@import"); i !== -1; i = lower.indexOf("@import", i + 7)) {
+    let j = i + 7;
+    while (j < css.length && " \t\n\r\f".includes(css[j])) j++;
+    const quote = css[j];
+    if (quote !== '"' && quote !== "'") continue; // url() form: covered above
+    const end = css.indexOf(quote, j + 1);
+    if (end !== -1 && isFolderRef(css.slice(j + 1, end))) return true;
+  }
+  return false;
+}
+
+const URL_ATTRS = ["src", "href", "xlink:href", "poster", "data"] as const;
+
+/**
+ * Does this page load files from its own folder (stylesheet, image, script,
+ * another page of the site, a module import)? Then it needs its folder URL;
+ * a srcdoc frame would show it without them.
+ *
+ * Parsed with DOMParser: an inert document — no script runs, nothing loads.
+ * A script that builds file URLs at run time (`img.src = "a.png"`) is not
+ * seen; a page that needs it and has no other reference stays on srcdoc.
+ */
+export function hasFolderRefs(html: string): boolean {
+  if (!html || typeof DOMParser === "undefined") return false;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  for (const el of Array.from(doc.querySelectorAll("*"))) {
+    for (const name of URL_ATTRS) {
+      const v = el.getAttribute(name);
+      if (v !== null && isFolderRef(v)) return true;
+    }
+    const srcset = el.getAttribute("srcset");
+    if (srcset && srcset.split(",").some((c) => isFolderRef(c.trim().split(/\s+/)[0] ?? ""))) return true;
+    const style = el.getAttribute("style");
+    if (style && cssHasFolderRef(style)) return true;
+  }
+  for (const style of Array.from(doc.querySelectorAll("style"))) {
+    if (cssHasFolderRef(style.textContent ?? "")) return true;
+  }
+  // Module imports (`import x from "./lib.js"`, `import("../a.js")`) — a
+  // browser only resolves relative module specifiers that start with ./ or ../
+  for (const script of Array.from(doc.querySelectorAll("script:not([src])"))) {
+    const code = script.textContent ?? "";
+    if (/["'`]\.\.?\//.test(code)) return true;
+  }
+  return false;
+}
+
 // ── Sandboxed frame ────────────────────────────────────────────────────────
 
 /**
@@ -149,29 +240,87 @@ export function buildPreviewDocument(html: string): string {
  */
 export const HTML_PREVIEW_LOADING_CAP_MS = 2000;
 
-function SandboxedFrame({ doc, title }: { doc: string; title: string }) {
+/**
+ * How long minting the folder URL may take before the page goes in as
+ * srcdoc after all (without its files, but visible). A request that never
+ * answers — a stalled DB pool, a lost connection — would otherwise leave
+ * the spinner up forever: the loading cap only starts with the frame.
+ */
+export const HTML_PREVIEW_MINT_TIMEOUT_MS = 5000;
+
+/** Mints the signed folder URL of a multi-file page (see the file comment). */
+export type FolderUrl = () => Promise<string>;
+
+/** Where the frame's page comes from: still asking for the folder URL,
+ *  the folder URL, or the srcdoc. */
+type FrameSource = { kind: "minting" } | { kind: "url"; url: string } | { kind: "srcdoc" };
+
+function SandboxedFrame({ doc, title, folderUrl }: { doc: string; title: string; folderUrl?: FolderUrl }) {
   const t = useTranslations("filePreview.html");
+  const wantsFolder = folderUrl !== undefined;
+  const [source, setSource] = useState<FrameSource>(wantsFolder ? { kind: "minting" } : { kind: "srcdoc" });
+
+  // The parent hands in a new inline function on every render; the URL is
+  // minted once per page (and once more for each fullscreen copy) — through
+  // the latest function, never per render.
+  const folderUrlRef = useRef(folderUrl);
+  useLayoutEffect(() => {
+    folderUrlRef.current = folderUrl;
+  });
+  useEffect(() => {
+    const mint = folderUrlRef.current;
+    if (!wantsFolder || !mint) {
+      setSource((s) => (s.kind === "srcdoc" ? s : { kind: "srcdoc" }));
+      return;
+    }
+    let active = true;
+    // First answer wins: the URL, a refusal, or the timeout. A late URL
+    // after the timeout does not swap the page under the reader.
+    const settle = (next: FrameSource) => {
+      if (!active) return;
+      active = false;
+      window.clearTimeout(timeout);
+      setSource(next);
+    };
+    const timeout = window.setTimeout(() => settle({ kind: "srcdoc" }), HTML_PREVIEW_MINT_TIMEOUT_MS);
+    setSource((s) => (s.kind === "minting" ? s : { kind: "minting" }));
+    mint().then(
+      (url) => settle({ kind: "url", url }),
+      () => settle({ kind: "srcdoc" }), // no folder view: the page without its files
+    );
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [doc, wantsFolder]);
+
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     setLoaded(false);
+    if (source.kind === "minting") return; // the cap starts with the frame
     const cap = window.setTimeout(() => setLoaded(true), HTML_PREVIEW_LOADING_CAP_MS);
     return () => window.clearTimeout(cap);
-  }, [doc]);
+  }, [doc, source]);
 
   return (
     <>
-      <iframe
-        title={title}
-        sandbox={HTML_PREVIEW_SANDBOX}
-        srcDoc={doc}
-        referrerPolicy="no-referrer"
-        onLoad={() => setLoaded(true)}
-        className="absolute inset-0 block w-full h-full border-0"
-        // The page's own ground, as in a browser tab: a page without a
-        // background is white (the system colour Canvas), a page that asks
-        // for a dark scheme gets a dark canvas from the browser.
-        style={{ colorScheme: "light", background: "Canvas" }}
-      />
+      {source.kind !== "minting" && (
+        <iframe
+          // A new element when the source changes: an iframe with both src
+          // and srcdoc would show the srcdoc.
+          key={source.kind === "url" ? source.url : "srcdoc"}
+          title={title}
+          sandbox={HTML_PREVIEW_SANDBOX}
+          {...(source.kind === "url" ? { src: source.url } : { srcDoc: doc })}
+          referrerPolicy="no-referrer"
+          onLoad={() => setLoaded(true)}
+          className="absolute inset-0 block w-full h-full border-0"
+          // The page's own ground, as in a browser tab: a page without a
+          // background is white (the system colour Canvas), a page that asks
+          // for a dark scheme gets a dark canvas from the browser.
+          style={{ colorScheme: "light", background: "Canvas" }}
+        />
+      )}
       {!loaded && (
         <div
           role="status"
@@ -222,15 +371,18 @@ function PageFrame({
   name,
   running,
   onRun,
+  folderUrl,
 }: {
   doc: string;
   name: string;
   running: boolean;
   onRun: () => void;
+  folderUrl?: FolderUrl;
 }) {
   const t = useTranslations("filePreview.html");
+  // The frame (and with it the folder-URL mint) only exists after the tap.
   return running ? (
-    <SandboxedFrame doc={doc} title={t("frameTitle", { name })} />
+    <SandboxedFrame doc={doc} title={t("frameTitle", { name })} folderUrl={folderUrl} />
   ) : (
     <RunPanel onRun={onRun} />
   );
@@ -343,12 +495,14 @@ function FullscreenView({
   name,
   running,
   onRun,
+  folderUrl,
   onClose,
 }: {
   doc: string;
   name: string;
   running: boolean;
   onRun: () => void;
+  folderUrl?: FolderUrl;
   onClose: () => void;
 }) {
   const t = useTranslations("filePreview.html");
@@ -402,7 +556,7 @@ function FullscreenView({
         </button>
       </div>
       <div className="relative flex-1 min-h-0">
-        <PageFrame doc={doc} name={name} running={running} onRun={onRun} />
+        <PageFrame doc={doc} name={name} running={running} onRun={onRun} folderUrl={folderUrl} />
       </div>
     </div>,
     document.body,
@@ -418,13 +572,21 @@ interface HtmlPreviewProps {
   name: string;
   /** The source view for the "Code" switch (FilePreview's code renderer). */
   code: ReactNode;
+  /** Deliverables only: mints the signed URL of the page's folder, used when
+   *  the page links files next to it (see the file comment). Without it —
+   *  workspace tab, Files page — every page goes in as srcdoc. */
+  folderUrl?: FolderUrl;
 }
 
-export function HtmlPreview({ html, name, code }: HtmlPreviewProps) {
+export function HtmlPreview({ html, name, code, folderUrl }: HtmlPreviewProps) {
   const t = useTranslations("filePreview.html");
   const [view, setView] = useState<View>("preview");
   const [fullscreen, setFullscreen] = useState(false);
   const doc = useMemo(() => buildPreviewDocument(html), [html]);
+  // Only scanned where a folder URL exists at all (deliverables).
+  const canServeFolder = folderUrl !== undefined;
+  const needsFolder = useMemo(() => canServeFolder && hasFolderRefs(html), [html, canServeFolder]);
+  const frameFolderUrl = needsFolder ? folderUrl : undefined;
 
   // Click to run: the document the operator started, or null. Bound to the
   // document itself, so other content — the same component handed another
@@ -473,7 +635,7 @@ export function HtmlPreview({ html, name, code }: HtmlPreviewProps) {
             {/* One copy of the page (or of the Run button) at a time: while
                 the fullscreen view is open the inline one is unmounted, the
                 box keeps its height so the page underneath does not jump. */}
-            {!fullscreen && <PageFrame doc={doc} name={name} running={running} onRun={run} />}
+            {!fullscreen && <PageFrame doc={doc} name={name} running={running} onRun={run} folderUrl={frameFolderUrl} />}
           </div>
         </div>
       ) : (
@@ -486,6 +648,7 @@ export function HtmlPreview({ html, name, code }: HtmlPreviewProps) {
           name={name}
           running={running}
           onRun={run}
+          folderUrl={frameFolderUrl}
           onClose={() => setFullscreen(false)}
         />
       )}

@@ -532,3 +532,86 @@ def test_session_address_redaction_does_not_depend_on_what_follows(redact):
     for tail in ("#frag", ",next", ")", "%2Fdevtools", ""):
         out = redact("see ws://cdp-browser:9300/s/" + BROWSER_TOKEN + tail)
         assert BROWSER_TOKEN not in out, tail
+
+
+# ── deliverable view tokens: the capability sits in the PATH ───────────────
+#
+# /api/v1/deliverable-view/<token>/<file> (routers/deliverable_view.py): the
+# sandboxed preview frame cannot send a header, so the signed token is a
+# path segment, and uvicorn's access log writes every request path. The
+# token opens one folder read-only for minutes; it still never belongs in a
+# log line. Same pattern as the /s/<token> case above.
+
+
+def _view_token():
+    import uuid
+
+    from app.routers.deliverable_view import mint_view_token
+
+    return mint_view_token(
+        user_id=uuid.uuid4(), token_version=0, task_id=uuid.uuid4(),
+        deliverable_id=uuid.uuid4(), folder="/deliverables/x",
+    )
+
+
+def test_redacts_a_deliverable_view_token_in_a_request_path(redact):
+    token = _view_token()
+    out = redact("GET /api/v1/deliverable-view/" + token + "/assets/site.css")
+    assert token not in out
+    assert token.split(".")[2] not in out  # not even the signature part
+    assert out == "GET /api/v1/deliverable-view/<REDACTED>/assets/site.css"  # the file stays readable
+
+
+def test_redacts_a_deliverable_view_token_in_a_uvicorn_access_line():
+    """The real shape: uvicorn's access logger, own handler, %-args."""
+    token = _view_token()
+    lg, records = _isolated_logger("uvicorn.access")
+    try:
+        install_log_redaction()
+        lg.info('%s - "%s %s HTTP/%s" %d', "1.2.3.4", "GET",
+                "/api/v1/deliverable-view/" + token + "/index.html", "1.1", 200)
+        assert records, "the line is kept"
+        assert token not in records[-1]
+        assert "/api/v1/deliverable-view/<REDACTED>/index.html" in records[-1]
+    finally:
+        lg.handlers.clear()
+        lg.filters.clear()
+        lg.propagate = True
+
+
+def test_deliverable_view_redaction_covers_odd_tokens_and_tails(redact):
+    """A truncated or tampered token, a full URL, a query or nothing after it."""
+    token = _view_token()
+    for text in (
+        "http://mc.local/api/v1/deliverable-view/" + token,
+        "/api/v1/deliverable-view/" + token + "?v=2",
+        "/api/v1/deliverable-view/" + token[:40] + "/x.png",
+        '"/api/v1/deliverable-view/' + token + '/a b.html"',
+    ):
+        out = redact(text)
+        assert token[:40] not in out, text
+        assert "/deliverable-view/<REDACTED>" in out, text
+
+
+def test_deliverable_view_redaction_is_idempotent_and_leaves_the_mint_route_alone(redact):
+    once = redact("GET /api/v1/deliverable-view/" + _view_token() + "/index.html")
+    assert redact(once) == once
+    mint = "POST /api/v1/boards/b/tasks/t/deliverables/d/view-url"
+    assert redact(mint) == mint
+
+
+def test_a_deliverable_view_token_is_redacted_by_its_shape_too(redact):
+    """Percent-encoded (the URL inside another URL's query) or on its own:
+    the token's own shape ``dv1.<claims>.<signature>`` is enough."""
+    from urllib.parse import quote
+
+    token = _view_token()
+    for text in (
+        "GET /outer?u=" + quote("/api/v1/deliverable-view/" + token + "/index.html", safe=""),
+        "minted " + token,
+    ):
+        out = redact(text)
+        assert token not in out, text
+        assert token.split(".")[2] not in out, text
+        assert "<REDACTED>" in out, text
+    assert redact("version dv1.2 of the plan") == "version dv1.2 of the plan"

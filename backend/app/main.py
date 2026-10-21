@@ -77,6 +77,7 @@ from app.routers import (
     cli_terminal,
     consensus,
     credentials,
+    deliverable_view,
     groups,
     deploy,
     hosts,
@@ -420,6 +421,7 @@ app.include_router(run_record.router)  # /api/v1/tasks/{id}/run-record — Laufa
 app.include_router(heads.router)  # /api/v1/heads — Head launcher (docs/specs/head-launcher.md), behind heads_enabled
 app.include_router(night_shift.router)  # /api/v1/night-shift — run marked tasks as heads tonight (ROADMAP E2), behind heads_enabled
 app.include_router(files.router)  # /api/v1/files — global Files browser (portable, sandboxed)
+app.include_router(deliverable_view.router)  # /api/v1/deliverable-view — multi-file HTML deliverables in a sandboxed frame
 app.include_router(agents.router)
 app.include_router(agent_templates.router)
 app.include_router(agent_scoped.router)
