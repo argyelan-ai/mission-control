@@ -34,9 +34,61 @@ import os
 import subprocess
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 logger = logging.getLogger("acp_client")
+
+#: Where MC tells a container agent to put its results: the ADR-022 mount
+#: (``~/.mc/deliverables/<slug>:/deliverables``, compose_renderer) and the
+#: first path the backend accepts for a deliverable
+#: (``/deliverables/<task_id>/``, deliverable_paths.accepted_path_prefixes).
+#: The fs jail serves it next to the session cwd, so omp's write tool can put
+#: a result where the dispatch prompt asks for it. Only used when the folder
+#: exists — the host (Hermes) has no such mount and stays at the cwd.
+DEFAULT_DELIVERABLES_DIR = "/deliverables"
+
+#: Override for the deliverables root: one or more absolute folders,
+#: separated by ``os.pathsep``. Set but empty = no extra root (cwd only).
+DELIVERABLES_DIR_ENV = "MC_DELIVERABLES_DIR"
+
+
+def _usable_roots(candidates: Iterable[str]) -> tuple[str, ...]:
+    """realpath of every candidate that is an absolute, existing folder.
+
+    Stored resolved, so the jail compares final paths with final paths. The
+    filesystem root is refused: it would open every path on the box.
+    """
+    roots: list[str] = []
+    for raw in candidates:
+        cand = raw.strip()
+        if not cand:
+            continue
+        if not os.path.isabs(cand):
+            logger.warning("fs jail: ignoring relative deliverables root %r", cand)
+            continue
+        real = os.path.realpath(cand)
+        if real == os.path.realpath(os.sep):
+            logger.warning("fs jail: refusing %r as a deliverables root", cand)
+            continue
+        if os.path.isdir(real) and real not in roots:
+            roots.append(real)
+    return tuple(roots)
+
+
+def deliverables_roots(environ: Optional[Mapping[str, str]] = None) -> tuple[str, ...]:
+    """The folders the fs jail serves besides the session cwd.
+
+    ``MC_DELIVERABLES_DIR`` when set, else :data:`DEFAULT_DELIVERABLES_DIR`.
+    """
+    env = os.environ if environ is None else environ
+    raw = env.get(DELIVERABLES_DIR_ENV)
+    if raw is None:
+        return _usable_roots([DEFAULT_DELIVERABLES_DIR])
+    return _usable_roots(raw.split(os.pathsep))
+
+
+def _inside(real: str, root: str) -> bool:
+    return real == root or real.startswith(root + os.sep)
 
 # Permission shortcuts -> optionId omp understands ($ys map in omp's
 # permission handler). Option ids come from the request's `options` list, so
@@ -112,6 +164,9 @@ class ACPClient:
         self._command = command or default_command()
         self._cwd = cwd
         self._fs_jail: Optional[str] = None  # realpath(cwd) — fs/* restricted here (Review #464 Major)
+        # Served too once a session exists: the deliverables root(s), read
+        # here once (the mount is there from container start).
+        self._fs_extra_roots: tuple[str, ...] = deliverables_roots()
         self._env = env
         self._proc: Optional[subprocess.Popen] = None
         self._reader: Optional[threading.Thread] = None
@@ -301,9 +356,11 @@ class ACPClient:
         params = msg.get("params") or {}
         method = msg.get("method", "")
         # Review #464 Major: fs/read_text_file + fs/write_text_file are
-        # restricted to the session's realpath(cwd). A symlink or `..`
-        # escape resolves through realpath, so the check is on the FINAL
-        # path, not the textual one. No jail (no session yet) -> reject.
+        # restricted to the session's realpath(cwd) plus the deliverables
+        # root(s) (deliverables_roots). A symlink or `..` escape resolves
+        # through realpath, so the check is on the FINAL path, not the
+        # textual one — out of the cwd and out of /deliverables alike. No
+        # jail (no session yet) -> reject, whatever the extra roots are.
         jail = self._fs_jail
         path = params.get("path")
         if method in ("fs/read_text_file", "fs/write_text_file"):
@@ -313,10 +370,14 @@ class ACPClient:
                                           "message": "fs request before session/new (no cwd jail)"}})
                 return
             real = os.path.realpath(path)
-            if real != jail and not real.startswith(jail + os.sep):
+            extra = self._fs_extra_roots
+            if not any(_inside(real, root) for root in (jail, *extra)):
+                message = f"path {path!r} outside session cwd {jail!r}"
+                if extra:
+                    message += " and outside the deliverables root " + ", ".join(
+                        repr(root) for root in extra)
                 self._send_raw({"jsonrpc": "2.0", "id": rid,
-                                "error": {"code": -32002,
-                                          "message": f"path {path!r} outside session cwd {jail!r}"}})
+                                "error": {"code": -32002, "message": message}})
                 return
         try:
             if method == "fs/read_text_file":
@@ -324,6 +385,11 @@ class ACPClient:
                     self._send_raw({"jsonrpc": "2.0", "id": rid,
                                     "result": {"content": f.read()}})
             elif method == "fs/write_text_file":
+                # The first file of a task goes to /deliverables/<task_id>/,
+                # a folder nobody made yet. `real` passed the check above and
+                # realpath leaves no `..` and no symlink in its missing tail,
+                # so every folder made here lies inside an allowed root.
+                os.makedirs(os.path.dirname(real), exist_ok=True)
                 with open(real, "w", encoding="utf-8") as f:
                     f.write(params.get("content", ""))
                 self._send_raw({"jsonrpc": "2.0", "id": rid, "result": {}})
@@ -417,7 +483,8 @@ class ACPClient:
         self.last_session_result = result
         # Review #464 Major: fs/read_text_file + fs/write_text_file are
         # jailed to the session's realpath(cwd) — the child must never read
-        # or write outside the working directory it was granted.
+        # or write outside the working directory it was granted, except in
+        # the deliverables root MC itself sends it to (_fs_extra_roots).
         try:
             self._fs_jail = os.path.realpath(cwd)
         except OSError:
