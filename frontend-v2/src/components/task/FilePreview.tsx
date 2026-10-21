@@ -10,6 +10,7 @@ import { useAuthBlob } from "@/hooks/useAuthBlob";
 import { C } from "@/lib/colors";
 import { VaultMarkdown } from "@/components/vault/VaultMarkdown";
 import { HtmlPreview, type FolderUrl } from "./HtmlPreview";
+import { SvgPreview, SVG_EXTS } from "./SvgPreview";
 
 // ── Hilfsfunktionen ────────────────────────────────────────────────────────
 
@@ -20,10 +21,13 @@ type PreviewKind =
   | "pdf"
   | "markdown"
   | "html"
+  | "svg"
   | "code"
   | "unsupported";
 
-const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"]);
+// No "svg": an SVG is markup that can freeze MC when drawn, so it is shown
+// as its source (SvgPreview), never as an <img>.
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
 const VIDEO_EXTS = new Set(["mp4", "mov", "webm", "mkv", "avi"]);
 const AUDIO_EXTS = new Set(["mp3", "wav", "ogg", "flac", "m4a", "aac"]);
 const MARKDOWN_EXTS = new Set(["md", "markdown"]);
@@ -48,6 +52,7 @@ function fileName(path: string): string {
 
 function classifyPath(path: string): PreviewKind {
   const ext = getExtension(path);
+  if (SVG_EXTS.has(ext)) return "svg";
   if (IMAGE_EXTS.has(ext)) return "image";
   if (VIDEO_EXTS.has(ext)) return "video";
   if (AUDIO_EXTS.has(ext)) return "audio";
@@ -65,7 +70,7 @@ function langForExt(ext: string): string {
     h: "c", cs: "csharp", rb: "ruby", php: "php", swift: "swift",
     kt: "kotlin", sh: "bash", bash: "bash", zsh: "bash", sql: "sql",
     md: "markdown", json: "json", yaml: "yaml", yml: "yaml",
-    toml: "toml", css: "css", scss: "scss", html: "html", htm: "html", xml: "xml",
+    toml: "toml", css: "css", scss: "scss", html: "html", htm: "html", xml: "xml", svg: "xml",
   };
   return map[ext] ?? "plaintext";
 }
@@ -195,6 +200,17 @@ function HtmlFilePreview({ fileUrl, path, folderUrl }: { fileUrl: string; path: 
   );
 }
 
+/** SVG: fetched as TEXT (with the Bearer header) and shown as its source,
+ *  never drawn — no object URL, no <img>, no frame (see SvgPreview). */
+function SvgFilePreview({ fileUrl, path, downloadOffered }: { fileUrl: string; path: string; downloadOffered: boolean }) {
+  const { text, loading, error } = useAuthText(fileUrl);
+
+  if (loading) return <PreviewLoader />;
+  if (error || text === null) return <PreviewError />;
+
+  return <SvgPreview code={<CodeView text={text} path={path} />} downloadOffered={downloadOffered} />;
+}
+
 function MarkdownPreview({ fileUrl }: { fileUrl: string }) {
   const { text, loading, error } = useAuthText(fileUrl);
 
@@ -264,6 +280,8 @@ export function FilePreview({ fileUrl, path, showDownload = true, htmlFolderUrl 
     body = <MarkdownPreview fileUrl={fileUrl} />;
   } else if (kind === "html") {
     body = <HtmlFilePreview fileUrl={fileUrl} path={path} folderUrl={htmlFolderUrl} />;
+  } else if (kind === "svg") {
+    body = <SvgFilePreview fileUrl={fileUrl} path={path} downloadOffered={showDownload} />;
   } else if (kind === "code") {
     body = <CodePreview fileUrl={fileUrl} path={path} />;
   } else if (kind === "unsupported") {
