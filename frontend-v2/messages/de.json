@@ -1788,7 +1788,8 @@
     },
     "svg": {
       "codeOnly": "MC zeigt SVG-Bilder nur als Code – eine SVG-Datei kann die App einfrieren.",
-      "downloadToView": "Zum Ansehen herunterladen."
+      "downloadToView": "Zum Ansehen herunterladen.",
+      "shortened": "Lange Datei – nur der Anfang wird gezeigt."
     }
   },
   "settings": {

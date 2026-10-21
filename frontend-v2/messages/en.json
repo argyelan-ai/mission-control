@@ -1788,7 +1788,8 @@
     },
     "svg": {
       "codeOnly": "MC shows SVG images as code only – an SVG file can freeze the app.",
-      "downloadToView": "Download it to see the image."
+      "downloadToView": "Download it to see the image.",
+      "shortened": "Long file – only the beginning is shown."
     }
   },
   "settings": {

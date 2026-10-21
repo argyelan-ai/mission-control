@@ -16,7 +16,16 @@
 import { useEffect, useState } from "react";
 import { getToken } from "@/lib/api";
 
-export function useAuthBlob(url: string | null): { blobUrl: string | null; loading: boolean; error: boolean } {
+/**
+ * @param type Optional: the type the bytes get, whatever the server sent.
+ *   FilePreview passes the type the file NAME stands for (`image/png` for a
+ *   `.png`), because the server may type a file by a symlink's target — an
+ *   SVG named `chart.png` must not be drawn as an SVG.
+ */
+export function useAuthBlob(
+  url: string | null,
+  type?: string,
+): { blobUrl: string | null; loading: boolean; error: boolean } {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -35,7 +44,8 @@ export function useAuthBlob(url: string | null): { blobUrl: string | null; loadi
       })
       .then((blob) => {
         if (!active) return;
-        objectUrl = URL.createObjectURL(blob);
+        // slice() re-types without copying the bytes.
+        objectUrl = URL.createObjectURL(type ? blob.slice(0, blob.size, type) : blob);
         setBlobUrl(objectUrl);
         setLoading(false);
       })
@@ -50,7 +60,7 @@ export function useAuthBlob(url: string | null): { blobUrl: string | null; loadi
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       setBlobUrl(null);
     };
-  }, [url]);
+  }, [url, type]);
 
   return { blobUrl, loading, error };
 }

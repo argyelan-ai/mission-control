@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { FilePreview } from "../FilePreview";
+import { SVG_SOURCE_MAX_BYTES, SVG_SOURCE_MAX_LINES, SVG_HIGHLIGHT_MAX_BYTES } from "../SvgPreview";
 import en from "../../../../messages/en.json";
 import de from "../../../../messages/de.json";
 
@@ -176,8 +177,149 @@ describe("SvgPreview — SVG files are shown as code, never drawn", () => {
   );
 });
 
+// The source view has a cost of its own: highlighted XML with line numbers
+// is several DOM nodes per token. A 10 MB SVG (a big chart is enough, no
+// bomb needed) blocked MC for more than 21 s that way in Chromium and WebKit,
+// a 2 MB one for 3–5.7 s. So the source view is capped: only the start of a
+// long file is read and shown, as plain text, with a line that says so; only
+// a small file is highlighted.
+
+const SHORTENED = "Long file – only the beginning is shown.";
+
+/** A matplotlib-like chart: one element per line. */
+function chartSvg(points: number) {
+  let s = `<?xml version="1.0" encoding="utf-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600">\n`;
+  for (let i = 0; i < points; i++) {
+    s += `  <circle id="p${i}" cx="${(i * 7919) % 800}.123" cy="${(i * 104729) % 600}.456" r="2.5" style="fill: #1f77b4"/>\n`;
+  }
+  return s + "</svg>\n";
+}
+
+/** The shown source without the line numbers. */
+function shownCode() {
+  const pre = document.querySelector("pre");
+  if (!pre) return "";
+  const copy = pre.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll(".linenumber").forEach((n) => n.remove());
+  return copy.textContent ?? "";
+}
+
+const shownLines = () => shownCode().split("\n").length;
+/** Elements the source view put in the page — the actual cost. */
+const preNodes = () => document.querySelectorAll("pre *").length;
+/** Plain text: about one line-number span and one text span per line.
+ *  Highlighted XML has several spans per line. */
+const isPlain = () => preNodes() <= 2 * shownLines() + 3;
+const utf8 = (s: string) => new TextEncoder().encode(s).length;
+
+describe("SvgPreview — a long SVG is shown only from its start, as plain text", () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+  beforeEach(() => {
+    Object.defineProperty(globalThis, "localStorage", {
+      value: { getItem: () => "tok", setItem: () => undefined, removeItem: () => undefined, clear: () => undefined },
+      configurable: true, writable: true,
+    });
+  });
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    fetchSpy = undefined;
+  });
+
+  it("shows only the start of a big chart, unhighlighted, and says so", async () => {
+    // Just above the limit: enough to need the cut, small enough that the
+    // uncapped view (the red state) still renders in jsdom instead of OOM.
+    const points = Math.ceil((1.5 * SVG_SOURCE_MAX_BYTES) / 80);
+    const chart = chartSvg(points);
+    expect(utf8(chart)).toBeGreaterThan(SVG_SOURCE_MAX_BYTES);
+    fetchSpy = mockFetch(chart);
+    render(<FilePreview fileUrl={URL_SVG} path="chart.svg" />);
+
+    await waitFor(() => expect(shownCode()).toContain("<?xml"));
+    expect(await screen.findByText(SHORTENED)).toBeInTheDocument();
+    expect(utf8(shownCode())).toBeLessThanOrEqual(SVG_SOURCE_MAX_BYTES);
+    expect(shownCode()).not.toContain(`id="p${points - 1}"`);
+    expect(shownLines()).toBeLessThanOrEqual(SVG_SOURCE_MAX_LINES);
+    expect(isPlain()).toBe(true);
+    // Still never drawn, and the note on why stays.
+    expect(drawnSvg()).toEqual({ img: 0, frame: 0, fileNodes: 0 });
+    expect(screen.getByText(NOTE)).toBeInTheDocument();
+  });
+
+  it("cuts a file of many short lines at the line limit", async () => {
+    const lines = SVG_SOURCE_MAX_LINES * 3;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg">\n${"<g/>\n".repeat(lines)}</svg>\n`;
+    expect(utf8(svg)).toBeLessThan(SVG_SOURCE_MAX_BYTES); // the line limit, not the byte limit, cuts it
+    fetchSpy = mockFetch(svg);
+    render(<FilePreview fileUrl={URL_SVG} path="many.svg" />);
+
+    expect(await screen.findByText(SHORTENED)).toBeInTheDocument();
+    expect(shownLines()).toBeLessThanOrEqual(SVG_SOURCE_MAX_LINES);
+    expect(shownCode()).not.toContain("</svg>");
+    expect(isPlain()).toBe(true);
+  });
+
+  it("stops reading an endless file after the limit, instead of loading all of it", async () => {
+    const CHUNK = 16 * 1024;
+    const MAX_CHUNKS = 2 * Math.ceil(SVG_SOURCE_MAX_BYTES / CHUNK) + 4; // stands in for "endless"
+    let pulls = 0;
+    const enc = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulls >= MAX_CHUNKS) { controller.close(); return; }
+        pulls += 1;
+        // Mostly blanks: cheap to render even uncapped, so the red state
+        // fails on the count, not on jsdom's memory.
+        controller.enqueue(enc.encode(pulls === 1 ? "<svg>".padEnd(CHUNK, " ") : " ".repeat(CHUNK)));
+      },
+    });
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(stream, { status: 200 }));
+    render(<FilePreview fileUrl={URL_SVG} path="endless.svg" />);
+
+    expect(await screen.findByText(SHORTENED)).toBeInTheDocument();
+    expect(pulls).toBeLessThanOrEqual(Math.ceil(SVG_SOURCE_MAX_BYTES / CHUNK) + 2);
+    expect(utf8(shownCode())).toBeLessThanOrEqual(SVG_SOURCE_MAX_BYTES);
+  });
+
+  it("never cuts a character in half at the limit", async () => {
+    // 5 ASCII bytes, then 2-byte characters: the limit falls inside one.
+    const svg = `<svg>${"ä".repeat(SVG_SOURCE_MAX_BYTES)}</svg>`;
+    fetchSpy = mockFetch(svg);
+    render(<FilePreview fileUrl={URL_SVG} path="umlaut.svg" />);
+
+    expect(await screen.findByText(SHORTENED)).toBeInTheDocument();
+    const code = shownCode();
+    expect(code.startsWith("<svg>ä")).toBe(true);
+    expect(code).not.toContain("\uFFFD");
+    expect(utf8(code)).toBeLessThanOrEqual(SVG_SOURCE_MAX_BYTES);
+  });
+
+  it("shows a mid-size file whole, without the shortened line, but unhighlighted", async () => {
+    const svg = chartSvg(Math.ceil(SVG_HIGHLIGHT_MAX_BYTES / 70));
+    expect(utf8(svg)).toBeGreaterThan(SVG_HIGHLIGHT_MAX_BYTES);
+    expect(utf8(svg)).toBeLessThan(SVG_SOURCE_MAX_BYTES);
+    fetchSpy = mockFetch(svg);
+    render(<FilePreview fileUrl={URL_SVG} path="mid.svg" />);
+
+    await waitFor(() => expect(shownCode()).toContain("</svg>"));
+    expect(screen.queryByText(SHORTENED)).toBeNull();
+    expect(isPlain()).toBe(true);
+  });
+
+  it("keeps a small SVG whole and highlighted, without the shortened line", async () => {
+    fetchSpy = mockFetch(LOGO);
+    render(<FilePreview fileUrl={URL_SVG} path="logo.svg" />);
+
+    await waitFor(() => expect(shownCode()).toContain("<circle"));
+    expect(shownCode()).toContain("</svg>");
+    expect(screen.queryByText(SHORTENED)).toBeNull();
+    // Highlighted: several spans per line (the positive control for isPlain).
+    expect(isPlain()).toBe(false);
+  });
+});
+
 describe("SvgPreview — wording", () => {
-  type Svg = { codeOnly: string; downloadToView: string };
+  type Svg = { codeOnly: string; downloadToView: string; shortened: string };
   const enSvg = (en as unknown as { filePreview: { svg: Svg } }).filePreview.svg;
   const deSvg = (de as unknown as { filePreview: { svg: Svg } }).filePreview.svg;
 
@@ -194,5 +336,7 @@ describe("SvgPreview — wording", () => {
     expect(enSvg.downloadToView).toBe(DOWNLOAD_HINT);
     expect(deSvg.codeOnly).toBe("MC zeigt SVG-Bilder nur als Code – eine SVG-Datei kann die App einfrieren.");
     expect(deSvg.downloadToView).toBe("Zum Ansehen herunterladen.");
+    expect(enSvg.shortened).toBe(SHORTENED);
+    expect(deSvg.shortened).toBe("Lange Datei – nur der Anfang wird gezeigt.");
   });
 });

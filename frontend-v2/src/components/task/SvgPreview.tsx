@@ -36,15 +36,27 @@ import { C } from "@/lib/colors";
 /** File endings FilePreview shows through this view instead of drawing. */
 export const SVG_EXTS: ReadonlySet<string> = new Set(["svg"]);
 
+/** The source view is capped too: highlighted XML with line numbers is
+ *  several elements per token, and a 10 MB SVG (a big chart, no bomb needed)
+ *  blocked MC for more than 21 s that way, a 2 MB one for 3–6 s. Only the
+ *  start of a longer file is read and shown, as plain text. */
+export const SVG_SOURCE_MAX_BYTES = 100 * 1024;
+/** Lines shown at most (a file of very short lines is cut here first). */
+export const SVG_SOURCE_MAX_LINES = 2000;
+/** Only a file up to this size is highlighted. */
+export const SVG_HIGHLIGHT_MAX_BYTES = 16 * 1024;
+
 interface SvgPreviewProps {
   /** The source view (FilePreview's code renderer). */
   code: ReactNode;
   /** Whether FilePreview offers the download next to it — only then does the
    *  note point to it. */
   downloadOffered: boolean;
+  /** Only the start of a long file is shown; a second line says so. */
+  shortened?: boolean;
 }
 
-export function SvgPreview({ code, downloadOffered }: SvgPreviewProps) {
+export function SvgPreview({ code, downloadOffered, shortened = false }: SvgPreviewProps) {
   const t = useTranslations("filePreview.svg");
   return (
     <div data-region="svg-preview" className="flex flex-col gap-2">
@@ -57,6 +69,11 @@ export function SvgPreview({ code, downloadOffered }: SvgPreviewProps) {
               {" "}
               <span>{t("downloadToView")}</span>
             </>
+          )}
+          {shortened && (
+            <span className="block mt-1" style={{ color: C.textMuted }}>
+              {t("shortened")}
+            </span>
           )}
         </span>
       </p>
