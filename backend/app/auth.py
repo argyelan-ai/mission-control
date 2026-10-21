@@ -63,6 +63,29 @@ def auth_method(request: Request) -> str | None:
     return getattr(getattr(request, "state", None), AUTH_METHOD_ATTR, None)
 
 
+def _cookie_allowed(request: Request) -> bool:
+    """May the HttpOnly session cookie authenticate this request?
+
+    Not for a cross-site subrequest. MC's own UI is always same-origin; a
+    cross-site request that carries the cookie comes from a page MC did not
+    write. The one that matters: an HTML deliverable shown in the sandboxed
+    preview frame (opaque origin, ``https:`` sources). WebKit sends the
+    SameSite=Lax cookie on that page's image/script/frame requests, so
+    without this check the page could call every GET route as the operator
+    once MC runs on https.
+
+    A cross-site top-level navigation (a link from another app) keeps the
+    cookie, as SameSite=Lax intends; the preview sandbox cannot start one.
+    No Fetch-Metadata header (older browsers, server-side callers): unchanged.
+    """
+    site = (request.headers.get("sec-fetch-site") or "").lower()
+    if site != "cross-site":
+        return True
+    mode = (request.headers.get("sec-fetch-mode") or "").lower()
+    dest = (request.headers.get("sec-fetch-dest") or "").lower()
+    return mode == "navigate" and dest == "document"
+
+
 def create_access_token(
     user_id: str,
     role: str,
@@ -325,7 +348,8 @@ async def _authenticate_user(
     # Credential sources, in order: Authorization header, single-use stream
     # ticket (?ticket=, SSE/WS only), the legacy ?token= query JWT (only with
     # ALLOW_QUERY_TOKEN_AUTH — it leaks into every log that records URLs),
-    # and finally the HttpOnly SSE cookie.
+    # and finally the HttpOnly SSE cookie (never for a cross-site
+    # subrequest, see _cookie_allowed).
     raw_token: str | None = None
     jwt_method = AUTH_BEARER_JWT
     if credentials:
@@ -337,7 +361,7 @@ async def _authenticate_user(
     elif token and settings.allow_query_token_auth:
         raw_token = token
         jwt_method = AUTH_QUERY_JWT
-    else:
+    elif _cookie_allowed(request):
         raw_token = request.cookies.get("mc_sse_token")
         jwt_method = AUTH_COOKIE_JWT
 
