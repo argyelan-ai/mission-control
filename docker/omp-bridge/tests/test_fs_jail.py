@@ -59,16 +59,18 @@ _MARKER_MISSING = os.path.join(HERE, "no-such-container-marker")
 
 
 @contextlib.contextmanager
-def _scratch_config(env=None, default=_UNSET, container=False) -> Iterator[None]:
-    """MC_FS_SCRATCH_DIRS (None = unset), the built-in scratch roots and
-    whether the container marker exists — for the block, then put back.
+def _scratch_config(env=None, default=_UNSET, container=False,
+                    checkouts=_UNSET) -> Iterator[None]:
+    """MC_FS_SCRATCH_DIRS (None = unset), the built-in scratch roots, the
+    checkouts mount (a stand-in for /workspace) and whether the container
+    marker exists — for the block, then put back.
 
     The baseline (no arguments) is the host: no env var, no marker. So a
     test that does not ask for the scratch roots never gets the machine's
     /tmp — where tempfile makes every "outside" folder on Linux."""
     old_env = os.environ.get("MC_FS_SCRATCH_DIRS")
     saved = {name: getattr(acp_client, name, _UNSET)
-             for name in ("DEFAULT_SCRATCH_DIRS", "CONTAINER_MARKER")}
+             for name in ("DEFAULT_SCRATCH_DIRS", "CONTAINER_MARKER", "CHECKOUTS_DIR")}
     try:
         if env is None:
             os.environ.pop("MC_FS_SCRATCH_DIRS", None)
@@ -76,6 +78,8 @@ def _scratch_config(env=None, default=_UNSET, container=False) -> Iterator[None]
             os.environ["MC_FS_SCRATCH_DIRS"] = env
         if default is not _UNSET:
             acp_client.DEFAULT_SCRATCH_DIRS = default
+        if checkouts is not _UNSET:
+            acp_client.CHECKOUTS_DIR = checkouts
         acp_client.CONTAINER_MARKER = _MARKER_PRESENT if container else _MARKER_MISSING
         yield
     finally:
@@ -1002,11 +1006,60 @@ def test_refusal_says_where_results_go_and_that_tmp_is_scratch():
         assert "wiped" in message[scratch:]
 
 
+def test_refusal_never_offers_the_checkouts_as_scratch():
+    """/workspace is served (operator's decision), but it is no scratch
+    folder: it is the persistent checkouts mount (~/.mc/workspaces/<slug>
+    on the host) with the main clone and every task's worktree in it. A
+    refusal that listed it under "scratch only (MC never collects it, and
+    /tmp is wiped ...)" would steer a refused model to drop files into the
+    checkouts, or into another task's worktree. So a refusal names /tmp as
+    scratch and does not name /workspace at all — with the real defaults on
+    a stand-in layout, and with only /workspace and a folder inside it as
+    scratch roots (MC_FS_SCRATCH_DIRS), where the scratch clause is left
+    out."""
+    with _dirs("omp-fs-deliv-", "omp-fs-tmp-", "omp-fs-ws-", "omp-fs-home-") as (
+            deliv, tmp, ws, home):
+        cwd = os.path.join(ws, "worktrees", "task-a")
+        os.makedirs(cwd)
+        nested = os.path.join(ws, "scratch")
+        os.makedirs(nested)
+        with _deliverables_config(env=deliv):
+            client, sent = _jailed_client(cwd, container=True, checkouts=ws,
+                                          default=_container_defaults(tmp, ws))
+            only_ws, sent_ws = _jailed_client(cwd, container=True, checkouts=ws,
+                                              env=ws + os.pathsep + nested)
+        target = os.path.join(home, "report.html")
+        results = f"results go to {os.path.join(deliv, '<task_id>') + os.sep!r}"
+
+        err = _write(client, sent, target)
+
+        assert err is not None and err["code"] == -32002, sent
+        message = err["message"]
+        assert message.startswith(f"path {target!r} outside session cwd {cwd!r}"), message
+        assert results in message, message
+        scratch = message.index("scratch only")
+        assert message[scratch:].endswith(f": {tmp!r}"), message
+        assert repr(ws) not in message, message
+
+        err = _write(only_ws, sent_ws, target)
+
+        assert err is not None and err["code"] == -32002, sent_ws
+        message = err["message"]
+        assert results in message, message
+        assert "scratch only" not in message, message
+        assert repr(ws) not in message and repr(nested) not in message, message
+        # Served all the same: the hint leaves /workspace out, the jail does not.
+        assert _write(client, sent, os.path.join(ws, "main", "x.py")) is None, sent
+        assert _write(only_ws, sent_ws, os.path.join(ws, "main", "y.py")) is None, sent_ws
+
+
 def test_scratch_defaults_match_the_container_layout():
     """The defaults are not a second truth: /workspace is the mount target
     the compose renderer gives every agent container and the cwd the omp
-    entrypoint pins. A rename on either side trips here."""
+    entrypoint pins — and the checkouts folder a refusal never offers as
+    scratch. A rename on either side trips here."""
     assert acp_client.DEFAULT_SCRATCH_DIRS == ("/tmp", "/workspace")
+    assert getattr(acp_client, "CHECKOUTS_DIR", None) == "/workspace"
     assert acp_client.CONTAINER_MARKER == "/.dockerenv"
     with open(os.path.join(REPO_ROOT, "backend", "app", "services",
                            "compose_renderer.py"), encoding="utf-8") as f:

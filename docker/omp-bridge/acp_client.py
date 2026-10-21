@@ -53,10 +53,18 @@ DEFAULT_DELIVERABLES_DIR = "/deliverables"
 #: separated by ``os.pathsep``. Set but empty = no extra root (cwd only).
 DELIVERABLES_DIR_ENV = "MC_DELIVERABLES_DIR"
 
-#: The container's own scratch folders, served next to the session cwd and
-#: the deliverables root: its /tmp and its /workspace mount
-#: (``~/.mc/workspaces/<slug>:/workspace``, compose_renderer). omp's bash
-#: writes both anyway — the jail only kept its read/write tools out (a task
+#: Every agent container's checkouts mount
+#: (``~/.mc/workspaces/<slug>:/workspace``, compose_renderer; the omp
+#: entrypoint's cwd). Served as a scratch root (:data:`DEFAULT_SCRATCH_DIRS`),
+#: but never offered as one in a refusal
+#: (:meth:`ACPClient._fs_outside_message`): it is not scratch — it lives on
+#: in the host's checkouts folder and holds the main clone and every task's
+#: worktree.
+CHECKOUTS_DIR = "/workspace"
+
+#: The scratch roots, served next to the session cwd and the deliverables
+#: root: the container's own /tmp and its checkouts mount /workspace
+#: (:data:`CHECKOUTS_DIR`). omp's bash writes both anyway — the jail only kept its read/write tools out (a task
 #: in a worktree cwd, or a chat turn, writing a scratch file to /tmp; a
 #: task writing a loose file to /workspace). Same realpath check as every
 #: root: a link out of /tmp or /workspace (to /etc, to ~/.omp, to the
@@ -66,13 +74,14 @@ DELIVERABLES_DIR_ENV = "MC_DELIVERABLES_DIR"
 #: link (:func:`_open_served`) — a hard link passes realpath.
 #:
 #: The price of /workspace (operator's decision): a task's cwd is its own
-#: worktree there, so its file tools now reach the main clone and the
-#: other tasks' worktrees next to it without a refusal — a wrong-checkout
-#: edit lands silently.
+#: worktree there, so its write and edit tools now reach the main clone and
+#: the other tasks' worktrees next to it without a refusal — a
+#: wrong-checkout edit lands silently. (Reads reached them before: omp
+#: reads from disk itself when an fs/read_text_file is refused.)
 #:
 #: Only served inside a container (:data:`CONTAINER_MARKER`): the host's
 #: /tmp is the whole machine's, so the host keeps cwd + deliverables.
-DEFAULT_SCRATCH_DIRS = ("/tmp", "/workspace")
+DEFAULT_SCRATCH_DIRS = ("/tmp", CHECKOUTS_DIR)
 
 #: Override for the scratch roots: one or more absolute folders, separated
 #: by ``os.pathsep`` — used as given, in a container or not. Set but empty
@@ -253,6 +262,11 @@ class ACPClient:
         self._fs_deliverables_roots: tuple[str, ...] = deliverables_roots()
         self._fs_scratch_roots: tuple[str, ...] = tuple(
             root for root in scratch_roots() if root not in self._fs_deliverables_roots)
+        # The ones a refusal offers as scratch: not the checkouts mount, nor
+        # anything inside it (persistent, other tasks' worktrees).
+        checkouts = os.path.realpath(CHECKOUTS_DIR)
+        self._fs_scratch_hint: tuple[str, ...] = tuple(
+            root for root in self._fs_scratch_roots if not _inside(root, checkouts))
         self._env = env
         self._proc: Optional[subprocess.Popen] = None
         self._reader: Optional[threading.Thread] = None
@@ -513,17 +527,19 @@ class ACPClient:
         """The refusal for a path outside every root. It names the folders
         the model may use instead, each for what it is for: results go to
         the deliverables root (MC collects them there), /tmp is scratch.
-        The first words stay "path ... outside session cwd ..." — transcript
-        scans of the refusals match on them."""
+        /workspace is served but never offered (:data:`CHECKOUTS_DIR`):
+        it is no scratch, and naming it would steer a refused model into
+        the checkouts. The first words stay "path ... outside session cwd
+        ..." — transcript scans of the refusals match on them."""
         message = f"path {path!r} outside session cwd {jail!r}"
         if self._fs_deliverables_roots:
             message += "; results go to " + " or ".join(
                 repr(os.path.join(root, "<task_id>") + os.sep)
                 for root in self._fs_deliverables_roots)
-        if self._fs_scratch_roots:
+        if self._fs_scratch_hint:
             message += ("; scratch only (MC never collects it, and /tmp is "
                         "wiped on every container recreate): " + ", ".join(
-                            repr(root) for root in self._fs_scratch_roots))
+                            repr(root) for root in self._fs_scratch_hint))
         return message
 
     def _send_raw(self, obj: dict) -> None:
