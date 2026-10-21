@@ -126,6 +126,14 @@ describe("SvgPreview — SVG files are shown as code, never drawn", () => {
     expect(screen.getByRole("button", { name: /download/i })).toBeInTheDocument();
   });
 
+  it("makes the download — the way to see the picture — a ≥ 44 px target on a phone", async () => {
+    fetchSpy = mockFetch(LOGO);
+    render(<FilePreview fileUrl={URL_SVG} path="logo.svg" />);
+    await waitFor(() => expect(shownSource()).toContain("<circle"));
+    const download = screen.getByRole("button", { name: /download/i });
+    expect(download.className).toContain("min-h-11");
+  });
+
   it("does not point to a download that is not offered (showDownload=false)", async () => {
     fetchSpy = mockFetch(LOGO);
     render(<FilePreview fileUrl={URL_SVG} path="logo.svg" showDownload={false} />);

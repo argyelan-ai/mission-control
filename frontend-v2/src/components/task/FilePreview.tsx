@@ -138,7 +138,7 @@ function DownloadButton({ fileUrl, path }: { fileUrl: string; path: string }) {
     <button
       onClick={handleDownload}
       disabled={busy}
-      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors cursor-pointer disabled:opacity-60"
+      className="inline-flex items-center gap-1.5 min-h-11 md:min-h-8 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors cursor-pointer disabled:opacity-60"
       style={{ background: C.bgElevated, color: C.textSecondary, border: `1px solid ${C.border}` }}
       onMouseEnter={(e) => (e.currentTarget.style.color = C.textPrimary)}
       onMouseLeave={(e) => (e.currentTarget.style.color = C.textSecondary)}
