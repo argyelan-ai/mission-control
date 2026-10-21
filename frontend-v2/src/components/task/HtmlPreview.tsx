@@ -64,9 +64,13 @@
  *    stops the page's own fetch/XHR/WebSocket. Hence the label: what the
  *    operator types into the page can be sent out.
  *  - In WebKit the page's requests to MC carry MC's session cookie. The
- *    backend does not take that cookie as a login for cross-site
- *    subrequests (`_cookie_allowed` in backend/app/auth.py), and http: is no
- *    source here, so the page cannot load MC's API as the operator.
+ *    backend does not take that cookie as a login for a cross-site
+ *    subrequest (`_cookie_allowed` in backend/app/auth.py, by Fetch
+ *    Metadata). Over plain http on an address other than localhost (a LAN
+ *    or tailnet IP) browsers send no Fetch Metadata: there only the CSP
+ *    keeps the page's images and scripts off MC (http: is no source), and a
+ *    navigation of the page's own frame to MC is not covered. The page can
+ *    never read MC's answers (opaque origin, no CORS for it).
  *
  * Shared by every FilePreview caller (task deliverables, folder deliverables,
  * the workspace tab, the Files page), so the boundary is the same everywhere.
