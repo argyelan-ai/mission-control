@@ -3950,7 +3950,9 @@
       "label": "Notice",
       "model_fallback": "Previously chosen model {previous} is not available anymore — using {current}.",
       "model_fallbackLabel": "Model switched",
-      "chat_started_freshLabel": "New chat started",
+      "new_conversationLabel": "New conversation started",
+      "new_conversation": "The previous conversation is saved.",
+      "chat_started_freshLabel": "New conversation started",
       "chat_started_fresh": "After the restart it was unclear which conversation was open. A new one started. Earlier conversations are kept.",
       "sink_migration_skippedLabel": "Storage not moved",
       "sink_migration_skipped": "Older chat copies were not moved this time. The chat works as usual; the next start tries again."

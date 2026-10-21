@@ -303,7 +303,9 @@ def test_a_pointer_that_could_not_be_written_never_undoes_new(tmp_path):
         assert loads(second) == ["sid-B"]
         assert news(second) == 0
         errors, notices = cards(sess.transcript_path)
-        assert errors == [] and notices == []
+        # Only the card `/new` itself wrote on top of sid-B (incident
+        # 21.10.2026) — the resume adds none.
+        assert errors == [] and codes(notices) == [("new_conversation", None)]
     finally:
         sess.close()
 
@@ -657,7 +659,9 @@ def test_load_refused_for_a_missing_model_is_one_model_missing_card(tmp_path, pa
         # Finding 2: the name as a field too — the card in the UI language
         # (S1-R7) never shows `content`, it fills the name into its sentence.
         assert errors[0]["data"]["model"] == "Old-Model-4.1-Flash"
-        assert notices == []
+        # The new conversation starts with its card (incident 21.10.2026,
+        # test_acp_chat_reset_card.py); the red card above says why.
+        assert codes(notices) == [("new_conversation", None)]
         assert read_json(folder / "acp-chat.json")["sessionId"] == "sid-new"
     finally:
         sess.close()

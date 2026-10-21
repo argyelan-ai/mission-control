@@ -20,9 +20,19 @@
  * not run. Their sentence has no placeholder, so it is translated without
  * values; before, the card showed the daemon's English text under a German
  * label (K10).
+ *
+ * Incident 21.10.2026: a chat reset left the operator an empty chat with no
+ * word why. Every conversation the daemon opens in place of another one now
+ * starts with `new_conversation` ("New conversation started · 17:07 · the
+ * previous one is saved"); the recreate card `chat_started_fresh` is the
+ * same thing for the same operator and carries the same label and the time.
+ * The time is the line's own (`ev.ts`), as a clock time — the day too when
+ * it was not today. `notice.previous`/`current` hold the two session ids:
+ * data for the "show previous" link of P4 (`action`), never shown as text.
  */
+import type { ReactNode } from "react";
 import { Info } from "lucide-react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 
 import { C, STATUS_TEXT } from "@/lib/colors";
 import type { MessageEvent } from "@/lib/chatTypes";
@@ -30,6 +40,30 @@ import { TIMELINE_CARD_GUTTER } from "./timelineCard";
 
 interface ChatNoticeCardProps {
   ev: MessageEvent;
+  /** Below the sentence: the place for the later "show previous" link
+   *  (P4, session list/resume). Nothing until then. */
+  action?: ReactNode;
+}
+
+/** Notices that mark the start of a new conversation: they show when. */
+export const CONVERSATION_START_CODES: ReadonlySet<string> = new Set([
+  "new_conversation",
+  "chat_started_fresh",
+]);
+
+/** `ts` as a clock time ("17:07"), with the day when it is not today;
+ *  null for a time that does not parse — never "Invalid Date". */
+export function noticeClockTime(ts: string | null | undefined, locale: string, now = new Date()): string | null {
+  if (!ts) return null;
+  const at = new Date(ts);
+  if (Number.isNaN(at.getTime())) return null;
+  const sameDay = at.toDateString() === now.toDateString();
+  return new Intl.DateTimeFormat(locale, {
+    ...(sameDay ? {} : { day: "numeric", month: "short" }),
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(at);
 }
 
 /** The values a notice sentence needs, per code. A code that is not listed
@@ -41,8 +75,9 @@ export const NOTICE_VALUES: Record<string, readonly ("previous" | "current")[]> 
   model_fallback: ["previous", "current"],
 };
 
-export function ChatNoticeCard({ ev }: ChatNoticeCardProps) {
+export function ChatNoticeCard({ ev, action }: ChatNoticeCardProps) {
   const t = useTranslations("chat");
+  const locale = useLocale();
   const code = ev.notice?.code ?? ev.source?.title ?? "";
   const previous = ev.notice?.previous ?? "";
   const current = ev.notice?.current ?? "";
@@ -60,6 +95,7 @@ export function ChatNoticeCard({ ev }: ChatNoticeCardProps) {
         : t(sentenceKey)
       : ev.text;
   const label = code && t.has(labelKey) ? t(labelKey) : t("notice.label");
+  const clock = CONVERSATION_START_CODES.has(code) ? noticeClockTime(ev.ts, locale) : null;
 
   return (
     <div className={TIMELINE_CARD_GUTTER}>
@@ -79,6 +115,16 @@ export function ChatNoticeCard({ ev }: ChatNoticeCardProps) {
           >
             {label}
           </span>
+          {clock && (
+            <time
+              data-testid="chat-notice-time"
+              dateTime={ev.ts}
+              className="text-xs tabular-nums"
+              style={{ color: C.textMuted }}
+            >
+              {clock}
+            </time>
+          )}
         </div>
         {sentence && (
           <p
@@ -88,6 +134,11 @@ export function ChatNoticeCard({ ev }: ChatNoticeCardProps) {
           >
             {sentence}
           </p>
+        )}
+        {action && (
+          <div data-testid="chat-notice-action" className="mt-2">
+            {action}
+          </div>
         )}
       </div>
     </div>

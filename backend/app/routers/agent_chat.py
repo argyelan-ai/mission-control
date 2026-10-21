@@ -31,6 +31,7 @@ from app.services.agent_chat_input import (
     AgentBusyError,
     AgentStartingError,
     BossDeliveryError,
+    ChatReset,
     ElicitationNotPendingError,
     EffortSwitchFailedError,
     EffortSwitchRejectedError,
@@ -39,10 +40,12 @@ from app.services.agent_chat_input import (
     QuestionOpenError,
     answer_elicitation,
     can_receive_input,
+    chat_actor,
     clear_queue,
     effort_capabilities,
     mode_capabilities,
     model_options_capabilities,
+    record_session_reset,
     send_keys,
     send_text,
     set_effort,
@@ -1102,6 +1105,7 @@ async def _open_pr_for_branch(git_service: Any, cwd: str, branch: str) -> str | 
 async def post_chat_input(
     agent_id: uuid.UUID,
     body: ChatInputBody,
+    request: Request,
     current_user=Depends(require_role(Role.ADMIN)),
     session: AsyncSession = Depends(get_session),
 ):
@@ -1119,7 +1123,9 @@ async def post_chat_input(
     slash command would install/modify a plugin, marketplace, MCP server or
     skill — the operator-approval-card flow for that does not exist yet
     (decided 12.10.2026), so chat refuses it outright rather than letting
-    the agent's own CLI act on it unsupervised."""
+    the agent's own CLI act on it unsupervised. A ``/new`` or ``/clear`` that
+    became a new chat session is recorded as the activity event
+    ``chat.session_reset`` with who sent it (incident 21.10.2026)."""
     agent = await _load_agent_or_404(agent_id, session)
 
     if not body.text or not body.text.strip():
@@ -1135,7 +1141,7 @@ async def post_chat_input(
         )
 
     try:
-        await send_text(agent, body.text)
+        reset = await send_text(agent, body.text)
     except InstallCommandBlockedError as e:
         return JSONResponse(
             status_code=409,
@@ -1161,6 +1167,8 @@ async def post_chat_input(
         return _acp_unreachable(e)
     except BossDeliveryError as e:
         return _boss_delivery_failed(e)
+    if isinstance(reset, ChatReset):
+        await record_session_reset(session, agent, reset, chat_actor(current_user, request))
 
 
 @router.post("/agents/{agent_id}/chat/queue/clear")

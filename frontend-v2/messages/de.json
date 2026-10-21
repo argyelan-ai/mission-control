@@ -3950,7 +3950,9 @@
       "label": "Hinweis",
       "model_fallback": "Das zuvor gewählte Modell {previous} ist nicht mehr verfügbar — es wird {current} verwendet.",
       "model_fallbackLabel": "Modell gewechselt",
-      "chat_started_freshLabel": "Neuer Chat begonnen",
+      "new_conversationLabel": "Neues Gespräch begonnen",
+      "new_conversation": "Das vorherige Gespräch ist gespeichert.",
+      "chat_started_freshLabel": "Neues Gespräch begonnen",
       "chat_started_fresh": "Nach dem Neustart war nicht klar, welches Gespräch offen war. Ein neues hat begonnen. Frühere Gespräche bleiben gespeichert.",
       "sink_migration_skippedLabel": "Ablage nicht umgezogen",
       "sink_migration_skipped": "Ältere Chat-Kopien wurden diesmal nicht umgezogen. Der Chat läuft normal weiter, der nächste Start versucht es erneut."

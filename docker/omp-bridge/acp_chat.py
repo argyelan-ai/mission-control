@@ -169,6 +169,24 @@ _CHAT_STARTED_FRESH_TEXT = (
     "started. Earlier conversations are kept."
 )
 
+#: The `chat_notice` on top of a conversation the daemon opened IN PLACE of
+#: another one (incident 21.10.2026: a `new_session` job left the operator
+#: an empty chat and nothing said why). Frontend: chat.notice.new_conversation
+#: ("New conversation started · 17:07 · the previous one is saved").
+#: `previous`/`current` are the two session ids — the slot the later "show
+#: previous" link (P4) reads —, `via` says how (VIA_*), `reason` why a resume
+#: failed. Written only while the previous conversation's copy is on disk:
+#: the card promises that it is kept.
+NEW_CONVERSATION = "new_conversation"
+_NEW_CONVERSATION_TEXT = "New conversation started — the previous one is saved."
+#: `via` of a new conversation (card and the state mirror's `lastReset`):
+#: the control op (`/new`, `/clear`), a daemon start that could not resume
+#: (daemon restart, container recreate), a respawned omp child that could
+#: not resume.
+VIA_NEW_SESSION = "new_session"
+VIA_START = "start"
+VIA_CHILD_RESTART = "child_restart"
+
 
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -303,6 +321,11 @@ class ChatSession:
         # Last `session_info_update` (title/updatedAt) — mirrored into the
         # state file, never a chat line.
         self._session_info: dict = {}
+        # The last time a conversation was replaced by a new one
+        # (`_note_new_conversation`), mirrored as `lastReset`. Taken over
+        # from the previous daemon's mirror at start, so a restart does not
+        # hide it from the backend's activity event.
+        self._last_reset: Optional[dict] = None
 
         self._full_text: list[str] = []
         self._throttle: dict = {"chars": -10 ** 9, "at": 0.0, "pending": None}
@@ -339,8 +362,10 @@ class ChatSession:
         # It stays in the mirror (`interrupted`) until its card is written —
         # _connect rewrites the mirror long before that.
         interrupted = self._previous_current()
+        last_reset = self._previous_last_reset()
         with self._lock:
             self._unreported = interrupted
+            self._last_reset = last_reset
         if interrupted is not None and interrupted.get("kind") == "new_session":
             # A `/new` that never ran is one more job the restart dropped —
             # it belongs on the card that lists those, first in line.
@@ -434,6 +459,9 @@ class ChatSession:
         reset_text = ("Previous chat session could not be loaded — "
                       "started a new one (history starts over).")
         reset_data: dict = {}
+        # The copy of the conversation that could not be resumed — still on
+        # disk, so the new conversation's card may say it is kept.
+        previous_copy: Optional[Path] = None
         started_fresh = False
         session_id: Optional[str] = None
         sink: Optional[acp_chat_events.ChatEventSink] = None
@@ -447,6 +475,7 @@ class ChatSession:
                     sink = acp_chat_events.ChatEventSink.appending(transcript, stored_id)
                     session_id = stored_id
                 except Exception as exc:  # noqa: BLE001 — any load failure is a reset
+                    previous_copy = transcript
                     model = missing_model(f"{exc}")
                     if model is None:
                         reset_detail = f"{type(exc).__name__}: {exc}"
@@ -487,6 +516,19 @@ class ChatSession:
             # still sits at the old place; its preview must sit there too.
             self._preview = acp_chat_events.PreviewEventSink.beside(sink.path, session_id)
             self._write_persisted()
+        if reset_detail:
+            # First line of the new conversation: it began, the old one is
+            # kept (incident 21.10.2026). The red card below says why.
+            self._note_new_conversation(
+                stored_id, session_id,
+                VIA_CHILD_RESTART if self._resume_source == "restart" else VIA_START,
+                reason=reset_detail if reset_detail in ("model_missing", "transcript_missing")
+                else "load_failed",
+                previous_copy=previous_copy,
+            )
+        elif started_fresh:
+            # Its own card below (`chat_started_fresh`) — no id to name.
+            self._note_new_conversation(None, session_id, VIA_START, reason="no_pointer")
         self._absorb_session_result(getattr(client, "last_session_result", None))
         self._pin_model()
         if reset_detail:
@@ -603,6 +645,41 @@ class ChatSession:
             text=_TURN_INTERRUPTED_TEXT if by_operator else _TURN_INTERRUPTED_NEUTRAL_TEXT,
             data=retry_data(current.get("text")) if by_operator else None,
         )
+
+    def _previous_last_reset(self) -> Optional[dict]:
+        """`lastReset` of a previous daemon's state mirror, or None."""
+        row = _read_json_object(self.state_file).get("lastReset")
+        if not isinstance(row, dict) or not isinstance(row.get("sessionId"), str):
+            return None
+        return {k: v for k, v in row.items() if isinstance(v, str)}
+
+    def _note_new_conversation(self, previous: Optional[str], current: str, via: str,
+                               reason: Optional[str] = None,
+                               previous_copy: Optional[Path] = None) -> None:
+        """A new conversation replaced `previous` (incident 21.10.2026).
+
+        Always: the state mirror's `lastReset` and a log line — the backend
+        reads the new session id from the mirror for its activity event.
+        The card (`new_conversation`, the FIRST line of the new transcript)
+        only while the previous conversation's copy is on disk: it promises
+        "the previous one is saved". Called right after the switch, before
+        the model pin can write a notice of its own."""
+        record = {"at": _now_iso(), "via": via, "reason": reason,
+                  "previousSessionId": previous, "sessionId": current}
+        with self._lock:
+            self._last_reset = {k: v for k, v in record.items() if v is not None}
+        logger.info("new conversation %s (was %s) via %s%s", current, previous or "none",
+                    via, f" — {reason}" if reason else "")
+        if not previous or previous == current or previous_copy is None:
+            return
+        try:
+            kept = previous_copy.is_file()
+        except OSError:
+            kept = False
+        if kept:
+            self._emit_notice(NEW_CONVERSATION, _NEW_CONVERSATION_TEXT, {
+                "previous": previous, "current": current, "via": via, "reason": reason,
+            })
 
     def _previous_elicitations(self) -> list[str]:
         """Card ids a previous daemon still held open, from its state mirror."""
@@ -924,6 +1001,7 @@ class ChatSession:
                     for e in self._elicitations.values()
                 ],
                 "sessionInfo": dict(self._session_info),
+                "lastReset": dict(self._last_reset) if self._last_reset else None,
                 "updatedAt": _now_iso(),
                 "lastError": json.loads(json.dumps(self._last_error))
                 if self._last_error else None,
@@ -1048,6 +1126,7 @@ class ChatSession:
         self._expire_elicitations()
         with self._lock:
             client, previous = self._client, self._session_id
+            previous_copy = self.transcript_path
             thinking = self._config_value("thinking")
         try:
             new_id = client.new_session(self._cwd)
@@ -1071,6 +1150,10 @@ class ChatSession:
             # Inside the same locked step, before the pin and the thinking
             # carry-over below write the mirror — see _connect.
             self._write_persisted()
+        # The first line of the new conversation (incident 21.10.2026: the
+        # chat was empty and nothing said why).
+        self._note_new_conversation(previous, new_id, VIA_NEW_SESSION,
+                                    previous_copy=previous_copy)
         self._absorb_session_result(result)
         self._pin_model()
         offered = self._config_value("thinking")

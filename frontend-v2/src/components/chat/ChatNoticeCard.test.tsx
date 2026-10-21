@@ -7,11 +7,11 @@
  * (nicht als rote Fehlerkarte, nicht als neutrale Rueckmeldung) und den Satz
  * mit beiden Modellnamen in der Sprache des Operators zeigen.
  */
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 import { ChatMessage } from "./ChatMessage";
-import { NOTICE_VALUES } from "./ChatNoticeCard";
+import { ChatNoticeCard, NOTICE_VALUES } from "./ChatNoticeCard";
 import { C } from "@/lib/colors";
 import type { MessageEvent } from "@/lib/chatTypes";
 import de from "../../../messages/de.json";
@@ -111,11 +111,13 @@ describe("Chat-Hinweiskarte — Saetze ohne Werte (S1-R7)", () => {
       />
     );
 
-    expect(screen.getByTestId("chat-notice-label")).toHaveTextContent("New chat started");
+    // One word for one thing (K10): the same label as every other new
+    // conversation (incident 21.10.2026, `new_conversation` below).
+    expect(screen.getByTestId("chat-notice-label")).toHaveTextContent("New conversation started");
     expect(screen.getByTestId("chat-notice-text")).toHaveTextContent(
       "After the restart it was unclear which conversation was open. A new one started. Earlier conversations are kept."
     );
-    expect(tDe()("notice.chat_started_freshLabel")).toBe("Neuer Chat begonnen");
+    expect(tDe()("notice.chat_started_freshLabel")).toBe("Neues Gespräch begonnen");
     expect(tDe()("notice.chat_started_fresh")).toBe(
       "Nach dem Neustart war nicht klar, welches Gespräch offen war. Ein neues hat begonnen. Frühere Gespräche bleiben gespeichert."
     );
@@ -162,6 +164,119 @@ describe("Chat-Hinweiskarte — Saetze ohne Werte (S1-R7)", () => {
         expect(used, `chat.notice.${key}`).toEqual([...(NOTICE_VALUES[key] ?? [])].sort());
       }
     }
+  });
+});
+
+/* ── Incident 21.10.2026: every chat reset leaves a card ───────────────────
+   A `/new` reached the chat daemon and the operator's chat was empty — no
+   word that a new conversation had begun, nor that the old one was kept.
+   The daemon now writes `chat_notice` `new_conversation` as the first line
+   of every conversation that replaces another (`previous`/`current` = the
+   two session ids). The card says when: the clock time of the line. */
+describe("Chat-Hinweiskarte — neues Gespräch (Vorfall 21.10.2026)", () => {
+  // A local clock time, so the test reads the same in every time zone.
+  const at = new Date(2026, 9, 21, 17, 7, 46);
+  const tDe = () =>
+    createTranslator({ locale: "de", messages: de, namespace: "chat" }) as unknown as (key: string) => string;
+  const mkNew = (overrides: Partial<MessageEvent> = {}) =>
+    mkNotice({
+      uuid: "nc1",
+      ts: at.toISOString(),
+      text: "New conversation started — the previous one is saved.",
+      source: { kind: "notice", title: "new_conversation" },
+      notice: { code: "new_conversation", previous: "01a1-old", current: "01a2-new" },
+      ...overrides,
+    });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows label, clock time and the promise in the operator's language", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 21, 18, 0, 0));
+    render(<ChatMessage ev={mkNew()} />);
+
+    const card = screen.getByTestId("chat-notice-card");
+    expect(card).toHaveAttribute("data-code", "new_conversation");
+    expect(screen.getByTestId("chat-notice-label")).toHaveTextContent("New conversation started");
+    const time = screen.getByTestId("chat-notice-time");
+    expect(time).toHaveTextContent(/^17:07$/);
+    expect(time).toHaveAttribute("dateTime", at.toISOString());
+    expect(screen.getByTestId("chat-notice-text")).toHaveTextContent(
+      "The previous conversation is saved."
+    );
+    // The session ids are data for the later "show previous" link, never text.
+    expect(card).not.toHaveTextContent("01a1-old");
+    expect(card).not.toHaveTextContent("01a2-new");
+    expect(screen.queryByTestId("chat-error-card")).not.toBeInTheDocument();
+
+    expect(tDe()("notice.new_conversationLabel")).toBe("Neues Gespräch begonnen");
+    expect(tDe()("notice.new_conversation")).toBe("Das vorherige Gespräch ist gespeichert.");
+  });
+
+  it("names the day too when the conversation began on another day", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 23, 9, 0, 0));
+    render(<ChatMessage ev={mkNew()} />);
+
+    const time = screen.getByTestId("chat-notice-time").textContent ?? "";
+    expect(time).toContain("17:07");
+    expect(time).toMatch(/21/);
+  });
+
+  it("the recreate card (chat_started_fresh) carries the clock time as well", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 21, 18, 0, 0));
+    render(
+      <ChatMessage
+        ev={mkNotice({
+          ts: at.toISOString(),
+          source: { kind: "notice", title: "chat_started_fresh" },
+          notice: { code: "chat_started_fresh" },
+        })}
+      />
+    );
+    expect(screen.getByTestId("chat-notice-time")).toHaveTextContent(/^17:07$/);
+  });
+
+  it("a notice that is no new conversation shows no time", () => {
+    render(<ChatMessage ev={mkNotice({ ts: at.toISOString() })} />);
+    expect(screen.getByTestId("chat-notice-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-notice-time")).not.toBeInTheDocument();
+  });
+
+  it("an unreadable time leaves the time out, never shows 'Invalid Date'", () => {
+    render(<ChatMessage ev={mkNew({ ts: "not-a-time" })} />);
+    expect(screen.queryByTestId("chat-notice-time")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-notice-card")).not.toHaveTextContent("Invalid");
+    expect(screen.getByTestId("chat-notice-text")).toHaveTextContent(
+      "The previous conversation is saved."
+    );
+  });
+
+  it("keeps a place for the later 'show previous' link (P4) — empty until then", () => {
+    const { rerender } = render(<ChatNoticeCard ev={mkNew()} />);
+    expect(screen.queryByTestId("chat-notice-action")).not.toBeInTheDocument();
+
+    rerender(<ChatNoticeCard ev={mkNew()} action={<a href="#previous">show previous</a>} />);
+    expect(screen.getByTestId("chat-notice-action")).toHaveTextContent("show previous");
+  });
+
+  it("a normal chat without a reset renders no notice card", () => {
+    render(
+      <>
+        <ChatMessage
+          ev={{ kind: "message", uuid: "u1", ts: at.toISOString(), role: "user", text: "hallo",
+                model: null, sidechain: false }}
+        />
+        <ChatMessage
+          ev={{ kind: "message", uuid: "a1", ts: at.toISOString(), role: "assistant", text: "Hallo!",
+                model: "model-a", sidechain: false }}
+        />
+      </>
+    );
+    expect(screen.queryByTestId("chat-notice-card")).not.toBeInTheDocument();
   });
 });
 

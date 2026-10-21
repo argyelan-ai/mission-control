@@ -51,7 +51,7 @@ acp_chat_ctl.py <op>  (CLI shim used by docker exec)      ·      hermes-bridge.
 ### Component: `docker/omp-bridge/acp_chat.py` (chat daemon)
 
 - `ChatSession(client_factory, cwd, state_dir, sessions_dir)` — pure-Python core, testable with a fake ACP process (`tests/fake_acp_server.py`) or an in-memory fake client.
-- Startup: move MC copies an older image left next to omp's files into `.mc/` (see "Storage" below); find the session to resume — the pointer `acp-chat.json` (`{"sessionId", "transcript"}`), else the state mirror (see "What survives what" below) — and follow it to a moved file (`sink_migration.remap`); `initialize`; try `session/load` with the stored id → on success append to the stored transcript file; when the load fails or the transcript is gone, `session/new`, a new transcript file and a visible `chat_error{code:"session_reset"}`. No pointer at all, but an earlier chat copy in the tree → `chat_notice{code:"chat_started_fresh"}`. When the move did not run (lock held by a live run, unreadable list, error) the chat shows a `chat_notice` with `code: "sink_migration_skipped"` and the chat starts anyway. Before anything rewrites the state mirror, the start also reads what the previous daemon was doing: held jobs (`queue_lost`) and a reply it was running (`turn_interrupted`, see "Interrupted turns" below).
+- Startup: move MC copies an older image left next to omp's files into `.mc/` (see "Storage" below); find the session to resume — the pointer `acp-chat.json` (`{"sessionId", "transcript"}`), else the state mirror (see "What survives what" below) — and follow it to a moved file (`sink_migration.remap`); `initialize`; try `session/load` with the stored id → on success append to the stored transcript file; when the load fails or the transcript is gone, `session/new`, a new transcript file and a visible `chat_error{code:"session_reset"}` — after a failed load (the old copy is still on disk) preceded by `chat_notice{code:"new_conversation"}` (see "A new conversation says so" below). No pointer at all, but an earlier chat copy in the tree → `chat_notice{code:"chat_started_fresh"}`. When the move did not run (lock held by a live run, unreadable list, error) the chat shows a `chat_notice` with `code: "sink_migration_skipped"` and the chat starts anyway. Before anything rewrites the state mirror, the start also reads what the previous daemon was doing: held jobs (`queue_lost`) and a reply it was running (`turn_interrupted`, see "Interrupted turns" below).
 - Uses `acp_chat_events.ACPEventMapper` + `ChatEventSink` + `PreviewEventSink` exactly like `run_acp_once` (user line via `map_user_prompt`, streaming previews, ONE final assistant line with usage).
 - Thinking (20.10.2026): a thought's preview line carries `data: {"block": "thinking", "chars": <full size>, "startedAt": <iso>}` and only the END of the thought as `content` (≤ 2 000 chars — the file grows linearly). The backend passes these on the `preview` SSE event; the chat shows "Thinking · ≈N tokens · m:ss" instead of an answer preview. When the thought ends (next answer chunk, tool call, plan, the turn's final line or a chat error) ONE assistant line with a `{"type": "thinking", "thinking", "durationMs"}` block lands in the transcript. Usage/config updates do not end a thought.
 - Running task in the agent chat (20.10.2026): the agent chat shows the chat daemon's session only (#898); a task runs in a session of its own (bridge header `taskId`). `GET /agents/{id}/chat/task-activity` reads that session through the same adapter (`find_task_session`, `tasks_in_own_session`) and the chat renders it as a separate "From the task" block — delivery, the newest steps, the running thought, more inbox tasks. Harnesses whose task runs inside the chat answer `applies: false` — Claude Code, omp under the native driver, and Hermes (over ACP the hermes-bridge hands a task to the chat daemon itself).
@@ -380,12 +380,59 @@ separator (`… the CLI.Unable to connect. …`).
   model's words), both say the same — the parity table in
   `docker/omp-bridge/tests/test_acp_chat_model_unreachable.py`.
 
+### A new conversation says so, and who asked is on record (21.10.2026)
+
+Incident: an operator's chat got a new, empty session (`new_session` job via
+`/new` over chat input). Nothing in the chat said a new conversation had
+begun, nothing durable named who sent the command, and the old session sat
+untouched on disk.
+
+- **Card in the new conversation** (`acp_chat.py`,
+  `_note_new_conversation`): every conversation the daemon opens in place of
+  another one starts with ONE `chat_notice` line, `data: {"code":
+  "new_conversation", "previous": <old session id>, "current": <new session
+  id>, "via", "reason"?}` — its FIRST line, never in the old transcript.
+  `via`: `new_session` (the control op: `/new`, `/clear`), `start` (a daemon
+  start that could not resume: daemon restart or recreate), `child_restart`
+  (the omp child died and the respawn could not resume). `reason` for a
+  failed resume: `load_failed`, `model_missing`. The red `session_reset`
+  card still follows and says why.
+- The card promises "the previous one is saved", so it is written only while
+  the previous conversation's copy is on disk: `transcript_missing` keeps its
+  red card alone; a start without a pointer keeps `chat_started_fresh`.
+- No reset, no card: a normal turn, a successful resume, a brand-new agent
+  and a refused `/new` (`new_session_failed`) write none.
+- **State mirror `lastReset`**: `{"at", "via", "reason"?,
+  "previousSessionId"?, "sessionId"}` of the last reset (also
+  `transcript_missing` and `no_pointer`), taken over from the previous mirror
+  at start so a restart does not hide it.
+- **Frontend** (`ChatNoticeCard`): `new_conversation` and
+  `chat_started_fresh` share the label "New conversation started" / "Neues
+  Gespräch begonnen" and show the line's clock time (with the day when it was
+  not today); `new_conversation`'s sentence is "The previous conversation is
+  saved." The card has an `action` slot for P4's "show previous" link; the
+  session ids are data for it, never text.
+- **Who asked** (backend): `send_text` returns a `ChatReset` (`command`,
+  `previous_session_id`, `queued`) when it turned `/new`/`/clear` into
+  `new_session`; `POST /agents/{id}/chat/input` records it as the activity
+  event `chat.session_reset` (`agent_chat_input.record_session_reset`):
+  `detail: {"via": "chat_input", "command", "actor": {"kind": "user" |
+  "token" | "service", "name", "user_id", "acting_as"?, "auth"},
+  "previous_session_id", "new_session_id", "queued"}`. A token that acts as
+  the first admin (`LOCAL_AUTH_TOKEN`, the MCP service JWT) is named as the
+  token, with `acting_as` — never passed off as the operator. The new session
+  id is added by a bounded follow-up (120 s) that reads `lastReset` from the
+  state mirror; without it, the event keeps `new_session_id: null`. A refused
+  reset writes no event.
+- Not here: resets the daemon does on its own (`start`, `child_restart`) are
+  on its card, in `lastReset` and in its log, not yet in the activity feed.
+
 ### Control protocol (socket and HTTP share the schema)
 
 | op | request | response |
 |----|---------|----------|
 | `prompt` | `{"op":"prompt","text":"...","mode"?:"now"\|"queue","origin"?:"operator"\|"task"\|"nudge"}` — `origin`: who wrote the text (see "Interrupted turns"); only `"operator"` makes it offerable again | `{"ok":true,"turn":n}` immediately (turn runs async) · busy + `mode:"queue"`: `{"ok":true,"queued":true,"queueId":"…","position":n,"at":"…"}` · busy otherwise: `{"ok":false,"error":"busy"}` · `{"ok":false,"error":"queue_full"}` |
-| `new_session` | `{"op":"new_session","mode"?:"now"\|"queue"}` | `{"ok":true,"previousSessionId":"…"}` — `session/new` runs in the worker; a new transcript file starts (the chat view follows it as a rollover), the old file stays, model + thinking carry over, the old ACP session gets `session/close`. Busy: `{"ok":false,"error":"busy"}`, or held in the queue with `mode:"queue"` |
+| `new_session` | `{"op":"new_session","mode"?:"now"\|"queue"}` | `{"ok":true,"previousSessionId":"…"}` — `session/new` runs in the worker; a new transcript file starts (the chat view follows it as a rollover), the old file stays, model + thinking carry over, the old ACP session gets `session/close`, the new transcript starts with a `new_conversation` card. Busy: `{"ok":false,"error":"busy"}`, or held in the queue with `mode:"queue"` |
 | `queue_clear` | `{"op":"queue_clear"}` | `{"ok":true,"dropped":[{"id","kind":"prompt"\|"new_session","text","origin"?,"at"}, …]}` oldest first |
 
 The queue lives in the daemon's memory only. A daemon restart (container recreate, bridge reload) drops held jobs; the restarted daemon reads the old `queue` from the state mirror and posts one `queue_lost` card listing them. The composer shows held messages from its own optimistic echo, so after a page reload or on another device they are not shown until they run (follow-up: render them from the state file's `queue`).
@@ -431,6 +478,7 @@ least two).
   "commands": [{"name":"usage","description":"…","input":null}, …],
   "queue": [{"id":"…","kind":"prompt" | "new_session","text":"…","at":"…"}, …],
   "current": null | {"kind":"prompt" | "new_session","turn":12 | null,"text":"…" | null,"truncated":false,"startedAt":"…"},
+  "lastReset": null | {"at":"…","via":"new_session" | "start" | "child_restart","reason"?:"…","previousSessionId"?:"…","sessionId":"…"},
   "updatedAt": "2026-09-13T12:00:00Z",
   "lastError": null | {"code":"…","detail":"…","at":"…"}
 }
