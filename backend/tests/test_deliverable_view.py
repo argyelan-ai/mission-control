@@ -8,14 +8,19 @@ the sandboxed frame loads the page and its files from it.
 
 What these tests pin (security review focus):
   - the URL only ever reads inside that one folder: ``..``, encoded ``..``,
-    symlinks out of the folder, hidden files and a task folder that points
-    out of the deliverables area are all refused;
+    symlinks (out of the folder, inside it, or swapped in between the check
+    and the read), hidden files and a task folder that points out of the
+    deliverables area are all refused; the bytes come from the one file
+    that was opened;
   - the signature is checked: expired, tampered, foreign-task and
     wrong-folder tokens get 403, and so does a token of a user who logged
     out since;
-  - every answer carries the sandbox: CSP ``sandbox allow-scripts`` (no
-    ``allow-same-origin``), sources scoped to the token's folder, nosniff,
-    no referrer, no caching, and no cookie is read or set;
+  - every answer carries the sandbox: files get CSP ``sandbox allow-scripts``
+    (no ``allow-same-origin``) with sources scoped to the token's folder,
+    nosniff, no referrer and a private cache; errors (403/404/405/416/429,
+    no token) get ``sandbox; default-src 'none'``, nosniff, no referrer and
+    no-store; no cookie is read or set;
+  - a folder that changes under a cached check is a 403, never a 500;
   - the view token is never a session credential.
 """
 from __future__ import annotations
@@ -532,7 +537,8 @@ async def test_hidden_files_are_not_served(auth_client, zone):
 @pytest.mark.parametrize("alias,target", [("env.txt", ".env"), ("cfg", ".git/config"), ("repo", ".git")])
 async def test_hidden_files_behind_a_symlink_alias_are_not_served(auth_client, zone, alias, target):
     """The name in the URL is harmless (``env.txt``), the file it resolves to
-    is hidden. What counts is the file on disk, not the requested name."""
+    is hidden. The folder view serves no symlink at all, so the alias is
+    refused before anything is read."""
     url, folder, (_, task_id, _) = await _site(auth_client, zone)
     site = zone / str(task_id)
     (site / ".git").mkdir()
@@ -542,7 +548,7 @@ async def test_hidden_files_behind_a_symlink_alias_are_not_served(auth_client, z
     request = alias if alias != "repo" else "repo/config"
     resp = await _anon_get(auth_client, folder + request)
 
-    assert resp.status_code == 404, resp.status_code
+    assert resp.status_code == 403, resp.status_code
     assert b"SECRET" not in resp.content
 
 
@@ -763,3 +769,399 @@ async def test_urls_with_spaces_and_unicode_round_trip(auth_client, zone):
     page = await _anon_get(auth_client, url)
     assert page.status_code == 200
     assert page.content == "<p>hallo</p>".encode()
+
+
+# ── hardening (security review 2026-10-21) ─────────────────────────────────
+#
+# The page is untrusted and can read its own URL, token included, so this
+# route is reachable by whatever the page (or anyone it leaks the URL to)
+# asks for. Four things pinned here:
+#   1. a file is opened ONCE, with no symlink anywhere on the way, and served
+#      from that open handle — a symlink swapped in between the check and the
+#      read is refused (TOCTOU), and the folder view serves no symlinks;
+#   2. every answer of the route carries the protective headers, errors too;
+#   3. a folder that changes under a cached check is a 403, never a 500;
+#   4. (test_log_redaction.py) the token never lands in a log line.
+
+ERROR_CSP = "sandbox; default-src 'none'; frame-ancestors 'self'"
+
+
+def _assert_error_headers(resp):
+    """The strict set every non-file answer carries: a sandbox with nothing
+    allowed (an error page never runs a script), nosniff, no referrer, never
+    stored."""
+    csp = resp.headers.get("content-security-policy", "")
+    directives = [d.strip() for d in csp.split(";")]
+    assert "sandbox" in directives, (resp.status_code, csp)
+    assert "default-src 'none'" in directives, (resp.status_code, csp)
+    assert "allow-scripts" not in csp, (resp.status_code, csp)
+    assert resp.headers.get("x-content-type-options") == "nosniff", resp.status_code
+    assert resp.headers.get("referrer-policy") == "no-referrer", resp.status_code
+    assert resp.headers.get("cache-control") == "no-store", resp.status_code
+    assert "set-cookie" not in resp.headers
+
+
+def _assert_file_headers(resp, token):
+    csp = resp.headers["content-security-policy"]
+    assert "sandbox allow-scripts" in [d.strip() for d in csp.split(";")], csp
+    assert f"/api/v1/deliverable-view/{token}/" in csp
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["referrer-policy"] == "no-referrer"
+    assert resp.headers["cache-control"].startswith("private, max-age=")
+
+
+@pytest.mark.asyncio
+async def test_a_file_swapped_for_a_symlink_after_the_check_is_not_followed(auth_client, zone, tmp_path, monkeypatch):
+    """TOCTOU: the containment check passes on a real file, then the file is
+    replaced by a symlink to a host file before it is read. The route must
+    not read by name a second time — it answers 403 and serves nothing of the
+    host file."""
+    from app.services import fs_service
+
+    secret = tmp_path / "host-secret.txt"
+    secret.write_text("HOST FILE CONTENT")
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    site = zone / str(task_id)
+    real_check = fs_service.safe_join
+    swapped = []
+
+    def check_then_swap(root, subpath):
+        result = real_check(root, subpath)
+        if subpath == "style.css" and not swapped:
+            (site / "style.css").unlink()
+            os.symlink(secret, site / "style.css")
+            swapped.append(1)
+        return result
+
+    monkeypatch.setattr(fs_service, "safe_join", check_then_swap)
+
+    resp = await _anon_get(auth_client, folder + "style.css")
+
+    assert swapped, "the check ran"
+    assert resp.status_code == 403, resp.status_code
+    assert b"HOST FILE" not in resp.content
+    _assert_error_headers(resp)
+
+
+@pytest.mark.asyncio
+async def test_a_folder_swapped_for_a_symlink_after_the_check_is_not_followed(auth_client, zone, tmp_path, monkeypatch):
+    """Same race one level up: ``assets/`` is a real folder at check time and
+    a symlink to a host folder at read time."""
+    from app.services import fs_service
+
+    outside = tmp_path / "host-dir"
+    outside.mkdir()
+    (outside / "x.css").write_text("HOST DIR CONTENT")
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    site = zone / str(task_id)
+    (site / "assets").mkdir()
+    (site / "assets" / "x.css").write_text("own file")
+    real_check = fs_service.safe_join
+
+    def check_then_swap(root, subpath):
+        result = real_check(root, subpath)
+        if subpath == "assets/x.css" and (site / "assets").is_dir() and not (site / "assets").is_symlink():
+            (site / "assets").rename(site / "assets-old")
+            os.symlink(outside, site / "assets")
+        return result
+
+    monkeypatch.setattr(fs_service, "safe_join", check_then_swap)
+
+    resp = await _anon_get(auth_client, folder + "assets/x.css")
+
+    assert resp.status_code == 403, resp.status_code
+    assert b"HOST DIR" not in resp.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("make,request_path", [
+    (lambda site: os.symlink(site / "style.css", site / "alias.css"), "alias.css"),
+    (lambda site: os.symlink("style.css", site / "rel-alias.css"), "rel-alias.css"),
+    (lambda site: os.symlink(site / "img", site / "pics"), "pics/a.png"),
+])
+async def test_symlinks_inside_the_folder_are_refused_too(auth_client, zone, make, request_path):
+    """A deliverable site needs no symlinks, and a symlink is the one thing a
+    page's folder could use to reach elsewhere: the folder view refuses every
+    one, also a harmless-looking alias to a sibling."""
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    site = zone / str(task_id)
+    (site / "img").mkdir()
+    (site / "img" / "a.png").write_bytes(b"\x89PNG")
+    make(site)
+
+    resp = await _anon_get(auth_client, folder + request_path)
+
+    assert resp.status_code == 403, resp.status_code
+    _assert_error_headers(resp)
+    # The real files themselves are still served.
+    assert (await _anon_get(auth_client, folder + "style.css")).status_code == 200
+    assert (await _anon_get(auth_client, folder + "img/a.png")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_a_symlink_loop_is_a_403_not_a_crash(auth_client, zone):
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    site = zone / str(task_id)
+    os.symlink("loop.css", site / "loop.css")
+
+    resp = await _anon_get(auth_client, folder + "loop.css")
+
+    assert resp.status_code == 403, resp.status_code
+
+
+@pytest.mark.asyncio
+async def test_a_fifo_or_folder_is_not_served(auth_client, zone):
+    """Only regular files: a folder is a 404, and a FIFO (which would block a
+    reader until someone writes to it) is refused without waiting."""
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    site = zone / str(task_id)
+    (site / "sub").mkdir()
+    os.mkfifo(site / "pipe.css")
+
+    assert (await _anon_get(auth_client, folder + "sub")).status_code == 404
+    resp = await _anon_get(auth_client, folder + "pipe.css")
+    assert resp.status_code == 404, resp.status_code
+    _assert_error_headers(resp)
+
+
+@pytest.mark.asyncio
+async def test_the_task_folder_replaced_by_a_symlink_under_a_cached_check_is_403(auth_client, zone, tmp_path):
+    """The first request checks the folder and caches the check. Then the
+    task folder is moved away and a symlink to a host folder (with the same
+    file names) takes its place. The next request inside the cache window
+    must refuse with 403 — not crash with a 500, and not serve the host
+    folder."""
+    outside = tmp_path / "host-site"
+    outside.mkdir()
+    (outside / "style.css").write_text("HOST SITE CONTENT")
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    site = zone / str(task_id)
+    assert (await _anon_get(auth_client, folder + "style.css")).status_code == 200
+
+    site.rename(tmp_path / "moved-away")
+    os.symlink(outside, site)
+
+    resp = await _anon_get(auth_client, folder + "style.css")
+
+    assert resp.status_code == 403, resp.status_code
+    assert b"HOST SITE" not in resp.content
+    _assert_error_headers(resp)
+
+
+@pytest.mark.asyncio
+async def test_unexpected_os_errors_on_the_way_to_the_file_are_403(auth_client, zone, monkeypatch):
+    """Whatever the filesystem throws (a folder vanishing mid-walk, EIO on a
+    network mount): a refusal with the strict headers, never a 500."""
+    import errno
+
+    from app.routers import deliverable_view
+
+    url, folder, _ = await _site(auth_client, zone)
+    real_open = deliverable_view.os.open
+
+    def failing_open(path, flags, *args, **kwargs):
+        if path == "style.css":
+            raise OSError(errno.EIO, "I/O error")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(deliverable_view.os, "open", failing_open)
+
+    resp = await _anon_get(auth_client, folder + "style.css")
+
+    assert resp.status_code == 403, resp.status_code
+    _assert_error_headers(resp)
+
+
+@pytest.mark.asyncio
+async def test_error_answers_carry_the_protective_headers(auth_client, zone, monkeypatch):
+    """Not only the files: every answer under /api/v1/deliverable-view/ —
+    bad token, ``..``, missing, hidden, over budget, wrong method, no token
+    at all — carries a sandbox with nothing allowed, nosniff, no referrer and
+    no-store. A future error page that echoes input could otherwise run as a
+    page of MC's origin when opened as its own tab."""
+    from app.routers import deliverable_view
+
+    url, folder, _ = await _site(auth_client, zone)
+
+    cases = [
+        ("GET", "/api/v1/deliverable-view/garbage/x.png", 403),
+        ("GET", folder + "%2e%2e/secret.txt", 403),
+        ("GET", folder + "nope.css", 404),
+        ("GET", folder + ".env", 404),
+        ("GET", folder, 403),  # empty file path
+        ("HEAD", folder + "index.html", 405),
+        ("OPTIONS", folder + "index.html", 405),
+        ("POST", folder + "index.html", 405),
+        ("DELETE", folder + "index.html", 405),
+        ("GET", "/api/v1/deliverable-view/", 404),
+        ("GET", "/api/v1/deliverable-view", 404),
+        ("GET", "/api/v1/deliverable-view/" + _token_of(url), 404),
+        ("POST", "/api/v1/deliverable-view/x", 404),
+    ]
+    for method, path, status in cases:
+        saved = auth_client.headers.pop("authorization", None)
+        try:
+            resp = await auth_client.request(method, path)
+        finally:
+            if saved is not None:
+                auth_client.headers["Authorization"] = saved
+        assert resp.status_code == status, (method, path, resp.status_code, resp.text)
+        _assert_error_headers(resp)
+        assert "location" not in resp.headers, (method, path)  # no redirect that repeats the token
+
+    # Over budget (429).
+    monkeypatch.setattr(deliverable_view, "VIEW_MAX_REQUESTS", 1)
+    url2, folder2, _ = await _site(auth_client, zone)
+    assert (await _anon_get(auth_client, folder2 + "logo.png")).status_code == 200
+    over = await _anon_get(auth_client, folder2 + "logo.png")
+    assert over.status_code == 429
+    _assert_error_headers(over)
+
+
+@pytest.mark.asyncio
+async def test_a_byte_range_is_served_from_the_open_file_with_the_headers(auth_client, zone):
+    """Media (``<video>``, ``<audio>``) asks for byte ranges — Safari plays
+    nothing without them. Each part comes with the page's headers."""
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    token = _token_of(url)
+    (zone / str(task_id) / "clip.mp4").write_bytes(bytes(range(10)))
+
+    full = await _anon_get(auth_client, folder + "clip.mp4")
+    assert full.status_code == 200
+    assert full.content == bytes(range(10))
+    assert full.headers["accept-ranges"] == "bytes"
+    assert full.headers["content-length"] == "10"
+    _assert_file_headers(full, token)
+
+    for spec, body, content_range in [
+        ("bytes=0-3", bytes(range(4)), "bytes 0-3/10"),
+        ("bytes=7-", bytes([7, 8, 9]), "bytes 7-9/10"),
+        ("bytes=-2", bytes([8, 9]), "bytes 8-9/10"),
+        ("bytes=8-99", bytes([8, 9]), "bytes 8-9/10"),
+    ]:
+        part = await _anon_get(auth_client, folder + "clip.mp4", headers={"Range": spec})
+        assert part.status_code == 206, (spec, part.status_code)
+        assert part.content == body, spec
+        assert part.headers["content-range"] == content_range, spec
+        assert part.headers["content-length"] == str(len(body)), spec
+        _assert_file_headers(part, token)
+
+
+@pytest.mark.asyncio
+async def test_an_unsatisfiable_range_is_416_with_the_headers(auth_client, zone):
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    (zone / str(task_id) / "clip.mp4").write_bytes(bytes(range(10)))
+
+    for spec in ("bytes=999-", "bytes=10-", "bytes=-0"):
+        resp = await _anon_get(auth_client, folder + "clip.mp4", headers={"Range": spec})
+        assert resp.status_code == 416, (spec, resp.status_code)
+        assert resp.headers["content-range"] == "bytes */10", spec
+        assert bytes(range(10)) not in resp.content
+        _assert_error_headers(resp)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spec", ["bytes=abc", "bytes=5-2", "items=0-1", "bytes=0-1,4-5", "bytes=-"])
+async def test_a_range_the_route_does_not_serve_gets_the_whole_file(auth_client, zone, spec):
+    """A malformed range, another unit or several ranges are ignored (RFC 9110
+    allows it): the whole file, 200, with the page's headers — never a 400
+    without them."""
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    token = _token_of(url)
+    (zone / str(task_id) / "clip.mp4").write_bytes(bytes(range(10)))
+
+    resp = await _anon_get(auth_client, folder + "clip.mp4", headers={"Range": spec})
+
+    assert resp.status_code == 200, (spec, resp.status_code)
+    assert resp.content == bytes(range(10))
+    _assert_file_headers(resp, token)
+
+
+@pytest.mark.asyncio
+async def test_if_range_gets_the_whole_file(auth_client, zone):
+    """The route sends no validator (no ETag, no Last-Modified), so a client
+    that asks "range only if unchanged" gets the whole current file."""
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    (zone / str(task_id) / "clip.mp4").write_bytes(bytes(range(10)))
+
+    resp = await _anon_get(
+        auth_client, folder + "clip.mp4", headers={"Range": "bytes=0-1", "If-Range": '"abc"'}
+    )
+
+    assert resp.status_code == 200
+    assert resp.content == bytes(range(10))
+
+
+@pytest.mark.asyncio
+async def test_mint_refuses_a_page_that_is_a_symlink(auth_client, zone):
+    """The page itself must be servable: a symlinked page gets no view URL
+    (the view would refuse it anyway)."""
+    board_id, task_id, deliverable_id = await _seed(path="/deliverables/{task}/site")
+    site = zone / str(task_id) / "site"
+    _write_site(site)
+    os.symlink(site / "index.html", site / "home.html")
+
+    resp = await _mint(auth_client, board_id, task_id, deliverable_id, subpath="home.html")
+    assert resp.status_code == 400, resp.text
+    ok = await _mint(auth_client, board_id, task_id, deliverable_id, subpath="index.html")
+    assert ok.status_code == 200, ok.text
+
+
+@pytest.mark.asyncio
+async def test_the_bytes_come_from_the_opened_file_not_a_second_lookup(auth_client, zone, tmp_path, monkeypatch):
+    """The other half of the race: the file is opened (no symlink), and right
+    after that the name is swapped for a symlink to a host file. What is sent
+    must be the bytes of the file that was opened — the route never looks
+    the name up a second time to read it."""
+    secret = tmp_path / "host-secret.txt"
+    secret.write_text("HOST FILE CONTENT")
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    site = zone / str(task_id)
+    real_open = os.open
+    swapped = []
+
+    def open_then_swap(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        if path == "style.css" and flags & os.O_NOFOLLOW and not swapped:
+            (site / "style.css").rename(site / "style-old.css")
+            os.symlink(secret, site / "style.css")
+            swapped.append(1)
+        return fd
+
+    monkeypatch.setattr(os, "open", open_then_swap)
+
+    resp = await _anon_get(auth_client, folder + "style.css")
+
+    assert swapped, "the file was opened with O_NOFOLLOW"
+    assert resp.status_code == 200
+    assert resp.content == b"body{color:green}"
+    assert b"HOST FILE" not in resp.content
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_error_is_a_500_with_the_strict_headers_and_no_token_in_the_log(
+    auth_client, zone, monkeypatch, caplog
+):
+    """A bug after the checks (here: building the headers fails) still answers
+    with the strict headers, and the logged traceback carries no token."""
+    import logging
+
+    from app.routers import deliverable_view
+
+    url, folder, _ = await _site(auth_client, zone)
+    token = _token_of(url)
+
+    def broken(request, tok, claims):
+        raise RuntimeError(f"boom for {request.url.path}")  # the path holds the token
+
+    monkeypatch.setattr(deliverable_view, "_view_headers", broken)
+
+    with caplog.at_level(logging.ERROR, logger="app.routers.deliverable_view"):
+        resp = await _anon_get(auth_client, folder + "style.css")
+
+    assert resp.status_code == 500
+    _assert_error_headers(resp)
+    # caplog.text is what a handler writes: message AND any exc_info
+    # traceback (which no log filter ever sees).
+    assert "boom for" in caplog.text, caplog.text  # the traceback is logged ...
+    assert token not in caplog.text  # ... without the token

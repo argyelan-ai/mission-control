@@ -27,15 +27,26 @@ token is readable by it (it is in the page's own URL):
   the task's deliverable area (``deliverable_paths.accepted_path_prefixes``),
   the task's folder on disk must be a real folder inside a deliverables
   mount (no symlink to another task or out of the mount), and the served
-  folder must stay inside it (realpath). Files are resolved through
-  ``fs_service.safe_join`` (ADR-040's one containment guard): ``..`` and
-  symlinks out of the folder are refused, and hidden files (``.env``,
-  ``.git``) are never served — also not through a harmless-looking
-  symlink to one.
+  folder must stay inside it (realpath). A request passes
+  ``fs_service.safe_join`` (ADR-040's one containment guard) and is then
+  **opened once**: from ``/`` down to the file, every step is an
+  ``openat`` with ``O_NOFOLLOW`` on the folder opened before it, and the
+  bytes come from that one open handle (``_open_in_folder``). So a symlink
+  anywhere on the way is refused — also one swapped in between the check
+  and the read (time-of-check to time-of-use) — and the folder view serves
+  no symlinks at all. Only regular files are served (no FIFO, no device).
+  ``..`` and hidden names (``.env``, ``.git``) are refused by name. A
+  folder that changes under a cached check is a 403, never a 500.
 * **Every answer carries the sandbox as a header**, so the page runs in an
   opaque origin even when the URL is opened as its own tab: CSP
   ``sandbox allow-scripts`` (no ``allow-same-origin``), ``nosniff``,
-  ``no-referrer``. Its sources are the token's folder URL plus ``https:``
+  ``no-referrer``. Errors (403, 404, 405, 416, 429, a path without a
+  token) get the strict set: ``sandbox; default-src 'none'``, nosniff,
+  no-referrer, ``no-store`` (``_ViewRoute``). Two answers on this path come
+  from middleware ahead of the router and carry only Caddy's headers: a
+  CORS preflight (``OPTIONS`` with ``Access-Control-Request-Method``) and
+  slowapi's per-IP 429 — both fixed text, no input echoed. Its sources are
+  the token's folder URL plus ``https:``
   (CDN libraries and fonts, as in the srcdoc preview) — not ``'self'``:
   ``'self'`` would be all of MC (and WebKit does not match ``'self'`` inside
   a sandboxed page at all, measured 2026-10-21). Over plain http that keeps
@@ -61,6 +72,7 @@ token is readable by it (it is in the page's own URL):
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import hmac
 import json
@@ -68,21 +80,31 @@ import logging
 import mimetypes
 import os
 import re
+import stat
 import time
+import traceback
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from typing import BinaryIO
 from urllib.parse import quote
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from sqlmodel.ext.asyncio.session import AsyncSession
+from starlette.datastructures import MutableHeaders
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import Message, Receive, Scope, Send
 
 from app.auth import require_user
 from app.config import settings
 from app.database import get_session, release_session
+from app.log_redaction import redact_secrets
 from app.services import fs_service
 from app.services.deliverable_paths import accepted_path_prefixes
 from app.services.fs_roots import FsRoot
@@ -310,17 +332,97 @@ def _clean_relpath(path: str) -> str:
     return path
 
 
-def _resolve_file(folder: _Folder, rel: str) -> Path:
-    """``rel`` inside the folder, symlinks followed — 403 when it leaves the
-    folder, 404 when what it resolves to is hidden. A harmless name can be a
-    symlink to ``.env`` or into ``.git``: the file on disk is what counts."""
+_NOT_ALLOWED = "Path not allowed"
+_NOT_FOUND = "File not found"
+
+# Every step of the walk: a directory, never followed if it is a symlink
+# (Linux answers ENOTDIR, macOS ELOOP). O_PATH where it exists (Linux, the
+# container): it needs only search permission on a folder, like a lookup by
+# name, not read permission.
+_DIR_FLAGS = getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+# The file: never followed; O_NONBLOCK so a FIFO cannot hang the open (it
+# is refused right after, by fstat).
+_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+
+
+def _check_contained(folder: _Folder, rel: str) -> None:
+    """ADR-040's containment guard: the resolved path stays in the folder
+    (403). Only a check — nothing is read through what it returns."""
     try:
-        target = fs_service.safe_join(_folder_root(folder), rel)
+        fs_service.safe_join(_folder_root(folder), rel)
     except fs_service.FsAccessError:
-        raise HTTPException(status_code=403, detail="Path not allowed") from None
-    if any(p.startswith(".") for p in target.relative_to(folder.real).parts):
-        raise HTTPException(status_code=404, detail="File not found")
-    return target
+        raise HTTPException(status_code=403, detail=_NOT_ALLOWED) from None
+    except (OSError, RuntimeError, ValueError):  # a symlink loop, a vanished folder
+        raise HTTPException(status_code=403, detail=_NOT_ALLOWED) from None
+
+
+def _refusal(dir_fd: int, name: str, exc: OSError) -> HTTPException:
+    """403 for a symlink (or anything unexpected), 404 for a name that is not
+    there or not what the path needs. Only picks the status code — nothing
+    is read through this lookup."""
+    if exc.errno in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
+        try:
+            if stat.S_ISLNK(os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode):
+                return HTTPException(status_code=403, detail=_NOT_ALLOWED)
+        except OSError:
+            pass
+        if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+            return HTTPException(status_code=404, detail=_NOT_FOUND)
+    return HTTPException(status_code=403, detail=_NOT_ALLOWED)
+
+
+def _open_in_folder(folder: _Folder, rel: str) -> tuple[BinaryIO, int]:
+    """Open ``folder.real/rel`` ONCE for reading and return it with its size.
+
+    The walk starts at ``/`` and opens every folder on the way relative to
+    the one before (``dir_fd``) with ``O_NOFOLLOW``, the file too. A symlink
+    anywhere — in the folder, or swapped into the path after a check — makes
+    the open fail instead of being followed, so what is opened is exactly
+    the file at that path, and the caller serves the bytes from this handle
+    (no second lookup by name). 403 for a symlink, 404 for a missing name
+    or anything but a regular file. ``rel`` is already clean
+    (``_clean_relpath``: no ``..``, ``.``, hidden or empty parts)."""
+    steps = [*folder.real.parts[1:], *rel.split("/")[:-1]]
+    name = rel.split("/")[-1]
+    fd = os.open("/", _DIR_FLAGS)
+    try:
+        for step in steps:
+            try:
+                nxt = os.open(step, _DIR_FLAGS, dir_fd=fd)
+            except OSError as exc:
+                raise _refusal(fd, step, exc) from None
+            os.close(fd)
+            fd = nxt
+        try:
+            file_fd = os.open(name, _FILE_FLAGS, dir_fd=fd)
+        except OSError as exc:
+            raise _refusal(fd, name, exc) from None
+    finally:
+        os.close(fd)
+    try:
+        st = os.fstat(file_fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise HTTPException(status_code=404, detail=_NOT_FOUND)
+        return os.fdopen(file_fd, "rb", buffering=0), st.st_size
+    except BaseException:
+        os.close(file_fd)
+        raise
+
+
+async def _open_file(folder: _Folder, rel: str) -> tuple[BinaryIO, int]:
+    """``_check_contained`` + ``_open_in_folder`` off the event loop. Every
+    filesystem surprise is a refusal, never a 500."""
+
+    def work() -> tuple[BinaryIO, int]:
+        _check_contained(folder, rel)
+        try:
+            return _open_in_folder(folder, rel)
+        except HTTPException:
+            raise
+        except (OSError, ValueError):
+            raise HTTPException(status_code=403, detail=_NOT_ALLOWED) from None
+
+    return await anyio.to_thread.run_sync(work)
 
 
 # ── Per-token budget and check cache ───────────────────────────────────────
@@ -413,6 +515,149 @@ def _view_headers(request: Request, token: str, claims: ViewClaims) -> dict[str,
     }
 
 
+# What every answer that is not a file of the page carries: an error page
+# never runs a script, never sends a Referer, is never stored (a 404 can be a
+# 200 a second later, a 403 must not outlive its reason). frame-ancestors as
+# on the files, so an error inside the preview frame shows instead of being
+# blocked by a TLS proxy's X-Frame-Options.
+ERROR_HEADERS: dict[str, str] = {
+    "Content-Security-Policy": "sandbox; default-src 'none'; frame-ancestors 'self'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store",
+}
+
+
+def _guard_start(message: Message) -> None:
+    """Make an ``http.response.start`` safe to show: a file answer (200/206
+    with its folder CSP) keeps its headers, everything else gets
+    ``ERROR_HEADERS`` — also a 2xx that somehow lacks a CSP (fail closed)."""
+    headers = MutableHeaders(scope=message)
+    if message["status"] in (200, 206) and "content-security-policy" in headers:
+        headers.setdefault("X-Content-Type-Options", "nosniff")
+        headers.setdefault("Referrer-Policy", "no-referrer")
+        return
+    for key, value in ERROR_HEADERS.items():
+        headers[key] = value
+    # An error answer is no CORS resource of the page, and repeats no URL.
+    for key in ("access-control-allow-origin", "location"):
+        if key in headers:
+            del headers[key]
+
+
+class _ViewRoute(APIRoute):
+    """A route whose every answer passes ``_guard_start`` — the endpoint's
+    files and HTTPExceptions, the 405 Starlette raises for a wrong method
+    (outside the endpoint), and an unexpected error (logged, answered with
+    500 and the strict headers instead of the bare error page)."""
+
+    async def handle(self, scope: Scope, receive: Receive, send: Send) -> None:
+        started = False
+
+        async def guarded_send(message: Message) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+                _guard_start(message)
+            await send(message)
+
+        try:
+            await super().handle(scope, receive, guarded_send)
+        except StarletteHTTPException as exc:
+            if started:
+                raise
+            await JSONResponse(
+                {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers
+            )(scope, receive, guarded_send)
+        except Exception as exc:
+            if started:
+                raise
+            # The traceback, redacted here: the path (and so an error
+            # message) carries the token, and the log filter only sees the
+            # message, never exc_info.
+            trace = "".join(traceback.format_exception(exc))
+            logger.error("deliverable view failed\n%s", redact_secrets(trace))
+            await JSONResponse({"detail": "Internal Server Error"}, status_code=500)(
+                scope, receive, guarded_send
+            )
+
+
+_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
+_CHUNK = 64 * 1024
+
+
+def _byte_range(request: Request, size: int) -> tuple[int, int] | None:
+    """The one byte range to serve, as (first, last), or ``None`` for the
+    whole file. A malformed range, another unit, several ranges or an
+    ``If-Range`` (this route sends no validator) are ignored — RFC 9110
+    allows that, and media players only ever ask for one range. 416 when
+    the range lies past the end."""
+    spec = (request.headers.get("range") or "").replace(" ", "")
+    if not spec or "if-range" in request.headers:
+        return None
+    m = _RANGE_RE.match(spec)
+    if not m or m.group(1) == m.group(2) == "":
+        return None
+    unsatisfiable = HTTPException(
+        status_code=416, detail="Range not satisfiable", headers={"Content-Range": f"bytes */{size}"}
+    )
+    if m.group(1) == "":  # suffix: the last n bytes
+        n = int(m.group(2))
+        if n == 0 or size == 0:
+            raise unsatisfiable
+        return max(0, size - n), size - 1
+    first = int(m.group(1))
+    last = int(m.group(2)) if m.group(2) else size - 1
+    if m.group(2) and last < first:
+        return None  # invalid: ignored
+    if first >= size:
+        raise unsatisfiable
+    return first, min(last, size - 1)
+
+
+async def _read_from(handle: BinaryIO, offset: int, length: int) -> AsyncIterator[bytes]:
+    """The bytes of the OPEN file (``os.pread`` on its descriptor — never a
+    second open by name); the handle is closed when the answer ends or the
+    client goes away."""
+    try:
+        fd = handle.fileno()
+        while length > 0:
+            chunk = await anyio.to_thread.run_sync(os.pread, fd, min(_CHUNK, length), offset)
+            if not chunk:
+                break
+            offset += len(chunk)
+            length -= len(chunk)
+            yield chunk
+    finally:
+        handle.close()
+
+
+def _file_response(
+    request: Request, handle: BinaryIO, size: int, media_type: str, headers: dict[str, str]
+) -> StreamingResponse:
+    try:
+        span = _byte_range(request, size)
+    except HTTPException:
+        handle.close()
+        raise
+    headers = {**headers, "Accept-Ranges": "bytes"}
+    if span is None:
+        first, length, status = 0, size, 200
+    else:
+        first, last = span
+        length, status = last - first + 1, 206
+        headers["Content-Range"] = f"bytes {first}-{last}/{size}"
+    headers["Content-Length"] = str(length)
+    return StreamingResponse(
+        _read_from(handle, first, length), status_code=status, media_type=media_type, headers=headers
+    )
+
+
+# The page's own URLs: every answer passes ``_guard_start``. Joined into
+# ``router`` at the end of the module (the route class carries over).
+view_router = APIRouter(route_class=_ViewRoute)
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────
 
 
@@ -447,7 +692,7 @@ async def mint_deliverable_view_url(
 
     try:
         folder = await _view_folder(deliverable, session)
-    except _NoFolderView as exc:
+    except (_NoFolderView, OSError, RuntimeError, ValueError) as exc:
         logger.info("deliverable view refused for %s: %s", deliverable_id, exc)
         raise HTTPException(status_code=404, detail="No page view for this deliverable") from None
 
@@ -462,14 +707,19 @@ async def mint_deliverable_view_url(
             page = _clean_relpath(body.subpath)
         except HTTPException:
             raise HTTPException(status_code=400, detail="Invalid subpath") from None
-    try:
-        target = _resolve_file(folder, page)
-    except HTTPException:
-        raise HTTPException(status_code=400, detail="Invalid subpath") from None
-    if target.suffix.lower() not in _HTML_SUFFIXES:
+    if Path(page).suffix.lower() not in _HTML_SUFFIXES:
         raise HTTPException(status_code=400, detail="Only HTML pages have a page view")
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail="Page not found")
+    # The page must be what the view will serve: opened the same way (no
+    # symlink on the way, a regular file), then closed again.
+    try:
+        handle, _ = await _open_file(folder, _clean_relpath(page))
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=404, detail="Page not found") from None
+        if folder.entry is not None:  # the deliverable's own file is a symlink
+            raise HTTPException(status_code=404, detail="No page view for this deliverable") from None
+        raise HTTPException(status_code=400, detail="Invalid subpath") from None
+    handle.close()
 
     token = mint_view_token(
         user_id=current_user.id,
@@ -478,14 +728,13 @@ async def mint_deliverable_view_url(
         deliverable_id=deliverable_id,
         folder=folder.logical,
     )
-    rel = target.relative_to(folder.real).as_posix()
     return {
-        "url": f"{VIEW_PATH}/{token}/{quote(rel, safe='/')}",
+        "url": f"{VIEW_PATH}/{token}/{quote(page, safe='/')}",
         "expires_in": VIEW_TTL_SECONDS,
     }
 
 
-@router.get("/deliverable-view/{token}/{file_path:path}")
+@view_router.get("/deliverable-view/{token}/{file_path:path}")
 async def serve_deliverable_view(
     token: str,
     file_path: str,
@@ -516,7 +765,7 @@ async def serve_deliverable_view(
             raise denied
         try:
             folder = await _view_folder(deliverable, session)
-        except _NoFolderView:
+        except (_NoFolderView, OSError, RuntimeError, ValueError):
             raise denied from None
         if not hmac.compare_digest(_folder_tag(folder.logical), claims.folder_tag):
             raise denied
@@ -524,9 +773,31 @@ async def serve_deliverable_view(
         # All DB work is done; a large file must not pin a pool connection.
         await release_session(session, route=VIEW_PATH)
 
-    target = _resolve_file(folder, _clean_relpath(file_path))
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
+    rel = _clean_relpath(file_path)
+    handle, size = await _open_file(folder, rel)
+    media_type = mimetypes.guess_type(rel.rsplit("/", 1)[-1])[0] or "application/octet-stream"
+    return _file_response(request, handle, size, media_type, _view_headers(request, token, claims))
 
-    media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-    return FileResponse(target, media_type=media_type, headers=_view_headers(request, token, claims))
+
+# Anything else under the view prefix is answered here, with the strict
+# headers, instead of by the app's bare 404/405 or a slash redirect that
+# would repeat the URL: another method on a file URL (405, GET only), and a
+# path without a token or without a file part (404). Registered after the
+# file route, so a GET of a file never gets here.
+_FALLBACK_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+
+
+async def _view_not_found(request: Request):
+    rest = request.path_params.get("rest", "")
+    if request.method != "GET" and "/" in rest:
+        raise HTTPException(status_code=405, detail="Method Not Allowed", headers={"Allow": "GET"})
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+view_router.add_api_route(
+    "/deliverable-view", _view_not_found, methods=_FALLBACK_METHODS, include_in_schema=False
+)
+view_router.add_api_route(
+    "/deliverable-view/{rest:path}", _view_not_found, methods=_FALLBACK_METHODS, include_in_schema=False
+)
+router.include_router(view_router)
