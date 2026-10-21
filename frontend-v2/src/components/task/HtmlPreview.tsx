@@ -22,16 +22,36 @@
  *        would load MC itself into the frame, and `logo.png` would be fetched
  *        from MC. With this base, `#links` stay in the page and relative
  *        files resolve to nothing (multi-file pages are a separate feature).
- *      · `no-referrer` — CDN requests do not learn MC's address.
+ *      · `no-referrer` — requests from the page carry no Referer header.
  *      · a CSP: inline code and https: libraries/fonts/images load (many
  *        landing pages use a CDN), but fetch/XHR/WebSocket (`connect-src`)
  *        and forms are off, and plain http: (LAN, MC itself) is never a
  *        source. This is defence in depth, not the boundary — the sandbox is.
  *
+ * Known limits — what the sandbox does NOT take away (checked in Chromium
+ * and WebKit):
+ *  - The page can learn MC's ADDRESS (not its data): its script can read
+ *    `location.ancestorOrigins`, which lists MC's origin whatever the
+ *    referrer policy says, and could send it out through an allowed https:
+ *    image or script URL. No token, cookie or page content goes with it.
+ *  - The page shares the tab's history: an in-page `#link` or
+ *    `history.pushState` adds entries, so Back first steps through them.
+ *    They stay even after the frame is removed (30 pushes → +30 entries,
+ *    in both engines), so remounting would not help; browsers throttle a
+ *    page that floods the history.
+ *
  * Shared by every FilePreview caller (task deliverables, folder deliverables,
  * the workspace tab, the Files page), so the boundary is the same everywhere.
  */
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import { useTranslations } from "next-intl";
 import { Code2, Eye, Loader2, Maximize2, X, type LucideIcon } from "lucide-react";
@@ -59,10 +79,58 @@ const GUARD_HEAD =
   '<meta name="referrer" content="no-referrer">' +
   `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">`;
 
-// Everything that may stand before a doctype: BOM, whitespace, comments, an
-// xml prologue. One character or one closed construct per step, so the
-// pattern stays linear on hostile input.
-const PROLOGUE = /^\uFEFF?(?:\s|<!--[\s\S]*?-->|<\?[^>]*>)*<!doctype\b[^>]*>/i;
+/** HTML whitespace (tab, LF, FF, CR, space) — not JS `\s`, which is wider. */
+function isHtmlSpace(code: number): boolean {
+  return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d;
+}
+
+/** Index just past the comment whose body starts at `from` (after `<!--`), or -1. */
+function commentEnd(html: string, from: number): number {
+  // `<!-->` and `<!--->` are complete (empty) comments in the HTML tokenizer.
+  if (html.startsWith(">", from)) return from + 1;
+  if (html.startsWith("->", from)) return from + 2;
+  // Otherwise the first `--` followed by `>` or `!>` ends it (`--->` too:
+  // the search simply moves on by one dash).
+  for (let k = html.indexOf("--", from); k !== -1; k = html.indexOf("--", k + 1)) {
+    if (html.startsWith(">", k + 2)) return k + 3;
+    if (html.startsWith("!>", k + 2)) return k + 4;
+  }
+  return -1;
+}
+
+/**
+ * Length of what may stand before the guard while keeping the doctype first:
+ * a BOM, whitespace, comments, `<?…>` and then the doctype itself — or 0 when
+ * there is no such doctype. Follows the HTML tokenizer, so the guard sits in
+ * front of the first thing the browser would run.
+ *
+ * A hand-written scan on purpose: every step moves forward and nothing is
+ * read twice, so it is linear on any input. (A regex with a lazy comment
+ * inside a repeated group backtracks exponentially over closed comments
+ * when no doctype follows — 200 bytes froze the tab for seconds.)
+ */
+function doctypeEnd(html: string): number {
+  const n = html.length;
+  let i = html.charCodeAt(0) === 0xfeff ? 1 : 0;
+  while (i < n) {
+    if (isHtmlSpace(html.charCodeAt(i))) {
+      i++;
+    } else if (html.startsWith("<!--", i)) {
+      i = commentEnd(html, i + 4);
+      if (i === -1) return 0; // unclosed: the rest of the file is a comment
+    } else if (html.startsWith("<?", i)) {
+      const gt = html.indexOf(">", i + 2);
+      if (gt === -1) return 0;
+      i = gt + 1;
+    } else if (html.slice(i, i + 9).toLowerCase() === "<!doctype") {
+      const gt = html.indexOf(">", i + 9);
+      return gt === -1 ? 0 : gt + 1;
+    } else {
+      return 0; // content first: a later doctype is ignored by the browser
+    }
+  }
+  return 0;
+}
 
 /**
  * The page plus the guard head, placed right after the doctype: before it
@@ -70,17 +138,27 @@ const PROLOGUE = /^\uFEFF?(?:\s|<!--[\s\S]*?-->|<\?[^>]*>)*<!doctype\b[^>]*>/i;
  * that comes first (a script before <head>) run unguarded.
  */
 export function buildPreviewDocument(html: string): string {
-  const m = PROLOGUE.exec(html);
-  if (!m) return GUARD_HEAD + html;
-  return m[0] + GUARD_HEAD + html.slice(m[0].length);
+  const end = doctypeEnd(html);
+  return html.slice(0, end) + GUARD_HEAD + html.slice(end);
 }
 
 // ── Sandboxed frame ────────────────────────────────────────────────────────
 
+/**
+ * How long the loading state may cover the frame at most. `load` waits for
+ * every subresource — one stalled CDN image or font would otherwise leave an
+ * opaque "Loading page…" over a page that rendered long ago.
+ */
+export const HTML_PREVIEW_LOADING_CAP_MS = 2000;
+
 function SandboxedFrame({ doc, title }: { doc: string; title: string }) {
   const t = useTranslations("filePreview.html");
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => setLoaded(false), [doc]);
+  useEffect(() => {
+    setLoaded(false);
+    const cap = window.setTimeout(() => setLoaded(true), HTML_PREVIEW_LOADING_CAP_MS);
+    return () => window.clearTimeout(cap);
+  }, [doc]);
 
   return (
     <>
@@ -168,6 +246,35 @@ function ViewSwitch({ view, onChange }: { view: View; onChange: (v: View) => voi
 
 // ── Fullscreen ─────────────────────────────────────────────────────────────
 
+/**
+ * Esc for the topmost layer only. The fullscreen view opens over dialogs that
+ * close on Esc themselves (the task modal, slide-over panels — all through
+ * `useEscapeKey`, a window listener in the bubble phase that was bound
+ * before this one). A second bubble listener cannot keep them from firing,
+ * so this one listens in the CAPTURE phase on window — the first stop of
+ * every key event — and stops the event there: one Esc closes one layer.
+ *
+ * Bound once, calling the latest handler through a ref, like `useEscapeKey`:
+ * re-binding per render can lose a real key press mid-dispatch (see there).
+ */
+function useTopLayerEscape(onEscape: () => void) {
+  const handlerRef = useRef(onEscape);
+  useLayoutEffect(() => {
+    handlerRef.current = onEscape;
+  });
+
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      handlerRef.current();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+}
+
 function FullscreenView({ doc, name, onClose }: { doc: string; name: string; onClose: () => void }) {
   const t = useTranslations("filePreview.html");
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -183,16 +290,7 @@ function FullscreenView({ doc, name, onClose }: { doc: string; name: string; onC
   // Escape closes — while focus is in MC. Inside the page the page owns the
   // keyboard (a sandboxed frame never hands keys up), so the close button
   // stays visible at all times.
-  useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useTopLayerEscape(onClose);
 
   return createPortal(
     <div

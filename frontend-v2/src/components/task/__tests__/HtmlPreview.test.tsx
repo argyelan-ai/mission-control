@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, within, act, waitFor } from "@testing-library/react";
 import { FilePreview } from "../FilePreview";
-import { HTML_PREVIEW_CSP, HTML_PREVIEW_SANDBOX, buildPreviewDocument } from "../HtmlPreview";
+import {
+  HTML_PREVIEW_CSP,
+  HTML_PREVIEW_LOADING_CAP_MS,
+  HTML_PREVIEW_SANDBOX,
+  HtmlPreview,
+  buildPreviewDocument,
+} from "../HtmlPreview";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 import en from "../../../../messages/en.json";
 import de from "../../../../messages/de.json";
 
@@ -219,6 +226,142 @@ describe("buildPreviewDocument — the guard head every preview gets", () => {
     const started = performance.now();
     buildPreviewDocument(evil);
     expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  it("stays linear on CLOSED comments with no doctype (the slow path of a lazy comment pattern)", () => {
+    // A lazy `<!--[\s\S]*?-->` inside a repeated group can split a run of n
+    // closed comments 2^(n-1) ways once no doctype follows — on MC's main
+    // thread, during render. 28 comments (196 bytes) take ~0.9 s even after
+    // V8 has compiled the hot regex to native code (~12 s before that), and
+    // microseconds for a linear scan. The small case comes first so a
+    // regression fails here instead of hanging on the big one.
+    const small = "<!---->".repeat(28) + "<p>x";
+    const t0 = performance.now();
+    expect(buildPreviewDocument(small).startsWith(GUARD_START)).toBe(true);
+    expect(performance.now() - t0).toBeLessThan(100);
+
+    const big = "<!---->".repeat(20_000) + "<!-- a -- b --!> <?x?>\n".repeat(5_000) + "<p>x";
+    const t1 = performance.now();
+    expect(buildPreviewDocument(big).startsWith(GUARD_START)).toBe(true);
+    expect(performance.now() - t1).toBeLessThan(250);
+  });
+
+  // The guard must sit before the first thing the BROWSER would run. These
+  // follow the HTML tokenizer: `<!-->` and `<!--->` are complete (empty)
+  // comments, `--!>` ends a comment, `--->` too.
+  it.each([
+    ["<!-->", "abrupt empty comment"],
+    ["<!--->", "abrupt empty comment with a dash"],
+    ["<!-- a --!>", "comment closed by --!>"],
+    ["<!-- a --->", "comment closed by --->"],
+    ["<!-- -- inner -- -->", "dashes inside a comment"],
+  ])("treats %s as a complete comment before the doctype (%s)", (comment) => {
+    const head = `${comment}\n<!DocType html>`;
+    const out = buildPreviewDocument(head + "<p>x</p>");
+    expect(out.slice(head.length).startsWith(GUARD_START)).toBe(true);
+    expect(out.endsWith("<p>x</p>")).toBe(true);
+  });
+
+  it.each([
+    ["<!--><script>run()</script>--><!doctype html>", "script after an abrupt empty comment"],
+    ["<!-- a --!><script>run()</script>--><!doctype html>", "script after a --!> close"],
+    ["<p>text</p><!doctype html>", "content before the doctype"],
+    ["<!-- never closed <!doctype html>", "an unclosed comment swallows the doctype"],
+    ["<?pi never closed <!doctype html", "an unclosed processing instruction"],
+  ])("puts the guard first when markup precedes the doctype: %s (%s)", (src) => {
+    expect(buildPreviewDocument(src)).toBe(
+      buildPreviewDocument("") + src,
+    );
+  });
+
+  it("accepts a doctype without a space before its name (`<!DOCTYPEhtml>`)", () => {
+    const out = buildPreviewDocument("<!DOCTYPEhtml><p>x</p>");
+    expect(out.startsWith("<!DOCTYPEhtml>" + GUARD_START)).toBe(true);
+  });
+});
+
+describe("HtmlPreview — review fixes (loading cap, nested Escape)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("drops the loading overlay after a short cap even when load never fires (stalled CDN)", () => {
+    // `load` waits for every subresource. The CSP allows https: CDNs, so one
+    // stalled image or font would otherwise leave an opaque "Loading page…"
+    // over a page that has already rendered — forever.
+    vi.useFakeTimers();
+    expect(HTML_PREVIEW_LOADING_CAP_MS).toBeGreaterThan(0);
+    expect(HTML_PREVIEW_LOADING_CAP_MS).toBeLessThanOrEqual(3000);
+    render(<HtmlPreview html={PAGE} name="index.html" code={<pre />} />);
+    expect(screen.getByText("Loading page…")).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(HTML_PREVIEW_LOADING_CAP_MS - 1);
+    });
+    expect(screen.getByText("Loading page…")).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.queryByText("Loading page…")).toBeNull();
+    // The frame itself was never touched: no load event, still mounted.
+    expect(screen.getByTitle(/Rendered page/i)).toBeInTheDocument();
+  });
+
+  it("starts the cap again for the fullscreen frame (its own copy of the page)", () => {
+    vi.useFakeTimers();
+    render(<HtmlPreview html={PAGE} name="index.html" code={<pre />} />);
+    act(() => {
+      vi.advanceTimersByTime(HTML_PREVIEW_LOADING_CAP_MS);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Fullscreen" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Loading page…")).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(HTML_PREVIEW_LOADING_CAP_MS);
+    });
+    expect(within(dialog).queryByText("Loading page…")).toBeNull();
+  });
+
+  /** A task modal: it closes on Esc through the shared hook, as TaskDetailPanel does. */
+  function TaskModal({ onClose }: { onClose: () => void }) {
+    useEscapeKey(() => onClose());
+    return <HtmlPreview html={PAGE} name="index.html" code={<pre />} />;
+  }
+
+  it("Escape in fullscreen closes ONLY the fullscreen, not the task modal behind it", () => {
+    const closeTask = vi.fn();
+    render(<TaskModal onClose={closeTask} />);
+    fireEvent.click(screen.getByRole("button", { name: "Fullscreen" }));
+    const close = screen.getByRole("button", { name: "Close fullscreen" });
+    expect(document.activeElement).toBe(close);
+
+    // A real key press lands on the focused element and bubbles to window.
+    fireEvent.keyDown(close, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(closeTask).not.toHaveBeenCalled();
+
+    // With the fullscreen gone, the next Esc belongs to the modal again.
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(closeTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("binds the fullscreen Escape listener once, not once per render", () => {
+    const add = vi.spyOn(window, "addEventListener");
+    try {
+      const { rerender } = render(<HtmlPreview html={PAGE} name="index.html" code={<pre />} />);
+      fireEvent.click(screen.getByRole("button", { name: "Fullscreen" }));
+      const keydownBinds = () => add.mock.calls.filter(([type]) => type === "keydown").length;
+      const afterOpen = keydownBinds();
+      expect(afterOpen).toBeGreaterThanOrEqual(1);
+      // A parent re-render hands FullscreenView a new inline onClose each time.
+      rerender(<HtmlPreview html={PAGE} name="index.html" code={<pre />} />);
+      rerender(<HtmlPreview html={PAGE} name="index.html" code={<pre />} />);
+      expect(keydownBinds()).toBe(afterOpen);
+      // … and Esc still closes with the latest handler.
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      add.mockRestore();
+    }
   });
 });
 
