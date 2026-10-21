@@ -181,7 +181,19 @@ function SandboxedFrame({ doc, title }: { doc: string; title: string }) {
  * page. Its own element: sandbox flags apply when a frame navigates, so the
  * running page always gets a NEW frame, never this one with a new attribute.
  */
-function StillFrame({ doc, title, onRun }: { doc: string; title: string; onRun: () => void }) {
+function StillFrame({
+  doc,
+  title,
+  onRun,
+  place,
+}: {
+  doc: string;
+  title: string;
+  onRun: () => void;
+  /** "top" inline: the button shows as soon as the box scrolls into view on a
+   *  phone (the box is taller than what is left of the screen). */
+  place: "top" | "center";
+}) {
   const t = useTranslations("filePreview.html");
   return (
     <>
@@ -195,7 +207,7 @@ function StillFrame({ doc, title, onRun }: { doc: string; title: string; onRun: 
         style={{ colorScheme: "light", background: "Canvas" }}
       />
       <div
-        className="absolute inset-0 flex items-center justify-center p-4"
+        className={`absolute inset-0 flex justify-center p-4 ${place === "top" ? "items-start pt-16" : "items-center"}`}
         style={{ background: alpha(C.scrim, 0.45) }}
       >
         <div
@@ -223,12 +235,24 @@ function StillFrame({ doc, title, onRun }: { doc: string; title: string; onRun: 
 }
 
 /** The still before the tap, the running page after it. */
-function PageFrame({ doc, name, running, onRun }: { doc: string; name: string; running: boolean; onRun: () => void }) {
+function PageFrame({
+  doc,
+  name,
+  running,
+  onRun,
+  place,
+}: {
+  doc: string;
+  name: string;
+  running: boolean;
+  onRun: () => void;
+  place: "top" | "center";
+}) {
   const t = useTranslations("filePreview.html");
   return running ? (
     <SandboxedFrame doc={doc} title={t("frameTitle", { name })} />
   ) : (
-    <StillFrame doc={doc} title={t("stillTitle", { name })} onRun={onRun} />
+    <StillFrame doc={doc} title={t("stillTitle", { name })} onRun={onRun} place={place} />
   );
 }
 
@@ -398,7 +422,7 @@ function FullscreenView({
         </button>
       </div>
       <div className="relative flex-1 min-h-0">
-        <PageFrame doc={doc} name={name} running={running} onRun={onRun} />
+        <PageFrame doc={doc} name={name} running={running} onRun={onRun} place="center" />
       </div>
     </div>,
     document.body,
@@ -465,7 +489,7 @@ export function HtmlPreview({ html, name, code }: HtmlPreviewProps) {
             {/* One copy of the page at a time: while the fullscreen view is
                 open the inline frame is unmounted, the box keeps its height
                 so the page underneath does not jump. */}
-            {!fullscreen && <PageFrame doc={doc} name={name} running={running} onRun={run} />}
+            {!fullscreen && <PageFrame doc={doc} name={name} running={running} onRun={run} place="top" />}
           </div>
         </div>
       ) : (
