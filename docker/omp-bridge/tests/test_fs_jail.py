@@ -346,8 +346,10 @@ def test_without_config_only_the_cwd_is_served():
 def test_filesystem_root_is_never_a_deliverables_root():
     """A misconfigured MC_DELIVERABLES_DIR=/ would open every path — it is
     ignored, and so are relative entries."""
+    configured = os.pathsep.join(["/", "relative/dir"])
+    assert acp_client.deliverables_roots({"MC_DELIVERABLES_DIR": configured}) == ()
     with _dirs("omp-fs-cwd-") as (cwd,):
-        with _deliverables_config(env=os.pathsep.join(["/", "relative/dir"])):
+        with _deliverables_config(env=configured):
             client, sent = _jailed_client(cwd)
 
         _fs_request(client, "fs/read_text_file", {"path": "/etc/hosts"})
