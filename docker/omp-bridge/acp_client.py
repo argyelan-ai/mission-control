@@ -64,11 +64,12 @@ CHECKOUTS_DIR = "/workspace"
 
 #: The scratch roots, served next to the session cwd and the deliverables
 #: root: the container's own /tmp and its checkouts mount /workspace
-#: (:data:`CHECKOUTS_DIR`). omp's bash writes both anyway — the jail only kept its read/write tools out (a task
-#: in a worktree cwd, or a chat turn, writing a scratch file to /tmp; a
-#: task writing a loose file to /workspace). Same realpath check as every
-#: root: a link out of /tmp or /workspace (to /etc, to ~/.omp, to the
-#: mounts /workspace-ref or /vault) resolves outside and stays refused.
+#: (:data:`CHECKOUTS_DIR`). omp's bash writes both anyway — the jail only
+#: kept its read/write tools out (a task in a worktree cwd, or a chat
+#: turn, writing a scratch file to /tmp; a task writing a loose file to
+#: /workspace). Same realpath check as every root: a link out of /tmp or
+#: /workspace (to /etc, to ~/.omp, to the mounts /workspace-ref or /vault)
+#: resolves outside and stays refused.
 #: /tmp lies on the container's own filesystem next to ~/.omp, so a file
 #: served only through a scratch root must also be a regular file with one
 #: link (:func:`_open_served`) — a hard link passes realpath.
