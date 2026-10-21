@@ -188,9 +188,16 @@ transition release, `ALLOW_QUERY_TOKEN_AUTH=true` in `.env` re-enables the old
 otherwise: every proxy that logs request URIs would record a reusable
 credential.
 
-The shipped Caddyfile redacts both `token` and `ticket` query parameters on
-its default logger. **If you run your own Caddyfile** (for example
-`caddy/Caddyfile.local` for TLS), add the same global block at the very top:
+The shipped Caddyfile redacts the `token`, `ticket` and `access_token` query
+parameters on its default logger, and the HTML preview's view token: the path
+segment after `/deliverable-view/` and the token by its own shape
+(`dv1.<claims>.<signature>`), in the request URI and in the `Referer`. Caddy
+writes both into a warning every time a client hangs up mid-answer
+("aborting with incomplete response" — a media player after its first
+request, a preview closed while it loads). **If you run your own Caddyfile**
+(for example `caddy/Caddyfile.local` for TLS), use the same global block at
+the very top. A log field takes only one filter, so the query parameters are
+masked by the same `regexp`, not by a `query` filter:
 
 ```caddyfile
 {
@@ -198,19 +205,17 @@ its default logger. **If you run your own Caddyfile** (for example
 		output stderr
 		format filter {
 			wrap json
-			request>uri query {
-				replace token REDACTED
-				replace ticket REDACTED
-				replace access_token REDACTED
-			}
+			request>uri regexp "(/deliverable-view/)[^/?]+|dv1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}|([?&](?:token|ticket|access_token)=)[^&]*" "${1}${2}REDACTED"
+			request>headers>Referer regexp "(/deliverable-view/)[^/?]+|dv1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}|([?&](?:token|ticket|access_token)=)[^&]*" "${1}${2}REDACTED"
 		}
 	}
 }
 ```
 
 Any other proxy in front of MC (nginx, Traefik, a load balancer) should strip
-or mask these two query parameters in its access log as well. The backend
-already redacts them from its own logs (`app/log_redaction.py`).
+or mask these query parameters and the `/deliverable-view/` path segment in
+its access log as well. The backend already redacts them from its own logs
+(`app/log_redaction.py`).
 
 ## Security reminder
 

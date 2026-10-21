@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Behaviour test: the security headers Caddy adds must not overwrite a
-# stricter value the backend already chose, in every Caddyfile that sets them:
+# Behaviour test, in every Caddyfile that ships:
 #   - Caddyfile                    (the default install)
 #   - caddy/Caddyfile.tls.example  (the HTTPS template operators copy)
+# 1. The security headers Caddy adds must not overwrite a stricter value the
+#    backend already chose.
+# 2. Caddy's log lines never carry a credential from a URL.
 #
 # Why: the HTML preview's folder view (backend routers/deliverable_view.py)
 # and the bench viewer answer with `Referrer-Policy: no-referrer`, so the
@@ -20,6 +22,14 @@
 #             Sabotage: drop the `?` in front of Referrer-Policy.
 #   default : a backend answer without the header still gets
 #             strict-origin-when-cross-origin. Sabotage: delete the line.
+#   redact  : a client that hangs up mid-download (a media player after its
+#             first GET, a preview closed while loading) makes the proxy log
+#             "aborting with incomplete response" with the request URI and
+#             headers. That line must show neither the folder view's token
+#             (the path segment after /deliverable-view/, in the URI and in
+#             the Referer, and the token by its own shape `dv1.<a>.<b>`) nor
+#             a `?ticket=` / `?token=` / `?access_token=` value.
+#             Sabotage: put back the query-only `request>uri query` filter.
 #
 # Needs: docker, curl, openssl. Usage: caddy/test_upstream_headers.sh
 set -euo pipefail
@@ -50,16 +60,28 @@ expect() { # expect LABEL ACTUAL WANTED
 docker network create "$NET" >/dev/null
 
 # Stub backend: the view route sets no-referrer, everything else sets none.
+# A path ending in big.bin streams 32 MiB, so a client can hang up while the
+# proxy is still copying the answer.
+mkdir -p "$TMP/srv"
+head -c 33554432 /dev/zero >"$TMP/srv/big.bin"
 cat >"$TMP/Caddyfile.backend" <<'STUB'
 :8000 {
 	@view path /api/v1/deliverable-view/*
 	header @view Referrer-Policy no-referrer
-	respond "ok" 200
+	@big path */big.bin
+	handle @big {
+		root * /srv
+		rewrite * /big.bin
+		file_server
+	}
+	handle {
+		respond "ok" 200
+	}
 }
 STUB
 name="mc-caddy-hdr-backend-$$"
 docker run -d --name "$name" --network "$NET" --network-alias backend \
-    -v "$TMP/Caddyfile.backend:/etc/caddy/Caddyfile:ro" "$IMAGE" >/dev/null
+    -v "$TMP/Caddyfile.backend:/etc/caddy/Caddyfile:ro" -v "$TMP/srv:/srv:ro" "$IMAGE" >/dev/null
 CONTAINERS="$CONTAINERS $name"
 
 # start_caddy CADDYFILE CONTAINER_PORT [extra docker args...] → sets PORT
@@ -75,6 +97,7 @@ start_caddy() {
         -v "$file:/etc/caddy/Caddyfile:ro" -v "$MAINT:/etc/caddy/maintenance:ro" "$@" \
         "$IMAGE" >/dev/null
     CONTAINERS="$CONTAINERS $name"
+    CADDY="$name"
     PORT="$(docker port "$name" "$cport/tcp" | head -1 | sed 's/.*://')"
     for _ in $(seq 1 50); do
         code="$(curl -sk -o /dev/null -w '%{http_code}' --resolve "mc-test.invalid:$PORT:127.0.0.1" \
@@ -93,11 +116,54 @@ referrer() {
         | tr -d '\r' | awk 'tolower($1)=="referrer-policy:"{print $2}' | paste -sd, -
 }
 
+# Stand-ins for credentials. Each one must never show up in Caddy's log.
+VIEW_TOKEN="dv1.PATHTOKENCLAIMS00000000.PATHTOKENSIGNATURE000000"
+REF_TOKEN="dv1.REFTOKENCLAIMS000000000.REFTOKENSIGNATURE0000000"
+SHAPE_TOKEN="dv1.SHAPETOKENCLAIMS0000000.SHAPETOKENSIGNATURE00000"
+SECRETS="PATHTOKEN REFTOKEN SHAPETOKEN TICKETVALUE QUERYTOKEN ACCESSVALUE"
+
+# redaction: hang up early on a big answer, then read Caddy's own log.
+redaction() {
+    local base="$SCHEME://$HOST:$PORT" log secret uri_want ref_want i
+    local path="/api/v1/deliverable-view/$VIEW_TOKEN/media/big.bin"
+    local query="x=1&ticket=TICKETVALUE&token=QUERYTOKEN&access_token=ACCESSVALUE&next=%2Fv%2F$SHAPE_TOKEN%2Fa"
+    curl -sk --resolve "mc-test.invalid:$PORT:127.0.0.1" \
+        -H "Referer: $base/api/v1/deliverable-view/$REF_TOKEN/index.html" \
+        "$base$path?$query" 2>/dev/null | head -c 1024 >/dev/null || :
+    log=""
+    for i in $(seq 1 50); do
+        log="$(docker logs "$CADDY" 2>&1)"
+        case "$log" in *'"uri"'*) break ;; esac
+        sleep 0.2
+    done
+    case "$log" in
+        *'"uri"'*) pass "redact: the hang-up wrote a log line with the request URI" ;;
+        *) fail "redact: no log line with the request URI (the hang-up was not logged)"; return 0 ;;
+    esac
+    for secret in $SECRETS; do
+        case "$log" in
+            *"$secret"*) fail "redact: '$secret' is in Caddy's log" ;;
+            *) pass "redact: '$secret' is not in Caddy's log" ;;
+        esac
+    done
+    uri_want='"uri":"/api/v1/deliverable-view/REDACTED/media/big.bin?x=1&ticket=REDACTED&token=REDACTED&access_token=REDACTED&next=%2Fv%2FREDACTED%2Fa"'
+    ref_want="\"Referer\":[\"$base/api/v1/deliverable-view/REDACTED/index.html\"]"
+    case "$log" in
+        *"$uri_want"*) pass "redact: the URI keeps its file path and other parameters" ;;
+        *) fail "redact: logged URI is not $uri_want" ;;
+    esac
+    case "$log" in
+        *"$ref_want"*) pass "redact: the Referer keeps its file path" ;;
+        *) fail "redact: logged Referer is not $ref_want" ;;
+    esac
+}
+
 run_cases() {
     expect "keep: the folder view keeps the backend's no-referrer" \
         "$(referrer /api/v1/deliverable-view/tok/index.html)" no-referrer
     expect "default: other answers get strict-origin-when-cross-origin" \
         "$(referrer /api/v1/tasks)" strict-origin-when-cross-origin
+    redaction
 }
 
 # 1. shipped default (plain http)
