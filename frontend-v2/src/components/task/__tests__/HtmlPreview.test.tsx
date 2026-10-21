@@ -32,9 +32,22 @@ const URL_HTML = "/api/v1/boards/b/tasks/t/deliverables/d/file";
 /** Source shown by the code view (the highlighter splits it into spans). */
 const shownSource = () => document.querySelector("pre")?.textContent ?? "";
 
-async function renderHtml(path = "site/index.html") {
+/** Every frame in the document (inline, fullscreen, still or running). */
+const frames = () => Array.from(document.querySelectorAll("iframe"));
+/** Frames whose page can run scripts. Before the operator's tap: none. */
+const scriptFrames = () => frames().filter((f) => (f.getAttribute("sandbox") ?? "").includes("allow-scripts"));
+
+/** Opens an HTML file: it arrives as a still view, scripts off. */
+async function renderStill(path = "site/index.html") {
   render(<FilePreview fileUrl={URL_HTML} path={path} />);
-  return (await screen.findByTitle(/Rendered page/i)) as HTMLIFrameElement;
+  return (await screen.findByTitle(/Still view of/i)) as HTMLIFrameElement;
+}
+
+/** Opens an HTML file and taps "Run page" — the page itself, running. */
+async function renderHtml(path = "site/index.html") {
+  await renderStill(path);
+  fireEvent.click(screen.getByRole("button", { name: "Run page" }));
+  return screen.getByTitle(/Rendered page/i) as HTMLIFrameElement;
 }
 
 describe("HtmlPreview — rendered HTML deliverables", () => {
@@ -108,7 +121,7 @@ describe("HtmlPreview — rendered HTML deliverables", () => {
     fetchSpy = mockFetch("nope", 500);
     render(<FilePreview fileUrl={URL_HTML} path="index.html" />);
     expect(await screen.findByText("Failed to load file")).toBeInTheDocument();
-    expect(screen.queryByTitle(/Rendered page/i)).toBeNull();
+    expect(frames()).toHaveLength(0);
   });
 
   it("switches between preview and code, preview being the default", async () => {
@@ -124,10 +137,13 @@ describe("HtmlPreview — rendered HTML deliverables", () => {
     expect(code).toHaveAttribute("aria-checked", "true");
     // The source is shown as code, and the running page is gone.
     await waitFor(() => expect(shownSource()).toContain("window.x = 1;"));
-    expect(screen.queryByTitle(/Rendered page/i)).toBeNull();
+    expect(frames()).toHaveLength(0);
 
+    // Back on the preview the page is a still again: leaving it stopped the
+    // page, and it runs only after the next tap.
     fireEvent.click(preview);
-    expect(screen.getByTitle(/Rendered page/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Still view of/i)).toBeInTheDocument();
+    expect(scriptFrames()).toHaveLength(0);
     expect(shownSource()).toBe("");
   });
 
@@ -177,29 +193,159 @@ describe("HtmlPreview — rendered HTML deliverables", () => {
     fetchSpy = mockFetch("<root><a>1</a></root>");
     render(<FilePreview fileUrl="/x" path="feed.xml" />);
     await waitFor(() => expect(shownSource()).toContain("<root>"));
-    expect(screen.queryByTitle(/Rendered page/i)).toBeNull();
+    expect(frames()).toHaveLength(0);
     expect(screen.queryByRole("radiogroup")).toBeNull();
+  });
+});
+
+// Click-to-run (security review 2026-10-21). A sandboxed srcdoc frame runs in
+// MC's own process (always on iOS): one `for(;;){}` froze all of MC, and in
+// WebKit `history.back()` from the page moved the whole tab. So the page
+// first arrives as a still with scripts OFF (sandbox="") and only the
+// operator's tap mounts the frame that may run scripts.
+describe("HtmlPreview — click to run", () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+  beforeEach(() => {
+    Object.defineProperty(globalThis, "localStorage", {
+      value: { getItem: () => "tok", setItem: () => undefined, removeItem: () => undefined, clear: () => undefined },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    fetchSpy = undefined;
+  });
+
+  it("opens as a still with scripts off — no frame that can run scripts exists before the tap", async () => {
+    fetchSpy = mockFetch(PAGE);
+    const still = await renderStill();
+    // sandbox="" — every restriction on, scripts included.
+    expect(still.getAttribute("sandbox")).toBe("");
+    expect(still.getAttribute("src")).toBeNull();
+    expect(still.getAttribute("srcdoc")).toContain("<h1>Helix page</h1>");
+    expect(still.getAttribute("referrerpolicy")).toBe("no-referrer");
+    // Not reachable by Tab: the still is a picture, the button is the way in.
+    expect(still.getAttribute("tabindex")).toBe("-1");
+    expect(frames()).toEqual([still]);
+    expect(scriptFrames()).toHaveLength(0);
+    expect(screen.queryByTitle(/Rendered page/i)).toBeNull();
+  });
+
+  it("starts the page only on a tap on 'Run page' (a ≥ 44 px button) — in a new frame element", async () => {
+    fetchSpy = mockFetch(PAGE);
+    const still = await renderStill();
+    const run = screen.getByRole("button", { name: "Run page" });
+    expect(run.className).toContain("min-h-11");
+
+    fireEvent.click(run);
+    const live = screen.getByTitle(/Rendered page/i) as HTMLIFrameElement;
+    expect(live.getAttribute("sandbox")).toBe(HTML_PREVIEW_SANDBOX);
+    // A NEW element: sandbox flags apply when a frame navigates, so flipping
+    // the attribute on the still frame would not change what its page may do.
+    expect(live).not.toBe(still);
+    expect(still.isConnected).toBe(false);
+    expect(frames()).toEqual([live]);
+    expect(screen.queryByRole("button", { name: "Run page" })).toBeNull();
+  });
+
+  it("opens fullscreen as a still too, and runs there only after the tap", async () => {
+    fetchSpy = mockFetch(PAGE);
+    await renderStill();
+    fireEvent.click(screen.getByRole("button", { name: "Fullscreen" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByTitle(/Still view of/i).getAttribute("sandbox")).toBe("");
+    expect(scriptFrames()).toHaveLength(0);
+    // One copy at a time: the inline still pauses while fullscreen is open.
+    expect(frames()).toHaveLength(1);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Run page" }));
+    expect(within(dialog).getByTitle(/Rendered page/i).getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frames()).toHaveLength(1);
+
+    // Started is started: closing fullscreen keeps the page running inline.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close fullscreen" }));
+    expect(screen.getByTitle(/Rendered page/i).getAttribute("sandbox")).toBe("allow-scripts");
+  });
+
+  it("never carries the tap over to other content: a new page arrives as a still again", () => {
+    const view = renderRunning();
+    expect(scriptFrames()).toHaveLength(1);
+    // The same HtmlPreview instance gets another file (Files page, folder list).
+    view.rerender(<HtmlPreview html="<p>another page</p>" name="other.html" code={<pre />} />);
+    expect(scriptFrames()).toHaveLength(0);
+    expect(screen.getByTitle(/Still view of/i).getAttribute("srcdoc")).toContain("another page");
+  });
+
+  it("keeps hostile code from running before the tap: an endless loop or history.back() sits in a frame without scripts", () => {
+    const hostile = "<script>for(;;){}</script><script>history.back()</script>";
+    render(<HtmlPreview html={hostile} name="loop.html" code={<pre />} />);
+    const still = screen.getByTitle(/Still view of/i);
+    expect(still.getAttribute("srcdoc")).toContain("for(;;){}");
+    expect(still.getAttribute("sandbox")).toBe("");
+    expect(scriptFrames()).toHaveLength(0);
+  });
+});
+
+// The page can draw anything inside its frame — a fake MC login included.
+// MC's own chrome around the frame says what it is; the page cannot paint
+// over it.
+describe("HtmlPreview — isolation label", () => {
+  const LABEL = "Agent page · isolated preview – never enter passwords here";
+
+  it("shows the label above the frame, before and after the page runs", () => {
+    render(<HtmlPreview html={PAGE} name="index.html" code={<pre />} />);
+    const region = document.querySelector('[data-region="html-preview"]') as HTMLElement;
+    expect(within(region).getByText(LABEL)).toBeInTheDocument();
+    // Above the frame in document order: MC's chrome, outside the page.
+    const label = within(region).getByText(LABEL);
+    const frame = screen.getByTitle(/Still view of/i);
+    expect(label.compareDocumentPosition(frame) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run page" }));
+    expect(within(region).getByText(LABEL)).toBeInTheDocument();
+  });
+
+  it("shows the label in the fullscreen header too", () => {
+    renderRunning();
+    fireEvent.click(screen.getByRole("button", { name: "Fullscreen" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(LABEL)).toBeInTheDocument();
+    // … together with the file name, so the operator knows which page it is.
+    expect(within(dialog).getByText("index.html")).toBeInTheDocument();
+  });
+
+  it("is not shown on the code view (the source runs nothing)", () => {
+    render(<HtmlPreview html={PAGE} name="index.html" code={<pre data-testid="src" />} />);
+    fireEvent.click(screen.getByRole("radio", { name: /Code/ }));
+    expect(screen.queryByText(LABEL)).toBeNull();
   });
 });
 
 describe("buildPreviewDocument — the guard head every preview gets", () => {
   const GUARD_START = '<base href="about:srcdoc">';
 
-  it("keeps the doctype first (standards mode) and puts the guard right after it", () => {
-    const out = buildPreviewDocument(PAGE);
-    expect(out.startsWith("<!DOCTYPE html>" + GUARD_START)).toBe(true);
-    expect(out.endsWith(PAGE.slice("<!DOCTYPE html>".length))).toBe(true);
-  });
-
-  it("skips a BOM, whitespace, comments and an xml prologue before the doctype", () => {
-    const head = "\uFEFF  <!-- generated -->\n<?xml version=\"1.0\"?>\n<!doctype html>";
-    const out = buildPreviewDocument(head + "<p>x</p>");
-    expect(out).toBe(head + out.slice(head.length, out.indexOf("<p>")) + "<p>x</p>");
-    expect(out.slice(head.length).startsWith(GUARD_START)).toBe(true);
-  });
-
-  it("prepends the guard when there is no doctype", () => {
-    expect(buildPreviewDocument("<p>bare</p>").startsWith(GUARD_START)).toBe(true);
+  // The guard goes FIRST, before anything the page brings — a doctype, a
+  // comment, a script. A srcdoc document is never in quirks mode (HTML spec,
+  // "initial" insertion mode: the quirks rules skip iframe srcdoc documents),
+  // so the doctype does not have to lead. Checked in Chromium and WebKit
+  // (2026-10-21): with the guard in front of an HTML 4.01 Transitional
+  // doctype the page stays in CSS1Compat, the CSP meta sits in <head> and is
+  // enforced, and the page's own <html lang>, <title> and styles still apply.
+  it.each([
+    ["<!DOCTYPE html><html><head><title>DNA</title></head><body>x</body></html>", "html5 doctype"],
+    ['<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"><p>x', "quirks-mode doctype"],
+    ["<p>bare</p>", "no doctype"],
+    ["<!-- generated -->\n<?xml version=\"1.0\"?>\n<!doctype html><p>x</p>", "comment and xml prologue"],
+    ["<!--><script>run()</script>--><!doctype html>", "script after an abrupt empty comment"],
+    ["<!-- never closed <!doctype html>", "an unclosed comment"],
+    ["<script>run()</script><!doctype html>", "a script before the doctype"],
+  ])("puts the guard in front of the whole page, unchanged: %s (%s)", (src) => {
+    const out = buildPreviewDocument(src);
+    expect(out.startsWith(GUARD_START)).toBe(true);
+    expect(out).toBe(buildPreviewDocument("") + src);
   });
 
   it("anchors relative URLs to about:srcdoc, so #links stay in the page and nothing hits MC", () => {
@@ -221,64 +367,22 @@ describe("buildPreviewDocument — the guard head every preview gets", () => {
     expect(HTML_PREVIEW_CSP).not.toContain('"');
   });
 
-  it("stays fast on a pathological prologue (no catastrophic backtracking)", () => {
-    const evil = " ".repeat(200_000) + "<!-- x".repeat(2_000) + "y";
-    const started = performance.now();
-    buildPreviewDocument(evil);
-    expect(performance.now() - started).toBeLessThan(500);
-  });
-
-  it("stays linear on CLOSED comments with no doctype (the slow path of a lazy comment pattern)", () => {
-    // A lazy `<!--[\s\S]*?-->` inside a repeated group can split a run of n
-    // closed comments 2^(n-1) ways once no doctype follows — on MC's main
-    // thread, during render. 28 comments (196 bytes) take ~0.9 s even after
-    // V8 has compiled the hot regex to native code (~12 s before that), and
-    // microseconds for a linear scan. The small case comes first so a
-    // regression fails here instead of hanging on the big one.
-    const small = "<!---->".repeat(28) + "<p>x";
+  it("does not scan the page at all: hostile prologues cost nothing", () => {
+    // The old doctype scan was a hand-written tokenizer (and before that a
+    // regex that froze the tab for seconds on 200 bytes of closed comments).
+    const evil = "<!---->".repeat(20_000) + " ".repeat(200_000) + "<!-- x".repeat(2_000) + "y";
     const t0 = performance.now();
-    expect(buildPreviewDocument(small).startsWith(GUARD_START)).toBe(true);
-    expect(performance.now() - t0).toBeLessThan(100);
-
-    const big = "<!---->".repeat(20_000) + "<!-- a -- b --!> <?x?>\n".repeat(5_000) + "<p>x";
-    const t1 = performance.now();
-    expect(buildPreviewDocument(big).startsWith(GUARD_START)).toBe(true);
-    expect(performance.now() - t1).toBeLessThan(250);
-  });
-
-  // The guard must sit before the first thing the BROWSER would run. These
-  // follow the HTML tokenizer: `<!-->` and `<!--->` are complete (empty)
-  // comments, `--!>` ends a comment, `--->` too.
-  it.each([
-    ["<!-->", "abrupt empty comment"],
-    ["<!--->", "abrupt empty comment with a dash"],
-    ["<!-- a --!>", "comment closed by --!>"],
-    ["<!-- a --->", "comment closed by --->"],
-    ["<!-- -- inner -- -->", "dashes inside a comment"],
-  ])("treats %s as a complete comment before the doctype (%s)", (comment) => {
-    const head = `${comment}\n<!DocType html>`;
-    const out = buildPreviewDocument(head + "<p>x</p>");
-    expect(out.slice(head.length).startsWith(GUARD_START)).toBe(true);
-    expect(out.endsWith("<p>x</p>")).toBe(true);
-  });
-
-  it.each([
-    ["<!--><script>run()</script>--><!doctype html>", "script after an abrupt empty comment"],
-    ["<!-- a --!><script>run()</script>--><!doctype html>", "script after a --!> close"],
-    ["<p>text</p><!doctype html>", "content before the doctype"],
-    ["<!-- never closed <!doctype html>", "an unclosed comment swallows the doctype"],
-    ["<?pi never closed <!doctype html", "an unclosed processing instruction"],
-  ])("puts the guard first when markup precedes the doctype: %s (%s)", (src) => {
-    expect(buildPreviewDocument(src)).toBe(
-      buildPreviewDocument("") + src,
-    );
-  });
-
-  it("accepts a doctype without a space before its name (`<!DOCTYPEhtml>`)", () => {
-    const out = buildPreviewDocument("<!DOCTYPEhtml><p>x</p>");
-    expect(out.startsWith("<!DOCTYPEhtml>" + GUARD_START)).toBe(true);
+    expect(buildPreviewDocument(evil).startsWith(GUARD_START)).toBe(true);
+    expect(performance.now() - t0).toBeLessThan(50);
   });
 });
+
+/** Renders HtmlPreview directly and starts the page (tap on "Run page"). */
+function renderRunning(html = PAGE) {
+  const view = render(<HtmlPreview html={html} name="index.html" code={<pre />} />);
+  fireEvent.click(screen.getByRole("button", { name: "Run page" }));
+  return view;
+}
 
 describe("HtmlPreview — review fixes (loading cap, nested Escape)", () => {
   afterEach(() => {
@@ -292,7 +396,7 @@ describe("HtmlPreview — review fixes (loading cap, nested Escape)", () => {
     vi.useFakeTimers();
     expect(HTML_PREVIEW_LOADING_CAP_MS).toBeGreaterThan(0);
     expect(HTML_PREVIEW_LOADING_CAP_MS).toBeLessThanOrEqual(3000);
-    render(<HtmlPreview html={PAGE} name="index.html" code={<pre />} />);
+    renderRunning();
     expect(screen.getByText("Loading page…")).toBeInTheDocument();
     act(() => {
       vi.advanceTimersByTime(HTML_PREVIEW_LOADING_CAP_MS - 1);
@@ -308,7 +412,7 @@ describe("HtmlPreview — review fixes (loading cap, nested Escape)", () => {
 
   it("starts the cap again for the fullscreen frame (its own copy of the page)", () => {
     vi.useFakeTimers();
-    render(<HtmlPreview html={PAGE} name="index.html" code={<pre />} />);
+    renderRunning();
     act(() => {
       vi.advanceTimersByTime(HTML_PREVIEW_LOADING_CAP_MS);
     });
@@ -347,7 +451,7 @@ describe("HtmlPreview — review fixes (loading cap, nested Escape)", () => {
   it("binds the fullscreen Escape listener once, not once per render", () => {
     const add = vi.spyOn(window, "addEventListener");
     try {
-      const { rerender } = render(<HtmlPreview html={PAGE} name="index.html" code={<pre />} />);
+      const { rerender } = renderRunning();
       fireEvent.click(screen.getByRole("button", { name: "Fullscreen" }));
       const keydownBinds = () => add.mock.calls.filter(([type]) => type === "keydown").length;
       const afterOpen = keydownBinds();
@@ -382,6 +486,8 @@ describe("filePreview i18n", () => {
     const deNs = (de as unknown as { filePreview: { html: Record<string, string>; download: string } }).filePreview;
     expect(deNs.html.preview).toBe("Vorschau");
     expect(deNs.html.fullscreen).toBe("Vollbild");
+    expect(deNs.html.run).toBe("Seite starten");
+    expect(deNs.html.isolationLabel).toBe("Agenten-Seite · isolierte Vorschau – hier nie Passwörter eingeben");
     expect(deNs.download).toBe("Herunterladen");
   });
 });
