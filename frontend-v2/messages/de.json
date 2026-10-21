@@ -1766,6 +1766,24 @@
     "listView": "Listenansicht",
     "gridView": "Rasteransicht"
   },
+  "filePreview": {
+    "download": "Herunterladen",
+    "downloadTitle": "{name} herunterladen",
+    "loading": "Datei wird geladen…",
+    "loadFailed": "Datei konnte nicht geladen werden",
+    "noPreview": "Für diesen Dateityp gibt es keine Vorschau — bitte herunterladen.",
+    "pdfTitle": "PDF-Vorschau",
+    "html": {
+      "viewLabel": "Ansicht",
+      "preview": "Vorschau",
+      "code": "Code",
+      "fullscreen": "Vollbild",
+      "closeFullscreen": "Vollbild schliessen",
+      "fullscreenTitle": "{name} im Vollbild",
+      "frameTitle": "Gerenderte Seite {name}",
+      "loading": "Seite wird geladen…"
+    }
+  },
   "settings": {
     "title": "Einstellungen",
     "subtitle": "Profil, Sicherheit, Systemkonfiguration",
