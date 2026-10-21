@@ -63,6 +63,19 @@ chars total):
 - {{ field }}
 {% endfor %}
 {%- endif %}
+{%- if harness == 'omp' %}
+
+## Self-check
+
+- **Browser:** `eval` has a global `browser` on a shared headless Chrome;
+  never search for or install Chromium. It runs in another container, so
+  `file://` and `localhost` do not reach your files. Serve them
+  (`python3 -m http.server 8765`, named `bash` service), then
+  `tab = await browser.open({name: "c", url: "http://<hostname>:8765/"})`
+  (`hostname` prints it), `tab.screenshot()`, `tab.errors()`, `tab.console()`.
+- **JS syntax:** `node --check app.js`.
+- **Never** `pip install --break-system-packages`; report a missing tool.
+{%- endif %}
 
 ## More knowledge (`mc docs <topic>`)
 
