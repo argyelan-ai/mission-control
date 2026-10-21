@@ -1783,8 +1783,7 @@
       "frameTitle": "Rendered page {name}",
       "loading": "Loading page…",
       "run": "Run page",
-      "stillTitle": "Still view of {name}",
-      "stillHint": "Still view, scripts off",
+      "runHint": "The page runs only when you start it.",
       "isolationLabel": "Agent page · isolated preview – never enter passwords here"
     }
   },

@@ -6,16 +6,19 @@
  *
  * Security boundary — the page is untrusted, model-written content:
  *
- *  - Click to run. The page first shows as a still: the same document in an
- *    `<iframe sandbox="">`, every restriction on, scripts included, under a
- *    "Run page" button. Only that tap mounts the frame that may run scripts.
- *    A sandboxed srcdoc frame runs in MC's own process (on iOS always), so a
- *    `for(;;){}` in the page freezes all of MC, and in WebKit the page's
- *    `history.back()` moves the whole tab (see Known limits). Neither may
- *    happen just because the operator opened a deliverable. The tap counts
- *    for this page only: other content, or leaving the preview for the code
- *    view, starts from the still again. A reload brings MC back from a page
- *    that hangs, and the page comes back as a still.
+ *  - Click to run. Before the tap there is NO frame: the box shows only a
+ *    "Run page" button. Nothing of the page is parsed until then — no
+ *    script, no markup, no request. A sandboxed srcdoc frame runs in MC's
+ *    own process (on iOS always), so a `for(;;){}` in the page freezes all
+ *    of MC, and so does pure markup without any script: an SVG `<use>` tree
+ *    that expands to millions of nodes froze MC for more than 45 s even in a
+ *    frame with sandbox="" (Chromium and WebKit). In WebKit the page's
+ *    `history.back()` moves the whole tab, and every https: image, style or
+ *    frame the page loads tells that host that the operator opened it (see
+ *    Known limits). None of this may happen just because the operator
+ *    opened a deliverable. The tap counts for this page only: other
+ *    content, or leaving the preview for the code view, shows the button
+ *    again.
  *  - The running page lives in an `<iframe sandbox="allow-scripts">` and
  *    NOTHING else. Without `allow-same-origin` it lives in an opaque origin:
  *    its scripts run, but they cannot read MC's localStorage (the session
@@ -36,7 +39,9 @@
  *        would load MC itself into the frame, and `logo.png` would be fetched
  *        from MC. With this base, `#links` stay in the page and relative
  *        files resolve to nothing (multi-file pages are a separate feature).
- *      · `no-referrer` — requests from the page carry no Referer header.
+ *      · `no-referrer` — asks that the page's requests carry no Referer
+ *        header. Chromium keeps to it; in WebKit the page can turn it off
+ *        again (see Known limits).
  *      · a CSP: inline code and https: libraries/fonts/images load (many
  *        landing pages use a CDN), the page's own fetch/XHR/WebSocket
  *        (`connect-src`) and forms are off, and plain http: (LAN, MC itself)
@@ -45,8 +50,11 @@
  *
  * Known limits — what the sandbox does NOT take away (checked in Chromium
  * and WebKit, the Safari engine; not on a real iPhone):
- *  - Once started, a page that never yields (an endless loop) freezes MC's
- *    tab until it is reloaded — the frame shares MC's process.
+ *  - Once started, a page that never yields (an endless loop, or markup that
+ *    expands without end) freezes MC's tab — the frame shares MC's process.
+ *    A reload brings MC back, and the page then waits for a tap again. The
+ *    installed app (standalone, no reload control) has to be closed and
+ *    opened again.
  *  - In WebKit a running page can step the TAB's history: `history.back()` or
  *    `history.go(-n)` leaves MC for the page before it, or steps back through
  *    MC's own routes. It can only reach existing history entries, never a URL
@@ -58,7 +66,13 @@
  *    page that floods the history.
  *  - The page can learn MC's ADDRESS (not its data): its script can read
  *    `location.ancestorOrigins`, which lists MC's origin whatever the
- *    referrer policy says.
+ *    referrer policy says. In WebKit even a page without scripts can: its
+ *    own later `<meta name="referrer" content="unsafe-url">` wins over the
+ *    guard's no-referrer, and its requests then carry MC's origin as
+ *    Referer. Chromium keeps no-referrer.
+ *  - Once started, the page loads its https: images, styles, fonts and
+ *    frames, so those hosts see that it was opened, when, and from which
+ *    address and browser.
  *  - Data the page has can leave: through an allowed https: image, script or
  *    frame URL, or by navigating its own frame. `connect-src 'none'` only
  *    stops the page's own fetch/XHR/WebSocket. Hence the label: what the
@@ -87,15 +101,11 @@ import {
 import { createPortal } from "react-dom";
 import { useTranslations } from "next-intl";
 import { Code2, Eye, Loader2, Maximize2, Play, ShieldAlert, X, type LucideIcon } from "lucide-react";
-import { C, alpha } from "@/lib/colors";
+import { C } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 
 /** The ONLY sandbox token the running frame gets. Tests pin it exactly. */
 export const HTML_PREVIEW_SANDBOX = "allow-scripts";
-
-/** The still before the tap: an empty sandbox, every restriction on — no
- *  script runs, so nothing in the page can loop or move the tab. */
-export const HTML_STILL_SANDBOX = "";
 
 /** CSP every previewed page runs under (see the file comment). */
 export const HTML_PREVIEW_CSP = [
@@ -176,87 +186,53 @@ function SandboxedFrame({ doc, title }: { doc: string; title: string }) {
   );
 }
 
-// ── Still (before the tap) ─────────────────────────────────────────────────
+// ── Before the tap ─────────────────────────────────────────────────────────
 
 /**
- * The page as a still: the same document with scripts off, dimmed, under the
- * "Run page" button. The cover takes every touch, so the still is a picture —
- * no link in it can be followed — and a swipe over it scrolls MC, not the
- * page. Its own element: sandbox flags apply when a frame navigates, so the
- * running page always gets a NEW frame, never this one with a new attribute.
+ * What the box shows before the tap: the "Run page" button and one line on
+ * why — and NO frame. Nothing of the page is parsed here: a still with
+ * scripts off was not enough, because pure markup can freeze MC and the
+ * page's images and styles already reach the hosts it picks (file comment).
  */
-function StillFrame({
-  doc,
-  title,
-  onRun,
-  place,
-}: {
-  doc: string;
-  title: string;
-  onRun: () => void;
-  /** "top" inline: the button shows as soon as the box scrolls into view on a
-   *  phone (the box is taller than what is left of the screen). */
-  place: "top" | "center";
-}) {
+function RunPanel({ onRun }: { onRun: () => void }) {
   const t = useTranslations("filePreview.html");
   return (
-    <>
-      <iframe
-        title={title}
-        sandbox={HTML_STILL_SANDBOX}
-        srcDoc={doc}
-        referrerPolicy="no-referrer"
-        tabIndex={-1}
-        className="absolute inset-0 block w-full h-full border-0"
-        style={{ colorScheme: "light", background: "Canvas" }}
-      />
-      <div
-        className={`absolute inset-0 flex justify-center p-4 ${place === "top" ? "items-start pt-16" : "items-center"}`}
-        style={{ background: alpha(C.scrim, 0.45) }}
+    <div className="flex flex-col items-center justify-center gap-2 h-full min-h-40 px-4 py-8 text-center">
+      <button
+        type="button"
+        onClick={onRun}
+        className="inline-flex items-center justify-center gap-2 min-h-11 px-4 rounded-md text-sm font-medium cursor-pointer transition-colors"
+        style={{ background: C.accent, color: C.onAccent }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = C.accentHover)}
+        onMouseLeave={(e) => (e.currentTarget.style.background = C.accent)}
       >
-        <div
-          className="flex flex-col items-center gap-2 p-4 rounded-lg text-center"
-          style={{ background: C.bgElevated, border: `1px solid ${C.border}` }}
-        >
-          <button
-            type="button"
-            onClick={onRun}
-            className="inline-flex items-center justify-center gap-2 min-h-11 px-4 rounded-md text-sm font-medium cursor-pointer transition-colors"
-            style={{ background: C.accent, color: C.onAccent }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = C.accentHover)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = C.accent)}
-          >
-            <Play size={16} aria-hidden="true" />
-            {t("run")}
-          </button>
-          <p className="text-xs" style={{ color: C.textSecondary }}>
-            {t("stillHint")}
-          </p>
-        </div>
-      </div>
-    </>
+        <Play size={16} aria-hidden="true" />
+        {t("run")}
+      </button>
+      <p className="text-xs" style={{ color: C.textSecondary }}>
+        {t("runHint")}
+      </p>
+    </div>
   );
 }
 
-/** The still before the tap, the running page after it. */
+/** The Run button before the tap, the running page after it. */
 function PageFrame({
   doc,
   name,
   running,
   onRun,
-  place,
 }: {
   doc: string;
   name: string;
   running: boolean;
   onRun: () => void;
-  place: "top" | "center";
 }) {
   const t = useTranslations("filePreview.html");
   return running ? (
     <SandboxedFrame doc={doc} title={t("frameTitle", { name })} />
   ) : (
-    <StillFrame doc={doc} title={t("stillTitle", { name })} onRun={onRun} place={place} />
+    <RunPanel onRun={onRun} />
   );
 }
 
@@ -426,7 +402,7 @@ function FullscreenView({
         </button>
       </div>
       <div className="relative flex-1 min-h-0">
-        <PageFrame doc={doc} name={name} running={running} onRun={onRun} place="center" />
+        <PageFrame doc={doc} name={name} running={running} onRun={onRun} />
       </div>
     </div>,
     document.body,
@@ -452,15 +428,15 @@ export function HtmlPreview({ html, name, code }: HtmlPreviewProps) {
 
   // Click to run: the document the operator started, or null. Bound to the
   // document itself, so other content — the same component handed another
-  // file — arrives as a still and never inherits the tap.
+  // file — arrives with the Run button and never inherits the tap.
   const [runningDoc, setRunningDoc] = useState<string | null>(null);
   const running = runningDoc === doc;
   const run = () => setRunningDoc(doc);
 
   function changeView(next: View) {
     setView(next);
-    // The code view unmounts the page; back on the preview it is a still
-    // again and runs only after the next tap.
+    // The code view unmounts the page; back on the preview it waits for
+    // the next tap again.
     if (next !== "preview") setRunningDoc(null);
   }
 
@@ -488,12 +464,16 @@ export function HtmlPreview({ html, name, code }: HtmlPreviewProps) {
           <div className="px-3 py-2" style={{ background: C.bgSurface, borderBottom: `1px solid ${C.border}` }}>
             <IsolationLabel />
           </div>
-          {/* 60 % of the screen on a phone, never so small that a page is a strip. */}
-          <div className="relative w-full h-[60vh] min-h-[320px] max-h-[720px]">
-            {/* One copy of the page at a time: while the fullscreen view is
-                open the inline frame is unmounted, the box keeps its height
-                so the page underneath does not jump. */}
-            {!fullscreen && <PageFrame doc={doc} name={name} running={running} onRun={run} place="top" />}
+          {/* Running: 60 % of the screen on a phone, never so small that a
+              page is a strip. Before the tap only the Run button: a short box,
+              nothing empty to scroll past. */}
+          <div
+            className={`relative w-full ${running ? "h-[60vh] min-h-[320px] max-h-[720px]" : "min-h-40"}`}
+          >
+            {/* One copy of the page (or of the Run button) at a time: while
+                the fullscreen view is open the inline one is unmounted, the
+                box keeps its height so the page underneath does not jump. */}
+            {!fullscreen && <PageFrame doc={doc} name={name} running={running} onRun={run} />}
           </div>
         </div>
       ) : (

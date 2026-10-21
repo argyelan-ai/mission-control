@@ -32,21 +32,28 @@ const URL_HTML = "/api/v1/boards/b/tasks/t/deliverables/d/file";
 /** Source shown by the code view (the highlighter splits it into spans). */
 const shownSource = () => document.querySelector("pre")?.textContent ?? "";
 
-/** Every frame in the document (inline, fullscreen, still or running). */
+/** Every frame in the document (inline or fullscreen). */
 const frames = () => Array.from(document.querySelectorAll("iframe"));
-/** Frames whose page can run scripts. Before the operator's tap: none. */
-const scriptFrames = () => frames().filter((f) => (f.getAttribute("sandbox") ?? "").includes("allow-scripts"));
+/** Frames whose page can run scripts. A frame WITHOUT a sandbox attribute is
+ *  the worst case (no sandbox at all), so it counts as one. */
+const scriptFrames = () =>
+  frames().filter((f) => {
+    const sandbox = f.getAttribute("sandbox");
+    return sandbox === null || sandbox.split(/\s+/).includes("allow-scripts");
+  });
 
-/** Opens an HTML file: it arrives as a still view, scripts off. */
-async function renderStill(path = "site/index.html") {
+/** The hint next to the Run button, before the tap. */
+const RUN_HINT = "The page runs only when you start it.";
+
+/** Opens an HTML file: it arrives as a Run button, with no frame yet. */
+async function renderGate(path = "site/index.html") {
   render(<FilePreview fileUrl={URL_HTML} path={path} />);
-  return (await screen.findByTitle(/Still view of/i)) as HTMLIFrameElement;
+  return screen.findByRole("button", { name: "Run page" });
 }
 
 /** Opens an HTML file and taps "Run page" — the page itself, running. */
 async function renderHtml(path = "site/index.html") {
-  await renderStill(path);
-  fireEvent.click(screen.getByRole("button", { name: "Run page" }));
+  fireEvent.click(await renderGate(path));
   return screen.getByTitle(/Rendered page/i) as HTMLIFrameElement;
 }
 
@@ -139,11 +146,11 @@ describe("HtmlPreview — rendered HTML deliverables", () => {
     await waitFor(() => expect(shownSource()).toContain("window.x = 1;"));
     expect(frames()).toHaveLength(0);
 
-    // Back on the preview the page is a still again: leaving it stopped the
-    // page, and it runs only after the next tap.
+    // Back on the preview the page waits for a tap again: leaving it stopped
+    // the page, and no frame exists until the next tap.
     fireEvent.click(preview);
-    expect(screen.getByTitle(/Still view of/i)).toBeInTheDocument();
-    expect(scriptFrames()).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Run page" })).toBeInTheDocument();
+    expect(frames()).toHaveLength(0);
     expect(shownSource()).toBe("");
   });
 
@@ -198,11 +205,14 @@ describe("HtmlPreview — rendered HTML deliverables", () => {
   });
 });
 
-// Click-to-run (security review 2026-10-21). A sandboxed srcdoc frame runs in
-// MC's own process (always on iOS): one `for(;;){}` froze all of MC, and in
-// WebKit `history.back()` from the page moved the whole tab. So the page
-// first arrives as a still with scripts OFF (sandbox="") and only the
-// operator's tap mounts the frame that may run scripts.
+// Click-to-run (security reviews 2026-10-21). A sandboxed srcdoc frame runs
+// in MC's own process (always on iOS): one `for(;;){}` froze all of MC, and in
+// WebKit `history.back()` from the page moved the whole tab. A still with
+// scripts off (sandbox="") was not enough: pure markup (an SVG <use> tree)
+// froze MC for > 45 s in it, and it already loaded the page's https: images,
+// styles and frames (a beacon to hosts the page picks, with MC's origin as
+// Referer in WebKit). So before the operator's tap there is NO frame at all —
+// nothing of the page is parsed — and only the tap mounts the page.
 describe("HtmlPreview — click to run", () => {
   let fetchSpy: ReturnType<typeof vi.spyOn> | undefined;
 
@@ -219,47 +229,38 @@ describe("HtmlPreview — click to run", () => {
     fetchSpy = undefined;
   });
 
-  it("opens as a still with scripts off — no frame that can run scripts exists before the tap", async () => {
+  it("opens with no frame at all before the tap — nothing of the page is parsed", async () => {
     fetchSpy = mockFetch(PAGE);
-    const still = await renderStill();
-    // sandbox="" — every restriction on, scripts included.
-    expect(still.getAttribute("sandbox")).toBe("");
-    expect(still.getAttribute("src")).toBeNull();
-    expect(still.getAttribute("srcdoc")).toContain("<h1>Helix page</h1>");
-    expect(still.getAttribute("referrerpolicy")).toBe("no-referrer");
-    // Not reachable by Tab: the still is a picture, the button is the way in.
-    expect(still.getAttribute("tabindex")).toBe("-1");
-    expect(frames()).toEqual([still]);
-    expect(scriptFrames()).toHaveLength(0);
+    await renderGate();
+    expect(frames()).toHaveLength(0);
+    // Not as srcdoc, not as markup: the page is nowhere in MC's DOM yet.
+    expect(document.body.innerHTML).not.toContain("Helix page");
+    expect(screen.getByText(RUN_HINT)).toBeInTheDocument();
     expect(screen.queryByTitle(/Rendered page/i)).toBeNull();
   });
 
-  it("starts the page only on a tap on 'Run page' (a ≥ 44 px button) — in a new frame element", async () => {
+  it("starts the page only on a tap on 'Run page' (a ≥ 44 px button)", async () => {
     fetchSpy = mockFetch(PAGE);
-    const still = await renderStill();
-    const run = screen.getByRole("button", { name: "Run page" });
+    const run = await renderGate();
     expect(run.className).toContain("min-h-11");
 
     fireEvent.click(run);
     const live = screen.getByTitle(/Rendered page/i) as HTMLIFrameElement;
     expect(live.getAttribute("sandbox")).toBe(HTML_PREVIEW_SANDBOX);
-    // A NEW element: sandbox flags apply when a frame navigates, so flipping
-    // the attribute on the still frame would not change what its page may do.
-    expect(live).not.toBe(still);
-    expect(still.isConnected).toBe(false);
+    expect(live.getAttribute("srcdoc")).toContain("<h1>Helix page</h1>");
     expect(frames()).toEqual([live]);
     expect(screen.queryByRole("button", { name: "Run page" })).toBeNull();
+    expect(screen.queryByText(RUN_HINT)).toBeNull();
   });
 
-  it("opens fullscreen as a still too, and runs there only after the tap", async () => {
+  it("opens fullscreen with the Run button too, and runs there only after the tap", async () => {
     fetchSpy = mockFetch(PAGE);
-    await renderStill();
+    await renderGate();
     fireEvent.click(screen.getByRole("button", { name: "Fullscreen" }));
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByTitle(/Still view of/i).getAttribute("sandbox")).toBe("");
-    expect(scriptFrames()).toHaveLength(0);
-    // One copy at a time: the inline still pauses while fullscreen is open.
-    expect(frames()).toHaveLength(1);
+    expect(frames()).toHaveLength(0);
+    // One Run button at a time: the inline one pauses while fullscreen is open.
+    expect(screen.getAllByRole("button", { name: "Run page" })).toHaveLength(1);
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Run page" }));
     expect(within(dialog).getByTitle(/Rendered page/i).getAttribute("sandbox")).toBe("allow-scripts");
@@ -270,22 +271,46 @@ describe("HtmlPreview — click to run", () => {
     expect(screen.getByTitle(/Rendered page/i).getAttribute("sandbox")).toBe("allow-scripts");
   });
 
-  it("never carries the tap over to other content: a new page arrives as a still again", () => {
+  it("never carries the tap over to other content: a new page waits for its own tap", () => {
     const view = renderRunning();
     expect(scriptFrames()).toHaveLength(1);
     // The same HtmlPreview instance gets another file (Files page, folder list).
     view.rerender(<HtmlPreview html="<p>another page</p>" name="other.html" code={<pre />} />);
-    expect(scriptFrames()).toHaveLength(0);
-    expect(screen.getByTitle(/Still view of/i).getAttribute("srcdoc")).toContain("another page");
+    expect(frames()).toHaveLength(0);
+    expect(document.body.innerHTML).not.toContain("another page");
+    fireEvent.click(screen.getByRole("button", { name: "Run page" }));
+    expect(screen.getByTitle(/Rendered page/i).getAttribute("srcdoc")).toContain("another page");
   });
 
-  it("keeps hostile code from running before the tap: an endless loop or history.back() sits in a frame without scripts", () => {
-    const hostile = "<script>for(;;){}</script><script>history.back()</script>";
+  it("keeps hostile pages out until the tap: a script loop, history.back(), an SVG <use> bomb", () => {
+    // The SVG needs no script: 8 levels of 10 <use> each expand to 10^8 nodes
+    // and froze MC for > 45 s even in a frame with sandbox="" (both engines).
+    const levels = Array.from({ length: 8 }, (_, i) =>
+      `<g id="l${i + 1}">${`<use href="#l${i}"/>`.repeat(10)}</g>`).join("");
+    const hostile =
+      "<script>for(;;){}</script><script>history.back()</script>" +
+      `<svg><defs><path id="l0" d="M0 0h1"/>${levels}</defs><use href="#l8"/></svg>` +
+      '<img src="https://beacon.example/pixel">';
     render(<HtmlPreview html={hostile} name="loop.html" code={<pre />} />);
-    const still = screen.getByTitle(/Still view of/i);
-    expect(still.getAttribute("srcdoc")).toContain("for(;;){}");
-    expect(still.getAttribute("sandbox")).toBe("");
-    expect(scriptFrames()).toHaveLength(0);
+    expect(frames()).toHaveLength(0);
+    expect(document.querySelectorAll("svg use, img[src^='https://beacon']")).toHaveLength(0);
+    expect(document.body.innerHTML).not.toContain("for(;;){}");
+    expect(screen.getByRole("button", { name: "Run page" })).toBeInTheDocument();
+  });
+
+  it("counts a frame without any sandbox attribute as one that can run scripts (test helper)", () => {
+    // The worst case — no sandbox at all — must never pass for a safe frame.
+    const bare = document.createElement("iframe");
+    document.body.appendChild(bare);
+    try {
+      expect(scriptFrames()).toEqual([bare]);
+      bare.setAttribute("sandbox", "");
+      expect(scriptFrames()).toHaveLength(0);
+      bare.setAttribute("sandbox", "allow-forms allow-scripts");
+      expect(scriptFrames()).toEqual([bare]);
+    } finally {
+      bare.remove();
+    }
   });
 });
 
@@ -295,17 +320,18 @@ describe("HtmlPreview — click to run", () => {
 describe("HtmlPreview — isolation label", () => {
   const LABEL = "Agent page · isolated preview – never enter passwords here";
 
-  it("shows the label above the frame, before and after the page runs", () => {
+  it("shows the label above the box, before and after the page runs", () => {
     render(<HtmlPreview html={PAGE} name="index.html" code={<pre />} />);
     const region = document.querySelector('[data-region="html-preview"]') as HTMLElement;
-    expect(within(region).getByText(LABEL)).toBeInTheDocument();
-    // Above the frame in document order: MC's chrome, outside the page.
+    // Above the Run button in document order: MC's chrome, outside the page.
     const label = within(region).getByText(LABEL);
-    const frame = screen.getByTitle(/Still view of/i);
-    expect(label.compareDocumentPosition(frame) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const run = screen.getByRole("button", { name: "Run page" });
+    expect(label.compareDocumentPosition(run) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Run page" }));
-    expect(within(region).getByText(LABEL)).toBeInTheDocument();
+    fireEvent.click(run);
+    // … and above the running frame.
+    const frame = screen.getByTitle(/Rendered page/i);
+    expect(within(region).getByText(LABEL).compareDocumentPosition(frame) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("shows the label in the fullscreen header too", () => {
@@ -487,6 +513,7 @@ describe("filePreview i18n", () => {
     expect(deNs.html.preview).toBe("Vorschau");
     expect(deNs.html.fullscreen).toBe("Vollbild");
     expect(deNs.html.run).toBe("Seite starten");
+    expect(deNs.html.runHint).toBe("Die Seite läuft erst, wenn du sie startest.");
     expect(deNs.html.isolationLabel).toBe("Agenten-Seite · isolierte Vorschau – hier nie Passwörter eingeben");
     expect(deNs.download).toBe("Herunterladen");
   });

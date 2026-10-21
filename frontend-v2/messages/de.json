@@ -1783,8 +1783,7 @@
       "frameTitle": "Gerenderte Seite {name}",
       "loading": "Seite wird geladen…",
       "run": "Seite starten",
-      "stillTitle": "Standbild von {name}",
-      "stillHint": "Standbild, Skripte aus",
+      "runHint": "Die Seite läuft erst, wenn du sie startest.",
       "isolationLabel": "Agenten-Seite · isolierte Vorschau – hier nie Passwörter eingeben"
     }
   },
