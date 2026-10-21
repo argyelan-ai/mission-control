@@ -133,6 +133,9 @@ import { withStreamTicket } from "./streamTicket";
 export { AUTH_TOKEN_KEY, BASE_URL, getToken };
 export const USER_INFO_KEY = "mc_user";
 
+/** The signed folder-view route (backend routers/deliverable_view.py). */
+const DELIVERABLE_VIEW_PREFIX = "/api/v1/deliverable-view/";
+
 export function clearToken() {
   if (typeof window !== "undefined") {
     localStorage.removeItem(AUTH_TOKEN_KEY);
@@ -804,6 +807,26 @@ export const api = {
         request<import("./types").DeliverableDirectory>(
           `/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${deliverableId}/directory${subpath ? `?subpath=${encodeURIComponent(subpath)}` : ""}`,
         ),
+      /** Signed, short-lived URL of an HTML page's FOLDER, for the sandboxed
+       *  preview frame of a multi-file page (its CSS, images, scripts load
+       *  from the same folder). `subpath` = the page inside a folder
+       *  deliverable; left out for a single-file deliverable. The frame
+       *  only ever gets a URL of the view route — anything else throws. */
+      viewUrl: async (
+        boardId: string,
+        taskId: string,
+        deliverableId: string,
+        subpath?: string,
+      ): Promise<string> => {
+        const { url } = await request<{ url: string; expires_in: number }>(
+          `/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${deliverableId}/view-url`,
+          { method: "POST", body: JSON.stringify({ subpath: subpath ?? null }) },
+        );
+        if (typeof url !== "string" || !url.startsWith(DELIVERABLE_VIEW_PREFIX)) {
+          throw new Error("unexpected view URL");
+        }
+        return `${BASE_URL}${url}`;
+      },
     },
     workspace: {
       list: (boardId: string, taskId: string, subpath?: string) =>

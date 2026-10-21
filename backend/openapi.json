@@ -2168,6 +2168,15 @@
         ]
       }
     },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/deliverables/{deliverable_id}/view-url": {
+      "post": {
+        "operationId": "mint_deliverable_view_url_api_v1_boards__board_id__tasks__task_id__deliverables__deliverable_id__view_url_post",
+        "summary": "Mint Deliverable View Url",
+        "tags": [
+          "deliverable-view"
+        ]
+      }
+    },
     "/api/v1/boards/{board_id}/tasks/{task_id}/dependencies": {
       "get": {
         "operationId": "get_task_dependencies_api_v1_boards__board_id__tasks__task_id__dependencies_get",
@@ -2547,6 +2556,15 @@
         "summary": "Update Credential",
         "tags": [
           "credentials"
+        ]
+      }
+    },
+    "/api/v1/deliverable-view/{token}/{file_path}": {
+      "get": {
+        "operationId": "serve_deliverable_view_api_v1_deliverable_view__token___file_path__get",
+        "summary": "Serve Deliverable View",
+        "tags": [
+          "deliverable-view"
         ]
       }
     },

@@ -19,8 +19,10 @@ It listens on `:80` and routes by path:
 | everything else | `frontend:3000` | Next.js |
 
 It also sets `X-Content-Type-Options: nosniff`,
-`Referrer-Policy: strict-origin-when-cross-origin`, removes the `Server`
-header and enables gzip/zstd.
+`Referrer-Policy: strict-origin-when-cross-origin` (only as a default: the
+backend's own `no-referrer` on the HTML preview and bench viewer stays, so
+`?Referrer-Policy` in your own Caddyfile too), removes the `Server` header and
+enables gzip/zstd.
 
 **The browser must enter through Caddy.** The prebuilt frontend image makes
 relative, same-origin API calls — exposing `frontend:3000` directly gives you

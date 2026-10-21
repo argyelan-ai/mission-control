@@ -9,7 +9,7 @@ import { getToken } from "@/lib/api";
 import { useAuthBlob } from "@/hooks/useAuthBlob";
 import { C } from "@/lib/colors";
 import { VaultMarkdown } from "@/components/vault/VaultMarkdown";
-import { HtmlPreview } from "./HtmlPreview";
+import { HtmlPreview, type FolderUrl } from "./HtmlPreview";
 
 // ── Hilfsfunktionen ────────────────────────────────────────────────────────
 
@@ -177,13 +177,22 @@ function CodeView({ text, path }: { text: string; path: string }) {
 
 /** HTML: fetched once (with the Bearer header), then shown as the rendered
  *  page in a sandboxed frame — or as the source, via the switch. */
-function HtmlFilePreview({ fileUrl, path }: { fileUrl: string; path: string }) {
+function HtmlFilePreview({ fileUrl, path, folderUrl }: { fileUrl: string; path: string; folderUrl?: FolderUrl }) {
   const { text, loading, error } = useAuthText(fileUrl);
 
   if (loading) return <PreviewLoader />;
   if (error || text === null) return <PreviewError />;
 
-  return <HtmlPreview html={text} name={fileName(path)} code={<CodeView text={text} path={path} />} />;
+  // One preview per file: another file of a folder gets its own folder URL.
+  return (
+    <HtmlPreview
+      key={fileUrl}
+      html={text}
+      name={fileName(path)}
+      code={<CodeView text={text} path={path} />}
+      folderUrl={folderUrl}
+    />
+  );
 }
 
 function MarkdownPreview({ fileUrl }: { fileUrl: string }) {
@@ -229,9 +238,13 @@ interface FilePreviewProps {
   /** Download-Anker immer anzeigen (Default true). Mobile-tauglicher Fallback
    *  für jeden Dateityp — funktioniert ohne native Abhängigkeit. */
   showDownload?: boolean;
+  /** Deliverables only: mints the signed folder URL an HTML page needs when
+   *  it links its own CSS/images/scripts (HtmlPreview). Other callers leave it
+   *  out and HTML stays a single-file srcdoc preview. */
+  htmlFolderUrl?: FolderUrl;
 }
 
-export function FilePreview({ fileUrl, path, showDownload = true }: FilePreviewProps) {
+export function FilePreview({ fileUrl, path, showDownload = true, htmlFolderUrl }: FilePreviewProps) {
   const t = useTranslations("filePreview");
   const kind = classifyPath(path);
   const { blobUrl, loading, error } = useAuthBlob(
@@ -250,7 +263,7 @@ export function FilePreview({ fileUrl, path, showDownload = true }: FilePreviewP
   if (kind === "markdown") {
     body = <MarkdownPreview fileUrl={fileUrl} />;
   } else if (kind === "html") {
-    body = <HtmlFilePreview fileUrl={fileUrl} path={path} />;
+    body = <HtmlFilePreview fileUrl={fileUrl} path={path} folderUrl={htmlFolderUrl} />;
   } else if (kind === "code") {
     body = <CodePreview fileUrl={fileUrl} path={path} />;
   } else if (kind === "unsupported") {

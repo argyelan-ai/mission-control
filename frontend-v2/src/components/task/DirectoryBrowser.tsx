@@ -169,7 +169,11 @@ export function DirectoryBrowser({
               </button>
             )}
           </div>
-          <FilePreview fileUrl={selectedFileUrl} path={selectedFilePath} />
+          <FilePreview
+            fileUrl={selectedFileUrl}
+            path={selectedFilePath}
+            htmlFolderUrl={() => api.tasks.deliverables.viewUrl(boardId, taskId, deliverableId, selectedFile)}
+          />
         </div>
       )}
 

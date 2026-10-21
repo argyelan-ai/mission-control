@@ -32,7 +32,12 @@
     encode gzip zstd
     header {
         X-Content-Type-Options nosniff
-        Referrer-Policy strict-origin-when-cross-origin
+        # `?` = only when the backend set none: the HTML preview's folder view
+        # and the bench viewer send no-referrer on purpose (agent-written pages
+        # must not send MC's host name to the CDNs they load). This block is
+        # deferred (it deletes Server), so a plain line would overwrite theirs.
+        # Test: caddy/test_upstream_headers.sh
+        ?Referrer-Policy strict-origin-when-cross-origin
         -Server
     }
 
