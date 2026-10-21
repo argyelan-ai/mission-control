@@ -18,8 +18,9 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Base tools — same surface as mc-agent-base so the container lifecycle
-# (health-check tmux pane, recycler, git workflow) behaves identically. No node:
-# omp bundles its own runtime and the mc CLI is Python; nothing here needs node.
+# (health-check tmux pane, recycler, git workflow) behaves identically. omp
+# bundles its own runtime and the mc CLI is Python; Node.js is installed right
+# below for the AGENT's own work (checking the JS it writes), not for the harness.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
@@ -57,6 +58,53 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
+
+# --- Node.js for the agent's own checks (pinned LTS, verified tarball) ---
+# An omp agent that writes a web page must be able to check its JS itself:
+# `node --check app.js`, `node -e …`, `npx <tool>`. Without node (live
+# 21.10.2026) an agent searched for node/npx/chromium, found nothing, failed to
+# pip-build a JS parser (no compiler here) and fell back to a Python parser.
+# `node --check` reads .js/.mjs/.cjs, not .html: an inline <script> is checked
+# in the browser (omp's browser tool, see the omp card) or extracted first.
+# Not omp's own runtime: `BUN_BE_BUN=1 omp` is Bun, but its `--check` RUNS the
+# file instead of parsing it, and the variable leaks into child processes (an
+# `omp` started from such a script answers as Bun). So: real Node.
+# Official nodejs.org release tarball, linux-arm64 like omp below (the image is
+# arm64-only). NODE_SHA256 = the tarball's line in the release's signed
+# SHASUMS256.txt. Only bin/ and lib/ are unpacked (node, npm, npx, corepack),
+# plus the LICENSE; headers and docs are left out — nothing here compiles
+# native addons.
+# This layer sits BEFORE omp on purpose: a changed layer rebuilds every layer
+# after it, and the in-app CLI update (ADR-058) bumps omp — with Node after
+# omp, every omp bump downloaded Node again and failed when nodejs.org was down.
+# Override at build: --build-arg NODE_VERSION=<ver> --build-arg NODE_SHA256=<sha>
+# tests/test_image_has_node.py guards the pin and, with MC_OMP_IMAGE set, the
+# built image.
+ARG NODE_VERSION=24.22.1
+ARG NODE_SHA256=33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3
+RUN curl -fsSL \
+        "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-arm64.tar.gz" \
+        -o /tmp/node.tar.gz \
+    && echo "${NODE_SHA256}  /tmp/node.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 --no-same-owner \
+        "node-v${NODE_VERSION}-linux-arm64/bin" "node-v${NODE_VERSION}-linux-arm64/lib" \
+    && mkdir -p /usr/local/share/doc/nodejs \
+    && tar -xzf /tmp/node.tar.gz -C /usr/local/share/doc/nodejs --strip-components=1 --no-same-owner \
+        "node-v${NODE_VERSION}-linux-arm64/LICENSE" \
+    && rm /tmp/node.tar.gz \
+    && node --version \
+    && npm --version \
+    && npx --version
+# NPM_CONFIG_UPDATE_NOTIFIER=false: no "new npm version, run npm install -g
+# npm@…" notice after every npx — the agent would read it as a task, and as the
+# agent user a global install into /usr/local fails anyway. The pin above is
+# the update path.
+# NPM_CONFIG_YES=true: omp's bash tool runs a command under a PTY when the model
+# asks for one in the native TUI; there `npx <tool>` stops at "Ok to proceed?
+# (y)" and nobody answers, so the call hangs until its timeout. Without a PTY
+# npm already says yes on its own — this only removes the hang.
+ENV NPM_CONFIG_UPDATE_NOTIFIER=false \
+    NPM_CONFIG_YES=true
 
 # --- omp install (verified GitHub release binary; pin + sha256 overridable) ---
 # The canonical pin lives in docker/cli-versions.json; scripts/build-agent-images.sh
