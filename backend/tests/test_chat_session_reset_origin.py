@@ -403,7 +403,8 @@ async def test_a_reset_from_outside_mc_is_on_record_as_such(make_agent, daemon):
         == ("outside_mc", "control_socket", "done")
     assert (event.detail["previous_session_id"], event.detail["new_session_id"]) == (OLD, S1)
     assert event.severity == "warning"
-    assert "not sent by MC" in event.title
+    assert event.title == ("Chat reset through the chat daemon's control socket — "
+                           "not sent by MC")
 
 
 @pytest.mark.parametrize("via,reason,way,words", [
@@ -438,7 +439,8 @@ async def test_a_request_id_mc_has_no_event_for_is_unknown_after_a_grace(make_ag
     await _audit(agent, daemon.state)
     (event,) = await _events(agent.id)
     assert event.detail["actor"] == "unknown"
-    assert "unknown sender" in event.title
+    assert event.title == ("Chat reset through the chat daemon's control socket by an "
+                           "unknown sender — its request id matches no open request of MC")
 
 
 async def test_a_request_id_used_twice_is_no_proof_of_mc(auth_client, make_agent, daemon):

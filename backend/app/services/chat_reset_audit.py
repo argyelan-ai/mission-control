@@ -126,7 +126,7 @@ def actor_label(detail: dict) -> str:
     if kind == ACTOR_SYSTEM:
         return "the chat daemon"
     if kind == ACTOR_OUTSIDE_MC:
-        return "a sender outside MC"
+        return "a sender outside MC"  # never in a title: the control-socket one says it
     if kind == ACTOR_UNKNOWN or not name:
         return "an unknown sender"
     return f"{name} (as {acting_as})" if acting_as else str(name)
@@ -144,8 +144,10 @@ def reset_title(detail: dict) -> str:
         where = "the chat restarted" if via == VIA_DAEMON_START else "the agent process restarted"
         return f"New chat conversation: {where} and the previous one did not resume — {why}"
     if via == VIA_CONTROL_SOCKET:
-        return (f"Chat reset by {who} — new_session through the chat daemon's control "
-                "socket, not sent by MC")
+        if detail.get("actor") == ACTOR_UNKNOWN:
+            return ("Chat reset through the chat daemon's control socket by an unknown "
+                    "sender — its request id matches no open request of MC")
+        return "Chat reset through the chat daemon's control socket — not sent by MC"
     if detail.get("handled_by") == HANDLED_BY_TERMINAL:
         return f"Chat reset {command} sent by {who} to the agent's terminal"
     if detail.get("handled_by") == HANDLED_BY_HARNESS:
