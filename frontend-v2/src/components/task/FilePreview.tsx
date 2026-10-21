@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Loader2, FileX, Download } from "lucide-react";
 import SyntaxHighlighter from "react-syntax-highlighter";
 import { atomOneDark } from "react-syntax-highlighter/dist/esm/styles/hljs";
@@ -8,6 +9,7 @@ import { getToken } from "@/lib/api";
 import { useAuthBlob } from "@/hooks/useAuthBlob";
 import { C } from "@/lib/colors";
 import { VaultMarkdown } from "@/components/vault/VaultMarkdown";
+import { HtmlPreview } from "./HtmlPreview";
 
 // ── Hilfsfunktionen ────────────────────────────────────────────────────────
 
@@ -17,6 +19,7 @@ type PreviewKind =
   | "audio"
   | "pdf"
   | "markdown"
+  | "html"
   | "code"
   | "unsupported";
 
@@ -24,11 +27,13 @@ const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "
 const VIDEO_EXTS = new Set(["mp4", "mov", "webm", "mkv", "avi"]);
 const AUDIO_EXTS = new Set(["mp3", "wav", "ogg", "flac", "m4a", "aac"]);
 const MARKDOWN_EXTS = new Set(["md", "markdown"]);
+// Rendered in a sandboxed frame (HtmlPreview) with a switch to the source.
+const HTML_EXTS = new Set(["html", "htm"]);
 const CODE_EXTS = new Set([
   "ts", "tsx", "js", "jsx", "py", "rs", "go", "java", "c", "cpp",
   "h", "cs", "rb", "php", "swift", "kt", "sh", "bash", "zsh",
   "sql", "txt", "json", "yaml", "yml", "toml", "env",
-  "css", "scss", "html", "xml", "dockerfile",
+  "css", "scss", "xml", "dockerfile",
 ]);
 
 function getExtension(path: string): string {
@@ -48,6 +53,7 @@ function classifyPath(path: string): PreviewKind {
   if (AUDIO_EXTS.has(ext)) return "audio";
   if (ext === "pdf") return "pdf";
   if (MARKDOWN_EXTS.has(ext)) return "markdown";
+  if (HTML_EXTS.has(ext)) return "html";
   if (CODE_EXTS.has(ext)) return "code";
   return "unsupported";
 }
@@ -59,7 +65,7 @@ function langForExt(ext: string): string {
     h: "c", cs: "csharp", rb: "ruby", php: "php", swift: "swift",
     kt: "kotlin", sh: "bash", bash: "bash", zsh: "bash", sql: "sql",
     md: "markdown", json: "json", yaml: "yaml", yml: "yaml",
-    toml: "toml", css: "css", scss: "scss", html: "html", xml: "xml",
+    toml: "toml", css: "css", scss: "scss", html: "html", htm: "html", xml: "xml",
   };
   return map[ext] ?? "plaintext";
 }
@@ -98,6 +104,7 @@ function useAuthText(url: string | null): { text: string | null; loading: boolea
  * mobile users can get the file out.
  */
 function DownloadButton({ fileUrl, path }: { fileUrl: string; path: string }) {
+  const t = useTranslations("filePreview");
   const [busy, setBusy] = useState(false);
 
   async function handleDownload() {
@@ -130,10 +137,10 @@ function DownloadButton({ fileUrl, path }: { fileUrl: string; path: string }) {
       style={{ background: C.bgElevated, color: C.textSecondary, border: `1px solid ${C.border}` }}
       onMouseEnter={(e) => (e.currentTarget.style.color = C.textPrimary)}
       onMouseLeave={(e) => (e.currentTarget.style.color = C.textSecondary)}
-      title={`Download ${fileName(path)}`}
+      title={t("downloadTitle", { name: fileName(path) })}
     >
       {busy ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-      Download
+      {t("download")}
     </button>
   );
 }
@@ -146,6 +153,10 @@ function CodePreview({ fileUrl, path }: { fileUrl: string; path: string }) {
   if (loading) return <PreviewLoader />;
   if (error || text === null) return <PreviewError />;
 
+  return <CodeView text={text} path={path} />;
+}
+
+function CodeView({ text, path }: { text: string; path: string }) {
   const lang = langForExt(getExtension(path));
   return (
     <div style={{ maxHeight: 400, overflow: "auto", borderRadius: 6 }}>
@@ -164,6 +175,17 @@ function CodePreview({ fileUrl, path }: { fileUrl: string; path: string }) {
   );
 }
 
+/** HTML: fetched once (with the Bearer header), then shown as the rendered
+ *  page in a sandboxed frame — or as the source, via the switch. */
+function HtmlFilePreview({ fileUrl, path }: { fileUrl: string; path: string }) {
+  const { text, loading, error } = useAuthText(fileUrl);
+
+  if (loading) return <PreviewLoader />;
+  if (error || text === null) return <PreviewError />;
+
+  return <HtmlPreview html={text} name={fileName(path)} code={<CodeView text={text} path={path} />} />;
+}
+
 function MarkdownPreview({ fileUrl }: { fileUrl: string }) {
   const { text, loading, error } = useAuthText(fileUrl);
 
@@ -178,18 +200,21 @@ function MarkdownPreview({ fileUrl }: { fileUrl: string }) {
 }
 
 function PreviewLoader() {
+  const t = useTranslations("filePreview");
   return (
-    <div className="flex items-center justify-center py-8">
-      <Loader2 size={16} className="animate-spin" style={{ color: C.textMuted }} />
+    <div role="status" className="flex items-center justify-center py-8">
+      <Loader2 size={16} className="animate-spin" style={{ color: C.textMuted }} aria-hidden="true" />
+      <span className="sr-only">{t("loading")}</span>
     </div>
   );
 }
 
 function PreviewError() {
+  const t = useTranslations("filePreview");
   return (
     <div className="flex flex-col items-center justify-center py-6 gap-1.5">
       <FileX size={16} style={{ color: C.textMuted }} />
-      <p className="text-xs" style={{ color: C.textMuted }}>Failed to load file</p>
+      <p className="text-xs" style={{ color: C.textMuted }}>{t("loadFailed")}</p>
     </div>
   );
 }
@@ -207,6 +232,7 @@ interface FilePreviewProps {
 }
 
 export function FilePreview({ fileUrl, path, showDownload = true }: FilePreviewProps) {
+  const t = useTranslations("filePreview");
   const kind = classifyPath(path);
   const { blobUrl, loading, error } = useAuthBlob(
     kind === "image" || kind === "video" || kind === "audio" || kind === "pdf" ? fileUrl : null,
@@ -223,6 +249,8 @@ export function FilePreview({ fileUrl, path, showDownload = true }: FilePreviewP
 
   if (kind === "markdown") {
     body = <MarkdownPreview fileUrl={fileUrl} />;
+  } else if (kind === "html") {
+    body = <HtmlFilePreview fileUrl={fileUrl} path={path} />;
   } else if (kind === "code") {
     body = <CodePreview fileUrl={fileUrl} path={path} />;
   } else if (kind === "unsupported") {
@@ -230,7 +258,7 @@ export function FilePreview({ fileUrl, path, showDownload = true }: FilePreviewP
       <div className="flex flex-col items-center justify-center py-6 gap-1">
         <FileX size={16} style={{ color: C.textMuted }} />
         <p className="text-xs" style={{ color: C.textMuted }}>
-          No preview for this file type — please download.
+          {t("noPreview")}
         </p>
       </div>
     );
@@ -260,7 +288,7 @@ export function FilePreview({ fileUrl, path, showDownload = true }: FilePreviewP
     body = (
       <iframe
         src={blobUrl}
-        title="PDF Preview"
+        title={t("pdfTitle")}
         style={{ width: "100%", height: 500, border: "none", borderRadius: 6, background: "transparent" }}
       />
     );

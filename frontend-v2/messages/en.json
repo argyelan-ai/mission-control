@@ -1766,6 +1766,27 @@
     "listView": "List view",
     "gridView": "Grid view"
   },
+  "filePreview": {
+    "download": "Download",
+    "downloadTitle": "Download {name}",
+    "loading": "Loading file…",
+    "loadFailed": "Failed to load file",
+    "noPreview": "No preview for this file type — please download.",
+    "pdfTitle": "PDF preview",
+    "html": {
+      "viewLabel": "View",
+      "preview": "Preview",
+      "code": "Code",
+      "fullscreen": "Fullscreen",
+      "closeFullscreen": "Close fullscreen",
+      "fullscreenTitle": "{name} in fullscreen",
+      "frameTitle": "Rendered page {name}",
+      "loading": "Loading page…",
+      "run": "Run page",
+      "runHint": "The page runs only when you start it.",
+      "isolationLabel": "Agent page · isolated preview – never enter passwords here"
+    }
+  },
   "settings": {
     "title": "Settings",
     "subtitle": "Profile, security, system configuration",
