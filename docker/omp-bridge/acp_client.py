@@ -53,25 +53,26 @@ DEFAULT_DELIVERABLES_DIR = "/deliverables"
 #: separated by ``os.pathsep``. Set but empty = no extra root (cwd only).
 DELIVERABLES_DIR_ENV = "MC_DELIVERABLES_DIR"
 
-#: The container's own scratch folder, served next to the session cwd and
-#: the deliverables root: its /tmp. omp's bash writes there anyway — the
-#: jail only kept its read/write tools out (a task in a worktree cwd, or a
-#: chat turn, writing a scratch file to /tmp). Same realpath check as every
-#: root: a link out of /tmp (to /etc, to ~/.omp, to the mounts /workspace,
-#: /workspace-ref or /vault) resolves outside and stays refused. /tmp lies
-#: on the container's own filesystem next to ~/.omp, so a file served only
-#: through a scratch root must also be a regular file with one link
-#: (:func:`_open_served`) — a hard link passes realpath.
+#: The container's own scratch folders, served next to the session cwd and
+#: the deliverables root: its /tmp and its /workspace mount
+#: (``~/.mc/workspaces/<slug>:/workspace``, compose_renderer). omp's bash
+#: writes both anyway — the jail only kept its read/write tools out (a task
+#: in a worktree cwd, or a chat turn, writing a scratch file to /tmp; a
+#: task writing a loose file to /workspace). Same realpath check as every
+#: root: a link out of /tmp or /workspace (to /etc, to ~/.omp, to the
+#: mounts /workspace-ref or /vault) resolves outside and stays refused.
+#: /tmp lies on the container's own filesystem next to ~/.omp, so a file
+#: served only through a scratch root must also be a regular file with one
+#: link (:func:`_open_served`) — a hard link passes realpath.
 #:
-#: /workspace (``~/.mc/workspaces/<slug>:/workspace``, compose_renderer) is
-#: NOT a scratch root: a task's cwd is its own worktree there, and the jail
-#: is what keeps the file tools out of the main clone and the other tasks'
-#: worktrees next to it (wrong-checkout edits were refused 2026-09-14..18).
-#: A chat session already has /workspace itself as its cwd (acp_chat).
+#: The price of /workspace (operator's decision): a task's cwd is its own
+#: worktree there, so its file tools now reach the main clone and the
+#: other tasks' worktrees next to it without a refusal — a wrong-checkout
+#: edit lands silently.
 #:
 #: Only served inside a container (:data:`CONTAINER_MARKER`): the host's
 #: /tmp is the whole machine's, so the host keeps cwd + deliverables.
-DEFAULT_SCRATCH_DIRS = ("/tmp",)
+DEFAULT_SCRATCH_DIRS = ("/tmp", "/workspace")
 
 #: Override for the scratch roots: one or more absolute folders, separated
 #: by ``os.pathsep`` — used as given, in a container or not. Set but empty
@@ -246,9 +247,9 @@ class ACPClient:
         self._cwd = cwd
         self._fs_jail: Optional[str] = None  # realpath(cwd) — fs/* restricted here (Review #464 Major)
         # Served too once a session exists: the deliverables root(s) and,
-        # in a container, the scratch root /tmp — read here once (the
-        # mounts are there from container start). Kept apart: a file served
-        # only through a scratch root gets the one-link check.
+        # in a container, the scratch roots /tmp and /workspace — read here
+        # once (the mounts are there from container start). Kept apart: a
+        # file served only through a scratch root gets the one-link check.
         self._fs_deliverables_roots: tuple[str, ...] = deliverables_roots()
         self._fs_scratch_roots: tuple[str, ...] = tuple(
             root for root in scratch_roots() if root not in self._fs_deliverables_roots)
@@ -460,11 +461,11 @@ class ACPClient:
             return {"error": {"code": -32601, "message": f"unhandled {method}"}}
         # Review #464 Major: fs/read_text_file + fs/write_text_file are
         # restricted to the session's realpath(cwd) plus the extra roots
-        # (/deliverables, and in a container the scratch root /tmp). A
-        # symlink or `..` escape resolves through realpath, so the check is
-        # on the FINAL path, not the textual one — out of the cwd and out of
-        # every extra root alike. No jail (no session yet) -> reject,
-        # whatever the extra roots are.
+        # (/deliverables, and in a container the scratch roots /tmp and
+        # /workspace). A symlink or `..` escape resolves through realpath,
+        # so the check is on the FINAL path, not the textual one — out of
+        # the cwd and out of every extra root alike. No jail (no session
+        # yet) -> reject, whatever the extra roots are.
         jail = self._fs_jail
         path = params.get("path")
         if not jail or not isinstance(path, str) or not path:
@@ -609,7 +610,7 @@ class ACPClient:
         # jailed to the session's realpath(cwd) — the child must never read
         # or write outside the working directory it was granted, except in
         # the deliverables root MC itself sends it to and the container's
-        # own scratch folder (_fs_deliverables_roots, _fs_scratch_roots).
+        # own scratch folders (_fs_deliverables_roots, _fs_scratch_roots).
         try:
             self._fs_jail = os.path.realpath(cwd)
         except OSError:

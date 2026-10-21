@@ -18,15 +18,15 @@ backend deliverable_paths). omp's write tool goes through fs/write_text_file,
 so the jail serves that root too — with the same realpath check, so a
 symlink or `..` out of /deliverables is refused like one out of the cwd.
 
-The scratch root (last part): inside an agent container the jail also
-serves the container's own /tmp — omp's bash writes there anyway, only its
-read/write tools were refused. Same realpath check again: a link out of
-/tmp (to /etc, to ~/.omp, to the mounts /workspace, /workspace-ref and
-/vault) stays refused. /tmp shares the container's own filesystem with
-~/.omp, so a file served only through /tmp must also be a regular file
-with one link. /workspace is not a scratch root: a task's cwd is its own
-worktree there, and the jail keeps the file tools out of the main clone
-and the other tasks' worktrees next to it.
+The scratch roots (last part): inside an agent container the jail also
+serves the container's own /tmp and its /workspace mount — omp's bash
+writes both anyway, only its read/write tools were refused. Same realpath
+check again: a link out of /tmp or /workspace (to /etc, to ~/.omp, to the
+mounts /workspace-ref and /vault) stays refused. /tmp shares the
+container's own filesystem with ~/.omp, so a file served only through a
+scratch root must also be a regular file with one link. The price of
+/workspace: a task in its own worktree reaches the main clone and the
+other tasks' worktrees with its file tools (operator's decision).
 Every client in this file is built as on the host (no container marker,
 no MC_FS_SCRATCH_DIRS) unless a test turns the scratch roots on, so the
 machine's own /tmp never leaks into the older tests.
@@ -585,11 +585,12 @@ def test_default_root_matches_the_backend_contract():
 
 
 # ---------------------------------------------------------------------------
-# The scratch root: the container's /tmp
+# The scratch roots: the container's /tmp and /workspace
 # ---------------------------------------------------------------------------
 # The refusals counted for #924 that were not /deliverables: /tmp (tasks in a
-# worktree cwd, and chat turns in /workspace, up to 2026-10-13). /tmp belongs
-# to the container, and omp's bash writes there anyway. Most tests below use
+# worktree cwd, and chat turns in /workspace, up to 2026-10-13) and
+# /workspace (up to 2026-09-18). Both belong to the container, and omp's
+# bash writes there anyway. Most tests below use
 # stand-in folders (`default=`) — for /tmp because on Linux every tempfile
 # "outside" folder lies under the real /tmp, for /workspace because it
 # exists only in a container. _container_defaults maps the REAL defaults
@@ -638,14 +639,30 @@ def test_write_and_read_under_tmp_are_served():
         assert sent[0]["result"] == {"content": "scratch"}
 
 
-def test_task_worktree_cannot_touch_a_sibling_checkout():
-    """/workspace is no scratch root. A task's cwd is its own worktree under
-    /workspace; the main clone and the other tasks' worktrees sit next to
-    it. The jail keeps omp's read/edit/write tools out of them — a
-    wrong-checkout edit (transcripts 2026-09-14..18: a task in
-    worktrees/pr-610 editing the main clone's repo_binding.py) is refused
-    and the file keeps its content; a loose /workspace folder is not made.
-    The real defaults on a stand-in container layout; /tmp stays served."""
+def test_write_and_read_under_workspace_are_served():
+    """A task whose cwd is a worktree writes a loose scratch file to
+    /workspace/scratch-1/x.py (refused up to 2026-09-18). In a container the
+    /workspace mount is served next to any cwd — read and write, a new
+    subfolder included. The real defaults on a stand-in layout."""
+    with _dirs("omp-fs-tmp-", "omp-fs-ws-") as (tmp, ws):
+        cwd = os.path.join(ws, "worktrees", "task-a")
+        os.makedirs(cwd)
+        client, sent = _jailed_client(cwd, container=True,
+                                      default=_container_defaults(tmp, ws))
+        target = os.path.join(ws, "scratch-1", "x.py")
+
+        assert _write(client, sent, target, "print(1)") is None, sent
+        assert _read(client, sent, target) is None, sent
+        assert sent[0]["result"] == {"content": "print(1)"}
+
+
+def test_task_worktree_reaches_the_other_checkouts():
+    """The price of the /workspace root, kept visible: a task's cwd is its
+    own worktree under /workspace, and its read/edit/write tools now reach
+    the main clone and the other tasks' worktrees next to it — no refusal.
+    (Up to this change such a wrong-checkout edit was refused, e.g. a task
+    in worktrees/pr-610 editing the main clone's repo_binding.py.) The
+    operator chose this; whoever narrows /workspace again flips this test."""
     with _dirs("omp-fs-tmp-", "omp-fs-ws-") as (tmp, ws):
         cwd = os.path.join(ws, "worktrees", "task-a")
         os.makedirs(cwd)
@@ -659,16 +676,10 @@ def test_task_worktree_cannot_touch_a_sibling_checkout():
                                       default=_container_defaults(tmp, ws))
 
         for other in others:
-            for err in (_read(client, sent, other),
-                        _write(client, sent, other, "edited")):
-                assert err is not None and err["code"] == -32002, (other, sent)
+            assert _read(client, sent, other) is None, (other, sent)
+            assert _write(client, sent, other, "edited") is None, (other, sent)
             with open(other, encoding="utf-8") as f:
-                assert f.read() == "original", other
-        loose = os.path.join(ws, "scratch-1", "x.py")
-        assert _write(client, sent, loose) is not None, sent
-        assert not os.path.exists(os.path.dirname(loose))
-        assert _write(client, sent, os.path.join(cwd, "own.py")) is None, sent
-        assert _write(client, sent, os.path.join(tmp, "x.txt")) is None, sent
+                assert f.read() == "edited", other
 
 
 def test_symlink_from_tmp_to_etc_passwd_is_rejected():
@@ -712,13 +723,12 @@ def test_symlink_from_tmp_into_omp_home_is_rejected():
 
 
 def test_tmp_does_not_open_the_mounts():
-    """A link from /tmp into a mount — /workspace (the checkouts),
-    /workspace-ref (the operator's checkouts), /vault, the host's ~/.mc —
-    resolves outside /tmp and is refused; a write through it makes
-    nothing."""
+    """A link from /tmp into a mount that is no root — /workspace-ref (the
+    operator's checkouts), /vault, the host's ~/.mc — resolves outside
+    every root and is refused; a write through it makes nothing."""
     with _dirs("omp-fs-cwd-", "omp-fs-tmp-", "omp-fs-ws-", "omp-fs-ref-",
                "omp-fs-vault-", "omp-fs-mc-") as (cwd, tmp, ws, ref, vault, mc_home):
-        mounts = (ws, ref, vault, mc_home)
+        mounts = (ref, vault, mc_home)
         for mount in mounts:
             with open(os.path.join(mount, "secret.txt"), "w", encoding="utf-8") as f:
                 f.write("original")
@@ -738,6 +748,68 @@ def test_tmp_does_not_open_the_mounts():
             assert not os.path.exists(os.path.join(mount, "new")), mount
             with open(os.path.join(mount, "secret.txt"), encoding="utf-8") as f:
                 assert f.read() == "original", mount
+
+
+def test_symlink_from_workspace_into_omp_home_is_rejected():
+    """/workspace/l -> /home/agent/.omp (omp's own config and keys, not on a
+    mount): a folder link and a file link out of /workspace are refused for
+    read and write, and the file behind them keeps its content."""
+    with _dirs("omp-fs-cwd-", "omp-fs-tmp-", "omp-fs-ws-", "omp-fs-home-") as (
+            cwd, tmp, ws, home):
+        omp_home = os.path.join(home, "agent", ".omp")
+        os.makedirs(os.path.join(omp_home, "agent"))
+        models = os.path.join(omp_home, "agent", "models.yml")
+        with open(models, "w", encoding="utf-8") as f:
+            f.write("original")
+        os.symlink(omp_home, os.path.join(ws, "l"))
+        os.symlink(models, os.path.join(ws, "models.yml"))
+        client, sent = _jailed_client(cwd, container=True,
+                                      default=_container_defaults(tmp, ws))
+
+        for path in (os.path.join(ws, "l", "agent", "models.yml"),
+                     os.path.join(ws, "models.yml")):
+            for err in (_read(client, sent, path),
+                        _write(client, sent, path, "hacked")):
+                assert err is not None and err["code"] == -32002, (path, sent)
+        err = _write(client, sent, os.path.join(ws, "l", "new", "x.txt"))
+        assert err is not None and err["code"] == -32002, sent
+        assert not os.path.exists(os.path.join(omp_home, "new"))
+        with open(models, encoding="utf-8") as f:
+            assert f.read() == "original"
+
+
+def test_workspace_does_not_open_the_other_mounts():
+    """/workspace is a mount next to others — /workspace-ref (the operator's
+    checkouts), /vault, the host's ~/.mc. A link from /workspace into any of
+    them resolves outside /workspace and is refused; a write through it
+    makes nothing. A folder that only shares the name as a prefix
+    (`/workspace-ref` next to `/workspace`) is outside too."""
+    with _dirs("omp-fs-cwd-", "omp-fs-tmp-", "omp-fs-ws-", "omp-fs-vault-",
+               "omp-fs-mc-") as (cwd, tmp, ws, vault, mc_home):
+        ref = ws + "-ref"
+        try:
+            for mount in (ref, vault, mc_home):
+                os.makedirs(mount, exist_ok=True)
+                with open(os.path.join(mount, "secret.txt"), "w", encoding="utf-8") as f:
+                    f.write("original")
+                os.symlink(mount, os.path.join(ws, "to-" + os.path.basename(mount)))
+            client, sent = _jailed_client(cwd, container=True,
+                                          default=_container_defaults(tmp, ws))
+
+            for mount in (ref, vault, mc_home):
+                via_link = os.path.join(ws, "to-" + os.path.basename(mount))
+                for path in (os.path.join(via_link, "secret.txt"),
+                             os.path.join(mount, "secret.txt")):
+                    for err in (_read(client, sent, path),
+                                _write(client, sent, path, "hacked")):
+                        assert err is not None and err["code"] == -32002, (path, sent)
+                assert _write(client, sent, os.path.join(via_link, "new", "x.txt")) \
+                    is not None
+                assert not os.path.exists(os.path.join(mount, "new")), mount
+                with open(os.path.join(mount, "secret.txt"), encoding="utf-8") as f:
+                    assert f.read() == "original", mount
+        finally:
+            shutil.rmtree(ref, ignore_errors=True)
 
 
 def test_hard_link_in_tmp_is_refused():
@@ -931,12 +1003,10 @@ def test_refusal_says_where_results_go_and_that_tmp_is_scratch():
 
 
 def test_scratch_defaults_match_the_container_layout():
-    """The default is not a second truth. /tmp is the only scratch root;
-    /workspace is where the checkouts live — the mount target the compose
-    renderer gives every agent container and the cwd the omp entrypoint
-    pins — so it is never a scratch root. A rename on either side trips
-    here."""
-    assert acp_client.DEFAULT_SCRATCH_DIRS == ("/tmp",)
+    """The defaults are not a second truth: /workspace is the mount target
+    the compose renderer gives every agent container and the cwd the omp
+    entrypoint pins. A rename on either side trips here."""
+    assert acp_client.DEFAULT_SCRATCH_DIRS == ("/tmp", "/workspace")
     assert acp_client.CONTAINER_MARKER == "/.dockerenv"
     with open(os.path.join(REPO_ROOT, "backend", "app", "services",
                            "compose_renderer.py"), encoding="utf-8") as f:
