@@ -1781,7 +1781,11 @@
       "closeFullscreen": "Close fullscreen",
       "fullscreenTitle": "{name} in fullscreen",
       "frameTitle": "Rendered page {name}",
-      "loading": "Loading page…"
+      "loading": "Loading page…",
+      "run": "Run page",
+      "stillTitle": "Still view of {name}",
+      "stillHint": "Still view, scripts off",
+      "isolationLabel": "Agent page · isolated preview – never enter passwords here"
     }
   },
   "settings": {

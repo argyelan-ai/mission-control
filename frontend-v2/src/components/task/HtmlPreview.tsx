@@ -6,16 +6,30 @@
  *
  * Security boundary — the page is untrusted, model-written content:
  *
- *  - It runs in an `<iframe sandbox="allow-scripts">` and NOTHING else. Without
- *    `allow-same-origin` the page lives in an opaque origin: its scripts run,
- *    but they cannot read MC's localStorage (the session token), cookies or
- *    DOM. Without `allow-top-navigation*`, `allow-popups*`, `allow-forms` and
- *    `allow-modals` it cannot navigate MC away, open windows, submit forms or
- *    block the app with alert().
+ *  - Click to run. The page first shows as a still: the same document in an
+ *    `<iframe sandbox="">`, every restriction on, scripts included, under a
+ *    "Run page" button. Only that tap mounts the frame that may run scripts.
+ *    A sandboxed srcdoc frame runs in MC's own process (on iOS always), so a
+ *    `for(;;){}` in the page freezes all of MC, and in WebKit the page's
+ *    `history.back()` moves the whole tab (see Known limits). Neither may
+ *    happen just because the operator opened a deliverable. The tap counts
+ *    for this page only: other content, or leaving the preview for the code
+ *    view, starts from the still again. A reload brings MC back from a page
+ *    that hangs, and the page comes back as a still.
+ *  - The running page lives in an `<iframe sandbox="allow-scripts">` and
+ *    NOTHING else. Without `allow-same-origin` it lives in an opaque origin:
+ *    its scripts run, but they cannot read MC's localStorage (the session
+ *    token), cookies or DOM. Without `allow-top-navigation*`,
+ *    `allow-popups*`, `allow-forms` and `allow-modals` it cannot navigate MC
+ *    to a new URL, open windows, submit forms or block the app with alert().
  *  - The content goes in as `srcdoc`, never as a URL. A `blob:` URL would
  *    carry MC's origin and runs un-sandboxed the moment someone opens it in
  *    its own tab ("open frame in new tab"); `about:srcdoc` cannot be opened
  *    that way.
+ *  - MC draws a label above the frame and in the fullscreen header: "Agent
+ *    page · isolated preview – never enter passwords here". The page can draw
+ *    anything inside its frame, a fake MC login included, but it cannot
+ *    paint over MC's own chrome.
  *  - `buildPreviewDocument` puts a guard head in front of the page:
  *      · `<base href="about:srcdoc">` — a srcdoc page otherwise resolves
  *        relative URLs against MC's own URL: an in-page link (`#pricing`)
@@ -24,21 +38,35 @@
  *        files resolve to nothing (multi-file pages are a separate feature).
  *      · `no-referrer` — requests from the page carry no Referer header.
  *      · a CSP: inline code and https: libraries/fonts/images load (many
- *        landing pages use a CDN), but fetch/XHR/WebSocket (`connect-src`)
- *        and forms are off, and plain http: (LAN, MC itself) is never a
- *        source. This is defence in depth, not the boundary — the sandbox is.
+ *        landing pages use a CDN), the page's own fetch/XHR/WebSocket
+ *        (`connect-src`) and forms are off, and plain http: (LAN, MC itself)
+ *        is never a source. This is defence in depth, not the boundary — the
+ *        sandbox is.
  *
  * Known limits — what the sandbox does NOT take away (checked in Chromium
- * and WebKit):
- *  - The page can learn MC's ADDRESS (not its data): its script can read
- *    `location.ancestorOrigins`, which lists MC's origin whatever the
- *    referrer policy says, and could send it out through an allowed https:
- *    image or script URL. No token, cookie or page content goes with it.
+ * and WebKit, the Safari engine; not on a real iPhone):
+ *  - Once started, a page that never yields (an endless loop) freezes MC's
+ *    tab until it is reloaded — the frame shares MC's process.
+ *  - In WebKit a running page can step the TAB's history: `history.back()` or
+ *    `history.go(-n)` leaves MC for the page before it, or steps back through
+ *    MC's own routes. It can only reach existing history entries, never a URL
+ *    of its choice, and no sandbox flag stops it. Chromium blocks it.
  *  - The page shares the tab's history: an in-page `#link` or
  *    `history.pushState` adds entries, so Back first steps through them.
  *    They stay even after the frame is removed (30 pushes → +30 entries,
  *    in both engines), so remounting would not help; browsers throttle a
  *    page that floods the history.
+ *  - The page can learn MC's ADDRESS (not its data): its script can read
+ *    `location.ancestorOrigins`, which lists MC's origin whatever the
+ *    referrer policy says.
+ *  - Data the page has can leave: through an allowed https: image, script or
+ *    frame URL, or by navigating its own frame. `connect-src 'none'` only
+ *    stops the page's own fetch/XHR/WebSocket. Hence the label: what the
+ *    operator types into the page can be sent out.
+ *  - In WebKit the page's requests to MC carry MC's session cookie. The
+ *    backend does not take that cookie as a login for cross-site
+ *    subrequests (`_cookie_allowed` in backend/app/auth.py), and http: is no
+ *    source here, so the page cannot load MC's API as the operator.
  *
  * Shared by every FilePreview caller (task deliverables, folder deliverables,
  * the workspace tab, the Files page), so the boundary is the same everywhere.
@@ -54,12 +82,16 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useTranslations } from "next-intl";
-import { Code2, Eye, Loader2, Maximize2, X, type LucideIcon } from "lucide-react";
-import { C } from "@/lib/colors";
+import { Code2, Eye, Loader2, Maximize2, Play, ShieldAlert, X, type LucideIcon } from "lucide-react";
+import { C, alpha } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 
-/** The ONLY sandbox token the preview frame gets. Tests pin it exactly. */
+/** The ONLY sandbox token the running frame gets. Tests pin it exactly. */
 export const HTML_PREVIEW_SANDBOX = "allow-scripts";
+
+/** The still before the tap: an empty sandbox, every restriction on — no
+ *  script runs, so nothing in the page can loop or move the tab. */
+export const HTML_STILL_SANDBOX = "";
 
 /** CSP every previewed page runs under (see the file comment). */
 export const HTML_PREVIEW_CSP = [
@@ -79,67 +111,19 @@ const GUARD_HEAD =
   '<meta name="referrer" content="no-referrer">' +
   `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">`;
 
-/** HTML whitespace (tab, LF, FF, CR, space) — not JS `\s`, which is wider. */
-function isHtmlSpace(code: number): boolean {
-  return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d;
-}
-
-/** Index just past the comment whose body starts at `from` (after `<!--`), or -1. */
-function commentEnd(html: string, from: number): number {
-  // `<!-->` and `<!--->` are complete (empty) comments in the HTML tokenizer.
-  if (html.startsWith(">", from)) return from + 1;
-  if (html.startsWith("->", from)) return from + 2;
-  // Otherwise the first `--` followed by `>` or `!>` ends it (`--->` too:
-  // the search simply moves on by one dash).
-  for (let k = html.indexOf("--", from); k !== -1; k = html.indexOf("--", k + 1)) {
-    if (html.startsWith(">", k + 2)) return k + 3;
-    if (html.startsWith("!>", k + 2)) return k + 4;
-  }
-  return -1;
-}
-
 /**
- * Length of what may stand before the guard while keeping the doctype first:
- * a BOM, whitespace, comments, `<?…>` and then the doctype itself — or 0 when
- * there is no such doctype. Follows the HTML tokenizer, so the guard sits in
- * front of the first thing the browser would run.
+ * The page with the guard head in FRONT of everything it brings (doctype,
+ * comments, a script before <head>), so nothing of the page runs before it.
  *
- * A hand-written scan on purpose: every step moves forward and nothing is
- * read twice, so it is linear on any input. (A regex with a lazy comment
- * inside a repeated group backtracks exponentially over closed comments
- * when no doctype follows — 200 bytes froze the tab for seconds.)
- */
-function doctypeEnd(html: string): number {
-  const n = html.length;
-  let i = html.charCodeAt(0) === 0xfeff ? 1 : 0;
-  while (i < n) {
-    if (isHtmlSpace(html.charCodeAt(i))) {
-      i++;
-    } else if (html.startsWith("<!--", i)) {
-      i = commentEnd(html, i + 4);
-      if (i === -1) return 0; // unclosed: the rest of the file is a comment
-    } else if (html.startsWith("<?", i)) {
-      const gt = html.indexOf(">", i + 2);
-      if (gt === -1) return 0;
-      i = gt + 1;
-    } else if (html.slice(i, i + 9).toLowerCase() === "<!doctype") {
-      const gt = html.indexOf(">", i + 9);
-      return gt === -1 ? 0 : gt + 1;
-    } else {
-      return 0; // content first: a later doctype is ignored by the browser
-    }
-  }
-  return 0;
-}
-
-/**
- * The page plus the guard head, placed right after the doctype: before it
- * would throw the page into quirks mode; anywhere later would let markup
- * that comes first (a script before <head>) run unguarded.
+ * Nothing is scanned: a srcdoc document is never in quirks mode (HTML spec,
+ * "initial" insertion mode — the quirks rules skip iframe srcdoc documents),
+ * so the page's doctype need not come first. Checked in Chromium and WebKit:
+ * with the guard before an HTML 4.01 Transitional doctype the page stays in
+ * standards mode (CSS1Compat), the CSP meta sits in <head> and is enforced,
+ * and the page's own `<html lang>`, `<title>` and styles still apply.
  */
 export function buildPreviewDocument(html: string): string {
-  const end = doctypeEnd(html);
-  return html.slice(0, end) + GUARD_HEAD + html.slice(end);
+  return GUARD_HEAD + html;
 }
 
 // ── Sandboxed frame ────────────────────────────────────────────────────────
@@ -185,6 +169,81 @@ function SandboxedFrame({ doc, title }: { doc: string; title: string }) {
         </div>
       )}
     </>
+  );
+}
+
+// ── Still (before the tap) ─────────────────────────────────────────────────
+
+/**
+ * The page as a still: the same document with scripts off, dimmed, under the
+ * "Run page" button. The cover takes every touch, so the still is a picture —
+ * no link in it can be followed — and a swipe over it scrolls MC, not the
+ * page. Its own element: sandbox flags apply when a frame navigates, so the
+ * running page always gets a NEW frame, never this one with a new attribute.
+ */
+function StillFrame({ doc, title, onRun }: { doc: string; title: string; onRun: () => void }) {
+  const t = useTranslations("filePreview.html");
+  return (
+    <>
+      <iframe
+        title={title}
+        sandbox={HTML_STILL_SANDBOX}
+        srcDoc={doc}
+        referrerPolicy="no-referrer"
+        tabIndex={-1}
+        className="absolute inset-0 block w-full h-full border-0"
+        style={{ colorScheme: "light", background: "Canvas" }}
+      />
+      <div
+        className="absolute inset-0 flex items-center justify-center p-4"
+        style={{ background: alpha(C.scrim, 0.45) }}
+      >
+        <div
+          className="flex flex-col items-center gap-2 p-4 rounded-lg text-center"
+          style={{ background: C.bgElevated, border: `1px solid ${C.border}` }}
+        >
+          <button
+            type="button"
+            onClick={onRun}
+            className="inline-flex items-center justify-center gap-2 min-h-11 px-4 rounded-md text-sm font-medium cursor-pointer transition-colors"
+            style={{ background: C.accent, color: C.onAccent }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = C.accentHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = C.accent)}
+          >
+            <Play size={16} aria-hidden="true" />
+            {t("run")}
+          </button>
+          <p className="text-xs" style={{ color: C.textSecondary }}>
+            {t("stillHint")}
+          </p>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** The still before the tap, the running page after it. */
+function PageFrame({ doc, name, running, onRun }: { doc: string; name: string; running: boolean; onRun: () => void }) {
+  const t = useTranslations("filePreview.html");
+  return running ? (
+    <SandboxedFrame doc={doc} title={t("frameTitle", { name })} />
+  ) : (
+    <StillFrame doc={doc} title={t("stillTitle", { name })} onRun={onRun} />
+  );
+}
+
+/**
+ * "Agent page · isolated preview – never enter passwords here". MC's own
+ * chrome, outside the frame: the page can fake a login form inside its
+ * frame, but it cannot paint over this line.
+ */
+function IsolationLabel() {
+  const t = useTranslations("filePreview.html");
+  return (
+    <p className="flex items-start gap-2 text-xs" style={{ color: C.textSecondary }}>
+      <ShieldAlert size={14} className="shrink-0 my-px" style={{ color: C.warning }} aria-hidden="true" />
+      <span>{t("isolationLabel")}</span>
+    </p>
   );
 }
 
@@ -275,7 +334,19 @@ function useTopLayerEscape(onEscape: () => void) {
   }, []);
 }
 
-function FullscreenView({ doc, name, onClose }: { doc: string; name: string; onClose: () => void }) {
+function FullscreenView({
+  doc,
+  name,
+  running,
+  onRun,
+  onClose,
+}: {
+  doc: string;
+  name: string;
+  running: boolean;
+  onRun: () => void;
+  onClose: () => void;
+}) {
   const t = useTranslations("filePreview.html");
   const closeRef = useRef<HTMLButtonElement>(null);
   useBodyScrollLock(true);
@@ -300,20 +371,25 @@ function FullscreenView({ doc, name, onClose }: { doc: string; name: string; onC
       className="fixed inset-0 z-[200] flex flex-col"
       style={{ background: C.bgDeep }}
     >
+      {/* MC's chrome: the label and which file this is. The page below can
+          fill the rest of the screen, never this bar. */}
       <div
         className="flex items-center gap-2 pl-4 pr-2 pt-safe shrink-0"
         style={{ borderBottom: `1px solid ${C.border}` }}
       >
-        <span className="flex-1 min-w-0 truncate font-mono text-xs" style={{ color: C.textSecondary }}>
-          {name}
-        </span>
+        <div className="flex-1 min-w-0 flex flex-col gap-1 py-2">
+          <IsolationLabel />
+          <span className="truncate font-mono text-xs" style={{ color: C.textMuted }}>
+            {name}
+          </span>
+        </div>
         <button
           ref={closeRef}
           type="button"
           onClick={onClose}
           aria-label={t("closeFullscreen")}
           title={t("closeFullscreen")}
-          className="inline-flex items-center justify-center min-h-11 min-w-11 rounded-md cursor-pointer transition-colors"
+          className="inline-flex items-center justify-center shrink-0 min-h-11 min-w-11 rounded-md cursor-pointer transition-colors"
           style={{ color: C.textSecondary }}
           onMouseEnter={(e) => (e.currentTarget.style.color = C.textPrimary)}
           onMouseLeave={(e) => (e.currentTarget.style.color = C.textSecondary)}
@@ -322,7 +398,7 @@ function FullscreenView({ doc, name, onClose }: { doc: string; name: string; onC
         </button>
       </div>
       <div className="relative flex-1 min-h-0">
-        <SandboxedFrame doc={doc} title={t("frameTitle", { name })} />
+        <PageFrame doc={doc} name={name} running={running} onRun={onRun} />
       </div>
     </div>,
     document.body,
@@ -346,10 +422,24 @@ export function HtmlPreview({ html, name, code }: HtmlPreviewProps) {
   const [fullscreen, setFullscreen] = useState(false);
   const doc = useMemo(() => buildPreviewDocument(html), [html]);
 
+  // Click to run: the document the operator started, or null. Bound to the
+  // document itself, so other content — the same component handed another
+  // file — arrives as a still and never inherits the tap.
+  const [runningDoc, setRunningDoc] = useState<string | null>(null);
+  const running = runningDoc === doc;
+  const run = () => setRunningDoc(doc);
+
+  function changeView(next: View) {
+    setView(next);
+    // The code view unmounts the page; back on the preview it is a still
+    // again and runs only after the next tap.
+    if (next !== "preview") setRunningDoc(null);
+  }
+
   return (
     <div data-region="html-preview">
       <div className="flex items-center justify-between gap-2 mb-2">
-        <ViewSwitch view={view} onChange={setView} />
+        <ViewSwitch view={view} onChange={changeView} />
         {view === "preview" && (
           <button
             type="button"
@@ -366,22 +456,30 @@ export function HtmlPreview({ html, name, code }: HtmlPreviewProps) {
       </div>
 
       {view === "preview" ? (
-        // 60 % of the screen on a phone, never so small that a page is a strip.
-        <div
-          className="relative w-full h-[60vh] min-h-[320px] max-h-[720px] rounded-dense overflow-hidden"
-          style={{ border: `1px solid ${C.border}` }}
-        >
-          {/* One running copy of the page at a time: while the fullscreen
-              view is open the inline frame is unmounted, the box keeps its
-              height so the page underneath does not jump. */}
-          {!fullscreen && <SandboxedFrame doc={doc} title={t("frameTitle", { name })} />}
+        <div className="rounded-dense overflow-hidden" style={{ border: `1px solid ${C.border}` }}>
+          <div className="px-3 py-2" style={{ background: C.bgSurface, borderBottom: `1px solid ${C.border}` }}>
+            <IsolationLabel />
+          </div>
+          {/* 60 % of the screen on a phone, never so small that a page is a strip. */}
+          <div className="relative w-full h-[60vh] min-h-[320px] max-h-[720px]">
+            {/* One copy of the page at a time: while the fullscreen view is
+                open the inline frame is unmounted, the box keeps its height
+                so the page underneath does not jump. */}
+            {!fullscreen && <PageFrame doc={doc} name={name} running={running} onRun={run} />}
+          </div>
         </div>
       ) : (
         code
       )}
 
       {fullscreen && (
-        <FullscreenView doc={doc} name={name} onClose={() => setFullscreen(false)} />
+        <FullscreenView
+          doc={doc}
+          name={name}
+          running={running}
+          onRun={run}
+          onClose={() => setFullscreen(false)}
+        />
       )}
     </div>
   );

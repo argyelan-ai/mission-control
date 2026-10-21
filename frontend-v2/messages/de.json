@@ -1781,7 +1781,11 @@
       "closeFullscreen": "Vollbild schliessen",
       "fullscreenTitle": "{name} im Vollbild",
       "frameTitle": "Gerenderte Seite {name}",
-      "loading": "Seite wird geladen…"
+      "loading": "Seite wird geladen…",
+      "run": "Seite starten",
+      "stillTitle": "Standbild von {name}",
+      "stillHint": "Standbild, Skripte aus",
+      "isolationLabel": "Agenten-Seite · isolierte Vorschau – hier nie Passwörter eingeben"
     }
   },
   "settings": {
