@@ -18,6 +18,15 @@ backend deliverable_paths). omp's write tool goes through fs/write_text_file,
 so the jail serves that root too — with the same realpath check, so a
 symlink or `..` out of /deliverables is refused like one out of the cwd.
 
+The scratch roots (last part): inside an agent container the jail also
+serves the container's own /tmp and its /workspace mount — omp's bash
+writes both anyway, only its read/write tools were refused there. Same
+realpath check again: a link out of /tmp or /workspace (to /etc, to
+~/.omp, to the sibling mounts /workspace-ref and /vault) stays refused.
+Every client in this file is built as on the host (no container marker,
+no MC_FS_SCRATCH_DIRS) unless a test turns the scratch roots on, so the
+machine's own /tmp never leaks into the older tests.
+
 Run:  python3 test_fs_jail.py   (standalone)   OR   pytest -v
 """
 from __future__ import annotations
@@ -37,12 +46,53 @@ import acp_client  # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 
+_UNSET = object()
+#: Stand-ins for the container marker: a file that exists ("in a
+#: container") and one that does not ("on the host").
+_MARKER_PRESENT = os.path.abspath(__file__)
+_MARKER_MISSING = os.path.join(HERE, "no-such-container-marker")
 
-def _jailed_client(jail: str) -> tuple[acp_client.ACPClient, list[dict]]:
+
+@contextlib.contextmanager
+def _scratch_config(env=None, default=_UNSET, container=False) -> Iterator[None]:
+    """MC_FS_SCRATCH_DIRS (None = unset), the built-in scratch roots and
+    whether the container marker exists — for the block, then put back.
+
+    The baseline (no arguments) is the host: no env var, no marker. So a
+    test that does not ask for the scratch roots never gets the machine's
+    /tmp — where tempfile makes every "outside" folder on Linux."""
+    old_env = os.environ.get("MC_FS_SCRATCH_DIRS")
+    saved = {name: getattr(acp_client, name, _UNSET)
+             for name in ("DEFAULT_SCRATCH_DIRS", "CONTAINER_MARKER")}
+    try:
+        if env is None:
+            os.environ.pop("MC_FS_SCRATCH_DIRS", None)
+        else:
+            os.environ["MC_FS_SCRATCH_DIRS"] = env
+        if default is not _UNSET:
+            acp_client.DEFAULT_SCRATCH_DIRS = default
+        acp_client.CONTAINER_MARKER = _MARKER_PRESENT if container else _MARKER_MISSING
+        yield
+    finally:
+        if old_env is None:
+            os.environ.pop("MC_FS_SCRATCH_DIRS", None)
+        else:
+            os.environ["MC_FS_SCRATCH_DIRS"] = old_env
+        for name, value in saved.items():
+            if value is not _UNSET:
+                setattr(acp_client, name, value)
+            elif hasattr(acp_client, name):
+                delattr(acp_client, name)
+
+
+def _jailed_client(jail: str, **scratch) -> tuple[acp_client.ACPClient, list[dict]]:
     """ACPClient wired for in-process dispatch: no subprocess — replies are
     captured instead of written to a (never-spawned) server's stdin. The jail
-    is set exactly as new_session() does after a successful session/new."""
-    client = acp_client.ACPClient(command=["never-spawned"])
+    is set exactly as new_session() does after a successful session/new.
+    Built under _scratch_config(**scratch): as on the host unless the test
+    asks for the scratch roots."""
+    with _scratch_config(**scratch):
+        client = acp_client.ACPClient(command=["never-spawned"])
     client._fs_jail = os.path.realpath(jail)
     sent: list[dict] = []
     client._send_raw = sent.append  # type: ignore[method-assign]
@@ -155,7 +205,6 @@ def test_fs_write_escape_is_rejected_too():
 # fixtures: the standalone runner below calls each test without arguments.
 
 TASK_ID = "11467ea6-4749-47be-901d-6acf900efb2d"
-_UNSET = object()
 
 
 @contextlib.contextmanager
@@ -528,6 +577,252 @@ def test_default_root_matches_the_backend_contract():
         renderer = f.read()
     assert f'f"{default}/{{task_id}}/"' in contract
     assert f'.mc/deliverables/{{slug}}:{default}")' in renderer
+
+
+# ---------------------------------------------------------------------------
+# The scratch roots: the container's /tmp and /workspace
+# ---------------------------------------------------------------------------
+# The refusals counted for #924 that were not /deliverables: /tmp (tasks in a
+# worktree cwd) and /workspace (the chat daemon, whose cwd is the agent's
+# home folder). Both folders belong to the container, and omp's bash writes
+# there anyway. Most tests below use stand-in folders for /tmp and
+# /workspace (`default=`), because /workspace exists only in a container
+# and on Linux every tempfile "outside" folder lies under the real /tmp.
+
+@contextlib.contextmanager
+def _real_tmp_dir() -> Iterator[str]:
+    """A fresh folder under the literal /tmp (not realpath'd: on macOS /tmp
+    is a link to /private/tmp, which the jail must resolve itself)."""
+    made = tempfile.mkdtemp(prefix="omp-fs-scratch-", dir="/tmp")
+    try:
+        yield made
+    finally:
+        shutil.rmtree(made, ignore_errors=True)
+
+
+def _write(client, sent, path: str, content: str = "x") -> Optional[dict]:
+    sent.clear()
+    _fs_request(client, "fs/write_text_file", {"path": path, "content": content})
+    return _error(sent)
+
+
+def _read(client, sent, path: str) -> Optional[dict]:
+    sent.clear()
+    _fs_request(client, "fs/read_text_file", {"path": path})
+    return _error(sent)
+
+
+def test_write_and_read_under_tmp_are_served():
+    """The live refusal: a task whose cwd is a worktree writes a scratch file
+    to /tmp/x and gets -32002. In a container /tmp is served — the real /tmp,
+    through the literal path, a new subfolder included."""
+    with _dirs("omp-fs-cwd-") as (cwd,), _real_tmp_dir() as tmp:
+        client, sent = _jailed_client(cwd, container=True)
+        target = os.path.join(tmp, "new", "x.txt")
+
+        assert _write(client, sent, target, "scratch") is None, sent
+        assert _read(client, sent, target) is None, sent
+        assert sent[0]["result"] == {"content": "scratch"}
+
+
+def test_write_and_read_under_workspace_are_served():
+    """The chat daemon's refusal: its cwd is the agent's home folder, and a
+    write to /workspace/y was refused. In a container the /workspace mount
+    is served next to any cwd — read and write, a new subfolder included."""
+    with _dirs("omp-fs-cwd-", "omp-fs-tmp-", "omp-fs-ws-") as (cwd, tmp, ws):
+        client, sent = _jailed_client(cwd, container=True, default=(tmp, ws))
+        target = os.path.join(ws, "cube", "index.html")
+
+        assert _write(client, sent, target, "<!DOCTYPE html>") is None, sent
+        assert _read(client, sent, target) is None, sent
+        assert sent[0]["result"] == {"content": "<!DOCTYPE html>"}
+
+
+def test_symlink_from_tmp_to_etc_passwd_is_rejected():
+    """/tmp/l -> /etc/passwd: the link sits in a served root, the file it
+    names does not — the final path decides, the read is refused."""
+    with _dirs("omp-fs-cwd-") as (cwd,), _real_tmp_dir() as tmp:
+        link = os.path.join(tmp, "l")
+        os.symlink("/etc/passwd", link)
+        client, sent = _jailed_client(cwd, container=True)
+
+        err = _read(client, sent, link)
+
+        assert err is not None and err["code"] == -32002, sent
+        assert "outside session cwd" in err["message"]
+
+
+def test_symlink_from_workspace_into_omp_home_is_rejected():
+    """/workspace/l -> /home/agent/.omp (omp's own config and keys, not on a
+    mount): a folder link and a file link out of /workspace are refused for
+    read and write, and the file behind them keeps its content."""
+    with _dirs("omp-fs-cwd-", "omp-fs-tmp-", "omp-fs-ws-", "omp-fs-home-") as (
+            cwd, tmp, ws, home):
+        omp_home = os.path.join(home, "agent", ".omp")
+        os.makedirs(os.path.join(omp_home, "agent"))
+        models = os.path.join(omp_home, "agent", "models.yml")
+        with open(models, "w", encoding="utf-8") as f:
+            f.write("original")
+        os.symlink(omp_home, os.path.join(ws, "l"))
+        os.symlink(models, os.path.join(ws, "models.yml"))
+        client, sent = _jailed_client(cwd, container=True, default=(tmp, ws))
+
+        for path in (os.path.join(ws, "l", "agent", "models.yml"),
+                     os.path.join(ws, "models.yml")):
+            for err in (_read(client, sent, path),
+                        _write(client, sent, path, "hacked")):
+                assert err is not None and err["code"] == -32002, (path, sent)
+        err = _write(client, sent, os.path.join(ws, "l", "new", "x.txt"))
+        assert err is not None and err["code"] == -32002, sent
+        assert not os.path.exists(os.path.join(omp_home, "new"))
+        with open(models, encoding="utf-8") as f:
+            assert f.read() == "original"
+
+
+def test_workspace_does_not_open_the_other_mounts():
+    """/workspace is a mount next to others — /workspace-ref (the operator's
+    checkouts), /vault, the host's ~/.mc. A link from /workspace into any of
+    them resolves outside /workspace and is refused; a write through it
+    makes nothing. A folder that only shares the name as a prefix
+    (`/workspace-ref` next to `/workspace`) is outside too."""
+    with _dirs("omp-fs-cwd-", "omp-fs-tmp-", "omp-fs-ws-", "omp-fs-vault-",
+               "omp-fs-mc-") as (cwd, tmp, ws, vault, mc_home):
+        ref = ws + "-ref"
+        try:
+            for mount in (ref, vault, mc_home):
+                os.makedirs(mount, exist_ok=True)
+                with open(os.path.join(mount, "secret.txt"), "w", encoding="utf-8") as f:
+                    f.write("original")
+                os.symlink(mount, os.path.join(ws, "to-" + os.path.basename(mount)))
+            client, sent = _jailed_client(cwd, container=True, default=(tmp, ws))
+
+            for mount in (ref, vault, mc_home):
+                via_link = os.path.join(ws, "to-" + os.path.basename(mount))
+                for path in (os.path.join(via_link, "secret.txt"),
+                             os.path.join(mount, "secret.txt")):
+                    for err in (_read(client, sent, path),
+                                _write(client, sent, path, "hacked")):
+                        assert err is not None and err["code"] == -32002, (path, sent)
+                assert _write(client, sent, os.path.join(via_link, "new", "x.txt")) \
+                    is not None
+                assert not os.path.exists(os.path.join(mount, "new")), mount
+                with open(os.path.join(mount, "secret.txt"), encoding="utf-8") as f:
+                    assert f.read() == "original", mount
+        finally:
+            shutil.rmtree(ref, ignore_errors=True)
+
+
+def test_dotdot_out_of_tmp_is_rejected():
+    """`..` out of /tmp is refused — on the real /tmp towards /etc/passwd,
+    and on a write before any folder along the escaping path is made."""
+    with _dirs("omp-fs-cwd-") as (cwd,), _real_tmp_dir() as real_tmp:
+        client, sent = _jailed_client(cwd, container=True)
+        escape = os.path.join(real_tmp, "..", "..", "etc", "passwd")
+
+        err = _read(client, sent, escape)
+
+        assert err is not None and err["code"] == -32002, sent
+    with _dirs("omp-fs-cwd-", "omp-fs-tmp-", "omp-fs-ws-", "omp-fs-outside-") as (
+            cwd, tmp, ws, outside):
+        client, sent = _jailed_client(cwd, container=True, default=(tmp, ws))
+        escape = os.path.join(tmp, "a", "..", "..", os.path.basename(outside),
+                              "made", "x.txt")
+
+        err = _write(client, sent, escape)
+
+        assert err is not None and err["code"] == -32002, sent
+        assert not os.path.exists(os.path.join(outside, "made"))
+        assert not os.path.exists(os.path.join(tmp, "a"))
+
+
+def test_home_stays_rejected_next_to_the_scratch_roots():
+    """/tmp and /workspace open, /home stays shut: with the cwd at /workspace
+    (the task path), /home/agent/z is refused for read and write and
+    nothing is made — the literal path with the real roots, and a stand-in
+    home folder with stand-in roots."""
+    with _dirs("omp-fs-ws-") as (ws,):
+        client, sent = _jailed_client(ws, container=True)
+        for err in (_read(client, sent, "/home/agent/z"),
+                    _write(client, sent, "/home/agent/z")):
+            assert err is not None and err["code"] == -32002, sent
+    with _dirs("omp-fs-tmp-", "omp-fs-ws-", "omp-fs-home-") as (tmp, ws, home):
+        target = os.path.join(home, "agent", "z")
+        client, sent = _jailed_client(ws, container=True, default=(tmp, ws))
+
+        err = _write(client, sent, target)
+
+        assert err is not None and err["code"] == -32002, sent
+        assert ws in err["message"] and tmp in err["message"]
+        assert not os.path.exists(os.path.join(home, "agent"))
+
+
+def test_scratch_roots_only_inside_a_container():
+    """The host (Hermes builds ACPClient there too) keeps its jail: without
+    the container marker and without MC_FS_SCRATCH_DIRS no scratch root is
+    served — the host's /tmp is the whole machine's. In a container only
+    the defaults that exist are roots, stored resolved."""
+    with _dirs("omp-fs-cwd-", "omp-fs-tmp-", "omp-fs-ws-") as (cwd, tmp, ws):
+        missing = os.path.join(ws, "not-mounted")
+        with _scratch_config(default=(tmp, ws)):
+            assert acp_client.scratch_roots() == ()
+        with _scratch_config(default=(tmp, missing), container=True):
+            assert acp_client.scratch_roots() == (tmp,)
+        client, sent = _jailed_client(cwd, default=(tmp, ws))
+
+        for root in (tmp, ws):
+            err = _write(client, sent, os.path.join(root, "x.txt"))
+            assert err is not None and err["code"] == -32002, (root, sent)
+            assert not os.path.exists(os.path.join(root, "x.txt"))
+
+
+def test_scratch_env_overrides_the_defaults():
+    """MC_FS_SCRATCH_DIRS wins over the container default: set but empty =
+    no scratch root even in a container; a list = exactly those folders,
+    also on the host. `/` and relative entries are never a root."""
+    with _dirs("omp-fs-cwd-", "omp-fs-tmp-", "omp-fs-ws-", "omp-fs-own-") as (
+            cwd, tmp, ws, own):
+        with _scratch_config(env="", default=(tmp, ws), container=True):
+            assert acp_client.scratch_roots() == ()
+        configured = os.pathsep.join([own, "/", "."])
+        with _scratch_config(env=configured, default=(tmp, ws)):
+            assert acp_client.scratch_roots() == (own,)
+        client, sent = _jailed_client(cwd, env="", default=(tmp, ws), container=True)
+
+        err = _write(client, sent, os.path.join(tmp, "x.txt"))
+
+        assert err is not None and err["code"] == -32002, sent
+        assert not os.path.exists(os.path.join(tmp, "x.txt"))
+
+
+def test_deliverables_root_still_served_next_to_the_scratch_roots():
+    """The #924 root keeps working with the scratch roots on, and the
+    refusal names every folder the model may use instead."""
+    with _dirs("omp-fs-cwd-", "omp-fs-deliv-", "omp-fs-tmp-", "omp-fs-ws-",
+               "omp-fs-outside-") as (cwd, deliv, tmp, ws, outside):
+        with _deliverables_config(env=deliv):
+            client, sent = _jailed_client(cwd, container=True, default=(tmp, ws))
+
+        assert _write(client, sent, os.path.join(deliv, TASK_ID, "index.html")) is None
+        err = _write(client, sent, os.path.join(outside, "x.txt"))
+
+        assert err is not None and err["code"] == -32002, sent
+        for root in (cwd, deliv, tmp, ws):
+            assert root in err["message"], (root, err)
+
+
+def test_scratch_defaults_match_the_container_layout():
+    """The defaults are not a second truth: /workspace is the mount target
+    the compose renderer gives every agent container and the cwd the omp
+    entrypoint pins. A rename on either side trips here."""
+    assert acp_client.DEFAULT_SCRATCH_DIRS == ("/tmp", "/workspace")
+    assert acp_client.CONTAINER_MARKER == "/.dockerenv"
+    with open(os.path.join(REPO_ROOT, "backend", "app", "services",
+                           "compose_renderer.py"), encoding="utf-8") as f:
+        renderer = f.read()
+    with open(os.path.join(HERE, os.pardir, "entrypoint.sh"), encoding="utf-8") as f:
+        entrypoint = f.read()
+    assert '.mc/workspaces/{slug}:/workspace",' in renderer
+    assert 'OMP_DEFAULT_CWD="${OMP_DEFAULT_CWD:-/workspace}"' in entrypoint
 
 
 # ---------------------------------------------------------------------------

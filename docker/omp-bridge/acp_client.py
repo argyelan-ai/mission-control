@@ -51,8 +51,29 @@ DEFAULT_DELIVERABLES_DIR = "/deliverables"
 #: separated by ``os.pathsep``. Set but empty = no extra root (cwd only).
 DELIVERABLES_DIR_ENV = "MC_DELIVERABLES_DIR"
 
+#: The container's own scratch folders, served next to the session cwd and
+#: the deliverables root: its /tmp and its /workspace mount
+#: (``~/.mc/workspaces/<slug>:/workspace``, compose_renderer; the cwd the
+#: omp entrypoint pins). omp's bash writes both anyway — the jail only kept
+#: its read/write tools out (a task in a worktree cwd writing to /tmp, the
+#: chat daemon writing to /workspace). Same realpath check as every root: a
+#: link out of /tmp or /workspace (to /etc, to ~/.omp, to the sibling
+#: mounts /workspace-ref or /vault) resolves outside and stays refused.
+#: Only served inside a container (:data:`CONTAINER_MARKER`): the host's
+#: /tmp is the whole machine's, so the host keeps cwd + deliverables.
+DEFAULT_SCRATCH_DIRS = ("/tmp", "/workspace")
 
-def _usable_roots(candidates: Iterable[str]) -> tuple[str, ...]:
+#: Override for the scratch roots: one or more absolute folders, separated
+#: by ``os.pathsep`` — used as given, in a container or not. Set but empty
+#: = no scratch root.
+SCRATCH_DIRS_ENV = "MC_FS_SCRATCH_DIRS"
+
+#: The file Docker puts into every container (backend nodes.py uses the
+#: same test). Without it :data:`DEFAULT_SCRATCH_DIRS` is not served.
+CONTAINER_MARKER = "/.dockerenv"
+
+
+def _usable_roots(candidates: Iterable[str], kind: str = "deliverables") -> tuple[str, ...]:
     """realpath of every candidate that is an absolute, existing folder.
 
     Stored resolved, so the jail compares final paths with final paths. The
@@ -64,11 +85,11 @@ def _usable_roots(candidates: Iterable[str]) -> tuple[str, ...]:
         if not cand:
             continue
         if not os.path.isabs(cand):
-            logger.warning("fs jail: ignoring relative deliverables root %r", cand)
+            logger.warning("fs jail: ignoring relative %s root %r", kind, cand)
             continue
         real = os.path.realpath(cand)
         if real == os.path.realpath(os.sep):
-            logger.warning("fs jail: refusing %r as a deliverables root", cand)
+            logger.warning("fs jail: refusing %r as a %s root", cand, kind)
             continue
         if os.path.isdir(real) and real not in roots:
             roots.append(real)
@@ -76,7 +97,7 @@ def _usable_roots(candidates: Iterable[str]) -> tuple[str, ...]:
 
 
 def deliverables_roots(environ: Optional[Mapping[str, str]] = None) -> tuple[str, ...]:
-    """The folders the fs jail serves besides the session cwd.
+    """The deliverables folder(s) the fs jail serves besides the session cwd.
 
     ``MC_DELIVERABLES_DIR`` when set, else :data:`DEFAULT_DELIVERABLES_DIR`.
     """
@@ -85,6 +106,28 @@ def deliverables_roots(environ: Optional[Mapping[str, str]] = None) -> tuple[str
     if raw is None:
         return _usable_roots([DEFAULT_DELIVERABLES_DIR])
     return _usable_roots(raw.split(os.pathsep))
+
+
+def scratch_roots(environ: Optional[Mapping[str, str]] = None) -> tuple[str, ...]:
+    """The scratch folders the fs jail serves besides the session cwd.
+
+    ``MC_FS_SCRATCH_DIRS`` when set, else :data:`DEFAULT_SCRATCH_DIRS` —
+    those only inside a container, and only the ones that exist.
+    """
+    env = os.environ if environ is None else environ
+    raw = env.get(SCRATCH_DIRS_ENV)
+    if raw is not None:
+        return _usable_roots(raw.split(os.pathsep), "scratch")
+    if not os.path.exists(CONTAINER_MARKER):
+        return ()
+    return _usable_roots(DEFAULT_SCRATCH_DIRS, "scratch")
+
+
+def fs_roots(environ: Optional[Mapping[str, str]] = None) -> tuple[str, ...]:
+    """Every folder the fs jail serves besides the session cwd, each once:
+    the deliverables root(s), then the scratch roots."""
+    return tuple(dict.fromkeys((*deliverables_roots(environ),
+                                *scratch_roots(environ))))
 
 
 def _inside(real: str, root: str) -> bool:
@@ -164,9 +207,10 @@ class ACPClient:
         self._command = command or default_command()
         self._cwd = cwd
         self._fs_jail: Optional[str] = None  # realpath(cwd) — fs/* restricted here (Review #464 Major)
-        # Served too once a session exists: the deliverables root(s), read
-        # here once (the mount is there from container start).
-        self._fs_extra_roots: tuple[str, ...] = deliverables_roots()
+        # Served too once a session exists: the deliverables root(s) and,
+        # in a container, the scratch roots /tmp and /workspace — read here
+        # once (the mounts are there from container start).
+        self._fs_extra_roots: tuple[str, ...] = fs_roots()
         self._env = env
         self._proc: Optional[subprocess.Popen] = None
         self._reader: Optional[threading.Thread] = None
@@ -374,11 +418,12 @@ class ACPClient:
         if method not in ("fs/read_text_file", "fs/write_text_file"):
             return {"error": {"code": -32601, "message": f"unhandled {method}"}}
         # Review #464 Major: fs/read_text_file + fs/write_text_file are
-        # restricted to the session's realpath(cwd) plus the deliverables
-        # root(s) (deliverables_roots). A symlink or `..` escape resolves
-        # through realpath, so the check is on the FINAL path, not the
-        # textual one — out of the cwd and out of /deliverables alike. No
-        # jail (no session yet) -> reject, whatever the extra roots are.
+        # restricted to the session's realpath(cwd) plus the extra roots
+        # (fs_roots: /deliverables, and in a container /tmp + /workspace).
+        # A symlink or `..` escape resolves through realpath, so the check
+        # is on the FINAL path, not the textual one — out of the cwd and out
+        # of every extra root alike. No jail (no session yet) -> reject,
+        # whatever the extra roots are.
         jail = self._fs_jail
         path = params.get("path")
         if not jail or not isinstance(path, str) or not path:
@@ -389,7 +434,7 @@ class ACPClient:
         if not any(_inside(real, root) for root in (jail, *extra)):
             message = f"path {path!r} outside session cwd {jail!r}"
             if extra:
-                message += " and outside the deliverables root " + ", ".join(
+                message += " and outside the other allowed folders " + ", ".join(
                     repr(root) for root in extra)
             return {"error": {"code": -32002, "message": message}}
         if method == "fs/read_text_file":
@@ -495,7 +540,8 @@ class ACPClient:
         # Review #464 Major: fs/read_text_file + fs/write_text_file are
         # jailed to the session's realpath(cwd) — the child must never read
         # or write outside the working directory it was granted, except in
-        # the deliverables root MC itself sends it to (_fs_extra_roots).
+        # the deliverables root MC itself sends it to and the container's
+        # own scratch folders (_fs_extra_roots).
         try:
             self._fs_jail = os.path.realpath(cwd)
         except OSError:
