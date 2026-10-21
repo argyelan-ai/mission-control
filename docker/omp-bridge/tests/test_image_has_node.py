@@ -101,8 +101,9 @@ def test_node_is_pinned_to_an_lts_release_and_its_checksum():
 
 def test_the_tarball_is_verified_before_it_is_unpacked():
     _, run = node_install()
-    check = re.search(r'sha256sum -c', run)
-    unpack = re.search(r'\btar\b', run)
+    check = re.search(r"sha256sum -c", run)
+    # The unpack command, not the ".tar.gz" in the URL.
+    unpack = re.search(r"&&\s*tar\s+-\w*x", run)
     assert check and "${NODE_SHA256}" in run, (
         "the Node download is not checked against NODE_SHA256")
     assert unpack, "the Node tarball is never unpacked"
@@ -117,6 +118,13 @@ def test_the_build_itself_runs_node_and_npx():
     _, run = node_install()
     for cmd in ("node --version", "npx --version"):
         assert cmd in run, f"the Node install step does not run `{cmd}`"
+
+
+def test_npm_does_not_tell_the_agent_to_update_npm():
+    """npm's update notice ("run npm install -g npm@…") lands in every npx
+    output; an agent takes it as work, and the global install fails as the
+    agent user. Live 21.10.2026 with node 24.22.1: npm 11 → 12 notice."""
+    assert "ENV NPM_CONFIG_UPDATE_NOTIFIER=false" in instructions()
 
 
 def test_node_is_installed_while_the_build_is_root():
@@ -186,12 +194,14 @@ def test_node_check_parses_without_running():
 
 @needs_image
 def test_npx_and_npm_answer_as_the_agent_user():
-    res = in_image("id -un && npm --version && npx --version")
+    res = in_image("id -un && npm --version && npx --version "
+                   "&& npm config get update-notifier")
     assert res.returncode == 0, res.stderr
     lines = res.stdout.split()
     assert lines[0] == "agent", f"ran as {lines[0]!r}, not the agent user"
-    assert len(lines) == 3 and lines[1] == lines[2], (
+    assert len(lines) == 4 and lines[1] == lines[2], (
         f"npm and npx disagree: {res.stdout!r}")
+    assert lines[3] == "false", "npm still shows its update notice"
 
 
 @needs_image

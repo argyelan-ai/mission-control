@@ -18,8 +18,9 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Base tools — same surface as mc-agent-base so the container lifecycle
-# (health-check tmux pane, recycler, git workflow) behaves identically. No node:
-# omp bundles its own runtime and the mc CLI is Python; nothing here needs node.
+# (health-check tmux pane, recycler, git workflow) behaves identically. omp
+# bundles its own runtime and the mc CLI is Python; Node.js is installed further
+# down for the AGENT's own work (checking the JS it writes), not for the harness.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
@@ -73,6 +74,38 @@ RUN curl -fsSL \
     && chmod +x /usr/local/bin/omp \
     && /usr/local/bin/omp --version
 LABEL mc.cli.name="omp" mc.cli.version="${OMP_VERSION}"
+
+# --- Node.js for the agent's own checks (pinned LTS, verified tarball) ---
+# An omp agent that writes a web page must be able to check its JS itself:
+# `node --check app.js`, `node -e …`, `npx <tool>`. Without node (live
+# 21.10.2026) an agent searched for node/npx/chromium, found nothing, failed to
+# pip-build a JS parser (no compiler here) and fell back to a Python parser.
+# Not omp's own runtime: `BUN_BE_BUN=1 omp` is Bun, but its `--check` RUNS the
+# file instead of parsing it, and the variable leaks into child processes (an
+# `omp` started from such a script answers as Bun). So: real Node.
+# Official nodejs.org release tarball, linux-arm64 like omp above (the image is
+# arm64-only). NODE_SHA256 = the tarball's line in the release's signed
+# SHASUMS256.txt. Only bin/ and lib/ are unpacked (node, npm, npx, corepack);
+# headers and docs are left out — nothing here compiles native addons.
+# Override at build: --build-arg NODE_VERSION=<ver> --build-arg NODE_SHA256=<sha>
+# tests/test_image_has_node.py guards the pin and, with MC_OMP_IMAGE set, the
+# built image.
+ARG NODE_VERSION=24.22.1
+ARG NODE_SHA256=33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3
+RUN curl -fsSL \
+        "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-arm64.tar.gz" \
+        -o /tmp/node.tar.gz \
+    && echo "${NODE_SHA256}  /tmp/node.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 --no-same-owner \
+        "node-v${NODE_VERSION}-linux-arm64/bin" "node-v${NODE_VERSION}-linux-arm64/lib" \
+    && rm /tmp/node.tar.gz \
+    && node --version \
+    && npm --version \
+    && npx --version
+# No "new npm version, run npm install -g npm@…" notice after every npx: the
+# agent would read it as a task, and as the agent user a global install into
+# /usr/local fails anyway. The pin above is the update path.
+ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 
 # Non-root user (mirrors mc-agent-base).
 RUN groupadd -r agent && useradd -r -g agent -s /bin/bash -m agent
