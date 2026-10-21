@@ -26,14 +26,18 @@
  * starts with `new_conversation` ("New conversation started · 17:07 · the
  * previous one is saved"); the recreate card `chat_started_fresh` is the
  * same thing for the same operator and carries the same label and the time.
- * The time is the line's own (`ev.ts`), as a clock time — the day too when
- * it was not today. `notice.previous`/`current` hold the two session ids:
- * data for the "show previous" link of P4 (`action`), never shown as text.
+ * The time is the line's own (`ev.ts`), in the app's one clock format
+ * (lib/clockTime) — the day too when it was not today. `notice.previous`/
+ * `current` hold the two session ids: data for the "show previous" link of
+ * P4 (`action`), never shown as text. `notice.kept: false` (the old copy is
+ * not on disk): the card still says a new conversation began, but makes no
+ * promise — no sentence.
  */
 import type { ReactNode } from "react";
 import { Info } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 
+import { formatClockTime } from "@/lib/clockTime";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import type { MessageEvent } from "@/lib/chatTypes";
 import { TIMELINE_CARD_GUTTER } from "./timelineCard";
@@ -50,21 +54,6 @@ export const CONVERSATION_START_CODES: ReadonlySet<string> = new Set([
   "new_conversation",
   "chat_started_fresh",
 ]);
-
-/** `ts` as a clock time ("17:07"), with the day when it is not today;
- *  null for a time that does not parse — never "Invalid Date". */
-export function noticeClockTime(ts: string | null | undefined, locale: string, now = new Date()): string | null {
-  if (!ts) return null;
-  const at = new Date(ts);
-  if (Number.isNaN(at.getTime())) return null;
-  const sameDay = at.toDateString() === now.toDateString();
-  return new Intl.DateTimeFormat(locale, {
-    ...(sameDay ? {} : { day: "numeric", month: "short" }),
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(at);
-}
 
 /** The values a notice sentence needs, per code. A code that is not listed
  *  has a sentence without placeholders. Written down once so a sentence is
@@ -88,14 +77,19 @@ export function ChatNoticeCard({ ev, action }: ChatNoticeCardProps) {
   // notice is never swallowed.
   const values = { previous, current };
   const needed = NOTICE_VALUES[code] ?? [];
-  const sentence =
-    code && t.has(sentenceKey) && needed.every((name) => values[name])
+  // A new conversation whose predecessor's copy is not on disk: the label
+  // and the time say what happened; "the previous one is saved" would be
+  // false (critic finding, incident 21.10.2026).
+  const promiseBroken = code === "new_conversation" && ev.notice?.kept === false;
+  const sentence = promiseBroken
+    ? null
+    : code && t.has(sentenceKey) && needed.every((name) => values[name])
       ? needed.length > 0
         ? t(sentenceKey, values)
         : t(sentenceKey)
       : ev.text;
   const label = code && t.has(labelKey) ? t(labelKey) : t("notice.label");
-  const clock = CONVERSATION_START_CODES.has(code) ? noticeClockTime(ev.ts, locale) : null;
+  const clock = CONVERSATION_START_CODES.has(code) ? formatClockTime(ev.ts, locale) : null;
 
   return (
     <div className={TIMELINE_CARD_GUTTER}>

@@ -12,6 +12,7 @@ import { render, screen } from "@testing-library/react";
 
 import { ChatMessage } from "./ChatMessage";
 import { ChatNoticeCard, NOTICE_VALUES } from "./ChatNoticeCard";
+import { formatClockTime } from "@/lib/clockTime";
 import { C } from "@/lib/colors";
 import type { MessageEvent } from "@/lib/chatTypes";
 import de from "../../../messages/de.json";
@@ -114,12 +115,13 @@ describe("Chat-Hinweiskarte — Saetze ohne Werte (S1-R7)", () => {
     // One word for one thing (K10): the same label as every other new
     // conversation (incident 21.10.2026, `new_conversation` below).
     expect(screen.getByTestId("chat-notice-label")).toHaveTextContent("New conversation started");
+    // K3: the label says a new one began — the sentence does not repeat it.
     expect(screen.getByTestId("chat-notice-text")).toHaveTextContent(
-      "After the restart it was unclear which conversation was open. A new one started. Earlier conversations are kept."
+      "After the restart it was unclear which conversation was open. Earlier conversations are kept."
     );
     expect(tDe()("notice.chat_started_freshLabel")).toBe("Neues Gespräch begonnen");
     expect(tDe()("notice.chat_started_fresh")).toBe(
-      "Nach dem Neustart war nicht klar, welches Gespräch offen war. Ein neues hat begonnen. Frühere Gespräche bleiben gespeichert."
+      "Nach dem Neustart war nicht klar, welches Gespräch offen war. Frühere Gespräche bleiben gespeichert."
     );
   });
 
@@ -215,14 +217,35 @@ describe("Chat-Hinweiskarte — neues Gespräch (Vorfall 21.10.2026)", () => {
     expect(tDe()("notice.new_conversation")).toBe("Das vorherige Gespräch ist gespeichert.");
   });
 
-  it("names the day too when the conversation began on another day", () => {
+  it("names the day too when the conversation began on another day — in the app's one clock format", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(2026, 9, 23, 9, 0, 0));
     render(<ChatMessage ev={mkNew()} />);
 
     const time = screen.getByTestId("chat-notice-time").textContent ?? "";
-    expect(time).toContain("17:07");
-    expect(time).toMatch(/21/);
+    expect(time).toMatch(/^21 Oct.*17:07$/);
+    expect(time).toBe(formatClockTime(at.toISOString(), "en"));
+  });
+
+  it("without the old copy on disk the card still says a new conversation began — and promises nothing", () => {
+    // Critic finding: /new while MC's copy of the old conversation is gone
+    // was a silent reset, the 21.10. symptom. The daemon now writes the card
+    // with `kept: false`.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 21, 18, 0, 0));
+    render(
+      <ChatMessage
+        ev={mkNew({
+          text: "New conversation started.",
+          notice: { code: "new_conversation", previous: "01a1-old", current: "01a2-new", kept: false },
+        })}
+      />
+    );
+
+    expect(screen.getByTestId("chat-notice-label")).toHaveTextContent("New conversation started");
+    expect(screen.getByTestId("chat-notice-time")).toHaveTextContent(/^17:07$/);
+    expect(screen.queryByTestId("chat-notice-text")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-notice-card")).not.toHaveTextContent("saved");
   });
 
   it("the recreate card (chat_started_fresh) carries the clock time as well", () => {

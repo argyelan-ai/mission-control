@@ -175,17 +175,40 @@ _CHAT_STARTED_FRESH_TEXT = (
 #: ("New conversation started · 17:07 · the previous one is saved").
 #: `previous`/`current` are the two session ids — the slot the later "show
 #: previous" link (P4) reads —, `via` says how (VIA_*), `reason` why a resume
-#: failed. Written only while the previous conversation's copy is on disk:
-#: the card promises that it is kept.
+#: failed, `requestId` which request of MC's backend asked (none: not MC).
+#: `kept` says whether the previous conversation's copy is on disk: only then
+#: does the card promise that it is saved — but it comes either way, no reset
+#: is silent.
 NEW_CONVERSATION = "new_conversation"
 _NEW_CONVERSATION_TEXT = "New conversation started — the previous one is saved."
-#: `via` of a new conversation (card and the state mirror's `lastReset`):
-#: the control op (`/new`, `/clear`), a daemon start that could not resume
-#: (daemon restart, container recreate), a respawned omp child that could
-#: not resume.
+_NEW_CONVERSATION_NOT_KEPT_TEXT = "New conversation started."
+#: `via` of a reset (card and the state mirror's `resets`): the control op
+#: (`/new`, `/clear`), a daemon start that could not resume (daemon restart,
+#: container recreate), a respawned omp child that could not resume.
 VIA_NEW_SESSION = "new_session"
 VIA_START = "start"
 VIA_CHILD_RESTART = "child_restart"
+_VIAS = (VIA_NEW_SESSION, VIA_START, VIA_CHILD_RESTART)
+#: What became of a reset (`resets[].outcome`): a new conversation began;
+#: omp refused `session/new` (the current one goes on); a held `/new` was
+#: taken back (`queue_clear`); a restart dropped it before it ran.
+RESET_DONE = "done"
+RESET_FAILED = "failed"
+RESET_WITHDRAWN = "withdrawn"
+RESET_LOST = "lost"
+_RESET_OUTCOMES = (RESET_DONE, RESET_FAILED, RESET_WITHDRAWN, RESET_LOST)
+#: How many resets the state mirror keeps (`resets`, newest last). The
+#: backend reads them into activity events every few seconds; a burst
+#: larger than this between two reads loses the oldest from the mirror.
+RESET_HISTORY_MAX = 20
+#: Shapes the daemon accepts for what it keeps about a reset. The request id
+#: comes from whoever reaches the socket, the history from a file on the
+#: agent's own mount: anything else is dropped, never stored.
+_REQUEST_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_RESET_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,32}")
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+_REASON_RE = re.compile(r"[a-z_]{1,40}")
+_AT_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
 
 def _now_iso() -> str:
@@ -321,11 +344,12 @@ class ChatSession:
         # Last `session_info_update` (title/updatedAt) — mirrored into the
         # state file, never a chat line.
         self._session_info: dict = {}
-        # The last time a conversation was replaced by a new one
-        # (`_note_new_conversation`), mirrored as `lastReset`. Taken over
-        # from the previous daemon's mirror at start, so a restart does not
-        # hide it from the backend's activity event.
-        self._last_reset: Optional[dict] = None
+        # Every reset job and what became of it, and every reset the daemon
+        # did on its own (`_record_reset`), newest last, at most
+        # RESET_HISTORY_MAX — mirrored as `resets`. Taken over from the
+        # previous daemon's mirror at start, so a restart does not hide one
+        # from the backend's activity feed (incident 21.10.2026).
+        self._resets: list[dict] = []
 
         self._full_text: list[str] = []
         self._throttle: dict = {"chars": -10 ** 9, "at": 0.0, "pending": None}
@@ -362,15 +386,23 @@ class ChatSession:
         # It stays in the mirror (`interrupted`) until its card is written —
         # _connect rewrites the mirror long before that.
         interrupted = self._previous_current()
-        last_reset = self._previous_last_reset()
+        resets = self._previous_resets()
         with self._lock:
             self._unreported = interrupted
-            self._last_reset = last_reset
+            self._resets = resets
         if interrupted is not None and interrupted.get("kind") == "new_session":
             # A `/new` that never ran is one more job the restart dropped —
             # it belongs on the card that lists those, first in line.
-            lost = [{"kind": "new_session", "text": ""}, *lost]
+            lost = [{"kind": "new_session", "text": "",
+                     "requestId": interrupted.get("requestId")}, *lost]
             interrupted = None
+        for job in lost:
+            if job.get("kind") == "new_session":
+                # On record too: whoever asked for it must not read "runs
+                # when the reply ends" for ever (the backend's event).
+                self._record_reset(VIA_NEW_SESSION, RESET_LOST,
+                                   previous=persisted.get("sessionId"),
+                                   request_id=job.get("requestId"))
         self._connect(persisted)
         self._write_state()
         if migration_problem:
@@ -459,8 +491,9 @@ class ChatSession:
         reset_text = ("Previous chat session could not be loaded — "
                       "started a new one (history starts over).")
         reset_data: dict = {}
-        # The copy of the conversation that could not be resumed — still on
-        # disk, so the new conversation's card may say it is kept.
+        # The copy of the conversation that could not be resumed — on disk,
+        # so the new conversation's card may say it is kept. None when it is
+        # gone (`transcript_missing`): the card comes without the promise.
         previous_copy: Optional[Path] = None
         started_fresh = False
         session_id: Optional[str] = None
@@ -517,8 +550,9 @@ class ChatSession:
             self._preview = acp_chat_events.PreviewEventSink.beside(sink.path, session_id)
             self._write_persisted()
         if reset_detail:
-            # First line of the new conversation: it began, the old one is
-            # kept (incident 21.10.2026). The red card below says why.
+            # First line of the new conversation: it began, and whether the
+            # old one is kept (incident 21.10.2026). The red card below says
+            # why the old one did not resume.
             self._note_new_conversation(
                 stored_id, session_id,
                 VIA_CHILD_RESTART if self._resume_source == "restart" else VIA_START,
@@ -646,40 +680,66 @@ class ChatSession:
             data=retry_data(current.get("text")) if by_operator else None,
         )
 
-    def _previous_last_reset(self) -> Optional[dict]:
-        """`lastReset` of a previous daemon's state mirror, or None."""
-        row = _read_json_object(self.state_file).get("lastReset")
-        if not isinstance(row, dict) or not isinstance(row.get("sessionId"), str):
-            return None
-        return {k: v for k, v in row.items() if isinstance(v, str)}
+    def _previous_resets(self) -> list[dict]:
+        """`resets` of a previous daemon's state mirror — only rows in the
+        shape this daemon writes (`_clean_reset_row`), at most
+        RESET_HISTORY_MAX. Never raises."""
+        rows = _read_json_object(self.state_file).get("resets")
+        if not isinstance(rows, list):
+            return []
+        cleaned = (_clean_reset_row(r) for r in rows[-RESET_HISTORY_MAX:])
+        return [r for r in cleaned if r is not None]
+
+    def _record_reset(self, via: str, outcome: str, *, previous: Any = None,
+                      current: Any = None, reason: Optional[str] = None,
+                      request_id: Any = None, kept: Optional[bool] = None) -> None:
+        """One row of `resets` (the mirror is written by the caller's next
+        `_write_state`). Every field in the shape `_clean_reset_row` keeps;
+        a value of another shape is left out, never stored."""
+        row = _clean_reset_row({
+            "id": uuid.uuid4().hex[:16], "at": _now_iso(), "via": via,
+            "outcome": outcome, "previousSessionId": previous, "sessionId": current,
+            "reason": reason, "requestId": _request_id_of(request_id), "kept": kept,
+        }, partial=True)
+        if row is None:
+            return
+        with self._lock:
+            self._resets = [*self._resets, row][-RESET_HISTORY_MAX:]
 
     def _note_new_conversation(self, previous: Optional[str], current: str, via: str,
                                reason: Optional[str] = None,
-                               previous_copy: Optional[Path] = None) -> None:
+                               previous_copy: Optional[Path] = None,
+                               request_id: Optional[str] = None) -> None:
         """A new conversation replaced `previous` (incident 21.10.2026).
 
-        Always: the state mirror's `lastReset` and a log line — the backend
-        reads the new session id from the mirror for its activity event.
-        The card (`new_conversation`, the FIRST line of the new transcript)
-        only while the previous conversation's copy is on disk: it promises
-        "the previous one is saved". Called right after the switch, before
-        the model pin can write a notice of its own."""
-        record = {"at": _now_iso(), "via": via, "reason": reason,
-                  "previousSessionId": previous, "sessionId": current}
-        with self._lock:
-            self._last_reset = {k: v for k, v in record.items() if v is not None}
-        logger.info("new conversation %s (was %s) via %s%s", current, previous or "none",
-                    via, f" — {reason}" if reason else "")
-        if not previous or previous == current or previous_copy is None:
+        Always a row in `resets` and a log line — the backend turns the row
+        into an activity event. The card (`new_conversation`, the FIRST line
+        of the new transcript) whenever there WAS a previous conversation;
+        it promises "the previous one is saved" only while that copy is on
+        disk (`kept`) — without it, it still says that a new one began: no
+        reset is silent. Called right after the switch, before the model pin
+        can write a notice of its own."""
+        kept = False
+        if previous_copy is not None:
+            try:
+                kept = previous_copy.is_file()
+            except OSError:
+                kept = False
+        request_id = _request_id_of(request_id)
+        self._record_reset(via, RESET_DONE, previous=previous, current=current,
+                           reason=reason, request_id=request_id,
+                           kept=kept if previous else None)
+        logger.info("new conversation %s (was %s) via %s%s%s", current, previous or "none",
+                    via, f" — {reason}" if reason else "",
+                    f" — request {request_id}" if request_id else " — no request id")
+        if not previous or previous == current:
             return
-        try:
-            kept = previous_copy.is_file()
-        except OSError:
-            kept = False
-        if kept:
-            self._emit_notice(NEW_CONVERSATION, _NEW_CONVERSATION_TEXT, {
-                "previous": previous, "current": current, "via": via, "reason": reason,
-            })
+        self._emit_notice(
+            NEW_CONVERSATION,
+            _NEW_CONVERSATION_TEXT if kept else _NEW_CONVERSATION_NOT_KEPT_TEXT,
+            {"previous": previous, "current": current, "via": via, "reason": reason,
+             "kept": kept, "requestId": request_id},
+        )
 
     def _previous_elicitations(self) -> list[str]:
         """Card ids a previous daemon still held open, from its state mirror."""
@@ -791,7 +851,7 @@ class ChatSession:
         self._spawn(job)
         return {"ok": True, "turn": job["turn"]}
 
-    def new_session(self, mode: str = MODE_NOW) -> dict:
+    def new_session(self, mode: str = MODE_NOW, request_id: Any = None) -> dict:
         """`/new` and `/clear`: open a fresh ACP session (`session/new`) with
         its own transcript file. The old file stays as it is — the chat view
         follows the new one as a rollover, the history is not deleted.
@@ -800,19 +860,25 @@ class ChatSession:
         omp connects MCP servers), so it never overlaps one: while a turn
         runs it is refused (`busy`), or held in the queue with
         `mode="queue"`. A failure keeps the current session and lands as a
-        `new_session_failed` card."""
+        `new_session_failed` card.
+
+        `request_id`: the id MC's backend sends with the op — it names the
+        activity event of the request, and the job carries it to the card and
+        to `resets`. Nothing (a shell, the agent's own tools) means "not MC";
+        a value of another shape counts as nothing (`_request_id_of`)."""
         mode = mode or MODE_NOW
         if mode not in _MODES:
             return {"ok": False, "error": "bad_mode", "detail": str(mode)}
+        request_id = _request_id_of(request_id)
         with self._lock:
             if self._closed or self._client is None:
                 return {"ok": False, "error": "not_started"}
             if self._busy:
                 if mode == MODE_QUEUE:
-                    return self._enqueue_locked("new_session", "")
+                    return self._enqueue_locked("new_session", "", request_id=request_id)
                 return {"ok": False, "error": "busy"}
             previous = self._session_id
-            job = self._claim_locked({"kind": "new_session"})
+            job = self._claim_locked(_job("new_session", "", request_id=request_id))
         self._write_state()
         self._spawn(job)
         return {"ok": True, "previousSessionId": previous}
@@ -823,6 +889,13 @@ class ChatSession:
         without the operator seeing it."""
         with self._lock:
             dropped, self._queue = self._queue, []
+            current = self._session_id
+        for job in dropped:
+            if job.get("kind") == "new_session":
+                # It never ran: on record, so whoever asked does not read
+                # "runs when the reply ends" for ever.
+                self._record_reset(VIA_NEW_SESSION, RESET_WITHDRAWN, previous=current,
+                                   request_id=job.get("requestId"))
         if dropped:
             self._write_state()
         return {"ok": True, "dropped": [dict(job) for job in dropped]}
@@ -1001,7 +1074,7 @@ class ChatSession:
                     for e in self._elicitations.values()
                 ],
                 "sessionInfo": dict(self._session_info),
-                "lastReset": dict(self._last_reset) if self._last_reset else None,
+                "resets": [dict(r) for r in self._resets],
                 "updatedAt": _now_iso(),
                 "lastError": json.loads(json.dumps(self._last_error))
                 if self._last_error else None,
@@ -1035,7 +1108,8 @@ class ChatSession:
     # the worker: one job, then everything queued behind it
     # ------------------------------------------------------------------
 
-    def _enqueue_locked(self, kind: str, text: str, origin: Optional[str] = None) -> dict:
+    def _enqueue_locked(self, kind: str, text: str, origin: Optional[str] = None,
+                        request_id: Optional[str] = None) -> dict:
         """Hold one job behind the running turn. Caller holds `_lock`."""
         if len(self._queue) >= MAX_QUEUE:
             self._emit_error(
@@ -1044,7 +1118,8 @@ class ChatSession:
                      "Wait for the reply or take some back.",
             )
             return {"ok": False, "error": "queue_full"}
-        job = {"id": uuid.uuid4().hex[:12], **_job(kind, text, origin), "at": _now_iso()}
+        job = {"id": uuid.uuid4().hex[:12], **_job(kind, text, origin, request_id),
+               "at": _now_iso()}
         self._queue.append(job)
         position = len(self._queue)
         self._write_state()
@@ -1082,7 +1157,7 @@ class ChatSession:
         while job is not None:
             try:
                 if job["kind"] == "new_session":
-                    self._renew_session()
+                    self._renew_session(job)
                 else:
                     self._run_turn(job["text"], job["turn"], job.get("origin"))
             except Exception:  # noqa: BLE001 — one broken job must not strand the queue busy
@@ -1109,7 +1184,7 @@ class ChatSession:
             self._write_state()
         self._idle.set()
 
-    def _renew_session(self) -> None:
+    def _renew_session(self, job: Optional[dict] = None) -> None:
         """The `new_session` job: a fresh `session/new` on the same child.
 
         Model and thinking level carry over — `/clear` forgets the
@@ -1121,7 +1196,11 @@ class ChatSession:
         is created. The chat view follows the file whose LAST entry is newest
         (omp_chat.find_active_session), and omp may still persist into the old
         session's own file while disposing it — the new header must be later
-        than anything that teardown writes."""
+        than anything that teardown writes.
+
+        `job["requestId"]`: who asked (MC's backend) — on the card and in
+        `resets`, whatever the outcome."""
+        request_id = (job or {}).get("requestId")
         # A question of the old session can never be answered in the new one.
         self._expire_elicitations()
         with self._lock:
@@ -1131,6 +1210,8 @@ class ChatSession:
         try:
             new_id = client.new_session(self._cwd)
         except Exception as exc:  # noqa: BLE001 — the old session keeps serving
+            self._record_reset(VIA_NEW_SESSION, RESET_FAILED, previous=previous,
+                               request_id=request_id)
             self._emit_error(
                 "new_session_failed", f"{exc}",
                 text="Could not start a new session — the current one continues.",
@@ -1153,7 +1234,7 @@ class ChatSession:
         # The first line of the new conversation (incident 21.10.2026: the
         # chat was empty and nothing said why).
         self._note_new_conversation(previous, new_id, VIA_NEW_SESSION,
-                                    previous_copy=previous_copy)
+                                    previous_copy=previous_copy, request_id=request_id)
         self._absorb_session_result(result)
         self._pin_model()
         offered = self._config_value("thinking")
@@ -1733,13 +1814,60 @@ def _origin_of(value: Any) -> Optional[str]:
     return None
 
 
-def _job(kind: str, text: str, origin: Optional[str] = None) -> dict:
-    """A job for the worker; `origin` only when known, so a job of an
-    unknown author looks exactly as it did before."""
+def _job(kind: str, text: str, origin: Optional[str] = None,
+         request_id: Optional[str] = None) -> dict:
+    """A job for the worker; `origin` and `requestId` only when known, so a
+    job of an unknown author looks exactly as it did before."""
     job = {"kind": kind, "text": text}
     if origin is not None:
         job["origin"] = origin
+    if request_id is not None:
+        job["requestId"] = request_id
     return job
+
+
+def _request_id_of(value: Any) -> Optional[str]:
+    """A `new_session` request id as the daemon keeps it: a short token
+    (`_REQUEST_ID_RE`) or None. Anyone who reaches the socket picks it, and
+    it lands in the mirror and on the card."""
+    if isinstance(value, str) and _REQUEST_ID_RE.fullmatch(value):
+        return value
+    return None
+
+
+def _clean_reset_row(raw: Any, partial: bool = False) -> Optional[dict]:
+    """One `resets` row in the shape the daemon writes, or None.
+
+    Required: `id`, `via` (VIA_*), `outcome` (RESET_*). Optional: `at`,
+    `previousSessionId`, `sessionId`, `reason`, `requestId`, `kept` (bool).
+    Unknown keys are dropped. A known key of another shape drops the whole
+    row (a row the previous daemon left on the mount) — or, with `partial`
+    (a row this daemon is writing), only that value."""
+    if not isinstance(raw, dict):
+        return None
+    shapes = (
+        ("id", _RESET_ID_RE), ("at", _AT_RE), ("previousSessionId", _SESSION_ID_RE),
+        ("sessionId", _SESSION_ID_RE), ("reason", _REASON_RE), ("requestId", _REQUEST_ID_RE),
+    )
+    row: dict = {}
+    for key, shape in shapes:
+        value = raw.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and shape.fullmatch(value):
+            row[key] = value
+        elif not partial:
+            return None
+    if raw.get("via") not in _VIAS or raw.get("outcome") not in _RESET_OUTCOMES \
+            or "id" not in row:
+        return None
+    row["via"], row["outcome"] = raw["via"], raw["outcome"]
+    kept = raw.get("kept")
+    if isinstance(kept, bool):
+        row["kept"] = kept
+    elif kept is not None and not partial:
+        return None
+    return row
 
 
 def _current_entry(job: dict) -> dict:
@@ -1758,6 +1886,7 @@ def _current_entry(job: dict) -> dict:
         "truncated": not whole,
         "startedAt": _now_iso(),
         "origin": job.get("origin"),
+        **({"requestId": job["requestId"]} if job.get("requestId") else {}),
     }
 
 
@@ -2035,7 +2164,9 @@ def dispatch(session: ChatSession, request: dict) -> dict:
         return session.prompt(request.get("text") or "", request.get("mode") or MODE_NOW,
                               origin=request.get("origin"))
     if op == "new_session":
-        return session.new_session(request.get("mode") or MODE_NOW)
+        # `requestId` (optional): which request of MC's backend asked.
+        return session.new_session(request.get("mode") or MODE_NOW,
+                                   request_id=request.get("requestId"))
     if op == "queue_clear":
         return session.queue_clear()
     if op == "cancel":

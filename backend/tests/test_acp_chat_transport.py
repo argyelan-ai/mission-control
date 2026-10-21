@@ -170,6 +170,36 @@ async def test_docker_transport_queue_and_new_session_ops(monkeypatch, acp_slug)
     assert calls[2][-1] == "queue_clear"
 
 
+async def test_both_transports_send_the_request_id_of_a_reset(monkeypatch, acp_slug):
+    """Incident 21.10.2026: ``new_session`` names MC's request, so the
+    daemon's card and its ``resets`` record point at the activity event of
+    who asked. Without one, nothing extra is sent (an older daemon)."""
+    from app.services import acp_chat_transport
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        acp_chat_transport.asyncio, "create_subprocess_exec",
+        _fake_exec(calls, _FakeProc(0, b'{"ok": true}')),
+    )
+    await acp_chat_transport.DockerCtlTransport(acp_slug).new_session(
+        mode="queue", request_id="req-1")
+    await acp_chat_transport.DockerCtlTransport(acp_slug).new_session()
+    assert json.loads(calls[0][-1]) == {"mode": "queue", "requestId": "req-1"}
+    assert calls[1][-1] == "new_session"
+
+    seen: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    http = acp_chat_transport.HttpCtlTransport(
+        "http://host.example:18794", transport=httpx.MockTransport(_handler)
+    )
+    await http.new_session(mode="queue", request_id="req-2")
+    assert json.loads(seen[0].content) == {"mode": "queue", "requestId": "req-2"}
+
+
 async def test_docker_transport_cancel_sends_no_payload(monkeypatch, acp_slug):
     from app.services import acp_chat_transport
 

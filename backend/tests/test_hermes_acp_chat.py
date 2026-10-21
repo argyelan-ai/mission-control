@@ -61,6 +61,7 @@ class FakeSession:
         self.prompts: list[str] = []
         self.modes: list[str] = []
         self.new_sessions: list[str] = []
+        self.request_ids: list = []
         self.queue_clears = 0
         self.configs: list[tuple] = []
         self.cancelled = 0
@@ -87,8 +88,9 @@ class FakeSession:
             return {"ok": True, "queued": True, "queueId": "q1", "position": 1}
         return {"ok": True, "turn": len(self.prompts)}
 
-    def new_session(self, mode="now"):
+    def new_session(self, mode="now", request_id=None):
         self.new_sessions.append(mode)
+        self.request_ids.append(request_id)
         return {"ok": True, "previousSessionId": "sid-1"}
 
     def queue_clear(self):
@@ -257,6 +259,22 @@ def test_chat_queue_and_new_session_ops_reach_the_session(bridge, monkeypatch):
     status, payload = _post(bridge, "/chat/queue_clear")
     assert status == 200 and payload == {"ok": True, "dropped": []}
     assert session.queue_clears == 1
+
+
+def test_new_session_hands_the_request_id_to_the_session(bridge, monkeypatch):
+    """Incident 21.10.2026: the backend names its request (``requestId``) so
+    the daemon's card and ``resets`` row point at the activity event that says
+    who asked. The HTTP twin must not drop it — without it every Hermes reset
+    would read "not sent by MC"."""
+    monkeypatch.setenv("HERMES_DRIVER", "acp")
+    session = FakeSession()
+    daemon = _daemon(bridge, session)
+    monkeypatch.setattr(bridge, "chat_daemon", lambda: daemon)
+
+    assert _post(bridge, "/chat/new_session", {"mode": "queue", "requestId": "req-h"})[0] == 200
+    assert _post(bridge, "/chat/new_session", {})[0] == 200
+    assert session.new_sessions == ["queue", "now"]
+    assert session.request_ids == ["req-h", None]
 
 
 def test_chat_prompt_while_busy_is_409(bridge, monkeypatch):

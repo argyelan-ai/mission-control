@@ -10,7 +10,8 @@ haelt:
 ``prompt``       ``{"text": "...", "mode"?: "queue"}``   ``{"ok":true,"turn":n}`` ·
                                                          ``{"ok":true,"queued":true,...}`` ·
                                                          ``{"ok":false,"error":"busy"}``
-``new_session``  ``{"mode"?: "queue"}``                  ``{"ok":true,"previousSessionId":...}``
+``new_session``  ``{"mode"?: "queue",``                 ``{"ok":true,"previousSessionId":...}``
+                 ``"requestId"?: "…"}``
 ``queue_clear``  —                                       ``{"ok":true,"dropped":[...]}``
 ``cancel``       —                                       ``{"ok":true}``
 ``config``       ``{"id":"thinking","value":"high"}``    ``{"ok":true,"configOptions":[...]}``
@@ -88,6 +89,14 @@ def _with_mode(payload: dict[str, Any], mode: str | None) -> dict[str, Any]:
     return {**payload, "mode": mode} if mode else payload
 
 
+def _new_session_payload(mode: str | None, request_id: str | None) -> dict[str, Any]:
+    """``new_session``: ``requestId`` names MC's request in the daemon's card
+    and its ``resets`` record (incident 21.10.2026, ``chat_reset_audit``).
+    Only when set — an older daemon ignores the field anyway."""
+    payload: dict[str, Any] = {"requestId": request_id} if request_id else {}
+    return _with_mode(payload, mode)
+
+
 class AcpChatUnreachableError(Exception):
     """Der Chat-Daemon hat nicht geantwortet — Container weg, Socket tot,
     Bridge aus. NICHT dasselbe wie ``{"ok": false}``: dort hat der Daemon
@@ -101,7 +110,8 @@ class ChatTransport(Protocol):
 
     async def prompt(self, text: str, mode: str | None = None) -> dict: ...
 
-    async def new_session(self, mode: str | None = None) -> dict: ...
+    async def new_session(self, mode: str | None = None,
+                          request_id: str | None = None) -> dict: ...
 
     async def queue_clear(self) -> dict: ...
 
@@ -229,8 +239,9 @@ class DockerCtlTransport:
     async def prompt(self, text: str, mode: str | None = None) -> dict:
         return await self._call("prompt", _with_mode({"text": text}, mode))
 
-    async def new_session(self, mode: str | None = None) -> dict:
-        return await self._call("new_session", _with_mode({}, mode))
+    async def new_session(self, mode: str | None = None,
+                          request_id: str | None = None) -> dict:
+        return await self._call("new_session", _new_session_payload(mode, request_id))
 
     async def queue_clear(self) -> dict:
         return await self._call("queue_clear")
@@ -285,8 +296,9 @@ class HttpCtlTransport:
     async def prompt(self, text: str, mode: str | None = None) -> dict:
         return await self._call("prompt", _with_mode({"text": text}, mode))
 
-    async def new_session(self, mode: str | None = None) -> dict:
-        return await self._call("new_session", _with_mode({}, mode))
+    async def new_session(self, mode: str | None = None,
+                          request_id: str | None = None) -> dict:
+        return await self._call("new_session", _new_session_payload(mode, request_id))
 
     async def queue_clear(self) -> dict:
         return await self._call("queue_clear")

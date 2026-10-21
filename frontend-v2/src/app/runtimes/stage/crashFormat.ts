@@ -1,20 +1,8 @@
 /**
  * Engine death on the stage card (ADR-096 §11, backend engine_death): when it
- * died, in the viewer's locale. Today → "17:20"; another day → "18 Oct, 17:20"
- * / "18. Okt., 17:20". Unparseable → null (the card then shows no time —
- * never an invented one).
+ * died, in the viewer's locale — the app's one clock format (lib/clockTime).
  */
-export function formatCrashTime(at: string | null | undefined, locale: string, now: Date = new Date()): string | null {
-  if (!at) return null;
-  const d = new Date(at);
-  if (Number.isNaN(d.getTime())) return null;
-  const tag = locale === "de" ? "de-CH" : "en-GB";
-  const sameDay =
-    d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
-  return sameDay
-    ? d.toLocaleTimeString(tag, { hour: "2-digit", minute: "2-digit" })
-    : d.toLocaleString(tag, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-}
+export { formatClockTime as formatCrashTime } from "@/lib/clockTime";
 
 /** ADR-096 §11.3 reason codes the catalog knows (runtimes.stage.crashReason.*);
  *  anything else → "unknown". */

@@ -463,7 +463,10 @@ def test_a_pointer_whose_transcript_is_gone_is_one_visible_reset(tmp_path, sourc
         assert news(c) == 1
         errors, notices = cards(sess.transcript_path)
         assert codes(errors) == [("session_reset", "transcript_missing")]
-        assert notices == []
+        # The new conversation says it began, without promising that the
+        # old one is saved — its copy is gone (incident 21.10.2026).
+        assert codes(notices) == [("new_conversation", None)]
+        assert notices[0]["data"]["kept"] is False
         assert read_json(folder / "acp-chat.json")["sessionId"] == "sid-new"
     finally:
         sess.close()
@@ -765,7 +768,8 @@ def test_a_transcript_path_the_file_system_refuses_is_a_missing_transcript(tmp_p
         assert news(c) == 1
         errors, notices = cards(sess.transcript_path)
         assert codes(errors) == [("session_reset", "transcript_missing")]
-        assert notices == []
+        assert codes(notices) == [("new_conversation", None)]
+        assert notices[0]["data"]["kept"] is False
     finally:
         sess.close()
         if locked.exists():

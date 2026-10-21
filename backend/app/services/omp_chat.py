@@ -1588,6 +1588,11 @@ class OmpLineParser:
                 k: data.get(k) for k in ("code", "previous", "current")
                 if isinstance(data.get(k), str) and data.get(k)
             }
+            # ``new_conversation``: is the previous conversation's copy on
+            # disk? Only then does the card say it is saved (incident
+            # 21.10.2026). A flag, passed on only as a real bool.
+            if isinstance(data.get("kept"), bool):
+                notice["kept"] = data["kept"]
             return [
                 {
                     "kind": "message",

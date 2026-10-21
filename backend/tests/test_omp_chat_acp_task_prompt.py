@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.services.omp_chat import OmpLineParser
 
 PROMPT = (
@@ -100,6 +102,34 @@ def test_chat_notice_line_becomes_a_notice_event_with_its_values():
     assert ev["source"] == {"kind": "notice", "title": "model_fallback"}
     assert ev["notice"] == {"code": "model_fallback", "previous": "Old-1", "current": "New-2"}
     assert "New-2" in ev["text"]
+
+
+@pytest.mark.parametrize("kept", [True, False])
+def test_the_new_conversation_card_says_whether_the_old_copy_is_kept(kept):
+    """Incident 21.10.2026: the card on top of a new conversation promises
+    "the previous one is saved" only while its copy is on disk — the daemon
+    says so in ``data.kept``, the frontend needs it."""
+    p = OmpLineParser()
+    [ev] = p(_line({
+        "type": "custom_message", "customType": "chat_notice",
+        "content": "New conversation started.", "display": True, "attribution": "agent",
+        "id": "acpn2", "parentId": None, "timestamp": "2026-10-21T17:07:46.000Z",
+        "data": {"code": "new_conversation", "previous": "01a0-old", "current": "01a1-new",
+                 "via": "new_session", "kept": kept, "requestId": "req-1"},
+    }))
+    assert ev["notice"] == {"code": "new_conversation", "previous": "01a0-old",
+                            "current": "01a1-new", "kept": kept}
+
+
+def test_a_kept_flag_that_is_no_bool_is_not_passed_on():
+    p = OmpLineParser()
+    [ev] = p(_line({
+        "type": "custom_message", "customType": "chat_notice", "content": "x",
+        "display": True, "attribution": "agent", "id": "acpn3", "parentId": None,
+        "timestamp": "2026-10-21T17:07:46.000Z",
+        "data": {"code": "new_conversation", "kept": "no"},
+    }))
+    assert ev["notice"] == {"code": "new_conversation"}
 
 
 # ── correction re-dispatch (fix 19.10.2026) ─────────────────────────────────

@@ -65,6 +65,9 @@ export interface ChatNoticeInfo {
   code?: string | null;
   previous?: string | null;
   current?: string | null;
+  /** `new_conversation`: is the previous conversation's copy on disk? Only
+   *  then does the card say it is saved (incident 21.10.2026). */
+  kept?: boolean | null;
 }
 
 export interface ChatErrorInfo {
