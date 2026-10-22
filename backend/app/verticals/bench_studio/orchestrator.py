@@ -14,6 +14,7 @@ Design rules (spec §7):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -22,6 +23,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import HTTPException
@@ -818,6 +820,46 @@ def _format_outro_size(artifact_path: str | None) -> str:
         return "—"
 
 
+DIRECT_API_TAG = "LOCAL · DIRECT API"
+
+
+def _published_episode_no(challenge_id: uuid.UUID) -> int | None:
+    """Episode number of a published run, else None.
+
+    The (private) catalog publisher writes
+    ``<challenge dir>/publish/state.json`` with ``episode_no`` on a
+    successful publish and removes it on unpublish — absent means "not
+    published". Read-only and defensive: anything unexpected is None."""
+    path = challenge_dir(challenge_id) / "publish" / "state.json"
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    episode_no = state.get("episode_no") if isinstance(state, dict) else None
+    if isinstance(episode_no, bool) or not isinstance(episode_no, int) or episode_no < 1:
+        return None
+    return episode_no
+
+
+def _branding_date_label(challenge: BenchChallenge) -> str:
+    """"2026-10-21", or "episode 4 · 2026-10-21" once published.
+
+    The date is the operator's calendar day (``settings.usage_timezone``,
+    the zone Insights counts days in; UTC when unset or unknown)."""
+    from app.config import settings
+
+    created = challenge.created_at or datetime.now(timezone.utc)
+    if created.tzinfo is None:  # SQLite hands back naive UTC
+        created = created.replace(tzinfo=timezone.utc)
+    try:
+        tz = ZoneInfo(settings.usage_timezone) if settings.usage_timezone else timezone.utc
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = timezone.utc
+    label = created.astimezone(tz).date().isoformat()
+    episode_no = _published_episode_no(challenge.id)
+    return f"episode {episode_no} · {label}" if episode_no else label
+
+
 async def _build_branding_payload(
     session: AsyncSession, challenge: BenchChallenge, ordered: list[BenchEntry]
 ) -> dict:
@@ -830,16 +872,9 @@ async def _build_branding_payload(
     frame_single.html based on len(models)."""
     from app.models.agent import Agent
 
-    # run_label: zero-padded 3-digit count of bench_challenges created
-    # at-or-before this one — a stable per-series run number.
-    prior_ids = (
-        await session.exec(
-            select(BenchChallenge.id).where(
-                BenchChallenge.created_at <= challenge.created_at
-            )
-        )
-    ).all()
-    run_label = f"{len(prior_ids):03d}"
+    # date_label: the run's date (+ "episode N" once published) — replaces the
+    # old RUN 0xx row counter (concept W0.5, 2026-10-22).
+    date_label = _branding_date_label(challenge)
 
     models: list[dict] = []
     outro_rows: list[dict] = []
@@ -848,7 +883,12 @@ async def _build_branding_payload(
             # Operator override (bench_entries.display_tag) always wins.
             tag = entry.display_tag
         elif entry.source_kind == "spark":
-            tag = "VLLM · SPARK"
+            # What MC knows for sure about a direct-API run: the local
+            # OpenAI-compatible endpoint, no agent in between. Engine and
+            # hardware are not known here (the endpoint can serve vLLM,
+            # SGLang or EXL3 recipes) — omitted rather than guessed
+            # (concept W0.5; the W1 receipt derives them from the recipe).
+            tag = DIRECT_API_TAG
         else:
             # Agent entries: harness-derived default (e.g. omp -> "OMP",
             # grok -> "GROK"); agent name as fallback when no harness is set.
@@ -897,7 +937,7 @@ async def _build_branding_payload(
 
     return {
         "title": challenge.title,
-        "run_label": run_label,
+        "date_label": date_label,
         "prompt_line": _first_prompt_line(challenge.prompt_text),
         "models": models,
         "outro_rows": outro_rows,

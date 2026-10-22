@@ -11,9 +11,10 @@ h1 { font-family:'Clash Display',sans-serif; font-weight:600; font-size:96px;
 /* Fixed tracks (not minmax/max-content) — per-row grids in a repeated
    {{ROWS}} block have no shared sizing context, so a max-content track
    would size independently per row and misalign columns between rows.
-   530px = the full slack in the 1450px table (1450 - 56px padding -
-   860px of other 4 fixed columns, minus a few px safety). */
-.row { display:grid; grid-template-columns: 530px 180px 180px 180px 320px;
+   4 columns since 2026-10-22 (SIZE left the card, concept W0.5): 1450px
+   table - 56px padding = 1394px; 660 + 200 + 200 + 320 = 1380px (a few px
+   safety). */
+.row { display:grid; grid-template-columns: 660px 200px 200px 320px;
   padding:26px 28px; border-bottom:1px solid var(--line); align-items:baseline; }
 .row.head { color:var(--muted); font-size:18px; letter-spacing:.08em;
   text-transform:uppercase; border-bottom:1px solid #232838; }
@@ -38,16 +39,20 @@ h1 { font-family:'Clash Display',sans-serif; font-weight:600; font-size:96px;
 <div class="ticks-x"></div><div class="ticks-y"></div>
 <div class="content">
   <div class="kicker"><span class="tick"></span>
-    <span class="label">argyelan <span class="accent">/</span> llm bench · run {{RUN_LABEL}} · results</span></div>
+    <span class="label">argyelan <span class="accent">/</span> llm bench<span class="date">{{DATE_LABEL}}</span> · results</span></div>
   <h1>The numbers.</h1>
   <div class="table">
-    <div class="row head"><span>Model</span><span>Time</span><span>Size</span><span>Cost</span><span>Tokens</span></div>
+    <div class="row head"><span>Model</span><span>Time</span><span>Cost</span><span>Tokens</span></div>
     {{ROWS}}
   </div>
 </div>
-<div class="judge">JUDGE: <b>YOUR EYES</b> — WHICH ONE WINS? ↓</div>
+<!-- filled by media.outro_judge_html: only a side-by-side run asks
+     which one wins -->
+<div class="judge">{{JUDGE}}</div>
 <div class="cta">
-  <div class="follow">local llm benchmarks, <span>weekly.</span></div>
+  <!-- no cadence and no "local" promise: neither is true for every run
+       (concept W0.5, 2026-10-22) -->
+  <div class="follow">follow for <span>more runs.</span></div>
   <div class="meta">argyelan.ai</div>
 </div>
 </body></html>

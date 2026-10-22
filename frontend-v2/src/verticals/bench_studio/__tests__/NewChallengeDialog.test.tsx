@@ -173,7 +173,7 @@ describe("NewChallengeDialog — template picker", () => {
 
     // Tag input shows the derived default as placeholder (spark row)
     const tagInput = screen.getByRole("textbox", { name: /tag 1/i });
-    expect((tagInput as HTMLInputElement).placeholder).toContain("VLLM · SPARK");
+    expect((tagInput as HTMLInputElement).placeholder).toContain("LOCAL · DIRECT API");
 
     // Type a custom tag
     await userEvent.type(tagInput, "OMP · DGX SPARK");

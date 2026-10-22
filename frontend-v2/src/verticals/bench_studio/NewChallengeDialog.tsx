@@ -201,10 +201,11 @@ export function NewChallengeDialog({
   }
 
   // Derived chip-tag default — mirrors the backend fallback
-  // (bench_studio/orchestrator._build_branding_payload): spark -> vLLM,
-  // agent -> harness uppercased, agent name as last resort.
+  // (bench_studio/orchestrator._build_branding_payload): spark -> the local
+  // direct-API path (no engine/hardware guess), agent -> harness uppercased,
+  // agent name as last resort.
   function derivedTag(m: BenchModelSpec): string {
-    if (m.source_kind === "spark") return "VLLM · SPARK";
+    if (m.source_kind === "spark") return "LOCAL · DIRECT API";
     const agent = (agents ?? []).find((a) => a.id === m.agent_id);
     return (agent?.harness ?? agent?.name ?? "AGENT").toUpperCase();
   }
