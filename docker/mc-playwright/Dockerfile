@@ -7,12 +7,25 @@ FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
 
 WORKDIR /app
 
+# ca-certificates floor = the eMudhra fix (Oct 2026: the intermediates' keys
+# leaked). The apt line below upgrades the package and the build FAILS below
+# this version — a stale base image can no longer ship the old bundle, and a
+# cached layer only exists if it passed. backend/tests/test_image_security_floor.py
+# guards the value per distro.
+ARG CA_CERTIFICATES_MIN=20260816ubuntu0.22.04.1
 # ffmpeg fuer /record (webm->H.264 mp4) + /compose (Grid-Video);
 # fonts-dejavu-core garantiert /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
 # fuer drawtext-Labels (im Playwright-Image i.d.R. schon vorhanden — hier explizit).
+# ca-certificates: listed so the build UPGRADES the base's stale bundle
+# (v1.48.0-jammy ships 20240203~22.04.1, which still trusts the compromised
+# eMudhra intermediates; 20260816ubuntu0.22.04.1 = USN-8944 fix). `apt-get
+# install` of an installed package upgrades it to the current candidate.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && v="$(dpkg-query -W -f='${Version}' ca-certificates)" \
+    && echo "ca-certificates $v (floor ${CA_CERTIFICATES_MIN})" \
+    && dpkg --compare-versions "$v" ge "${CA_CERTIFICATES_MIN}"
 
 RUN pip install --no-cache-dir \
     fastapi==0.115.6 \
@@ -21,7 +34,8 @@ RUN pip install --no-cache-dir \
     httpx==0.27.2 \
     pydantic==2.10.3 \
     markdown==3.7 \
-    pygments==2.18.0
+    pygments==2.18.0 \
+    "certifi>=2026.10.19"
 
 COPY media.py /app/media.py
 COPY service.py /app/service.py

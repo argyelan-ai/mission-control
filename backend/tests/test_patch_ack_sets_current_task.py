@@ -109,11 +109,19 @@ async def test_patch_ack_sets_current_task_id_for_worker_when_subagent_off(
 
 
 @pytest.mark.asyncio
-async def test_patch_ack_skips_current_task_id_for_worker_subagent_mode(
+async def test_patch_ack_sets_current_task_id_for_worker_subagent_mode(
     client: AsyncClient, monkeypatch,
 ):
-    """Subagent-dispatch mode: workers have parallel sessions, current_task_id
-    stays null (like pull-dispatch agent_scoped.py:1293)."""
+    """Subagent-dispatch mode: a worker's ACK takes the pointer when it is free.
+
+    Turned around on purpose (was ``..._skips_...``, which asserted None). The
+    old rule was already void after at most 30 s: the heartbeat self-heal
+    (``agents.py`` ``agent_heartbeat``) sets current_task_id for workers too.
+    ADR-097 review Z1 wants the pointer "from the first second" — the chat's
+    "Working on" row, the sessions sidebar, the runtime-switch busy check and
+    ``mc ask``/``mc msg`` all read it. Live gap before this fix: ACK → next
+    heartbeat = 0–30 s without a pointer.
+    """
     from app.config import settings
     monkeypatch.setattr(settings, "use_subagent_dispatch", True)
 
@@ -129,11 +137,386 @@ async def test_patch_ack_skips_current_task_id_for_worker_subagent_mode(
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.agent import Agent
         fresh = await s.get(Agent, agent.id)
-        assert fresh.current_task_id is None, (
-            f"Worker in Subagent-Modus soll kein current_task_id bekommen — "
-            f"parallele Sessions brauchen den Lock nicht. "
-            f"current_task_id={fresh.current_task_id}"
+        assert fresh.current_task_id == task.id, (
+            f"Worker ACK must take the free pointer — "
+            f"current_task_id={fresh.current_task_id}, expected={task.id}"
         )
+        assert fresh.run_state == "running"
+
+
+async def _add_task(board_id, agent_id, *, status: str, title: str = "Other", parent_task_id=None):
+    from app.models.task import Task
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = Task(
+            board_id=board_id,
+            title=title,
+            description="x",
+            status=status,
+            assigned_agent_id=agent_id,
+            parent_task_id=parent_task_id,
+        )
+        s.add(t)
+        await s.commit()
+        await s.refresh(t)
+    return t
+
+
+async def _set_pointer(agent_id, task_id):
+    from app.models.agent import Agent
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        a = await s.get(Agent, agent_id)
+        a.current_task_id = task_id
+        s.add(a)
+        await s.commit()
+
+
+async def _add_reflection(task_id, agent_id):
+    """The review gate wants a reflection before leaving in_progress."""
+    from app.models.task import TaskComment
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(TaskComment(
+            task_id=task_id,
+            author_type="agent",
+            author_agent_id=agent_id,
+            comment_type="reflection",
+            content=(
+                "## Was wurde gemacht\nThe change was built and tested end to end.\n\n"
+                "## Was hat funktioniert\nThe red test first, then the fix.\n\n"
+                "## Was war unklar\nNothing was unclear in this synthetic run.\n\n"
+                "## Lesson für Agent-Memory\nKeep the pointer in step with the status."
+            ),
+        ))
+        await s.commit()
+
+
+async def _pointer(agent_id):
+    from app.models.agent import Agent
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        a = await s.get(Agent, agent_id)
+        return a.current_task_id, a.run_state
+
+
+@pytest.mark.asyncio
+async def test_patch_ack_keeps_existing_pointer_for_worker_subagent_mode(
+    client: AsyncClient, monkeypatch,
+):
+    """Parallel sessions: the first running task keeps the pointer — a second
+    ACK must not steal it (first come stays, same value the heartbeat keeps)."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "use_subagent_dispatch", True)
+
+    agent, token, board_id, task_a = await _make_agent_with_task(is_board_lead=False)
+    task_b = await _add_task(board_id, agent.id, status="in_progress", title="Running B")
+    await _set_pointer(agent.id, task_b.id)
+
+    resp = await client.patch(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_a.id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "in_progress"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    pointer, _ = await _pointer(agent.id)
+    assert pointer == task_b.id, f"pointer stolen: {pointer} (expected B {task_b.id})"
+
+
+@pytest.mark.asyncio
+async def test_worker_leaving_in_progress_hands_pointer_to_other_running_task(
+    client: AsyncClient, monkeypatch,
+):
+    """Mirror: A → review while B still runs ⇒ pointer moves to B (not 30 s
+    of "Working on A" for a card that is already in review)."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "use_subagent_dispatch", True)
+
+    agent, token, board_id, task_a = await _make_agent_with_task(
+        is_board_lead=False, task_status="in_progress",
+    )
+    task_b = await _add_task(board_id, agent.id, status="in_progress", title="Running B")
+    await _set_pointer(agent.id, task_a.id)
+    await _add_reflection(task_a.id, agent.id)
+
+    resp = await client.patch(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_a.id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "review"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    pointer, _ = await _pointer(agent.id)
+    assert pointer == task_b.id, f"pointer should move to B, got {pointer}"
+
+
+@pytest.mark.asyncio
+async def test_worker_leaving_in_progress_clears_pointer_without_other_task(
+    client: AsyncClient, monkeypatch,
+):
+    """Mirror without a second running task ⇒ pointer None, run_state idle."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "use_subagent_dispatch", True)
+
+    agent, token, board_id, task_a = await _make_agent_with_task(
+        is_board_lead=False, task_status="in_progress",
+    )
+    await _set_pointer(agent.id, task_a.id)
+    await _add_reflection(task_a.id, agent.id)
+
+    resp = await client.patch(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_a.id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "review"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    pointer, run_state = await _pointer(agent.id)
+    assert pointer is None, f"pointer should be cleared, got {pointer}"
+    assert run_state == "idle"
+
+
+@pytest.mark.asyncio
+async def test_worker_leaving_in_progress_leaves_foreign_pointer_alone(
+    client: AsyncClient, monkeypatch,
+):
+    """A task that does not hold the pointer must not move it on leaving.
+
+    The pointer here names a `waiting` task (a blocking `mc ask` holds its
+    session via current_task_id, see /me/poll and the heartbeat) — another
+    task finishing must not drop that hold, even though no other task is
+    in_progress."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "use_subagent_dispatch", True)
+
+    agent, token, board_id, task_a = await _make_agent_with_task(
+        is_board_lead=False, task_status="in_progress",
+    )
+    task_w = await _add_task(board_id, agent.id, status="waiting", title="Waiting W")
+    await _set_pointer(agent.id, task_w.id)
+    await _add_reflection(task_a.id, agent.id)
+
+    resp = await client.patch(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_a.id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "review"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    pointer, _ = await _pointer(agent.id)
+    assert pointer == task_w.id, f"waiting hold dropped: {pointer}"
+
+
+@pytest.mark.asyncio
+async def test_worker_pointer_not_taken_for_task_not_really_in_progress(monkeypatch):
+    """execute_review_decision 'releases' a reviewer with new_status=in_progress
+    while the card is still `review` (request_changes hands it back to the
+    developer). That call must not point the worker reviewer at the card."""
+    from app.config import settings
+    from app.models.agent import Agent
+    from app.models.task import Task
+    from app.services.task_lifecycle import update_agent_active_task
+
+    monkeypatch.setattr(settings, "use_subagent_dispatch", True)
+    agent, _token, _board_id, task = await _make_agent_with_task(
+        is_board_lead=False, task_status="review",
+    )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Task, task.id)
+        await update_agent_active_task(s, agent.id, t, "in_progress", "review")
+        a = await s.get(Agent, agent.id)
+        assert a.current_task_id is None, (
+            f"reviewer release must not take the pointer: {a.current_task_id}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_auto_ack_via_comment_sets_current_task_id_for_worker_subagent_mode(
+    client: AsyncClient, monkeypatch,
+):
+    """Implicit ACK by the first agent comment (inbox → in_progress) takes the
+    free pointer for a worker too — same rule as the PATCH ACK."""
+    from datetime import datetime, timezone
+
+    from app.config import settings
+    from app.models.task import Task as _Task
+
+    monkeypatch.setattr(settings, "use_subagent_dispatch", True)
+    agent, token, board_id, task = await _make_agent_with_task(
+        is_board_lead=False, task_status="inbox",
+    )
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(_Task, task.id)
+        t.dispatched_at = datetime.now(tz=timezone.utc)
+        s.add(t)
+        await s.commit()
+
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task.id}/comments",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"content": "First comment triggers Auto-ACK"},
+    )
+    assert resp.status_code in (200, 201), resp.text
+
+    pointer, _ = await _pointer(agent.id)
+    assert pointer == task.id, f"comment ACK must take the free pointer: {pointer}"
+
+
+@pytest.mark.asyncio
+async def test_pull_claim_sets_current_task_id_for_worker_subagent_mode(
+    client: AsyncClient, monkeypatch,
+):
+    """Pull claim (GET /tasks/next) moves the card to in_progress itself — a
+    worker takes the free pointer there too."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "use_subagent_dispatch", True)
+    agent, token, board_id, parent = await _make_agent_with_task(
+        is_board_lead=False, task_status="done",
+    )
+    sub = await _add_task(
+        board_id, agent.id, status="inbox", title="Sub", parent_task_id=parent.id,
+    )
+
+    resp = await client.get(
+        f"/api/v1/agent/boards/{board_id}/tasks/next",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    pointer, _ = await _pointer(agent.id)
+    assert pointer == sub.id, f"pull claim must take the free pointer: {pointer}"
+
+
+@pytest.mark.asyncio
+async def test_auto_ack_via_comment_keeps_existing_pointer_for_worker(
+    client: AsyncClient, monkeypatch,
+):
+    """First come stays on the comment-ACK path too: a worker already running
+    B keeps the pointer on B when its first comment on A claims A."""
+    from datetime import datetime, timezone
+
+    from app.config import settings
+    from app.models.task import Task as _Task
+
+    monkeypatch.setattr(settings, "use_subagent_dispatch", True)
+    agent, token, board_id, task_a = await _make_agent_with_task(
+        is_board_lead=False, task_status="inbox",
+    )
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(_Task, task_a.id)
+        t.dispatched_at = datetime.now(tz=timezone.utc)
+        s.add(t)
+        await s.commit()
+    task_b = await _add_task(board_id, agent.id, status="in_progress", title="Running B")
+    await _set_pointer(agent.id, task_b.id)
+
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_a.id}/comments",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"content": "First comment triggers Auto-ACK"},
+    )
+    assert resp.status_code in (200, 201), resp.text
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        claimed = await s.get(_Task, task_a.id)
+        assert claimed.status == "in_progress", "comment must still ACK task A"
+    pointer, _ = await _pointer(agent.id)
+    assert pointer == task_b.id, f"comment ACK stole the pointer: {pointer} (expected B {task_b.id})"
+
+
+@pytest.mark.asyncio
+async def test_pull_claim_keeps_existing_pointer_for_worker(
+    client: AsyncClient, monkeypatch,
+):
+    """First come stays on the pull claim too: GET /tasks/next moves the
+    subtask to in_progress, but a pointer that is already set is kept.
+
+    The pull claim answers 204 while any task of the agent is in_progress
+    (busy check), so the only pointer it can meet is one on a non-running
+    task — here a `waiting` task W whose blocking `mc ask` holds the session
+    via current_task_id (/me/poll, heartbeat). The claim must not drop that
+    hold."""
+    from app.config import settings
+    from app.models.task import Task as _Task
+
+    monkeypatch.setattr(settings, "use_subagent_dispatch", True)
+    agent, token, board_id, parent = await _make_agent_with_task(
+        is_board_lead=False, task_status="done",
+    )
+    sub = await _add_task(
+        board_id, agent.id, status="inbox", title="Sub", parent_task_id=parent.id,
+    )
+    task_w = await _add_task(board_id, agent.id, status="waiting", title="Waiting W")
+    await _set_pointer(agent.id, task_w.id)
+
+    resp = await client.get(
+        f"/api/v1/agent/boards/{board_id}/tasks/next",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        claimed = await s.get(_Task, sub.id)
+        assert claimed.status == "in_progress", "pull must still claim the subtask"
+    pointer, _ = await _pointer(agent.id)
+    assert pointer == task_w.id, f"pull claim stole the pointer: {pointer} (expected W {task_w.id})"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_keeps_existing_running_pointer_for_worker(
+    client: AsyncClient, monkeypatch,
+):
+    """The heartbeat self-heal must not undo "first come": with two running
+    tasks it keeps the pointer on the one it already names instead of
+    picking any in_progress row. A is inserted first, so the unordered
+    lookup returns A — the pointer on B must survive anyway."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "use_subagent_dispatch", True)
+    agent, token, board_id, task_a = await _make_agent_with_task(
+        is_board_lead=False, task_status="in_progress",
+    )
+    task_b = await _add_task(board_id, agent.id, status="in_progress", title="Running B")
+    await _set_pointer(agent.id, task_b.id)
+
+    resp = await client.post(
+        "/api/v1/agent/me/heartbeat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "working"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    pointer, _ = await _pointer(agent.id)
+    assert pointer == task_b.id, f"heartbeat flipped the pointer: {pointer} (expected B {task_b.id})"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_repoints_when_pointer_task_no_longer_running(
+    client: AsyncClient, monkeypatch,
+):
+    """Counterpart: a pointer whose task left in_progress (here: review) is
+    not kept — the heartbeat moves it to the running task."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "use_subagent_dispatch", True)
+    agent, token, board_id, task_a = await _make_agent_with_task(
+        is_board_lead=False, task_status="in_progress",
+    )
+    stale = await _add_task(board_id, agent.id, status="review", title="Stale R")
+    await _set_pointer(agent.id, stale.id)
+
+    resp = await client.post(
+        "/api/v1/agent/me/heartbeat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "working"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    pointer, _ = await _pointer(agent.id)
+    assert pointer == task_a.id, f"stale pointer kept: {pointer} (expected A {task_a.id})"
 
 
 @pytest.mark.asyncio

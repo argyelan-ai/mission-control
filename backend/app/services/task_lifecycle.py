@@ -233,6 +233,30 @@ def task_still_reactivatable(task: Task, *, expected_status: str | None = None) 
     return True
 
 
+def point_worker_at_task_if_free(agent: Agent, task: Task) -> bool:
+    """A worker in subagent-dispatch mode takes ``current_task_id`` for a task
+    that just became ``in_progress`` — only while the pointer is free.
+
+    For workers the pointer is a hint, not a lock (parallel sessions, the
+    dispatch busy check is skipped). It is still what the chat's "Working on"
+    row, the sessions sidebar, the runtime-switch busy check and ``mc ask`` /
+    ``mc msg`` read. The heartbeat self-heal (``routers/agents.py``
+    ``agent_heartbeat``) sets the same value for workers, but only every 30 s;
+    ADR-097 review Z1 wants it from the first second. First come stays: a
+    pointer that already names another running task is kept, so parallel
+    sessions never flip it back and forth.
+
+    Only for a task that really is ``in_progress`` — a caller that passes
+    ``in_progress`` as a transition label while the card stays elsewhere
+    (``execute_review_decision`` releasing a reviewer) must not point the
+    agent at it. Returns True iff the pointer was set here.
+    """
+    if task.status != "in_progress" or agent.current_task_id is not None:
+        return False
+    agent.current_task_id = task.id
+    return True
+
+
 def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool:
     """Auto-ACK: the first inbound signal from the assigned agent on a
     dispatched task claims it (§3.3 handshake).
@@ -274,16 +298,18 @@ def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool
     task.updated_at = utcnow()
     # Also set the active-task lock. Without this, agent.current_task_id
     # stays None and mc delegate / mc help-request / mc clarification
-    # respond with 409 "Kein aktiver Task". Same skip condition as
-    # PATCH-ACK (PR #103): workers in subagent-dispatch mode have
-    # parallel sessions and don't need the lock. Live bug from Boss's
+    # respond with 409 "Kein aktiver Task". Live bug from Boss's
     # reflection on 2026-04-24: Boss ACKed via comment instead of PATCH,
-    # mc delegate failed.
+    # mc delegate failed. Workers in subagent-dispatch mode (parallel
+    # sessions) take the pointer only while it is free — same rule as the
+    # PATCH ACK (point_worker_at_task_if_free).
     from app.config import settings as _auto_ack_settings
     if not (_auto_ack_settings.use_subagent_dispatch and not agent.is_board_lead):
         if agent.current_task_id != task.id:
             agent.current_task_id = task.id
             session.add(agent)
+    elif point_worker_at_task_if_free(agent, task):
+        session.add(agent)
     session.add(task)
     logger.info("Auto-ACK: %s claimed Task '%s' → ack_at + current_task_id gesetzt", agent.name, task.title[:60])
     return True
@@ -503,8 +529,11 @@ async def update_agent_active_task(
     - task leaves in_progress (review, done, blocked, failed, inbox)
       AND current_task_id == task.id
 
-    With use_subagent_dispatch: workers skip current_task_id tracking
-    (parallel sessions → the field can only represent one task).
+    With use_subagent_dispatch, workers (parallel sessions) keep the field
+    as a hint: → in_progress takes it only while it is free
+    (point_worker_at_task_if_free); leaving in_progress hands it to another
+    in_progress task of the agent, or clears it. Until 22.10.2026 workers
+    skipped it here and only the 30 s heartbeat set it (ADR-097 review Z1).
     """
     from app.config import settings
 
@@ -524,12 +553,17 @@ async def update_agent_active_task(
     if not agent:
         return
 
-    # Workers with isolated sessions: don't set/clear current_task_id
-    # (parallel tasks → field would be immediately inconsistent)
-    # Still update run_state for UI display.
+    # Workers with isolated sessions: current_task_id is a hint, not a lock
+    # (parallel tasks — it can name only one). It still drives the chat's
+    # "Working on" row, the sessions sidebar and the busy checks, so it
+    # follows the status here instead of waiting up to 30 s for the
+    # heartbeat self-heal: first come keeps it, and a task leaving
+    # in_progress hands it to another running task of the agent (or clears
+    # it). run_state as before.
     if settings.use_subagent_dispatch and not agent.is_board_lead:
         if new_status == "in_progress" and old_status != "in_progress":
             agent.run_state = "running"
+            point_worker_at_task_if_free(agent, task)
             session.add(agent)
         elif old_status == "in_progress" and new_status not in ("in_progress", "waiting"):
             # run_state only goes to idle if no other task is still in_progress
@@ -540,6 +574,9 @@ async def update_agent_active_task(
                     Task.status == "in_progress",
                 )
             )).first()
+            if agent.current_task_id == task.id:
+                agent.current_task_id = other_active.id if other_active else None
+                session.add(agent)
             if not other_active:
                 if new_status == "blocked":
                     agent.run_state = "blocked"

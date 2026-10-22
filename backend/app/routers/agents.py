@@ -4495,13 +4495,28 @@ async def agent_heartbeat(
     # The task table is the source of truth. We read it here once and
     # derive from it whether the agent is "really" working — independent
     # of what poll.sh reports.
-    active_res = await session.exec(
-        select(_Task).where(
-            _Task.assigned_agent_id == agent.id,
-            _Task.status == "in_progress",
-        ).limit(1)
-    )
-    active_task = active_res.first()
+    # First come stays: while the pointer still names a running task of
+    # this agent, keep it. A worker with parallel sessions has several
+    # in_progress tasks; the unordered lookup below picked any one of them
+    # and flipped the pointer every 30 s, undoing the ACK's "first come"
+    # rule (task_lifecycle.point_worker_at_task_if_free).
+    active_task = None
+    if agent.current_task_id is not None:
+        active_task = (await session.exec(
+            select(_Task).where(
+                _Task.id == agent.current_task_id,
+                _Task.assigned_agent_id == agent.id,
+                _Task.status == "in_progress",
+            ).limit(1)
+        )).first()
+    if active_task is None:
+        active_res = await session.exec(
+            select(_Task).where(
+                _Task.assigned_agent_id == agent.id,
+                _Task.status == "in_progress",
+            ).limit(1)
+        )
+        active_task = active_res.first()
 
     # `waiting` preserves the hold (Interaction 2.0, Task 12): a blocking ask
     # parks the session on an answer, and /me/poll's waiting-hold is keyed

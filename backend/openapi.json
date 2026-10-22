@@ -1254,6 +1254,33 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/chat/tasks": {
+      "get": {
+        "operationId": "get_chat_tasks_api_v1_agents__agent_id__chat_tasks_get",
+        "summary": "Get Chat Tasks",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/tasks/{task_id}/steps": {
+      "get": {
+        "operationId": "get_chat_task_steps_api_v1_agents__agent_id__chat_tasks__task_id__steps_get",
+        "summary": "Get Chat Task Steps",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/tasks/{task_id}/steps/{row_id}": {
+      "get": {
+        "operationId": "get_chat_task_step_api_v1_agents__agent_id__chat_tasks__task_id__steps__row_id__get",
+        "summary": "Get Chat Task Step",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/cli-sessions": {
       "get": {
         "operationId": "list_cli_sessions_api_v1_agents__agent_id__cli_sessions_get",

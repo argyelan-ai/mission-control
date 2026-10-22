@@ -36,6 +36,10 @@ dependencies = [
     # Bildschirm-Emulator fuer die Live-Vorschau aus dem tmux-Strom: der Strom
     # ist rohe Terminal-Ausgabe mit Cursor-Spruengen, kein anhaengbarer Text.
     "pyte>=0.8.2",
+    # CA bundle floor (httpx/requests verify against certifi, not the OS
+    # store): 2026.10.19 drops trust in the compromised eMudhra intermediates
+    # (Oct 2026 incident). Transitive pin alone would let a re-lock go back.
+    "certifi>=2026.10.19",
 ]
 
 [project.optional-dependencies]
