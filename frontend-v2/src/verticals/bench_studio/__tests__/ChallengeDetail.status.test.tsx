@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { BenchChallenge, BenchEntry } from "../types";
+import type { BenchChallenge, BenchEntry, RecordNetworkMetrics } from "../types";
 
 // W0.8 + W0.9 on the detail page: the status names why a challenge ended,
 // and an entry says when its recording had network requests blocked or
@@ -62,6 +62,8 @@ function entry(over: Partial<BenchEntry> = {}): BenchEntry {
   };
 }
 
+const net = (m: RecordNetworkMetrics) => m as BenchEntry["metrics"];
+
 function challenge(over: Partial<BenchChallenge> = {}): BenchChallenge {
   return {
     id: "ch-1", title: "Pagoda Garden", prompt_template_id: null, prompt_text: "p",
@@ -106,7 +108,7 @@ describe("ChallengeDetail — recorder network note (W0.9)", () => {
 
   it("explains a blank recording: requests were blocked", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(challenge({
-      entries: [entry({ metrics: { network_blocked: true, network_attempts: 2 } })],
+      entries: [entry({ metrics: net({ network_blocked: true, network_attempts: 2 }) })],
     }));
     renderDetail();
     expect(
@@ -116,7 +118,7 @@ describe("ChallengeDetail — recorder network note (W0.9)", () => {
 
   it("names pasted library code", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(challenge({
-      entries: [entry({ metrics: { network_blocked: true, network_attempts: 0, libraries_inlined: ["three.js r160"] } })],
+      entries: [entry({ metrics: net({ network_blocked: true, network_attempts: 0, libraries_inlined: ["three.js r160"] }) })],
     }));
     renderDetail();
     expect(await screen.findByText("Contains pasted library code: three.js r160")).toBeTruthy();
@@ -126,7 +128,7 @@ describe("ChallengeDetail — recorder network note (W0.9)", () => {
   it("says nothing for a clean recording or one made before the block", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(challenge({
       entries: [
-        entry({ metrics: { network_blocked: true, network_attempts: 0, libraries_inlined: [] } }),
+        entry({ metrics: net({ network_blocked: true, network_attempts: 0, libraries_inlined: [] }) }),
         entry({ id: "e-2", model_label: "Old", metrics: { duration_ms: 1000 } }),
       ],
     }));

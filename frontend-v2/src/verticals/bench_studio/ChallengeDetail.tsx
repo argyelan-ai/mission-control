@@ -30,7 +30,7 @@ import { ChallengeStatusPill, ENTRY_STATUS_COLOR, challengeErrorLine } from "./C
 import { abortReason } from "./status";
 import { DraftDialog } from "./DraftDialog";
 import { EntryTaskState } from "./EntryTaskState";
-import type { BenchChallenge, ChallengeAction, BenchEntry } from "./types";
+import type { BenchChallenge, ChallengeAction, BenchEntry, RecordNetworkMetrics } from "./types";
 
 function sharedUrl(absPath: string): string {
   return api.files.contentUrl("shared-deliverables", benchApi.sharedSubpath(absPath));
@@ -794,8 +794,9 @@ function EditChallengeDialog({
 /** W0.9: why a recording may look empty (requests blocked) and whether the
  *  page pasted a library instead of writing the code. Silent for clean
  *  recordings and for recordings made before the network block existed. */
-function RecordingNetworkNote({ metrics }: { metrics: BenchEntry["metrics"] }) {
+function RecordingNetworkNote({ metrics: raw }: { metrics: BenchEntry["metrics"] }) {
   const t = useTranslations("bench.recording");
+  const metrics = raw as BenchEntry["metrics"] & RecordNetworkMetrics;
   const attempts = metrics.network_blocked ? metrics.network_attempts ?? 0 : 0;
   const libraries = metrics.libraries_inlined ?? [];
   if (attempts === 0 && libraries.length === 0) return null;
