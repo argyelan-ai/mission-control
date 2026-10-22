@@ -80,14 +80,14 @@ async def task_is_agents_run(session: AsyncSession, task: Task, agent: Agent) ->
 
 def refusal_detail(task: Task, action: str) -> str:
     """The text the agent reads in the chat (``mc`` prints the HTTP detail).
-    German like the other agent-facing refusals; the code first, so a test
-    and a log grep find it."""
+    English — the agents' working language (operator decision 23.09.2026);
+    the code first, so a test and a log grep find it."""
     return (
-        f"{REFUSAL_CODE}: Aufgabe '{task.title}' ({task.id}) gehoert ihrem eigenen "
-        f"Lauf, nicht diesem Chat — `{action}` aus dem Chat ist gesperrt. Im Chat nur "
-        "Auskunft geben (lesen: `mc task-get <id>`, die Dateien unter "
-        f"/deliverables/{task.id}/). Nichts an der Aufgabe aendern; will der Operator "
-        "etwas aendern, macht er das in der Aufgaben-Ansicht."
+        f"{REFUSAL_CODE}: task '{task.title}' ({task.id}) belongs to its own run, "
+        f"not to this chat — `{action}` from the chat is refused. In the chat, only "
+        "report on it (read: `mc task-get <id>`, the files under "
+        f"/deliverables/{task.id}/). Do not change the task; if the operator wants a "
+        "change, they make it in the task view."
     )
 
 
@@ -102,6 +102,7 @@ async def refuse_chat_task_write(
     own agent. No-op for every other caller. ``action`` names the write in the
     refusal and the activity event (``comment progress``, ``status review``,
     ``deliverable``, ``checklist``, ``recover``)."""
+    # rule: R-chat-never-works-own-run - a chat question once ran a task a second time
     if not is_chat_session(request):
         return
     if not await task_is_agents_run(session, task, agent):
@@ -116,7 +117,9 @@ async def refuse_chat_task_write(
 
         await emit_event(
             session, REFUSAL_EVENT,
-            f"Chat von {agent.name} wollte '{task.title}' aendern ({action}) — abgelehnt",
+            # Short: the row sits in this task's own timeline, the agent is
+            # its actor chip — a long title truncates on a phone.
+            f"Change from the chat refused: {action}",
             severity="warning",
             board_id=task.board_id, task_id=task.id, agent_id=agent.id,
             detail=detail,

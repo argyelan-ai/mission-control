@@ -1,7 +1,7 @@
 """A chat session never works a task of its own agent (round-1 user test t1,
 MUST-1, 22.10.2026).
 
-The live case: the operator asked "how far are you?" in Sparky's chat while
+The live case: the operator asked "how far are you?" in an omp agent's chat while
 task 15cc7c63 ran in its own session. The chat session did the task again —
 a progress comment at 22:22:22, AFTER the review handoff at 22:21:46, and a
 second ``mc finish``. Contract:
@@ -191,3 +191,24 @@ async def test_guard_ignores_tasks_of_other_agents(client):
         headers=_auth(token, chat=True, attempt=False),
     )
     assert "chat_session_task_write" not in resp.text
+
+
+async def test_a_refusal_lands_in_the_task_timeline(client):
+    """The operator sees that the chat tried (task timeline, kind "stuck")."""
+    from app.models.activity import ActivityEvent
+    from app.routers.tasks import _ACTIVITY_KIND_MAP
+
+    board_id, agent_id, task_id, token = await _setup()
+    await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        json={"comment_type": "progress", "content": "x"},
+        headers=_auth(token, chat=True),
+    )
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        events = (await s.exec(select(ActivityEvent).where(
+            ActivityEvent.task_id == task_id,
+            ActivityEvent.event_type == "task.chat_write_rejected",
+        ))).all()
+    assert len(events) == 1 and events[0].agent_id == agent_id
+    assert events[0].detail == {"action": "comment progress", "status": "in_progress"}
+    assert _ACTIVITY_KIND_MAP["task.chat_write_rejected"] == "stuck"

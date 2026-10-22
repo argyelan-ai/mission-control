@@ -373,6 +373,7 @@
         "review_reviewer_turn_stopped": "Reviewer turn stopped",
         "stale_update_rejected": "Stale update rejected",
         "late_update_rejected": "Late update rejected",
+        "chat_write_rejected": "Change from the chat refused",
         "review_stuck": "Review stuck",
         "review_escalated": "Review escalated",
         "review_rejected": "Review rejected",
