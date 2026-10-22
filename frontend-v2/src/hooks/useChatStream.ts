@@ -296,6 +296,34 @@ function withoutThought(state: ChatReducerState): ChatReducerState {
   return state.preview?.block === "thinking" ? { ...state, preview: null } : state;
 }
 
+/** Milliseconds of an ISO timestamp, or `null` when it is missing or not
+ *  readable. Instants, not strings: the writer stamps `…05.123Z`, the
+ *  backend `…05.123456+00:00` — as strings those do not sort by time. */
+function instant(ts: string | null | undefined): number | null {
+  if (!ts) return null;
+  const ms = Date.parse(ts);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/** Is a preview stamped `ts` already overtaken by the transcript — not newer
+ *  than the newest permanent assistant line or finished thought? A preview
+ *  without a readable stamp is never called stale (worst case one line too
+ *  many, never a missing running answer — as `seedSequence`). Scans from the
+ *  end and stops at the first readable line of each kind. */
+function overtakenByTranscript(events: TimelineChatEvent[], ts: string | null | undefined): boolean {
+  const at = instant(ts);
+  if (at === null) return false;
+  let answer: number | null = null;
+  let thought: number | null = null;
+  for (let i = events.length - 1; i >= 0 && (answer === null || thought === null); i--) {
+    const ev = events[i];
+    if (answer === null && ev.kind === "message" && ev.role === "assistant") answer = instant(ev.ts);
+    else if (thought === null && ev.kind === "thinking") thought = instant(ev.ts);
+  }
+  const newest = Math.max(answer ?? -Infinity, thought ?? -Infinity);
+  return at <= newest;
+}
+
 /** The tool event this live output belongs to, if it is already known. */
 function toolFor(state: ChatReducerState, toolUseId: string): ToolEvent | null {
   const i = state.index.get(`tool:${toolUseId}`);
@@ -388,6 +416,15 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
       };
     }
     case "preview":
+      /* Die Vorschau-Datei und das Transkript sind zwei Dateien ohne
+         gemeinsame Reihenfolge, und der Tailer liest je Takt die Vorschau
+         ZUERST: ein Schnappschuss von Text, der gerade zur festen Zeile wurde,
+         kann NACH dieser Zeile eintreffen — und stand dann als zweite Kopie
+         darunter, bis zur naechsten Vorschau (nach einem Werkzeug: Minuten).
+         Was nicht neuer ist als die neueste feste Antwort / der neueste
+         fertige Gedanke, hat das Transkript ueberholt (Spec A PR-0, M6;
+         dieselbe Regel wie `seedSequence` und der Aufgaben-Block im Server). */
+      if (overtakenByTranscript(state.events, event.ts)) return state;
       return { ...state, preview: event };
     case "tool_output": {
       /* Die Ausgabe-Datei und das Transkript sind zwei Dateien ohne

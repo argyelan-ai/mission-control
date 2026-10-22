@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { MessageEvent, StateEvent, TimelineChatEvent, TodoEvent, ToolEvent } from "@/lib/chatTypes";
 import {
   FINAL_SETTLE_MS,
+  FINAL_TEXT_MAX,
   FINAL_WAIT_MS,
   HEARTBEAT_MS,
   PERIODIC_MS,
@@ -244,6 +245,54 @@ describe("ProgressTracker — final (never success before the agent said so)", (
     t.forwarded(false, 0);
     t.observe(snap(state("idle"), [msg("x".repeat(20_000))]), 1000);
     expect((t.tick(1000 + FINAL_SETTLE_MS)[0].req.text ?? "").length).toBeLessThanOrEqual(4000);
+  });
+});
+
+// Spec A PR-0 (S2): once the bridge writes one permanent line per text
+// segment (PR-1), a turn's answer can arrive as several assistant lines. The
+// call must read the WHOLE answer, as it does today with one line per turn —
+// not just the last segment ("Saved.").
+describe("ProgressTracker — final reads every reply segment of the turn", () => {
+  it("joins all segments of the turn in order", () => {
+    const t = new ProgressTracker();
+    t.observe(snap(state("idle")), 0);
+    t.forwarded(false, 0);
+    t.observe(snap(state("working")), 1000);
+    const first = msg("Die Datei hat drei Fehler, ich behebe sie.");
+    const toolCall = tool({ result: "ok" });
+    const second = msg("Gespeichert.");
+    t.observe(snap(state("working"), [first]), 2000);
+    t.observe(snap(state("working"), [first, toolCall]), 3000);
+    t.observe(snap(state("idle"), [first, toolCall, second]), 4000);
+    const out = t.tick(4000 + FINAL_SETTLE_MS);
+    expect(kinds(out)).toEqual(["final"]);
+    expect(out[0].req.text).toBe("Die Datei hat drei Fehler, ich behebe sie.\n\nGespeichert.");
+  });
+
+  it("leaves out empty segments and replies of an earlier turn", () => {
+    const t = new ProgressTracker();
+    const old = msg("Alte Antwort.");
+    t.observe(snap(state("idle"), [old]), 0);
+    t.forwarded(false, 0);
+    t.observe(snap(state("working"), [old]), 1000);
+    const blank = msg("   ");
+    const a = msg("Eins.");
+    const b = msg("Zwei.");
+    t.observe(snap(state("idle"), [old, a, blank, b]), 2000);
+    expect(t.tick(2000 + FINAL_SETTLE_MS)[0].req.text).toBe("Eins.\n\nZwei.");
+  });
+
+  it("the joined answer is capped, from its start", () => {
+    const t = new ProgressTracker();
+    t.observe(snap(state("idle")), 0);
+    t.forwarded(false, 0);
+    t.observe(snap(state("working")), 1000);
+    const a = msg("a".repeat(3_000));
+    const b = msg("b".repeat(3_000));
+    t.observe(snap(state("idle"), [a, b]), 2000);
+    const text = t.tick(2000 + FINAL_SETTLE_MS)[0].req.text ?? "";
+    expect(text.length).toBe(FINAL_TEXT_MAX);
+    expect(text.startsWith("a".repeat(3_000) + "\n\nb")).toBe(true);
   });
 });
 

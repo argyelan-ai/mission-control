@@ -284,14 +284,19 @@ export class ProgressTracker {
     return this.emitted(out, now);
   }
 
+  /** The turn's whole answer: every reply line of the turn, in event order.
+   *  A turn can write its answer as several lines (one per text segment, the
+   *  omp bridge after spec A PR-1) — reading only the last one would speak
+   *  "Saved." instead of the answer. Capped from the start, which is the part
+   *  MC reads aloud (`voice_progress.summarize_reply`). */
   private lastReplyText(): string {
     const events = this.snap?.events ?? [];
     const wanted = new Set(this.replies);
-    for (let i = events.length - 1; i >= 0; i--) {
-      const ev = events[i];
-      if (ev.kind === "message" && wanted.has(ev.uuid) && ev.text.trim()) return ev.text.slice(0, FINAL_TEXT_MAX);
+    const parts: string[] = [];
+    for (const ev of events) {
+      if (ev.kind === "message" && wanted.has(ev.uuid) && ev.text.trim()) parts.push(ev.text);
     }
-    return "";
+    return parts.join("\n\n").slice(0, FINAL_TEXT_MAX);
   }
 
   /** Call about once a second: settles the final, flushes a held tool
