@@ -20,6 +20,11 @@ export interface BenchEntry {
     tokens_in?: number;
     tokens_out?: number;
     tok_per_s?: number;
+    // Agent entries: attributed usage snapshot the video outro uses
+    // (backend orchestrator.snapshot_entry_usage). cost_usd is the API
+    // list price — not spent money when locality is "local".
+    cost_usd?: number;
+    locality?: "local" | "cloud";
   };
   error: string | null;
   // Detail endpoint only: derived view of the fleet task behind a running

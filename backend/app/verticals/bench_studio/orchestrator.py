@@ -500,6 +500,13 @@ async def task_work_duration_ms(session: AsyncSession, task_id: uuid.UUID) -> in
     `in_progress -> review` event by the working agent (work end — the
     one-shot artifact exists at that moment; everything after is review
     ping-pong). Returns None when either endpoint is missing.
+
+    Time the task sat outside in_progress inside that span (blocked on an
+    operator answer overnight, put back into the inbox) is not work and is
+    subtracted — a run blocked for 21 h showed "1363.6 min" in the video
+    (live, 2026-10-19). A pause only counts once its re-entry into
+    in_progress is recorded; a leave without a recorded return stays work
+    time (event logs of older runs miss some re-entries).
     """
     from app.models.task import TaskEvent
 
@@ -523,7 +530,18 @@ async def task_work_duration_ms(session: AsyncSession, task_id: uuid.UUID) -> in
     )
     if start is None or end is None or end.created_at <= start.created_at:
         return None
-    return int((end.created_at - start.created_at).total_seconds() * 1000)
+    paused_s = 0.0
+    left_at = None
+    for e in events:
+        if e.created_at <= start.created_at or e.created_at > end.created_at:
+            continue
+        if e.from_status == "in_progress" and e.to_status != "in_progress":
+            left_at = e.created_at
+        elif e.to_status == "in_progress" and left_at is not None:
+            paused_s += (e.created_at - left_at).total_seconds()
+            left_at = None
+    worked_s = (end.created_at - start.created_at).total_seconds() - paused_s
+    return int(worked_s * 1000)
 
 
 async def task_cost_usd(session: AsyncSession, task_id: uuid.UUID) -> float | None:
@@ -712,6 +730,9 @@ async def on_task_done(session: AsyncSession, task) -> None:
         if duration_ms is not None:
             metrics["duration_ms"] = duration_ms
         entry.metrics = metrics
+        # Tokens/cost/locality as far as already harvested (the outro
+        # refreshes them at compose time) — the UI shows them right away.
+        await snapshot_entry_usage(session, entry)
         entry.status = "generated"
         entry.error = None
     session.add(entry)
@@ -776,16 +797,30 @@ def _format_outro_time(duration_ms: int | None) -> str:
     return f"{duration_ms / 60000:.1f} min"
 
 
-def _format_outro_cost(cost_usd: float | None, source_kind: str) -> str:
-    """Outro cost cell. Spark entries run on the local DGX — no per-token
-    cost, shown as "local" (clearer than a fake $0). Agent entries show the
-    attributed sum when model_usage_events has one, else "—" (most agent
-    runs today — see task_cost_usd coverage note)."""
-    if source_kind == "spark":
+def _format_outro_cost(
+    cost_usd: float | None, source_kind: str, locality: str | None = None
+) -> str:
+    """Outro cost cell — never a number that was not spent.
+
+    - Spark entries and agents on a local runtime (our own box): "local".
+      model_usage_events may still carry an API list price for the same
+      model name (the price table is keyed by model, not by where it ran);
+      showing it would read as real spend.
+    - No attributed cost, or a sum of 0 (the catch-all price row prices an
+      unknown model at 0/0 — "price unknown", not "free"): "—".
+    - Below one cent: "<$0.01" instead of a misleading "$0.00".
+    - Otherwise "~$0.42": the sum is the API list price of the tokens
+      (model_prices), not an invoice — cloud runs mostly go through a
+      subscription (Grok, Claude Code). "~" (not "≈") because the outro's
+      JetBrains Mono is the Google Fonts latin subset, which has no U+2248.
+    """
+    if source_kind == "spark" or locality == "local":
         return "local"
-    if cost_usd is None:
+    if cost_usd is None or cost_usd <= 0:
         return "—"
-    return f"${cost_usd:.2f}"
+    if cost_usd < 0.01:
+        return "<$0.01"
+    return f"~${cost_usd:.2f}"
 
 
 def _format_tok_count(n: int) -> str:
@@ -816,6 +851,60 @@ def _format_outro_size(artifact_path: str | None) -> str:
         return f"{size_kb:.0f} KB"
     except OSError:
         return "—"
+
+
+async def entry_locality(session: AsyncSession, entry: BenchEntry) -> str | None:
+    """"local" | "cloud" | None for where an entry's model ran.
+
+    Spark entries are local by definition. Agent entries: the agent's bound
+    runtime — local when it sits on one of our own boxes and speaks the
+    OpenAI protocol (``heads.pairs.is_local``, the same rule as the pair
+    table and head runs). None when the agent or runtime is gone."""
+    if entry.source_kind == "spark":
+        return "local"
+    if entry.agent_id is None:
+        return None
+    from app.models.agent import Agent
+    from app.models.runtime import Runtime
+    from app.services.heads.pairs import is_local
+
+    agent = await session.get(Agent, entry.agent_id)
+    if agent is None or agent.runtime_id is None:
+        return None
+    runtime = await session.get(Runtime, agent.runtime_id)
+    if runtime is None:
+        return None
+    return "local" if is_local(runtime) else "cloud"
+
+
+async def snapshot_entry_usage(session: AsyncSession, entry: BenchEntry) -> dict:
+    """Store an agent entry's attributed usage on ``entry.metrics`` and
+    return the metrics dict — one source of truth for the video outro, the
+    Bench Studio UI and the episode export.
+
+    Writes ``tokens_in``/``tokens_out``/``cost_usd`` from model_usage_events
+    when the task has attributed rows (never deletes a value an earlier
+    snapshot stored), and ``locality`` once — at task-done time, so a later
+    runtime switch of the agent does not relabel an old run. Spark entries
+    are left alone: their tokens come from the engine response directly."""
+    metrics = dict(entry.metrics or {})
+    if entry.source_kind == "spark":
+        return metrics
+    if "locality" not in metrics:
+        locality = await entry_locality(session, entry)
+        if locality is not None:
+            metrics["locality"] = locality
+    if entry.task_id is not None:
+        usage = await task_token_usage(session, entry.task_id)
+        if usage is not None:
+            metrics["tokens_in"], metrics["tokens_out"] = usage
+        cost = await task_cost_usd(session, entry.task_id)
+        if cost is not None:
+            metrics["cost_usd"] = cost
+    if metrics != (entry.metrics or {}):
+        entry.metrics = metrics
+        session.add(entry)
+    return metrics
 
 
 async def _build_branding_payload(
@@ -862,36 +951,31 @@ async def _build_branding_payload(
                         tag = agent.name.upper()
         models.append({"label": entry.model_label, "tag": tag})
 
+        # Fresh snapshot of the attributed usage (agent entries; the
+        # harvester may have attributed more turns since task-done — a
+        # recompose picks them up). Spark entries carry tokens_in/out from
+        # the engine response (_spark_generate) and have no fleet task.
+        metrics = await snapshot_entry_usage(session, entry)
+
         # Time: stored metrics first; for agent entries without a stored
         # value (old runs, hook races) derive defensively from task_events.
-        duration_ms = (entry.metrics or {}).get("duration_ms")
+        duration_ms = metrics.get("duration_ms")
         if duration_ms is None and entry.task_id is not None:
             duration_ms = await task_work_duration_ms(session, entry.task_id)
 
-        cost_usd = None
-        if entry.source_kind != "spark" and entry.task_id is not None:
-            cost_usd = await task_cost_usd(session, entry.task_id)
+        cost_usd = metrics.get("cost_usd") if entry.source_kind != "spark" else None
 
-        # Token usage: spark entries have no fleet Task (task_id is always
-        # NULL for them, see _record_spark_usage_event), so they can never
-        # be attributed via task_token_usage/model_usage_events — read the
-        # tokens_in/out _spark_generate already captured into entry.metrics
-        # directly instead (Task 5). Agent entries keep the existing
-        # task-attributed sum.
         token_usage = None
-        if entry.source_kind == "spark":
-            tokens_in = (entry.metrics or {}).get("tokens_in")
-            tokens_out = (entry.metrics or {}).get("tokens_out")
-            if tokens_in is not None and tokens_out is not None:
-                token_usage = (int(tokens_in), int(tokens_out))
-        elif entry.task_id is not None:
-            token_usage = await task_token_usage(session, entry.task_id)
+        tokens_in = metrics.get("tokens_in")
+        tokens_out = metrics.get("tokens_out")
+        if tokens_in is not None and tokens_out is not None:
+            token_usage = (int(tokens_in), int(tokens_out))
 
         outro_rows.append({
             "name": entry.model_label,
             "time": _format_outro_time(duration_ms),
             "size": _format_outro_size(entry.artifact_path),
-            "cost": _format_outro_cost(cost_usd, entry.source_kind),
+            "cost": _format_outro_cost(cost_usd, entry.source_kind, metrics.get("locality")),
             "tokens": _format_outro_tokens(token_usage),
         })
 

@@ -1020,3 +1020,55 @@ describe("ChallengeDetail — entry task state", () => {
     expect(screen.queryByRole("link", { name: /Open task/ })).toBeNull();
   });
 });
+
+describe("ChallengeDetail — usage per entry (video outro numbers)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shows the tokens and cost the video outro will use, local runs as 'local'", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        entries: [
+          makeEntry({
+            id: "e-1", model_label: "Local agent", source_kind: "agent", agent_id: "a-1",
+            metrics: { duration_ms: 60000, tokens_in: 1_117_881, tokens_out: 264_150, cost_usd: 0.43, locality: "local" },
+          }),
+          makeEntry({
+            id: "e-2", model_label: "Cloud", source_kind: "agent", agent_id: "a-2",
+            metrics: { tokens_in: 12_400, tokens_out: 1_800, cost_usd: 0.43, locality: "cloud" },
+          }),
+          // A Spark entry has no locality in metrics — the source kind says local.
+          makeEntry({
+            id: "e-3", model_label: "Spark direct", source_kind: "spark",
+            metrics: { duration_ms: 30000, tok_per_s: 52, tokens_out: 1200 },
+          }),
+        ],
+      })
+    );
+
+    renderDetail();
+    await screen.findByText("Local agent");
+
+    expect(screen.getByText("60 s · 1.1M → 264.1k tok · local")).toBeInTheDocument();
+    // A cloud cost is the API list price, not an invoice: "~".
+    expect(screen.getByText("12.4k → 1.8k tok · ~$0.43")).toBeInTheDocument();
+    expect(screen.getByText("30 s · 52 tok/s · 1200 tok · local")).toBeInTheDocument();
+  });
+
+  it("warns on a finished agent entry without token data (the video would show a dash)", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        entries: [
+          makeEntry({ id: "e-1", model_label: "Agent", source_kind: "agent", agent_id: "a-1", metrics: { duration_ms: 60000 } }),
+          makeEntry({ id: "e-2", model_label: "Qwen", source_kind: "spark", metrics: {} }),
+        ],
+      })
+    );
+
+    renderDetail();
+    await screen.findByText("Agent");
+
+    expect(screen.getAllByText(/No token data yet/)).toHaveLength(1);
+  });
+});
