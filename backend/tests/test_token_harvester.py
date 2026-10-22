@@ -877,8 +877,9 @@ class TestRunHarvestIntegration:
         events = result.all()
         assert not any(e.message_uuid == "private-001" for e in events)
 
-    async def test_mc_cwd_boss_attributed(self, tmp_path, async_db_session):
-        """(f) ~/.claude path with MC cwd → Boss event is inserted."""
+    async def test_mc_cwd_outside_lead_dir_is_operator_session(self, tmp_path, async_db_session):
+        """(f) ~/.claude path with MC cwd, but not the lead's own project dir →
+        the operator's own session: counted, never on the lead (22.10.2026)."""
         from app.services.token_harvester import run_harvest
 
         boss_dir = tmp_path / "boss_projects" / "-Users-testuser-Workspace-Projects-mc"
@@ -903,7 +904,8 @@ class TestRunHarvestIntegration:
         )
         events = result.all()
         assert len(events) == 1
-        assert events[0].harness == "host"
+        assert events[0].harness == "operator-session"
+        assert events[0].agent_id is None
 
     async def test_offset_resume_second_run(self, tmp_path, async_db_session):
         """Second run_harvest reads only new lines thanks to offset resume."""
@@ -1053,7 +1055,7 @@ async def test_costs_endpoint_aggregation(tmp_path, async_db_session):
 @pytest.mark.asyncio
 async def test_build_agent_slug_map_und_boss_attribution(session, tmp_path):
     """Without an explicit map, it is built from the agents table; Boss lines
-    from ~/.claude get the Boss agent ID (only for MC cwd)."""
+    from the Boss's own ~/.claude project dir get the Boss agent ID."""
     from app.models import Agent
     from app.services.token_harvester import (
         _build_agent_slug_map,
@@ -1081,14 +1083,17 @@ async def test_build_agent_slug_map_und_boss_attribution(session, tmp_path):
     (rex_dir / "s1.jsonl").write_text(
         _make_line(uuid_="u-rex-1", session_id="s1", model="claude-sonnet-4-6") + "\n"
     )
-    boss_dir = tmp_path / "claude-projects" / "proj"
+    from app.services.token_harvester import encode_cwd
+
+    boss_checkout = str(tmp_path / "boss-checkout")
+    boss_dir = tmp_path / "claude-projects" / encode_cwd(boss_checkout)
     boss_dir.mkdir(parents=True)
     (boss_dir / "s2.jsonl").write_text(
         _make_line(
             uuid_="u-boss-1",
             session_id="s2",
             model="claude-opus-4-8",
-            cwd="/Users/testuser/Workspace/Projects/mission-control",
+            cwd=boss_checkout,
         ) + "\n"
     )
 
@@ -1097,6 +1102,7 @@ async def test_build_agent_slug_map_und_boss_attribution(session, tmp_path):
         agent_base_paths=[str(tmp_path / "agents")],
         boss_base_paths=[str(tmp_path / "claude-projects")],
         agent_slug_map=None,  # ← must be built from DB
+        boss_checkout_path=boss_checkout,
     )
     assert stats["new_events"] == 2
 

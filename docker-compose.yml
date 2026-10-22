@@ -320,6 +320,10 @@ services:
       # renderer) needs it INSIDE the container; the volume interpolation
       # below only resolves it on the host.
       MC_REPO_PATH: ${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}
+      # The lead host agent's working dir (docker/shared/ensure-checkout.sh).
+      # Empty = its default under HOME_HOST. The token harvester books only
+      # this checkout's ~/.claude project dir on the lead.
+      MC_CHECKOUT_PATH: ${MC_CHECKOUT_PATH:-}
       # Agent image naming for the compose renderer (see .env.example).
       # Default = published GHCR images (since v0.2.0); "" = bare local names.
       MC_AGENT_IMAGE_PREFIX: ${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}
@@ -593,6 +597,7 @@ services:
       DOCKER_HOST: tcp://docker-socket-proxy:2375
       HOME_HOST: ${HOME}
       MC_REPO_PATH: ${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}
+      MC_CHECKOUT_PATH: ${MC_CHECKOUT_PATH:-}
       MC_AGENT_IMAGE_PREFIX: ${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}
       MC_AGENT_IMAGE_TAG: ${MC_AGENT_IMAGE_TAG:-latest}
       HOST_UID: ${HOST_UID:-502}

@@ -4,10 +4,11 @@ Reproduces the hand-made table in docs/metrics/2026-09-baseline.md §1 as a
 query, so the baseline stops being a one-off. Every bucket is derived from
 columns the harvester already writes; nothing is guessed:
 
-  operator        host-CLI rows from ``~/.claude/projects/<dir>`` whose <dir>
-                  is not the lead checkout. The harvester books these on the
-                  lead agent's id (token_harvester._should_attribute_boss_path),
-                  so ``agent_id`` alone mixes both — ``source_file`` splits them.
+  operator        the operator's own host Claude Code sessions: rows with
+                  harness ``operator-session`` (the harvester since 22.10.2026),
+                  plus older host-CLI rows from ``~/.claude/projects/<dir>``
+                  whose <dir> is not the lead checkout — those were booked on
+                  the lead agent's id, ``source_file`` splits them.
   lead            every other row of the lead agent (slug ``boss*``, same rule
                   as the harvester): its checkout dir and its own config dir.
   agents:<h>      other persistent agents, by the harness recorded on the row
@@ -61,8 +62,11 @@ from app.models.agent import Agent
 from app.models.model_usage import ModelUsageEvent
 from app.models.runtime import Runtime
 from app.models.runtime_token import RuntimeTokenCounter, RuntimeTokenHour
-from app.services.token_harvester import _host_home, _slugify_agent_name
-from app.services.transcript_chat import encode_cwd
+from app.services.token_harvester import (
+    OPERATOR_SESSION_HARNESS,
+    _slugify_agent_name,
+    lead_project_dir_name,
+)
 from app.utils import ensure_aware, utcnow
 
 MAX_WEEKS = 26
@@ -94,8 +98,8 @@ def week_starts(weeks: int, now: datetime, tzinfo=timezone.utc) -> list[date]:
 
 
 def _lead_checkout_dir() -> str:
-    # Same checkout the Sessions chat resolves for the lead (transcript_chat).
-    return encode_cwd(str(_host_home() / ".mc" / "checkouts" / "mission-control"))
+    # Same dir the harvester books on the lead and the Sessions chat reads.
+    return lead_project_dir_name()
 
 
 async def _model_locality(session: AsyncSession) -> set[str]:
@@ -201,6 +205,7 @@ async def _classified(session: AsyncSession, start: datetime, tzinfo,
     adds them into days or weeks with ``_add``."""
     lead_dir = _lead_checkout_dir()
     is_operator = case(
+        (ModelUsageEvent.harness == OPERATOR_SESSION_HARNESS, literal(True)),
         (
             (ModelUsageEvent.harness == "host")
             & ModelUsageEvent.source_file.like("%/.claude/projects/%")
