@@ -18,7 +18,7 @@
  * Owns nothing about the Diff/Browser side panel — that's PanelRail's job,
  * orthogonal to this toggle.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
@@ -33,7 +33,7 @@ import {
   isNoTranscriptError,
   resolveSessionAliveness,
 } from "@/lib/chatTypes";
-import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
+import type { ChatTaskStub, StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
 import { isHeadDone, type HeadRun } from "@/lib/heads";
 import { HeadChatHeader } from "@/components/heads/HeadChatHeader";
 import { HeadChatFooter } from "@/components/heads/HeadChatFooter";
@@ -43,14 +43,13 @@ import { AgentCard } from "./AgentCard";
 import { NotificationRow } from "./NotificationRow";
 import { WorkingOnRow, type WorkingOn } from "./WorkingOnRow";
 import { isAgentSpawn, matchRuns, notificationsByTool } from "./agentRuns";
-import { buildTimelineItems } from "./buildTimelineItems";
+import type { TimelineItem } from "./buildTimelineItems";
 import { ChatMessage } from "./ChatMessage";
 import { PreviewRow } from "./PreviewRow";
 import { TodoPanel } from "./TodoPanel";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
 import { LiveThinkingRow } from "./LiveThinkingRow";
-import { TaskActivityBlock } from "./TaskActivityBlock";
 import { SubagentGroup } from "./SubagentGroup";
 import { ToolGroup } from "./ToolGroup";
 import { ToolOutputContext, createToolOutputStore, type ToolOutputStore } from "./toolOutputStore";
@@ -71,6 +70,14 @@ import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
 import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
 import type { PanelKind } from "./PanelRail";
+import { useChatTasks } from "@/hooks/useChatTasks";
+import { useTaskSteps, type TaskStepsSpec } from "@/hooks/useTaskSteps";
+import { TaskStepsAgentContext } from "@/hooks/useTaskStepDetail";
+import { ScrollAnchorContext, type ScrollAnchor } from "./useScrollAnchor";
+import { mergeTimeline, type MergeResult, type MergeTask } from "./taskSteps/mergeTimeline";
+import { rowMs } from "./taskSteps/buildTaskUnits";
+import { TaskCard, TaskSegment } from "./taskSteps/TaskSection";
+import { TaskStepsRetryContext } from "./taskSteps/TaskUnits";
 
 // Re-exported from their own module so ChatOptionsSheet can use them without
 // importing ChatView back (see chatOptions.ts). Importers are unaffected.
@@ -196,6 +203,23 @@ function isVisibleAtLevel(ev: TimelineChatEvent, level: DetailLevel): boolean {
 /** Timeline items mounted in the first commit — roughly a screenful, so the
  *  operator sees the end of the conversation immediately. */
 export const INITIAL_RENDER_WINDOW = 30;
+
+/** At most this long an omp chat waits for its task rows before it shows
+ *  what it has (spec A S6). */
+export const TASK_LOAD_GATE_MS = 1500;
+
+const EMPTY_ROWS: never[] = [];
+
+/** The same array object while its elements are the same objects — so a
+ *  memo that depends on it reruns only when one of them really changed. */
+function useStableArray<T>(next: T[]): T[] {
+  const ref = useRef<T[]>(next);
+  const prev = ref.current;
+  if (prev !== next && (prev.length !== next.length || prev.some((x, i) => x !== next[i]))) {
+    ref.current = next;
+  }
+  return ref.current;
+}
 
 /**
  * The uuids of assistant messages whose model differs from the previous
@@ -372,6 +396,15 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
+  /* Mirrors `stickToBottom`, set synchronously wherever it changes (spec A
+     M3): the ResizeObserver below reads THIS, not the value captured when it
+     was created — otherwise an observer made while following pinned once
+     more after an anchored expand had already ended following. */
+  const stickRef = useRef(true);
+  const setStick = useCallback((value: boolean) => {
+    stickRef.current = value;
+    setStickToBottom(value);
+  }, []);
   const [optionsOpen, setOptionsOpen] = useState(false);
   /** Text eines zurueckgeholten Steers, der noch einmal bearbeitet werden soll. */
   const [composerPrefill, setComposerPrefill] = useState<{ text: string; at: number } | null>(null);
@@ -460,6 +493,219 @@ export function ChatView({
         ? (terminalDeepLink ? "terminal" : "chat")
         : centerView;
 
+  /* useMemo mit Grund: ein preview-Tick (alle 0.3 s ein replace-me-Event)
+     erzeugt ein neues `stream`-Objekt, veraendert aber `events` nicht. Ohne
+     Memo liefen filter + buildTimelineItems über den ganzen Verlauf bei JEDEM
+     Tick — bei einem grossen Transkript blockte das den Main-Thread so lange,
+     dass die Ansicht sprang (Mark: "der chat bewegt sich die ganze zeit").
+     `visibleEvents`-Identitaet kommt aus dem Reducer (bei preview unveraendert),
+     deshalb ist hier events die Abhaengigkeit, nicht das stream-Objekt. */
+  const visibleEvents = useMemo(
+    () => stream.events.filter((ev) => isVisibleAtLevel(ev, detailLevel)),
+    [stream.events, detailLevel],
+  );
+
+  // ── Tasks in the chat (spec A, variant A) ──────────────────────────────
+  // An omp agent over ACP runs a task in a session of its own (#898). Its
+  // steps stand in THIS chat at their time — as sections, or as a card once
+  // finished. Read-only endpoints (`/chat/tasks`, `/chat/tasks/{id}/steps`),
+  // never through useChatStream. Client pre-gate (N6): only an agent whose
+  // tasks run in sessions of their own asks (`tasks_in_own_session`, the
+  // backend's adapter rule — never a harness name here, PRINCIPLES §3.4);
+  // every other agent renders at once, exactly as before.
+  const agentId = agent?.id ?? null;
+  const taskGateOn = !head && !!agent && agent.tasks_in_own_session === true && streamEnabled;
+  const chatOnScreen = effectiveView === "chat" && voiceOnScreen;
+  // A chat-state flip asks for the stubs at once (inside the hook): a task
+  // delivered to an idle agent must not wait for the 60 s idle poll.
+  const chatTasks = useChatTasks(agentId, taskGateOn && chatOnScreen, stream.state?.status ?? null);
+  const tasksApply = taskGateOn && chatTasks.data?.applies === true;
+  const currentStubs: ChatTaskStub[] = useMemo(
+    () => (tasksApply && chatTasks.data?.applies ? chatTasks.data.tasks : []),
+    [tasksApply, chatTasks.data],
+  );
+
+  // What this mount has seen (M4): a task's shape is decided once — finished
+  // when first seen = a card, live = a section — and never changes while the
+  // view is open; a stub that vanishes keeps its content and says so.
+  type Shape = { kind: "card" | "segments"; frozenAtMs: number | null };
+  type TaskMemory = {
+    agentId: string | null;
+    shapes: ReadonlyMap<string, Shape>;
+    stubs: ReadonlyMap<string, ChatTaskStub>;
+    wasLive: ReadonlySet<string>;
+  };
+  const [memory, setMemory] = useState<TaskMemory>(() => ({
+    agentId, shapes: new Map(), stubs: new Map(), wasLive: new Set(),
+  }));
+  const mem: TaskMemory =
+    memory.agentId === agentId ? memory : { agentId, shapes: new Map(), stubs: new Map(), wasLive: new Set() };
+  const defaultShape = (stub: ChatTaskStub): Shape =>
+    stub.live ? { kind: "segments", frozenAtMs: null } : { kind: "card", frozenAtMs: rowMs(stub.endedAt) ?? Date.now() };
+  useEffect(() => {
+    if (!tasksApply) return;
+    setMemory((prev) => {
+      const base = prev.agentId === agentId ? prev : { agentId, shapes: new Map(), stubs: new Map(), wasLive: new Set<string>() };
+      let shapes = base.shapes;
+      let wasLive = base.wasLive;
+      const stubs = new Map(base.stubs);
+      for (const stub of currentStubs) {
+        if (!shapes.has(stub.taskId)) shapes = new Map(shapes).set(stub.taskId, defaultShape(stub));
+        if (stub.live && !wasLive.has(stub.taskId)) wasLive = new Set(wasLive).add(stub.taskId);
+        stubs.set(stub.taskId, stub);
+      }
+      return { agentId, shapes, stubs, wasLive };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasksApply, currentStubs, agentId]);
+
+  // The chat's loaded window (D8): finished tasks older than what the chat
+  // shows stay out; live ones always count.
+  const oldestEventTs = stream.events.length > 0 ? rowMs(stream.events[0].ts) : null;
+  const windowStart = stream.hasMore ? oldestEventTs : rowMs(stream.session?.startedAt ?? null);
+  const [openCards, setOpenCards] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleCard = useCallback((taskId: string) => {
+    setOpenCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }, []);
+
+  const taskEntries = useMemo(() => {
+    if (!tasksApply) return [];
+    const current = new Map(currentStubs.map((s) => [s.taskId, s]));
+    const list: { stub: ChatTaskStub; shape: Shape; detached: boolean; wasLive: boolean }[] = [];
+    for (const stub of currentStubs) {
+      const shape = mem.shapes.get(stub.taskId) ?? defaultShape(stub);
+      if (!stub.live && shape.kind === "card") {
+        const start = rowMs(stub.startKey);
+        if (windowStart == null || start == null || start < windowStart) continue;
+      }
+      list.push({ stub, shape, detached: false, wasLive: mem.wasLive.has(stub.taskId) || stub.live });
+    }
+    // Vanished in this mount after being live here: keep what was shown.
+    for (const [id, stub] of mem.stubs) {
+      if (current.has(id) || !mem.wasLive.has(id)) continue;
+      const shape = mem.shapes.get(id) ?? defaultShape(stub);
+      list.push({ stub: { ...stub, live: false }, shape, detached: true, wasLive: true });
+    }
+    list.sort((a, b) => (rowMs(a.stub.startKey) ?? 0) - (rowMs(b.stub.startKey) ?? 0));
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasksApply, currentStubs, mem, windowStart]);
+
+  const stepSpecs: TaskStepsSpec[] = useMemo(
+    () =>
+      taskEntries.map(({ stub, shape, detached }) => ({
+        taskId: stub.taskId,
+        live: stub.live && !detached,
+        status: stub.status,
+        load: shape.kind === "segments" || stub.live || openCards.has(stub.taskId),
+      })),
+    [taskEntries, openCards],
+  );
+  const steps = useTaskSteps(agentId, stepSpecs, taskGateOn && chatOnScreen);
+  const stepsRef = useRef(steps);
+  stepsRef.current = steps;
+  const retrySteps = useCallback((taskId: string) => stepsRef.current.get(taskId)?.retry(), []);
+  // One version per poll result, so the memos below see a change only when
+  // some task's state object really changed (structural sharing upstream).
+  const stepStates = taskEntries.map((e) => steps.get(e.stub.taskId)?.state ?? null);
+  const stepsVersion = useStableArray(stepStates);
+  // Failed with nothing loaded: the section says so instead of a bare head.
+  const stepFailures = useStableArray(
+    taskEntries.map((e) => {
+      const st = steps.get(e.stub.taskId);
+      return !!st && st.error && !st.state;
+    }),
+  );
+
+  const mergeTasks: MergeTask[] = useMemo(
+    () =>
+      taskEntries.map(({ stub, shape, detached, wasLive }, i) => {
+        const state = stepsVersion[i];
+        // A card that was never live in this mount keeps all its rows; one that
+        // went live again shows the new work below it (M4).
+        const frozenAtMs = shape.kind === "card" ? (wasLive && !detached ? shape.frozenAtMs : Number.POSITIVE_INFINITY) : null;
+        return {
+          stub,
+          shape: shape.kind,
+          frozenAtMs,
+          rows: state?.rows ?? EMPTY_ROWS,
+          liveRow: stub.live && !detached ? state?.liveRow ?? null : null,
+          omitted: state?.omitted ?? 0,
+          // Not loaded yet: no "waiting for the first step" flash.
+          hasSession: state ? state.hasSession : true,
+          detached,
+          loadFailed: stepFailures[i],
+          endLine: !stub.live && !detached && (shape.kind === "segments" || wasLive),
+        };
+      }),
+    [taskEntries, stepsVersion, stepFailures],
+  );
+
+  // The newest chapter of a live task opens by itself — only while the view
+  // follows; otherwise the open chapter stays frozen (no height change above
+  // the reader, M3).
+  const newestChapterIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const t of mergeTasks) {
+      if (!t.stub.live || t.detached) continue;
+      for (let i = t.rows.length - 1; i >= 0; i--) {
+        if (t.rows[i].k === "think") {
+          ids.add(t.rows[i].id);
+          break;
+        }
+      }
+    }
+    return ids;
+  }, [mergeTasks]);
+  const [frozenAutoIds, setFrozenAutoIds] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    if (stickToBottom) setFrozenAutoIds(newestChapterIds);
+  }, [stickToBottom, newestChapterIds]);
+  const autoIds = stickToBottom ? newestChapterIds : frozenAutoIds;
+
+  const queued = tasksApply && chatTasks.data?.applies ? chatTasks.data.queued : 0;
+  const waitingModel = stream.state?.status === "waiting_model";
+  // Previous result only for object reuse (N5) — the output never depends on it.
+  const prevMergeRef = useRef<MergeResult | null>(null);
+  const merged = useMemo(
+    () =>
+      mergeTimeline({
+        chatEvents: visibleEvents,
+        tasks: mergeTasks,
+        detailLevel,
+        queued,
+        autoIds,
+        hidePending: waitingModel,
+        prev: prevMergeRef.current,
+      }),
+    [visibleEvents, mergeTasks, detailLevel, queued, autoIds, waitingModel],
+  );
+  useLayoutEffect(() => {
+    prevMergeRef.current = merged;
+  }, [merged]);
+  const taskById = useMemo(() => new Map(mergeTasks.map((t) => [t.stub.taskId, t])), [mergeTasks]);
+  const liveTask = useMemo(() => [...mergeTasks].reverse().find((t) => t.stub.live && !t.detached) ?? null, [mergeTasks]);
+
+  // Load gate (S6): an omp chat shows its timeline once history, task stubs
+  // and the first steps page of each live task are in — at most 1.5 s — so
+  // the tail-first commit already holds the task rows and no card is
+  // inserted above the reader after mount.
+  const [gateCapPassed, setGateCapPassed] = useState(false);
+  useEffect(() => {
+    setGateCapPassed(false);
+    if (!taskGateOn) return;
+    const id = setTimeout(() => setGateCapPassed(true), TASK_LOAD_GATE_MS);
+    return () => clearTimeout(id);
+  }, [taskGateOn, agentId]);
+  const liveStepsSettled = mergeTasks.every((t) => !t.stub.live || t.detached || !!steps.get(t.stub.taskId)?.settled);
+  const gateReady =
+    !taskGateOn || gateCapPassed || (!stream.loading && chatTasks.settled && (!tasksApply || liveStepsSettled));
+
   // `renderAll` is in the deps for a reason: when the deferred remainder mounts,
   // content appears ABOVE the viewport, so a scroll position left untouched
   // would silently show older messages instead of the end. `stream.preview`
@@ -473,19 +719,33 @@ export function ChatView({
     // Basis fuer handleScroll gleich mitfuehren: ohne sie kann das erste
     // Scroll-Ereignis nicht sagen, ob sich Hoehe oder Ansicht geaendert hat.
     lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
-  }, [stream.events, stream.preview, stream.toolOutputs, stickToBottom, renderAll, effectiveView]);
+  }, [
+    stream.events,
+    stream.preview,
+    stream.toolOutputs,
+    // The echo's own height is pinned too (M1); task rows grow without
+    // touching `stream.events`.
+    stream.pendingEchoes.length,
+    merged,
+    gateReady,
+    stickToBottom,
+    renderAll,
+    effectiveView,
+  ]);
 
   // One frame later, not on a timer: the browser gets to paint the tail first,
   // which is the whole point.
   useEffect(() => {
-    if (renderAll) return;
+    // Behind the load gate nothing is drawn yet: the frame counts from the
+    // moment the timeline really mounts.
+    if (renderAll || !gateReady) return;
     if (typeof requestAnimationFrame === "undefined") {
       setRenderAll(true);
       return;
     }
     const handle = requestAnimationFrame(() => setRenderAll(true));
     return () => cancelAnimationFrame(handle);
-  }, [renderAll]);
+  }, [renderAll, gateReady]);
 
   // The effect above fires on new events, which is not enough: the mobile
   // stack keeps the off-screen pane mounted with `display: none`, where the
@@ -503,7 +763,7 @@ export function ChatView({
     const el = scrollRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      if (!stickToBottom) return;
+      if (!stickRef.current) return;
       el.scrollTop = el.scrollHeight;
       lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
     });
@@ -587,7 +847,7 @@ export function ChatView({
     // mitlaufen, und die Geste ist damit beendet.
     if (atBottom) {
       userDrivingUntilRef.current = 0;
-      setStickToBottom(true);
+      setStick(true);
       return;
     }
 
@@ -597,14 +857,14 @@ export function ChatView({
       // ein weiteres Geraete-Ereignis kommt. Jeder Scroll waehrend einer noch
       // gueltigen Geste haelt sie am Leben.
       markUserDriving();
-      setStickToBottom(false);
+      setStick(false);
       return;
     }
 
     // Ohne Geste: nur eine verschobene ANSICHT zaehlt, kein Hoehensprung.
     const heightChanged = previous != null && previous.height !== height;
     const viewMoved = previous != null && previous.top !== top;
-    if (viewMoved && !heightChanged) setStickToBottom(false);
+    if (viewMoved && !heightChanged) setStick(false);
   }
 
   function handleSend(text: string) {
@@ -613,6 +873,9 @@ export function ChatView({
     // not a second later when the tailer has polled the transcript. The request
     // failing removes the echo again — an echo that outlived a failed send would
     // be the one thing worse than the old delay.
+    // Sending jumps to the end first (M1): from anywhere up in a long task
+    // section the operator otherwise never sees his own message arrive.
+    jumpToBottom();
     stream.echoSent(text, stream.state?.status === "working");
     deliver(text);
   }
@@ -731,39 +994,56 @@ export function ChatView({
     [stream.state, stream.events, stream.todos],
   );
 
-  /* useMemo mit Grund: ein preview-Tick (alle 0.3 s ein replace-me-Event)
-     erzeugt ein neues `stream`-Objekt, veraendert aber `events` nicht. Ohne
-     Memo liefen filter + buildTimelineItems über den ganzen Verlauf bei JEDEM
-     Tick — bei einem grossen Transkript blockte das den Main-Thread so lange,
-     dass die Ansicht sprang (Mark: "der chat bewegt sich die ganze zeit").
-     `visibleEvents`-Identitaet kommt aus dem Reducer (bei preview unveraendert),
-     deshalb ist hier events die Abhaengigkeit, nicht das stream-Objekt. */
-  const visibleEvents = useMemo(
-    () => stream.events.filter((ev) => isVisibleAtLevel(ev, detailLevel)),
-    [stream.events, detailLevel],
-  );
-  const items = useMemo(
-    () => buildTimelineItems(visibleEvents),
-    [visibleEvents],
-  );
-  // Tail first; the remainder joins one frame later (see `renderAll`).
-  const visibleItems = useMemo(
-    () => (renderAll ? items : items.slice(-INITIAL_RENDER_WINDOW)),
-    [items, renderAll],
-  );
-
-  // "Nach unten"-Knopf: sobald das Mitlaufen aus ist, merken wir uns, wie
-  // viele Eintraege der Verlauf da hatte — alles darueber ist "neu seitdem".
-  const itemsAtUnstickRef = useRef<number | null>(null);
+  // "Nach unten"-Knopf (S7): neu ist, was eine NEUERE Zeit traegt als das
+  // Neueste beim Loslassen — Chat-Eintraege, Aufgaben-Schritte und Echos.
+  // Keine Laengen-Differenz: eine spaet eintreffende Seite alter Schritte
+  // oder ein geteiltes Kapitel aendert die Laenge, ohne dass etwas neu ist.
+  const newestAtUnstickRef = useRef<{ server: number | null; echo: number } | null>(null);
   useEffect(() => {
-    itemsAtUnstickRef.current = stickToBottom ? null : items.length;
+    newestAtUnstickRef.current = stickToBottom ? null : { server: merged.newestTs, echo: Date.now() };
     // Nur beim Umschalten einfrieren, nicht bei jedem neuen Eintrag.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stickToBottom]);
+  const unstick = newestAtUnstickRef.current;
   const newSinceUnstick =
-    stickToBottom || itemsAtUnstickRef.current == null
+    stickToBottom || unstick == null
       ? 0
-      : Math.max(0, items.length - itemsAtUnstickRef.current);
+      : (unstick.server == null ? merged.countNewer(Number.NEGATIVE_INFINITY) : merged.countNewer(unstick.server)) +
+        stream.pendingEchoes.filter((e) => e.sentAt > unstick.echo).length;
+
+  // Tail first; the remainder joins one frame later (see `renderAll`).
+  const visibleEntries = useMemo(
+    () => (renderAll ? merged.entries : merged.entries.slice(-INITIAL_RENDER_WINDOW)),
+    [merged, renderAll],
+  );
+  const queuedLabel = useCallback((count: number) => t("taskQueued", { count }), [t]);
+
+  // Is a head of the live task's section on screen? (S5) Then the status
+  // line stays silent in `task_working` (the head says it, K3); otherwise it
+  // names the task. One observer; the state changes only on a crossing.
+  const [taskHeadVisible, setTaskHeadVisible] = useState(false);
+  const liveTaskId = liveTask?.stub.taskId ?? null;
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || !liveTaskId || typeof IntersectionObserver === "undefined") {
+      setTaskHeadVisible(false);
+      return;
+    }
+    const heads = Array.from(
+      root.querySelectorAll(`[data-task-id="${liveTaskId}"] [data-region="chat-task-head"]`),
+    );
+    const seen = new Map<Element, boolean>();
+    const observer = new IntersectionObserver(
+      (records) => {
+        for (const r of records) seen.set(r.target, r.isIntersecting);
+        setTaskHeadVisible([...seen.values()].some(Boolean));
+      },
+      { root },
+    );
+    heads.forEach((h) => observer.observe(h));
+    if (heads.length === 0) setTaskHeadVisible(false);
+    return () => observer.disconnect();
+  }, [liveTaskId, merged, gateReady, effectiveView]);
 
   // Was der Agent GERADE tut, aus dem Transkript statt vom Bildschirm
   // (Befund 10.09.2026): der Tailer sendet ein Werkzeug-Ereignis sofort beim
@@ -790,13 +1070,37 @@ export function ChatView({
     return null;
   }, [stream.events]);
 
+  /* Anchored toggles (spec A §6.3, M3): the tapped row keeps its place on
+     screen — the same scroll owner, no second follow logic. */
+  const anchorRef = useRef<{ el: Element; top: number } | null>(null);
+  const scrollAnchor = useMemo<ScrollAnchor>(
+    () => ({
+      capture(el) {
+        const box = scrollRef.current;
+        if (!box || !el) return;
+        setStick(false);
+        anchorRef.current = { el, top: el.getBoundingClientRect().top - box.getBoundingClientRect().top };
+      },
+      restore() {
+        const a = anchorRef.current;
+        const box = scrollRef.current;
+        anchorRef.current = null;
+        if (!a || !box || !a.el.isConnected) return;
+        const now = a.el.getBoundingClientRect().top - box.getBoundingClientRect().top;
+        if (now !== a.top) box.scrollTop += now - a.top;
+        lastMetricsRef.current = { top: box.scrollTop, height: box.scrollHeight };
+      },
+    }),
+    [setStick],
+  );
+
   function jumpToBottom() {
     const el = scrollRef.current;
     if (!el) return;
     userDrivingUntilRef.current = 0;
     el.scrollTop = el.scrollHeight;
     lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
-    setStickToBottom(true);
+    setStick(true);
   }
   const modelBadges = modelBadgeUuids(visibleEvents);
   const liveUuid = liveEventUuid(visibleEvents, stream.state?.status ?? null);
@@ -860,6 +1164,54 @@ export function ChatView({
   // yet on page load) — threw "Rendered more hooks than during the
   // previous render" (reproduced directly: render with `head={null}`, then
   // re-render the SAME `ChatView` instance with a real `head`).
+  function renderChatItem(item: TimelineItem) {
+                if (item.kind === "agent") {
+                  return (
+                    <AgentCard
+                      key={item.event.toolUseId ?? item.event.uuid}
+                      ev={item.event}
+                      run={runMatches.get(item.event.toolUseId ?? "")}
+                      notice={toolNotices.get(item.event.toolUseId ?? "")}
+                      // A head has no subagent-detail endpoint of its own
+                      // (ADR-085 Nachtrag §4: the main transcript only) — an
+                      // empty id just makes the "open subagent" affordance a
+                      // harmless no-reply instead of crashing on `agent.id`.
+                      agentId={agent?.id ?? ""}
+                    />
+                  );
+                }
+                if (item.kind === "sidechain") {
+                  return <SubagentGroup key={`sidechain-${item.events[0].uuid}`} events={item.events} />;
+                }
+                if (item.kind === "activity") {
+                  return (
+                    <ToolGroup
+                      key={`activity-${item.events[0].uuid}`}
+                      events={item.events}
+                      detailLevel={detailLevel}
+                    />
+                  );
+                }
+                if (item.event.kind === "elicitation") {
+                  return (
+                    <ElicitationCard
+                      key={item.event.uuid}
+                      ev={item.event}
+                      result={stream.elicitationResults[item.event.elicitationId] ?? null}
+                      // Read-only for a head's transcript and for a non-admin
+                      // (the answer endpoint is operator-only, like the composer).
+                      agentId={head || !isAdmin ? null : agent?.id ?? null}
+                    />
+                  );
+                }
+                return renderTimelineEvent(
+                  item.event,
+                  detailLevel,
+                  modelBadges.has(item.event.uuid),
+                  item.event.uuid === liveUuid,
+                );
+  }
+
   if (!agent && !head) {
     return (
       <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: C.textMuted }}>
@@ -870,6 +1222,9 @@ export function ChatView({
 
   return (
     <ToolOutputContext.Provider value={toolOutputStore}>
+    <ScrollAnchorContext.Provider value={scrollAnchor}>
+    <TaskStepsAgentContext.Provider value={agentId}>
+    <TaskStepsRetryContext.Provider value={retrySteps}>
     {/* P2: tool pictures load from THIS agent's media route; a head (no
         agent row) shows none rather than guessing an address. */}
     <ChatMediaContext.Provider value={agent?.id ?? null}>
@@ -1153,7 +1508,9 @@ export function ChatView({
       </div>
       ) : null}
 
-      {!head && agent && workingOn && (
+      {/* Only where the chat shows no task sections: there the section head
+          names the task (K3). */}
+      {!head && agent && workingOn && !tasksApply && (!taskGateOn || chatTasks.settled) && (
         <WorkingOnRow taskId={workingOn.taskId} title={workingOn.title} />
       )}
 
@@ -1202,7 +1559,9 @@ export function ChatView({
             className="flex-1 min-h-0 overflow-y-auto scroll-quiet flex flex-col pt-2 pb-3"
           >
           <div ref={timelineRef} data-testid="chat-timeline" className="flex flex-col flex-1">
-            {items.length === 0 && stream.pendingEchoes.length === 0 ? (
+            {!gateReady ? (
+              <TimelineSkeleton />
+            ) : merged.entries.length === 0 && stream.pendingEchoes.length === 0 ? (
               stream.loading ? (
                 <TimelineSkeleton />
               ) : head ? (
@@ -1222,51 +1581,31 @@ export function ChatView({
                 </div>
               )
             ) : (
-              visibleItems.map((item) => {
-                if (item.kind === "agent") {
+              visibleEntries.map((entry) => {
+                // The merge's own key: a task row can split a chat tool group,
+                // and both halves would share renderChatItem's turn-uuid key.
+                if (entry.kind === "chat") return <Fragment key={entry.key}>{renderChatItem(entry.item)}</Fragment>;
+                const task = taskById.get(entry.taskId);
+                if (!task) return null;
+                if (entry.kind === "card") {
+                  const st = steps.get(entry.taskId);
                   return (
-                    <AgentCard
-                      key={item.event.toolUseId ?? item.event.uuid}
-                      ev={item.event}
-                      run={runMatches.get(item.event.toolUseId ?? "")}
-                      notice={toolNotices.get(item.event.toolUseId ?? "")}
-                      // A head has no subagent-detail endpoint of its own
-                      // (ADR-085 Nachtrag §4: the main transcript only) — an
-                      // empty id just makes the "open subagent" affordance a
-                      // harmless no-reply instead of crashing on `agent.id`.
-                      agentId={agent?.id ?? ""}
-                    />
-                  );
-                }
-                if (item.kind === "sidechain") {
-                  return <SubagentGroup key={`sidechain-${item.events[0].uuid}`} events={item.events} />;
-                }
-                if (item.kind === "activity") {
-                  return (
-                    <ToolGroup
-                      key={`activity-${item.events[0].uuid}`}
-                      events={item.events}
+                    <TaskCard
+                      key={entry.key}
+                      stub={task.stub}
+                      open={openCards.has(entry.taskId)}
+                      onToggle={toggleCard}
+                      steps={st?.state ?? null}
+                      loading={!st?.state && !st?.error}
+                      error={!!st?.error}
+                      onRetry={retrySteps}
+                      frozenAtMs={task.frozenAtMs}
                       detailLevel={detailLevel}
                     />
                   );
                 }
-                if (item.event.kind === "elicitation") {
-                  return (
-                    <ElicitationCard
-                      key={item.event.uuid}
-                      ev={item.event}
-                      result={stream.elicitationResults[item.event.elicitationId] ?? null}
-                      // Read-only for a head's transcript and for a non-admin
-                      // (the answer endpoint is operator-only, like the composer).
-                      agentId={head || !isAdmin ? null : agent?.id ?? null}
-                    />
-                  );
-                }
-                return renderTimelineEvent(
-                  item.event,
-                  detailLevel,
-                  modelBadges.has(item.event.uuid),
-                  item.event.uuid === liveUuid,
+                return (
+                  <TaskSegment key={entry.key} entry={entry} stub={task.stub} detailLevel={detailLevel} queuedLabel={queuedLabel} />
                 );
               })
             )}
@@ -1308,11 +1647,6 @@ export function ChatView({
                 ? <LiveThinkingRow preview={stream.preview} />
                 : <PreviewRow preview={stream.preview} />
             )}
-
-            {/* Was die laufende Aufgabe tut — eigener Block, nie in den Chat
-                gemischt (seit #898 zeigt der Chat nur die Chat-Sitzung; eine
-                ACP-Aufgabe laeuft in einer eigenen). */}
-            {!head && agent && workingOn && <TaskActivityBlock agentId={agent.id} detailLevel={detailLevel} />}
 
             {/* The run-record summary card — only once the head has ended
                 AND actually wrote one (`run.run_record`, the same boolean
@@ -1389,6 +1723,8 @@ export function ChatView({
                 activity={activity}
                 aliveness={aliveness}
                 sending={stream.awaitingResponse}
+                task={liveTask ? { taskId: liveTask.stub.taskId, title: liveTask.stub.title } : null}
+                taskHeadVisible={taskHeadVisible}
               />
               {!isAdmin ? (
                 <AdminOnlyNotice compact message={t("inputAdminOnly")} />
@@ -1397,7 +1733,10 @@ export function ChatView({
                   agentId={agent.id}
                   agentName={agent.name}
                   // Delivered by MC already — only the echo, no second send.
-                  onForwarded={(text, midTurn) => stream.echoSent(text, midTurn)}
+                  onForwarded={(text, midTurn) => {
+                    jumpToBottom();
+                    stream.echoSent(text, midTurn);
+                  }}
                   // Stopped by voice: same aftermath as the Stop button —
                   // the follow-ups the daemon held go back into the composer.
                   onStopped={handleVoiceStopped}
@@ -1413,6 +1752,7 @@ export function ChatView({
                   onSend={handleSend}
                   onStop={handleStop}
                   prefill={composerPrefill}
+                  placeholder={liveTask ? t("messagePlaceholderTaskRunning") : undefined}
                   sessionLive={aliveness !== "ended"}
                   /* Nur die Docker-tmux-Bruecke liefert echten Pane-Text; Host-Agenten
                    * (Boss/Hermes/Jarvis) haben diesen Kanal nicht — dort ist "arbeitet"
@@ -1457,6 +1797,9 @@ export function ChatView({
     </div>
     </ChatResendContext.Provider>
     </ChatMediaContext.Provider>
+    </TaskStepsRetryContext.Provider>
+    </TaskStepsAgentContext.Provider>
+    </ScrollAnchorContext.Provider>
     </ToolOutputContext.Provider>
   );
 }

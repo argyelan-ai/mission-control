@@ -59,6 +59,11 @@ vi.mock("@/hooks/useChatStream", () => ({ useChatStream: vi.fn() }));
 // The task block (20.10.2026) asks the backend on its own — stubbed, so these
 // tests keep running without a QueryClientProvider.
 vi.mock("@/hooks/useTaskActivity", () => ({ useTaskActivity: vi.fn(() => null) }));
+// Task sections (spec A) ask the backend through react-query — stubbed here
+// (no agent in this file is an omp agent; ChatView.tasks.test.tsx covers them
+// with a real QueryClient).
+vi.mock("@/hooks/useChatTasks", () => ({ useChatTasks: vi.fn(() => ({ data: null, settled: false, error: false })) }));
+vi.mock("@/hooks/useTaskSteps", () => ({ useTaskSteps: vi.fn(() => new Map()) }));
 // Heads-in-Chats (PR 2) branch: no test in this file passes a `head` prop
 // (that's ChatView.head.test.tsx's job), but every render still calls this
 // hook unconditionally (rules of hooks) — mocked the same way
@@ -1191,7 +1196,15 @@ describe("ChatView", () => {
       expect(screen.getByRole("button", { name: /Jump to bottom/ })).not.toHaveTextContent(/new/);
 
       mockUseChatStream.mockReturnValue(
-        mkStream({ events: [MSG, mkMsg({ uuid: "n1", text: "Neu 1" }), mkMsg({ uuid: "n2", text: "Neu 2" })] })
+        // New = a NEWER time than the newest entry when following stopped
+        // (spec A S7) — no longer a count difference.
+        mkStream({
+          events: [
+            MSG,
+            mkMsg({ uuid: "n1", text: "Neu 1", ts: "2026-08-15T10:01:00Z" }),
+            mkMsg({ uuid: "n2", text: "Neu 2", ts: "2026-08-15T10:02:00Z" }),
+          ],
+        })
       );
       rerender(
         <ChatView agent={mkAgent()} hasTranscript detailLevel="normal" onDetailLevelChange={noop} centerView="chat" onCenterViewChange={noop} />
@@ -1423,43 +1436,9 @@ describe("ChatView", () => {
     );
   });
 
-  it("zeigt die laufende Aufgabe als eigenen Block, nur wenn ein Task gebunden ist", async () => {
-    const { useTaskActivity } = await import("@/hooks/useTaskActivity");
-    vi.mocked(useTaskActivity).mockReturnValue({
-      applies: true, taskId: "task-42", hasSession: true, deliveredAt: null, queued: 0,
-      events: [], preview: {
-        kind: "preview", uuid: null, ts: "2026-10-20T09:00:00Z", source: "acp",
-        text: "…", block: "thinking", chars: 23_600,
-      },
-    });
-    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
-    const { unmount } = renderChatView({ workingOn: { taskId: "task-42", title: "Login reparieren" } });
-    const block = screen.getByTestId("chat-task-activity");
-    expect(block).toHaveTextContent("≈5,900 tokens");
-    // Never part of the conversation: after the chat's own timeline.
-    expect(screen.getByText("Hallo!").compareDocumentPosition(block)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING
-    );
-    unmount();
-    renderChatView();
-    expect(screen.queryByTestId("chat-task-activity")).not.toBeInTheDocument();
-  });
-
-  // Review UI-9: the chat's detail setting reaches the task block.
-  it("Kompakt gilt auch fuer den Aufgaben-Block: keine Werkzeug-Schritte", async () => {
-    const { useTaskActivity } = await import("@/hooks/useTaskActivity");
-    vi.mocked(useTaskActivity).mockReturnValue({
-      applies: true, taskId: "task-42", hasSession: true, deliveredAt: null, queued: 0, preview: null,
-      events: [{ kind: "tool", uuid: "t1", ts: "2026-10-20T09:00:00Z", name: "bash", title: "$ npm test",
-                 detail: {}, result: "ok", status: "done", toolUseId: "c1" }] as never,
-    });
-    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
-    const { unmount } = renderChatView({ detailLevel: "compact", workingOn: { taskId: "task-42", title: "Login reparieren" } });
-    expect(screen.getByTestId("chat-task-activity")).not.toHaveTextContent("$ npm test");
-    unmount();
-    renderChatView({ workingOn: { taskId: "task-42", title: "Login reparieren" } });
-    expect(screen.getByTestId("chat-task-activity")).toHaveTextContent("$ npm test");
-  });
+  // The old "From the task" block (TaskActivityBlock) is no longer rendered:
+  // spec A shows the task's steps as sections in the timeline instead —
+  // covered by ChatView.tasks.test.tsx ("never renders the old task block").
 
   it("deckelt die ACP-Vorschau in der Hoehe, damit nichts springt", () => {
     mockUseChatStream.mockReturnValue(

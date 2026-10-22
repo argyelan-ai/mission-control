@@ -987,7 +987,9 @@
       "sent": "Gesendet…",
       "workingWords": "Arbeitet|Denkt nach|Grübelt|Brütet|Werkelt|Tüftelt|Rechnet|Sinniert|Knobelt|Feilt|Sortiert|Kombiniert|Verdichtet|Spürt nach|Wälzt Ideen|Zieht Fäden",
       "taskWorking": "Arbeitet an einer Aufgabe",
-      "waitingForModel": "Wartet auf das Modell"
+      "waitingForModel": "Wartet auf das Modell",
+      "taskInProgress": "{word} · {title}",
+      "waitingForModelTask": "Wartet auf das Modell · {title}"
     },
     "livePreview": "Live-Vorschau",
     "noMessagesYet": "Noch keine Nachrichten",
@@ -1098,7 +1100,8 @@
         "previous": "Vorheriges Bild",
         "next": "Nächstes Bild",
         "unavailable": "Bild nicht verfügbar"
-      }
+      },
+      "failed": "fehlgeschlagen"
     },
     "diff": {
       "scopeLabel": "Änderungen",
@@ -1196,7 +1199,43 @@
       "statusDone": "erledigt",
       "statusBlocked": "blockiert",
       "statusSkipped": "übersprungen"
-    }
+    },
+    "taskSteps": {
+      "region": "Aufgabe {title}",
+      "action": {
+        "view": "Ansehen",
+        "review": "Prüfen",
+        "answer": "Antworten"
+      },
+      "continues": "{title} · läuft weiter",
+      "attempt": "Versuch {n} · {time}",
+      "delivered": "Aufgabe zugestellt · {time}",
+      "firstStepPending": "Wartet auf den ersten Schritt",
+      "noNewSteps": "Keine neuen Schritte seit {span}",
+      "runningFor": "läuft · seit {span}",
+      "noResult": "ohne Ergebnis",
+      "moreTools": "+{count}",
+      "repeated": "{count}×",
+      "files": "{count, plural, one {# Datei} other {# Dateien}}",
+      "showSteps": "Schritte zeigen",
+      "hideSteps": "Schritte ausblenden",
+      "loading": "Schritte werden geladen…",
+      "loadFailed": "Schritte konnten nicht geladen werden.",
+      "stepLoadFailed": "Dieser Schritt konnte nicht geladen werden.",
+      "retry": "Nochmal laden",
+      "notLoaded": "{count, plural, one {# früherer Schritt nicht geladen} other {# frühere Schritte nicht geladen}}",
+      "detached": "Aufgabe hier nicht mehr aktiv",
+      "comment": "Kommentar",
+      "permission": "Freigabe: {what} · {decision}",
+      "permissionRequest": "Freigabe: {what}",
+      "permissionDecision": {
+        "allow_always": "immer erlaubt",
+        "allow_once": "einmal erlaubt",
+        "reject_once": "abgelehnt",
+        "reject_always": "immer abgelehnt"
+      }
+    },
+    "messagePlaceholderTaskRunning": "An den Chat, nicht an die Aufgabe…"
   },
   "shell": {
     "searchPlaceholder": "Suchen oder Befehl...",

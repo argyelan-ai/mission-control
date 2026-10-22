@@ -390,6 +390,36 @@ def test_only_omp_runs_tasks_in_sessions_of_their_own(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("harness", "runtime", "omp_driver", "expected"),
+    [
+        ("omp", "cli-bridge", "acp", True),
+        ("omp", "cli-bridge", "native", False),
+        ("hermes", "host", "acp", False),
+        ("claude", "cli-bridge", "acp", False),
+    ],
+)
+async def test_agent_row_says_whether_its_tasks_run_in_sessions_of_their_own(
+    auth_client: AsyncClient, make_agent, monkeypatch, harness, runtime, omp_driver, expected
+):
+    """The chat's task steps gate on THIS flag, never on a harness name
+    (PRINCIPLES §3.4, review MUST-1 on #937). List and detail both carry it,
+    and it follows the adapter's rule — the omp driver switch included."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "omp_driver_default", omp_driver, raising=False)
+    monkeypatch.setattr(settings, "hermes_driver", "acp", raising=False)
+    agent = await make_agent(name=f"Flag {harness} {omp_driver}", harness=harness, agent_runtime=runtime)
+
+    detail = (await auth_client.get(f"/api/v1/agents/{agent.id}")).json()
+    assert detail["tasks_in_own_session"] is expected
+    listed = (await auth_client.get("/api/v1/agents")).json()
+    rows = listed if isinstance(listed, list) else listed.get("items", listed.get("agents", []))
+    row = next(a for a in rows if a["id"] == str(agent.id))
+    assert row["tasks_in_own_session"] is expected
+
+
+@pytest.mark.asyncio
 async def test_native_omp_driver_does_not_apply(
     auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch
 ):

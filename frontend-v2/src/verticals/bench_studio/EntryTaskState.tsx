@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useNow } from "@/hooks/useNow";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 import { CircleAlert, ExternalLink, Loader2 } from "lucide-react";
@@ -18,14 +18,6 @@ function taskHref(taskId: string) {
   return `/tasks?task=${encodeURIComponent(taskId)}`;
 }
 
-function useNow(intervalMs = 30_000) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
-}
 
 /**
  * Placeholder body of a running agent entry card: says WHY the entry waits
