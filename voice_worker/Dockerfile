@@ -2,10 +2,19 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# ca-certificates floor = the eMudhra fix (Oct 2026: the intermediates' keys
+# leaked). The apt line below upgrades the package and the build FAILS below
+# this version — a stale base image can no longer ship the old bundle, and a
+# cached layer only exists if it passed. backend/tests/test_image_security_floor.py
+# guards the value per distro.
+ARG CA_CERTIFICATES_MIN=20250419+deb13u1
 # System deps fuer livekit-agents (audio processing)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && v="$(dpkg-query -W -f='${Version}' ca-certificates)" \
+    && echo "ca-certificates $v (floor ${CA_CERTIFICATES_MIN})" \
+    && dpkg --compare-versions "$v" ge "${CA_CERTIFICATES_MIN}"
 
 # Build context is the repo root (ADR-061). Install deps first for layer caching.
 COPY voice_worker/requirements.txt .

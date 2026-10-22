@@ -17,6 +17,12 @@
 # backend/tests/test_image_security_floor.py.
 FROM node:22.23.4-bookworm-slim
 
+# ca-certificates floor = the eMudhra fix (Oct 2026: the intermediates' keys
+# leaked). The apt line below upgrades the package and the build FAILS below
+# this version — a stale base image can no longer ship the old bundle, and a
+# cached layer only exists if it passed. backend/tests/test_image_security_floor.py
+# guards the value per distro.
+ARG CA_CERTIFICATES_MIN=20250419~deb12u2
 # Basis-Tools (gleiche Set wie mc-agent-base, aber Debian statt Alpine)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
@@ -37,7 +43,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # unlesbar. Aufgefallen 19.08.2026, als der erste Datei-Anhang im
     # Sessions-Chat ein PDF war: Bilder las der Agent sofort, PDFs gar nicht.
     poppler-utils \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && v="$(dpkg-query -W -f='${Version}' ca-certificates)" \
+    && echo "ca-certificates $v (floor ${CA_CERTIFICATES_MIN})" \
+    && dpkg --compare-versions "$v" ge "${CA_CERTIFICATES_MIN}"
 
 # Python-Libraries fuer Office-Formate (Word/Excel/PowerPoint). Pure Python,
 # ARM-neutral. Anthropic document-skills (pdf/docx/xlsx/pptx) sind bereits

@@ -19,6 +19,12 @@
 
 FROM debian:bookworm-slim
 
+# ca-certificates floor = the eMudhra fix (Oct 2026: the intermediates' keys
+# leaked). The apt line below upgrades the package and the build FAILS below
+# this version — a stale base image can no longer ship the old bundle, and a
+# cached layer only exists if it passed. backend/tests/test_image_security_floor.py
+# guards the value per distro.
+ARG CA_CERTIFICATES_MIN=20250419~deb12u2
 # Basis-Tools (gleiche Menge wie mc-claude-agent, minus Node/Office-Stack)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
@@ -37,7 +43,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # unlesbar. Aufgefallen 19.08.2026, als der erste Datei-Anhang im
     # Sessions-Chat ein PDF war: Bilder las der Agent sofort, PDFs gar nicht.
     poppler-utils \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && v="$(dpkg-query -W -f='${Version}' ca-certificates)" \
+    && echo "ca-certificates $v (floor ${CA_CERTIFICATES_MIN})" \
+    && dpkg --compare-versions "$v" ge "${CA_CERTIFICATES_MIN}"
 
 # GitHub CLI (für Agent Git-Workflow — gh auth via GH_TOKEN env)
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \

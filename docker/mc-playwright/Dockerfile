@@ -7,6 +7,12 @@ FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
 
 WORKDIR /app
 
+# ca-certificates floor = the eMudhra fix (Oct 2026: the intermediates' keys
+# leaked). The apt line below upgrades the package and the build FAILS below
+# this version — a stale base image can no longer ship the old bundle, and a
+# cached layer only exists if it passed. backend/tests/test_image_security_floor.py
+# guards the value per distro.
+ARG CA_CERTIFICATES_MIN=20260816ubuntu0.22.04.1
 # ffmpeg fuer /record (webm->H.264 mp4) + /compose (Grid-Video);
 # fonts-dejavu-core garantiert /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
 # fuer drawtext-Labels (im Playwright-Image i.d.R. schon vorhanden — hier explizit).
@@ -16,7 +22,10 @@ WORKDIR /app
 # install` of an installed package upgrades it to the current candidate.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && v="$(dpkg-query -W -f='${Version}' ca-certificates)" \
+    && echo "ca-certificates $v (floor ${CA_CERTIFICATES_MIN})" \
+    && dpkg --compare-versions "$v" ge "${CA_CERTIFICATES_MIN}"
 
 RUN pip install --no-cache-dir \
     fastapi==0.115.6 \

@@ -78,19 +78,115 @@ def test_backend_nodesource_line_and_build_guard():
     assert '"${NODE_MIN}"' in text and "process.exit(ok?0:1)" in text
 
 
-def test_backend_and_agent_images_share_one_node_major():
-    """The backend's `npm install` fills ~/.mc/mcp-servers; the agent
-    containers run those servers with their own node. Native addons only load
-    under the major they were built for."""
-    backend = re.search(
-        r"^ARG NODE_MAJOR=(\d+)",
-        (REPO_ROOT / "backend/Dockerfile").read_text(encoding="utf-8"),
-        re.MULTILINE,
-    ).group(1)
+def _agent_node_majors() -> dict[str, int]:
+    """Node major of every agent image that can run a /mc-servers MCP server.
+    mc-kimi-agent has no system node (its CLI binary embeds its own runtime),
+    so node MCP servers cannot run there at all — nothing to compare."""
+    majors: dict[str, int] = {}
     for rel in ("docker/mc-agent-base/Dockerfile", "docker/mc-claude-agent/Dockerfile"):
         text = (REPO_ROOT / rel).read_text(encoding="utf-8")
-        agent = re.search(r"^FROM\s+node:(\d+)\.", text, re.MULTILINE).group(1)
-        assert agent == backend, f"{rel}: node {agent}.x vs backend node {backend}.x"
+        majors[rel] = int(re.search(r"^FROM\s+node:(\d+)\.", text, re.MULTILINE).group(1))
+    omp = (REPO_ROOT / "docker/omp-bridge/Dockerfile").read_text(encoding="utf-8")
+    majors["docker/omp-bridge/Dockerfile"] = int(
+        re.search(r"^ARG NODE_VERSION=(\d+)\.", omp, re.MULTILINE).group(1)
+    )
+    return majors
+
+
+def test_backend_node_is_not_newer_than_any_agent_node():
+    """The backend's `npm install` fills ~/.mc/mcp-servers (mounted into every
+    agent at /mc-servers) and npm resolves packages for the node it runs
+    under; the agents then execute them with THEIR node. An installer newer
+    than a runtime could pick a release that needs the newer node and then
+    break on the older agent. Older-or-equal is safe. (Native addons do not
+    carry over between these images anyway — musl vs glibc — so this is not
+    a "same major" rule.)"""
+    backend = int(
+        re.search(
+            r"^ARG NODE_MAJOR=(\d+)",
+            (REPO_ROOT / "backend/Dockerfile").read_text(encoding="utf-8"),
+            re.MULTILINE,
+        ).group(1)
+    )
+    majors = _agent_node_majors()
+    assert set(majors) == {
+        "docker/mc-agent-base/Dockerfile",
+        "docker/mc-claude-agent/Dockerfile",
+        "docker/omp-bridge/Dockerfile",
+    }
+    for rel, agent in majors.items():
+        assert backend <= agent, f"backend node {backend}.x is newer than {rel} node {agent}.x"
+
+
+def test_ci_busybox_lanes_run_on_the_fleet_base_image():
+    """The CI BusyBox/musl lanes stand in for the openclaude agent runtime.
+    They run on the exact FROM image of mc-agent-base, so a base bump cannot
+    leave them on an older Alpine/BusyBox (review of PR #938: they had stayed
+    on alpine:3.20 while the fleet moved to Alpine 3.24)."""
+    base = re.search(
+        r"^FROM\s+(\S+)",
+        (REPO_ROOT / "docker/mc-agent-base/Dockerfile").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    ).group(1)
+    ci = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    for step in (
+        "Disk preflight lib tests (BusyBox/musl)",
+        "Bash lib smoke test on the BusyBox/musl runtime",
+    ):
+        i = ci.index(f"- name: {step}")
+        body = ci[i : ci.index("- name:", i + 1)]
+        images = re.findall(r"^\s+(\S+:\S+) sh -c '", body, re.MULTILINE)
+        assert images == [base], f"CI step {step!r} runs on {images}, fleet base is {base}"
+
+
+# ca-certificates package with the eMudhra fix, per distro. Debian version
+# order matters: on trixie the UNFIXED package is plain `20250419`, which
+# sorts ABOVE bookworm's fixed `20250419~deb12u2` — one floor for all would
+# let the stale trixie bundle through.
+CA_CERTIFICATES_FLOOR = {
+    "bookworm": "20250419~deb12u2",
+    "trixie": "20250419+deb13u1",
+    "jammy": "20260816ubuntu0.22.04.1",
+}
+# Every apt-based image MC builds, and the distro its FROM resolves to.
+# (python:3.12-slim floats with Debian stable = trixie today.)
+APT_IMAGES = {
+    "backend/Dockerfile": "trixie",
+    "voice_worker/Dockerfile": "trixie",
+    "docker/cdp-browser/Dockerfile": "trixie",
+    "docker/mc-claude-agent/Dockerfile": "bookworm",
+    "docker/mc-kimi-agent/Dockerfile": "bookworm",
+    "docker/omp-bridge/Dockerfile": "bookworm",
+    "docker/mc-playwright/Dockerfile": "jammy",
+}
+_DISTRO_OF_FROM = (
+    (r"python:3\.\d+-slim\b", "trixie"),
+    (r"-trixie\b|debian:trixie", "trixie"),
+    (r"-bookworm\b|debian:bookworm", "bookworm"),
+    (r"-jammy\b", "jammy"),
+)
+
+
+@pytest.mark.parametrize("rel,distro", sorted(APT_IMAGES.items()))
+def test_apt_image_enforces_the_ca_certificates_floor_at_build(rel, distro):
+    """Review of PR #938: an unchanged `apt-get install ca-certificates` line
+    is served from the layer cache, so the image kept the stale bundle until
+    someone remembered `--pull` / `--no-cache`. Each apt image now declares the
+    fixed version and fails its build below it."""
+    text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+    first_from = re.search(r"^FROM\s+(\S+)", text, re.MULTILINE).group(1)
+    detected = next((d for pat, d in _DISTRO_OF_FROM if re.search(pat, first_from)), None)
+    assert detected == distro, f"{rel}: FROM {first_from} is {detected}, table says {distro}"
+    m = re.search(r"^ARG CA_CERTIFICATES_MIN=(\S+)$", text, re.MULTILINE)
+    assert m, f"{rel}: no ARG CA_CERTIFICATES_MIN"
+    assert m.group(1) == CA_CERTIFICATES_FLOOR[distro], (
+        f"{rel}: CA_CERTIFICATES_MIN={m.group(1)}, {distro} floor is "
+        f"{CA_CERTIFICATES_FLOOR[distro]}"
+    )
+    # Enforced in the build, after the package is installed — not just declared.
+    assert 'dpkg --compare-versions "$v" ge "${CA_CERTIFICATES_MIN}"' in text
+    assert text.index("ARG CA_CERTIFICATES_MIN") < text.index("dpkg --compare-versions")
+    assert text.index("ca-certificates") < text.index("dpkg --compare-versions")
 
 
 def test_backend_lock_pins_certifi_at_or_above_the_floor():

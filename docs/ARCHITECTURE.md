@@ -1646,8 +1646,9 @@ Alle ADRs in `docs/decisions/`:
 - **2026-10-22** — **Image security floor (Node 2026-10-21 release + eMudhra CA):** the backend
   image moves from NodeSource Node 20 (end of life) to the 22 line with a build-time floor
   (`NODE_MIN`); `mc-agent-base` / `mc-claude-agent` move from `node:22.11.0` to `node:22.23.4`,
-  `playwright-mcp` to the `22.23.4` digest. Backend and agent images share one Node major on
-  purpose: MCP servers the backend installs with npm run under the agents' node. certifi floor
+  `playwright-mcp` to the `22.23.4` digest. MCP servers the backend installs with npm run under
+  the agents' node, so the backend's Node major stays at or below every agent image's (omp: 24).
+  `mc-agent-base` is now Alpine 3.24 / Python 3.14; the CI BusyBox lanes run on that image. certifi floor
   2026.10.19 in the backend (pyproject + lock) and voice worker; `mc-playwright` upgrades the
   stale jammy `ca-certificates`. `backend/tests/test_image_security_floor.py` keeps the floor.
 

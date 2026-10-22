@@ -416,7 +416,9 @@ jobs:
       # running under BusyBox ash — a bashism that only shows up on alpine is
       # exactly the class the context-detect lane below exists for. The host
       # lane runs under /bin/sh (dash on ubuntu-latest), which catches the
-      # POSIX violations; the alpine lane pins the actual musl runtime.
+      # POSIX violations; the alpine lane runs on the fleet's own base image
+      # (the FROM of docker/mc-agent-base — test_image_security_floor.py keeps
+      # the two in step).
       - name: Disk preflight lib tests (host /bin/sh)
         run: sh docker/shared/test_disk_preflight.sh
 
@@ -425,7 +427,7 @@ jobs:
           docker run --rm \
             -v "$PWD/docker/shared/disk-preflight.sh:/lib.sh:ro" \
             -v "$PWD/docker/shared/test_disk_preflight.sh:/t.sh:ro" \
-            alpine:3.20 sh -c '
+            node:22.23.4-alpine sh -c '
               apk add --no-cache bash >/dev/null &&
               DISK_PREFLIGHT_BIN=/lib.sh sh /t.sh
             '
@@ -505,14 +507,16 @@ jobs:
       # The fixtures in test_context_detect.sh catch most regressions on any
       # grep; this step exists for the NARROW class of divergences that only
       # show up on BusyBox/musl and that the host lane structurally cannot see
-      # (review #487: e.g. `[:blank:]` semantics; measured against the fleet
-      # binary BusyBox 1.36.1 / musl 1.2.5 extracted from node:22.11.0-alpine).
+      # (review #487: e.g. `[:blank:]` semantics). It runs on the fleet's own
+      # base image — the FROM of docker/mc-agent-base, today node:22.23.4-alpine
+      # = Alpine 3.24.3 / BusyBox 1.37.0 / musl 1.2.5 — so the stand-in can no
+      # longer drift from the fleet (test_image_security_floor.py checks it).
       - name: Bash lib smoke test on the BusyBox/musl runtime
         run: |
           docker run --rm \
             -v "$PWD/docker/mc-agent-base/lib/context-detect.sh:/lib.sh:ro" \
             -v "$PWD/backend/tests/test_context_detect.sh:/t.sh:ro" \
-            alpine:3.20 sh -c 'apk add --no-cache bash >/dev/null && bash /t.sh /lib.sh'
+            node:22.23.4-alpine sh -c 'apk add --no-cache bash >/dev/null && bash /t.sh /lib.sh'
 
       # Nachbehandlung wie in jedem lokalen Bau-Weg: Cache begrenzen statt
       # unbegrenzt wachsen lassen. Laeuft nur, wenn alle Bild-Builds oben
