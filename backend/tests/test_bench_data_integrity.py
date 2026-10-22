@@ -338,9 +338,9 @@ async def test_effort_levels_check_refused_while_an_agent_works_on_the_spark(
                  endpoint="http://192.0.2.10:8000/v1", enabled=True)
     session.add(rt)
     await session.commit()
-    await make_agent(name="Sparky", runtime_id=rt.id, current_task_id=uuid.uuid4())
+    await make_agent(name="Worker", runtime_id=rt.id, current_task_id=uuid.uuid4())
 
     resp = await auth_client.post("/api/v1/bench/effort-levels/check", json={"model": "deepseek-x"})
     assert resp.status_code == 409
-    assert "Sparky" in resp.json()["detail"]
+    assert "Worker" in resp.json()["detail"]
     probe.assert_not_awaited()

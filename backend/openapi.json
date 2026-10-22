@@ -1879,6 +1879,15 @@
         ]
       }
     },
+    "/api/v1/bench/effort-levels/check": {
+      "post": {
+        "operationId": "check_effort_levels_api_v1_bench_effort_levels_check_post",
+        "summary": "Check Effort Levels",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
     "/api/v1/bench/entries/{entry_id}": {
       "patch": {
         "operationId": "update_entry_api_v1_bench_entries__entry_id__patch",
