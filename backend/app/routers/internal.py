@@ -306,9 +306,9 @@ async def build_runtime_env(
     if runtime.model_identifier:
         tokens["OPENAI_MODEL"] = runtime.model_identifier
     tokens.update(_context_window_env(runtime))
-    if harness == "hermes":
-        # Hermes only: the key means nothing to other harnesses, and a new
-        # key in a host agent.env restarts its bridge.
+    from app.services.harness_compat import reads_thinking_switch
+
+    if reads_thinking_switch(harness):
         tokens.update(thinking_switch_env(runtime))
     return tokens
 

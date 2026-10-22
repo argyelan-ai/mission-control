@@ -233,6 +233,17 @@ def derive_harness(runtime: Runtime | None) -> str | None:
     return None
 
 
+# Harnesses that read MC's chat-template thinking switch from agent.env
+# (``MC_THINKING_TEMPLATE_KWARG`` -> scripts/hermes-config-patch.py ->
+# ``model.thinking_template_kwarg``). Only these get the key: in any other
+# host agent's agent.env a new key would only restart its bridge.
+HARNESSES_READING_THINKING_SWITCH: frozenset[str] = frozenset({"hermes"})
+
+
+def reads_thinking_switch(harness: str | None) -> bool:
+    return (harness or "") in HARNESSES_READING_THINKING_SWITCH
+
+
 # Harnesses that CANNOT boot without a runtime binding.
 #
 # Background (incident 2026-09-05): the omp container renders its provider
