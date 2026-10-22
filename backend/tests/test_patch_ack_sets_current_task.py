@@ -281,15 +281,20 @@ async def test_worker_leaving_in_progress_clears_pointer_without_other_task(
 async def test_worker_leaving_in_progress_leaves_foreign_pointer_alone(
     client: AsyncClient, monkeypatch,
 ):
-    """A task that does not hold the pointer must not move it on leaving."""
+    """A task that does not hold the pointer must not move it on leaving.
+
+    The pointer here names a `waiting` task (a blocking `mc ask` holds its
+    session via current_task_id, see /me/poll and the heartbeat) — another
+    task finishing must not drop that hold, even though no other task is
+    in_progress."""
     from app.config import settings
     monkeypatch.setattr(settings, "use_subagent_dispatch", True)
 
     agent, token, board_id, task_a = await _make_agent_with_task(
         is_board_lead=False, task_status="in_progress",
     )
-    task_b = await _add_task(board_id, agent.id, status="in_progress", title="Running B")
-    await _set_pointer(agent.id, task_b.id)
+    task_w = await _add_task(board_id, agent.id, status="waiting", title="Waiting W")
+    await _set_pointer(agent.id, task_w.id)
     await _add_reflection(task_a.id, agent.id)
 
     resp = await client.patch(
@@ -300,7 +305,7 @@ async def test_worker_leaving_in_progress_leaves_foreign_pointer_alone(
     assert resp.status_code == 200, resp.text
 
     pointer, _ = await _pointer(agent.id)
-    assert pointer == task_b.id
+    assert pointer == task_w.id, f"waiting hold dropped: {pointer}"
 
 
 @pytest.mark.asyncio
