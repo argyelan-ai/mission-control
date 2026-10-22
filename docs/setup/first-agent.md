@@ -33,7 +33,7 @@ The version each image builds against comes from one file,
 ```json
 {
   "openclaude": { "version": "0.7.0" },
-  "claude":     { "version": "2.1.201" },
+  "claude":     { "version": "2.1.308" },
   "omp":        { "version": "16.2.13", "sha256": "7cc62ef..." }
 }
 ```

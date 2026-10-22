@@ -12,6 +12,7 @@ Raise the floor here when the next security release lands; never lower it.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -231,8 +232,29 @@ def test_kimi_cli_verifies_tls_against_the_system_bundle():
     ca-certificates floor keeps clean. Remove together with this test once a
     kimi release embeds Node >= 24.22.1."""
     text = (REPO_ROOT / "docker/mc-kimi-agent/Dockerfile").read_text(encoding="utf-8")
-    m = re.search(r"^ENV NODE_OPTIONS=(.+)$", text, re.MULTILINE)
-    assert m, "docker/mc-kimi-agent/Dockerfile: no ENV NODE_OPTIONS"
-    assert "--use-openssl-ca" in m.group(1).split()
+    settings = re.findall(r"^ENV NODE_OPTIONS=(.+)$", text, re.MULTILINE)
+    assert settings, "docker/mc-kimi-agent/Dockerfile: no ENV NODE_OPTIONS"
+    # The last ENV wins at runtime — a later line must not drop the flag.
+    assert "--use-openssl-ca" in settings[-1].split()
     # The system bundle it switches to must be the floored one.
     assert text.index("ARG CA_CERTIFICATES_MIN") < text.index("ENV NODE_OPTIONS")
+
+
+# kimi versions whose embedded Node was checked against the eMudhra test
+# chains (all embed v24.15.0 → still need the NODE_OPTIONS workaround above).
+KIMI_EMBEDDED_NODE_CHECKED = {"0.29.1"}
+
+
+def test_kimi_version_bump_rechecks_the_embedded_node():
+    """Reminder hook: a kimi bump must re-check the embedded Node. If the new
+    binary embeds Node >= 24.22.1, drop `ENV NODE_OPTIONS` and the test above;
+    otherwise add the version to KIMI_EMBEDDED_NODE_CHECKED."""
+    manifest = json.loads((REPO_ROOT / "docker/cli-versions.json").read_text(encoding="utf-8"))
+    dockerfile = (REPO_ROOT / "docker/mc-kimi-agent/Dockerfile").read_text(encoding="utf-8")
+    m = re.search(r"^ARG KIMI_VERSION=(\S+)$", dockerfile, re.MULTILINE)
+    assert m, "docker/mc-kimi-agent/Dockerfile: no ARG KIMI_VERSION default"
+    for where, version in (("cli-versions.json", manifest["kimi"]["version"]), ("Dockerfile", m.group(1))):
+        assert version in KIMI_EMBEDDED_NODE_CHECKED, (
+            f"kimi {version} ({where}) not checked: does its embedded Node still "
+            "accept the eMudhra chain? See the docstring."
+        )
