@@ -76,7 +76,9 @@ Contract now (both writers — the chat daemon and the task path — through
 - **One permanent assistant text line per text segment.** A segment ends at a
   tool call, the start of a thought, a plan, a permission/elicitation card, a
   chat notice/error line, or the turn end (normal or failed). A
-  whitespace-only segment writes nothing.
+  whitespace-only segment writes nothing. An empty or non-text chunk (a
+  thought chunk without words, an empty answer chunk) is no boundary: it
+  ends neither the open segment nor the open thought.
 - **Only the turn's last assistant line carries `stopReason` and `usage`.**
   Segment lines carry `stopReason: null` and no `usage`. When no text is left
   for the last line, it has `content: []` (the backend parser yields only the

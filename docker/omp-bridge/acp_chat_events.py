@@ -332,6 +332,21 @@ _THOUGHT_ENDING_UPDATES = frozenset({
 #: step) and not the bookkeeping updates (usage, config, mode).
 _TEXT_ENDING_UPDATES = frozenset({"tool_call", "agent_thought_chunk", "plan"})
 
+#: Chunk updates that are a boundary only when they carry words: an empty
+#: or non-text chunk writes nothing, so it must not end a segment or a
+#: thought either (review #936 S1 — empty reasoning deltas would otherwise
+#: break the chat into mid-word bubbles).
+_CHUNK_UPDATES = frozenset({"agent_message_chunk", "agent_thought_chunk"})
+
+
+def _carries_text(update: dict[str, Any]) -> bool:
+    """True when a chunk update holds a non-empty text block."""
+    content = update.get("content")
+    if not isinstance(content, dict) or content.get("type") != "text":
+        return False
+    text = content.get("text")
+    return isinstance(text, str) and bool(text)
+
 
 def is_volatile(entry: dict[str, Any]) -> bool:
     """True for lines that belong on the PREVIEW channel, never the
@@ -648,6 +663,10 @@ class ACPEventMapper:
 
     def _map_one(self, update: dict[str, Any], stream: bool) -> list[dict[str, Any]]:
         su = update.get("sessionUpdate")
+        if su in _CHUNK_UPDATES and not _carries_text(update):
+            # An empty (or non-text) chunk writes nothing and ends nothing:
+            # neither the open text segment nor the open thought.
+            return self._map_one_inner(update, su, stream)
         # The agent's words so far end where a tool call, a thought or a
         # plan begins (D7): they land as their own line first.
         pre = self._flush_text() if stream and su in _TEXT_ENDING_UPDATES else []

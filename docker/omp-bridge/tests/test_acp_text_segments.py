@@ -270,6 +270,38 @@ def test_11_flush_on_abort_keeps_the_open_text_and_thought(updates, expected):
     assert mapper.flush_on_abort() == [], "nothing twice"
 
 
+# ── 13. an empty chunk is no boundary (review #936 S1) ─────────────────────
+
+
+def test_13_empty_or_non_text_thought_chunk_does_not_split_the_text():
+    empty = {"update": {"sessionUpdate": "agent_thought_chunk",
+                        "content": {"type": "text", "text": ""}, "messageId": "t-1"}}
+    invalid = {"update": {"sessionUpdate": "agent_thought_chunk",
+                          "content": {"type": "image", "data": "x"}, "messageId": "t-2"}}
+    missing = {"update": {"sessionUpdate": "agent_thought_chunk", "messageId": "t-3"}}
+    _, lines = run_mapper([text("Hello "), empty, text("world"), invalid, missing, text("!")],
+                          final_text="Hello world!")
+    assert shape(lines) == ["text:Hello world!"], shape(lines)
+    assert assistant_lines(lines)[-1]["message"]["stopReason"] == "stop"
+
+
+def test_13b_empty_text_chunk_does_not_split_the_thought():
+    empty = {"update": {"sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": ""}, "messageId": "m-1"}}
+    _, lines = run_mapper([thought("first half "), empty, thought("second half"),
+                           text("Answer.")], final_text="Answer.")
+    assert shape(lines) == ["thinking", "text:Answer."], shape(lines)
+    think = assistant_lines(lines)[0]["message"]["content"][0]["thinking"]
+    assert think == "first half second half"
+
+
+def test_13c_a_real_thought_chunk_still_ends_the_text():
+    """Guard against over-fixing: a thought WITH words is a boundary."""
+    _, lines = run_mapper([text("Hello "), thought("hmm"), text("world")],
+                          final_text="world")
+    assert shape(lines) == ["text:Hello ", "thinking", "text:world"], shape(lines)
+
+
 # ── 12. reasoning parsers that alternate every few tokens (N14) ─────────────
 
 
@@ -332,8 +364,19 @@ def _run_task(tmp_path: Path, updates: list[dict], **kw):
     import bridge
     from test_acp_adapter import InProcessFake
 
+    no_result = kw.pop("no_result", False)
     order: list[tuple[str, dict]] = []
     fake = InProcessFake(_fixture(tmp_path, updates, **kw), [], fake_delay=0.0)
+    if no_result:
+        # A client whose prompt ends WITHOUT a result and without raising:
+        # no error card flushes the open text, only the abort net can.
+        real_prompt = fake.client.prompt
+
+        def prompt_without_result(*a, **k):
+            real_prompt(*a, **k)
+            return None
+
+        fake.client.prompt = prompt_without_result
     try:
         outcome = bridge.run_acp_once(
             "segment test", cwd=str(HERE), model=None, max_time=10,
@@ -468,6 +511,31 @@ def test_9c_chat_daemon_writes_segments_and_one_stop_line(tmp_path):
     assert len(stops) == 1 and stops[0] is assistant_lines(lines)[-1]
 
 
+def test_11c_chat_daemon_abort_net_keeps_the_open_text_when_no_card_comes(tmp_path):
+    """Review #936 S2: the prompt dies with an EMPTY message — no chat
+    error card is written, so only ``flush_on_abort()`` keeps the open
+    words. Without the net they were lost silently."""
+    from test_acp_chat import make_session, read_lines
+    from test_acp_chat_model_unreachable import OmpClient
+
+    updates = [text("Before."), tool_call(), tool_done(), text("Open words", mid="m-2")]
+
+    class DyingClient(OmpClient):
+        def prompt(self, session_id, text_, timeout=600.0):
+            for params in updates:
+                self.fire({"sessionId": session_id, **params})
+            raise RuntimeError()
+
+    client = DyingClient(tmp_path / "sessions", turns=[{"stopReason": "end_turn"}])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    sess.prompt("go", origin="operator")
+    assert sess.wait_idle(timeout=5)
+    lines = read_lines(sess.transcript_path)
+    sess.close()
+    assert shape(lines) == ["text:Before.", "toolCall", "text:Open words"], shape(lines)
+
+
 # ── 8. S1: the verdict cuts only the END of the mapper's own rest ──────────
 
 
@@ -507,6 +575,16 @@ def test_8c_mapper_cut_forms_empty_tuple_hides_the_whole_rest():
     _, lines = run_mapper([text("Seen."), tool_call(), text("ECONNREFUSED", mid="m-2")],
                           final_text="", cut_forms=())
     assert shape(lines) == ["text:Seen.", "toolCall", "empty"]
+
+
+def test_11d_task_path_abort_net_keeps_the_open_text_without_a_result(tmp_path):
+    """Review #936 N1: the bridge's ``flush_on_abort()`` net, reached when
+    the prompt yields no result and no error card was written."""
+    _, order = _run_task(tmp_path, [thought("pondering"), text("Before."), tool_call(),
+                                    tool_done(), text("Open words", mid="m-2")],
+                         no_result=True)
+    assert shape(_transcript(order)) == ["thinking", "text:Before.", "toolCall",
+                                         "text:Open words"], shape(_transcript(order))
 
 
 # ── 11b. the task path's error exit keeps the open text before the card ────
