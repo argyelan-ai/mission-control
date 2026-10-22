@@ -213,10 +213,33 @@ describe("mergeTimeline — continuation head follows the task's state", () => {
     expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:continues"]);
   });
 
-  it.each(["blocked", "waiting", "user_test"])("%s (waits for the operator) below the message: title + its state, not 'continues'", (status) => {
-    const s = stub({ status, live: true });
-    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A")], { stub: s })]);
-    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:full"]);
+  it.each(["blocked", "waiting", "user_test"])(
+    "%s (waits for the operator) below the message: title only — the state line stays in the first band (K3)",
+    (status) => {
+      const s = stub({ status, live: true });
+      const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A")], { stub: s })]);
+      expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title"]);
+    },
+  );
+
+  it("a task waiting for the operator stays title-only even while a live row shows", () => {
+    const live = { block: "text" as const, ts: at(6), text: "Which one?", stale: false };
+    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A")], { stub: stub({ status: "waiting" }), liveRow: live })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title"]);
+  });
+
+  it("a delivered task still in the inbox whose agent already writes: 'continues' (NICE-1)", () => {
+    const s = stub({ status: "inbox", live: true });
+    const live = { block: "thinking" as const, startedAt: at(6), ts: at(7), chars: 120, stale: false };
+    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A")], { stub: s, liveRow: live })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:continues"]);
+  });
+
+  it("an end time equal to the next message's time: the chat goes first, the end line below it", () => {
+    const review = stub({ status: "review", live: false, endedAt: at(5) });
+    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A")], { stub: review })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title"]);
+    expect(units(r.entries[2]).map((u) => u.u)).toEqual(["end"]);
   });
 
   it("a delivered task not started yet: the pending row below the message is not 'continues'", () => {
@@ -245,7 +268,8 @@ describe("mergeTimeline — continuation head follows the task's state", () => {
     const chat = [chatMsg(at(5), "x")];
     const r1 = merge(chat, [task(rows, { stub: stub({ status: "in_progress" }) })]);
     const r2 = merge(chat, [task(rows, { stub: stub({ status: "blocked" }) })], { prev: r1 });
-    expect(segHeads(r2.entries)[2]).toBe("cont:full");
+    expect(segHeads(r1.entries)[2]).toBe("cont:continues");
+    expect(segHeads(r2.entries)[2]).toBe("cont:title");
     expect(r2.entries[2]).not.toBe(r1.entries[2]);
   });
 });

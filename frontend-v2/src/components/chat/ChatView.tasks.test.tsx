@@ -496,7 +496,7 @@ describe("ChatView — task sections (spec A)", () => {
     expect(within(segments[1]).getAllByTestId("chat-task-state")).toHaveLength(1);
   });
 
-  it("a blocked task below the operator's message: its head says it waits, not 'continues'", async () => {
+  it("a blocked task below the operator's message: its head links 'Answer', not 'continues', and says the state once", async () => {
     serve(
       { applies: true, tasks: [stub({ status: "blocked" })], queued: 0, hasMore: false },
       { [TASK_ID]: steps([think(at(1), "Need a decision")], { status: "blocked" }) },
@@ -508,7 +508,10 @@ describe("ChatView — task sections (spec A)", () => {
     const head = within(segments[1]).getByTestId("chat-task-head");
     expect(head).not.toHaveTextContent("continues");
     expect(head).toHaveTextContent("Answer");
-    expect(within(segments[1]).getByTestId("chat-task-state")).toHaveTextContent("Task waits for you");
+    // The state line stands in the first band only (K3) — not again below.
+    expect(within(segments[1]).queryByTestId("chat-task-state")).not.toBeInTheDocument();
+    expect(within(segments[0]).getByTestId("chat-task-state")).toHaveTextContent("Task waits for you");
+    expect(screen.getAllByText(/Task waits for you/)).toHaveLength(1);
   });
 
   it("M4: a stub that vanishes keeps its rows and says the task is no longer active here", async () => {

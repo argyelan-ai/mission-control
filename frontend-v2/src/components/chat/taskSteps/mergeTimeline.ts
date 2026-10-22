@@ -14,10 +14,12 @@
  * a task that ended before the next chat entry ends its last segment there.
  *
  * A later segment's head follows the task's state at that point (`head`):
- * work rows or a running task → "<title> · continues"; a task that waits for
- * the operator → title + state line; anything else that is not running (the
- * end line of a finished task, a vanished or not yet started task) → the
- * title alone — never "continues" for a task that does not run.
+ * work rows or a working task (in progress, or its agent already writing) →
+ * "<title> · continues"; anything else (the end line of a finished task, a
+ * task that waits for the operator, a vanished or not yet started task) →
+ * the title alone, whose link says what to do ("Answer" / "Review") — never
+ * "continues" for a task that does not run, and never the state line again:
+ * the first segment says it (spec A §2.5 continuation header, K3).
  *
  * Shapes are decided by the caller once per task per mount (M4): a card
  * stays a card (rows after its freeze time go below as segments), a section
@@ -50,11 +52,12 @@ export interface MergeTask {
 
 /**
  * How a segment's head reads (spec A §2.5):
- * - `full`: title + state line (a task's first segment; a later one of a task
- *   that waits for the operator, so the band says why nothing runs);
+ * - `full`: title + state line — a task's first segment only (K3: the state
+ *   is said once; a later band repeats it nowhere);
  * - `continues`: "<title> · continues" — the task works on in this segment;
- * - `title`: the title alone — the segment holds no work and the task does
- *   not run (its end line or "no longer active here" says the state).
+ * - `title`: the title alone (its link names the action) — the segment holds
+ *   no work and the task does not run (finished, waits for the operator, not
+ *   started yet, or no longer active here).
  */
 export type SegmentHead = "full" | "continues" | "title";
 
@@ -103,7 +106,10 @@ export function segmentHead(task: MergeTask, units: readonly TaskUnit[], first: 
   if (units.some((u) => !TAIL_KINDS.has(u.u))) return "continues";
   if (task.detached || !task.stub.live) return "title";
   if (task.stub.status === "in_progress") return "continues";
-  return WAITS_FOR_OPERATOR.has(task.stub.status) ? "full" : "title";
+  // Delivered but still `inbox` while its agent already writes (live row):
+  // it works, the status just has not flipped yet (review NICE-1 on #948).
+  if (task.liveRow && !WAITS_FOR_OPERATOR.has(task.stub.status)) return "continues";
+  return "title";
 }
 
 /** An entry's time: a chat item's / card's own, a segment's first timed unit. */
@@ -311,7 +317,10 @@ export function mergeTimeline(input: MergeInput): MergeResult {
     // Only while the task's last segment is the newest entry of all (M2) —
     // or, for the end line alone, while the task ended before the entry that
     // follows its last segment (the end is not newer than that entry; ties:
-    // the chat first, as in the merge).
+    // the chat first, as in the merge). Note: `endedAt` is the database's
+    // clock, chat times come from the agent's transcript — a few seconds of
+    // clock skew can put an end line on the other side of a message written
+    // in the same moment (the step rows share this; review NICE-2 on #948).
     const endedMs = rowMs(task.stub.endedAt);
     const endsBeforeNext =
       at != null &&
