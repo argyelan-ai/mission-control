@@ -71,6 +71,8 @@ logger = logging.getLogger("mc.token_harvester")
 # host (agent_id NULL). They share ~/.claude/projects with the lead agent but
 # are not the lead's usage — the cost views show them as their own bucket.
 OPERATOR_SESSION_HARNESS = "operator-session"
+# Harness tag of the lead's own host Claude Code rows (and other host agents).
+HOST_CLI_HARNESS = "host"
 
 # ── MC workspace indicators (operator MC work vs. private sessions) ────────
 # Paths/branches that point to an MC context → counted (lead or operator)
@@ -940,7 +942,7 @@ async def run_harvest(
                     session=session,
                     path=str(jsonl_path),
                     agent_id=boss_agent_id if is_lead else None,
-                    harness="host" if is_lead else OPERATOR_SESSION_HARNESS,
+                    harness=HOST_CLI_HARNESS if is_lead else OPERATOR_SESSION_HARNESS,
                     privacy_filter=not is_lead,  # operator dirs: skip private sessions
                     all_prices=all_prices,
                     state_map=state_map,
@@ -1447,7 +1449,7 @@ async def reattribute_operator_sessions(
     src = ModelUsageEvent.source_file
     is_lead_row = and_(
         ModelUsageEvent.agent_id.in_(lead_ids),  # type: ignore[union-attr]
-        ModelUsageEvent.harness == "host",
+        ModelUsageEvent.harness == HOST_CLI_HARNESS,
     )
     under_root = src.startswith(root, autoescape=True)
     under_lead_dir = src.startswith(lead_prefix, autoescape=True)
