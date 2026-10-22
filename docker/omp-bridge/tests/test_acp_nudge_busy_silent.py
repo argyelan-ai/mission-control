@@ -15,11 +15,12 @@ text segment (``map_chat_error``), so a streaming reply was cut into pieces.
 Contract tested here, through the REAL daemon (``acp_chat.ChatSession`` +
 its Unix socket + ``dispatch``) and the REAL bridge sender:
 
-* a prompt Mission Control wrote (``origin`` ``"nudge"`` / ``"task"``) that
-  meets a running turn is refused quietly: ``{"ok": false, "error":
-  "busy"}``, no card, no flush — its caller retries on its next poll;
-* the operator's prompt (or one of unknown origin) still gets exactly ONE
-  card — a typed message must never vanish silently;
+* a wake-up (``origin`` ``"nudge"``) that meets a running turn is refused
+  quietly: ``{"ok": false, "error": "busy"}``, no card, no flush — its
+  caller retries on its next poll;
+* the operator's prompt, one of unknown origin, or a ``"task"`` prompt (no
+  caller retries one today) still gets exactly ONE card — a prompt must
+  never vanish silently;
 * the bridge's sender says ``origin: "nudge"`` (a delivered wake-up is an MC
   event in the chat, not an operator bubble);
 * under ACP the bridge's turn gate is closed while the daemon answers (the
@@ -266,14 +267,24 @@ def _finish(sess, gate):
     return read_lines(sess.transcript_path)
 
 
-def test_busy_mc_origins_are_refused_without_a_card(tmp_path):
+def test_busy_nudge_is_refused_without_a_card(tmp_path):
     sess, gate = _busy_session(tmp_path)
-    for origin in ("nudge", "task"):
-        assert sess.prompt("wake up", origin=origin) == {"ok": False, "error": "busy"}
+    for _ in range(3):
+        assert sess.prompt("wake up", origin="nudge") == {"ok": False, "error": "busy"}
     assert sess.state()["lastError"] is None, "a quiet refusal is not the chat's last error"
     lines = _finish(sess, gate)
     assert _busy_cards(lines) == []
     assert user_texts(lines) == ["first"]
+
+
+def test_busy_task_origin_still_gets_exactly_one_card(tmp_path):
+    """Quiet only for a caller known to retry (the wake-up). No caller sends
+    "task" to the chat daemon today; one that did without a retry must not
+    lose its prompt without a trace."""
+    sess, gate = _busy_session(tmp_path)
+    assert sess.prompt("do the task", origin="task") == {"ok": False, "error": "busy"}
+    lines = _finish(sess, gate)
+    assert len(_busy_cards(lines)) == 1
 
 
 def test_busy_without_origin_still_gets_exactly_one_card(tmp_path):
@@ -291,7 +302,7 @@ def test_busy_operator_prompt_still_gets_exactly_one_card(tmp_path):
 
 
 def test_busy_unknown_origin_value_is_treated_like_no_origin(tmp_path):
-    """Fail-closed: only the two MC names are quiet — a typo is not."""
+    """Fail-closed: only "nudge" is quiet — a typo is not."""
     sess, gate = _busy_session(tmp_path)
     assert sess.prompt("x", origin="nudges") == {"ok": False, "error": "busy"}
     lines = _finish(sess, gate)
