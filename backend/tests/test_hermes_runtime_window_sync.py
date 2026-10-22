@@ -1,7 +1,7 @@
 """Hermes shows the RUNTIME's context window, not its own model-name guess.
 
 Live 22.10.2026: Hermes' chat ring read ~17.5k of 203k (9 %) while the runtime
-it runs on serves 1,048,576 tokens (truth: 2 %). Sparky (omp) on the SAME
+it runs on serves 1,048,576 tokens (truth: 2 %). An omp agent on the SAME
 runtime was right. Cause: MC told omp the window (``OMP_CONTEXT_WINDOW`` from
 ``runtime.max_context_len``) but told Hermes nothing, so Hermes guessed from a
 stale model name ("glm" -> 202,752) and the backend took the harness' number
@@ -98,7 +98,7 @@ async def test_hermes_harness_gets_the_runtime_window(async_session):
 async def test_omp_keeps_its_window_var_and_gets_the_generic_one(async_session):
     from app.routers.internal import build_runtime_env
 
-    agent = Agent(name="Sparky", slug="sparky", agent_runtime="cli-bridge", harness="omp")
+    agent = Agent(name="OmpAgent", slug="omp-agent", agent_runtime="cli-bridge", harness="omp")
     env = await build_runtime_env(_runtime(), async_session, agent=agent)
 
     assert env["OMP_CONTEXT_WINDOW"] == str(WINDOW)
@@ -237,25 +237,25 @@ async def test_parity_omp_and_hermes_show_the_runtime_window(
     await async_session.commit()
     await async_session.refresh(rt)
 
-    sparky = Agent(
-        name="Sparky", slug="sparky", agent_runtime="cli-bridge", harness="omp", runtime_id=rt.id
+    omp_agent = Agent(
+        name="OmpAgent", slug="omp-agent", agent_runtime="cli-bridge", harness="omp", runtime_id=rt.id
     )
     hermes = Agent(
         name="Hermes", slug="hermes", agent_runtime="host", harness="hermes", runtime_id=rt.id
     )
-    async_session.add(sparky)
+    async_session.add(omp_agent)
     async_session.add(hermes)
     await async_session.commit()
 
     # omp reports what MC rendered for it; Hermes reports its name-table guess.
-    _write_session(tmp_path, "sparky", _acp_usage_line(entry_id="s1", window=WINDOW, used=17_500))
+    _write_session(tmp_path, "omp-agent", _acp_usage_line(entry_id="s1", window=WINDOW, used=17_500))
     _write_session(
         tmp_path, "hermes", _acp_usage_line(entry_id="h1", window=HERMES_GUESS, used=17_500)
     )
 
     windows = {}
     pcts = {}
-    for agent in (sparky, hermes):
+    for agent in (omp_agent, hermes):
         resolved = await _resolve_transcript_path(agent.id, async_session)
         assert not hasattr(resolved, "status_code"), f"{agent.name}: no transcript"
         _agent, path, adapter = resolved
@@ -264,8 +264,8 @@ async def test_parity_omp_and_hermes_show_the_runtime_window(
         windows[agent.name] = usage["contextWindow"]
         pcts[agent.name] = usage["usedPct"]
 
-    assert windows == {"Sparky": WINDOW, "Hermes": WINDOW}
-    assert pcts["Hermes"] == pcts["Sparky"] == round(17_500 / WINDOW * 100, 1)
+    assert windows == {"OmpAgent": WINDOW, "Hermes": WINDOW}
+    assert pcts["Hermes"] == pcts["OmpAgent"] == round(17_500 / WINDOW * 100, 1)
 
 
 # ── 4. the guard itself ─────────────────────────────────────────────────────
@@ -342,7 +342,7 @@ def test_bind_runtime_window_leaves_the_claude_parser_alone():
     bound = transcript_adapters.bind_runtime_window(claude, WINDOW)
     assert bound.new_parser() is transcript_chat.parse_transcript_line
 
-    omp = transcript_adapters.adapter_for(Agent(name="Sparky", harness="omp"))
+    omp = transcript_adapters.adapter_for(Agent(name="OmpAgent", harness="omp"))
     assert transcript_adapters.bind_runtime_window(omp, None) is omp
     parser = transcript_adapters.bind_runtime_window(omp, WINDOW).new_parser()
     assert parser.runtime_window == WINDOW
