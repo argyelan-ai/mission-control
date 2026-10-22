@@ -633,6 +633,30 @@ async def test_steps_symlink_swap_after_discovery_is_skipped(
     assert "private words" not in resp.text
 
 
+def test_open_pinned_refuses_a_symlink_and_a_file_swapped_while_opening(tmp_path, monkeypatch):
+    """S3: the file read is the file checked — a symlink is refused, and so
+    is a file replaced between the ``lstat`` and the ``open`` (new inode at
+    the same name)."""
+    path = _write(tmp_path / "a.jsonl", [{"n": 1}])
+    other = _write(tmp_path / "b.jsonl", [{"n": 2}])
+    opened = chat_task_steps.open_pinned(path)
+    assert opened is not None and json.loads(opened.fh.read()) == {"n": 1}
+    opened.close()
+    link = tmp_path / "link.jsonl"
+    link.symlink_to(path)
+    assert chat_task_steps.open_pinned(link) is None
+
+    real_open = os.open
+
+    def racing_open(p, flags, *a, **kw):
+        if str(p) == str(path):
+            os.replace(other, path)
+        return real_open(p, flags, *a, **kw)
+
+    monkeypatch.setattr(chat_task_steps.os, "open", racing_open)
+    assert chat_task_steps.open_pinned(path) is None
+
+
 @pytest.mark.asyncio
 async def test_steps_no_session_yet_and_gates(
     auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
