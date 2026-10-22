@@ -201,6 +201,41 @@ async def test_raising_skip_hook_fails_open_to_the_old_callback():
 
 
 @pytest.mark.asyncio
+async def test_skip_hook_db_error_cannot_poison_the_callback():
+    """Fail-open must also hold for a DATABASE error inside a predicate.
+
+    A failed flush leaves a SQLAlchemy session in "needs rollback" state
+    (on Postgres any failed statement aborts the transaction the same way).
+    If the predicate shared the callback's session, the fallback callback's
+    own queries would then raise and the lead would get nothing — the
+    opposite of fail-open. The predicate must run on a session of its own.
+    """
+    lead_ref = {}
+
+    async def _db_broken(session, task):
+        # Duplicate primary key -> IntegrityError on flush.
+        session.add(Agent(
+            id=lead_ref["id"], name="Dup", role="orchestrator",
+            agent_token_hash=generate_agent_token()[1], scopes=[],
+        ))
+        await session.flush()
+        return True  # never reached
+
+    hooks.completion_callback_skip_hooks.append(_db_broken)
+    try:
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            board_id, lead_id, worker_id = await _seed_board_with_lead(s, "dberr")
+            lead_ref["id"] = lead_id
+            task = await _add_task(s, board_id, worker_id, title="Any task, db error")
+            events = await _run_notify(s, task, board_id)
+            assert len(await _lead_dms(s, lead_id)) == 1, "DB error in a skip hook swallowed the callback"
+            assert len(await _notify_comments(s, task.id)) == 1
+            assert events == ["owner.completion_callback"]
+    finally:
+        hooks.completion_callback_skip_hooks.remove(_db_broken)
+
+
+@pytest.mark.asyncio
 async def test_real_path_review_finalize_does_not_wake_the_lead(
     monkeypatch, tmp_path, _bench_skip_hook_registered,
 ):

@@ -42,6 +42,8 @@ async def run_task_done_hooks(session: Any, task: Any) -> None:
 # Self-filtering: return False for tasks that are not yours. A raising
 # predicate counts as False — the callback then runs exactly as before
 # (fail-open to the old behaviour, a broken vertical never swallows it).
+# The caller passes a session used only for the predicates (read-only use
+# expected), so a database error in a predicate cannot break the callback.
 completion_callback_skip_hooks: list[Callable[..., Awaitable[bool]]] = []
 
 
