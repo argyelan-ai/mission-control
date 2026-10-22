@@ -25,12 +25,22 @@ VIEWPORTS = {
     "tablet":  {"width":  768, "height": 1024},
 }
 
+# How every browser in this service is started (service.py `_launch_chromium`).
+# `channel="chromium"` = the full browser in new headless mode, NOT
+# chrome-headless-shell (Playwright's default for headless=True): the headless
+# shell reads no managed policies, so it ignores the eMudhra distrust policy
+# in /etc/opt/chrome_for_testing/policies/managed and still trusted the
+# compromised chain (measured 2026-10-22, Playwright 1.64.0 / Chrome for
+# Testing 156.0.8078.4). backend/tests/test_image_security_floor.py keeps every
+# launch here.
+CHROMIUM_LAUNCH_KWARGS = {"headless": True, "channel": "chromium"}
+
 # LocalStorage-Key the MC frontend actually reads (frontend-v2/src/lib/api.ts,
 # `AUTH_TOKEN_KEY`) — read from the frontend source, not assumed.
 MC_AUTH_STORAGE_KEY = "mc_auth_token"
 
 FFMPEG_BIN = "ffmpeg"
-# DejaVu ships in the playwright jammy image; the Dockerfile additionally
+# DejaVu ships in the playwright base image; the Dockerfile additionally
 # installs fonts-dejavu-core so this path is guaranteed.
 DEJAVU_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 

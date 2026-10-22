@@ -37,6 +37,7 @@ from fastapi import FastAPI, HTTPException
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from pydantic import BaseModel, Field
 from media import (
+    CHROMIUM_LAUNCH_KWARGS,
     VIEWPORTS,
     BrandingSpec,
     ComposeRequest,
@@ -67,6 +68,13 @@ app = FastAPI(title="mc-playwright visual verifier", version="1.1.0")
 
 # Shared Volume — Backend + dieser Service schreiben/lesen beide hier.
 SHARED_DELIVERABLES = Path(os.environ.get("SHARED_DELIVERABLES", "/shared-deliverables"))
+
+
+async def _launch_chromium(p) -> Browser:
+    """The one way this service starts a browser: the full browser in new
+    headless mode, which reads the managed eMudhra distrust policy (the
+    headless shell does not) — see media.CHROMIUM_LAUNCH_KWARGS."""
+    return await p.chromium.launch(**CHROMIUM_LAUNCH_KWARGS)
 
 
 def _safe_filename(name: str) -> str:
@@ -520,7 +528,7 @@ async def generate_pdf(req: PdfRequest):
             pdf_kwargs["footer_template"] = req.footer_html
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await _launch_chromium(p)
         try:
             context = await browser.new_context()
             page = await context.new_page()
@@ -563,7 +571,7 @@ async def snapshot(req: SnapshotRequest):
     vp = VIEWPORTS[req.viewport]
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await _launch_chromium(p)
         try:
             context = await _new_context_with_auth(browser, vp, req.url, req.auth_token)
             page = await context.new_page()
@@ -594,7 +602,7 @@ async def metrics(req: SnapshotRequest):
     """
     t0 = time.monotonic()
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await _launch_chromium(p)
         total_bytes = 0
         status_code = 0
 
@@ -674,7 +682,7 @@ async def verify(req: VerifyRequest):
     }
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await _launch_chromium(p)
         try:
             for vp_name in req.viewports:
                 vp = VIEWPORTS[vp_name]
@@ -798,7 +806,7 @@ async def _screenshot_bench_card(html_text: str, out_png: Path) -> None:
         html_path.write_text(html_text, encoding="utf-8")
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await _launch_chromium(p)
             try:
                 context = await browser.new_context(
                     viewport=BENCH_FRAME_VIEWPORT, device_scale_factor=2
@@ -1150,7 +1158,7 @@ async def record(req: RecordRequest):
     )
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await _launch_chromium(p)
         try:
             context = await browser.new_context(
                 viewport=RECORD_VIEWPORT,
