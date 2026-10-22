@@ -508,10 +508,12 @@ export function ChatView({
   // An omp agent over ACP runs a task in a session of its own (#898). Its
   // steps stand in THIS chat at their time — as sections, or as a card once
   // finished. Read-only endpoints (`/chat/tasks`, `/chat/tasks/{id}/steps`),
-  // never through useChatStream. Client pre-gate (N6): only omp agents ask;
-  // every other harness renders at once, exactly as before.
+  // never through useChatStream. Client pre-gate (N6): only an agent whose
+  // tasks run in sessions of their own asks (`tasks_in_own_session`, the
+  // backend's adapter rule — never a harness name here, PRINCIPLES §3.4);
+  // every other agent renders at once, exactly as before.
   const agentId = agent?.id ?? null;
-  const taskGateOn = !head && !!agent && agent.harness === "omp" && streamEnabled;
+  const taskGateOn = !head && !!agent && agent.tasks_in_own_session === true && streamEnabled;
   const chatOnScreen = effectiveView === "chat" && voiceOnScreen;
   const chatTasks = useChatTasks(agentId, taskGateOn && chatOnScreen);
   const tasksApply = taskGateOn && chatTasks.data?.applies === true;

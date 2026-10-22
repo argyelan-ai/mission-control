@@ -91,7 +91,7 @@ const mockStream = vi.mocked(useChatStream);
 
 function agent(over: Partial<AgentWithState> = {}): AgentWithState {
   return {
-    id: "agent-a", name: "agent-a", harness: "omp", headless_chat: true, agent_runtime: "cli-bridge",
+    id: "agent-a", name: "agent-a", harness: "omp", headless_chat: true, tasks_in_own_session: true, agent_runtime: "cli-bridge",
     current_task_id: null, ...over,
   } as AgentWithState;
 }
@@ -185,8 +185,16 @@ describe("ChatView — task sections (spec A)", () => {
 
   it("N6: another harness never asks and renders as before", async () => {
     mockStream.mockReturnValue(streamOf({ events: [msg(at(1), "hello", "assistant")] }));
-    renderView({ agent: agent({ harness: "claude", headless_chat: false }) });
+    renderView({ agent: agent({ harness: "claude", headless_chat: false, tasks_in_own_session: false }) });
     expect(screen.getByText("hello")).toBeInTheDocument();
+    expect(api.chat.tasks).not.toHaveBeenCalled();
+  });
+
+  it("N6: the gate is the backend's flag, not the harness name (omp under the native driver never asks)", async () => {
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(1), "hello", "assistant")] }));
+    renderView({ agent: agent({ harness: "omp", headless_chat: false, tasks_in_own_session: false }) });
+    expect(screen.getByText("hello")).toBeInTheDocument();
+    await act(async () => {});
     expect(api.chat.tasks).not.toHaveBeenCalled();
   });
 
