@@ -578,6 +578,36 @@ describe("ChallengeDetail — per-entry rerender", () => {
     expect(screen.queryByRole("button", { name: /rerender/i })).toBeNull();
   });
 
+  it("a run that failed at max_tokens shows the localized reason, not the backend's English error", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "review",
+        entries: [
+          makeEntry({
+            id: "e-1",
+            status: "failed",
+            video_path: null,
+            error: "generation failed: model returned no HTML content — stopped at max_tokens (16384) before the page",
+            metrics: { effort_requested: "default", truncated: true, max_tokens: 16384 },
+          }),
+          makeEntry({
+            id: "e-2",
+            model_label: "Other",
+            status: "failed",
+            video_path: null,
+            error: "generation failed: HTTP 500",
+            metrics: { effort_requested: "default", truncated: false },
+          }),
+        ],
+      })
+    );
+    renderDetail();
+    expect(await screen.findByText(/No page: stopped at max_tokens \(16384\)/)).toBeTruthy();
+    expect(screen.queryByText(/model returned no HTML content/)).toBeNull();
+    // Any other failure still shows its error text.
+    expect(screen.getByText("generation failed: HTTP 500")).toBeTruthy();
+  });
+
   it("shows Rerender for a failed entry that still has a recorded artifact", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(
       makeChallenge({

@@ -63,6 +63,7 @@ COMPOSE_TIMEOUT_S = 1200.0
 # (~10k tokens at ~25 tok/s) — 300s cut those runs off mid-generation.
 SPARK_TIMEOUT_S = 900.0
 SPARK_MAX_TOKENS = 16384
+SPARK_TEMPERATURE = 0.7
 
 GENERATION_SYSTEM_PROMPT = (
     "You are a one-shot frontend generator. Output a single complete "
@@ -191,19 +192,34 @@ def extract_html(raw: str | None) -> str:
     return text.strip()
 
 
-async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str, dict]:
+async def _spark_generate(
+    prompt: str,
+    model_override: str | None,
+    effort_fields: dict | None = None,
+    max_tokens: int = SPARK_MAX_TOKENS,
+) -> tuple[str, dict]:
     """One-shot HTML generation against the Spark vLLM endpoint.
 
     Reuses SparkClient for URL + active-model resolution, but calls
     /chat/completions directly because SparkClient.complete() drops the
     usage block — the studio needs tokens/tok_per_s metrics (spec §3).
 
+    ``effort_fields``: the probed thinking key for the requested effort
+    (``effort_probe.level_fields``) — ``None``/empty sends nothing, the
+    serving default governs. No model-name guard any more: the old
+    "qwen in the name -> enable_thinking false" switch silently ran every
+    Qwen bench without thinking and never said so (bench W0.6).
+    ``max_tokens`` is scaled by the caller for deep effort levels; the HTTP
+    timeout grows with it.
+
     Returns (content, metrics). Raises on HTTP errors — the caller converts
     that into entry.status = "failed".
     """
+    from app.services import reasoning_params
     from app.services.spark_client import SparkClient
 
-    spark = SparkClient(timeout=SPARK_TIMEOUT_S)
+    timeout = SPARK_TIMEOUT_S * max(1.0, max_tokens / SPARK_MAX_TOKENS)
+    spark = SparkClient(timeout=timeout)
     model = model_override or await spark._resolve_llm_model()
     started = time.monotonic()
     payload: dict = {
@@ -212,27 +228,41 @@ async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str,
             {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": SPARK_MAX_TOKENS,
-        "temperature": 0.7,
+        "max_tokens": max_tokens,
+        "temperature": SPARK_TEMPERATURE,
+        **(effort_fields or {}),
     }
-    # Qwen3 thinking mode returns content=null; disable it there (same guard
-    # as SparkClient.complete). Other models (Laguna/poolside) need thinking
-    # for benchmark-grade output — omit the kwarg so the serving default
-    # governs and the reasoning parser strips the think block from content.
-    if "qwen" in model.lower():
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    # One line per run with what went on the wire for effort, so a live
+    # check can read it from the backend log (not only from the entry).
+    logger.info(
+        "bench spark request model=%s effort_sent=%s max_tokens=%s",
+        model, reasoning_params.wire_fields(effort_fields or {}), max_tokens,
+    )
     async with httpx.AsyncClient(timeout=spark.timeout) as cli:
         resp = await cli.post(f"{spark.llm_url}/chat/completions", json=payload)
         resp.raise_for_status()
     duration_ms = int((time.monotonic() - started) * 1000)
     data = resp.json()
-    content = data["choices"][0]["message"]["content"] or ""
+    choice = data["choices"][0]
+    message = choice.get("message") or {}
+    content = message.get("content") or ""
 
     # The actually-served model per the response body wins over the
     # requested name — the resolver can be stale by the time the request
     # lands (recipe swap mid-flight). Falls back to the requested model
     # since some backends echo it verbatim or omit the field.
     metrics: dict = {"duration_ms": duration_ms, "model": data.get("model") or model}
+    # What was asked and what came back (bench §7.2 names): the request
+    # knobs, the effort key=value actually sent (None = nothing), whether
+    # the answer shows thinking, and why generation stopped ("length" =
+    # max_tokens ran out — thinking can eat the whole budget).
+    finish_reason = choice.get("finish_reason")
+    metrics["temperature"] = SPARK_TEMPERATURE
+    metrics["max_tokens"] = max_tokens
+    metrics["effort_sent"] = reasoning_params.wire_fields(effort_fields or {})
+    metrics["effort_observed"] = reasoning_params.reasoning_of(message, data.get("usage"))
+    metrics["finish_reason"] = finish_reason
+    metrics["truncated"] = finish_reason == "length"
     usage = data.get("usage") or {}
     if usage:
         tokens_out = usage.get("completion_tokens")
@@ -381,6 +411,46 @@ async def _record_spark_usage_event(session: AsyncSession, entry: BenchEntry, me
         logger.warning("bench entry %s: spark usage event write failed", entry.id, exc_info=True)
 
 
+async def _spark_effort_request(
+    session: AsyncSession, entry: BenchEntry
+) -> tuple[dict, int, dict]:
+    """(request fields, max_tokens, metrics to store) for the effort the
+    entry asked for (``metrics["effort_requested"]``, set at create time).
+
+    "default" sends nothing and never probes. It keeps today's max_tokens —
+    unless a STORED probe (no extra request) saw that this server thinks by
+    default: then "default" behaves like "on" and gets the same budget, or a
+    model that thinks by default (Qwen) runs out of tokens before the page.
+    Any other level re-reads the probe for the engine as it runs NOW (cached
+    per serving_since): a model restarted between create and run gets probed
+    again, and a level it no longer offers fails the entry with the reason
+    instead of silently running on the default."""
+    from app.services import reasoning_params
+
+    from . import effort_probe
+
+    level = (entry.metrics or {}).get("effort_requested") or "default"
+    if level == "default":
+        cached = await effort_probe.cached_probe(session, entry.spark_model or "")
+        if cached is None or cached.default_observed != "on":
+            return {}, SPARK_MAX_TOKENS, {"effort_requested": "default"}
+        runtime = await effort_probe.spark_runtime(session)
+        limit = getattr(runtime, "max_context_len", None) if runtime is not None else None
+        return {}, reasoning_params.max_tokens_for("on", SPARK_MAX_TOKENS, limit), {
+            "effort_requested": "default",
+            "default_observed": "on",
+        }
+    probe = await effort_probe.get_or_probe(session, entry.spark_model or "")
+    fields = effort_probe.level_fields(probe, level)
+    runtime = await effort_probe.spark_runtime(session)
+    limit = getattr(runtime, "max_context_len", None) if runtime is not None else None
+    max_tokens = reasoning_params.max_tokens_for(level, SPARK_MAX_TOKENS, limit)
+    return fields, max_tokens, {
+        "effort_requested": level,
+        "thinking_key": probe.effort_param or probe.thinking_key,
+    }
+
+
 async def generate_spark_entry(
     session: AsyncSession, entry: BenchEntry, prompt: str
 ) -> None:
@@ -392,20 +462,31 @@ async def generate_spark_entry(
     session.add(entry)
     await session.commit()
     try:
-        content, metrics = await _spark_generate(prompt, entry.spark_model)
+        effort_fields, max_tokens, run_params = await _spark_effort_request(session, entry)
+        content, metrics = await _spark_generate(
+            prompt, entry.spark_model, effort_fields=effort_fields, max_tokens=max_tokens
+        )
         # Tokens were spent the moment the API call returned, independent of
         # whether the HTML below turns out to be valid — record usage now,
         # not after the extract_html/write-to-disk steps that can still fail.
         await _record_spark_usage_event(session, entry, metrics)
+        # Same for what was sent and observed (effort, finish_reason): a run
+        # that thought until max_tokens and produced no HTML must still show
+        # why (bench W0.6).
+        entry.metrics = {**(entry.metrics or {}), **run_params, **metrics}
         html = extract_html(content)
         if not html:
+            if metrics.get("finish_reason") == "length":
+                raise ValueError(
+                    f"model returned no HTML content — stopped at max_tokens "
+                    f"({metrics.get('max_tokens')}) before the page"
+                )
             raise ValueError("model returned no HTML content")
         out_dir = challenge_dir(entry.challenge_id) / _safe_label(entry.model_label)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "index.html"
         out_path.write_text(html, encoding="utf-8")
         entry.artifact_path = str(out_path)
-        entry.metrics = {**(entry.metrics or {}), **metrics}
         entry.status = "generated"
         entry.error = None
     except Exception as exc:  # noqa: BLE001 — every failure must land in the DB
@@ -685,6 +766,16 @@ async def on_task_done(session: AsyncSession, task) -> None:
     if entry.status not in ("pending", "generating"):
         if not await _readopt_reopened_entry(session, entry):
             return
+
+    # Agent-path effort is recorded, not set (bench W0.7): which thinking
+    # level the task's own omp session really ran on.
+    from .agent_effort import observed_agent_effort
+
+    entry.metrics = {
+        **(entry.metrics or {}),
+        "effort_requested": (entry.metrics or {}).get("effort_requested") or "default",
+        "effort_observed": await observed_agent_effort(session, entry, task),
+    }
 
     rows = (
         await session.exec(

@@ -3794,6 +3794,41 @@
     }
   },
   "bench": {
+    "effort": {
+      "label": "Effort",
+      "groupAria": "Effort für Modell {index}",
+      "level": {
+        "default": "Standard",
+        "off": "Aus",
+        "on": "An",
+        "low": "Niedrig",
+        "medium": "Mittel",
+        "high": "Hoch",
+        "max": "Max"
+      },
+      "checking": "Prüfe, welche Stufen dieses Modell befolgt …",
+      "checkedAt": "Geprüft {when}.",
+      "serverDefaultOn": "Standard schickt nichts — der Server denkt von sich aus.",
+      "serverDefaultOff": "Standard schickt nichts — der Server denkt von sich aus nicht.",
+      "serverDefaultUnknown": "Standard schickt nichts — es gilt die Server-Vorgabe.",
+      "noEffect": "Kein Schalter hat das Denken dieses Modells verändert — nur Standard.",
+      "failed": "Prüfung fehlgeschlagen — vorerst nur Standard.",
+      "offline": "Box offline — nur Standard.",
+      "retry": "Nochmal prüfen",
+      "deepHint": "Hohe Stufen können lange denken: das Token-Budget wächst bis aufs 4-Fache.",
+      "agentNote": "Effort: die eigene Stufe der Agent-Sitzung — wird nach dem Lauf aufgezeichnet, noch nicht einstellbar.",
+      "requested": "Effort: {level}",
+      "sent": "gesendet {wire}",
+      "sentNothing": "gesendet: nichts",
+      "thinkingOn": "denkt",
+      "thinkingOnTokens": "denkt · {count} Denk-Token",
+      "thinkingOff": "denkt nicht",
+      "ompSessionDefault": "omp-Sitzungsstandard: {level}",
+      "ompSession": "omp-Sitzung: {level}",
+      "agentUnknown": "Effort: für diesen Agenten nicht lesbar",
+      "truncated": "Bei max_tokens ({max}) gestoppt — das Denken hat das Budget aufgebraucht.",
+      "truncatedFailed": "Keine Seite: bei max_tokens ({max}) gestoppt, bevor das HTML kam — das Denken hat das Budget aufgebraucht."
+    },
     "common": {
       "cancel": "Abbrechen",
       "save": "Speichern",

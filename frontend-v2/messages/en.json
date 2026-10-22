@@ -3794,6 +3794,41 @@
     }
   },
   "bench": {
+    "effort": {
+      "label": "Effort",
+      "groupAria": "Effort for model {index}",
+      "level": {
+        "default": "Default",
+        "off": "Off",
+        "on": "On",
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "max": "Max"
+      },
+      "checking": "Checking which levels this model honours …",
+      "checkedAt": "Checked {when}.",
+      "serverDefaultOn": "Default sends nothing — the server thinks by default.",
+      "serverDefaultOff": "Default sends nothing — the server does not think by default.",
+      "serverDefaultUnknown": "Default sends nothing — the server default governs.",
+      "noEffect": "No switch changed this model's thinking — Default only.",
+      "failed": "Check failed — Default only for now.",
+      "offline": "Box offline — Default only.",
+      "retry": "Check again",
+      "deepHint": "Deep levels can think for a long time: the token budget grows up to 4×.",
+      "agentNote": "Effort: the agent session's own level — recorded after the run, not settable yet.",
+      "requested": "Effort: {level}",
+      "sent": "sent {wire}",
+      "sentNothing": "sent: nothing",
+      "thinkingOn": "thinking on",
+      "thinkingOnTokens": "thinking on · {count} reasoning tok",
+      "thinkingOff": "thinking off",
+      "ompSessionDefault": "omp session default: {level}",
+      "ompSession": "omp session: {level}",
+      "agentUnknown": "Effort: not readable for this agent",
+      "truncated": "Stopped at max_tokens ({max}) — thinking used up the budget.",
+      "truncatedFailed": "No page: stopped at max_tokens ({max}) before the HTML — thinking used up the budget."
+    },
     "common": {
       "cancel": "Cancel",
       "save": "Save",

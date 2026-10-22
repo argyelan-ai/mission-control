@@ -5,6 +5,7 @@ import type {
   BenchChallenge,
   BenchChallengeCreate,
   BenchEntry,
+  EffortLevels,
   PromptTemplate,
   SparkModelsStatus,
 } from "./types";
@@ -14,6 +15,18 @@ export const benchApi = {
    *  NewChallengeDialog — always resolves (reachable: false on error). */
   sparkModels: {
     get: () => request<SparkModelsStatus>("/api/v1/bench/spark-models"),
+  },
+  /** Bench W0.6: effort levels the effort probe found for a served model
+   *  (empty model = the Spark's active one). Always resolves; a probe that
+   *  could not run is status "failed". */
+  effortLevels: {
+    get: (model?: string | null, refresh = false) => {
+      const q = new URLSearchParams();
+      if (model) q.set("model", model);
+      if (refresh) q.set("refresh", "true");
+      const qs = q.toString();
+      return request<EffortLevels>(`/api/v1/bench/effort-levels${qs ? `?${qs}` : ""}`);
+    },
   },
   challenges: {
     list: (includeArchived = false) =>
