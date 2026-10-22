@@ -51,7 +51,13 @@ actual contract:
   hold the matching scope, which is how a vertical adds instructions to an
   agent's `TOOLS.md` without editing a core template.
 
-If the vertical is removed, both lists stay empty and the app boots unchanged.
+Further registries follow the same pattern (see `backend/app/verticals/hooks.py`),
+for example `completion_callback_skip_hooks` — async `(session, task) -> bool`;
+return `True` for your own tasks when your vertical handles their follow-up
+itself, and the board lead gets no completion callback for them. A raising
+predicate counts as `False`, so the callback runs as before.
+
+If the vertical is removed, all lists stay empty and the app boots unchanged.
 
 ## Building one
 

@@ -33,6 +33,37 @@ async def run_task_done_hooks(session: Any, task: Any) -> None:
             logger.exception("task_done hook %s failed", getattr(hook, "__name__", hook))
 
 
+# Async predicates, asked before the generic completion callback to the board
+# lead (task_lifecycle._notify_lead_on_completion: system_notify comment, DM to
+# the lead, optional Telegram notice). Signature: async (session, task) -> bool.
+# True = the vertical owns the follow-up of this task itself, so the lead is
+# NOT woken (e.g. bench_studio: the operator judges bench results in the
+# Bench Studio; a lead callback only burns cloud tokens — W0.11, 22.10.2026).
+# Self-filtering: return False for tasks that are not yours. A raising
+# predicate counts as False — the callback then runs exactly as before
+# (fail-open to the old behaviour, a broken vertical never swallows it).
+# The caller passes a session used only for the predicates (read-only use
+# expected), so a database error in a predicate cannot break the callback.
+completion_callback_skip_hooks: list[Callable[..., Awaitable[bool]]] = []
+
+
+async def completion_callback_skipped_by(session: Any, task: Any) -> str | None:
+    """Name of the first skip hook that claims `task`, or None (callback runs)."""
+    import logging
+
+    logger = logging.getLogger("mc.verticals.hooks")
+    for hook in completion_callback_skip_hooks:
+        try:
+            if await hook(session, task):
+                return getattr(hook, "__name__", repr(hook))
+        except Exception:
+            logger.exception(
+                "completion_callback skip hook %s failed — callback runs as usual",
+                getattr(hook, "__name__", hook),
+            )
+    return None
+
+
 # Async hooks, called when a task lands in status=review, before the generic
 # "wait for a human reviewer" flow runs (task_lifecycle.handle_human_review_
 # handoff). Signature: async (session, task) -> bool. Return True when the

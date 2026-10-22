@@ -971,6 +971,7 @@ Verzeichnis bootet unveraendert. Kopplung nur ueber die **Hook-Registry** in
 | `task_done_hooks` | `routers/tasks.py`, `routers/agent_task_status.py` | Callback wenn Agent-Task `done` wird (bench_studio: Artefakt einsammeln) |
 | `tools_md_sections` | Template-Renderer | Zusaetzliche TOOLS.md-Sektionen fuer Agents |
 | `x_post_resolved_hooks` (NEU) | `routers/approvals.py::_handle_x_post_resolution()` | Callback bei Approve/Reject eines `x_post`-Approvals (bench_studio: Challenge → `published`) |
+| `completion_callback_skip_hooks` | `services/task_lifecycle.py::_notify_lead_on_completion()` | Vertical uebernimmt die Nacharbeit eigener Tasks selbst → kein Completion-Callback an den Board Lead (bench_studio: Bench-Tasks wecken den Lead nicht mehr, W0.11). Werfendes Hook = Callback wie bisher |
 
 #### Kern-Bausteine fuer Publishing (ADR-065, ADR-070)
 

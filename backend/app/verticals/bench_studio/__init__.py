@@ -6,7 +6,8 @@ via the CORE Approval + ContentPipeline lifecycles (no second lifecycle).
 
 Strippable: delete this directory and the app boots unchanged. Coupling into
 core exclusively via app.verticals.hooks (task_review_hooks + task_done_hooks +
-x_post_resolved_hooks). Core NEVER imports this package.
+x_post_resolved_hooks + completion_callback_skip_hooks). Core NEVER imports
+this package.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ def register(app) -> None:
     """Called once by app.verticals.register_all() during bootstrap."""
     from app.verticals import hooks
 
+    from .callbacks import owns_completion_followup  # noqa: PLC0415
     from .drafts import on_x_post_resolved  # noqa: PLC0415
     from .orchestrator import on_task_done, on_task_review  # noqa: PLC0415
     from .routers import router  # noqa: PLC0415
@@ -31,3 +33,5 @@ def register(app) -> None:
         hooks.task_done_hooks.append(on_task_done)
     if on_x_post_resolved not in hooks.x_post_resolved_hooks:
         hooks.x_post_resolved_hooks.append(on_x_post_resolved)
+    if owns_completion_followup not in hooks.completion_callback_skip_hooks:
+        hooks.completion_callback_skip_hooks.append(owns_completion_followup)
