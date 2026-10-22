@@ -388,6 +388,19 @@ rules:
     status: active
     checked: 2026-10-22
 
+  - id: R-lead-usage-only-from-lead-dir
+    says: "Host Claude Code usage is booked on the lead agent only when the transcript lives in the lead's own project dir (the Claude Code encoding of its working dir, MC_CHECKOUT_PATH / token_harvester.lead_checkout_path). Every other MC-looking transcript under the host's ~/.claude/projects is the operator's own usage (agent_id NULL, harness operator-session) and shows as its own cost bucket; private ones are skipped. The harvester, the Sessions chat and the usage baseline read the lead dir from that one helper."
+    source: "Cost misattribution found 2026-10-22: operator sessions were booked on the lead (~150x inflated lead cost)"
+    owner: backend/app/services/token_harvester.py
+    applies_to: ["backend/app/services/token_harvester.py", "backend/app/services/transcript_chat.py", "backend/app/services/usage_baseline.py", "backend/app/routers/system.py"]
+    enforced_by:
+      - {test: "backend/tests/test_harvester_boss_attribution.py::test_only_the_boss_session_dir_is_booked_on_boss"}
+      - {test: "backend/tests/test_harvester_boss_attribution.py::test_transcript_chat_and_baseline_use_the_same_lead_dir"}
+      - {test: "backend/tests/test_harvester_boss_attribution.py::test_cost_view_shows_operator_sessions_apart_from_boss"}
+      - {test: "backend/tests/test_harvester_boss_attribution.py::test_reattribution_dry_run_counts_and_writes_nothing"}
+    status: active
+    checked: 2026-10-22
+
 rejected:
   - id: X-own-control-room
     idea: "An own control-room UI, job page or coordinator for heads"

@@ -445,31 +445,43 @@ async def intelligence_costs(
 
     cutoff = utcnow() - datetime.timedelta(days=days)
 
-    # Head runs carry no agent (docs/specs/head-launcher.md) — they get their
-    # own "Heads" bucket instead of disappearing into "Unattributed".
-    is_head = case(
-        (and_(ModelUsageEvent.agent_id.is_(None), ModelUsageEvent.harness.like("head-%")), True),
-        else_=False,
-    ).label("is_head")
+    from app.services.token_harvester import OPERATOR_SESSION_HARNESS
 
-    def _bucket(agent_id, head: bool) -> tuple[str, str]:
+    # Rows without an agent: head runs (docs/specs/head-launcher.md) and the
+    # operator's own host Claude Code sessions (token_harvester, never booked
+    # on the lead) each get their own bucket instead of "Unattributed".
+    no_agent_kind = case(
+        (and_(ModelUsageEvent.agent_id.is_(None), ModelUsageEvent.harness.like("head-%")), "heads"),
+        (
+            and_(
+                ModelUsageEvent.agent_id.is_(None),
+                ModelUsageEvent.harness == OPERATOR_SESSION_HARNESS,
+            ),
+            "operator",
+        ),
+        else_="",
+    ).label("no_agent_kind")
+
+    _NO_AGENT_BUCKETS = {"heads": ("heads", "Heads"), "operator": ("operator", "Operator sessions")}
+
+    def _bucket(agent_id, kind: str) -> tuple[str, str]:
         if agent_id:
             return str(agent_id), agent_name_cache.get(str(agent_id), "?")
-        # The UI keys rows by agent_id → distinct non-UUID ids for the two buckets.
-        return ("heads", "Heads") if head else ("", "Unattributed")
+        # The UI keys rows by agent_id → distinct non-UUID ids per bucket.
+        return _NO_AGENT_BUCKETS.get(kind or "", ("", "Unattributed"))
 
-    # Aggregate per agent (agent_id NULL = Boss without attribution / unknown)
+    # Aggregate per agent (agent_id NULL = heads / operator sessions / unknown)
     agent_result = await session.exec(
         select(
             ModelUsageEvent.agent_id,
-            is_head,
+            no_agent_kind,
             func.sum(ModelUsageEvent.input_tokens).label("total_in"),
             func.sum(ModelUsageEvent.output_tokens).label("total_out"),
             func.sum(ModelUsageEvent.cost_usd).label("total_cost"),
             func.count(ModelUsageEvent.id).label("event_count"),
         )
         .where(ModelUsageEvent.ts >= cutoff)
-        .group_by(ModelUsageEvent.agent_id, is_head)
+        .group_by(ModelUsageEvent.agent_id, no_agent_kind)
     )
 
     # Load agent names once (batch)
@@ -491,9 +503,10 @@ async def intelligence_costs(
         total_out += a_out
         total_cost += a_cost
 
-        # agent_id NULL → "Heads" (head runs) or "Unattributed" (Boss rows
-        # without cwd match, etc.). The UI schema needs agent_id as a string.
-        aid_str, aname = _bucket(row.agent_id, row.is_head)
+        # agent_id NULL → "Heads" (head runs), "Operator sessions" (the
+        # operator's own host Claude Code) or "Unattributed" (anything else).
+        # The UI schema needs agent_id as a string.
+        aid_str, aname = _bucket(row.agent_id, row.no_agent_kind)
 
         agent_costs.append({
             "agent_id": aid_str,
@@ -517,7 +530,7 @@ async def intelligence_costs(
         session_result = await session.exec(
             select(
                 ModelUsageEvent.agent_id,
-                is_head,
+                no_agent_kind,
                 ModelUsageEvent.session_id,
                 func.sum(ModelUsageEvent.input_tokens).label("total_in"),
                 func.sum(ModelUsageEvent.output_tokens).label("total_out"),
@@ -526,13 +539,13 @@ async def intelligence_costs(
                 func.max(ModelUsageEvent.ts).label("last_event_at"),
             )
             .where(ModelUsageEvent.ts >= cutoff)
-            .group_by(ModelUsageEvent.agent_id, is_head, ModelUsageEvent.session_id)
+            .group_by(ModelUsageEvent.agent_id, no_agent_kind, ModelUsageEvent.session_id)
             .order_by(func.sum(ModelUsageEvent.cost_usd).desc())
             .limit(100)
         )
         sessions = []
         for row in session_result.all():
-            aid_str, aname = _bucket(row.agent_id, row.is_head)
+            aid_str, aname = _bucket(row.agent_id, row.no_agent_kind)
             sessions.append({
                 "agent_id": aid_str,
                 "agent_name": aname,

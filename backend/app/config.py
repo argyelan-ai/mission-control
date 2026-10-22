@@ -458,6 +458,13 @@ class Settings(BaseSettings):
         Path(os.environ.get("HOME_HOST", str(Path.home())))
         / "Workspace" / "Projects" / "mission-control"
     )
+    # The stable host-agent checkout (docker/shared/ensure-checkout.sh,
+    # MC_CHECKOUT_PATH) — the lead host agent's working directory. Its Claude
+    # Code project dir is the ONLY place the token harvester books on the lead
+    # agent; every other ~/.claude/projects dir is the operator's own sessions.
+    # Empty = the script's default, <HOME_HOST>/.mc/checkouts/mission-control,
+    # resolved at call time (token_harvester.lead_checkout_path).
+    mc_checkout_path: str = ""
 
     # ── Plattenplatz ──────────────────────────────────────────────────────
     # Bau-Preflight: ein Bau startet nur, wenn mindestens so viele GB frei
@@ -836,7 +843,9 @@ class Settings(BaseSettings):
     # Base paths for agent JSONL transcripts (all runtime types).
     # Default: ~/.mc/agents (expanduser happens in the harvester).
     # Boss path (~/.claude/projects) is separately hardcoded in the harvester and
-    # gets mounted into the container as :ro via docker-compose.yml.
+    # gets mounted into the container as :ro via docker-compose.yml. Only the
+    # lead's own project dir there (see mc_checkout_path) is booked on the lead;
+    # the rest is the operator's own usage (harness "operator-session").
     token_harvest_paths: list[str] = ["~/.mc/agents"]
 
     # Token Harvester — Grok source (Bench #18 PR1). Grok Build CLI (host

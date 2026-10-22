@@ -1649,6 +1649,18 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-22** — **Token harvester: lead cost only from the lead's own session dir.** The host's
+  `~/.claude/projects` is shared by the lead agent and the operator's interactive Claude Code; the
+  harvester booked every MC-looking line there on the lead (cwd/branch heuristic), inflating its
+  cost ~150x. Now only `<projects>/<encode_cwd(lead_checkout_path())>/**` (incl. subagents) is the
+  lead; other MC-looking dirs are written with `agent_id` NULL + harness `operator-session` and show
+  as "Operator sessions" in `/intelligence/costs` and as `operator` in the usage baseline; private
+  dirs stay skipped (`_should_attribute_boss_path` is now only that privacy filter + the chat's
+  fail-closed gate). `lead_checkout_path()` (setting `mc_checkout_path` / `MC_CHECKOUT_PATH`, default
+  as `docker/shared/ensure-checkout.sh`) is the one source for the harvester, the Sessions chat and
+  `usage_baseline`. Old rows: `backend/scripts/reattribute_operator_sessions.py` (dry run by
+  default, `--apply`, `--since`). Rule `R-lead-usage-only-from-lead-dir`. No migration.
+
 - **2026-10-22** — **mc-playwright on Playwright 1.64 (eMudhra follow-up):** base
   `playwright/python:v1.48.0-jammy` → `v1.64.0-noble` (Chrome for Testing 156, Ubuntu 24.04,
   Python 3.12, ffmpeg 6.1). The driver's bundled Node (1.64: v24.21.0) is replaced by a pinned

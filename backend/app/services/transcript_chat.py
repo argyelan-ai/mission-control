@@ -108,7 +108,12 @@ from app.services.acp_chat_transport import (
 )
 from app.services.pane_state import capture_pane, process_alive
 from app.redis_client import RedisKeys
-from app.services.token_harvester import _host_home, _should_attribute_boss_path
+from app.services.token_harvester import (  # noqa: F401 — encode_cwd re-exported
+    _host_home,
+    _should_attribute_boss_path,
+    encode_cwd,
+    lead_checkout_path,
+)
 
 logger = logging.getLogger("mc.transcript_chat")
 
@@ -788,13 +793,6 @@ def _truncate_title(title: str) -> str:
 # sessions before anything from them reaches the frontend.
 
 
-def encode_cwd(cwd: str) -> str:
-    """Replicates Claude Code's own project-directory name encoding: every
-    non-alphanumeric character (including path separators and dots) becomes
-    a literal '-'. Verified against a real session dir name, see tests."""
-    return re.sub(r"[^a-zA-Z0-9]", "-", cwd)
-
-
 def resolve_transcript_dir(agent) -> Path | None:
     """Maps an Agent to the on-disk directory holding its Claude Code JSONL
     transcripts, or None if this agent/runtime has no transcript at all
@@ -820,8 +818,8 @@ def resolve_transcript_dir(agent) -> Path | None:
         )
 
     if runtime == "host" and slug in _BOSS_SLUGS:
-        checkout = str(_host_home() / ".mc" / "checkouts" / "mission-control")
-        return _host_home() / ".claude" / "projects" / encode_cwd(checkout)
+        # Same dir the token harvester books on the lead (lead_checkout_path).
+        return _host_home() / ".claude" / "projects" / encode_cwd(lead_checkout_path(_host_home()))
 
     return None
 

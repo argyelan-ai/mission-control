@@ -6,7 +6,12 @@ Data sources:
   - ~/.mc/agents/{slug}/omp-sessions/**/*.jsonl (omp headless harness, ADR-045 —
     e.g. Sparky on Qwen/Spark. Distinct schema — type=="message", see
     parse_transcript_line)
-  - ~/.claude/projects/**/*.jsonl (boss-host + operator's private sessions → boss attribution heuristic!)
+  - ~/.claude/projects/**/*.jsonl (host Claude Code: shared by the lead agent
+    and the operator's own interactive sessions. Only the lead's own project
+    dir — the Claude Code encoding of its working dir, lead_checkout_path() —
+    is booked on the lead; other MC-looking sessions are the operator's own
+    usage (agent_id NULL, harness OPERATOR_SESSION_HARNESS); private ones are
+    skipped, see _should_attribute_boss_path)
   - ~/.grok/logs/unified.jsonl (Grok Build CLI, ADR-066 host harness — append-only
     structured log, only "shell.turn.inference_done" lines carry usage; joined
     against ~/.grok/sessions/<urlenc-cwd>/<sid>/summary.json for model/cwd and
@@ -68,8 +73,15 @@ _TASK_WINDOW_GRACE = timedelta(hours=1)
 
 logger = logging.getLogger("mc.token_harvester")
 
-# ── MC workspace indicators for boss attribution ──────────────────────────
-# Paths/branches that point to an MC context → attribute to boss
+# Harness tag for the operator's own interactive Claude Code sessions on the
+# host (agent_id NULL). They share ~/.claude/projects with the lead agent but
+# are not the lead's usage — the cost views show them as their own bucket.
+OPERATOR_SESSION_HARNESS = "operator-session"
+# Harness tag of the lead's own host Claude Code rows (and other host agents).
+HOST_CLI_HARNESS = "host"
+
+# ── MC workspace indicators (operator MC work vs. private sessions) ────────
+# Paths/branches that point to an MC context → counted (lead or operator)
 _MC_CWD_MARKERS = [
     "mission-control",  # main repo
     "/.mc/",            # agent workspaces under ~/.mc/
@@ -600,13 +612,19 @@ def _compute_cost_usd(
 
 
 def _should_attribute_boss_path(cwd: str, git_branch: str | None) -> bool:
-    """Decides whether a ~/.claude line should be attributed to the boss.
+    """Decides whether a host ~/.claude line looks like MC work.
 
-    Boss criteria (OR):
+    MC criteria (OR):
     1. cwd contains an MC workspace marker (mission-control, /.mc/)
     2. gitBranch starts with 'task/'
 
     ANYTHING ELSE → private session → SKIP.
+
+    This is a privacy filter, NOT the lead attribution: the harvester books
+    a line on the lead only when it comes from the lead's own project dir
+    (lead_project_dir_name); MC-looking lines from any other dir are the
+    operator's own sessions. transcript_chat reuses it as the fail-closed
+    gate for the lead's chat.
     """
     if git_branch and git_branch.startswith(_MC_BRANCH_PREFIX):
         return True
@@ -664,6 +682,87 @@ def _host_home() -> Path:
     (/Users/.../.mc, /Users/.../.claude); ~ in the container points to /home/mcuser.
     """
     return Path(os.environ.get("HOME_HOST") or Path.home())
+
+
+def encode_cwd(cwd: str) -> str:
+    """Replicates Claude Code's own project-directory name encoding: every
+    non-alphanumeric character (including path separators and dots) becomes
+    a literal '-'. Verified against a real session dir name, see tests."""
+    return re.sub(r"[^a-zA-Z0-9]", "-", cwd)
+
+
+def lead_checkout_path(home: Path | None = None) -> str:
+    """The lead host agent's working directory: the stable host-agent checkout
+    maintained by docker/shared/ensure-checkout.sh (MC_CHECKOUT_PATH, same
+    default). Resolved at call time so HOME_HOST changes are honoured;
+    ``home`` overrides the host home for the default and for a leading ``~``.
+
+    A configured value is normalised (``~`` → the HOST home, not the
+    container's; trailing slash and ``..`` segments dropped) because Claude
+    Code names the project dir after the absolute cwd. Symlinks are NOT
+    resolved: the value is a host path that need not exist inside the
+    backend container, so it must already be the real path on the host.
+
+    Limit: only sessions started IN this dir count as the lead. Should the
+    lead ever start ``claude`` in a worktree below its checkout, that gets
+    its own project dir and would be booked as an operator session.
+    """
+    from app.config import settings as app_settings
+
+    host_home = home or _host_home()
+    configured = (getattr(app_settings, "mc_checkout_path", "") or "").strip()
+    if configured:
+        if configured == "~" or configured.startswith("~/"):
+            configured = str(host_home) + configured[1:]
+        return os.path.normpath(configured)
+    return str(host_home / ".mc" / "checkouts" / "mission-control")
+
+
+def lead_agent_ids(agent_slug_map: dict[str, Any]) -> list[Any]:
+    """Ids of the lead agent(s): every agent whose slug starts with "boss", in
+    map order. The harvester books new lead rows on the first one; the
+    re-attribution treats all of them as lead rows (historical rows may sit on
+    any). One rule for both, so they cannot drift."""
+    return [aid for slug, aid in agent_slug_map.items() if slug.startswith("boss")]
+
+
+_warned_missing_lead_dirs: set[str] = set()
+
+
+def _warn_if_lead_dir_missing(base: Path, lead_dir: Path) -> None:
+    """Once per process and dir: the lead's project dir is absent although
+    ~/.claude/projects has sessions. Most likely MC_CHECKOUT_PATH differs
+    between the backend (.env) and the host agent's own launch environment —
+    then every lead row would silently land in the operator bucket."""
+    key = str(lead_dir)
+    if key in _warned_missing_lead_dirs or lead_dir.exists():
+        return
+    try:
+        has_sessions = any(p.is_dir() for p in base.iterdir())
+    except OSError:
+        return
+    if not has_sessions:
+        return
+    _warned_missing_lead_dirs.add(key)
+    logger.warning(
+        "token_harvester: lead session dir %s not found under %s — host Claude Code "
+        "usage is booked as operator sessions. Check that MC_CHECKOUT_PATH is the "
+        "same for the backend and the host agents (empty = %s).",
+        lead_dir.name, base, "~/.mc/checkouts/mission-control",
+    )
+
+
+def lead_project_dir_name(checkout: str | None = None) -> str:
+    """Name of the lead's Claude Code project dir under ~/.claude/projects."""
+    return encode_cwd(checkout if checkout is not None else lead_checkout_path())
+
+
+def _is_under(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _expand_harvest_path(p: str) -> str:
@@ -856,6 +955,7 @@ async def run_harvest(
     grok_sessions_path: str | None = None,
     hermes_state_db_path: str | None = None,
     heads_root: str | None = None,
+    boss_checkout_path: str | None = None,
 ) -> dict[str, int]:
     """Scans all JSONL files, parses assistant lines, and inserts events.
 
@@ -863,6 +963,9 @@ async def run_harvest(
     - agent_base_paths: paths to ~/.mc/agents-like directories
                         (default: settings.token_harvest_paths, expanduser)
     - boss_base_paths: paths to ~/.claude/projects-like directories
+    - boss_checkout_path: the lead's working dir (default lead_checkout_path());
+      only <base>/<encode_cwd(it)>/** is booked on the lead, every other
+      MC-looking transcript under a boss base goes to the operator bucket
     - agent_slug_map: {slug: agent_id} for agent lookup (optional)
     - task_workspace_map: {normalized workspace_path: [candidate task dicts]}
                           for task attribution (optional, built from DB if
@@ -875,7 +978,7 @@ async def run_harvest(
 
     Returns:
         {"files_scanned": N, "new_events": M, "skipped_private": K,
-         "backfilled_task_id": L, "reattributed_task_id": R,
+         "operator_session_events": O, "backfilled_task_id": L, "reattributed_task_id": R,
          "grok_skipped_no_summary": G,
          "hermes_sessions_scanned": H, "source_errors": E}
     """
@@ -915,10 +1018,7 @@ async def run_harvest(
         task_workspace_map = await _build_task_workspace_map(session)
 
     # Boss agent for ~/.claude attribution (host agent, slug starts with "boss")
-    boss_agent_id = next(
-        (aid for slug, aid in agent_slug_map.items() if slug.startswith("boss")),
-        None,
-    )
+    boss_agent_id = next(iter(lead_agent_ids(agent_slug_map)), None)
     grok_agent_id = agent_slug_map.get("grok")
     hermes_agent_id = agent_slug_map.get("hermes")
 
@@ -936,6 +1036,7 @@ async def run_harvest(
         "files_scanned": 0,
         "new_events": 0,
         "skipped_private": 0,
+        "operator_session_events": 0,
         "backfilled_task_id": 0,
         "reattributed_task_id": 0,
         "grok_skipped_no_summary": 0,
@@ -979,7 +1080,7 @@ async def run_harvest(
                         path=str(jsonl_path),
                         agent_id=agent_id,
                         harness=harness,
-                        is_boss_path=False,
+                        privacy_filter=False,
                         all_prices=all_prices,
                         state_map=state_map,
                         stats=stats,
@@ -987,22 +1088,28 @@ async def run_harvest(
                         cwd_translate_slug=slug,
                     )
 
+        lead_dir_name = lead_project_dir_name(boss_checkout_path)
         for base_str in boss_base_paths:
             base = Path(base_str)
             if not base.exists():
                 continue
+            lead_dir = base / lead_dir_name
+            _warn_if_lead_dir_missing(base, lead_dir)
             for jsonl_path in sorted(base.glob("**/*.jsonl")):
+                # The lead's own sessions (and their subagents) live in exactly
+                # one project dir. Anything else under ~/.claude/projects is the
+                # operator's own Claude Code — never the lead, whatever its cwd.
+                is_lead = _is_under(jsonl_path, lead_dir)
                 await _process_jsonl_file(
                     session=session,
                     path=str(jsonl_path),
-                    agent_id=boss_agent_id,  # only applies to MC-attributed lines
-                    harness="host",
-                    is_boss_path=True,
+                    agent_id=boss_agent_id if is_lead else None,
+                    harness=HOST_CLI_HARNESS if is_lead else OPERATOR_SESSION_HARNESS,
+                    privacy_filter=not is_lead,  # operator dirs: skip private sessions
                     all_prices=all_prices,
                     state_map=state_map,
                     stats=stats,
                     task_workspace_map=task_workspace_map,
-                    # boss_agent_id gets reloaded later if needed
                 )
         await session.commit()
     except Exception as e:
@@ -1084,7 +1191,7 @@ async def _process_jsonl_file(
     path: str,
     agent_id: Any | None,
     harness: str,
-    is_boss_path: bool,
+    privacy_filter: bool,
     all_prices: list[ModelPrice],
     state_map: dict[str, ModelUsageHarvestState],
     stats: dict[str, int],
@@ -1095,8 +1202,10 @@ async def _process_jsonl_file(
     """Processes a single JSONL file (offset resume, batch insert).
 
     cwd_translate_slug: agent slug for container→host cwd rewrite (agent
-    paths only — is_boss_path lines already carry a host-native cwd and
+    paths only — host ~/.claude lines already carry a host-native cwd and
     never get translated).
+    privacy_filter: host ~/.claude dirs other than the lead's — lines that
+    do not look like MC work (_should_attribute_boss_path) are skipped.
     head: attribution of a head run ({task_id, head_run_id, locality}) —
     taken as given; no cwd matching, no backfill.
     """
@@ -1116,7 +1225,7 @@ async def _process_jsonl_file(
 
     # Read lines (from offset)
     records = harvest_file(path, processed_lines)
-    if cwd_translate_slug and not is_boss_path:
+    if cwd_translate_slug and not privacy_filter:
         for rec in records:
             rec["cwd"] = _translate_agent_cwd(rec.get("cwd", ""), cwd_translate_slug)
     if not records:
@@ -1165,19 +1274,17 @@ async def _process_jsonl_file(
             return None
         return _resolve_task_id(candidates, rec.get("git_branch"), ts)
 
-    # For boss paths: decide attribution per line
+    # Operator dirs under ~/.claude/projects (privacy_filter): MC-looking lines
+    # are counted on the passed-in (operator) bucket, private lines skipped.
     new_events_count = 0
     for rec in new_records:
-        if is_boss_path:
+        if privacy_filter:
             cwd = rec.get("cwd", "")
             git_branch = rec.get("git_branch")
             if not _should_attribute_boss_path(cwd, git_branch):
                 stats["skipped_private"] += 1
                 continue
-            # Boss: passed-through boss_agent_id (None if no boss agent exists)
-            eff_agent_id = agent_id
-        else:
-            eff_agent_id = agent_id
+        eff_agent_id = agent_id
 
         # Price matching
         ts = _parse_ts(rec["timestamp"])
@@ -1227,6 +1334,8 @@ async def _process_jsonl_file(
             async with session.begin_nested():
                 session.add(event)
             new_events_count += 1
+            if harness == OPERATOR_SESSION_HARNESS:
+                stats["operator_session_events"] = stats.get("operator_session_events", 0) + 1
         except IntegrityError:
             logger.debug("harvest: duplicate uuid %s (UNIQUE conflict) — skipped", rec["uuid"])
 
@@ -1372,7 +1481,7 @@ async def _harvest_heads(
                 path=str(jsonl_path),
                 agent_id=None,
                 harness=harness,
-                is_boss_path=False,
+                privacy_filter=False,
                 all_prices=all_prices,
                 state_map=state_map,
                 stats=stats,
@@ -1496,6 +1605,84 @@ async def backfill_omp_token_deltas(
     if commit:
         await session.commit()
     return stats
+
+
+async def reattribute_operator_sessions(
+    session: AsyncSession,
+    *,
+    apply: bool = False,
+    since: datetime | None = None,
+    claude_projects_root: str | None = None,
+    boss_checkout_path: str | None = None,
+) -> dict[str, Any]:
+    """One-off correction for rows harvested before the lead-dir rule
+    (bug found 22.10.2026): host Claude Code lines from the operator's own
+    sessions were booked on the lead agent.
+
+    Buckets (rows + list-price USD, ``ts >= since`` when given):
+      boss_session_dir          lead rows from the lead's own project dir — kept
+      boss_other_sources        lead rows from anywhere else outside
+                                ~/.claude/projects (e.g. its legacy config
+                                dir) — kept
+      operator_session          lead rows from any OTHER ~/.claude/projects
+                                dir — moved to agent_id NULL +
+                                OPERATOR_SESSION_HARNESS
+      already_operator_session  rows already carrying that harness
+
+    Dry run by default: counts only, writes nothing. ``apply=True`` UPDATEs
+    the operator_session bucket and commits. Idempotent — a second apply
+    finds 0 rows to move. task_id, tokens and cost are never touched.
+    """
+    from sqlalchemy import and_, func, not_
+
+    root = (claude_projects_root or str(_host_home() / ".claude" / "projects")).rstrip("/") + "/"
+    lead_prefix = root + lead_project_dir_name(boss_checkout_path) + "/"
+
+    lead_ids = lead_agent_ids(await _build_agent_slug_map(session))
+
+    window = [ModelUsageEvent.ts >= since] if since is not None else []
+    src = ModelUsageEvent.source_file
+    is_lead_row = and_(
+        ModelUsageEvent.agent_id.in_(lead_ids),  # type: ignore[union-attr]
+        ModelUsageEvent.harness == HOST_CLI_HARNESS,
+    )
+    under_root = src.startswith(root, autoescape=True)
+    under_lead_dir = src.startswith(lead_prefix, autoescape=True)
+    conditions = {
+        "boss_session_dir": and_(is_lead_row, under_lead_dir),
+        "boss_other_sources": and_(is_lead_row, not_(under_root)),
+        "operator_session": and_(is_lead_row, under_root, not_(under_lead_dir)),
+        "already_operator_session": ModelUsageEvent.harness == OPERATOR_SESSION_HARNESS,
+    }
+
+    buckets: dict[str, dict[str, Any]] = {}
+    for name, cond in conditions.items():
+        rows, cost = (
+            await session.exec(
+                select(func.count(ModelUsageEvent.id), func.sum(ModelUsageEvent.cost_usd))
+                .where(cond, *window)
+            )
+        ).one()
+        buckets[name] = {"rows": int(rows or 0), "cost_usd": round(float(cost or 0.0), 2)}
+
+    updated = 0
+    if apply and buckets["operator_session"]["rows"]:
+        result = await session.exec(
+            update(ModelUsageEvent)
+            .where(conditions["operator_session"], *window)
+            .values(agent_id=None, harness=OPERATOR_SESSION_HARNESS)
+        )
+        updated = int(result.rowcount or 0)
+        await session.commit()
+
+    return {
+        "applied": apply,
+        "since": since.isoformat() if since else None,
+        "lead_session_dir": lead_prefix.rstrip("/"),
+        "lead_agent_ids": [str(a) for a in lead_ids],
+        "buckets": buckets,
+        "updated": updated,
+    }
 
 
 async def _process_grok_file(
