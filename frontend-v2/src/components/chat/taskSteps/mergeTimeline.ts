@@ -10,7 +10,14 @@
  * land below it). Nothing of a task grows above a newer chat entry: the live
  * row, the "waiting" lines and the end line belong to the task's last
  * segment only while that segment is the newest entry; otherwise they form a
- * trailing continuation segment at the bottom.
+ * trailing continuation segment at the bottom. The end line keeps its time:
+ * a task that ended before the next chat entry ends its last segment there.
+ *
+ * A later segment's head follows the task's state at that point (`head`):
+ * work rows or a running task → "<title> · continues"; a task that waits for
+ * the operator → title + state line; anything else that is not running (the
+ * end line of a finished task, a vanished or not yet started task) → the
+ * title alone — never "continues" for a task that does not run.
  *
  * Shapes are decided by the caller once per task per mount (M4): a card
  * stays a card (rows after its freeze time go below as segments), a section
@@ -41,6 +48,16 @@ export interface MergeTask {
   endLine?: boolean;
 }
 
+/**
+ * How a segment's head reads (spec A §2.5):
+ * - `full`: title + state line (a task's first segment; a later one of a task
+ *   that waits for the operator, so the band says why nothing runs);
+ * - `continues`: "<title> · continues" — the task works on in this segment;
+ * - `title`: the title alone — the segment holds no work and the task does
+ *   not run (its end line or "no longer active here" says the state).
+ */
+export type SegmentHead = "full" | "continues" | "title";
+
 export type MergedEntry =
   | { kind: "chat"; key: string; ms: number | null; item: TimelineItem }
   | { kind: "card"; key: string; ms: number | null; taskId: string }
@@ -48,8 +65,9 @@ export type MergedEntry =
       kind: "segment";
       key: string;
       taskId: string;
-      /** The task's first segment: full header + state line; else continuation. */
+      /** The task's first segment (full header + state line). */
       first: boolean;
+      head: SegmentHead;
       units: TaskUnit[];
     };
 
@@ -75,6 +93,28 @@ export interface MergeInput {
 }
 
 const TAIL_KINDS = new Set<TaskUnit["u"]>(["live", "pending", "detached", "queued", "end", "notLoaded", "loadFailed"]);
+
+/** Live states in which the task waits for the operator, not for its agent. */
+const WAITS_FOR_OPERATOR = new Set(["waiting", "blocked", "user_test"]);
+
+/** The head of a task's segment, from what it holds and the task's state now. */
+export function segmentHead(task: MergeTask, units: readonly TaskUnit[], first: boolean): SegmentHead {
+  if (first) return "full";
+  if (units.some((u) => !TAIL_KINDS.has(u.u))) return "continues";
+  if (task.detached || !task.stub.live) return "title";
+  if (task.stub.status === "in_progress") return "continues";
+  return WAITS_FOR_OPERATOR.has(task.stub.status) ? "full" : "title";
+}
+
+/** An entry's time: a chat item's / card's own, a segment's first timed unit. */
+function entryMs(e: MergedEntry): number | null {
+  if (e.kind !== "segment") return e.ms;
+  for (const u of e.units) {
+    const ms = "ts" in u ? rowMs(u.ts) : null;
+    if (ms != null) return ms;
+  }
+  return null;
+}
 
 type Entry =
   | { type: "chat"; ms: number; rank: 0; seq: number; ev: TimelineChatEvent }
@@ -189,12 +229,13 @@ export function mergeTimeline(input: MergeInput): MergeResult {
     const id = task.stub.taskId;
     const n = segCount.get(id) ?? 0;
     const first = n === 0 && task.shape === "segments";
+    const head = segmentHead(task, units, first);
     const key = `task:${id}:seg:${keyHint}`;
     const old = prevSegments.get(key);
     const entry =
-      old && old.first === first && sameArray(old.units, units)
+      old && old.first === first && old.head === head && sameArray(old.units, units)
         ? old
-        : ({ kind: "segment", key, taskId: id, first, units } as const);
+        : ({ kind: "segment", key, taskId: id, first, head, units } as const);
     segCount.set(id, n + 1);
     lastSegIndex.set(id, out.length);
     out.push(entry);
@@ -267,15 +308,27 @@ export function mergeTimeline(input: MergeInput): MergeResult {
     }
     if (tail.length === 0) continue;
     const at = lastSegIndex.get(id);
-    // Only while the task's last segment is the newest entry of all (M2).
-    if (at != null && at === out.length - 1) {
+    // Only while the task's last segment is the newest entry of all (M2) —
+    // or, for the end line alone, while the task ended before the entry that
+    // follows its last segment (the end is not newer than that entry; ties:
+    // the chat first, as in the merge).
+    const endedMs = rowMs(task.stub.endedAt);
+    const endsBeforeNext =
+      at != null &&
+      at < out.length - 1 &&
+      tail.length === 1 &&
+      tail[0].u === "end" &&
+      endedMs != null &&
+      (entryMs(out[at + 1]) ?? Number.NEGATIVE_INFINITY) > endedMs;
+    if (at != null && (at === out.length - 1 || endsBeforeNext)) {
       const segEntry = out[at] as Extract<MergedEntry, { kind: "segment" }>;
       const units = [...segEntry.units, ...tail.map((u) => reuseTail(u, prevSegments.get(segEntry.key)))];
+      const head = segmentHead(task, units, segEntry.first);
       const old = prevSegments.get(segEntry.key);
       out[at] =
-        old && old.first === segEntry.first && sameArray(old.units, units)
+        old && old.first === segEntry.first && old.head === head && sameArray(old.units, units)
           ? old
-          : { ...segEntry, units };
+          : { ...segEntry, head, units };
     } else {
       trailing.push({ task, units: tail });
     }
@@ -285,7 +338,12 @@ export function mergeTimeline(input: MergeInput): MergeResult {
     const old = prevSegments.get(key);
     const reused = units.map((u) => reuseTail(u, old));
     const first = !lastSegIndex.has(task.stub.taskId) && task.shape === "segments";
-    out.push(old && old.first === first && sameArray(old.units, reused) ? old : { kind: "segment", key, taskId: task.stub.taskId, first, units: reused });
+    const head = segmentHead(task, reused, first);
+    out.push(
+      old && old.first === first && old.head === head && sameArray(old.units, reused)
+        ? old
+        : { kind: "segment", key, taskId: task.stub.taskId, first, head, units: reused },
+    );
   }
 
   for (const e of out) if (e.kind === "chat" && e.ms != null) unitTimes.push(e.ms);

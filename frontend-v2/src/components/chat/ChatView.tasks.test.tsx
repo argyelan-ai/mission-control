@@ -448,6 +448,69 @@ describe("ChatView — task sections (spec A)", () => {
     expect(screen.getByText(/2 files/)).toBeInTheDocument();
   });
 
+  it("live 22.10.: a task that finished before the operator's message ends above it — no 'continues' band below", async () => {
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Run the bench")]) });
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(0), "go"), msg(at(3), "Looks good?")] }));
+    const { qc } = renderView();
+    await screen.findByText("Run the bench");
+    // The task had ended (review) at 1:22, before the message at 3:00.
+    const review = stub({ status: "review", live: false, endedAt: at(1, 22) });
+    vi.mocked(api.chat.tasks).mockResolvedValue({ data: { applies: true, tasks: [review], queued: 0, hasMore: false }, etag: '"t-r"' });
+    vi.mocked(api.chat.taskSteps).mockResolvedValue({ data: steps([], { live: false, status: "review" }), etag: '"s-r"' });
+    await act(async () => {
+      await qc.refetchQueries({ queryKey: ["chat-tasks", "agent-a"] });
+    });
+    await waitFor(() => expect(screen.getAllByTestId("task-unit").some((u) => u.dataset.unit === "end")).toBe(true));
+    const segments = screen.getAllByTestId("chat-task-segment");
+    expect(segments).toHaveLength(1);
+    const end = within(segments[0]).getAllByTestId("task-unit").find((u) => u.dataset.unit === "end");
+    expect(end).toHaveTextContent("Task awaits review · took 1 min");
+    expect(end!.compareDocumentPosition(screen.getByText("Looks good?"))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(screen.queryByText(/· continues/)).not.toBeInTheDocument();
+  });
+
+  it("an end line that arrives after an interleaved message: title-only head below it, never 'continues'", async () => {
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Run the bench")]) });
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(0), "go"), msg(at(3), "Looks good?")] }));
+    const { qc } = renderView();
+    await screen.findByText("Run the bench");
+    // Running at the message (the live row trails below it as "continues") …
+    let segments = await screen.findAllByTestId("chat-task-segment");
+    expect(within(segments[1]).getByTestId("chat-task-head")).toHaveTextContent("Build the report page · continues");
+    // … then ends after it, with no new steps: the band below holds only the end line.
+    const review = stub({ status: "review", live: false, endedAt: at(4) });
+    vi.mocked(api.chat.tasks).mockResolvedValue({ data: { applies: true, tasks: [review], queued: 0, hasMore: false }, etag: '"t-r2"' });
+    vi.mocked(api.chat.taskSteps).mockResolvedValue({ data: steps([], { live: false, status: "review" }), etag: '"s-r2"' });
+    await act(async () => {
+      await qc.refetchQueries({ queryKey: ["chat-tasks", "agent-a"] });
+    });
+    await waitFor(() => expect(screen.getAllByTestId("task-unit").some((u) => u.dataset.unit === "end")).toBe(true));
+    segments = screen.getAllByTestId("chat-task-segment");
+    expect(segments).toHaveLength(2);
+    const head = within(segments[1]).getByTestId("chat-task-head");
+    expect(head).toHaveTextContent("Build the report page");
+    expect(head).not.toHaveTextContent("continues");
+    expect(head).toHaveTextContent("Review");
+    expect(screen.getByText("Looks good?").compareDocumentPosition(segments[1])).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    // The state is said once — in the end line, not again under the head (K3).
+    expect(within(segments[1]).getAllByTestId("chat-task-state")).toHaveLength(1);
+  });
+
+  it("a blocked task below the operator's message: its head says it waits, not 'continues'", async () => {
+    serve(
+      { applies: true, tasks: [stub({ status: "blocked" })], queued: 0, hasMore: false },
+      { [TASK_ID]: steps([think(at(1), "Need a decision")], { status: "blocked" }) },
+    );
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(0), "go"), msg(at(3), "What do you need?")] }));
+    renderView();
+    const segments = await screen.findAllByTestId("chat-task-segment");
+    expect(segments).toHaveLength(2);
+    const head = within(segments[1]).getByTestId("chat-task-head");
+    expect(head).not.toHaveTextContent("continues");
+    expect(head).toHaveTextContent("Answer");
+    expect(within(segments[1]).getByTestId("chat-task-state")).toHaveTextContent("Task waits for you");
+  });
+
   it("M4: a stub that vanishes keeps its rows and says the task is no longer active here", async () => {
     serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Kept")]) });
     mockStream.mockReturnValue(streamOf({ events: [msg(at(0), "go")] }));
