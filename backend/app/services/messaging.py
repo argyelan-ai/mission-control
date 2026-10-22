@@ -492,7 +492,13 @@ async def resume_task_after_answer(
         changed_by=changed_by, reason="answer_received",
         actor_user_id=actor_user_id, actor_label=actor_label,
     )
-    parked = agent is None or agent.current_task_id != task.id
+    # An omp agent with the ACP chat daemon has no live RUN session once the
+    # task turn ended on the question: the wake-up would land in its chat,
+    # which must not work the task (chat_session_guard, round-1 user test t1
+    # MUST-1). Resume it through the run path like a parked card.
+    from app.services.acp_chat_transport import headless_chat_kind
+    run_ended_with_turn = agent is not None and headless_chat_kind(agent) == "acp-docker"
+    parked = agent is None or agent.current_task_id != task.id or run_ended_with_turn
     if parked:
         from app.services.dispatch import auto_dispatch_task
         from app.services.dispatch_attempt_audit import set_dispatch_attempt_id

@@ -2267,9 +2267,11 @@ def dispatch(session: ChatSession, request: dict) -> dict:
     op = request.get("op")
     if op == "prompt":
         # `origin` (optional): who wrote the text — see ORIGIN_OPERATOR.
-        # `context` (optional): MC's run-context block — model only.
+        # `context` (optional): MC's run-context block — model only. Passed
+        # only when sent, so the call stays as before without it.
+        extra = {"context": request["context"]} if request.get("context") is not None else {}
         return session.prompt(request.get("text") or "", request.get("mode") or MODE_NOW,
-                              origin=request.get("origin"), context=request.get("context"))
+                              origin=request.get("origin"), **extra)
     if op == "new_session":
         # `requestId` (optional): which request of MC's backend asked.
         return session.new_session(request.get("mode") or MODE_NOW,

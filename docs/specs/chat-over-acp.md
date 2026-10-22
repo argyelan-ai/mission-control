@@ -539,6 +539,15 @@ a run ended got "0 % — no task is running". Two layers:
   `task.chat_write_rejected` event in the task timeline. The marker guards
   against an honest mistake of the model; it is not authentication.
 
+- **Resume through a run:** an `acp-docker` agent holds no paused run session
+  once its task turn ended on a blocking question. So an answer
+  (`messaging.resume_task_after_answer`) re-dispatches like a parked card, and
+  an operator `waiting → in_progress` unblock resets the dispatch handshake
+  (`apply_unblock_notify_reset`) — the task continues in a new run, never in
+  the chat. The bridge's comment wake-up into the chat says "read, tell the
+  operator, change nothing" instead of "keep working"
+  (`build_comment_nudge_text(chat=True)`).
+
 Rolling out needs both images: an old daemon ignores `context` and sets no
 role (the guard then never fires); an old backend sends no `context`.
 

@@ -2484,13 +2484,28 @@ def _nudge_state_write(path: str, seqs: dict[str, int], now: float) -> None:
         fh.write("".join(f"{tid} {seq} {int(now)}\n" for tid, seq in seqs.items()))
 
 
-def build_comment_nudge_text(pending: dict) -> str:
+def build_comment_nudge_text(pending: dict, *, chat: bool = False) -> str:
     """One wake-up line per task with new comments — the content itself is
-    pulled by the agent (`mc task-get` prints the thread)."""
+    pulled by the agent (`mc task-get` prints the thread).
+
+    ``chat=True`` (ACP driver): the wake-up lands in the agent's CHAT session,
+    not in a run — the gate waits until the run's turn is over. "then keep
+    working right away" made that chat do the task itself (round-1 user test
+    t1, MUST-1); the server refuses such writes from the chat now
+    (chat_session_guard). So: read, tell the operator, do not change it — a
+    task that needs more work gets a new run from MC."""
     parts = [
         f"Task {tid}: {n} neue(r) Kommentar(e) — lies sie jetzt mit: mc task-get {tid}"
         for tid, n in pending.items()
     ]
+    if chat:
+        return (
+            "📬 Neue Kommentare auf deiner Aufgabe (Operator/Lead/System). "
+            + " | ".join(parts)
+            + " — Die Aufgabe selbst wird nur in ihrem eigenen Lauf bearbeitet, nicht "
+            "hier im Chat: lies die Kommentare und sag dem Operator kurz, was drinsteht. "
+            "Aendere nichts an der Aufgabe (kein mc comment/checklist/deliverable/finish)."
+        )
     return (
         "📬 Neue Kommentare auf deinem aktiven Task (Operator/Lead/System). "
         + " | ".join(parts)
@@ -2839,7 +2854,10 @@ class _MsgDelivery:
         if not self.gate_open():
             self.log(f"comments: Gate zu ({self._gate_closed_why}) — Wecker aufgeschoben.")
             return
-        text = build_comment_nudge_text(self._pending_comments)
+        # Under ACP the wake-up goes to the chat session, not a run.
+        text = build_comment_nudge_text(
+            self._pending_comments, chat=self._acp_prompt is not None,
+        )
         if self._withdrawn_notice:
             text = self._withdrawn_notice + (("\n" + text) if self._pending_comments else "")
         if self._acp_prompt is not None:

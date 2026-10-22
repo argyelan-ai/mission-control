@@ -138,6 +138,36 @@ def test_build_session_spawns_the_chat_child_with_the_chat_env(tmp_path, monkeyp
     assert seen["env"]["MC_CONTEXT_ENV_PATH"] == acp_chat.CHAT_CONTEXT_ENV_PATH
 
 
+def test_comment_wakeup_in_the_chat_says_read_and_report_not_work():
+    """Under ACP the comment wake-up lands in the CHAT session (the run's turn
+    is over — the gate waits for that). It used to say "then keep working
+    right away", which made the chat work the task itself. Now: read, report
+    to the operator, do not change the task. The native wording (into the
+    run's own pane) is unchanged."""
+    import bridge
+
+    chat = bridge.build_comment_nudge_text({"t-1": 2}, chat=True)
+    assert "mc task-get t-1" in chat
+    assert "arbeite sofort weiter" not in chat
+    assert "eigenen Lauf" in chat
+    native = bridge.build_comment_nudge_text({"t-1": 2})
+    assert native.endswith("dann arbeite sofort weiter.")
+
+
+def test_acp_delivery_sends_the_chat_wording(tmp_path):
+    import bridge
+    from test_comment_nudge import TID, _comment
+    from test_msg_nudge import _StubTui, _delivery
+
+    sent: list[str] = []
+    dv = _delivery(str(tmp_path), _StubTui())
+    dv._acp_prompt = lambda text: sent.append(text) or True
+    dv.note_comments([_comment()])
+    dv.nudge_comments()
+    assert len(sent) == 1 and f"mc task-get {TID}" in sent[0]
+    assert "arbeite sofort weiter" not in sent[0]
+
+
 if __name__ == "__main__":
     import pytest
 
