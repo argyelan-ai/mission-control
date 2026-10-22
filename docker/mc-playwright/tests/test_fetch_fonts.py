@@ -203,3 +203,20 @@ def test_offline_opt_out_writes_the_fallback_without_any_remote_reference(tmp_pa
     assert rc == 0
     text = out.read_text(encoding="utf-8")
     assert "url(" not in text
+
+
+def test_offline_opt_out_is_reachable_from_compose_and_env_example():
+    """Review of #944: mc-playwright is also the agents' visual verifier
+    (profile `browser`). A build-arg the Dockerfile declares but compose never
+    passes would leave an offline install with no way to build it at all."""
+    repo = Path(__file__).resolve().parents[3]
+    dockerfile = (repo / "docker" / "mc-playwright" / "Dockerfile").read_text(encoding="utf-8")
+    assert re.search(r"^ARG BENCH_FONTS_OPTIONAL=0$", dockerfile, re.M)
+
+    compose = (repo / "docker-compose.yml").read_text(encoding="utf-8")
+    service = compose.split("\n  mc-playwright:\n", 1)[1].split("\n  # ", 1)[0]
+    service = re.split(r"\n  [a-z0-9-]+:\n", service, maxsplit=1)[0]
+    assert "BENCH_FONTS_OPTIONAL: ${BENCH_FONTS_OPTIONAL:-0}" in service
+
+    env_example = (repo / ".env.example").read_text(encoding="utf-8")
+    assert re.search(r"^BENCH_FONTS_OPTIONAL=0$", env_example, re.M)
