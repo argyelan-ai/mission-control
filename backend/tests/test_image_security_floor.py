@@ -198,3 +198,41 @@ def test_backend_lock_pins_certifi_at_or_above_the_floor():
     floor = re.search(r'"certifi>=(\d+)\.(\d+)\.(\d+)"', pyproject)
     assert floor, "backend/pyproject.toml: no certifi floor (a re-lock could go back)"
     assert tuple(int(g) for g in floor.groups()) >= CERTIFI_FLOOR
+
+
+# Claude Code verifies TLS with its own root store (bundled + system), not
+# Node's: on node 22.23.4 + the fixed Debian bundle, 2.1.207 still accepted
+# the emSign test chain (`API Error: 405` from the test host instead of a
+# certificate error). Measured on 2026-10-22 against the incident page's test
+# hosts: 2.1.302 accepts both chains; 2.1.303 (the version the incident page
+# lists) rejects both on the fixed bundle but still accepts the AAA chain
+# when the image's system bundle is stale; 2.1.304+ rejects both even then.
+CLAUDE_CLI_FLOOR = (2, 1, 304)
+
+
+def test_claude_cli_pin_is_at_or_above_the_emudhra_floor():
+    import json
+
+    manifest = json.loads((REPO_ROOT / "docker/cli-versions.json").read_text(encoding="utf-8"))
+    pin = _ver(manifest["claude"]["version"])
+    assert pin >= CLAUDE_CLI_FLOOR, f"docker/cli-versions.json claude {pin} is below {CLAUDE_CLI_FLOOR}"
+    # The Dockerfile default is the fallback for a manual `docker build`
+    # without build-args — it must not quietly bring the vulnerable CLI back.
+    text = (REPO_ROOT / "docker/mc-claude-agent/Dockerfile").read_text(encoding="utf-8")
+    m = re.search(r"^ARG CLAUDE_VERSION=(\d+\.\d+\.\d+)$", text, re.MULTILINE)
+    assert m, "docker/mc-claude-agent/Dockerfile: no exact ARG CLAUDE_VERSION default"
+    assert _ver(m.group(1)) >= CLAUDE_CLI_FLOOR
+
+
+def test_kimi_cli_verifies_tls_against_the_system_bundle():
+    """The kimi binary embeds its own Node (v24.15.0 up to at least 2.3.0),
+    whose built-in root store still trusts the compromised eMudhra chain.
+    `--use-openssl-ca` switches it to the image's system bundle, which the
+    ca-certificates floor keeps clean. Remove together with this test once a
+    kimi release embeds Node >= 24.22.1."""
+    text = (REPO_ROOT / "docker/mc-kimi-agent/Dockerfile").read_text(encoding="utf-8")
+    m = re.search(r"^ENV NODE_OPTIONS=(.+)$", text, re.MULTILINE)
+    assert m, "docker/mc-kimi-agent/Dockerfile: no ENV NODE_OPTIONS"
+    assert "--use-openssl-ca" in m.group(1).split()
+    # The system bundle it switches to must be the floored one.
+    assert text.index("ARG CA_CERTIFICATES_MIN") < text.index("ENV NODE_OPTIONS")

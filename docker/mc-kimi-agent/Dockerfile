@@ -70,6 +70,17 @@ RUN curl -fsSL \
     && /usr/local/bin/kimi --version
 LABEL mc.cli.name="kimi" mc.cli.version="${KIMI_VERSION}"
 
+# eMudhra CA compromise (Oct 2026): the kimi binary embeds its own Node
+# (v24.15.0 in 0.29.1 and still in 2.3.0, the newest release on 2026-10-22),
+# and that Node's built-in root store still trusts the compromised emSign
+# chain. No fixed kimi release exists yet. --use-openssl-ca makes the embedded
+# Node verify against the system bundle instead — the ca-certificates floor
+# above, which no longer contains the bad chain. Measured: both eMudhra test
+# hosts fail, api.kimi.com / auth.kimi.com / code.kimi.com still connect.
+# Drop this once a kimi release ships Node >= 24.22.1.
+# backend/tests/test_image_security_floor.py guards it.
+ENV NODE_OPTIONS=--use-openssl-ca
+
 # Non-root user mit Login-Shell
 RUN groupadd -r agent && useradd -r -g agent -s /bin/bash -m agent
 USER agent
