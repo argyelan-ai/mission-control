@@ -7,7 +7,7 @@ import { renderHook, waitFor, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { api, requestWithEtag } from "@/lib/api";
-import { useChatTasks, chatTasksInterval, CHAT_TASKS_IDLE_POLL_MS, CHAT_TASKS_LIVE_POLL_MS } from "../useChatTasks";
+import { useChatTasks, chatTasksInterval, isTaskFlip, CHAT_TASKS_IDLE_POLL_MS, CHAT_TASKS_LIVE_POLL_MS } from "../useChatTasks";
 import { useTaskSteps, stepsInterval, TASK_STEPS_POLL_MS, TASK_STEPS_WAITING_POLL_MS } from "../useTaskSteps";
 import type { TaskStepsResponse } from "@/lib/chatTypes";
 
@@ -131,5 +131,18 @@ describe("useTaskSteps", () => {
     expect(stepsInterval(spec)).toBe(TASK_STEPS_POLL_MS);
     expect(stepsInterval({ ...spec, status: "waiting" })).toBe(TASK_STEPS_WAITING_POLL_MS);
     expect(stepsInterval({ ...spec, live: false })).toBe(false);
+  });
+});
+
+describe("isTaskFlip (review MUST-2 on #937)", () => {
+  it("a crossing to or from task_working / waiting_model / idle asks; anything else does not", () => {
+    expect(isTaskFlip("idle", "task_working")).toBe(true);
+    expect(isTaskFlip("task_working", "idle")).toBe(true);
+    expect(isTaskFlip("waiting_model", "task_working")).toBe(true);
+    expect(isTaskFlip("working", "idle")).toBe(true);
+    expect(isTaskFlip("working", "waiting_input")).toBe(false);
+    expect(isTaskFlip("idle", "idle")).toBe(false);
+    // The first state of a mount is not a flip (the first fetch runs anyway).
+    expect(isTaskFlip(null, "task_working")).toBe(false);
   });
 });
