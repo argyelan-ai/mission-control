@@ -4806,9 +4806,11 @@ def run_acp_once(
     Sessions chat view (Review #465, Mark's Option b + Folge-PR): chunks go
     ONLY to the preview channel — a SIBLING preview file the backend tailer
     broadcasts as volatile ``preview`` events (``preview_sink``); they never
-    touch ``transcript_sink``. ONE final assistant line carries the complete
-    text (plus usage + the real sessionId) into the transcript. No stacked
-    per-chunk bubbles, no 0/0 usage per chunk, no frontend change.
+    touch ``transcript_sink``. The reply text lands as one assistant line
+    per text segment (spec A D7: a tool call, a thought, a plan, a card or
+    the turn end closes a segment); the turn's last line carries usage +
+    stopReason. Thoughts are their own thinking lines — never glued into the
+    reply (F1). No stacked per-chunk bubbles, no 0/0 usage per chunk.
     ``None`` keeps the pure-driver behaviour byte-identical.
 
     ``media_sink(name, bytes) -> bool`` (chat package P2): stores a tool
@@ -4822,6 +4824,10 @@ def run_acp_once(
 
     mapper = acp_chat_events.ACPEventMapper()
 
+    # Preview-flush throttle state (see on_event): last flushed snapshot
+    # length, last flush time, and the newest withheld snapshot.
+    _throttle = {"chars": -10**9, "at": time.monotonic(), "pending": None}
+
     def emit_transcript(entries: list[dict]) -> None:
         if transcript_sink is None or not entries:
             return
@@ -4829,6 +4835,12 @@ def run_acp_once(
             transcript_sink(acp_chat_events.ACPEventMapper.dump(entries, media_writer=media_sink))
         except Exception:  # noqa: BLE001 — the chat view must never kill the run
             sys.stderr.write("[acp] transcript sink write failed\n")
+        # D7: a text segment is on record now — a withheld snapshot of it
+        # must never follow it into the preview channel, and the next
+        # segment's first snapshot goes out at once.
+        if any(acp_chat_events.is_text_line(e) for e in entries):
+            _throttle["pending"] = None
+            _throttle["chars"] = -10**9
 
     def emit_preview(entries: list[dict]) -> None:
         if preview_sink is None or not entries:
@@ -4839,11 +4851,12 @@ def run_acp_once(
             sys.stderr.write("[acp] preview sink write failed\n")
 
     outcome = RunOutcome()
+    # full_text: thoughts AND reply text in arrival order — the
+    # classification input (sentinel, reflection, auth/unreachable rules),
+    # byte-identical to before. reply_text: the reply only — what the chat's
+    # final line may show (F1: thoughts are their own lines, never glued in).
     full_text: list[str] = []
-
-    # Preview-flush throttle state (see on_event): last flushed snapshot
-    # length, last flush time, and the newest withheld snapshot.
-    _throttle = {"chars": -10**9, "at": time.monotonic(), "pending": None}
+    reply_text: list[str] = []
 
     _first_activity_seen = [False]
     _message_chunks = [0]
@@ -4873,6 +4886,8 @@ def run_acp_once(
             c = upd.get("content") or {}
             if c.get("type") == "text":
                 full_text.append(c.get("text") or "")
+                if su == "agent_message_chunk":
+                    reply_text.append(c.get("text") or "")
                 outcome.saw_agent_start = True
             # G4 (parity audit #521): a streaming token IS forward progress —
             # the same liveness channel the native hook's message_update feeds
@@ -5122,16 +5137,23 @@ def run_acp_once(
             and outcome.final_text.strip()
         ):
             _first_activity()
-        # ONE final assistant line: the complete text + usage stamped here
-        # (never 0/0 per chunk) + the real sessionId (Review #465 mid 3/5).
+        # The turn's LAST assistant line: the reply text not written as a
+        # segment yet + usage stamped here (never 0/0 per chunk) + the real
+        # sessionId (Review #465 mid 3/5). Reply text only (F1): the
+        # thoughts already are their own thinking lines.
         mapper.set_prompt_usage(prompt_result.usage)
         # The backend's turn-ended probe reads message.stopReason; ACP's
         # end_turn is omp's stop. Anything else stays non-terminal — the
         # probe stays conservative (working/idle by mtime only).
         emit_transcript(mapper.map_final_assistant_message(
-            outcome.final_text,
+            "".join(reply_text),
             stop_reason="stop" if outcome.final_stop_reason == "end_turn" else "",
         ))
+    elif saw_session:
+        # No prompt result (error/abort): the open thought and text segment
+        # still land (N11). The error card above already flushed them in the
+        # usual case; this is the net for any other way out.
+        emit_transcript(mapper.flush_on_abort())
 
     # Ladder step 1 bookkeeping (review follow-up): when the control channel
     # fired and the turn ended cancelled, carry WHAT interrupted it on the
