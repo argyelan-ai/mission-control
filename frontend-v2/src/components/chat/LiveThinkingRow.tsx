@@ -24,7 +24,18 @@ import { estimateTokens, formatElapsed } from "./thinkingFormat";
 /** No new piece of the thought for this long = the row stops counting. */
 export const QUIET_AFTER_MS = 60_000;
 
-export const LiveThinkingRow = memo(function LiveThinkingRow({ preview }: { preview: PreviewEvent }) {
+export const LiveThinkingRow = memo(function LiveThinkingRow({
+  preview,
+  wide = false,
+  onOpenChange,
+}: {
+  preview: PreviewEvent;
+  /** Task sections (spec A §2.6): a 16 px icon slot, so the label starts on
+   *  the section's text edge (40 px) like every other row there (K9). */
+  wide?: boolean;
+  /** A task section fetches the thought's end only while it is open. */
+  onOpenChange?: (open: boolean) => void;
+}) {
   const t = useTranslations("sessions");
   const locale = useLocale();
   const [open, setOpen] = useState(false);
@@ -64,12 +75,18 @@ export const LiveThinkingRow = memo(function LiveThinkingRow({ preview }: { prev
       </span>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          const next = !open;
+          setOpen(next);
+          onOpenChange?.(next);
+        }}
         aria-expanded={open}
         className="w-full min-h-11 flex items-center gap-2 text-left bg-transparent border-0 p-0 cursor-pointer text-xs"
       >
         {/* 13 px + gap-2 like ToolRow / ThinkingRow: one text edge (review UI-7). */}
-        <Brain size={13} className={`shrink-0 ${quiet ? "" : "animate-pulse motion-reduce:animate-none"}`} style={{ color: C.textMuted }} aria-hidden="true" />
+        <span className={`shrink-0 flex justify-center ${wide ? "w-4" : ""}`} aria-hidden="true">
+          <Brain size={13} className={quiet ? "" : "animate-pulse motion-reduce:animate-none"} style={{ color: C.textMuted }} />
+        </span>
         <span className="min-w-0 truncate">
           <span style={{ color: C.textSecondary }}>{t("thinkingLive")}</span>
           {tokens && <span className="tabular-nums" style={{ color: C.textMuted }}> · {tokens}</span>}
@@ -90,7 +107,7 @@ export const LiveThinkingRow = memo(function LiveThinkingRow({ preview }: { prev
       {open && (
         <div data-testid="live-thinking-text" className="flex gap-2 pb-2">
           {/* Spacer in icon width: the text starts on the label's edge. */}
-          <span data-indent="" className="w-[13px] shrink-0" aria-hidden="true" />
+          <span data-indent="" className={`${wide ? "w-4" : "w-[13px]"} shrink-0`} aria-hidden="true" />
           <div className="min-w-0 flex flex-col justify-end overflow-hidden max-h-[calc(8*1.6*12px)]">
             <p className="m-0 text-xs italic leading-relaxed whitespace-pre-wrap break-words max-w-[76ch]" style={{ color: C.textMuted }}>
               {preview.text}
