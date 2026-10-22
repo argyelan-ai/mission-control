@@ -1859,7 +1859,7 @@ async def test_outro_cost_from_model_usage_events(session, monkeypatch, make_boa
     await orchestrator.compose_challenge(session, ch, entries)
 
     rows = {r["name"]: r for r in captured["branding"]["outro_rows"]}
-    assert rows["Grok 4.5"]["cost"] == "$0.42"
+    assert rows["Grok 4.5"]["cost"] == "~$0.42"
     assert rows["Qwen"]["cost"] == "local"
 
 
@@ -2318,7 +2318,9 @@ async def test_outro_cloud_runtime_keeps_the_real_sum(
                                           local=False, costs=(0.30, 0.13))
     captured = _fake_compose_client(monkeypatch)
     await orchestrator.compose_challenge(session, ch, [entry])
-    assert captured["branding"]["outro_rows"][0]["cost"] == "$0.43"
+    assert captured["branding"]["outro_rows"][0]["cost"] == "~$0.43"
+    # "~": an API list price, not money spent — cloud runs mostly go
+    # through a subscription.
 
 
 @pytest.mark.asyncio

@@ -809,6 +809,10 @@ def _format_outro_cost(
     - No attributed cost, or a sum of 0 (the catch-all price row prices an
       unknown model at 0/0 — "price unknown", not "free"): "—".
     - Below one cent: "<$0.01" instead of a misleading "$0.00".
+    - Otherwise "~$0.42": the sum is the API list price of the tokens
+      (model_prices), not an invoice — cloud runs mostly go through a
+      subscription (Grok, Claude Code). "~" (not "≈") because the outro's
+      JetBrains Mono is the Google Fonts latin subset, which has no U+2248.
     """
     if source_kind == "spark" or locality == "local":
         return "local"
@@ -816,7 +820,7 @@ def _format_outro_cost(
         return "—"
     if cost_usd < 0.01:
         return "<$0.01"
-    return f"${cost_usd:.2f}"
+    return f"~${cost_usd:.2f}"
 
 
 def _format_tok_count(n: int) -> str:

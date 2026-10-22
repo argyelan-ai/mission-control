@@ -1038,6 +1038,11 @@ describe("ChallengeDetail — usage per entry (video outro numbers)", () => {
             id: "e-2", model_label: "Cloud", source_kind: "agent", agent_id: "a-2",
             metrics: { tokens_in: 12_400, tokens_out: 1_800, cost_usd: 0.43, locality: "cloud" },
           }),
+          // A Spark entry has no locality in metrics — the source kind says local.
+          makeEntry({
+            id: "e-3", model_label: "Spark direct", source_kind: "spark",
+            metrics: { duration_ms: 30000, tok_per_s: 52, tokens_out: 1200 },
+          }),
         ],
       })
     );
@@ -1046,7 +1051,9 @@ describe("ChallengeDetail — usage per entry (video outro numbers)", () => {
     await screen.findByText("Local agent");
 
     expect(screen.getByText("60 s · 1.1M → 264.1k tok · local")).toBeInTheDocument();
-    expect(screen.getByText("12.4k → 1.8k tok · $0.43")).toBeInTheDocument();
+    // A cloud cost is the API list price, not an invoice: "~".
+    expect(screen.getByText("12.4k → 1.8k tok · ~$0.43")).toBeInTheDocument();
+    expect(screen.getByText("30 s · 52 tok/s · 1200 tok · local")).toBeInTheDocument();
   });
 
   it("warns on a finished agent entry without token data (the video would show a dash)", async () => {

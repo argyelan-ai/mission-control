@@ -111,15 +111,18 @@ function tokCount(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
-/** Same rule as the video outro (backend _format_outro_cost): a local run
- *  shows "local", never an API list price; no or zero cost shows nothing. */
-function costLabel(m: BenchEntry["metrics"], localLabel: string): string | null {
-  if (m.locality === "local") return localLabel;
+/** Same rule as the video outro (backend _format_outro_cost): a Spark entry
+ *  or a local run shows "local", never an API list price; no or zero cost
+ *  shows nothing; a cloud cost is the API list price, so "~$0.42". */
+function costLabel(entry: BenchEntry, localLabel: string): string | null {
+  const m = entry.metrics;
+  if (entry.source_kind === "spark" || m.locality === "local") return localLabel;
   if (!m.cost_usd || m.cost_usd <= 0) return null;
-  return m.cost_usd < 0.01 ? "<$0.01" : `$${m.cost_usd.toFixed(2)}`;
+  return m.cost_usd < 0.01 ? "<$0.01" : `~$${m.cost_usd.toFixed(2)}`;
 }
 
-function metricsLine(m: BenchEntry["metrics"], localLabel: string): string {
+function metricsLine(entry: BenchEntry, localLabel: string): string {
+  const m = entry.metrics;
   const parts: string[] = [];
   if (m.duration_ms) parts.push(`${(m.duration_ms / 1000).toFixed(0)} s`);
   if (m.tok_per_s) parts.push(`${m.tok_per_s.toFixed(0)} tok/s`);
@@ -128,7 +131,7 @@ function metricsLine(m: BenchEntry["metrics"], localLabel: string): string {
   } else if (m.tokens_out) {
     parts.push(`${m.tokens_out} tok`);
   }
-  const cost = costLabel(m, localLabel);
+  const cost = costLabel(entry, localLabel);
   if (cost) parts.push(cost);
   return parts.join(" · ");
 }
@@ -515,9 +518,9 @@ export function ChallengeDetail({
                 </Pill>
               </div>
             </div>
-            {metricsLine(entry.metrics, t("costLocal")) && (
+            {metricsLine(entry, t("costLocal")) && (
               <span className="text-xs font-mono" style={{ color: C.textMuted }}>
-                {metricsLine(entry.metrics, t("costLocal"))}
+                {metricsLine(entry, t("costLocal"))}
               </span>
             )}
             {usageMissing(entry) && (

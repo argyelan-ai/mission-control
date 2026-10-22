@@ -3892,7 +3892,7 @@
       "notifyDownloadFailed": "Download failed",
       "notifyOpenFailed": "Could not open",
       "costLocal": "local",
-      "usageMissing": "No token data yet — the video shows “—” for tokens and cost. Recreate the video in a few minutes."
+      "usageMissing": "No token data yet — the video shows “—” for tokens and cost. Recreate the video in a few minutes. If it stays empty, MC does not count this agent’s harness yet."
     },
     "draftDialog": {
       "ariaLabel": "Create draft",
