@@ -4062,6 +4062,7 @@
       "turn_interrupted": "Unterbrochen",
       "model_unreachable": "Modell antwortet nicht",
       "turn_interruptedBody": "Der Chat wurde neu gestartet, während eine Antwort lief. Nichts wurde automatisch neu gesendet.",
+      "busyBody": "Der Agent war noch mit einer Antwort beschäftigt und hat diese Nachricht nicht angenommen.",
       "process_exitBody": "Der Agent-Prozess wurde unerwartet beendet. Der Chat verbindet sich neu.",
       "process_exit_restart_failedBody": "Der Agent-Prozess wurde beendet und liess sich nicht neu starten.",
       "session_resetBody": "Das vorherige Gespräch liess sich nicht laden.",

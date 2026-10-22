@@ -4062,6 +4062,7 @@
       "turn_interrupted": "Interrupted",
       "model_unreachable": "Model not responding",
       "turn_interruptedBody": "The chat restarted while a reply was running. Nothing was resent automatically.",
+      "busyBody": "The agent was still busy with a reply and did not take this message.",
       "process_exitBody": "The agent process ended unexpectedly. The chat is reconnecting.",
       "process_exit_restart_failedBody": "The agent process ended and could not be restarted.",
       "session_resetBody": "The previous conversation could not be loaded.",

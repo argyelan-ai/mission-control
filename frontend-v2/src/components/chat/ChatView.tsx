@@ -1128,11 +1128,16 @@ export function ChatView({
   );
   // Welches Abzeichen die Kopfzeile gerade zeigt — dieselbe Bedingung wie
   // unten im JSX, hier einmal als Wert, damit die Platzberechnung nicht raet.
+  // "active" comes from the transcript's age (written < 60 s ago); the status
+  // line from the live state. Right after a reply the two disagreed — "live"
+  // in the header, "Bereit" below — and seconds later the same state showed
+  // the dot (round-1 NICE-2). A chat the status line calls ready gets the dot.
+  const badgeAliveness = aliveness === "active" && stream.state?.status === "idle" ? "idle" : aliveness;
   const headerBadge: HeaderBadge = !(canChat && stream.session)
     ? "none"
-    : aliveness === "idle"
+    : badgeAliveness === "idle"
       ? "dot"
-      : aliveness === "active"
+      : badgeAliveness === "active"
         ? "live"
         : "ended";
   const titleSide = headerSideReservation({ hasBack: !!onBack, badge: headerBadge });
@@ -1339,21 +1344,21 @@ export function ChatView({
             but idle at its prompt; the header then announced "beendet" at a
             session sitting right there. `idle` now gets a quiet dot with no
             word at all: nothing is happening, and nothing is wrong. */}
-        {canChat && stream.session && aliveness !== "idle" && (
+        {headerBadge === "live" || headerBadge === "ended" ? (
           <span
             data-testid="session-badge"
-            data-aliveness={aliveness}
+            data-aliveness={badgeAliveness}
             className="relative z-10 text-[10px] font-medium px-1.5 py-0.5 rounded-sm font-mono shrink-0"
             style={{
-              background: aliveness === "active" ? alpha(C.online, 0.1) : C.bgHover,
-              color: aliveness === "active" ? C.online : C.textMuted,
-              border: `1px solid ${aliveness === "active" ? alpha(C.online, 0.2) : C.border}`,
+              background: headerBadge === "live" ? alpha(C.online, 0.1) : C.bgHover,
+              color: headerBadge === "live" ? C.online : C.textMuted,
+              border: `1px solid ${headerBadge === "live" ? alpha(C.online, 0.2) : C.border}`,
             }}
           >
-            {aliveness === "active" ? "live" : "beendet"}
+            {headerBadge === "live" ? "live" : "beendet"}
           </span>
-        )}
-        {canChat && stream.session && aliveness === "idle" && (
+        ) : null}
+        {headerBadge === "dot" && (
           <span
             data-testid="session-badge"
             data-aliveness="idle"
