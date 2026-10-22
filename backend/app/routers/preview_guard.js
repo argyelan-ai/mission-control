@@ -63,7 +63,10 @@
     } catch (e) { /* keep the original */ }
   }
   /* A page that still breaks: tell MC once, so it can show a hint outside
-     the frame. A fixed word, never the page's text. */
+     the frame. A fixed word, never the page's text. Only thrown errors
+     count - a rejected promise is no broken page: a start sound before the
+     first tap (NotAllowedError) or a fetch (connect-src 'none') reject in
+     pages that run fine. */
   var told = false;
   function tell() {
     if (told) return;
@@ -71,5 +74,4 @@
     try { w.parent.postMessage({ mcPreview: "page-error" }, "*"); } catch (e) { /* no parent */ }
   }
   w.addEventListener("error", tell);
-  w.addEventListener("unhandledrejection", tell);
 })(window, document);

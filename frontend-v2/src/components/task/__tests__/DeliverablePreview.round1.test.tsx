@@ -171,8 +171,17 @@ describe("preview guard — storage stand-ins for the sandboxed page (t4 M1)", (
     const { w, d, listeners, posted } = opaqueWindow();
     runGuard(w, d);
     listeners.error();
-    listeners.unhandledrejection();
+    listeners.error();
     expect(posted).toEqual([[{ mcPreview: "page-error" }, "*"]]);
+  });
+
+  it("does not report a rejected promise: a blocked start sound or fetch is no broken page", () => {
+    // Review of #953: Audio.play() before a tap (NotAllowedError) and any
+    // fetch (connect-src 'none') reject in pages that run fine.
+    const { w, d, listeners, posted } = opaqueWindow();
+    runGuard(w, d);
+    expect(listeners.unhandledrejection).toBeUndefined();
+    expect(posted).toEqual([]);
   });
 });
 
@@ -192,6 +201,13 @@ describe("HtmlPreview — a visible hint when the page throws (t4 M1)", () => {
     });
     const hint = screen.getByText(HINT);
     expect(frame.contains(hint)).toBe(false);
+    // Below the frame, not over it: the hint is not inside the frame's own
+    // box, and that box comes before it (touch controls sit at the bottom).
+    const box = frame.parentElement as HTMLElement;
+    const row = screen.getByTestId("html-preview-page-error");
+    expect(box.contains(row)).toBe(false);
+    expect(box.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.className).not.toMatch(/\babsolute\b/);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss hint" }));
     expect(screen.queryByText(HINT)).toBeNull();
   });

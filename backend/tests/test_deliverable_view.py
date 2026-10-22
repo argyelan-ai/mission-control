@@ -1211,6 +1211,10 @@ def test_the_guard_script_defines_storage_stand_ins_and_reports_errors():
     assert "localStorage" in script and "sessionStorage" in script
     assert '"cookie"' in script
     assert 'mcPreview: "page-error"' in script
+    # Only thrown errors count. A rejected promise is no broken page: a start
+    # sound before the first tap or a fetch (connect-src 'none') reject in
+    # pages that run fine (review of #953).
+    assert "unhandledrejection" not in script
     # It sits inside a <script> element: it must never close it early.
     assert "</script" not in script.lower()
 

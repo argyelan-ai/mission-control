@@ -334,45 +334,50 @@ function SandboxedFrame({ doc, title, folderUrl }: { doc: string; title: string;
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
+  // The frame's own box, then MC's hint row under it: the hint takes its
+  // height from the frame and never lies over the page's bottom edge, where
+  // games put their touch controls.
   return (
-    <>
-      {source.kind !== "minting" && (
-        <iframe
-          // A new element when the source changes: an iframe with both src
-          // and srcdoc would show the srcdoc.
-          key={source.kind === "url" ? source.url : "srcdoc"}
-          ref={frameRef}
-          title={title}
-          sandbox={HTML_PREVIEW_SANDBOX}
-          {...(source.kind === "url" ? { src: source.url } : { srcDoc: doc })}
-          referrerPolicy="no-referrer"
-          onLoad={() => setLoaded(true)}
-          className="absolute inset-0 block w-full h-full border-0"
-          // The page's own ground, as in a browser tab: a page without a
-          // background is white (the system colour Canvas), a page that asks
-          // for a dark scheme gets a dark canvas from the browser.
-          style={{ colorScheme: "light", background: "Canvas" }}
-        />
-      )}
-      {!loaded && (
-        <div
-          role="status"
-          className="absolute inset-0 flex items-center justify-center gap-2 text-xs"
-          style={{ background: C.bgDeep, color: C.textMuted }}
-        >
-          <Loader2 size={16} className="animate-spin" aria-hidden="true" />
-          {t("loading")}
-        </div>
-      )}
+    <div className="absolute inset-0 flex flex-col">
+      <div className="relative flex-1 min-h-0">
+        {source.kind !== "minting" && (
+          <iframe
+            // A new element when the source changes: an iframe with both src
+            // and srcdoc would show the srcdoc.
+            key={source.kind === "url" ? source.url : "srcdoc"}
+            ref={frameRef}
+            title={title}
+            sandbox={HTML_PREVIEW_SANDBOX}
+            {...(source.kind === "url" ? { src: source.url } : { srcDoc: doc })}
+            referrerPolicy="no-referrer"
+            onLoad={() => setLoaded(true)}
+            className="absolute inset-0 block w-full h-full border-0"
+            // The page's own ground, as in a browser tab: a page without a
+            // background is white (the system colour Canvas), a page that asks
+            // for a dark scheme gets a dark canvas from the browser.
+            style={{ colorScheme: "light", background: "Canvas" }}
+          />
+        )}
+        {!loaded && (
+          <div
+            role="status"
+            className="absolute inset-0 flex items-center justify-center gap-2 text-xs"
+            style={{ background: C.bgDeep, color: C.textMuted }}
+          >
+            <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+            {t("loading")}
+          </div>
+        )}
+      </div>
       {pageError && <PageErrorHint onDismiss={() => setPageError(false)} />}
-    </>
+    </div>
   );
 }
 
 /**
- * MC's own line over the bottom of the frame when the page reported an
- * error: the operator sees that the page broke, not a page that silently
- * does nothing. Fixed text — the page's own error text never shows here.
+ * MC's own row below the frame when the page reported an error: the
+ * operator sees that the page broke, not a page that silently does nothing.
+ * The frame gives up the row's height; nothing of the page is covered. Fixed text — the page's own error text never shows here.
  */
 function PageErrorHint({ onDismiss }: { onDismiss: () => void }) {
   const t = useTranslations("filePreview.html");
@@ -380,7 +385,7 @@ function PageErrorHint({ onDismiss }: { onDismiss: () => void }) {
     <div
       role="status"
       data-testid="html-preview-page-error"
-      className="absolute inset-x-0 bottom-0 flex items-start gap-2 pl-3 pr-1 py-1 text-xs"
+      className="shrink-0 flex items-start gap-2 pl-3 pr-1 py-1 text-xs"
       style={{ background: C.bgSurface, borderTop: `1px solid ${C.border}`, color: C.textSecondary }}
     >
       <AlertTriangle size={14} className="shrink-0 mt-3" style={{ color: C.warning }} aria-hidden="true" />
