@@ -706,7 +706,7 @@ describe("ChallengeDetail — extension-point actions (ADR-044)", () => {
       makeChallenge({ status: "review", actions: [] })
     );
     renderDetail();
-    await screen.findByRole("button", { name: /Create Draft/ });
+    await screen.findByRole("button", { name: /Create draft/ });
     expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
   });
 

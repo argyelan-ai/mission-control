@@ -498,10 +498,11 @@ describe("NewChallengeDialog — label autofill", () => {
 });
 
 describe("NewChallengeDialog — vanilla (direct-API) spark row (Bench #21)", () => {
-  it("labels the source option 'Direkt-API (vanilla)' instead of 'Spark'", async () => {
+  it("labels the source option 'Direkt-API' (same word as the entry pill) instead of 'Spark'", async () => {
     renderDialog();
     await screen.findByRole("option", { name: /bouncing balls/i });
-    expect(screen.getByRole("option", { name: /direct api \(vanilla\)/i })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /^direct api$/i })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /vanilla/i })).toBeNull();
     expect(screen.queryByRole("option", { name: /^spark$/i })).toBeNull();
   });
 

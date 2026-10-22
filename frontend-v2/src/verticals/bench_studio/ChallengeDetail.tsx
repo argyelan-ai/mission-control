@@ -101,6 +101,13 @@ function apiErrorDetail(err: unknown, fallback: string): string {
   return fallback;
 }
 
+/** True when the API said the challenge does not exist: 404, or 422 for an
+ *  id that is not even a UUID (a mangled `?challenge=` link). request()
+ *  throws `Error("API <status>: <body>")`. */
+function isNotFoundError(err: unknown): boolean {
+  return err instanceof Error && /^API (404|422):/.test(err.message);
+}
+
 /** Mirrors the backend guard in routers.rerender_entry: needs a recorded
  *  artifact and a settled per-entry status. */
 function canRerenderEntry(entry: BenchEntry): boolean {
@@ -181,11 +188,19 @@ export function ChallengeDetail({
   // immediately once the task is scheduled).
   const [rerenderEntryId, setRerenderEntryId] = useState<string | null>(null);
 
-  const { data: challenge } = useQuery({
+  const { data: queried, error: loadError } = useQuery({
     queryKey: ["bench-challenge", challengeId],
     queryFn: () => benchApi.challenges.get(challengeId),
-    refetchInterval: 5000, // polling — no generic SSE hook for bench
+    // polling — no generic SSE hook for bench. A challenge that does not
+    // exist (deleted, or a stale `?challenge=` link) will not come back:
+    // stop asking instead of polling a 404 every 5 s.
+    refetchInterval: (query) => (isNotFoundError(query.state.error) ? false : 5000),
+    retry: (failureCount, err) => !isNotFoundError(err) && failureCount < 3,
   });
+  // Deleted elsewhere while open: react-query keeps the last data on a
+  // failed refetch — the page must not keep showing a challenge that is gone.
+  const notFound = isNotFoundError(loadError);
+  const challenge = notFound ? undefined : queried;
 
   // Once the run this entry kicked off settles (review/failed/etc.), release
   // the spinner — isRunning below already re-enables the other buttons.
@@ -319,7 +334,44 @@ export function ChallengeDetail({
     danger: { background: C.error, color: C.onStatus },
   };
 
-  if (!challenge) return null;
+  if (!challenge) {
+    // Still loading: nothing yet (the poll lands within a moment).
+    if (!loadError) return null;
+    // The open challenge lives in the URL since P4, so a shared/bookmarked
+    // link can point at one that is gone — never leave an empty page
+    // without a way back (review finding SOLL-1).
+    return (
+      <div data-region="bench-detail-missing" className="flex flex-col gap-3">
+        <div className="flex items-start gap-2">
+          <button
+            onClick={onBack}
+            aria-label={t("backAria")}
+            className="flex items-center justify-center w-11 h-11 -ml-3 shrink-0 rounded-md cursor-pointer"
+            style={{ color: C.textSecondary }}
+          >
+            <ArrowLeft size={18} />
+          </button>
+          <div className="flex-1 min-w-0 pt-2">
+            <h2 className="text-lg font-semibold" style={{ color: C.textPrimary }}>
+              {notFound ? t("notFoundTitle") : t("loadFailedTitle")}
+            </h2>
+            <p className="text-sm mt-1" style={{ color: C.textSecondary }}>
+              {notFound ? t("notFoundHint") : t("loadFailedHint")}
+            </p>
+          </div>
+        </div>
+        <div>
+          <button
+            onClick={onBack}
+            className="flex items-center gap-2 px-3 min-h-11 rounded-lg text-sm"
+            style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+          >
+            {t("backToList")}
+          </button>
+        </div>
+      </div>
+    );
+  }
   const canDraft = challenge.status === "review" || challenge.status === "drafted";
   const canRerender = ["review", "drafted", "failed"].includes(challenge.status);
   // Mirrors the backend gates (routers.RUNNING_STATUSES / ARCHIVABLE_STATUSES):

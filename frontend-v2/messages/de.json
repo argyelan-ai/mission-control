@@ -3920,7 +3920,7 @@
       "labelPlaceholderDefault": "Label (z. B. DeepSeek)",
       "labelAria": "Label {index}",
       "sourceAria": "Quelle {index}",
-      "sourceSpark": "Direkt-API (vanilla)",
+      "sourceSpark": "Direkt-API",
       "sourceAgent": "Agent",
       "vllmModelAria": "vLLM-Modell {index}",
       "vllmModelPlaceholderOffline": "vLLM-Modell (leer = aktiv)",
@@ -3952,14 +3952,17 @@
     },
     "challengeDetail": {
       "backAria": "Zurück",
+      "backToList": "Zur Liste",
+      "notFoundTitle": "Challenge nicht gefunden",
+      "notFoundHint": "Sie wurde vielleicht gelöscht, oder der Link ist alt.",
+      "loadFailedTitle": "Challenge konnte nicht geladen werden",
+      "loadFailedHint": "MC versucht es alle paar Sekunden erneut.",
       "moreAria": "Weitere Aktionen",
       "stop": "Stoppen",
       "archive": "Archivieren",
       "unarchive": "Entarchivieren",
       "edit": "Bearbeiten",
-      "editChallengeAria": "Challenge bearbeiten",
       "recompose": "Video neu bauen",
-      "deleteChallengeAria": "Challenge löschen",
       "rerender": "Alles neu aufnehmen",
       "draft": "Entwurf erstellen",
       "gridVideoTitle": "Grid-Video",
@@ -4004,13 +4007,13 @@
       "usageMissing": "Noch keine Token-Daten — das Video zeigt „—“ bei Tokens und Kosten. In ein paar Minuten „Video neu bauen“ wählen. Bleibt es leer, kann MC die Token dieses Agenten noch nicht zählen."
     },
     "draftDialog": {
-      "ariaLabel": "Draft erstellen",
-      "title": "X-Post Draft — {title}",
+      "ariaLabel": "Entwurf erstellen",
+      "title": "X-Post-Entwurf — {title}",
       "textPlaceholder": "Tweet-Text …",
       "speedLabelsCheckbox": "Speed-Labels ins Grid einblenden (z. B. „DeepSeek · 42 s · 87 tok/s“)",
-      "createDraft": "Draft erstellen",
-      "notifyCreated": "Draft in der Inbox — warte auf Freigabe",
-      "notifyFailed": "Draft konnte nicht erstellt werden"
+      "createDraft": "Entwurf erstellen",
+      "notifyCreated": "Entwurf in der Inbox — wartet auf Freigabe",
+      "notifyFailed": "Entwurf konnte nicht erstellt werden"
     }
   },
   "providerDescriptions": {

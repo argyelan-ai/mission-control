@@ -32,9 +32,11 @@ export default function BenchStudioPage() {
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
+  // Any tab click leaves an open challenge — also "Challenges" itself, so a
+  // tap on the tab always lands on the list (and out of a dead link).
   function showTab(next: Tab) {
     setTab(next);
-    if (next !== "challenges" && selectedId) selectChallenge(null);
+    if (selectedId) selectChallenge(null);
   }
 
   function startFromTemplate(tpl: PromptTemplate) {

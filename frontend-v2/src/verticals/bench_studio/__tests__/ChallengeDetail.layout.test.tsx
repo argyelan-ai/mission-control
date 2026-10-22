@@ -108,10 +108,10 @@ describe("ChallengeDetail — header on a phone (P4, t2 MUSS-2 / r2 M2)", () => 
     expect(screen.getByText("Done")).toBeTruthy();
   });
 
-  it("shows one next step (Create Draft) and moves the rest behind ⋯", async () => {
+  it("shows one next step (Create draft) and moves the rest behind ⋯", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(challenge());
     renderDetail();
-    await screen.findByRole("button", { name: /Create Draft/ });
+    await screen.findByRole("button", { name: /Create draft/ });
     expect(screen.queryByRole("button", { name: /^Archive$/ })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "More actions" }));
     const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
@@ -125,7 +125,7 @@ describe("ChallengeDetail — header on a phone (P4, t2 MUSS-2 / r2 M2)", () => 
     );
     renderDetail();
     await screen.findByRole("button", { name: /Stop/ });
-    expect(screen.queryByRole("button", { name: /Create Draft/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Create draft/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Re-record all/ })).toBeNull();
   });
 
@@ -206,5 +206,45 @@ describe("Bench status colours (P4, t4 N6 / r2 S4)", () => {
 
   it("a generated entry is not shown as a warning", () => {
     expect(ENTRY_STATUS_COLOR.generated).not.toBe(C.warning);
+  });
+});
+
+describe("ChallengeDetail — a link to a challenge that is gone (P4 review SOLL-1)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function renderWith(onBack: () => void) {
+    // retryDelay 0: a non-404 error still retries (ChallengeDetail's own
+    // retry rule), the test need not wait seconds for it.
+    const qc = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+    return render(
+      <QueryClientProvider client={qc}>
+        <ChallengeDetail challengeId="gone" onBack={onBack} />
+      </QueryClientProvider>,
+    );
+  }
+
+  it("a 404 says 'not found' and offers the way back instead of an empty page", async () => {
+    vi.mocked(benchApi.challenges.get).mockRejectedValue(new Error('API 404: {"detail":"Challenge not found"}'));
+    const onBack = vi.fn();
+    renderWith(onBack);
+    expect(await screen.findByRole("heading", { name: "Challenge not found" })).toBeTruthy();
+    // 404 is final: no retries.
+    expect(benchApi.challenges.get).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Back to list" }));
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(onBack).toHaveBeenCalledTimes(2);
+  });
+
+  it("a mangled id (422) is treated as not found too", async () => {
+    vi.mocked(benchApi.challenges.get).mockRejectedValue(new Error("API 422: {}"));
+    renderWith(() => {});
+    expect(await screen.findByRole("heading", { name: "Challenge not found" })).toBeTruthy();
+  });
+
+  it("any other error says it could not load, still with the way back", async () => {
+    vi.mocked(benchApi.challenges.get).mockRejectedValue(new Error("API 500: boom"));
+    renderWith(() => {});
+    expect(await screen.findByRole("heading", { name: "Could not load the challenge" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Back to list" })).toBeTruthy();
   });
 });
