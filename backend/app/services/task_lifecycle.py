@@ -2595,6 +2595,22 @@ async def _notify_lead_on_completion(
             if not task:
                 return
 
+            # A vertical that owns the follow-up of its own tasks can claim
+            # them here (hooks.completion_callback_skip_hooks) — no comment,
+            # no lead DM, no Telegram. Routing for every other task is
+            # unchanged. W0.11: bench tasks woke the lead (cloud model) only
+            # to classify a result the operator judges in the Bench Studio.
+            from app.verticals import hooks as vertical_hooks
+            skipped_by = await vertical_hooks.completion_callback_skipped_by(session, task)
+            if skipped_by:
+                await emit_event(
+                    session, "owner.completion_callback_skipped",
+                    f"Completion-Callback uebersprungen fuer '{task.title}' ({skipped_by})",
+                    board_id=board_id, task_id=task.id,
+                    detail={"skipped_by": skipped_by},
+                )
+                return
+
             # ── Collect evidence ──────────────────────────────
             evidence_cmt = (await session.exec(
                 select(TaskComment)
