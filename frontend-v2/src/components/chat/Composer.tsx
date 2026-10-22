@@ -220,6 +220,9 @@ interface ComposerProps {
   /** Plan/Standard switch of a headless (ACP) agent (P3, `ModeChip`), left
    *  of the effort chip. `null`/absent = the agent reports no plan mode. */
   modeSlot?: ReactNode;
+  /** Overrides the default placeholder — while a task runs in this agent's
+   *  chat it says where a message goes ("to the chat, not the task", D12). */
+  placeholder?: string;
 }
 
 /**
@@ -243,7 +246,7 @@ interface ComposerProps {
  *  globals.css passen. */
 export const EFFORT_SETTLE_MS = 320;
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false, voiceSlot = null, modeSlot = null }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
   const t = useTranslations("sessions");
   const locale = useLocale();
   const [text, setText] = useState("");
@@ -824,7 +827,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           rows={1}
-          placeholder={t("messagePlaceholder")}
+          placeholder={placeholder ?? t("messagePlaceholder")}
           // 16px on mobile is not a taste call: anything smaller makes iOS
           // Safari zoom the viewport on focus. The placeholder and caret are
           // themed explicitly — the browser's own placeholder (50% alpha of

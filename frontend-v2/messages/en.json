@@ -987,7 +987,9 @@
       "sent": "Sent…",
       "workingWords": "Working|Thinking|Pondering|Mulling|Tinkering|Puzzling|Computing|Musing|Figuring|Polishing|Sorting|Combining|Distilling|Tracing|Turning ideas|Pulling threads",
       "taskWorking": "Working on a task",
-      "waitingForModel": "Waiting for the model"
+      "waitingForModel": "Waiting for the model",
+      "taskInProgress": "{word} · {title}",
+      "waitingForModelTask": "Waiting for the model · {title}"
     },
     "livePreview": "Live preview",
     "noMessagesYet": "No messages yet",
@@ -1095,7 +1097,8 @@
         "previous": "Previous picture",
         "next": "Next picture",
         "unavailable": "Picture not available"
-      }
+      },
+      "failed": "failed"
     },
     "diff": {
       "scopeLabel": "Changes",
@@ -1193,7 +1196,42 @@
       "statusDone": "done",
       "statusBlocked": "blocked",
       "statusSkipped": "skipped"
-    }
+    },
+    "taskSteps": {
+      "region": "Task {title}",
+      "action": {
+        "view": "View",
+        "review": "Review",
+        "answer": "Answer"
+      },
+      "continues": "{title} · continues",
+      "attempt": "Attempt {n} · {time}",
+      "delivered": "Task delivered · {time}",
+      "firstStepPending": "Waiting for the first step",
+      "noNewSteps": "No new steps for {span}",
+      "runningFor": "running · for {span}",
+      "noResult": "no result",
+      "moreTools": "+{count}",
+      "repeated": "{count}×",
+      "files": "{count, plural, one {# file} other {# files}}",
+      "showSteps": "Show steps",
+      "hideSteps": "Hide steps",
+      "loading": "Loading steps…",
+      "loadFailed": "Steps could not be loaded.",
+      "retry": "Load again",
+      "notLoaded": "{count, plural, one {# earlier step not loaded} other {# earlier steps not loaded}}",
+      "detached": "Task no longer active here",
+      "comment": "Comment",
+      "permission": "Approval: {what} · {decision}",
+      "permissionRequest": "Approval: {what}",
+      "permissionDecision": {
+        "allow_always": "always allowed",
+        "allow_once": "allowed once",
+        "reject_once": "rejected",
+        "reject_always": "always rejected"
+      }
+    },
+    "messagePlaceholderTaskRunning": "Goes to the chat, not the task…"
   },
   "shell": {
     "searchPlaceholder": "Search or command...",

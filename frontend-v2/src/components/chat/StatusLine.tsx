@@ -11,10 +11,12 @@
  * the terminal, the one place that can't lie.
  */
 import { useEffect, useState } from "react";
-import { useTranslations } from "next-intl";
+import Link from "next/link";
+import { useLocale, useTranslations } from "next-intl";
 
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { ChatAliveness, StateEvent } from "@/lib/chatTypes";
+import { capitalize } from "@/lib/taskDetail/stateLine";
 
 interface StatusLineProps {
   state: StateEvent | null;
@@ -34,7 +36,17 @@ interface StatusLineProps {
    *  the tool's own title ("Read poll.sh", "$ git diff"). Only honoured while
    *  the probe says working — a stale activity never outranks the state. */
   activity?: { title: string } | null;
+  /** The live task of a chat that shows task sections (spec A, S5). With it,
+   *  `task_working` says nothing while a task head is on screen (the head
+   *  says it, K3) and otherwise names the task as a link; `waiting_model`
+   *  names it too. Absent = the chat as before (other harnesses). */
+  task?: { taskId: string; title: string } | null;
+  /** A head of the live task's section is in the viewport. */
+  taskHeadVisible?: boolean;
 }
+
+/** One line, left edge on the message column (px-4 md:px-5). */
+const LINE_CLASS = "flex items-center gap-2 px-4 md:px-5 pb-1.5 text-[12px]";
 
 interface StatusDisplay {
   dotColor: string;
@@ -211,8 +223,12 @@ export function StatusLine({
   aliveness = "active",
   sending = false,
   activity = null,
+  task = null,
+  taskHeadVisible = false,
 }: StatusLineProps) {
   const t = useTranslations("sessions.status");
+  const tAll = useTranslations();
+  const locale = useLocale();
   // Der Hook muss VOR jedem fruehen Return laufen (Regeln der Hooks); er ist nur
   // aktiv, wenn wirklich gearbeitet wird, und laesst sonst keinen Timer laufen.
   const workingWord = useWorkingWord(connected && state?.status === "working" && !sending);
@@ -225,11 +241,52 @@ export function StatusLine({
   // (Monospace, eine Zeile, abgeschnitten — nichts springt).
   const showVerb = working && !activity;
 
+  // A task section in the chat (spec A): the task is named, as a link.
+  const live = !sending && aliveness !== "ended" && connected;
+  const status = state?.status;
+  if (task && live && status === "task_working" && taskHeadVisible) return null;
+  if (task && live && (status === "task_working" || status === "waiting_model")) {
+    const waiting = status === "waiting_model";
+    const word = waiting
+      ? null
+      : capitalize(tAll("tasks.detail.line.task.in_progress"), locale);
+    const marker = "\u0000";
+    const sentence = waiting
+      ? t("waitingForModelTask", { title: marker })
+      : t("taskInProgress", { word: word ?? "", title: marker });
+    const [before, after = ""] = sentence.split(marker);
+    return (
+      <div
+        className={LINE_CLASS}
+        style={{ color: waiting ? STATUS_TEXT.warning : C.textMuted }}
+        aria-live="polite"
+      >
+        <span
+          data-testid="status-dot"
+          data-live="false"
+          className="status-dot relative inline-flex h-1.5 w-1.5 shrink-0 rounded-full"
+          style={{ backgroundColor: waiting ? C.warning : C.textDim, ["--status-dot" as string]: waiting ? C.warning : C.textDim }}
+        />
+        <span data-testid="status-label" className="min-w-0 flex items-center">
+          <span className="shrink-0 whitespace-pre">{before}</span>
+          <Link
+            href={`/tasks?task=${encodeURIComponent(task.taskId)}`}
+            className="min-w-0 truncate min-h-11 -my-4 flex items-center underline-offset-2 hover:underline"
+            style={{ color: C.textSecondary }}
+          >
+            {task.title}
+          </Link>
+          {after && <span className="shrink-0 whitespace-pre">{after}</span>}
+        </span>
+      </div>
+    );
+  }
+
   return (
     // Left edge lines up with the message column (px-4 md:px-5), so the status
     // reads as the last line of the conversation rather than composer chrome.
     <div
-      className="flex items-center gap-2 px-4 md:px-5 pb-1.5 text-[12px]"
+      className={LINE_CLASS}
       style={{ color: display.textColor }}
       aria-live="polite"
     >

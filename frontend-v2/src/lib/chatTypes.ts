@@ -410,6 +410,107 @@ export type TaskActivity =
       queued: number;
     };
 
+// ── Task steps in the agent chat (spec A, variant A) ────────────────────────
+// `GET /agents/{id}/chat/tasks`, `…/tasks/{task_id}/steps`, `…/steps/{row_id}`
+// (backend `services/chat_task_steps.py`). Read-only; a task's work stands at
+// its time inside the chat. Never fed through `useChatStream` (#898).
+
+/** One task of this chat: every live task assigned to the agent, plus the
+ *  newest finished ones (cards). Times are ISO strings. */
+export interface ChatTaskStub {
+  taskId: string;
+  title: string;
+  status: string;
+  /** Assigned to this agent AND in a live state (in_progress, waiting,
+   *  blocked, user_test, or inbox + delivered). Never from "worked by". */
+  live: boolean;
+  deliveredAt: string | null;
+  startedAt: string | null;
+  /** Where the task stands in the chat: started_at → first in_progress
+   *  event → dispatched_at (survives park/requeue). */
+  startKey: string | null;
+  endedAt: string | null;
+  /** A task this agent worked on that now sits with another agent. */
+  assignee: string | null;
+  /** One plain line: result / question / reason (≤ 200 chars), or null. */
+  outcome: string | null;
+  deliverables: number;
+}
+
+export type ChatTasksResponse =
+  | { applies: false }
+  | { applies: true; tasks: ChatTaskStub[]; queued: number; hasMore: boolean };
+
+interface TaskStepBase {
+  /** `<attempt>:<eventIndex>` or `<attempt>:<eventIndex>.<k>` (recovered piece). */
+  id: string;
+  ts: string | null;
+}
+
+export type TaskStepRow =
+  | (TaskStepBase & { k: "think"; lead: string; more?: boolean; ms?: number })
+  | (TaskStepBase & {
+      k: "tool";
+      name: string | null;
+      title: string;
+      st: "running" | "done" | "error";
+      stats?: { additions: number; deletions: number } | null;
+    })
+  | (TaskStepBase & { k: "comment"; type: string; text: string; more?: boolean })
+  | (TaskStepBase & { k: "text"; text: string; more?: boolean })
+  | (TaskStepBase & { k: "system"; what: string; request?: boolean; decision?: string; src?: string })
+  | (TaskStepBase & { k: "delivery"; lead: string; more?: boolean })
+  | (TaskStepBase & { k: "attempt"; n: number });
+
+/** The task's running thought or answer (live tasks only). */
+export type TaskLiveRow =
+  | { block: "thinking"; startedAt: string | null; ts: string; chars: number | null; stale: boolean; text?: string }
+  | { block: "text"; ts: string; text: string; stale: boolean };
+
+export type TaskStepsResponse =
+  | { applies: false }
+  | {
+      applies: true;
+      taskId: string;
+      status: string;
+      live: boolean;
+      hasSession: boolean;
+      attempts: { n: number; startedAt: string | null }[];
+      /** Oldest first. */
+      rows: TaskStepRow[];
+      /** Current form of rows listed in `open` (a running tool finished). */
+      updated: TaskStepRow[];
+      cursor: string;
+      /** More rows behind the cursor — fetch again at once. */
+      hasMore: boolean;
+      /** The cursor did not fit: `rows` replace everything. */
+      reset: boolean;
+      /** Rows older than the first returned one (initial page only). */
+      omitted: number;
+      liveRow: TaskLiveRow | null;
+    };
+
+/** One step in full (on tap). */
+export interface TaskStepDetail {
+  id: string;
+  ts: string | null;
+  k: "think" | "tool" | "comment" | "text" | "system" | "delivery" | "attempt";
+  text?: string;
+  truncated?: boolean;
+  durationMs?: number;
+  name?: string | null;
+  title?: string | null;
+  st?: "running" | "done" | "error";
+  detail?: Record<string, unknown> | null;
+  result?: string | null;
+  diffs?: ToolDiff[] | null;
+  locations?: string[] | null;
+  stats?: { additions: number; deletions: number } | null;
+  type?: string;
+}
+
+export type TaskStepLiveDetail = { liveRow: TaskLiveRow | null };
+
 /** Eine Hintergrund-Meldung der CLI: ein Subagent oder ein Hintergrund-Befehl
  *  ist fertig. Sie steht im Transkript als Nachricht mit der Rolle `user` —
  *  ungedeutet stand sie darum als Nachricht des Operators im Chat, samt
