@@ -1,18 +1,18 @@
 
- ▐▛███▜▌   Claude Code v2.1.217
-▝▜█████▛▘  Sonnet 5 · Claude API
-  ▘▘ ▝▝    /home/agent
+ ▐▛███▛█   Claude Code v2.1.308
+▝▜██████▀  Sonnet 5 · Claude API
+ ▝▝   ▝▝   /home/agent
 
- ▎ Using Sonnet 5 (from .claude/settings.json) · /model
+  Updated to latest. Got 62 features, 391 bugfixes, and 132 other changes.
+  code.claude.com/docs/en/changelog for details
 
+▎ Using Sonnet 5 (from .claude/settings.json) · /model
 
+❯ say hi
 
+● Hello from the mock.
 
-
-
-
-
-
+✻ Brewed for 46s · done 1:05 PM
 
 
 
@@ -21,4 +21,4 @@
 ────────────────────────────────────────────────────────────────────────────────
 ❯ 
 ────────────────────────────────────────────────────────────────────────────────
-  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

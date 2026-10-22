@@ -140,7 +140,6 @@ backend/scripts/create_free_code_agent.py: freecode
 backend/templates/SOUL.md.j2: davinci, freecode, shakespeare, sparky
 backend/templates/docs/pdf-office.md.j2: freecode
 backend/tests/context_scrape_fixtures.py: sparky
-backend/tests/fixtures/panes/claude/meta.json: freecode
 backend/tests/fixtures/panes/openclaude/meta.json: freecode, shakespeare
 backend/tests/test_agent_chat_input.py: freecode
 backend/tests/test_agent_image_no_provider_defaults.py: shakespeare

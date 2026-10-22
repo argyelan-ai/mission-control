@@ -1,24 +1,24 @@
+▝▜██████▀  Sonnet 5 · Claude API
+ ▝▝   ▝▝   /home/agent
 
- ▐▛███▜▌   Claude Code v2.1.217
-▝▜█████▛▘  Sonnet 5 · Claude API
-  ▘▘ ▝▝    /home/agent
+  Updated to latest. Got 62 features, 391 bugfixes, and 132 other changes.
+  code.claude.com/docs/en/changelog for details
 
- ▎ Using Sonnet 5 (from .claude/settings.json) · /model
+▎ Using Sonnet 5 (from .claude/settings.json) · /model
 
-❯ Antworte nur mit OK.
+❯ say hi
 
-● OK
+● Hello from the mock.
 
-✻ Cogitated for 2s
+✻ Brewed for 46s · done 1:05 PM
 
-❯ Antworte nur mit OK.
+❯ list the files here
 
-
-
-* Transfiguring…
-  ⎿  Tip: Use /permissions to pre-approve and pre-deny bash, edit, and MCP tools
+· Cogitating…
+  ⎿  Tip: Use Plan Mode to prepare for a complex request before making changes.
+     Press shift+tab twice to enable.
 
 ────────────────────────────────────────────────────────────────────────────────
 ❯ 
 ────────────────────────────────────────────────────────────────────────────────
-  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for age…
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt

@@ -117,7 +117,7 @@ WORKDIR /home/agent
 # scripts/build-agent-images.sh setzt den build-arg, das Default hier ist nur
 # der Fallback fuer manuelle `docker build`-Aufrufe. install.sh akzeptiert
 # [stable|latest|VERSION] als $1.
-ARG CLAUDE_VERSION=2.1.201
+ARG CLAUDE_VERSION=2.1.308
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}"
 ENV PATH="/home/agent/.local/bin:${PATH}"
 LABEL mc.cli.name="claude" mc.cli.version="${CLAUDE_VERSION}"

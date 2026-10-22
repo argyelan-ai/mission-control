@@ -1,24 +1,24 @@
 
-[38;5;174m ▐[48;5;16m▛███▜[49m▌[39m   [1mClaude Code[0m[39m[49m [38;5;246mv2.1.217
-[38;5;174m▝▜[48;5;16m█████[49m▛▘[39m  [38;5;246mSonnet 5 · Claude API
-[38;5;174m  ▘▘ ▝▝  [39m  [38;5;246m/home/agent
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m[39m[49m [38;5;246mv2.1.308
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mSonnet 5 · Claude API
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/home/agent
 
-[39m [2m▎[0m[39m[49m [38;5;246mUsing Sonnet 5 (from .claude/settings.json) · /model
+[39m  [1mUpdated to latest. Got 62 features, 391 bugfixes, and 132 other changes.
+[0m[39m[49m  [38;5;246mcode.claude.com/docs/en/changelog for details
 
+[2m[39m▎[0m[39m[49m [38;5;246mUsing Sonnet 5 (from .claude/settings.json) · /model
 
+[48;5;237m❯ [38;5;231msay hi[39m
 
+[38;5;231m[49m●[39m Hello from the mock.
 
-
-
-
-
-
+[38;5;246m✻[39m [38;5;246mBrewed for 46s · done 1:05 PM
 
 
 
 
 [39m
 [38;5;244m────────────────────────────────────────────────────────────────────────────────
-[39m❯ 
-[38;5;244m────────────────────────────────────────────────────────────────────────────────
-[39m  [38;5;211m⏵⏵ bypass permissions on[38;5;246m (shift+tab to cycle) · ← for agents
+[39m❯ [7m
+[0m[38;5;244m[49m────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;211m⏵⏵ bypass permissions on[38;5;246m (shift+tab to cycle)[39m
