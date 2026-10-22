@@ -21,6 +21,10 @@ haelt:
                                                          ``{"ok":false,"error":"bad_content",...}``
 ===============  ======================================  ==========================
 
+``config`` traegt die id, die der Agent selbst meldet: die Denk-Stufe heisst
+bei omp ``thinking``, bei Hermes ``reasoning_effort`` (beide Kategorie
+``thought_level``, ``agent_chat_input._acp_thinking_option``).
+
 Plan-Modus braucht keine eigene Op: ``config`` mit ``{"id":"mode","value":
 "plan"|"default"}`` (omp meldet ``mode`` in ``configOptions``).
 

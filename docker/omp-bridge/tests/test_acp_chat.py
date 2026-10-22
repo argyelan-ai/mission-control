@@ -1018,6 +1018,38 @@ def test_new_session_opens_a_fresh_session_and_keeps_the_old_transcript(tmp_path
     print("PASS test_new_session_opens_a_fresh_session_and_keeps_the_old_transcript")
 
 
+#: Hermes' option set (upstream "reasoning effort as an ACP session config
+#: option"): the thinking level is `reasoning_effort` with the ACP standard
+#: category `thought_level` — not omp's id `thinking`.
+HERMES_SESSION_RESULT = {
+    "sessionId": "sid-1",
+    "configOptions": [
+        {"id": "edit_approval_policy", "category": "mode", "currentValue": "session",
+         "options": [{"value": "session", "name": "Session"}]},
+        {"id": "reasoning_effort", "category": "thought_level", "currentValue": "default",
+         "options": [{"value": "default", "name": "Default"}, {"value": "none", "name": "None"},
+                     {"value": "low", "name": "low"}, {"value": "xhigh", "name": "xhigh"}]},
+    ],
+}
+
+
+def test_new_session_carries_a_thought_level_option_by_its_own_id(tmp_path):
+    """/clear keeps the operator's thinking level for every harness: the
+    carry-over finds the option by id `thinking` OR category `thought_level`
+    and sets it back under the id the agent advertised."""
+    client = FakeClient(session_result=HERMES_SESSION_RESULT, new_ids=["sid-1", "sid-2"])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    sess.config("reasoning_effort", "xhigh")
+
+    assert sess.new_session() == {"ok": True, "previousSessionId": "sid-1"}
+    assert sess.wait_idle(timeout=5)
+    sess.close()
+    assert ("set_config_option", "sid-2", "reasoning_effort", "xhigh") in client.calls
+    assert not any(c[0] == "set_config_option" and c[2] == "thinking" for c in client.calls)
+    print("PASS test_new_session_carries_a_thought_level_option_by_its_own_id")
+
+
 def test_new_session_closes_the_old_session_before_the_new_file_exists(tmp_path):
     """The chat view follows the file whose LAST entry is newest. omp may
     persist into the old session's file while disposing it, so the close must
