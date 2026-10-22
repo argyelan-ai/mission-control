@@ -44,6 +44,11 @@ describe("EntryEffort (bench W0.6/W0.7)", () => {
     expect(screen.getByText("Effort: Default · sent: nothing · thinking off")).toBeInTheDocument();
   });
 
+  it("a running entry with a level says it is being sent, not 'nothing' (round-1 P3)", () => {
+    render(<EntryEffort entry={entry({ status: "generating", metrics: { effort_requested: "max" } })} />);
+    expect(screen.getByText("Effort: Max · sending …")).toBeInTheDocument();
+  });
+
   it("warns when the run stopped at max_tokens", () => {
     render(
       <EntryEffort

@@ -16,6 +16,7 @@ vi.mock("@/verticals/bench_studio/api", () => ({
         levels: ["off", "low", "medium", "high", "max"], default_observed: "on",
         probed_at: null, serving_since: null,
       }),
+      check: vi.fn(),
     },
     challenges: {
       list: vi.fn(),
@@ -709,5 +710,73 @@ describe("NewChallengeDialog — effort chip (bench W0.6)", () => {
         expect.objectContaining({ models: [expect.objectContaining({ source_kind: "agent", effort: null })] })
       );
     });
+  });
+});
+
+describe("NewChallengeDialog — effort check is explicit (round-1 P3)", () => {
+  const UNCHECKED = {
+    served_model_id: "m", reachable: true, status: "unchecked" as const, thinking_key: null,
+    effort_param: null, levels: [], default_observed: "unknown" as const, probed_at: null, serving_since: null,
+  };
+
+  it("opening the dialog only reads; an unchecked model offers 'Check now'", async () => {
+    vi.mocked(benchApi.effortLevels.get).mockResolvedValueOnce(UNCHECKED);
+    vi.mocked(benchApi.effortLevels.check).mockClear();
+    renderDialog();
+    expect(await screen.findByText(/not checked yet/i)).toBeInTheDocument();
+    expect(benchApi.effortLevels.check).not.toHaveBeenCalled();
+    const group = screen.getByRole("radiogroup", { name: /effort for model 1/i });
+    expect(group.querySelectorAll('[role="radio"]')).toHaveLength(1);
+  });
+
+  it("'Check now' probes and then offers the levels found", async () => {
+    vi.mocked(benchApi.effortLevels.get).mockResolvedValueOnce(UNCHECKED);
+    vi.mocked(benchApi.effortLevels.check).mockResolvedValueOnce({
+      ...UNCHECKED, status: "ok", thinking_key: "reasoning_effort", effort_param: "reasoning_effort",
+      levels: ["off", "max"], default_observed: "on",
+    });
+    renderDialog();
+    await userEvent.click(await screen.findByRole("button", { name: /check now/i }));
+    expect(await screen.findByRole("radio", { name: "Max" })).toBeInTheDocument();
+    expect(benchApi.effortLevels.check).toHaveBeenCalledWith(null);
+  });
+
+  it("a busy Spark refuses the check and says so", async () => {
+    vi.mocked(benchApi.effortLevels.get).mockResolvedValueOnce(UNCHECKED);
+    vi.mocked(benchApi.effortLevels.check).mockRejectedValueOnce(
+      new Error('API 409: {"detail":"The Spark is busy"}')
+    );
+    renderDialog();
+    await userEvent.click(await screen.findByRole("button", { name: /check now/i }));
+    expect(await screen.findByText(/spark is busy/i)).toBeInTheDocument();
+  });
+});
+
+describe("NewChallengeDialog — labels stay apart (round-1 P3)", () => {
+  async function twoRows(labelA: string, labelB: string) {
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+    await userEvent.type(screen.getByPlaceholderText(/title/i), "Off vs Max");
+    await userEvent.type(screen.getByPlaceholderText(/prompt/i), "Some prompt");
+    await userEvent.type(screen.getByRole("textbox", { name: "Label 1" }), labelA);
+    await userEvent.click(screen.getByRole("button", { name: /add model/i }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Label 2" }), labelB);
+    await screen.findAllByRole("radio", { name: "Max" });
+  }
+
+  it("same label and same effort: error, Start stays off", async () => {
+    await twoRows("DeepSeek", "deepseek ");
+    expect(screen.getByText(/same label as model 1/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Start Challenge/i })).toBeDisabled();
+  });
+
+  it("same label, different effort: says the effort gets appended, Start allowed", async () => {
+    await twoRows("DeepSeek", "DeepSeek");
+    const groups = screen.getAllByRole("radiogroup");
+    const maxChip = Array.from(groups[1].querySelectorAll('[role="radio"]')).find((c) => c.textContent === "Max");
+    await userEvent.click(maxChip as HTMLElement);
+    expect(screen.queryByText(/same label as model 1/i)).toBeNull();
+    expect(screen.getAllByText(/effort is added to the label/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /Start Challenge/i })).toBeEnabled();
   });
 });
