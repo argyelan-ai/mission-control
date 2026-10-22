@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Plus, Trash2 } from "lucide-react";
@@ -9,6 +9,7 @@ import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { benchApi } from "@/verticals/bench_studio/api";
+import { EffortChips } from "./EffortChips";
 import type { BenchModelSpec, PromptTemplate } from "./types";
 
 const EMPTY_MODEL: BenchModelSpec = { label: "", source_kind: "spark", spark_model: "", display_tag: "" };
@@ -119,6 +120,8 @@ export function NewChallengeDialog({
         models: models.map((m) => ({
           ...m,
           display_tag: m.display_tag?.trim() || null,
+          // Effort is a direct-API setting; agent rows record theirs (D5).
+          effort: m.source_kind === "spark" ? m.effort ?? null : null,
         })),
         series_label: seriesLabel.trim() || null,
         record_duration_s: recordDurationS,
@@ -201,10 +204,11 @@ export function NewChallengeDialog({
   }
 
   // Derived chip-tag default — mirrors the backend fallback
-  // (bench_studio/orchestrator._build_branding_payload): spark -> vLLM,
-  // agent -> harness uppercased, agent name as last resort.
+  // (bench_studio/orchestrator._build_branding_payload): spark -> the local
+  // direct-API path (no engine/hardware guess), agent -> harness uppercased,
+  // agent name as last resort.
   function derivedTag(m: BenchModelSpec): string {
-    if (m.source_kind === "spark") return "VLLM · SPARK";
+    if (m.source_kind === "spark") return "LOCAL · DIRECT API";
     const agent = (agents ?? []).find((a) => a.id === m.agent_id);
     return (agent?.harness ?? agent?.name ?? "AGENT").toUpperCase();
   }
@@ -341,7 +345,8 @@ export function NewChallengeDialog({
             {t("modelsLabel")}
           </span>
           {models.map((m, i) => (
-            <div key={i} className="flex gap-2 items-center">
+            <Fragment key={i}>
+            <div className="flex flex-wrap gap-2 items-center">
               <input
                 value={m.label}
                 onChange={(e) => {
@@ -367,6 +372,7 @@ export function NewChallengeDialog({
                     source_kind: e.target.value as "spark" | "agent",
                     spark_model: "",
                     agent_id: null,
+                    effort: null,
                   })
                 }
                 className="rounded-lg p-2 text-sm outline-none"
@@ -446,6 +452,15 @@ export function NewChallengeDialog({
                 <Trash2 size={14} />
               </button>
             </div>
+            <EffortChips
+              index={i}
+              sourceKind={m.source_kind}
+              model={m.spark_model}
+              sparkOffline={sparkOffline}
+              value={m.effort}
+              onChange={(effort) => setModel(i, { effort })}
+            />
+            </Fragment>
           ))}
           <button
             onClick={() => setModels((prev) => [...prev, { ...EMPTY_MODEL }])}

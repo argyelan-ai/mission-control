@@ -80,6 +80,14 @@ class BenchModelSpec(BaseModel):
     # Custom chip tag for the branded video (e.g. "OMP · DGX SPARK").
     # None -> harness-derived default (orchestrator._build_branding_payload).
     display_tag: str | None = Field(default=None, max_length=80)
+    # Effort (thinking level) for the direct-API path (bench W0.6). None /
+    # "default" = send nothing, the server default governs. Any other level
+    # must be one the effort probe found for the served model (422
+    # otherwise). Agent rows only take "default": a bench task opens a new
+    # omp session that starts on its own default and the chat switch does
+    # not reach it — the level is recorded from the session instead (W0.7,
+    # operator decision D5).
+    effort: Literal["default", "off", "on", "low", "medium", "high", "max"] | None = None
 
 
 class BenchChallengeCreate(BaseModel):
@@ -154,6 +162,54 @@ async def list_spark_models(current_user=Depends(require_user)):
     return await orchestrator.spark_models_status()
 
 
+@router.get("/effort-levels")
+async def get_effort_levels(
+    model: str | None = None,
+    refresh: bool = False,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Bench W0.6: which effort levels the direct-API row may offer for
+    ``model`` (empty = the Spark's active model). Answered from the probe
+    cache (per runtime, served model and serving_since); a missing, failed
+    or ``refresh``-ed probe runs now — 2-4 tiny requests against the box.
+    Always 200: an unreachable box is ``reachable: false``, a probe that
+    found no working key is ``status: "no_effect"`` (only "default" then)."""
+    from . import effort_probe
+
+    served = (model or "").strip()
+    if not served:
+        status_now = await orchestrator.spark_models_status()
+        if not status_now["reachable"] or not status_now["active"]:
+            return effort_probe.serialize(None, None, reachable=False)
+        served = status_now["active"]
+    row = await effort_probe.get_or_probe(session, served, refresh=refresh)
+    return effort_probe.serialize(row, served, reachable=effort_probe.reached(row))
+
+
+async def _validate_effort(session: AsyncSession, spec: BenchModelSpec) -> str:
+    """The effort level to store for ``spec`` — 422 when it cannot run."""
+    level = spec.effort or "default"
+    if level == "default":
+        return level
+    if spec.source_kind == "agent":
+        raise HTTPException(
+            422,
+            f"model {spec.label!r}: effort cannot be set on the agent path yet — "
+            "the agent's session level is recorded instead",
+        )
+    from app.services.reasoning_params import UnsupportedEffortError
+
+    from . import effort_probe
+
+    probe = await effort_probe.get_or_probe(session, spec.spark_model or "")
+    try:
+        effort_probe.level_fields(probe, level)
+    except UnsupportedEffortError as exc:
+        raise HTTPException(422, f"model {spec.label!r}: {exc}") from exc
+    return level
+
+
 @router.post("/challenges", status_code=status.HTTP_201_CREATED)
 async def create_challenge(
     body: BenchChallengeCreate,
@@ -191,6 +247,7 @@ async def create_challenge(
             spec.spark_model = resolved_spark_model
             if not spec.label.strip():
                 spec.label = spec.spark_model
+    efforts = [await _validate_effort(session, spec) for spec in body.models]
 
     series_no = None
     if body.series_label:
@@ -222,8 +279,11 @@ async def create_challenge(
             spark_model=spec.spark_model,
             agent_id=spec.agent_id,
             display_tag=(spec.display_tag or "").strip() or None,
+            # The requested effort lives in metrics until the W1 schema PR
+            # moves it into a column (concept §7: same field names).
+            metrics={"effort_requested": effort},
         )
-        for spec in body.models
+        for spec, effort in zip(body.models, efforts)
     ]
     for e in entries:
         session.add(e)
@@ -265,8 +325,9 @@ async def get_challenge(
     if challenge is None:
         raise HTTPException(404, "Challenge not found")
     entries = await _entries_for(session, challenge_id)
-    # Poll-fallback for failed agent tasks (they never fire task_done):
-    await orchestrator.reconcile_challenge(session, challenge, entries)
+    # Read-only (W0.8): failed/aborted/deleted agent tasks are healed by the
+    # vertical's background sweep (orchestrator.reconcile_loop), so the list
+    # shows them too and a GET never writes.
     # Why a running agent entry waits (blocked + question, last sign of
     # life) — derived, read-only, never persisted.
     task_states = await orchestrator.entry_task_states(session, entries)

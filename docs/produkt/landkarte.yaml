@@ -596,8 +596,9 @@ features:
     api:
       # Benchmark studio vertical (ADR-070, backend/app/verticals/bench_studio/):
       # challenge gallery/detail CRUD, draft via approval, rerender/recompose/
-      # stop lifecycle, entry retry/rerender/edit, spark model list for the
-      # new-challenge dialog. The entry view URL carries a short-lived
+      # stop lifecycle, entry retry/rerender/edit, spark model list and the
+      # effort probe's levels (effort-levels) for the new-challenge dialog.
+      # The entry view URL carries a short-lived
       # resource-scoped view-token so it can be opened on a phone without a
       # Bearer header (router docstring).
       - "* /api/v1/bench/*"
@@ -606,10 +607,12 @@ features:
       - "* /api/v1/prompt-templates"
       - "* /api/v1/prompt-templates/*"
     tables:
-      # Bench studio vertical (ADR-070): challenges, entries, content
+      # Bench studio vertical (ADR-070): challenges, entries, the effort
+      # probe cache (which thinking key a served model honours), content
       # pipelines (draft flow) and the prompt library.
       - bench_challenges
       - bench_entries
+      - bench_probes
       - content_pipelines
       - prompt_templates
   - id: F-files

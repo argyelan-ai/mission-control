@@ -803,8 +803,11 @@ async def backfill_usage_attribution(
     JSONL from the start. Re-scanned lines whose message_uuid is already in
     the DB are never re-inserted (dedup) — but if their event still has
     task_id IS NULL, the harvester's backfill pass UPDATEs it once the
-    current task_workspace_map resolves a match. Events whose source JSONL
-    has since been deleted are not reachable and stay NULL — never guessed.
+    dispatch marker or the current task_workspace_map resolves a match.
+    Events that already have a task are moved only when the transcript's
+    dispatch marker names a different, existing task (re-attribution pass;
+    the cwd match never moves a tasked row). Events whose source JSONL has
+    since been deleted are not reachable and stay as they are — never guessed.
 
     Runs asynchronously: this endpoint only flips the offset state, the
     actual attribution happens on the harvester's own schedule.

@@ -87,6 +87,8 @@ RUN rm -rf /ms-playwright/chromium_headless_shell-*
 COPY media.py /app/media.py
 COPY service.py /app/service.py
 COPY deterministic_shim.js /app/deterministic_shim.js
+COPY record_network.py /app/record_network.py
+COPY record_network_guard.js /app/record_network_guard.js
 COPY templates/ /app/templates/
 
 # Proof by effect, at build time and on whatever architecture builds the
@@ -98,9 +100,14 @@ RUN python3 /app/check_browser.py
 
 # Bench-video branding fonts: fetched + inlined at build time (never
 # committed — Fontshare fonts must not be redistributed verbatim, see
-# templates/bench/fetch_fonts.py). Network failure must NOT fail the build —
-# the script itself guarantees that (writes an empty css + exits 0).
-RUN python3 /app/templates/bench/fetch_fonts.py
+# templates/bench/fetch_fonts.py). The build FAILS when the fonts cannot be
+# embedded (a remote url() would be a silently missing font at render time —
+# every video showed DejaVu Sans until 2026-10). Offline build on purpose:
+# --build-arg BENCH_FONTS_OPTIONAL=1 (system-font fallback, still no CDN
+# reference). The grep is an independent second guard on the output.
+ARG BENCH_FONTS_OPTIONAL=0
+RUN BENCH_FONTS_OPTIONAL=$BENCH_FONTS_OPTIONAL python3 /app/templates/bench/fetch_fonts.py \
+ && ! grep -Eq "url\(['\"]?(https?:)?//" /app/templates/bench/fonts/embedded-fonts.css
 
 ENV PYTHONUNBUFFERED=1
 

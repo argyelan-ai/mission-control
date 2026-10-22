@@ -1261,6 +1261,90 @@ describe("Composer", () => {
       expect(screen.getByTestId("effort-chip-static")).toBeInTheDocument();
     });
 
+    describe("a ladder with a 'default' entry (Hermes over ACP)", () => {
+      // The real option values Hermes reports (reasoning_effort, category
+      // thought_level). `default` is not a level: it hands the session back
+      // to the agent's configured level, so it has no rank on the slider.
+      const HERMES = {
+        effortLevels: ["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"],
+        canSwitchEffort: true,
+        effortLive: true,
+        effortScope: "session" as const,
+      };
+      const RANKED = HERMES.effortLevels.slice(1);
+      const renderHermes = (effort: string) =>
+        render(
+          <Composer
+            agentId="a1"
+            usage={null}
+            capabilities={{ ...HERMES, effort }}
+            state={null}
+            onSend={vi.fn()}
+            onStop={vi.fn()}
+          />
+        );
+
+      it("keeps 'default' off the slider, which runs none..max in order", async () => {
+        const user = userEvent.setup();
+        renderHermes("medium");
+        await user.click(screen.getByTestId("effort-chip"));
+        expect(slider()).toHaveAttribute("max", String(RANKED.length - 1));
+        expect(shownLevel()).toBe("medium");
+        expect(levelsInOrder(RANKED)).toEqual(RANKED);
+      });
+
+      it("fills the gauge over the ranked levels only", () => {
+        renderHermes("medium"); // index 3 of 7 -> 4/7
+        expect(screen.getByTestId("effort-gauge-fill").style.height).toBe(`${(4 / 7) * 100}%`);
+      });
+
+      it("keeps the gauge empty on 'default' — no level is claimed", () => {
+        renderHermes("default");
+        expect(screen.getByTestId("effort-gauge-fill").style.height).toBe("0%");
+      });
+
+      it("names 'default' under the slider instead of the slider's first stop", async () => {
+        // The thumb has to rest somewhere; the label must not claim "none"
+        // while the model thinks at its configured level.
+        const user = userEvent.setup();
+        renderHermes("default");
+        await user.click(screen.getByTestId("effort-chip"));
+        expect(shownLevel()).toBe("default");
+        expect(slider()).toHaveAttribute("aria-valuetext", "default");
+        expect(screen.getByTestId("effort-default")).toHaveAttribute("aria-pressed", "true");
+        // Dragging previews a real level again.
+        fireEvent.change(slider(), { target: { value: String(RANKED.indexOf("low")) } });
+        expect(shownLevel()).toBe("low");
+      });
+
+      it("offers 'default' as its own button that sends the value", async () => {
+        const user = userEvent.setup();
+        renderHermes("max");
+        await user.click(screen.getByTestId("effort-chip"));
+        const reset = screen.getByTestId("effort-default");
+        expect(reset).toHaveAttribute("aria-pressed", "false");
+        await user.click(reset);
+        expect(mockSetEffort).toHaveBeenCalledWith("a1", "default");
+      });
+
+      it("says every level lasts for this session only when the scope is the session", async () => {
+        const user = userEvent.setup();
+        renderHermes("medium");
+        await user.click(screen.getByTestId("effort-chip"));
+        for (const level of ["low", "medium", "xhigh"]) {
+          fireEvent.change(slider(), { target: { value: String(RANKED.indexOf(level)) } });
+          expect(screen.getByTestId("effort-menu").textContent).toContain("this session only");
+        }
+      });
+    });
+
+    it("shows no 'default' button for a ladder without one", async () => {
+      const user = userEvent.setup();
+      renderWithEffort("high");
+      await user.click(screen.getByTestId("effort-chip"));
+      expect(screen.queryByTestId("effort-default")).not.toBeInTheDocument();
+    });
+
     it("marks the level the transcript reports as the selected one", async () => {
       const user = userEvent.setup();
       renderWithEffort("high");

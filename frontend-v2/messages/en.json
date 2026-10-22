@@ -1055,6 +1055,7 @@
     "effortLockedStateMissing": "The agent has not reported its settings yet — the thinking level shows up once it has.",
     "effortLockedHarnessNoEffort": "{harness} doesn't offer a thinking level.",
     "effortLockedHarnessNoEffortGeneric": "This agent's harness doesn't offer a thinking level.",
+    "effortDefault": "Default — the agent’s configured level",
     "effortSessionOnly": "this session only",
     "effortBecomesDefault": "becomes the default",
     "effortBecomesDefaultShared": "becomes the default — for your local Claude sessions too (shared config)",
@@ -3793,6 +3794,41 @@
     }
   },
   "bench": {
+    "effort": {
+      "label": "Effort",
+      "groupAria": "Effort for model {index}",
+      "level": {
+        "default": "Default",
+        "off": "Off",
+        "on": "On",
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "max": "Max"
+      },
+      "checking": "Checking which levels this model honours …",
+      "checkedAt": "Checked {when}.",
+      "serverDefaultOn": "Default sends nothing — the server thinks by default.",
+      "serverDefaultOff": "Default sends nothing — the server does not think by default.",
+      "serverDefaultUnknown": "Default sends nothing — the server default governs.",
+      "noEffect": "No switch changed this model's thinking — Default only.",
+      "failed": "Check failed — Default only for now.",
+      "offline": "Box offline — Default only.",
+      "retry": "Check again",
+      "deepHint": "Deep levels can think for a long time: the token budget grows up to 4×.",
+      "agentNote": "Effort: the agent session's own level — recorded after the run, not settable yet.",
+      "requested": "Effort: {level}",
+      "sent": "sent {wire}",
+      "sentNothing": "sent: nothing",
+      "thinkingOn": "thinking on",
+      "thinkingOnTokens": "thinking on · {count} reasoning tok",
+      "thinkingOff": "thinking off",
+      "ompSessionDefault": "omp session default: {level}",
+      "ompSession": "omp session: {level}",
+      "agentUnknown": "Effort: not readable for this agent",
+      "truncated": "Stopped at max_tokens ({max}) — thinking used up the budget.",
+      "truncatedFailed": "No page: stopped at max_tokens ({max}) before the HTML — thinking used up the budget."
+    },
     "common": {
       "cancel": "Cancel",
       "save": "Save",
@@ -3811,6 +3847,28 @@
       "showArchived": "Show archive",
       "newChallenge": "New Challenge",
       "emptyState": "No challenges yet — start the first one from the Prompt Library."
+    },
+    "status": {
+      "generating": "Generating",
+      "rendering": "Recording",
+      "composing": "Building video",
+      "review": "Done",
+      "drafted": "Draft",
+      "published": "Published",
+      "failed": "Aborted",
+      "abortedWithReason": "Aborted – {reason}",
+      "reason": {
+        "taskDeleted": "task deleted",
+        "taskFailed": "task failed",
+        "taskAborted": "task cancelled",
+        "stopped": "stopped by you",
+        "renderFailed": "recording failed",
+        "composeFailed": "video failed"
+      }
+    },
+    "recording": {
+      "networkBlocked": "Network blocked while recording: {count, plural, one {# request} other {# requests}} stopped — the page tried to load something from the network. A recording may only use the page itself.",
+      "librariesInlined": "Contains pasted library code: {libraries}"
     },
     "promptLibrary": {
       "searchPlaceholder": "Search …",
@@ -3929,7 +3987,9 @@
       "notifyActionStarted": "{label} started",
       "notifyActionFailed": "{label} not possible",
       "notifyDownloadFailed": "Download failed",
-      "notifyOpenFailed": "Could not open"
+      "notifyOpenFailed": "Could not open",
+      "costLocal": "local",
+      "usageMissing": "No token data yet — the video shows “—” for tokens and cost. Recreate the video in a few minutes. If it stays empty, MC does not count this agent’s harness yet."
     },
     "draftDialog": {
       "ariaLabel": "Create draft",

@@ -731,7 +731,15 @@ services:
   # ueber `mc verify` CLI oder direkt POST /verify hier auf, schreibt
   # Screenshots in gemeinsames Volume das Backend als Deliverables registriert.
   mc-playwright:
-    build: ./docker/mc-playwright
+    build:
+      context: ./docker/mc-playwright
+      args:
+        # The image build embeds the bench-video brand fonts and FAILS when
+        # Fontshare/Google Fonts cannot be reached (a silently missing font
+        # was the old failure mode). Offline/firewalled install: set
+        # BENCH_FONTS_OPTIONAL=1 in .env — the visual verifier still builds,
+        # bench videos then use system fonts.
+        BENCH_FONTS_OPTIONAL: ${BENCH_FONTS_OPTIONAL:-0}
     # Optional: nur mit COMPOSE_PROFILES=browser (Visual-Verify fuer Agents).
     profiles: ["browser"]
     restart: unless-stopped

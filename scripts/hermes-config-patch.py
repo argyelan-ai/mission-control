@@ -6,7 +6,10 @@ Idempotent: re-running makes no diff. Uses ruamel.yaml when available
 
 Model block (ADR-064): from the runtime binding MC writes into Hermes'
 agent.env — OPENAI_BASE_URL / OPENAI_MODEL -> model.base_url / model.default,
-and MC_CONTEXT_WINDOW -> model.context_length. The window matters as much as
+and MC_CONTEXT_WINDOW -> model.context_length, and MC_THINKING_TEMPLATE_KWARG ->
+model.thinking_template_kwarg (how the runtime turns thinking off; read by
+Hermes with the ACP reasoning-effort patch, ignored by older Hermes).
+The window matters as much as
 the name: without it Hermes guesses from its own model-name table, and with a
 stale name it guessed GLM's 202,752 while the runtime served 1,048,576 (live
 22.10.2026 — wrong chat ring AND compaction thresholds sized for the wrong
@@ -160,6 +163,29 @@ def _model_patches_from_env() -> dict:
     return patches
 
 
+#: agent.env key naming the runtime's chat-template thinking switch
+#: (backend/app/routers/internal.py THINKING_TEMPLATE_KWARG_ENV). Present and
+#: non-empty -> written; present and empty -> removed; absent -> left alone.
+THINKING_SWITCH_ENV = "MC_THINKING_TEMPLATE_KWARG"
+THINKING_SWITCH_KEY = "model.thinking_template_kwarg"
+
+
+def _thinking_switch(cfg: dict, model_patches: dict) -> tuple[dict, list[str]]:
+    """``(patches, removals)`` for model.thinking_template_kwarg.
+
+    Only with an MC runtime binding (``model_patches``), like the window: a
+    hand-written model block is never touched. An agent.env from before this
+    key existed says nothing, and nothing is changed then."""
+    if not model_patches or THINKING_SWITCH_ENV not in os.environ:
+        return {}, []
+    value = (os.environ.get(THINKING_SWITCH_ENV) or "").strip()
+    if value:
+        return {THINKING_SWITCH_KEY: value}, []
+    if _get_dotted(cfg, THINKING_SWITCH_KEY) is None:
+        return {}, []
+    return {}, [THINKING_SWITCH_KEY]
+
+
 def _stale_window_removals(cfg: dict, model_patches: dict) -> list[str]:
     """Keys to DROP: a model.context_length left over from another model.
 
@@ -243,7 +269,9 @@ def main() -> int:
     model_patches = _model_patches_from_env()
     # Decided BEFORE model.default is overwritten below.
     removals = _stale_window_removals(cfg, model_patches)
-    patches = {**AUTONOMOUS_WORKER_PATCHES, **model_patches}
+    switch_patches, switch_removals = _thinking_switch(cfg, model_patches)
+    removals += switch_removals
+    patches = {**AUTONOMOUS_WORKER_PATCHES, **model_patches, **switch_patches}
     for dotted, expected in patches.items():
         current = _get_dotted(cfg, dotted)
         if current != expected:
@@ -252,7 +280,9 @@ def main() -> int:
     for dotted in removals:
         current = _get_dotted(cfg, dotted)
         if _del_dotted(cfg, dotted):
-            changed.append(f"  {dotted}: {current!r} -> (removed, belonged to the previous model)")
+            why = ("the runtime has no thinking switch" if dotted == THINKING_SWITCH_KEY
+                   else "belonged to the previous model")
+            changed.append(f"  {dotted}: {current!r} -> (removed, {why})")
 
     if not changed:
         print(f"OK: {CONFIG_PATH} already has all patches (idempotent no-op)")

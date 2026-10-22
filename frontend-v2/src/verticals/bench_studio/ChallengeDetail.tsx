@@ -26,10 +26,12 @@ import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { FilePreview } from "@/components/task/FilePreview";
 import { benchApi } from "@/verticals/bench_studio/api";
-import { BENCH_STATUS_COLOR, ENTRY_STATUS_COLOR } from "./ChallengesTab";
+import { ChallengeStatusPill, ENTRY_STATUS_COLOR, challengeErrorLine } from "./ChallengesTab";
+import { abortReason } from "./status";
 import { DraftDialog } from "./DraftDialog";
+import { EntryEffort, failedAtMaxTokens } from "./EntryEffort";
 import { EntryTaskState } from "./EntryTaskState";
-import type { BenchChallenge, ChallengeAction, BenchEntry } from "./types";
+import type { BenchChallenge, ChallengeAction, BenchEntry, RecordNetworkMetrics } from "./types";
 
 function sharedUrl(absPath: string): string {
   return api.files.contentUrl("shared-deliverables", benchApi.sharedSubpath(absPath));
@@ -104,12 +106,44 @@ function canRerenderEntry(entry: BenchEntry): boolean {
     ["generated", "rendered", "failed"].includes(entry.status);
 }
 
-function metricsLine(m: BenchEntry["metrics"]): string {
+/** Same compact form as the video outro (backend _format_tok_count). */
+function tokCount(n: number): string {
+  if (n < 1_000) return String(n);
+  if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/** Same rule as the video outro (backend _format_outro_cost): a Spark entry
+ *  or a local run shows "local", never an API list price; no or zero cost
+ *  shows nothing; a cloud cost is the API list price, so "~$0.42". */
+function costLabel(entry: BenchEntry, localLabel: string): string | null {
+  const m = entry.metrics;
+  if (entry.source_kind === "spark" || m.locality === "local") return localLabel;
+  if (!m.cost_usd || m.cost_usd <= 0) return null;
+  return m.cost_usd < 0.01 ? "<$0.01" : `~$${m.cost_usd.toFixed(2)}`;
+}
+
+function metricsLine(entry: BenchEntry, localLabel: string): string {
+  const m = entry.metrics;
   const parts: string[] = [];
   if (m.duration_ms) parts.push(`${(m.duration_ms / 1000).toFixed(0)} s`);
   if (m.tok_per_s) parts.push(`${m.tok_per_s.toFixed(0)} tok/s`);
-  if (m.tokens_out) parts.push(`${m.tokens_out} tok`);
+  if (m.tokens_in != null && m.tokens_out != null) {
+    parts.push(`${tokCount(m.tokens_in)} → ${tokCount(m.tokens_out)} tok`);
+  } else if (m.tokens_out) {
+    parts.push(`${m.tokens_out} tok`);
+  }
+  const cost = costLabel(entry, localLabel);
+  if (cost) parts.push(cost);
   return parts.join(" · ");
+}
+
+/** A finished agent entry whose task has no attributed token rows yet: the
+ *  video outro would print "—" for tokens and cost. */
+function usageMissing(entry: BenchEntry): boolean {
+  return entry.source_kind === "agent" &&
+    ["generated", "rendered"].includes(entry.status) &&
+    entry.metrics.tokens_out == null;
 }
 
 /** Extension-point action buttons (ADR-044) POST to a provider-supplied
@@ -309,9 +343,7 @@ export function ChallengeDetail({
           <h2 className="text-lg font-semibold truncate" style={{ color: C.textPrimary }}>
             {challenge.title}
           </h2>
-          <Pill color={BENCH_STATUS_COLOR[challenge.status] ?? C.textMuted}>
-            {challenge.status}
-          </Pill>
+          {abortReason(challenge) === null && <ChallengeStatusPill challenge={challenge} />}
           {challenge.archived_at && (
             <Pill color={C.textMuted} variant="outline">
               {tCommon("archivedPill")}
@@ -423,12 +455,19 @@ export function ChallengeDetail({
         </div>
       </div>
 
-      {challenge.error && (
+      {/* A named end reason is a long pill: own line under the header (the
+          phone header row is already full, see W1.6), like in the list. */}
+      {abortReason(challenge) !== null && (
+        <div>
+          <ChallengeStatusPill challenge={challenge} />
+        </div>
+      )}
+      {challengeErrorLine(challenge) && (
         <div
           className="rounded-lg px-3 py-2 text-sm"
           style={{ color: C.error, border: `1px solid ${alpha(C.error, 0.25)}`, backgroundColor: alpha(C.error, 0.06) }}
         >
-          {challenge.error}
+          {challengeErrorLine(challenge)}
         </div>
       )}
 
@@ -486,9 +525,14 @@ export function ChallengeDetail({
                 </Pill>
               </div>
             </div>
-            {metricsLine(entry.metrics) && (
+            {metricsLine(entry, t("costLocal")) && (
               <span className="text-xs font-mono" style={{ color: C.textMuted }}>
-                {metricsLine(entry.metrics)}
+                {metricsLine(entry, t("costLocal"))}
+              </span>
+            )}
+            {usageMissing(entry) && (
+              <span className="text-xs" style={{ color: C.textMuted }}>
+                {t("usageMissing")}
               </span>
             )}
             {entry.video_path ? (
@@ -501,9 +545,11 @@ export function ChallengeDetail({
                 generatingLabel={entry.status === "generating" ? t("generating") : t("waiting")}
               />
             ) : null}
-            {entry.error && (
+            <EntryEffort entry={entry} />
+            {entry.error && !failedAtMaxTokens(entry) && (
               <span className="text-xs" style={{ color: C.error }}>{entry.error}</span>
             )}
+            <RecordingNetworkNote metrics={entry.metrics} />
             <div className="flex items-center gap-2 mt-auto">
               {entry.artifact_path && (
                 <>
@@ -781,5 +827,30 @@ function EditChallengeDialog({
         </div>
       </div>
     </ResponsiveModal>
+  );
+}
+
+/** W0.9: why a recording may look empty (requests blocked) and whether the
+ *  page pasted a library instead of writing the code. Silent for clean
+ *  recordings and for recordings made before the network block existed. */
+function RecordingNetworkNote({ metrics: raw }: { metrics: BenchEntry["metrics"] }) {
+  const t = useTranslations("bench.recording");
+  const metrics = raw as BenchEntry["metrics"] & RecordNetworkMetrics;
+  const attempts = metrics.network_blocked ? metrics.network_attempts ?? 0 : 0;
+  const libraries = metrics.libraries_inlined ?? [];
+  if (attempts === 0 && libraries.length === 0) return null;
+  return (
+    <>
+      {attempts > 0 && (
+        <span className="text-xs" style={{ color: C.textMuted }}>
+          {t("networkBlocked", { count: attempts })}
+        </span>
+      )}
+      {libraries.length > 0 && (
+        <span className="text-xs" style={{ color: C.textMuted }}>
+          {t("librariesInlined", { libraries: libraries.join(", ") })}
+        </span>
+      )}
+    </>
   );
 }

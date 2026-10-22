@@ -49,6 +49,7 @@ from media import (
     TranscodeResponse,
     build_branded_compose_cmd,
     build_compose_cmd,
+    build_frame_tokens,
     build_pipe_encode_cmd,
     build_storage_state,
     build_transcode_poster_cmd,
@@ -57,8 +58,14 @@ from media import (
     compose_branded_timeout_s,
     fill_bench_template,
     load_deterministic_shim,
-    render_outro_rows_html,
+    render_outro_html,
     resolve_contained_path,
+)
+from record_network import (
+    RecordNetworkGuard,
+    detect_inlined_libraries,
+    load_record_network_guard_script,
+    record_proxy_settings,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -786,8 +793,6 @@ RECORD_CAPTURE_TIMEOUT_S = 900
 # docker/mc-playwright/templates/bench/).
 BENCH_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "bench"
 BENCH_FRAME_VIEWPORT = {"width": 1920, "height": 1080}
-BENCH_MODE_LINE = "side by side"  # frame.html's fixed {{MODE_LINE}} value
-BENCH_MODE_LINE_SINGLE = "solo run"  # frame_single.html's fixed {{MODE_LINE}} value
 
 
 async def _screenshot_bench_card(html_text: str, out_png: Path) -> None:
@@ -823,39 +828,11 @@ async def _render_branding_assets(branding: BrandingSpec, render_dir: Path) -> t
     with the branding payload and screenshots both to PNGs inside render_dir.
     Returns (frame_png, outro_png)."""
     outro_template = (BENCH_TEMPLATES_DIR / "outro.html").read_text(encoding="utf-8")
-
-    if len(branding.models) == 2:
-        frame_template = (BENCH_TEMPLATES_DIR / "frame.html").read_text(encoding="utf-8")
-        model_a, model_b = branding.models
-        frame_tokens = {
-            "TITLE": branding.title,
-            "RUN_LABEL": branding.run_label,
-            "MODEL_A": model_a.label,
-            "TAG_A": model_a.tag,
-            "MODEL_B": model_b.label,
-            "TAG_B": model_b.tag,
-            "PROMPT_LINE": branding.prompt_line,
-            "MODE_LINE": BENCH_MODE_LINE,
-        }
-    else:
-        frame_template = (BENCH_TEMPLATES_DIR / "frame_single.html").read_text(encoding="utf-8")
-        (model,) = branding.models
-        frame_tokens = {
-            "TITLE": branding.title,
-            "RUN_LABEL": branding.run_label,
-            "MODEL": model.label,
-            "TAG": model.tag,
-            "PROMPT_LINE": branding.prompt_line,
-            "MODE_LINE": BENCH_MODE_LINE_SINGLE,
-        }
-    frame_html = fill_bench_template(frame_template, frame_tokens)
-
-    outro_tokens = {"RUN_LABEL": branding.run_label}
-    outro_html = fill_bench_template(outro_template, outro_tokens)
-    # ROWS is a markup block (already html-escaped per-cell by
-    # render_outro_rows_html), not a plain scalar token — filled separately
-    # so fill_bench_template's blanket html.escape() doesn't double-escape it.
-    outro_html = outro_html.replace("{{ROWS}}", render_outro_rows_html(branding.outro_rows))
+    frame_name = "frame.html" if len(branding.models) == 2 else "frame_single.html"
+    frame_template = (BENCH_TEMPLATES_DIR / frame_name).read_text(encoding="utf-8")
+    # Token values + outro markup are built in media.py (pure, unit-tested).
+    frame_html = fill_bench_template(frame_template, build_frame_tokens(branding))
+    outro_html = render_outro_html(outro_template, branding)
 
     frame_png = render_dir / "frame.png"
     outro_png = render_dir / "outro.png"
@@ -1157,14 +1134,41 @@ async def record(req: RecordRequest):
         fps=RECORD_FPS,
     )
 
+    # W0.9: the page is model-written code — no network except the page
+    # document itself (record_network.py). Routing decides + counts, the dead
+    # proxy catches whatever routing does not see, the init script stubs
+    # WebRTC, service workers are off (they would bypass routing).
+    guard = RecordNetworkGuard(req.target_url)
+    libraries: list[str] = []
+    html_bytes: int | None = None
+    if req.html_path:
+        html_text = html.read_text(encoding="utf-8", errors="replace")
+        html_bytes = html.stat().st_size
+        libraries = detect_inlined_libraries(html_text)
+
+    async def _route(route):
+        if guard.allow(route.request.url):
+            await route.continue_()
+        else:
+            await route.abort("blockedbyclient")
+
+    async def _route_ws(ws):
+        guard.note_blocked(ws.url)
+        await ws.close(code=1008, reason="network disabled in the benchmark recorder")
+
     async with async_playwright() as p:
         browser = await _launch_chromium(p)
         try:
             context = await browser.new_context(
                 viewport=RECORD_VIEWPORT,
                 device_scale_factor=RECORD_DEVICE_SCALE,
+                service_workers="block",
+                proxy=record_proxy_settings(req.target_url),
             )
+            await context.route("**/*", _route)
+            await context.route_web_socket(re.compile(".*"), _route_ws)
             page = await context.new_page()
+            await page.add_init_script(load_record_network_guard_script())
             await page.add_init_script(load_deterministic_shim())
             try:
                 await page.goto(req.target_url, wait_until="load", timeout=30000)
@@ -1199,20 +1203,35 @@ async def record(req: RecordRequest):
                 # (every subprocess/browser failure surfaces as a clean 502
                 # with context, see _run_ffmpeg / _do_form_login / etc.).
                 raise HTTPException(502, f"deterministic capture failed: {e}")
+            # WebRTC attempts the init script stopped (main frame; counted
+            # best-effort — routing/proxy cover every other channel).
+            try:
+                rtc = int(await page.evaluate("() => window.__mcNetBlocked || 0"))
+            except Exception:  # noqa: BLE001 — a crashed page has nothing to add
+                rtc = 0
+            guard.note_blocked("webrtc:", count=rtc)
         finally:
             await browser.close()
 
+    net = guard.report()
     logger.info(
-        "record: %s -> %s (%ds, %d frames @ %dfps, %dx%d)",
+        "record: %s -> %s (%ds, %d frames @ %dfps, %dx%d) network_attempts=%d libraries=%s",
         req.target_url, video_path, req.duration_s, n_frames, RECORD_FPS,
-        RECORD_OUTPUT_WIDTH, RECORD_OUTPUT_HEIGHT,
+        RECORD_OUTPUT_WIDTH, RECORD_OUTPUT_HEIGHT, net["network_attempts"], libraries,
     )
+    if net["network_attempts"]:
+        logger.info("record: blocked %s", net["blocked_requests"])
     return RecordResponse(
         video_path=str(video_path),
         # "" wenn die Thumbnail-Aufnahme uebersprungen wurde (best-effort)
         screenshot_path=str(screenshot_path) if screenshot_path.exists() else "",
         duration_s=req.duration_s,
         bytes=video_path.stat().st_size,
+        network_blocked=net["network_blocked"],
+        network_attempts=net["network_attempts"],
+        blocked_requests=net["blocked_requests"],
+        libraries_inlined=libraries,
+        html_bytes=html_bytes,
     )
 
 

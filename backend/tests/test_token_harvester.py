@@ -2866,3 +2866,459 @@ class TestOmpTokenDeltaDerivation:
         assert by_uuid2[legacy_uuids[0]].cost_usd == pytest.approx(0.013336)
         assert by_uuid2[legacy_uuids[1]].cost_usd == pytest.approx(0.001639)
         assert by_uuid2[legacy_uuids[2]].cost_usd == pytest.approx(0.00164014)
+
+
+# ── Dispatch-marker attribution (bench video showed "—" for cost/tokens) ────
+
+
+def _omp_header(cwd: str = "/workspace", session_uuid: str = "01a16020-76ed-709e-9aae-584822979645",
+                task_id: str | None = None, bridge: bool = False) -> str:
+    head: dict = {"type": "session", "version": 3, "id": session_uuid,
+                  "timestamp": "2026-10-21T20:21:42.765Z", "cwd": cwd}
+    if bridge:
+        head["bridge"] = "acp"
+    if task_id is not None:
+        head["taskId"] = task_id
+    # omp writes compact JSON; the bridge's display copy uses json.dumps defaults
+    # (both verified on live files 2026-10-22).
+    return json.dumps(head) if bridge else json.dumps(head, separators=(",", ":"))
+
+
+def _omp_user_turn(text: str, short_id: str = "u0000001") -> str:
+    return json.dumps({
+        "type": "message", "id": short_id, "parentId": None,
+        "timestamp": "2026-10-21T20:21:43.000Z",
+        "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+    })
+
+
+def _omp_tool_result(text: str, short_id: str = "t0000001") -> str:
+    return json.dumps({
+        "type": "message", "id": short_id, "parentId": None,
+        "timestamp": "2026-10-21T20:21:44.000Z",
+        "message": {"role": "toolResult", "content": [{"type": "text", "text": text}]},
+    })
+
+
+def _dispatch_text(task_id: object) -> str:
+    # Shape of dispatch_message_builder's prompt — the marker line is what counts.
+    return f"# Task\n\n**Task ID:** {task_id}\n**Title:** Bench run\n\nBuild index.html."
+
+
+
+class TestDispatchMarkerHarvestFile:
+    """harvest_file stamps every assistant record with the task named by the
+    dispatch prompt (``**Task ID:** <uuid>`` in a USER turn) — omp sessions
+    usually run in the agent's main folder (cwd ``/workspace``), so the cwd
+    match alone never finds the task."""
+
+    def test_omp_user_turn_marker_stamps_following_records(self, tmp_path):
+        from app.services.token_harvester import harvest_file
+
+        tid = str(uuid.uuid4())
+        f = tmp_path / "2026-10-21T20-21-42-765Z_01a16020.jsonl"
+        f.write_text("\n".join([
+            _omp_header(),
+            _omp_user_turn(_dispatch_text(tid)),
+            _make_omp_line(short_id="a1", response_id="r1", input_tokens=100),
+            _make_omp_line(short_id="a2", response_id="r2", input_tokens=200),
+        ]) + "\n")
+
+        records = harvest_file(str(f))
+        assert [r["dispatch_task_id"] for r in records] == [tid, tid]
+
+    def test_second_dispatch_switches_attribution(self, tmp_path):
+        from app.services.token_harvester import harvest_file
+
+        first, second = str(uuid.uuid4()), str(uuid.uuid4())
+        f = tmp_path / "s.jsonl"
+        f.write_text("\n".join([
+            _omp_header(),
+            _omp_user_turn(_dispatch_text(first), short_id="u1"),
+            _make_omp_line(short_id="a1", response_id="r1"),
+            _omp_user_turn(_dispatch_text(second), short_id="u2"),
+            _make_omp_line(short_id="a2", response_id="r2"),
+        ]) + "\n")
+
+        records = harvest_file(str(f))
+        assert [r["dispatch_task_id"] for r in records] == [first, second]
+
+    def test_marker_in_tool_result_does_not_count(self, tmp_path):
+        """An agent that prints another task (``mc task show``) does not start
+        working it — only user turns and session headers name the task."""
+        from app.services.token_harvester import harvest_file
+
+        own, other = str(uuid.uuid4()), str(uuid.uuid4())
+        f = tmp_path / "s.jsonl"
+        f.write_text("\n".join([
+            _omp_header(),
+            _omp_user_turn(_dispatch_text(own)),
+            _omp_tool_result(_dispatch_text(other)),
+            _make_omp_line(short_id="a1", response_id="r1"),
+        ]) + "\n")
+
+        records = harvest_file(str(f))
+        assert records[0]["dispatch_task_id"] == own
+
+    def test_offset_resume_keeps_marker_seen_before_offset(self, tmp_path):
+        from app.services.token_harvester import harvest_file
+
+        tid = str(uuid.uuid4())
+        f = tmp_path / "s.jsonl"
+        f.write_text("\n".join([
+            _omp_header(),
+            _omp_user_turn(_dispatch_text(tid)),
+            _make_omp_line(short_id="a1", response_id="r1"),
+            _make_omp_line(short_id="a2", response_id="r2"),
+        ]) + "\n")
+
+        records = harvest_file(str(f), processed_lines=3)
+        assert len(records) == 1
+        assert records[0]["dispatch_task_id"] == tid
+
+    def test_claude_code_user_turn_marker(self, tmp_path):
+        """Claude Code transcripts (cli-bridge agents) carry the dispatch as a
+        ``type: user`` line — same marker, same stamping."""
+        from app.services.token_harvester import harvest_file
+
+        tid = str(uuid.uuid4())
+        user = json.dumps({
+            "type": "user", "uuid": "u-1", "sessionId": "s", "timestamp": "2026-10-21T20:00:00Z",
+            "cwd": "/workspace", "message": {"role": "user", "content": _dispatch_text(tid)},
+        })
+        f = tmp_path / "s.jsonl"
+        f.write_text("\n".join([user, _make_line(uuid_="cc-1", cwd="/workspace")]) + "\n")
+
+        records = harvest_file(str(f))
+        assert records[0]["dispatch_task_id"] == tid
+
+    def test_no_marker_leaves_none(self, tmp_path):
+        from app.services.token_harvester import harvest_file
+
+        f = tmp_path / "s.jsonl"
+        f.write_text("\n".join([
+            _omp_header(),
+            _omp_user_turn("just chatting"),
+            _make_omp_line(short_id="a1", response_id="r1"),
+        ]) + "\n")
+
+        assert harvest_file(str(f))[0]["dispatch_task_id"] is None
+
+    def test_bridge_copy_header_names_the_task_of_a_retry_session(self, tmp_path):
+        """Under ACP every attempt of a task (continue nudge, retry) is a new
+        session WITHOUT the dispatch prompt in omp's own file; the omp
+        bridge's display copy of the same session (``<folder>/.mc/``, same
+        session uuid) carries ``taskId`` in its header."""
+        from app.services.token_harvester import harvest_file
+
+        tid = str(uuid.uuid4())
+        sid = "01a16020-76ed-709e-9aae-584822979645"
+        folder = tmp_path / "omp-sessions" / "--workspace--"
+        (folder / ".mc").mkdir(parents=True)
+        own = folder / f"2026-10-21T20-21-42-765Z_{sid}.jsonl"
+        own.write_text("\n".join([
+            _omp_header(session_uuid=sid),
+            _omp_user_turn("Continue with the task."),
+            _make_omp_line(short_id="a1", response_id="r1"),
+        ]) + "\n")
+        (folder / ".mc" / f"2026-10-21T20-21-42_{sid}.jsonl").write_text(
+            _omp_header(cwd="", session_uuid=sid, task_id=tid, bridge=True) + "\n"
+        )
+
+        assert harvest_file(str(own))[0]["dispatch_task_id"] == tid
+
+
+@pytest.mark.asyncio
+class TestDispatchMarkerAttribution:
+    """run_harvest writes the dispatch task onto model_usage_events.task_id —
+    the bench outro (task_cost_usd / task_token_usage) reads exactly that."""
+
+    def _sparky_file(self, tmp_path, lines):
+        folder = tmp_path / "agents" / "sparky" / "omp-sessions" / "--workspace--"
+        folder.mkdir(parents=True)
+        f = folder / "2026-10-21T20-21-42-765Z_01a16020-76ed-709e-9aae-584822979645.jsonl"
+        f.write_text("\n".join(lines) + "\n")
+        return tmp_path / "agents"
+
+    async def test_omp_event_in_main_folder_gets_dispatch_task(self, tmp_path, session, make_task):
+        task = await make_task(uuid.uuid4(), title="[Bench] Shot Sequence",
+                               workspace_path=str(tmp_path / "worktrees" / "bench-shot"))
+        agents = self._sparky_file(tmp_path, [
+            _omp_header(cwd="/workspace"),
+            _omp_user_turn(_dispatch_text(task.id)),
+            _make_omp_line(short_id="a1", response_id="r1", input_tokens=1000, output_tokens=10),
+            _make_omp_line(short_id="a2", response_id="r2", input_tokens=1500, output_tokens=20),
+        ])
+
+        await run_harvest(session, agent_base_paths=[str(agents)], boss_base_paths=[], agent_slug_map={})
+
+        events = (await session.exec(select(ModelUsageEvent))).all()
+        assert len(events) == 2
+        assert {e.task_id for e in events} == {task.id}
+
+    async def test_unknown_dispatch_task_stays_null_without_fk_error(self, tmp_path, session):
+        agents = self._sparky_file(tmp_path, [
+            _omp_header(cwd="/workspace"),
+            _omp_user_turn(_dispatch_text(uuid.uuid4())),
+            _make_omp_line(short_id="a1", response_id="r1"),
+        ])
+
+        stats = await run_harvest(session, agent_base_paths=[str(agents)], boss_base_paths=[], agent_slug_map={})
+
+        assert stats["source_errors"] == 0
+        event = (await session.exec(select(ModelUsageEvent))).one()
+        assert event.task_id is None
+
+    async def test_turns_long_after_the_task_finished_are_not_billed_to_it(
+        self, tmp_path, session, make_task,
+    ):
+        """A session that goes on with plain chat after the task is done must
+        not keep billing that task (same grace window as the cwd match)."""
+        done = datetime(2026, 10, 21, 20, 30, tzinfo=timezone.utc)
+        task = await make_task(uuid.uuid4(), title="Done task", status="done", completed_at=done)
+        agents = self._sparky_file(tmp_path, [
+            _omp_header(cwd="/workspace"),
+            _omp_user_turn(_dispatch_text(task.id)),
+            _make_omp_line(short_id="a1", response_id="r1", timestamp="2026-10-21T20:25:00.000Z"),
+            _make_omp_line(short_id="a2", response_id="r2", timestamp="2026-10-22T09:00:00.000Z"),
+        ])
+
+        await run_harvest(session, agent_base_paths=[str(agents)], boss_base_paths=[], agent_slug_map={})
+
+        by_short = {e.message_uuid.split(":")[-1]: e.task_id for e in
+                    (await session.exec(select(ModelUsageEvent))).all()}
+        assert by_short == {"r1": task.id, "r2": None}
+
+    async def test_backfill_fills_old_null_rows_from_the_dispatch_marker(
+        self, tmp_path, session, make_task,
+    ):
+        """Rows harvested before this fix (task_id NULL) get the task on the
+        next full re-read (admin backfill resets the offsets) — no duplicates."""
+        task = await make_task(uuid.uuid4(), title="[Bench] Medium DNA")
+        agents = self._sparky_file(tmp_path, [
+            _omp_header(cwd="/workspace"),
+            _omp_user_turn(_dispatch_text(task.id)),
+            _make_omp_line(short_id="a1", response_id="r1"),
+        ])
+        f = next(agents.glob("*/omp-sessions/*/*.jsonl"))
+        sid = f.stem
+        session.add(ModelUsageEvent(
+            id=uuid.uuid4(), task_id=None, harness="sparky", model="Qwen/Qwen3.6-35B-A3B-FP8",
+            session_id=sid, message_uuid=f"{sid}:r1", input_tokens=1, output_tokens=1,
+            ts=datetime(2026, 10, 21, 20, 25, tzinfo=timezone.utc), source_file=str(f),
+        ))
+        await session.commit()
+
+        stats = await run_harvest(session, agent_base_paths=[str(agents)], boss_base_paths=[], agent_slug_map={})
+
+        assert stats["new_events"] == 0
+        assert stats["backfilled_task_id"] == 1
+        events = (await session.exec(select(ModelUsageEvent))).all()
+        assert len(events) == 1 and events[0].task_id == task.id
+
+    async def test_cwd_match_still_works_without_marker(self, tmp_path, session, make_task):
+        workspace = str(tmp_path / "workspaces" / "sparky" / "worktrees" / "bench-x")
+        task = await make_task(uuid.uuid4(), title="cwd task", workspace_path=workspace)
+        folder = tmp_path / "agents" / "sparky" / "omp-sessions" / "--x--"
+        folder.mkdir(parents=True)
+        (folder / "s.jsonl").write_text("\n".join([
+            _omp_header(cwd=workspace),
+            _make_omp_line(short_id="a1", response_id="r1"),
+        ]) + "\n")
+
+        await run_harvest(session, agent_base_paths=[str(tmp_path / "agents")], boss_base_paths=[],
+                          agent_slug_map={})
+
+        event = (await session.exec(select(ModelUsageEvent))).one()
+        assert event.task_id == task.id
+
+
+# ── Review fixes on #940: marker vs. cwd, re-attribution, review dispatches ──
+
+
+def _review_text(task_id: object, heading: str = "Code Review") -> str:
+    # Shape of dispatch_message_builder's review / QA prompts.
+    return f"# {heading}: Bench run\n\n**Task ID:** {task_id}\n**Board:** b\n\nCheck the work."
+
+
+class TestTaskMarkerRole:
+    """Only a work dispatch names the task a session builds. Review and QA
+    dispatches carry the same ``**Task ID:**`` line for the task they check."""
+
+    @pytest.mark.parametrize("heading", ["Code Review", "Phase Review", "QA Test"])
+    def test_review_and_qa_dispatch_are_check(self, heading):
+        from app.services.transcript_task_marker import ROLE_CHECK, task_marker_role
+
+        tid = str(uuid.uuid4())
+        obj = json.loads(_omp_user_turn(_review_text(tid, heading)))
+        assert task_marker_role(obj) == (tid, ROLE_CHECK)
+
+    @pytest.mark.parametrize("heading", ["New Task", "CORRECTION NEEDED"])
+    def test_work_dispatch_is_work(self, heading):
+        from app.services.transcript_task_marker import ROLE_WORK, task_marker_role
+
+        tid = str(uuid.uuid4())
+        text = f"# {heading}: Bench run\n**Priority:** high\n**Task ID:** {tid}\n**Board ID:** b"
+        obj = json.loads(_omp_user_turn(text))
+        assert task_marker_role(obj) == (tid, ROLE_WORK)
+
+    def test_review_words_in_a_task_title_do_not_make_it_a_check(self):
+        from app.services.transcript_task_marker import ROLE_WORK, task_marker_role
+
+        tid = str(uuid.uuid4())
+        text = f"# New Task: Code Review: tidy the reviewer\n**Priority:** high\n**Task ID:** {tid}"
+        assert task_marker_role(json.loads(_omp_user_turn(text))) == (tid, ROLE_WORK)
+
+    def test_only_the_heading_right_above_the_marker_counts(self):
+        """A correction dispatch quotes the reviewer's text below the marker,
+        and a prompt may carry earlier headings above the dispatch heading —
+        neither turns the work into a check."""
+        from app.services.transcript_task_marker import ROLE_WORK, task_marker_role
+
+        tid = str(uuid.uuid4())
+        text = (f"# Code Review: an earlier note\n\nok\n\n"
+                f"# CORRECTION NEEDED: Bench run\n**Priority:** high\n**Task ID:** {tid}\n\n"
+                f"## Reviewer feedback\n# Code Review: Bench run\nfix the header")
+        assert task_marker_role(json.loads(_omp_user_turn(text))) == (tid, ROLE_WORK)
+
+    def test_task_marker_still_returns_the_id_of_a_review(self):
+        """The checklist sync keeps its behaviour: it reads task_marker()."""
+        from app.services.transcript_task_marker import task_marker
+
+        tid = str(uuid.uuid4())
+        assert task_marker(json.loads(_omp_user_turn(_review_text(tid)))) == tid
+
+
+class TestReviewDispatchEndsBilling:
+    def test_review_dispatch_ends_the_previous_task_and_bills_nothing(self, tmp_path):
+        """A long-lived session (Boss, a Claude Code reviewer) that first built
+        task A and then reviews task B: the review turns are billed neither to
+        A nor to B by the marker (they fall back to the cwd match)."""
+        from app.services.token_harvester import harvest_file
+
+        built, reviewed = str(uuid.uuid4()), str(uuid.uuid4())
+        f = tmp_path / "s.jsonl"
+        f.write_text("\n".join([
+            _omp_header(),
+            _omp_user_turn(_dispatch_text(built), short_id="u1"),
+            _make_omp_line(short_id="a1", response_id="r1"),
+            _omp_user_turn(_review_text(reviewed), short_id="u2"),
+            _make_omp_line(short_id="a2", response_id="r2"),
+            _omp_user_turn(_dispatch_text(built), short_id="u3"),
+            _make_omp_line(short_id="a3", response_id="r3"),
+        ]) + "\n")
+
+        records = harvest_file(str(f))
+        assert [r["dispatch_task_id"] for r in records] == [built, None, built]
+
+
+@pytest.mark.asyncio
+class TestMarkerBeatsCwdAndCorrectsOldRows:
+    """Live 19.10.: one omp session's marker names task A for all 93 records,
+    but 14 rows sat on neighbouring bench task B from the old cwd match."""
+
+    def _file(self, tmp_path, cwd, lines):
+        folder = tmp_path / "agents" / "sparky" / "omp-sessions" / "--x--"
+        folder.mkdir(parents=True)
+        f = folder / "2026-10-19T19-19-10-646Z_01a1559a-0000-7000-8000-000000000000.jsonl"
+        f.write_text("\n".join([_omp_header(cwd=cwd), *lines]) + "\n")
+        return tmp_path / "agents", f
+
+    async def test_dispatch_marker_beats_a_conflicting_cwd_match(self, tmp_path, session, make_task):
+        workspace = str(tmp_path / "workspaces" / "bench")
+        older = await make_task(uuid.uuid4(), title="older", workspace_path=workspace,
+                                created_at=datetime(2026, 10, 19, 18, 0, tzinfo=timezone.utc))
+        await make_task(uuid.uuid4(), title="newer", workspace_path=workspace,
+                        created_at=datetime(2026, 10, 19, 19, 0, tzinfo=timezone.utc))
+        agents, _ = self._file(tmp_path, workspace, [
+            _omp_user_turn(_dispatch_text(older.id)),
+            _make_omp_line(short_id="a1", response_id="r1", timestamp="2026-10-19T19:30:00.000Z"),
+        ])
+
+        await run_harvest(session, agent_base_paths=[str(agents)], boss_base_paths=[], agent_slug_map={})
+
+        event = (await session.exec(select(ModelUsageEvent))).one()
+        assert event.task_id == older.id
+
+    async def test_reread_moves_a_row_the_marker_disagrees_with(self, tmp_path, session, make_task):
+        right = await make_task(uuid.uuid4(), title="right")
+        wrong = await make_task(uuid.uuid4(), title="wrong")
+        agents, f = self._file(tmp_path, "/workspace", [
+            _omp_user_turn(_dispatch_text(right.id)),
+            _make_omp_line(short_id="a1", response_id="r1"),
+        ])
+        sid = f.stem
+        session.add(ModelUsageEvent(
+            id=uuid.uuid4(), task_id=wrong.id, harness="sparky", model="Qwen/Qwen3.6-35B-A3B-FP8",
+            session_id=sid, message_uuid=f"{sid}:r1", input_tokens=1, output_tokens=1,
+            ts=datetime(2026, 10, 21, 20, 25, tzinfo=timezone.utc), source_file=str(f),
+        ))
+        await session.commit()
+
+        stats = await run_harvest(session, agent_base_paths=[str(agents)], boss_base_paths=[], agent_slug_map={})
+
+        assert stats["new_events"] == 0
+        assert stats["reattributed_task_id"] == 1
+        assert stats["backfilled_task_id"] == 0
+        event = (await session.exec(select(ModelUsageEvent))).one()
+        assert event.task_id == right.id
+
+    async def test_cwd_match_never_moves_a_row_that_has_a_task(self, tmp_path, session, make_task):
+        workspace = str(tmp_path / "workspaces" / "bench")
+        await make_task(uuid.uuid4(), title="cwd task", workspace_path=workspace)
+        stored = await make_task(uuid.uuid4(), title="stored")
+        agents, f = self._file(tmp_path, workspace, [
+            _make_omp_line(short_id="a1", response_id="r1"),
+        ])
+        sid = f.stem
+        session.add(ModelUsageEvent(
+            id=uuid.uuid4(), task_id=stored.id, harness="sparky", model="Qwen/Qwen3.6-35B-A3B-FP8",
+            session_id=sid, message_uuid=f"{sid}:r1", input_tokens=1, output_tokens=1,
+            ts=datetime(2026, 10, 21, 20, 25, tzinfo=timezone.utc), source_file=str(f),
+        ))
+        await session.commit()
+
+        stats = await run_harvest(session, agent_base_paths=[str(agents)], boss_base_paths=[], agent_slug_map={})
+
+        assert stats["reattributed_task_id"] == 0
+        event = (await session.exec(select(ModelUsageEvent))).one()
+        assert event.task_id == stored.id
+
+    async def test_unresolvable_marker_never_moves_a_row(self, tmp_path, session, make_task):
+        """Deleted task, or a turn long after the named task finished: the
+        stored task stays — a marker that does not resolve proves nothing."""
+        stored = await make_task(uuid.uuid4(), title="stored")
+        done = await make_task(uuid.uuid4(), title="done long ago", status="done",
+                               completed_at=datetime(2026, 10, 1, 8, 0, tzinfo=timezone.utc))
+        agents, f = self._file(tmp_path, "/workspace", [
+            _omp_user_turn(_dispatch_text(uuid.uuid4()), short_id="u1"),
+            _make_omp_line(short_id="a1", response_id="r1", timestamp="2026-10-21T20:25:00.000Z"),
+            _omp_user_turn(_dispatch_text(done.id), short_id="u2"),
+            _make_omp_line(short_id="a2", response_id="r2", timestamp="2026-10-21T20:26:00.000Z"),
+        ])
+        sid = f.stem
+        for short in ("r1", "r2"):
+            session.add(ModelUsageEvent(
+                id=uuid.uuid4(), task_id=stored.id, harness="sparky", model="Qwen/Qwen3.6-35B-A3B-FP8",
+                session_id=sid, message_uuid=f"{sid}:{short}", input_tokens=1, output_tokens=1,
+                ts=datetime(2026, 10, 21, 20, 25, tzinfo=timezone.utc), source_file=str(f),
+            ))
+        await session.commit()
+
+        stats = await run_harvest(session, agent_base_paths=[str(agents)], boss_base_paths=[], agent_slug_map={})
+
+        assert stats["source_errors"] == 0
+        assert stats["reattributed_task_id"] == 0
+        assert {e.task_id for e in (await session.exec(select(ModelUsageEvent))).all()} == {stored.id}
+
+    async def test_review_dispatch_does_not_bill_the_reviewed_task(self, tmp_path, session, make_task):
+        reviewed = await make_task(uuid.uuid4(), title="reviewed")
+        agents, _ = self._file(tmp_path, "/workspace", [
+            _omp_user_turn(_review_text(reviewed.id)),
+            _make_omp_line(short_id="a1", response_id="r1"),
+        ])
+
+        await run_harvest(session, agent_base_paths=[str(agents)], boss_base_paths=[], agent_slug_map={})
+
+        event = (await session.exec(select(ModelUsageEvent))).one()
+        assert event.task_id is None

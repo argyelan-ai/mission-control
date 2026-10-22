@@ -1055,6 +1055,7 @@
     "effortLockedStateMissing": "Der Agent hat seine Einstellungen noch nicht gemeldet — die Denkstufe erscheint, sobald er es tut.",
     "effortLockedHarnessNoEffort": "{harness} bietet keine Denkstufe an.",
     "effortLockedHarnessNoEffortGeneric": "Der Harness dieses Agenten bietet keine Denkstufe an.",
+    "effortDefault": "Standard — die eingestellte Stufe des Agenten",
     "effortSessionOnly": "nur diese Session",
     "effortBecomesDefault": "wird Standard",
     "effortBecomesDefaultShared": "wird Standard — auch für deine lokalen Claude-Sessions (geteilte Config)",
@@ -3793,6 +3794,41 @@
     }
   },
   "bench": {
+    "effort": {
+      "label": "Effort",
+      "groupAria": "Effort für Modell {index}",
+      "level": {
+        "default": "Standard",
+        "off": "Aus",
+        "on": "An",
+        "low": "Niedrig",
+        "medium": "Mittel",
+        "high": "Hoch",
+        "max": "Max"
+      },
+      "checking": "Prüfe, welche Stufen dieses Modell befolgt …",
+      "checkedAt": "Geprüft {when}.",
+      "serverDefaultOn": "Standard schickt nichts — der Server denkt von sich aus.",
+      "serverDefaultOff": "Standard schickt nichts — der Server denkt von sich aus nicht.",
+      "serverDefaultUnknown": "Standard schickt nichts — es gilt die Server-Vorgabe.",
+      "noEffect": "Kein Schalter hat das Denken dieses Modells verändert — nur Standard.",
+      "failed": "Prüfung fehlgeschlagen — vorerst nur Standard.",
+      "offline": "Box offline — nur Standard.",
+      "retry": "Nochmal prüfen",
+      "deepHint": "Hohe Stufen können lange denken: das Token-Budget wächst bis aufs 4-Fache.",
+      "agentNote": "Effort: die eigene Stufe der Agent-Sitzung — wird nach dem Lauf aufgezeichnet, noch nicht einstellbar.",
+      "requested": "Effort: {level}",
+      "sent": "gesendet {wire}",
+      "sentNothing": "gesendet: nichts",
+      "thinkingOn": "denkt",
+      "thinkingOnTokens": "denkt · {count} Denk-Token",
+      "thinkingOff": "denkt nicht",
+      "ompSessionDefault": "omp-Sitzungsstandard: {level}",
+      "ompSession": "omp-Sitzung: {level}",
+      "agentUnknown": "Effort: für diesen Agenten nicht lesbar",
+      "truncated": "Bei max_tokens ({max}) gestoppt — das Denken hat das Budget aufgebraucht.",
+      "truncatedFailed": "Keine Seite: bei max_tokens ({max}) gestoppt, bevor das HTML kam — das Denken hat das Budget aufgebraucht."
+    },
     "common": {
       "cancel": "Abbrechen",
       "save": "Speichern",
@@ -3811,6 +3847,28 @@
       "showArchived": "Archiv anzeigen",
       "newChallenge": "Neue Challenge",
       "emptyState": "Noch keine Challenges — starte die erste aus der Prompt Library."
+    },
+    "status": {
+      "generating": "Wird generiert",
+      "rendering": "Wird aufgenommen",
+      "composing": "Video wird gebaut",
+      "review": "Fertig",
+      "drafted": "Entwurf",
+      "published": "Veröffentlicht",
+      "failed": "Abgebrochen",
+      "abortedWithReason": "Abgebrochen – {reason}",
+      "reason": {
+        "taskDeleted": "Auftrag gelöscht",
+        "taskFailed": "Auftrag fehlgeschlagen",
+        "taskAborted": "Auftrag gestoppt",
+        "stopped": "von dir gestoppt",
+        "renderFailed": "Aufnahme fehlgeschlagen",
+        "composeFailed": "Video fehlgeschlagen"
+      }
+    },
+    "recording": {
+      "networkBlocked": "Netz bei der Aufnahme gesperrt: {count, plural, one {# Anfrage} other {# Anfragen}} gestoppt – die Seite wollte etwas aus dem Netz laden. Eine Aufnahme darf nur die Seite selbst nutzen.",
+      "librariesInlined": "Enthält eingefügten Bibliotheks-Code: {libraries}"
     },
     "promptLibrary": {
       "searchPlaceholder": "Suche …",
@@ -3929,7 +3987,9 @@
       "notifyActionStarted": "{label} gestartet",
       "notifyActionFailed": "{label} nicht möglich",
       "notifyDownloadFailed": "Download fehlgeschlagen",
-      "notifyOpenFailed": "Öffnen nicht möglich"
+      "notifyOpenFailed": "Öffnen nicht möglich",
+      "costLocal": "lokal",
+      "usageMissing": "Noch keine Token-Daten — das Video zeigt „—“ bei Tokens und Kosten. Video in ein paar Minuten neu erstellen. Bleibt es leer, zählt MC den Harness dieses Agenten noch nicht."
     },
     "draftDialog": {
       "ariaLabel": "Draft erstellen",

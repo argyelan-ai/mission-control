@@ -510,6 +510,18 @@ async def test_effort_capabilities_hermes_reasoning_effort_is_switchable(hermes_
     assert caps["effortReason"] is None
 
 
+async def test_effort_capabilities_acp_level_is_session_scoped(hermes_agent, monkeypatch):
+    """An ACP config option belongs to the session: nothing is written into
+    the agent's own settings (``_set_effort_acp`` only sets the option; the
+    chat daemon carries it over a /new). The composer must not promise
+    "becomes the default" — harness-neutral, omp-over-ACP included."""
+    from app.services import agent_chat_input
+
+    _state(monkeypatch, [_HERMES_MODE_OPTION, _HERMES_REASONING_OPTION])
+    caps = await agent_chat_input.effort_capabilities(hermes_agent)
+    assert caps["effortScope"] == "session"
+
+
 async def test_set_effort_hermes_sends_the_matched_option_id(hermes_agent, fake_transport, monkeypatch):
     """Zurueck geht die ECHTE id der gefundenen Zeile — ein hart kodiertes
     ``thinking`` lehnt Hermes nicht einmal ab, es bedeutet dort nichts."""

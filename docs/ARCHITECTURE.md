@@ -967,6 +967,7 @@ Verzeichnis bootet unveraendert. Kopplung nur ueber die **Hook-Registry** in
 
 | Registry | Aufgerufen aus | Einsatz |
 |---|---|---|
+| `background_loops` | `main.py::lifespan()` via `start_background_loops()` / `stop_background_loops()` | Dauer-Schleifen eines Verticals im API-Prozess (nicht im Worker): einmal beim Start gestartet, beim Stopp abgebrochen. Fabrik ohne Argumente → Coroutine bis `cancel`; Fehler faengt die Schleife selbst, eine werfende Fabrik wird geloggt und uebersprungen (bench_studio: Waisen-Durchlauf alle 60 s, W0.8) |
 | `task_done_hooks` | `routers/tasks.py`, `routers/agent_task_status.py` | Callback wenn Agent-Task `done` wird (bench_studio: Artefakt einsammeln) |
 | `tools_md_sections` | Template-Renderer | Zusaetzliche TOOLS.md-Sektionen fuer Agents |
 | `x_post_resolved_hooks` (NEU) | `routers/approvals.py::_handle_x_post_resolution()` | Callback bei Approve/Reject eines `x_post`-Approvals (bench_studio: Challenge → `published`) |

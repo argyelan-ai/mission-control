@@ -9,6 +9,7 @@ import { Pill } from "@/components/shared/Pill";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { ChallengeDetail } from "./ChallengeDetail";
 import { NewChallengeDialog } from "./NewChallengeDialog";
+import { abortReason } from "./status";
 import type { BenchChallenge, BenchEntry, PromptTemplate } from "./types";
 
 // Muted Leitstand status palette (no purple, no glow):
@@ -29,6 +30,27 @@ export const ENTRY_STATUS_COLOR: Record<string, string> = {
   rendered: C.online,
   failed: C.error,
 };
+
+/** Status pill with the i18n word for the state (K10); a failed challenge
+ *  also names why it ended ("Aborted – task deleted") when the reason is
+ *  known. Shared by the list row and the detail header. */
+export function ChallengeStatusPill({ challenge }: { challenge: BenchChallenge }) {
+  const t = useTranslations("bench.status");
+  const reason = abortReason(challenge);
+  const label = reason
+    ? t("abortedWithReason", { reason: t(`reason.${reason}`) })
+    : t.has(challenge.status)
+      ? t(challenge.status)
+      : challenge.status;
+  return <Pill color={BENCH_STATUS_COLOR[challenge.status] ?? C.textMuted}>{label}</Pill>;
+}
+
+/** The backend's raw error line — only when the pill could not name the
+ *  reason itself (never the same fact twice, K3). */
+export function challengeErrorLine(challenge: BenchChallenge): string | null {
+  if (!challenge.error) return null;
+  return abortReason(challenge) ? null : challenge.error;
+}
 
 export function ChallengesTab({
   prefillTemplate,
@@ -126,6 +148,11 @@ function ChallengeRow({
   onOpen: () => void;
   archivedLabel: string;
 }) {
+  const errorLine = challengeErrorLine(challenge);
+  // A named reason makes the pill long ("Aborted – task deleted"): it gets
+  // its own line under the entries so the title and labels keep their width
+  // on a phone; short states stay in the top-right corner.
+  const longStatus = abortReason(challenge) !== null;
   return (
     <button
       onClick={onOpen}
@@ -156,14 +183,17 @@ function ChallengeRow({
               {archivedLabel}
             </Pill>
           )}
-          <Pill color={BENCH_STATUS_COLOR[challenge.status] ?? C.textMuted}>
-            {challenge.status}
-          </Pill>
+          {!longStatus && <ChallengeStatusPill challenge={challenge} />}
         </div>
       </div>
-      {challenge.error && (
+      {longStatus && (
+        <div className="mt-2">
+          <ChallengeStatusPill challenge={challenge} />
+        </div>
+      )}
+      {errorLine && (
         <div className="mt-2 text-xs" style={{ color: C.error }}>
-          {challenge.error}
+          {errorLine}
         </div>
       )}
     </button>

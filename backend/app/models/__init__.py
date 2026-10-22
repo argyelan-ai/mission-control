@@ -38,7 +38,7 @@ from app.models.repo import Repo  # noqa: F401
 from app.models.loop import Loop, LoopRound  # noqa: F401
 from app.models.reference_file import ReferenceFile  # noqa: F401
 from app.models.prompt_template import PromptTemplate  # noqa: F401
-from app.models.bench import BenchChallenge, BenchEntry  # noqa: F401
+from app.models.bench import BenchChallenge, BenchEntry, BenchProbe  # noqa: F401
 from app.models.thread import Thread, Message, AgentThreadCursor, UserThreadCursor  # noqa: F401
 from app.models.browser_session import BrowserSession  # noqa: F401
 from app.models.config_check import ConfigCheck  # noqa: F401
@@ -92,6 +92,7 @@ __all__ = [
     "PromptTemplate",
     "BenchChallenge",
     "BenchEntry",
+    "BenchProbe",
     "Thread",
     "Message",
     "AgentThreadCursor",

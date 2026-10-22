@@ -96,6 +96,14 @@ class RecordResponse(BaseModel):
     screenshot_path: str
     duration_s: int
     bytes: int
+    # W0.9 network block (record_network.py). Defaults describe a recording
+    # WITHOUT the block, so a caller never reads "blocked" from a response
+    # that did not set it.
+    network_blocked: bool = False
+    network_attempts: int = 0
+    blocked_requests: List[str] = Field(default_factory=list)
+    libraries_inlined: List[str] = Field(default_factory=list)
+    html_bytes: Optional[int] = None
 
 
 class BrandingModelSpec(BaseModel):
@@ -107,10 +115,15 @@ class BrandingModelSpec(BaseModel):
 class BrandingOutroRow(BaseModel):
     """One row of the outro results table. `cost`/`tokens` are optional
     (default em dash) so older callers without that attribution stay
-    compatible."""
+    compatible.
+
+    `size` is accepted but no longer printed on the card (concept W0.5,
+    2026-10-22): the HTML size is not a quality signal — a model that inlines
+    three.js (709 KB) "loses" to 17 KB written by hand. It moves to the
+    result receipt as "HTML size (incl. inlined libs)" (W1)."""
     name: str
     time: str
-    size: str
+    size: str = "\u2014"
     cost: str = "\u2014"
     tokens: str = "\u2014"
 
@@ -122,7 +135,13 @@ class BrandingSpec(BaseModel):
     -> side-by-side frame.html (2026-07-13, single-video branding).
     See templates/bench/{frame,frame_single,outro}.html."""
     title: str
-    run_label: str
+    # The run's date ("2026-10-21"), plus "episode N · " in front once the run
+    # is published — replaces the `RUN 0xx` counter (2026-10-22, concept W0.5:
+    # the counter shifted after deletes and never matched the episode number).
+    # Defaults to "" so an older backend that still sends `run_label` (ignored
+    # as an unknown field) composes without a 422; the templates then simply
+    # omit the date segment.
+    date_label: str = ""
     prompt_line: str
     models: List[BrandingModelSpec]
     outro_rows: List[BrandingOutroRow]
@@ -139,7 +158,7 @@ class BrandingSpec(BaseModel):
 class ComposeRequest(BaseModel):
     """POST /compose — N mp4 recordings -> one labeled grid video (H.264),
     or (with `branding` set) one or two recordings composited into the
-    branded argyelan frame + a 2s outro card appended."""
+    branded argyelan frame + an outro card appended (OUTRO_DURATION_S)."""
     inputs: List[str] = Field(min_length=1, max_length=4)
     labels: List[str]
     layout: Literal["grid"] = "grid"
@@ -405,7 +424,9 @@ SLOT_SINGLE_WIDTH = 3584
 SLOT_SINGLE_HEIGHT = 1120
 SLOT_SINGLE_XY = (128, 580)
 SLOT_BG_COLOR = "0x090B10"  # matches .slot background in shared.css
-OUTRO_DURATION_S = 2.0
+# 4.5 s (was 2 s until 2026-10-22, concept W0.5): long enough to read the
+# numbers on a phone before X loops the clip back to frame 0.
+OUTRO_DURATION_S = 4.5
 FRAME_SIZE = "3840x2160"
 
 
@@ -447,23 +468,72 @@ def fill_bench_template(template_text: str, tokens: dict) -> str:
 def render_outro_rows_html(rows: List["BrandingOutroRow"]) -> str:
     """Builds the outro table row markup for the `{{ROWS}}` placeholder in
     templates/bench/outro.html — one `.row` div per BrandingOutroRow, values
-    html-escaped. No winner-highlight styling (Mark's decision 2026-07-12:
-    the human judges, the card stays neutral)."""
+    html-escaped: model, time, cost, tokens (no size, see BrandingOutroRow).
+    No winner-highlight styling (Mark's decision 2026-07-12: the human
+    judges, the card stays neutral)."""
     parts = []
     for row in rows:
         name = _html.escape(row.name)
         time_val = _html.escape(row.time)
-        size_val = _html.escape(row.size)
         cost_val = _html.escape(row.cost)
         tokens_val = _html.escape(row.tokens)
         parts.append(
             f'<div class="row"><span class="name">{name}</span>'
             f'<span class="val">{time_val}</span>'
-            f'<span class="val">{size_val}</span>'
             f'<span class="val">{cost_val}</span>'
             f'<span class="val">{tokens_val}</span></div>'
         )
     return "".join(parts)
+
+
+# Fixed frame copy (frame.html / frame_single.html {{MODE_LINE}}).
+BENCH_MODE_LINE = "side by side"
+BENCH_MODE_LINE_SINGLE = "solo run"
+
+
+def outro_judge_html(n_models: int) -> str:
+    """Bottom-left line of the outro. Only a side-by-side run asks which one
+    wins — a solo run has nothing to win against (concept W0.5)."""
+    if n_models >= 2:
+        return "JUDGE: <b>YOUR EYES</b> — WHICH ONE WINS?"
+    return "JUDGE: <b>YOUR EYES</b>"
+
+
+def build_frame_tokens(branding: "BrandingSpec") -> dict:
+    """Placeholder values for frame.html (2 models) or frame_single.html
+    (1 model). Pure — service.py reads the template and screenshots it."""
+    common = {
+        "TITLE": branding.title,
+        "DATE_LABEL": branding.date_label,
+        "PROMPT_LINE": branding.prompt_line,
+    }
+    if len(branding.models) == 2:
+        model_a, model_b = branding.models
+        return {
+            **common,
+            "MODEL_A": model_a.label,
+            "TAG_A": model_a.tag,
+            "MODEL_B": model_b.label,
+            "TAG_B": model_b.tag,
+            "MODE_LINE": BENCH_MODE_LINE,
+        }
+    (model,) = branding.models
+    return {
+        **common,
+        "MODEL": model.label,
+        "TAG": model.tag,
+        "MODE_LINE": BENCH_MODE_LINE_SINGLE,
+    }
+
+
+def render_outro_html(template_text: str, branding: "BrandingSpec") -> str:
+    """Fills templates/bench/outro.html. ROWS and JUDGE are markup blocks
+    (cells already escaped by render_outro_rows_html; JUDGE is fixed copy),
+    filled after fill_bench_template so its blanket html.escape() does not
+    double-escape them."""
+    out = fill_bench_template(template_text, {"DATE_LABEL": branding.date_label})
+    out = out.replace("{{JUDGE}}", outro_judge_html(len(branding.models)))
+    return out.replace("{{ROWS}}", render_outro_rows_html(branding.outro_rows))
 
 
 def build_branded_compose_cmd(

@@ -9,6 +9,14 @@ vi.mock("@/verticals/bench_studio/api", () => ({
     sparkModels: {
       get: vi.fn().mockResolvedValue({ reachable: true, models: [], active: null }),
     },
+    effortLevels: {
+      get: vi.fn().mockResolvedValue({
+        served_model_id: "deepseek-v4", reachable: true, status: "ok",
+        thinking_key: "reasoning_effort", effort_param: "reasoning_effort",
+        levels: ["off", "low", "medium", "high", "max"], default_observed: "on",
+        probed_at: null, serving_since: null,
+      }),
+    },
     challenges: {
       list: vi.fn(),
       get: vi.fn(),
@@ -173,7 +181,7 @@ describe("NewChallengeDialog — template picker", () => {
 
     // Tag input shows the derived default as placeholder (spark row)
     const tagInput = screen.getByRole("textbox", { name: /tag 1/i });
-    expect((tagInput as HTMLInputElement).placeholder).toContain("VLLM · SPARK");
+    expect((tagInput as HTMLInputElement).placeholder).toContain("LOCAL · DIRECT API");
 
     // Type a custom tag
     await userEvent.type(tagInput, "OMP · DGX SPARK");
@@ -609,6 +617,97 @@ describe("NewChallengeDialog — vanilla (direct-API) spark row (Bench #21)", ()
 
     await waitFor(() => {
       expect(notify.error).toHaveBeenCalledWith("Challenge could not be started");
+    });
+  });
+});
+
+describe("NewChallengeDialog — effort chip (bench W0.6)", () => {
+  async function fillRequired() {
+    await screen.findByRole("option", { name: /bouncing balls/i });
+    await userEvent.type(screen.getByPlaceholderText(/title/i), "Effort Test");
+    await userEvent.type(screen.getByPlaceholderText(/prompt/i), "Some prompt");
+    await userEvent.type(screen.getByPlaceholderText(/Label \(e\.g\./i), "DeepSeek");
+  }
+
+  it("offers Default plus the levels the probe found, as 44 px radio chips", async () => {
+    renderDialog();
+    const group = await screen.findByRole("radiogroup", { name: /effort for model 1/i });
+    await screen.findByRole("radio", { name: "Max" });
+    const names = Array.from(group.querySelectorAll('[role="radio"]')).map((c) => c.textContent);
+    expect(names).toEqual(["Default", "Off", "Low", "Medium", "High", "Max"]);
+    for (const chip of group.querySelectorAll('[role="radio"]')) {
+      expect(chip.className).toContain("min-h-11");
+    }
+    expect(screen.getByRole("radio", { name: "Default" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(/the server thinks by default/i)).toBeInTheDocument();
+  });
+
+  it("submits the chosen level for the direct-API row", async () => {
+    renderDialog();
+    await fillRequired();
+    await userEvent.click(await screen.findByRole("radio", { name: "Max" }));
+    expect(screen.getByRole("radio", { name: "Max" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(/token budget grows up to 4/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    await waitFor(() => {
+      expect(benchApi.challenges.create).toHaveBeenCalledWith(
+        expect.objectContaining({ models: [expect.objectContaining({ effort: "max" })] })
+      );
+    });
+  });
+
+  it("submits effort null when Default stays selected", async () => {
+    vi.mocked(benchApi.challenges.create).mockClear();
+    renderDialog();
+    await fillRequired();
+    await screen.findByRole("radio", { name: "Max" });
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    await waitFor(() => {
+      expect(benchApi.challenges.create).toHaveBeenCalledWith(
+        expect.objectContaining({ models: [expect.objectContaining({ effort: null })] })
+      );
+    });
+  });
+
+  it("shows only Default when no switch had an effect", async () => {
+    vi.mocked(benchApi.effortLevels.get).mockResolvedValueOnce({
+      served_model_id: "m", reachable: true, status: "no_effect", thinking_key: null,
+      effort_param: null, levels: [], default_observed: "on", probed_at: null, serving_since: null,
+    });
+    renderDialog();
+    expect(await screen.findByText(/no switch changed this model/i)).toBeInTheDocument();
+    const group = screen.getByRole("radiogroup", { name: /effort for model 1/i });
+    expect(group.querySelectorAll('[role="radio"]')).toHaveLength(1);
+  });
+
+  it("a failed probe offers Default only and a 'Check again' button", async () => {
+    vi.mocked(benchApi.effortLevels.get).mockResolvedValueOnce({
+      served_model_id: "m", reachable: true, status: "failed", thinking_key: null,
+      effort_param: null, levels: [], default_observed: "unknown", probed_at: null, serving_since: null,
+    });
+    renderDialog();
+    expect(await screen.findByText(/check failed/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /check again/i })).toBeInTheDocument();
+  });
+
+  it("an agent row shows the recorded-not-settable note and sends no effort", async () => {
+    vi.mocked(api.agents.list).mockResolvedValue([
+      { id: "a-1", name: "Worker", model: "some-model", harness: "omp" },
+    ] as never);
+    vi.mocked(benchApi.challenges.create).mockClear();
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /source 1/i }), "agent");
+    expect(screen.getByText(/recorded after the run, not settable yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: /effort for model 1/i })).toBeNull();
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: /agent 1/i }), "a-1");
+    await userEvent.type(screen.getByPlaceholderText(/title/i), "Agent");
+    await userEvent.type(screen.getByPlaceholderText(/prompt/i), "Some prompt");
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    await waitFor(() => {
+      expect(benchApi.challenges.create).toHaveBeenCalledWith(
+        expect.objectContaining({ models: [expect.objectContaining({ source_kind: "agent", effort: null })] })
+      );
     });
   });
 });

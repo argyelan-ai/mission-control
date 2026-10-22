@@ -14,6 +14,7 @@ Design rules (spec §7):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -22,6 +23,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import HTTPException
@@ -61,6 +63,7 @@ COMPOSE_TIMEOUT_S = 1200.0
 # (~10k tokens at ~25 tok/s) — 300s cut those runs off mid-generation.
 SPARK_TIMEOUT_S = 900.0
 SPARK_MAX_TOKENS = 16384
+SPARK_TEMPERATURE = 0.7
 
 GENERATION_SYSTEM_PROMPT = (
     "You are a one-shot frontend generator. Output a single complete "
@@ -189,19 +192,34 @@ def extract_html(raw: str | None) -> str:
     return text.strip()
 
 
-async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str, dict]:
+async def _spark_generate(
+    prompt: str,
+    model_override: str | None,
+    effort_fields: dict | None = None,
+    max_tokens: int = SPARK_MAX_TOKENS,
+) -> tuple[str, dict]:
     """One-shot HTML generation against the Spark vLLM endpoint.
 
     Reuses SparkClient for URL + active-model resolution, but calls
     /chat/completions directly because SparkClient.complete() drops the
     usage block — the studio needs tokens/tok_per_s metrics (spec §3).
 
+    ``effort_fields``: the probed thinking key for the requested effort
+    (``effort_probe.level_fields``) — ``None``/empty sends nothing, the
+    serving default governs. No model-name guard any more: the old
+    "qwen in the name -> enable_thinking false" switch silently ran every
+    Qwen bench without thinking and never said so (bench W0.6).
+    ``max_tokens`` is scaled by the caller for deep effort levels; the HTTP
+    timeout grows with it.
+
     Returns (content, metrics). Raises on HTTP errors — the caller converts
     that into entry.status = "failed".
     """
+    from app.services import reasoning_params
     from app.services.spark_client import SparkClient
 
-    spark = SparkClient(timeout=SPARK_TIMEOUT_S)
+    timeout = SPARK_TIMEOUT_S * max(1.0, max_tokens / SPARK_MAX_TOKENS)
+    spark = SparkClient(timeout=timeout)
     model = model_override or await spark._resolve_llm_model()
     started = time.monotonic()
     payload: dict = {
@@ -210,27 +228,41 @@ async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str,
             {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": SPARK_MAX_TOKENS,
-        "temperature": 0.7,
+        "max_tokens": max_tokens,
+        "temperature": SPARK_TEMPERATURE,
+        **(effort_fields or {}),
     }
-    # Qwen3 thinking mode returns content=null; disable it there (same guard
-    # as SparkClient.complete). Other models (Laguna/poolside) need thinking
-    # for benchmark-grade output — omit the kwarg so the serving default
-    # governs and the reasoning parser strips the think block from content.
-    if "qwen" in model.lower():
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    # One line per run with what went on the wire for effort, so a live
+    # check can read it from the backend log (not only from the entry).
+    logger.info(
+        "bench spark request model=%s effort_sent=%s max_tokens=%s",
+        model, reasoning_params.wire_fields(effort_fields or {}), max_tokens,
+    )
     async with httpx.AsyncClient(timeout=spark.timeout) as cli:
         resp = await cli.post(f"{spark.llm_url}/chat/completions", json=payload)
         resp.raise_for_status()
     duration_ms = int((time.monotonic() - started) * 1000)
     data = resp.json()
-    content = data["choices"][0]["message"]["content"] or ""
+    choice = data["choices"][0]
+    message = choice.get("message") or {}
+    content = message.get("content") or ""
 
     # The actually-served model per the response body wins over the
     # requested name — the resolver can be stale by the time the request
     # lands (recipe swap mid-flight). Falls back to the requested model
     # since some backends echo it verbatim or omit the field.
     metrics: dict = {"duration_ms": duration_ms, "model": data.get("model") or model}
+    # What was asked and what came back (bench §7.2 names): the request
+    # knobs, the effort key=value actually sent (None = nothing), whether
+    # the answer shows thinking, and why generation stopped ("length" =
+    # max_tokens ran out — thinking can eat the whole budget).
+    finish_reason = choice.get("finish_reason")
+    metrics["temperature"] = SPARK_TEMPERATURE
+    metrics["max_tokens"] = max_tokens
+    metrics["effort_sent"] = reasoning_params.wire_fields(effort_fields or {})
+    metrics["effort_observed"] = reasoning_params.reasoning_of(message, data.get("usage"))
+    metrics["finish_reason"] = finish_reason
+    metrics["truncated"] = finish_reason == "length"
     usage = data.get("usage") or {}
     if usage:
         tokens_out = usage.get("completion_tokens")
@@ -379,6 +411,46 @@ async def _record_spark_usage_event(session: AsyncSession, entry: BenchEntry, me
         logger.warning("bench entry %s: spark usage event write failed", entry.id, exc_info=True)
 
 
+async def _spark_effort_request(
+    session: AsyncSession, entry: BenchEntry
+) -> tuple[dict, int, dict]:
+    """(request fields, max_tokens, metrics to store) for the effort the
+    entry asked for (``metrics["effort_requested"]``, set at create time).
+
+    "default" sends nothing and never probes. It keeps today's max_tokens —
+    unless a STORED probe (no extra request) saw that this server thinks by
+    default: then "default" behaves like "on" and gets the same budget, or a
+    model that thinks by default (Qwen) runs out of tokens before the page.
+    Any other level re-reads the probe for the engine as it runs NOW (cached
+    per serving_since): a model restarted between create and run gets probed
+    again, and a level it no longer offers fails the entry with the reason
+    instead of silently running on the default."""
+    from app.services import reasoning_params
+
+    from . import effort_probe
+
+    level = (entry.metrics or {}).get("effort_requested") or "default"
+    if level == "default":
+        cached = await effort_probe.cached_probe(session, entry.spark_model or "")
+        if cached is None or cached.default_observed != "on":
+            return {}, SPARK_MAX_TOKENS, {"effort_requested": "default"}
+        runtime = await effort_probe.spark_runtime(session)
+        limit = getattr(runtime, "max_context_len", None) if runtime is not None else None
+        return {}, reasoning_params.max_tokens_for("on", SPARK_MAX_TOKENS, limit), {
+            "effort_requested": "default",
+            "default_observed": "on",
+        }
+    probe = await effort_probe.get_or_probe(session, entry.spark_model or "")
+    fields = effort_probe.level_fields(probe, level)
+    runtime = await effort_probe.spark_runtime(session)
+    limit = getattr(runtime, "max_context_len", None) if runtime is not None else None
+    max_tokens = reasoning_params.max_tokens_for(level, SPARK_MAX_TOKENS, limit)
+    return fields, max_tokens, {
+        "effort_requested": level,
+        "thinking_key": probe.effort_param or probe.thinking_key,
+    }
+
+
 async def generate_spark_entry(
     session: AsyncSession, entry: BenchEntry, prompt: str
 ) -> None:
@@ -390,20 +462,31 @@ async def generate_spark_entry(
     session.add(entry)
     await session.commit()
     try:
-        content, metrics = await _spark_generate(prompt, entry.spark_model)
+        effort_fields, max_tokens, run_params = await _spark_effort_request(session, entry)
+        content, metrics = await _spark_generate(
+            prompt, entry.spark_model, effort_fields=effort_fields, max_tokens=max_tokens
+        )
         # Tokens were spent the moment the API call returned, independent of
         # whether the HTML below turns out to be valid — record usage now,
         # not after the extract_html/write-to-disk steps that can still fail.
         await _record_spark_usage_event(session, entry, metrics)
+        # Same for what was sent and observed (effort, finish_reason): a run
+        # that thought until max_tokens and produced no HTML must still show
+        # why (bench W0.6).
+        entry.metrics = {**(entry.metrics or {}), **run_params, **metrics}
         html = extract_html(content)
         if not html:
+            if metrics.get("finish_reason") == "length":
+                raise ValueError(
+                    f"model returned no HTML content — stopped at max_tokens "
+                    f"({metrics.get('max_tokens')}) before the page"
+                )
             raise ValueError("model returned no HTML content")
         out_dir = challenge_dir(entry.challenge_id) / _safe_label(entry.model_label)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "index.html"
         out_path.write_text(html, encoding="utf-8")
         entry.artifact_path = str(out_path)
-        entry.metrics = {**(entry.metrics or {}), **metrics}
         entry.status = "generated"
         entry.error = None
     except Exception as exc:  # noqa: BLE001 — every failure must land in the DB
@@ -500,6 +583,13 @@ async def task_work_duration_ms(session: AsyncSession, task_id: uuid.UUID) -> in
     `in_progress -> review` event by the working agent (work end — the
     one-shot artifact exists at that moment; everything after is review
     ping-pong). Returns None when either endpoint is missing.
+
+    Time the task sat outside in_progress inside that span (blocked on an
+    operator answer overnight, put back into the inbox) is not work and is
+    subtracted — a run blocked for 21 h showed "1363.6 min" in the video
+    (live, 2026-10-19). A pause only counts once its re-entry into
+    in_progress is recorded; a leave without a recorded return stays work
+    time (event logs of older runs miss some re-entries).
     """
     from app.models.task import TaskEvent
 
@@ -523,7 +613,18 @@ async def task_work_duration_ms(session: AsyncSession, task_id: uuid.UUID) -> in
     )
     if start is None or end is None or end.created_at <= start.created_at:
         return None
-    return int((end.created_at - start.created_at).total_seconds() * 1000)
+    paused_s = 0.0
+    left_at = None
+    for e in events:
+        if e.created_at <= start.created_at or e.created_at > end.created_at:
+            continue
+        if e.from_status == "in_progress" and e.to_status != "in_progress":
+            left_at = e.created_at
+        elif e.to_status == "in_progress" and left_at is not None:
+            paused_s += (e.created_at - left_at).total_seconds()
+            left_at = None
+    worked_s = (end.created_at - start.created_at).total_seconds() - paused_s
+    return int(worked_s * 1000)
 
 
 async def task_cost_usd(session: AsyncSession, task_id: uuid.UUID) -> float | None:
@@ -666,6 +767,16 @@ async def on_task_done(session: AsyncSession, task) -> None:
         if not await _readopt_reopened_entry(session, entry):
             return
 
+    # Agent-path effort is recorded, not set (bench W0.7): which thinking
+    # level the task's own omp session really ran on.
+    from .agent_effort import observed_agent_effort
+
+    entry.metrics = {
+        **(entry.metrics or {}),
+        "effort_requested": (entry.metrics or {}).get("effort_requested") or "default",
+        "effort_observed": await observed_agent_effort(session, entry, task),
+    }
+
     rows = (
         await session.exec(
             select(TaskDeliverable).where(TaskDeliverable.task_id == task.id)
@@ -712,6 +823,9 @@ async def on_task_done(session: AsyncSession, task) -> None:
         if duration_ms is not None:
             metrics["duration_ms"] = duration_ms
         entry.metrics = metrics
+        # Tokens/cost/locality as far as already harvested (the outro
+        # refreshes them at compose time) — the UI shows them right away.
+        await snapshot_entry_usage(session, entry)
         entry.status = "generated"
         entry.error = None
     session.add(entry)
@@ -748,6 +862,60 @@ async def record_entry(entry: BenchEntry, challenge: BenchChallenge) -> dict:
         return resp.json()
 
 
+DIRECT_API_TAG = "LOCAL · DIRECT API"
+
+
+def _published_episode_no(challenge_id: uuid.UUID) -> int | None:
+    """Episode number of a published run, else None.
+
+    The (private) catalog publisher writes
+    ``<challenge dir>/publish/state.json`` with ``episode_no`` on a
+    successful publish and removes it on unpublish — absent means "not
+    published". Read-only and defensive: anything unexpected is None."""
+    path = challenge_dir(challenge_id) / "publish" / "state.json"
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    episode_no = state.get("episode_no") if isinstance(state, dict) else None
+    if isinstance(episode_no, bool) or not isinstance(episode_no, int) or episode_no < 1:
+        return None
+    return episode_no
+
+
+def _branding_date_label(challenge: BenchChallenge) -> str:
+    """"2026-10-21", or "episode 4 · 2026-10-21" once published.
+
+    The date is the operator's calendar day (``settings.usage_timezone``,
+    the zone Insights counts days in; UTC when unset or unknown)."""
+    from app.config import settings
+
+    created = challenge.created_at or datetime.now(timezone.utc)
+    if created.tzinfo is None:  # SQLite hands back naive UTC
+        created = created.replace(tzinfo=timezone.utc)
+    try:
+        tz = ZoneInfo(settings.usage_timezone) if settings.usage_timezone else timezone.utc
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = timezone.utc
+    label = created.astimezone(tz).date().isoformat()
+    episode_no = _published_episode_no(challenge.id)
+    return f"episode {episode_no} · {label}" if episode_no else label
+
+
+async def _legacy_run_label(session: AsyncSession, challenge: BenchChallenge) -> str:
+    """The pre-W0.5 "RUN 0xx" value (zero-padded count of challenges created
+    at-or-before this one) — only for a not-yet-rebuilt renderer image, see
+    the run_label comment in _build_branding_payload."""
+    prior_ids = (
+        await session.exec(
+            select(BenchChallenge.id).where(
+                BenchChallenge.created_at <= challenge.created_at
+            )
+        )
+    ).all()
+    return f"{len(prior_ids):03d}"
+
+
 def format_speed_label(metrics: dict) -> str:
     """'42 s · 87 tok/s' — optional per-model overlay for the grid (spec §4)."""
     parts: list[str] = []
@@ -776,16 +944,30 @@ def _format_outro_time(duration_ms: int | None) -> str:
     return f"{duration_ms / 60000:.1f} min"
 
 
-def _format_outro_cost(cost_usd: float | None, source_kind: str) -> str:
-    """Outro cost cell. Spark entries run on the local DGX — no per-token
-    cost, shown as "local" (clearer than a fake $0). Agent entries show the
-    attributed sum when model_usage_events has one, else "—" (most agent
-    runs today — see task_cost_usd coverage note)."""
-    if source_kind == "spark":
+def _format_outro_cost(
+    cost_usd: float | None, source_kind: str, locality: str | None = None
+) -> str:
+    """Outro cost cell — never a number that was not spent.
+
+    - Spark entries and agents on a local runtime (our own box): "local".
+      model_usage_events may still carry an API list price for the same
+      model name (the price table is keyed by model, not by where it ran);
+      showing it would read as real spend.
+    - No attributed cost, or a sum of 0 (the catch-all price row prices an
+      unknown model at 0/0 — "price unknown", not "free"): "—".
+    - Below one cent: "<$0.01" instead of a misleading "$0.00".
+    - Otherwise "~$0.42": the sum is the API list price of the tokens
+      (model_prices), not an invoice — cloud runs mostly go through a
+      subscription (Grok, Claude Code). "~" (not "≈") because the outro's
+      JetBrains Mono is the Google Fonts latin subset, which has no U+2248.
+    """
+    if source_kind == "spark" or locality == "local":
         return "local"
-    if cost_usd is None:
+    if cost_usd is None or cost_usd <= 0:
         return "—"
-    return f"${cost_usd:.2f}"
+    if cost_usd < 0.01:
+        return "<$0.01"
+    return f"~${cost_usd:.2f}"
 
 
 def _format_tok_count(n: int) -> str:
@@ -818,6 +1000,60 @@ def _format_outro_size(artifact_path: str | None) -> str:
         return "—"
 
 
+async def entry_locality(session: AsyncSession, entry: BenchEntry) -> str | None:
+    """"local" | "cloud" | None for where an entry's model ran.
+
+    Spark entries are local by definition. Agent entries: the agent's bound
+    runtime — local when it sits on one of our own boxes and speaks the
+    OpenAI protocol (``heads.pairs.is_local``, the same rule as the pair
+    table and head runs). None when the agent or runtime is gone."""
+    if entry.source_kind == "spark":
+        return "local"
+    if entry.agent_id is None:
+        return None
+    from app.models.agent import Agent
+    from app.models.runtime import Runtime
+    from app.services.heads.pairs import is_local
+
+    agent = await session.get(Agent, entry.agent_id)
+    if agent is None or agent.runtime_id is None:
+        return None
+    runtime = await session.get(Runtime, agent.runtime_id)
+    if runtime is None:
+        return None
+    return "local" if is_local(runtime) else "cloud"
+
+
+async def snapshot_entry_usage(session: AsyncSession, entry: BenchEntry) -> dict:
+    """Store an agent entry's attributed usage on ``entry.metrics`` and
+    return the metrics dict — one source of truth for the video outro, the
+    Bench Studio UI and the episode export.
+
+    Writes ``tokens_in``/``tokens_out``/``cost_usd`` from model_usage_events
+    when the task has attributed rows (never deletes a value an earlier
+    snapshot stored), and ``locality`` once — at task-done time, so a later
+    runtime switch of the agent does not relabel an old run. Spark entries
+    are left alone: their tokens come from the engine response directly."""
+    metrics = dict(entry.metrics or {})
+    if entry.source_kind == "spark":
+        return metrics
+    if "locality" not in metrics:
+        locality = await entry_locality(session, entry)
+        if locality is not None:
+            metrics["locality"] = locality
+    if entry.task_id is not None:
+        usage = await task_token_usage(session, entry.task_id)
+        if usage is not None:
+            metrics["tokens_in"], metrics["tokens_out"] = usage
+        cost = await task_cost_usd(session, entry.task_id)
+        if cost is not None:
+            metrics["cost_usd"] = cost
+    if metrics != (entry.metrics or {}):
+        entry.metrics = metrics
+        session.add(entry)
+    return metrics
+
+
 async def _build_branding_payload(
     session: AsyncSession, challenge: BenchChallenge, ordered: list[BenchEntry]
 ) -> dict:
@@ -830,16 +1066,16 @@ async def _build_branding_payload(
     frame_single.html based on len(models)."""
     from app.models.agent import Agent
 
-    # run_label: zero-padded 3-digit count of bench_challenges created
-    # at-or-before this one — a stable per-series run number.
-    prior_ids = (
-        await session.exec(
-            select(BenchChallenge.id).where(
-                BenchChallenge.created_at <= challenge.created_at
-            )
-        )
-    ).all()
-    run_label = f"{len(prior_ids):03d}"
+    # date_label: the run's date (+ "episode N" once published) — replaces the
+    # old RUN 0xx row counter (concept W0.5, 2026-10-22).
+    date_label = _branding_date_label(challenge)
+    # run_label: the old counter, still sent for ONE release — a renderer
+    # image built before W0.5 requires it (BrandingSpec.run_label: str, a
+    # 422 on every compose without it) and the image build can now fail by
+    # design when Fontshare/Google is down, so backend and renderer may be
+    # live in different versions for a while. The new renderer ignores it.
+    # Drop once every renderer image is W0.5 or newer.
+    run_label = await _legacy_run_label(session, challenge)
 
     models: list[dict] = []
     outro_rows: list[dict] = []
@@ -848,7 +1084,12 @@ async def _build_branding_payload(
             # Operator override (bench_entries.display_tag) always wins.
             tag = entry.display_tag
         elif entry.source_kind == "spark":
-            tag = "VLLM · SPARK"
+            # What MC knows for sure about a direct-API run: the local
+            # OpenAI-compatible endpoint, no agent in between. Engine and
+            # hardware are not known here (the endpoint can serve vLLM,
+            # SGLang or EXL3 recipes) — omitted rather than guessed
+            # (concept W0.5; the W1 receipt derives them from the recipe).
+            tag = DIRECT_API_TAG
         else:
             # Agent entries: harness-derived default (e.g. omp -> "OMP",
             # grok -> "GROK"); agent name as fallback when no harness is set.
@@ -862,41 +1103,37 @@ async def _build_branding_payload(
                         tag = agent.name.upper()
         models.append({"label": entry.model_label, "tag": tag})
 
+        # Fresh snapshot of the attributed usage (agent entries; the
+        # harvester may have attributed more turns since task-done — a
+        # recompose picks them up). Spark entries carry tokens_in/out from
+        # the engine response (_spark_generate) and have no fleet task.
+        metrics = await snapshot_entry_usage(session, entry)
+
         # Time: stored metrics first; for agent entries without a stored
         # value (old runs, hook races) derive defensively from task_events.
-        duration_ms = (entry.metrics or {}).get("duration_ms")
+        duration_ms = metrics.get("duration_ms")
         if duration_ms is None and entry.task_id is not None:
             duration_ms = await task_work_duration_ms(session, entry.task_id)
 
-        cost_usd = None
-        if entry.source_kind != "spark" and entry.task_id is not None:
-            cost_usd = await task_cost_usd(session, entry.task_id)
+        cost_usd = metrics.get("cost_usd") if entry.source_kind != "spark" else None
 
-        # Token usage: spark entries have no fleet Task (task_id is always
-        # NULL for them, see _record_spark_usage_event), so they can never
-        # be attributed via task_token_usage/model_usage_events — read the
-        # tokens_in/out _spark_generate already captured into entry.metrics
-        # directly instead (Task 5). Agent entries keep the existing
-        # task-attributed sum.
         token_usage = None
-        if entry.source_kind == "spark":
-            tokens_in = (entry.metrics or {}).get("tokens_in")
-            tokens_out = (entry.metrics or {}).get("tokens_out")
-            if tokens_in is not None and tokens_out is not None:
-                token_usage = (int(tokens_in), int(tokens_out))
-        elif entry.task_id is not None:
-            token_usage = await task_token_usage(session, entry.task_id)
+        tokens_in = metrics.get("tokens_in")
+        tokens_out = metrics.get("tokens_out")
+        if tokens_in is not None and tokens_out is not None:
+            token_usage = (int(tokens_in), int(tokens_out))
 
         outro_rows.append({
             "name": entry.model_label,
             "time": _format_outro_time(duration_ms),
             "size": _format_outro_size(entry.artifact_path),
-            "cost": _format_outro_cost(cost_usd, entry.source_kind),
+            "cost": _format_outro_cost(cost_usd, entry.source_kind, metrics.get("locality")),
             "tokens": _format_outro_tokens(token_usage),
         })
 
     return {
         "title": challenge.title,
+        "date_label": date_label,
         "run_label": run_label,
         "prompt_line": _first_prompt_line(challenge.prompt_text),
         "models": models,
@@ -970,8 +1207,7 @@ async def _render_and_compose(
     for entry in generated:
         try:
             result = await record_entry(entry, challenge)
-            entry.video_path = result.get("video_path")
-            entry.screenshot_path = result.get("screenshot_path")
+            _apply_record_result(entry, result)
             entry.status = "rendered"
             entry.error = None
             rendered.append(entry)
@@ -1014,6 +1250,26 @@ async def _render_and_compose(
     challenge.status = "review"
     session.add(challenge)
     await session.commit()
+
+
+# W0.9: recorder network report -> entry.metrics (§7.2 receipt names). The
+# sidecar's URL sample (blocked_requests) stays in its log, not in the record.
+_RECORD_REPORT_KEYS = ("network_blocked", "network_attempts", "libraries_inlined", "html_bytes")
+
+
+def _apply_record_result(entry: BenchEntry, result: dict) -> None:
+    """Store one /record response on the entry. A response without the
+    network fields (a sidecar older than the block) removes earlier values
+    instead of keeping them, so an entry never claims a block its current
+    recording did not have."""
+    entry.video_path = result.get("video_path")
+    entry.screenshot_path = result.get("screenshot_path")
+    metrics = {k: v for k, v in (entry.metrics or {}).items() if k not in _RECORD_REPORT_KEYS}
+    for key in _RECORD_REPORT_KEYS:
+        if key in result:
+            metrics[key] = result[key]
+    metrics["recorded_at"] = datetime.now(timezone.utc).isoformat()
+    entry.metrics = metrics
 
 
 async def maybe_advance(session: AsyncSession, challenge_id: uuid.UUID) -> None:
@@ -1182,7 +1438,8 @@ async def retire_blocked_entry_task(
 async def reconcile_challenge(
     session: AsyncSession, challenge: BenchChallenge, entries: list[BenchEntry]
 ) -> None:
-    """GET-time fallback sweep: agent tasks that ended in `failed` or
+    """Fallback sweep for one challenge (run by reconcile_open_challenges in
+    the background, never from a GET): agent tasks that ended in `failed` or
     `aborted` never fire the task_done hook — mark their entries failed so
     nothing hangs silently (spec §7, lesson from the Grok review: uncaught
     -> eternal in_progress; `aborted` added 2026-10-19). If such a task is
@@ -1219,6 +1476,69 @@ async def reconcile_challenge(
     if changed:
         await session.commit()
         await maybe_advance(session, challenge.id)
+
+
+# ── Background orphan sweep (W0.8) ────────────────────────────────────────
+# reconcile_challenge used to run only inside GET /challenges/{id}: a GET
+# that wrote, and a list that never healed. Three challenges sat at
+# `generating` from 19.10. on because their tasks were deleted and nobody
+# opened them. The sweep below runs in the vertical itself (registered via
+# hooks.background_loops, ADR-044) and keeps both GETs read-only.
+
+RECONCILE_INTERVAL_S = 60
+# Let the API finish booting before the first sweep (DB pool, other loops).
+RECONCILE_INITIAL_DELAY_S = 15
+
+
+async def reconcile_open_challenges() -> int:
+    """One sweep over every `generating` challenge (archived ones included:
+    archiving only hides a row, its state must still be honest). Each
+    challenge gets its own session, so one broken row never stops the rest.
+    Returns how many challenges left `generating` in this sweep."""
+    from app.database import engine
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        ids = (
+            await session.exec(
+                select(BenchChallenge.id).where(BenchChallenge.status == "generating")
+            )
+        ).all()
+
+    healed = 0
+    for challenge_id in ids:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            try:
+                challenge = await session.get(BenchChallenge, challenge_id)
+                if challenge is None or challenge.status != "generating":
+                    continue
+                entries = (
+                    await session.exec(
+                        select(BenchEntry).where(BenchEntry.challenge_id == challenge_id)
+                    )
+                ).all()
+                await reconcile_challenge(session, challenge, entries)
+                await session.refresh(challenge)
+                if challenge.status != "generating":
+                    healed += 1
+                    logger.info(
+                        "bench sweep: challenge %s -> %s", challenge_id, challenge.status
+                    )
+            except Exception:  # noqa: BLE001 — one bad row never stops the sweep
+                logger.exception("bench sweep: challenge %s reconcile failed", challenge_id)
+                await session.rollback()
+    return healed
+
+
+async def reconcile_loop() -> None:
+    """Runs reconcile_open_challenges every RECONCILE_INTERVAL_S until
+    cancelled. Errors are logged; the loop keeps going."""
+    await asyncio.sleep(RECONCILE_INITIAL_DELAY_S)
+    while True:
+        try:
+            await reconcile_open_challenges()
+        except Exception:  # noqa: BLE001 — a DB hiccup must not end the loop
+            logger.exception("bench sweep failed")
+        await asyncio.sleep(RECONCILE_INTERVAL_S)
 
 
 # ── Operator lifecycle: stop + artifact cleanup (2026-07-12) ───────────────
@@ -1504,8 +1824,7 @@ async def rerender_entry(entry_id: uuid.UUID, challenge_id: uuid.UUID) -> None:
 
                 try:
                     result = await record_entry(entry, challenge)
-                    entry.video_path = result.get("video_path")
-                    entry.screenshot_path = result.get("screenshot_path")
+                    _apply_record_result(entry, result)
                     entry.status = "rendered"
                     entry.error = None
                 except Exception as exc:  # noqa: BLE001
