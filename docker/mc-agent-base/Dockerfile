@@ -1,5 +1,11 @@
 # docker/mc-agent-base/Dockerfile
-FROM node:22.11.0-alpine
+# Node pin: >= the Node.js 2026-10-21 security release (22.23.4 / 24.22.1 /
+# 26.12.1 — TLS hostname-verification bypasses, Brotli RCE, CA store without
+# the compromised eMudhra intermediates). Stays on the 22 line together with
+# mc-claude-agent and the backend's NodeSource node (see backend/Dockerfile:
+# MCP servers installed by the backend run with THIS node). Bump by version
+# tag; backend/tests/test_image_security_floor.py guards the floor.
+FROM node:22.23.4-alpine
 
 # Basis-Tools (alle Agents)
 # github-cli immer mitinstallieren — Agents die keine Git-Ops machen

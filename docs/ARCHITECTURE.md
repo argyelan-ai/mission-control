@@ -204,7 +204,7 @@ zeigt, hat eine Definition: die SQL-Funktion `update_running_work()`
 - deployer (+ `gh` CLI + `vercel` CLI)
 
 **`mc-agent-base` Image** (`docker/mc-agent-base/Dockerfile`):
-- `node:22.11.0-alpine`
+- `node:22.23.4-alpine` (Node security floor: `backend/tests/test_image_security_floor.py`)
 - Tools: git, curl, python3, bash, openssh-client, tmux
 - `openclaude@0.1.8` global installiert
 - Non-root `agent` user, `/bin/sh` login shell (wichtig: nicht `/sbin/nologin`, sonst tmux-Zombie)
@@ -1642,6 +1642,14 @@ Alle ADRs in `docs/decisions/`:
 ---
 
 ## Änderungshistorie (high-level)
+
+- **2026-10-22** — **Image security floor (Node 2026-10-21 release + eMudhra CA):** the backend
+  image moves from NodeSource Node 20 (end of life) to the 22 line with a build-time floor
+  (`NODE_MIN`); `mc-agent-base` / `mc-claude-agent` move from `node:22.11.0` to `node:22.23.4`,
+  `playwright-mcp` to the `22.23.4` digest. Backend and agent images share one Node major on
+  purpose: MCP servers the backend installs with npm run under the agents' node. certifi floor
+  2026.10.19 in the backend (pyproject + lock) and voice worker; `mc-playwright` upgrades the
+  stale jammy `ca-certificates`. `backend/tests/test_image_security_floor.py` keeps the floor.
 
 - **2026-10-19** — **Terminal door + crash matrix (ADR-094, update plan PR 2c):** on the stable
   channel `install.sh --update`, `--rollback` and `--resume` only run `scripts/mc_update.py`

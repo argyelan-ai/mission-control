@@ -10,8 +10,12 @@ WORKDIR /app
 # ffmpeg fuer /record (webm->H.264 mp4) + /compose (Grid-Video);
 # fonts-dejavu-core garantiert /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
 # fuer drawtext-Labels (im Playwright-Image i.d.R. schon vorhanden — hier explizit).
+# ca-certificates: listed so the build UPGRADES the base's stale bundle
+# (v1.48.0-jammy ships 20240203~22.04.1, which still trusts the compromised
+# eMudhra intermediates; 20260816ubuntu0.22.04.1 = USN-8944 fix). `apt-get
+# install` of an installed package upgrades it to the current candidate.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \
@@ -21,7 +25,8 @@ RUN pip install --no-cache-dir \
     httpx==0.27.2 \
     pydantic==2.10.3 \
     markdown==3.7 \
-    pygments==2.18.0
+    pygments==2.18.0 \
+    "certifi>=2026.10.19"
 
 COPY media.py /app/media.py
 COPY service.py /app/service.py

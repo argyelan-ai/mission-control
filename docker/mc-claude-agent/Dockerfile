@@ -12,7 +12,10 @@
 # setup-token' auf Host generiert). Kein Credential-File-Mount — bekannter
 # Bug anthropics/claude-code#22066.
 
-FROM node:22.11.0-bookworm-slim
+# Node pin: >= the Node.js 2026-10-21 security release (see the note in
+# docker/mc-agent-base/Dockerfile); guarded by
+# backend/tests/test_image_security_floor.py.
+FROM node:22.23.4-bookworm-slim
 
 # Basis-Tools (gleiche Set wie mc-agent-base, aber Debian statt Alpine)
 RUN apt-get update && apt-get install -y --no-install-recommends \

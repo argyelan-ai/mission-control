@@ -9,6 +9,7 @@ processes from its healthcheck (PID 1 = Chromium never reaps), eating the
 Docker VM's shared pid space. The runtime proof is
 ``docker/cdp-browser/test_webgl.sh`` (CI); these checks pin the config.
 """
+import re
 from pathlib import Path
 
 import yaml
@@ -104,7 +105,10 @@ def test_playwright_mcp_is_built_from_a_pinned_version():
     assert "image" not in svc or not str(svc["image"]).endswith(":latest")
     text = PW_DOCKERFILE.read_text(encoding="utf-8")
     assert "@playwright/mcp@0.0.83" in text
-    assert "FROM node:22-bookworm-slim@sha256:" in text
+    # Version tag + digest: the digest is what Docker pulls, the tag says
+    # which Node it is (the security floor is checked in
+    # test_image_security_floor.py).
+    assert re.search(r"^FROM node:\d+\.\d+\.\d+-bookworm-slim@sha256:[0-9a-f]{64}$", text, re.M)
 
 
 def test_playwright_mcp_writes_screenshots_into_the_output_mount():
@@ -165,3 +169,46 @@ def test_playwright_mcp_health_does_not_start_a_child():
 def test_playwright_mcp_stays_off_the_host_network():
     """The host port for heads comes with the harness wiring, not here."""
     assert "ports" not in _service("playwright-mcp")
+
+
+# SHA-256 of the 12 compromised eMudhra TLS intermediates + Sectigo
+# cross-signs (Oct 2026; https://emudhra.we-have-a-problem.com/
+# impacted-intermediates.json, usage "tls"). Chromium checks its built-in root
+# store, not the Debian bundle, and the CRLSet block never reaches this
+# headless browser — the managed policy is what makes it refuse them.
+EMUDHRA_TLS_INTERMEDIATES = {
+    "42C4ACCD12C4F59597925E1A08A7A90102608543809308D50EC427E118BA1493",
+    "45A883F349AEDFD5F3A649B5498FFB121712BA8B448F3F2A91DBC5A766FCDDBE",
+    "98B896625C0C230ADEEC3EB2CF6AAD5001ECF9156A68644E82374CE5833BC25B",
+    "5F1DED4DD590AF74631290CF073B122A2AAC6A1FA479778A0BD43579BD832699",
+    "E7568FE6E12331F4FD7DE61DA4C7559D0F8EB192A218D4741A3BA75184333838",
+    "579480AEA166290BD3C643589E795FC0D0E54E86505D180F1DFF99EFD3199512",
+    "0164D7CEAE5BB909C272AF151FF44B1177AE9B47D9424B94F1D9558C30934D19",
+    "62B7F9868263F72F6911FC78CEAF72C1979158B7368BF648683BB2AA39B02E72",
+    "CB6E15165AC802E9B3F993F16C25D41F4E81C21EBDE71AE1B012AC00BF9C7C3F",
+    "7485B51C0ED192878FA1D2F948FB529AE1842CC5086C4B67F7BE5B2039DE9489",
+    "432EC25F0D28DE9006D97BF752F17BBB2CD41F669933FCB072D9A1148D0261F3",
+    "FD9D5C2DBBD4995AB69B8D50C439D9527B00529199C2FD01B2174EB58F07021F",
+}
+
+
+def test_cdp_browser_distrusts_the_compromised_emudhra_intermediates():
+    import base64
+    import hashlib
+    import json
+
+    from cryptography import x509
+
+    policy_file = REPO_ROOT / "docker/cdp-browser/policies/emudhra-distrust.json"
+    certs = json.loads(policy_file.read_text(encoding="utf-8"))["CADistrustedCertificates"]
+    ders = [base64.b64decode(c) for c in certs]
+    assert {hashlib.sha256(d).hexdigest().upper() for d in ders} == EMUDHRA_TLS_INTERMEDIATES
+    # Only eMudhra intermediates — a wrong entry would break unrelated sites.
+    for der in ders:
+        subject = x509.load_der_x509_certificate(der).subject.rfc4514_string()
+        assert "O=eMudhra" in subject, subject
+    # Chromium reads managed policies from exactly this directory.
+    assert (
+        "COPY policies/emudhra-distrust.json "
+        "/etc/chromium/policies/managed/emudhra-distrust.json"
+    ) in CDP_DOCKERFILE.read_text(encoding="utf-8")

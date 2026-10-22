@@ -1,7 +1,24 @@
 FROM python:3.12-slim AS base
 
 # Git + GitHub CLI + Docker CLI (fuer Agent Git-Workflow + PTY Terminal)
-# Node.js 20 via NodeSource (fuer MCPRegistry.install() von npm-basierten MCP-Servern)
+# Node.js via NodeSource (fuer MCPRegistry.install() von npm-basierten MCP-Servern).
+#
+# Node line = 22, on purpose the same major as the agent images
+# (mc-claude-agent / mc-agent-base: node:22.x): the backend's `npm install`
+# writes into ~/.mc/mcp-servers, and the AGENT containers run those servers
+# with their own node from the /mc-servers mount — a package with a native
+# addon built against another major (different NODE_MODULE_VERSION) would not
+# load there. Node 20 is end of life (no security fixes); move backend and
+# agent images to the next LTS together, not one alone.
+#
+# NODE_MIN is the security floor: the Node.js 2026-10-21 security release
+# (22.23.4 / 24.22.1 / 26.12.1 — TLS hostname-verification bypasses, Brotli
+# RCE, and the CA store update that distrusts the compromised eMudhra
+# intermediates). The repo line floats so a rebuild picks up later patches;
+# the check after the install fails the build if the mirror ever serves an
+# older one.
+ARG NODE_MAJOR=22
+ARG NODE_MIN=22.23.4
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git curl ca-certificates tmux openssh-client gnupg \
     && mkdir -p /etc/apt/keyrings \
@@ -18,11 +35,14 @@ RUN apt-get update \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && chmod go+r /etc/apt/keyrings/nodesource.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
        > /etc/apt/sources.list.d/nodesource.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends gh docker-ce-cli docker-compose-plugin nodejs \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && node -e 'const [a,b]=[process.versions.node,process.argv[1]].map(v=>v.split(".").map(Number)); \
+         const ok=a[0]===b[0]&&(a[1]>b[1]||(a[1]===b[1]&&a[2]>=b[2])); \
+         console.log("node "+process.versions.node+(ok?" >= ":" < ")+process.argv[1]); process.exit(ok?0:1)' "${NODE_MIN}"
 
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/

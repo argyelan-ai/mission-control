@@ -57,6 +57,17 @@ RUN set -eu; \
     echo "${sum}  /usr/local/bin/websocat" | sha256sum -c -; \
     chmod +x /usr/local/bin/websocat
 
+# Managed Chromium policy: distrust the 12 eMudhra TLS intermediates (and
+# their Sectigo cross-signs) whose private keys leaked in Oct 2026. Chromium
+# verifies against its BUILT-IN Chrome Root Store, not the Debian bundle, and
+# Google blocked these certs through CRLSets — which this headless Chromium
+# never downloads. Measured 2026-10-22: Debian chromium 155.0.8059.79 still
+# loaded https://dv-g3b-emudhra.we-have-a-problem.com/ without the policy and
+# fails with ERR_CERT_AUTHORITY_INVALID with it. Source of the certificates:
+# https://emudhra.we-have-a-problem.com/impacted-intermediates.json (usage
+# "tls"); backend/tests/test_compose_cdp_browser.py pins their SHA-256s.
+# Drop the file once Chromium's own root store excludes them.
+COPY policies/emudhra-distrust.json /etc/chromium/policies/managed/emudhra-distrust.json
 COPY entrypoint.sh /usr/local/bin/cdp-entrypoint.sh
 COPY healthcheck.sh /usr/local/bin/cdp-healthcheck.sh
 COPY gateway/cdp_gateway.py /opt/cdp-gateway/cdp_gateway.py
