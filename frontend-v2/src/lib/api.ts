@@ -197,6 +197,36 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/**
+ * A read with `If-None-Match`: `null` on 304 (nothing changed — the caller
+ * keeps its last answer), otherwise the body and the `ETag` to send back
+ * next time. Same handling as `api.heads.history`, as a helper because the
+ * chat's task reads (spec A) poll three such endpoints.
+ */
+export async function requestWithEtag<T>(
+  path: string,
+  etag?: string | null,
+): Promise<{ data: T; etag: string | null } | null> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${getToken()}`,
+      ...(etag ? { "If-None-Match": etag } : {}),
+    },
+  });
+  if (res.status === 304) return null;
+  if (res.status === 401 && typeof window !== "undefined") {
+    clearToken();
+    window.location.href = "/login";
+    throw new Error("Session abgelaufen");
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`API ${res.status}: ${text}`);
+  }
+  return { data: (await res.json()) as T, etag: res.headers.get("ETag") };
+}
+
 /** Like request(), but returns the raw response body as text (Markdown etc.). */
 export async function requestText(path: string, init?: RequestInit): Promise<string> {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -908,6 +938,36 @@ export const api = {
      *  `thumb` = small WebP for the card, `full` = metadata-free original. */
     mediaUrl: (agentId: string, mediaId: string, variant: "thumb" | "full" = "thumb"): string =>
       `${BASE_URL}/api/v1/agents/${encodeURIComponent(agentId)}/chat/media/${encodeURIComponent(mediaId)}?variant=${variant}`,
+    /** The tasks of this chat (spec A): live ones + the newest finished
+     *  ones as cards. `null` = 304, keep the last answer. */
+    tasks: (agentId: string, params: { limit?: number; etag?: string | null } = {}) =>
+      requestWithEtag<import("./chatTypes").ChatTasksResponse>(
+        `/api/v1/agents/${encodeURIComponent(agentId)}/chat/tasks${params.limit != null ? `?limit=${params.limit}` : ""}`,
+        params.etag,
+      ),
+    /** One task's steps, slim, across all attempts. `after` = the last
+     *  cursor; `open` = ids of rows whose current form is wanted back. */
+    taskSteps: (
+      agentId: string,
+      taskId: string,
+      params: { limit?: number; after?: string | null; open?: string[]; etag?: string | null } = {},
+    ) => {
+      const q = new URLSearchParams();
+      if (params.limit != null) q.set("limit", String(params.limit));
+      if (params.after) q.set("after", params.after);
+      if (params.open && params.open.length > 0) q.set("open", params.open.slice(0, 50).join(","));
+      const qs = q.toString();
+      return requestWithEtag<import("./chatTypes").TaskStepsResponse>(
+        `/api/v1/agents/${encodeURIComponent(agentId)}/chat/tasks/${encodeURIComponent(taskId)}/steps${qs ? `?${qs}` : ""}`,
+        params.etag,
+      );
+    },
+    /** One step in full (`rowId` like `1:13`, or `live`). */
+    taskStepDetail: (agentId: string, taskId: string, rowId: string, params: { etag?: string | null } = {}) =>
+      requestWithEtag<import("./chatTypes").TaskStepDetail | import("./chatTypes").TaskStepLiveDetail>(
+        `/api/v1/agents/${encodeURIComponent(agentId)}/chat/tasks/${encodeURIComponent(taskId)}/steps/${encodeURIComponent(rowId)}`,
+        params.etag,
+      ),
     /** What the agent's running task does (chat task block, 20.10.2026). */
     taskActivity: (agentId: string) =>
       request<import("./chatTypes").TaskActivity>(`/api/v1/agents/${agentId}/chat/task-activity`),

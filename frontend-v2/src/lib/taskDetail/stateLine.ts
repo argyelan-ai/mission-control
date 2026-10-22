@@ -2,6 +2,7 @@ import type { Agent, Task } from "@/lib/types";
 import type { HeadState } from "@/lib/heads";
 import { runDurationSeconds } from "@/lib/heads";
 import type { StateCard } from "./stateCard";
+import type { ChatTaskStub } from "@/lib/chatTypes";
 import { formatDuration, secondsBetween } from "./format";
 import { STATUS_LABEL_KEY } from "./statusLabels";
 
@@ -31,7 +32,7 @@ export type StateLine = {
   detail: { key: string; values: Record<string, string> } | null;
 };
 
-const STATUS_TONE: Record<string, StateTone> = {
+export const STATUS_TONE: Record<string, StateTone> = {
   inbox: "muted",
   in_progress: "info",
   review: "warning",
@@ -179,4 +180,45 @@ export function deriveStateLine({
   // No card: inbox, review, anything else.
   if (task.status === "inbox") return { tone: statusTone, word: statusWord, detail: { key: "notStarted", values: {} } };
   return { tone: statusTone, word: statusWord, detail: agentName ? { key: "with", values: { name: agentName } } : null };
+}
+
+/**
+ * The state line of a task section in the agent chat (spec A §2.5, S4):
+ * "● Task done · took 1 h 4 min". The same keys and formatters as
+ * `deriveStateLine` — the state word is the task's own sentence word
+ * (`tasks.detail.line.task.<status>`), the detail `for` / `took` /
+ * `endedAgo` / `waitingFirstAnswer` / `notStarted`. No agent name: the chat
+ * IS that agent; a task that moved on to another agent says `with`.
+ */
+export function deriveChatTaskLine(stub: ChatTaskStub, locale: string = "en", now: Date = new Date()): StateLine {
+  const tone = STATUS_TONE[stub.status] ?? "muted";
+  const word = { ns: "tasks" as const, key: `detail.line.task.${stub.status}` };
+  const start = stub.startedAt ?? stub.startKey;
+  if (stub.assignee) return { tone, word, detail: { key: "with", values: { name: stub.assignee } } };
+  switch (stub.status) {
+    case "in_progress": {
+      const span = spanSince(start, locale, now);
+      return { tone, word, detail: span ? { key: "for", values: { span } } : null };
+    }
+    case "done":
+    case "review": {
+      const duration = stub.endedAt ? formatDuration(secondsBetween(start, stub.endedAt, now), locale) : null;
+      return { tone, word, detail: duration ? { key: "took", values: { duration } } : null };
+    }
+    case "failed":
+    case "aborted": {
+      const span = spanSince(stub.endedAt, locale, now);
+      return { tone, word, detail: span ? { key: "endedAgo", values: { span } } : null };
+    }
+    case "inbox":
+      return { tone, word, detail: { key: stub.deliveredAt ? "waitingFirstAnswer" : "notStarted", values: {} } };
+    default:
+      return { tone, word, detail: null };
+  }
+}
+
+/** First letter up: a state word that also stands mid-sentence ("task in
+ *  progress") opens a line in the chat. */
+export function capitalize(text: string, locale: string = "en"): string {
+  return text ? text.charAt(0).toLocaleUpperCase(locale) + text.slice(1) : text;
 }
