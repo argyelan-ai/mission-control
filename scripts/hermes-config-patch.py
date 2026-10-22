@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 def _hermes_home() -> Path:
@@ -29,10 +30,37 @@ def _hermes_home() -> Path:
     return Path(override).expanduser() if override else Path(os.path.expanduser("~/.hermes"))
 
 
+def _mc_repo() -> Path:
+    """The MC install this patcher belongs to: ``MC_REPO_PATH`` first, else
+    the patcher's own checkout — the same rule as ``hermes_acp_chat.repo_root``
+    and cli-bridge's update door.
+
+    NOT the dev tree under ~/Workspace: since the ACP bridge runs this patch
+    on every chat start, a hardcoded dev path would rewrite
+    ``mcp_servers.mc.args`` away from the deliberate ``~/.mc/checkouts``
+    install (set by hand 11.10.2026 — agent mode, no hidden admin fallback
+    from the dev tree's .env) on every bridge start, gateway included.
+    """
+    override = (os.environ.get("MC_REPO_PATH") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path(__file__).resolve().parent.parent
+
+
 CONFIG_PATH = _hermes_home() / "config.yaml"
 BACKUP_PATH = CONFIG_PATH.with_suffix(".yaml.bak-pre-25-07")
-MC_REPO = Path(os.environ.get("HOME_HOST", os.path.expanduser("~"))) / "Workspace/Projects/mission-control"
-VENV_PY = MC_REPO / "backend" / ".venv" / "bin" / "python3"
+#: Prefix of the timestamped rollback copy written before EVERY real change
+#: (``config.yaml.bak-mcsync-YYYYmmdd-HHMMSS``). The one-time BACKUP_PATH
+#: above is from the very first patch (May 2026) and is useless as a rollback
+#: point for anything later. Only files with this prefix are ever pruned.
+SYNC_BACKUP_PREFIX = ".yaml.bak-mcsync-"
+SYNC_BACKUPS_KEPT = 5
+#: The interpreter for mc-mcp.py stays the dev tree's backend venv: the
+#: ~/.mc/checkouts install has no venv of its own (live 22.10.2026), and the
+#: hand-set config of 11.10. points ``command`` there too.
+DEV_REPO = Path(os.environ.get("HOME_HOST", os.path.expanduser("~"))) / "Workspace/Projects/mission-control"
+VENV_PY = DEV_REPO / "backend" / ".venv" / "bin" / "python3"
+MC_REPO = _mc_repo()
 MC_MCP_SCRIPT = MC_REPO / "scripts" / "mc-mcp.py"
 
 AUTONOMOUS_WORKER_PATCHES: dict = {
@@ -150,6 +178,36 @@ def _stale_window_removals(cfg: dict, model_patches: dict) -> list[str]:
     return ["model.context_length"]
 
 
+def _write_sync_backup(config_path: Path) -> Path | None:
+    """Timestamped 0600 copy of ``config_path`` before a real change, plus
+    pruning of the oldest of OUR copies (``SYNC_BACKUP_PREFIX`` only — hand
+    backups like ``.bak-20261011-mcmcp`` are never touched). Never raises:
+    a failed backup is reported but does not block the sync."""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = config_path.with_suffix(f"{SYNC_BACKUP_PREFIX}{stamp}")
+    n = 1
+    while target.exists():  # two real changes within one second
+        target = config_path.with_suffix(f"{SYNC_BACKUP_PREFIX}{stamp}-{n}")
+        n += 1
+    try:
+        shutil.copy2(config_path, target)
+        os.chmod(target, 0o600)  # provider keys: never wider than the original
+    except OSError as exc:
+        print(f"WARN: rollback backup {target} not written: {exc}", file=sys.stderr)
+        return None
+    prefix = config_path.with_suffix(SYNC_BACKUP_PREFIX).name
+    ours = sorted(
+        (p for p in config_path.parent.iterdir() if p.name.startswith(prefix)),
+        key=lambda p: p.name,
+    )
+    for old in ours[:-SYNC_BACKUPS_KEPT]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return target
+
+
 def main() -> int:
     if not CONFIG_PATH.exists():
         print(
@@ -203,6 +261,9 @@ def main() -> int:
     if not BACKUP_PATH.exists():
         shutil.copy2(CONFIG_PATH, BACKUP_PATH)
         print(f"Backup written: {BACKUP_PATH}")
+    sync_backup = _write_sync_backup(CONFIG_PATH)
+    if sync_backup is not None:
+        print(f"Rollback backup: {sync_backup}")
 
     tmp = CONFIG_PATH.with_suffix(".yaml.tmp-25-07")
     # The temp file is created 0600 BEFORE anything is written into it: a

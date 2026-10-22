@@ -425,3 +425,126 @@ async def test_tailer_streams_the_runtime_window_and_observes_it(tmp_path, monke
     assert usage, "no usage event streamed"
     assert usage[-1]["contextWindow"] == WINDOW
     assert observed == [(MODEL, WINDOW)]
+
+
+@pytest.mark.asyncio
+async def test_tailer_follows_a_runtime_switch_without_reconnect(tmp_path, monkeypatch):
+    """Review #939 SHOULD 2: Hermes keeps its ACP session across the bridge
+    restart of a runtime switch, so the tailer is NOT restarted. It must
+    re-read the window on its probe tick — otherwise the live ring kept the
+    OLD runtime's window until the last viewer disconnected."""
+    import asyncio
+    from types import SimpleNamespace
+
+    import app.services.pane_stream as pane_stream
+    import app.services.runtime_window as runtime_window
+    import app.services.transcript_adapters as transcript_adapters
+    import app.services.transcript_chat as transcript_chat
+    from app.services.transcript_chat import ChatTailerManager
+
+    old_window = 202_752
+    current = {"window": old_window}
+    published: list[dict] = []
+
+    async def _broadcast(channel, event_type, data):
+        published.append(data)
+
+    async def _observe(model, window):
+        return None
+
+    async def _no_observed():
+        return {}
+
+    async def _snapshot_window(agent, session=None):
+        return old_window
+
+    async def _current_window(agent):
+        return current["window"]
+
+    async def _none(*_a, **_k):
+        return None
+
+    async def _pane(*_a, **_k):
+        return ""
+
+    async def _state(self, *_a, **_k):
+        return {"state": "idle"}
+
+    monkeypatch.setattr(transcript_chat.sse, "broadcast", _broadcast)
+    monkeypatch.setattr(transcript_chat, "observe_model_window", _observe)
+    monkeypatch.setattr(transcript_chat, "get_observed_model_windows", _no_observed)
+    monkeypatch.setattr(transcript_chat, "capture_pane", _pane)
+    monkeypatch.setattr(pane_stream, "start", _none)
+    monkeypatch.setattr(pane_stream, "stop", _none)
+    monkeypatch.setattr(ChatTailerManager, "_compute_pane_state", _state)
+    monkeypatch.setattr(runtime_window, "agent_runtime_window", _snapshot_window)
+    monkeypatch.setattr(runtime_window, "current_agent_runtime_window", _current_window)
+    monkeypatch.setattr(
+        transcript_adapters, "adapter_for", lambda _agent: transcript_adapters._omp_adapter("hermes")
+    )
+
+    session_file = tmp_path / "omp-sessions" / "--workspace--" / "sess1.jsonl"
+    session_file.parent.mkdir(parents=True)
+    session_file.write_text("")
+    agent = SimpleNamespace(id="hermes-1", runtime_id="rt-1", harness="hermes")
+
+    async def _usage_after(entry_id: str) -> dict:
+        with session_file.open("a") as f:
+            f.write(_acp_usage_line(entry_id=entry_id, window=HERMES_GUESS, used=17_500) + "\n")
+        for _ in range(200):
+            hits = [d for d in published if d.get("kind") == "usage" and d.get("uuid") == entry_id]
+            if hits:
+                return hits[-1]
+            await asyncio.sleep(0.02)
+        raise AssertionError(f"no usage event for {entry_id}")
+
+    manager = ChatTailerManager()
+    manager.POLL_INTERVAL = 0.02
+    manager.STATE_PROBE_INTERVAL_SECONDS = 0.02
+    manager.RUNTIME_WINDOW_REFRESH_SECONDS = 0.02
+    await manager.acquire("hermes-1", session_file, agent)
+    try:
+        await asyncio.sleep(0.1)
+        before = await _usage_after("before-switch")
+        assert before["contextWindow"] == old_window
+        current["window"] = WINDOW  # the runtime switch lands in the DB
+        await asyncio.sleep(0.2)
+        after = await _usage_after("after-switch")
+    finally:
+        await manager.release("hermes-1")
+    assert after["contextWindow"] == WINDOW
+    assert after["usedPct"] == round(17_500 / WINDOW * 100, 1)
+
+
+@pytest.mark.asyncio
+async def test_current_agent_runtime_window_rereads_the_binding(async_session, monkeypatch):
+    """The tailer's agent row is a snapshot; the re-read follows the agent's
+    CURRENT runtime_id (agent_runtime_switch rebinds the agent)."""
+    import app.services.runtime_window as runtime_window
+
+    old = _runtime(slug="glm-slot", max_context_len=HERMES_GUESS)
+    new = _runtime(slug="deepseek-slot", max_context_len=WINDOW)
+    async_session.add_all([old, new])
+    await async_session.commit()
+    agent = Agent(name="Hermes", harness="hermes", runtime_id=old.id)
+    async_session.add(agent)
+    await async_session.commit()
+    snapshot = Agent(id=agent.id, name="Hermes", harness="hermes", runtime_id=old.id)
+
+    agent.runtime_id = new.id
+    await async_session.commit()
+
+    class _Maker:
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            return async_session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    import app.database as database
+
+    monkeypatch.setattr(database, "async_session_maker", _Maker())
+    assert await runtime_window.current_agent_runtime_window(snapshot) == WINDOW

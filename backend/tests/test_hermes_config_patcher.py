@@ -290,3 +290,113 @@ def test_hermes_home_is_respected(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hh"))
     mod = _load_module()
     assert mod.CONFIG_PATH == tmp_path / "hh" / "config.yaml"
+
+
+# ── MCP path follows the patcher's own install (review #939, MUST 1) ───────
+# Since the ACP bridge runs this patch on every chat start, a hardcoded
+# ~/Workspace dev path rewrote mcp_servers.mc.args away from the deliberate
+# ~/.mc/checkouts install (hand-set 11.10.2026: agent mode, no admin fallback
+# from the dev tree's .env) — on every bridge start, the gateway included.
+
+
+def _load_copy_from(checkout: Path):
+    """Load a COPY of the patcher living in ``checkout/scripts`` — its
+    ``__file__`` is what a launchd bridge under ~/.mc/checkouts sees."""
+    scripts = checkout / "scripts"
+    scripts.mkdir(parents=True)
+    copy = scripts / "hermes-config-patch.py"
+    copy.write_text(PATCHER.read_text())
+    spec = importlib.util.spec_from_file_location("hermes_config_patch_copy", copy)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_mcp_args_follow_the_patchers_own_checkout(fake_config, tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("MC_REPO_PATH", raising=False)
+    checkout = tmp_path / "home" / ".mc" / "checkouts" / "mission-control"
+    # The live state since 11.10.: args already on the checkout.
+    cfg = pyyaml.safe_load(fake_config.read_text())
+    cfg["mcp_servers"]["mc"]["args"] = [str(checkout / "scripts" / "mc-mcp.py")]
+    fake_config.write_text(pyyaml.safe_dump(cfg, sort_keys=False))
+    mod = _load_copy_from(checkout)
+    monkeypatch.setattr(mod, "CONFIG_PATH", fake_config)
+    monkeypatch.setattr(mod, "BACKUP_PATH", fake_config.with_suffix(".yaml.bak"))
+    assert mod.main() == 0
+    args = pyyaml.safe_load(fake_config.read_text())["mcp_servers"]["mc"]["args"]
+    assert args == [str(checkout / "scripts" / "mc-mcp.py")]
+    assert "Workspace/Projects" not in args[0]
+    # A second start changes nothing — args is never bounced back and forth.
+    capsys.readouterr()
+    assert mod.main() == 0
+    assert "idempotent" in capsys.readouterr().out.lower()
+
+
+def test_mcp_args_honour_mc_repo_path(fake_config, tmp_path, monkeypatch):
+    deliberate = tmp_path / "srv" / "deliberate-checkout"
+    monkeypatch.setenv("MC_REPO_PATH", str(deliberate))
+    mod = _load_module()
+    monkeypatch.setattr(mod, "CONFIG_PATH", fake_config)
+    monkeypatch.setattr(mod, "BACKUP_PATH", fake_config.with_suffix(".yaml.bak"))
+    assert mod.main() == 0
+    args = pyyaml.safe_load(fake_config.read_text())["mcp_servers"]["mc"]["args"]
+    assert args == [str(deliberate / "scripts" / "mc-mcp.py")]
+
+
+def test_mcp_command_stays_on_the_dev_venv(fake_config, tmp_path, monkeypatch):
+    """The checkout has no backend venv; the interpreter stays where the
+    hand-set config of 11.10. points (HOME_HOST's dev tree)."""
+    monkeypatch.delenv("MC_REPO_PATH", raising=False)
+    host_home = tmp_path / "host-home"
+    monkeypatch.setenv("HOME_HOST", str(host_home))
+    mod = _load_copy_from(tmp_path / "home" / ".mc" / "checkouts" / "mission-control")
+    monkeypatch.setattr(mod, "CONFIG_PATH", fake_config)
+    monkeypatch.setattr(mod, "BACKUP_PATH", fake_config.with_suffix(".yaml.bak"))
+    assert mod.main() == 0
+    command = pyyaml.safe_load(fake_config.read_text())["mcp_servers"]["mc"]["command"]
+    assert command == str(
+        host_home / "Workspace" / "Projects" / "mission-control" / "backend" / ".venv" / "bin" / "python3"
+    )
+
+
+# ── Rollback backup on every real change (review #939, SHOULD 1) ───────────
+# The one-time .bak-pre-25-07 dates from the first patch (May 2026); with it
+# as the only backup, "restore from .bak-*" would roll back six months.
+
+
+def _sync_backups(config: Path) -> list[Path]:
+    return sorted(config.parent.glob(config.name + ".bak-mcsync-*"))
+
+
+def test_real_change_writes_a_fresh_0600_rollback_backup(fake_config, monkeypatch):
+    before = fake_config.read_bytes()
+    mod = _patch_with(
+        monkeypatch, fake_config,
+        OPENAI_BASE_URL="http://192.0.2.10:8000/v1", OPENAI_MODEL="m", MC_CONTEXT_WINDOW="1048576",
+    )
+    # The old one-time backup already exists (the live situation).
+    mod.BACKUP_PATH.write_text("may config")
+    assert mod.main() == 0
+    backups = _sync_backups(fake_config)
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == before  # the state BEFORE this change
+    assert (backups[0].stat().st_mode & 0o777) == 0o600
+    # A no-op run writes no further backup.
+    assert mod.main() == 0
+    assert len(_sync_backups(fake_config)) == 1
+
+
+def test_rollback_backups_are_pruned_to_ours_only(fake_config, monkeypatch):
+    foreign = fake_config.with_suffix(".yaml.bak-20261011-mcmcp")
+    foreign.write_text("hand backup")
+    for i in range(7):
+        fake_config.with_suffix(f".yaml.bak-mcsync-2026010{i}-000000").write_text(str(i))
+    mod = _patch_with(
+        monkeypatch, fake_config,
+        OPENAI_BASE_URL="http://192.0.2.10:8000/v1", OPENAI_MODEL="m",
+    )
+    assert mod.main() == 0
+    backups = _sync_backups(fake_config)
+    assert len(backups) == mod.SYNC_BACKUPS_KEPT
+    assert backups[-1].read_bytes() != b"6"  # the newest is this run's copy
+    assert foreign.read_text() == "hand backup"  # never touched

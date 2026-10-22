@@ -79,3 +79,34 @@ async def agent_runtime_window(agent: Any | None, session: Any | None = None) ->
         )
         return None
     return runtime_context_window(runtime)
+
+
+async def current_agent_runtime_window(agent: Any | None) -> int | None:
+    """Like ``agent_runtime_window``, but re-reads the agent's binding first.
+
+    For the long-lived chat tailer: its ``agent`` row is a snapshot from the
+    first SSE connect, and a runtime switch changes EITHER the agent's
+    ``runtime_id`` (agent_runtime_switch) OR the runtime row's
+    ``max_context_len`` (recipe switch on the same slot). Hermes under ACP
+    keeps its chat session across that restart, so the tailer is not
+    restarted either — without this re-read the live ring kept the old
+    runtime's window until the last viewer disconnected (review #939).
+    ``None`` on any failure, like ``agent_runtime_window``.
+    """
+    agent_id = getattr(agent, "id", None)
+    if agent_id is None:
+        return await agent_runtime_window(agent)
+    from app.database import async_session_maker
+    from app.models.agent import Agent
+
+    try:
+        async with async_session_maker() as own:
+            fresh = await own.get(Agent, agent_id)
+            if fresh is None:
+                return None
+            return await agent_runtime_window(fresh, own)
+    except Exception:  # noqa: BLE001 — a display figure never breaks the chat
+        logger.warning(
+            "runtime_window: agent %s not readable", agent_id, exc_info=True
+        )
+        return None

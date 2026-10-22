@@ -356,6 +356,10 @@ def _build_chat_session():
     # BEFORE the `hermes acp` child exists: Hermes reads config.yaml once at
     # agent init. Every start AND restart builds its session here, so a
     # runtime switch (agent.env rewritten -> bridge reload) lands too.
+    # NOTE: ChatDaemon calls this factory while holding its _lock, so the
+    # patch delays the chat start AND blocks state()/busy readers for as
+    # long as it runs. Normally well under a second (one small YAML file);
+    # CONFIG_PATCH_TIMEOUT (30 s) caps the worst case — keep it short.
     sync_hermes_config(env)
     return hermes_acp_chat.build_session(
         workspace=WORKSPACE,
