@@ -49,6 +49,7 @@ from media import (
     TranscodeResponse,
     build_branded_compose_cmd,
     build_compose_cmd,
+    build_frame_tokens,
     build_pipe_encode_cmd,
     build_storage_state,
     build_transcode_poster_cmd,
@@ -57,7 +58,7 @@ from media import (
     compose_branded_timeout_s,
     fill_bench_template,
     load_deterministic_shim,
-    render_outro_rows_html,
+    render_outro_html,
     resolve_contained_path,
 )
 
@@ -786,8 +787,6 @@ RECORD_CAPTURE_TIMEOUT_S = 900
 # docker/mc-playwright/templates/bench/).
 BENCH_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "bench"
 BENCH_FRAME_VIEWPORT = {"width": 1920, "height": 1080}
-BENCH_MODE_LINE = "side by side"  # frame.html's fixed {{MODE_LINE}} value
-BENCH_MODE_LINE_SINGLE = "solo run"  # frame_single.html's fixed {{MODE_LINE}} value
 
 
 async def _screenshot_bench_card(html_text: str, out_png: Path) -> None:
@@ -823,39 +822,11 @@ async def _render_branding_assets(branding: BrandingSpec, render_dir: Path) -> t
     with the branding payload and screenshots both to PNGs inside render_dir.
     Returns (frame_png, outro_png)."""
     outro_template = (BENCH_TEMPLATES_DIR / "outro.html").read_text(encoding="utf-8")
-
-    if len(branding.models) == 2:
-        frame_template = (BENCH_TEMPLATES_DIR / "frame.html").read_text(encoding="utf-8")
-        model_a, model_b = branding.models
-        frame_tokens = {
-            "TITLE": branding.title,
-            "RUN_LABEL": branding.run_label,
-            "MODEL_A": model_a.label,
-            "TAG_A": model_a.tag,
-            "MODEL_B": model_b.label,
-            "TAG_B": model_b.tag,
-            "PROMPT_LINE": branding.prompt_line,
-            "MODE_LINE": BENCH_MODE_LINE,
-        }
-    else:
-        frame_template = (BENCH_TEMPLATES_DIR / "frame_single.html").read_text(encoding="utf-8")
-        (model,) = branding.models
-        frame_tokens = {
-            "TITLE": branding.title,
-            "RUN_LABEL": branding.run_label,
-            "MODEL": model.label,
-            "TAG": model.tag,
-            "PROMPT_LINE": branding.prompt_line,
-            "MODE_LINE": BENCH_MODE_LINE_SINGLE,
-        }
-    frame_html = fill_bench_template(frame_template, frame_tokens)
-
-    outro_tokens = {"RUN_LABEL": branding.run_label}
-    outro_html = fill_bench_template(outro_template, outro_tokens)
-    # ROWS is a markup block (already html-escaped per-cell by
-    # render_outro_rows_html), not a plain scalar token — filled separately
-    # so fill_bench_template's blanket html.escape() doesn't double-escape it.
-    outro_html = outro_html.replace("{{ROWS}}", render_outro_rows_html(branding.outro_rows))
+    frame_name = "frame.html" if len(branding.models) == 2 else "frame_single.html"
+    frame_template = (BENCH_TEMPLATES_DIR / frame_name).read_text(encoding="utf-8")
+    # Token values + outro markup are built in media.py (pure, unit-tested).
+    frame_html = fill_bench_template(frame_template, build_frame_tokens(branding))
+    outro_html = render_outro_html(outro_template, branding)
 
     frame_png = render_dir / "frame.png"
     outro_png = render_dir / "outro.png"

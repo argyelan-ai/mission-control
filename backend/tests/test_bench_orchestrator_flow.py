@@ -1389,8 +1389,12 @@ def _fake_compose_client(monkeypatch) -> dict:
 @pytest.mark.asyncio
 async def test_compose_challenge_sends_branding_for_two_entries(session, monkeypatch, make_agent, make_board):
     """side_by_side + exactly 2 rendered entries -> compose_challenge attaches
-    a `branding` payload with title/run_label/models/outro_rows shape. Tags:
-    spark -> "VLLM · SPARK", agent -> harness uppercased."""
+    a `branding` payload with title/date_label/models/outro_rows shape. Tags:
+    spark -> "LOCAL · DIRECT API" (no engine/hardware guess), agent ->
+    harness uppercased."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "usage_timezone", "UTC")
     board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
     agent = await make_agent(board_id=board.id, name="Grok-Agent", harness="grok")
 
@@ -1419,12 +1423,17 @@ async def test_compose_challenge_sends_branding_for_two_entries(session, monkeyp
 
     branding = captured["branding"]
     assert branding["title"] == "SVG timeline animation"
+    # the run date in the operator zone (no RUN 0xx counter on the video since
+    # 2026-10-22, concept W0.5); zone pinned to UTC above
+    assert branding["date_label"] == ch.created_at.date().isoformat()
+    # legacy counter still sent for one release (a not-yet-rebuilt renderer
+    # requires it; see test_bench_outro_copy.py)
     assert branding["run_label"] == "001"
     assert branding["prompt_line"] == "Build a timeline."
 
     models_by_label = {m["label"]: m["tag"] for m in branding["models"]}
     assert models_by_label["Grok 4.5"] == "GROK"  # harness "grok" uppercased
-    assert models_by_label["Qwen 3.6 35B A3B"] == "VLLM · SPARK"
+    assert models_by_label["Qwen 3.6 35B A3B"] == "LOCAL · DIRECT API"
 
     rows_by_name = {r["name"]: r for r in branding["outro_rows"]}
     assert rows_by_name["Qwen 3.6 35B A3B"]["time"] == "12.8 min"
@@ -1463,7 +1472,7 @@ async def test_compose_challenge_sends_branding_for_one_entry(session, monkeypat
     branding = captured["branding"]
     assert len(branding["models"]) == 1
     assert branding["models"][0]["label"] == "Qwen 3.6 35B A3B"
-    assert branding["models"][0]["tag"] == "VLLM · SPARK"
+    assert branding["models"][0]["tag"] == "LOCAL · DIRECT API"
     assert len(branding["outro_rows"]) == 1
     assert branding["outro_rows"][0]["time"] == "12.8 min"
     assert len(captured["inputs"]) == 1
