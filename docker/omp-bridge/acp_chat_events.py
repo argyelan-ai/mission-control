@@ -116,6 +116,7 @@ import math
 import os
 import re
 import stat
+import sys
 import threading
 import time
 import uuid
@@ -324,12 +325,33 @@ _THOUGHT_ENDING_UPDATES = frozenset({
     "agent_message_chunk", "tool_call", "tool_call_update", "plan",
 })
 
+#: Updates that end a text SEGMENT (stream mode, spec A D7): the agent's
+#: words written so far land as their own permanent line before the tool
+#: call, the new thought or the plan — the chat reads them where they were
+#: written. Not ``tool_call_update`` (a running tool's output is not a new
+#: step) and not the bookkeeping updates (usage, config, mode).
+_TEXT_ENDING_UPDATES = frozenset({"tool_call", "agent_thought_chunk", "plan"})
+
 
 def is_volatile(entry: dict[str, Any]) -> bool:
     """True for lines that belong on the PREVIEW channel, never the
     transcript: text previews and live tool output. Both callers
     (bridge.run_acp_once and the chat daemon) route on this."""
     return entry.get("customType") in (PREVIEW_CUSTOM_TYPE, TOOL_OUTPUT_CUSTOM_TYPE)
+
+
+def is_text_line(entry: dict[str, Any]) -> bool:
+    """True for a permanent assistant TEXT line (a segment or the turn's
+    final line). Both callers reset their preview throttle when one is
+    written: a withheld snapshot of that text must never reach the preview
+    channel after it (D7 — it would show the same words twice)."""
+    if entry.get("type") != "message":
+        return False
+    message = entry.get("message") or {}
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return False
+    return any(isinstance(b, dict) and b.get("type") == "text"
+               for b in message.get("content") or [])
 
 # ACP toolCall status values that settle a tool call.
 _TERMINAL_STATUSES = ("completed", "failed", "error")
@@ -506,6 +528,19 @@ def _clean_cost(raw: Any) -> Optional[dict[str, Any]]:
     return {"amount": float(amount), "currency": currency}
 
 
+def _cut_rest(text: str, cut_forms: tuple) -> str:
+    """The final line's rest after the chat's verdict (S1): ``()`` hides it
+    all, else omp's error line (in any of ``cut_forms``) is cut off its END
+    only. Segments written earlier are never touched — they are on screen."""
+    if not cut_forms:
+        if text.strip():
+            sys.stderr.write("[acp] verdict hides the reply rest; earlier segments stay\n")
+        return ""
+    import model_errors  # noqa: PLC0415 — sibling module, only for this cut
+
+    return model_errors.reply_without_omp_line(text, cut_forms)
+
+
 @dataclass
 class ACPEventMapper:
     """Accumulates one ACP run's events into omp-format transcript line dicts.
@@ -513,22 +548,38 @@ class ACPEventMapper:
     One instance per bridge run (= one ACP session). Consumed by
     bridge.run_acp_once via a ChatEventSink; also usable standalone in tests.
 
-    Review #465, Mark's Option b — streaming contract:
+    Streaming contract (Review #465 Option b, narrowed by spec A D7 —
+    docs/specs/chat-over-acp.md "Text segments"):
     - ``map_update(params, stream=True)`` maps agent text chunks into
       PREVIEW lines (``custom_message``/``acp-preview`` carrying the growing
-      snapshot). The chat reducer treats preview as replace-me; it never
-      stacks bubbles.
-    - ``map_final_assistant_message(text)`` emits exactly ONE ``message``
-      line with the complete text + usage + model — the only assistant
-      entry that lands in the permanent transcript.
-    - ``usage`` is stamped ONLY on that final line (never 0/0 per chunk).
+      snapshot of the CURRENT segment). The chat reducer treats preview as
+      replace-me; it never stacks bubbles. Previews never enter the
+      transcript.
+    - ONE permanent assistant text line per text SEGMENT. A segment ends at
+      a tool call, the start of a thought, a plan, a permission/elicitation
+      card, a chat notice/error line (``_flush_text``) or the turn end
+      (``map_final_assistant_message``). A turn without such a boundary
+      still writes exactly one line.
+    - ``usage`` + ``stopReason`` are stamped ONLY on the turn's last
+      assistant line (never 0/0 per chunk); when no text is left for it,
+      that line has ``content: []``. The final line never repeats flushed
+      text and never contains thought text.
     - ``set_session_id`` carries the REAL ``session/new`` id into the sink
       (file name + session header), replacing the "acp-session" stub.
     """
 
     seq: int = 0
-    # agent_message_chunk accumulation: messageId -> full text so far.
+    # agent_message_chunk accumulation: messageId -> text of the open
+    # segment so far. Cleared when the segment is written (``_flush_text``).
     _text_by_message: dict[str, str] = field(default_factory=dict)
+    # The keys of ``_text_by_message`` in chunk-arrival order (D7: a
+    # segment is joined in the order it was written, never by dict order).
+    _text_order: list[str] = field(default_factory=list)
+    # This turn already wrote a text segment line / a thinking line: the
+    # final line then carries only the mapper's own unflushed rest, and
+    # always exists (``content: []`` when empty) to carry stopReason+usage.
+    _turn_flushed_any: bool = False
+    _turn_thought_any: bool = False
     _thought_by_message: dict[str, str] = field(default_factory=dict)
     # toolCallId -> {"name", "title", "arguments"} as seeded by tool_call.
     _tools: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -597,14 +648,17 @@ class ACPEventMapper:
 
     def _map_one(self, update: dict[str, Any], stream: bool) -> list[dict[str, Any]]:
         su = update.get("sessionUpdate")
+        # The agent's words so far end where a tool call, a thought or a
+        # plan begins (D7): they land as their own line first.
+        pre = self._flush_text() if stream and su in _TEXT_ENDING_UPDATES else []
         if su in _THOUGHT_ENDING_UPDATES or (
             su == "agent_thought_chunk" and self._other_thought(update)
         ):
             # The model stopped thinking (it answers, calls a tool, plans) or
             # began a new thought: keep the finished one first, so the
             # transcript reads in the order it happened.
-            return self._flush_thought() + self._map_one_inner(update, su, stream)
-        return self._map_one_inner(update, su, stream)
+            return pre + self._flush_thought() + self._map_one_inner(update, su, stream)
+        return pre + self._map_one_inner(update, su, stream)
 
     def _map_one_inner(
         self, update: dict[str, Any], su: Any, stream: bool
@@ -659,6 +713,7 @@ class ACPEventMapper:
         if not text.strip():
             return []
         duration_ms = max(0, int(round((self.clock() - open_thought["mono"]) * 1000)))
+        self._turn_thought_any = True
         return [
             {
                 "type": "message",
@@ -676,6 +731,50 @@ class ACPEventMapper:
                 },
             }
         ]
+
+    def _take_text(self) -> str:
+        """The open segment's text in chunk-arrival order; clears it, so the
+        next preview snapshot holds only what comes after."""
+        with self._lock:
+            keys = self._text_order + [k for k in self._text_by_message
+                                       if k not in self._text_order]
+            self._text_order = []
+            return "".join(self._text_by_message.pop(k, "") for k in keys)
+
+    def _flush_text(self) -> list[dict[str, Any]]:
+        """The open text segment -> ONE permanent assistant text line
+        (stream mode, D7), or [] when there is none or it is only
+        whitespace. No ``stopReason`` and no ``usage``: both belong to the
+        turn's last line only (``map_final_assistant_message``)."""
+        with self._lock:
+            text = self._take_text()
+            if not text.strip():
+                return []
+            self._turn_flushed_any = True
+            return [
+                {
+                    "type": "message",
+                    "id": self._next_id(),
+                    "parentId": None,
+                    "timestamp": _now_iso(),
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": text}],
+                        "model": None,
+                        "stopReason": None,
+                    },
+                }
+            ]
+
+    def flush_on_abort(self) -> list[dict[str, Any]]:
+        """A run that ends without a prompt result (error, abort): the open
+        thought and the open text segment still land as lines — never lost
+        with the run (N11). Neither carries a stop reason. Never raises."""
+        try:
+            with self._lock:
+                return self._flush_thought() + self._flush_text()
+        except Exception:  # noqa: BLE001 — the error path must not break
+            return []
 
     def map_mode(self, mode_id: Any) -> list[dict[str, Any]]:
         """``current_mode_update`` -> one quiet ``custom``/``acp-mode`` line.
@@ -701,7 +800,7 @@ class ACPEventMapper:
         ``custom_message``/``acp-elicitation`` line. ``schema`` is the
         already-cleaned ``requestedSchema`` (see acp_chat.clean_schema)."""
         text = str(message or "").strip() or "?"
-        return [
+        return self._flush_text() + [
             {
                 "type": "custom_message",
                 "customType": ELICITATION_CUSTOM_TYPE,
@@ -793,9 +892,12 @@ class ACPEventMapper:
         deduplicated away.
         """
         self._text_by_message.clear()
+        self._text_order.clear()
         self._thought_by_message.clear()
         self._open_thought = None
         self._prompt_usage = None
+        self._turn_flushed_any = False
+        self._turn_thought_any = False
 
     def set_session_id(self, session_id: Optional[str]) -> None:
         """Carry the REAL `session/new` sessionId into the sink (Review
@@ -839,7 +941,7 @@ class ACPEventMapper:
         named = [o for o in options if o]
         if named:
             question += " [" + " | ".join(named) + "]"
-        return [
+        return self._flush_text() + [
             {
                 "type": "custom_message",
                 "customType": "acp-permission",
@@ -933,7 +1035,7 @@ class ACPEventMapper:
         localized sentence; ``content`` is the English fallback text."""
         payload = {"code": code}
         payload.update({k: v for k, v in (data or {}).items() if v is not None})
-        return [
+        return self._flush_text() + [
             {
                 "type": "custom_message",
                 "customType": CHAT_NOTICE_CUSTOM_TYPE,
@@ -970,7 +1072,7 @@ class ACPEventMapper:
         payload: dict[str, Any] = {"code": code, "detail": str(detail)[:_RESULT_TRUNCATE_LEN]}
         payload.update({k: v for k, v in (data or {}).items()
                         if v is not None and k not in payload})
-        return self._flush_thought() + [
+        return self._flush_text() + self._flush_thought() + [
             {
                 "type": "custom_message",
                 "customType": CHAT_ERROR_CUSTOM_TYPE,
@@ -1080,9 +1182,9 @@ class ACPEventMapper:
         customType every flush so the chat's preview slot replaces (never
         stacks). These lines NEVER enter the transcript JSONL —
         bridge.run_acp_once routes them to the preview sink — so the
-        permanent timeline holds exactly ONE final assistant line (Option
-        b) and the volatile channel holds the growing snapshot. No usage,
-        no fresh message identity per chunk."""
+        permanent timeline holds one assistant line per text segment (D7)
+        and the volatile channel holds the growing snapshot of the open
+        segment. No usage, no fresh message identity per chunk."""
         content = update.get("content") or {}
         if not isinstance(content, dict) or content.get("type") != "text":
             return []
@@ -1092,6 +1194,8 @@ class ACPEventMapper:
         message_id = update.get("messageId")
         key = message_id if isinstance(message_id, str) and message_id else "_anon"
         store = self._text_by_message if block_type == "text" else self._thought_by_message
+        if block_type == "text" and key not in store:
+            self._text_order.append(key)
         store[key] = store.get(key, "") + text
         line: dict[str, Any] = {
             "type": "custom_message",
@@ -1121,12 +1225,28 @@ class ACPEventMapper:
         return [line]
 
     def map_final_assistant_message(
-        self, final_text: str, *, stop_reason: str = "stop"
+        self, final_text: str, *, stop_reason: str = "stop",
+        cut_forms: Optional[tuple] = None,
     ) -> list[dict[str, Any]]:
-        """Review #465, Mark's Option b: EXACTLY ONE permanent assistant
-        line per turn — the complete text, real usage (never 0/0), and the
-        mapper's model=None. Empty text -> [] (a turn that produced no
-        visible text leaves no empty bubble).
+        """The turn's LAST assistant line: the text not written yet, real
+        usage (never 0/0) and the mapper's model=None.
+
+        - No text segment was written this turn: exactly the line Review
+          #465 Option b defined — ``final_text`` (the caller's; the chat
+          passes its verdict's ``reply``), and no line at all when it is
+          empty and the turn wrote nothing else (a turn that produced
+          nothing leaves no empty bubble).
+        - Segments were written (D7): the text is the mapper's OWN unflushed
+          rest, never a prefix computation on the caller's string (S1).
+          ``cut_forms`` (the chat's verdict, ``ChatTurnVerdict.cut_forms``)
+          cuts omp's error line off the END of that rest
+          (``model_errors.reply_without_omp_line``); ``()`` hides the whole
+          rest. Segments already written stay — they are on screen.
+        - When nothing is left, the line still comes with ``content: []``
+          so that stopReason + usage end the turn (the parser yields only
+          ``usage`` for it: no bubble). The same holds for a turn whose only
+          output was thinking: the thought is its own line, never glued into
+          this one (F1).
 
         ``stop_reason`` stamps `message.stopReason` — the backend's
         ``omp_chat.transcript_suggests_turn_ended`` probe reads it to decide
@@ -1134,10 +1254,21 @@ class ACPEventMapper:
         terminal reasons land here: a cancelled/error turn keeps the probe
         conservative via the non-terminal default the caller passes.
         """
-        thought = self._flush_thought()
-        text = str(final_text or "")
-        if not text.strip():
-            return thought
+        with self._lock:
+            thought = self._flush_thought()
+            # The turn's open text ends here either way: nothing of it may
+            # come back later (a card's flush, the next turn's notice).
+            rest = self._take_text()
+            if self._turn_flushed_any:
+                text = rest if cut_forms is None else _cut_rest(rest, cut_forms)
+            else:
+                text = str(final_text or "")
+            if text.strip():
+                content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+            elif self._turn_flushed_any or self._turn_thought_any:
+                content = []
+            else:
+                return thought
         entry: dict[str, Any] = {
             "type": "message",
             "id": self._next_id(),
@@ -1145,7 +1276,7 @@ class ACPEventMapper:
             "timestamp": _now_iso(),
             "message": {
                 "role": "assistant",
-                "content": [{"type": "text", "text": text}],
+                "content": content,
                 "model": None,
                 "stopReason": stop_reason if stop_reason == "stop" else None,
             },

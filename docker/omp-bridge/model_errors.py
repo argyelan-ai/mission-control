@@ -203,11 +203,15 @@ class ChatTurnVerdict:
     ``kind``: MODEL_UNREACHABLE (the card), ABORTED (no card at all, like
     Stop) or None (as before S1-R6). ``detail``: omp's line for the card.
     ``reply``: the text the reply bubble shows instead of the turn's text —
-    omp's error line cut off its end; "" = no bubble; None = unchanged."""
+    omp's error line cut off its end; "" = no bubble; None = unchanged.
+    ``cut_forms``: the same cut for a turn whose text was partly written as
+    segments already (D7): the mapper cuts these forms off the END of its
+    own unflushed rest (S1) — ``()`` hides the rest, None = no cut."""
 
     kind: Optional[str] = None
     detail: str = ""
     reply: Optional[str] = None
+    cut_forms: Optional[tuple] = None
 
     @property
     def hide_reply(self) -> bool:
@@ -277,9 +281,11 @@ def classify_chat_turn(*, stop_reason: str, final_text: str, error_text: str = "
         line = _omp_error_line(message) if stop == "error" else None
         if line is None:
             return NOTHING
-        reply = reply_without_omp_line(text, omp_line_forms(message, omp_retried))
+        forms = omp_line_forms(message, omp_retried)
+        reply = reply_without_omp_line(text, forms)
         return ChatTurnVerdict(MODEL_UNREACHABLE, line,
-                               reply=None if reply == text else reply)
+                               reply=None if reply == text else reply,
+                               cut_forms=forms)
     line = unreachable_line(text[-UNREACHABLE_TAIL_CHARS:], keep_end=True)
     if line is None:
         return NOTHING
@@ -288,5 +294,6 @@ def classify_chat_turn(*, stop_reason: str, final_text: str, error_text: str = "
         # Hidden only when the card's detail is the whole text: no word of
         # a reply the rule misread is ever lost.
         whole = no_usage and len(_one_line(text)) <= DETAIL_CHARS
-        return ChatTurnVerdict(MODEL_UNREACHABLE, line, reply="" if whole else None)
+        return ChatTurnVerdict(MODEL_UNREACHABLE, line, reply="" if whole else None,
+                               cut_forms=() if whole else None)
     return NOTHING

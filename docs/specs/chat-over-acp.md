@@ -52,7 +52,7 @@ acp_chat_ctl.py <op>  (CLI shim used by docker exec)      ·      hermes-bridge.
 
 - `ChatSession(client_factory, cwd, state_dir, sessions_dir)` — pure-Python core, testable with a fake ACP process (`tests/fake_acp_server.py`) or an in-memory fake client.
 - Startup: move MC copies an older image left next to omp's files into `.mc/` (see "Storage" below); find the session to resume — the pointer `acp-chat.json` (`{"sessionId", "transcript"}`), else the state mirror (see "What survives what" below) — and follow it to a moved file (`sink_migration.remap`); `initialize`; try `session/load` with the stored id → on success append to the stored transcript file; when the load fails or the transcript is gone, `session/new`, a new transcript file and a visible `chat_error{code:"session_reset"}`, preceded by `chat_notice{code:"new_conversation"}` (see "A new conversation says so" below). No pointer at all, but an earlier chat copy in the tree → `chat_notice{code:"chat_started_fresh"}`. When the move did not run (lock held by a live run, unreadable list, error) the chat shows a `chat_notice` with `code: "sink_migration_skipped"` and the chat starts anyway. Before anything rewrites the state mirror, the start also reads what the previous daemon was doing: held jobs (`queue_lost`) and a reply it was running (`turn_interrupted`, see "Interrupted turns" below).
-- Uses `acp_chat_events.ACPEventMapper` + `ChatEventSink` + `PreviewEventSink` exactly like `run_acp_once` (user line via `map_user_prompt`, streaming previews, ONE final assistant line with usage).
+- Uses `acp_chat_events.ACPEventMapper` + `ChatEventSink` + `PreviewEventSink` exactly like `run_acp_once` (user line via `map_user_prompt`, streaming previews, one assistant text line per text segment, the turn's last line with stop reason and usage — see "Text segments" below).
 - Thinking (20.10.2026): a thought's preview line carries `data: {"block": "thinking", "chars": <full size>, "startedAt": <iso>}` and only the END of the thought as `content` (≤ 2 000 chars — the file grows linearly). The backend passes these on the `preview` SSE event; the chat shows "Thinking · ≈N tokens · m:ss" instead of an answer preview. When the thought ends (next answer chunk, tool call, plan, the turn's final line or a chat error) ONE assistant line with a `{"type": "thinking", "thinking", "durationMs"}` block lands in the transcript. Usage/config updates do not end a thought.
 - Running task in the agent chat (20.10.2026): the agent chat shows the chat daemon's session only (#898); a task runs in a session of its own (bridge header `taskId`). `GET /agents/{id}/chat/task-activity` reads that session through the same adapter (`find_task_session`, `tasks_in_own_session`) and the chat renders it as a separate "From the task" block — delivery, the newest steps, the running thought, more inbox tasks. Harnesses whose task runs inside the chat answer `applies: false` — Claude Code, omp under the native driver, and Hermes (over ACP the hermes-bridge hands a task to the chat daemon itself).
 - `configOptions` (from `session/new`/`session/load` result and `config_option_update` notifications) and `available_commands_update` are kept in memory and mirrored to `sessions_dir/acp-chat-state.json` after every change.
@@ -60,6 +60,49 @@ acp_chat_ctl.py <op>  (CLI shim used by docker exec)      ·      hermes-bridge.
 - Errors → transcript `custom_message` line, `customType: "chat_error"`, content = human text, plus `data: {"code": ..., "detail": ...}`. Codes: `rpc_error` (JSON-RPC error on prompt/config), `provider_error` (`401`/`403`/`429`/quota text detected in the error or in the final agent text when the turn produced no text), `empty_turn` (turn ended with stopReason `end_turn` and zero agent text), `process_exit` (child died; daemon restarts it and re-loads the session — `data.retryText` carries the operator's text of the turn that died, when its reply never came), `turn_interrupted` (the daemon restarted while a reply ran; `detail` is `turn <n>` or `turn unknown`, `data.retryText` the operator's text — see "Interrupted turns"), `model_unreachable` (the model's endpoint does not answer, or the engine stopped mid-request — omp's own error line says so, or the prompt failed with it; `detail` is omp's line, `data.retryText` the operator's text; decided before `provider_error`, `rpc_error` and `empty_turn` — see "The model is not answering"), `busy`, `session_reset` (the conversation to resume could not be opened; `detail` is `transcript_missing` when its transcript is gone, `model_missing` when omp cannot restore the session's model — the content then names the model, and `data.model` carries the name for the card in the UI language —, otherwise the exception), `queue_full` (20 messages already held), `new_session_failed` (`session/new` refused; the current session continues), `queue_lost` (a restart dropped held jobs, and a `/new` that was running), `cancelled` is NOT an error (it produces a normal end-of-turn), and neither is a turn omp's own line calls aborted. Extra fields of a card go through `ACPEventMapper.map_chat_error(code, detail, text, data=None)`: they never replace `code` or `detail`, a `None` value is left out, and without `data` the line is exactly the one before S1-R5.
 - Model pin (incident 19.10.2026): every `session/new` and `session/load` pins the selector read from the CURRENT `omp.env` (`acp_model.current_selector` — a runtime switch re-renders that file in the running container; the daemon's boot env goes stale). A selector the session does not offer is replaced by the offered model of the same provider and the chat gets a `custom_message` line `customType: "chat_notice"`, `data: {"code": "model_fallback", "previous", "current"}` (frontend `ChatNoticeCard`, `chat.notice.*`). The task path (`bridge.run_acp_once`) does the same, writes a refused pin into the task's chat as `chat_error`, and marks its prompts `attribution: "mc"` + `origin: {kind: "task"|"nudge"}` so the chat shows them as task events, not as operator bubbles.
 - Socket server: `$OMP_HOME/acp-chat.sock` (path configurable via `--socket`), newline-delimited JSON; each connection = one request/one response.
+
+### Text segments (22.10.2026, narrows Review #465 Option b)
+
+Before: exactly ONE permanent assistant text line per turn, written at its
+end. In a long turn the agent's words between tool calls lived only in the
+preview slot, and all of them appeared as one block below every tool call
+when the turn ended. The task path (`bridge.run_acp_once`) also glued every
+thought into that line (measured: a finished bench task ended with a
+514,640-character line holding its 54 thoughts a second time).
+
+Contract now (both writers — the chat daemon and the task path — through
+`ACPEventMapper`):
+
+- **One permanent assistant text line per text segment.** A segment ends at a
+  tool call, the start of a thought, a plan, a permission/elicitation card, a
+  chat notice/error line, or the turn end (normal or failed). A
+  whitespace-only segment writes nothing.
+- **Only the turn's last assistant line carries `stopReason` and `usage`.**
+  Segment lines carry `stopReason: null` and no `usage`. When no text is left
+  for the last line, it has `content: []` (the backend parser yields only the
+  `usage` event for it — no bubble). The same holds for a turn whose only
+  output was thinking: it still ends with its stop line.
+- A turn without boundaries still writes exactly one line (unchanged).
+  Previews never enter the transcript (unchanged); after a segment is written
+  the next preview snapshot holds only the new segment, and a withheld
+  snapshot of the written segment is never sent after it (writer throttle
+  reset).
+- The final line never repeats flushed text and **never contains thought
+  text** — the task path builds it from `agent_message_chunk` text only.
+  `outcome.final_text` (sentinel, reflection, auth/unreachable rules) keeps
+  thoughts + reply exactly as before.
+- After segments, the final line's text is the mapper's own unflushed rest.
+  The chat's verdict ("The model is not answering") only cuts omp's error
+  line off the END of that rest (`ChatTurnVerdict.cut_forms`; `()` hides the
+  rest). Segments already written stay — they are on screen.
+- A run that ends without a prompt result (error, child died) still writes
+  the open thought and text before the error card (`flush_on_abort`).
+
+Readers stay correct: the turn-ended probe (`omp_chat.transcript_suggests_turn_ended`)
+sees a segment with `stopReason: null` mid-turn (working) and the final line
+with `stopReason: "stop"` after it; a segment `message` clears the chat's
+preview slot, and the chat reducer drops a preview snapshot that is not
+newer than the newest assistant/thinking line (spec A PR-0).
 
 ### Storage: MC's copy lives in `<folder>/.mc/` (S1-R3, 20.10.2026)
 

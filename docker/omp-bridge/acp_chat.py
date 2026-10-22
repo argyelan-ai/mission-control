@@ -34,7 +34,8 @@ Spec: docs/specs/chat-over-acp.md. Contract in one picture:
 
 Everything the operator must SEE is a transcript line, written through the
 SAME mapper the task path uses (`acp_chat_events.ACPEventMapper`): the user
-turn, the streamed preview, exactly ONE final assistant line — and failures
+turn, the streamed preview, one assistant text line per text segment (the
+turn's last one with stop reason + usage) — and failures
 as `chat_error` lines, because an error only the log knows about is an error
 the operator debugs blind.
 
@@ -1320,11 +1321,18 @@ class ChatSession:
         if result is not None:
             self._mapper.set_prompt_usage(getattr(result, "usage", None))
             # An empty text still goes through the mapper: it writes no
-            # bubble but closes a thought that is still open (#902).
+            # bubble but closes a thought that is still open (#902). After
+            # text segments (D7) the mapper writes its own unflushed rest;
+            # the verdict then only cuts omp's line off that rest's end.
             self._emit_transcript(self._mapper.map_final_assistant_message(
                 final_text if verdict.reply is None else verdict.reply,
                 stop_reason="stop" if stop_reason == "end_turn" else "",
+                cut_forms=verdict.cut_forms,
             ))
+        else:
+            # No reply (the prompt failed, the child died): the open thought
+            # and text segment land before the card below (N11).
+            self._emit_transcript(self._mapper.flush_on_abort())
 
         if not alive:
             # The card offers the text of the turn that died — the
@@ -1632,6 +1640,12 @@ class ChatSession:
                 ))
             except Exception:  # noqa: BLE001 — the chat view never kills the turn
                 logger.exception("transcript write failed")
+            # D7: a text segment is on record — a withheld snapshot of it
+            # never follows it into the preview channel, and the next
+            # segment's first snapshot goes out at once.
+            if any(acp_chat_events.is_text_line(e) for e in entries):
+                self._throttle["pending"] = None
+                self._throttle["chars"] = -10 ** 9
 
     def _emit_preview(self, entries: list[dict]) -> None:
         if not entries:

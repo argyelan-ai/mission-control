@@ -142,7 +142,11 @@ def test_thought_open_at_turn_end_is_kept_with_the_final_answer():
     mapper = acp_chat_events.ACPEventMapper()
     mapper.map_update(thought("only thinking, then the turn ends"), stream=True)
     final = mapper.map_final_assistant_message("")
-    assert [e["message"]["content"][0]["type"] for e in final] == ["thinking"]
+    assert final[0]["message"]["content"][0]["type"] == "thinking"
+    # D7: the turn still ends with its stop line — no text left, so
+    # ``content: []`` (the thought is never glued into it).
+    assert [e["message"]["content"] for e in final[1:]] == [[]]
+    assert final[-1]["message"]["stopReason"] == "stop"
 
 
 def test_thought_open_at_chat_error_is_kept():
