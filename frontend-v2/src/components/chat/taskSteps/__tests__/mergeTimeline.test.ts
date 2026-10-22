@@ -154,3 +154,122 @@ describe("mergeTimeline (spec A §6.2)", () => {
     expect(r.newestTs).toBe(Date.parse(at(10)));
   });
 });
+
+/*
+ * Live 22.10.2026: a task finished (review) BEFORE the operator wrote; the
+ * band after his message held only the end line, yet said "· continues".
+ * The header of a later segment follows the task's real state at that point.
+ */
+describe("mergeTimeline — continuation head follows the task's state", () => {
+  const segHeads = (entries: MergedEntry[]) =>
+    entries.map((e) => (e.kind === "segment" ? `${e.first ? "seg" : "cont"}:${e.head}` : e.kind));
+
+  it("a task that ended before the operator's message keeps its end line above it — no second band", () => {
+    const review = stub({ status: "review", live: false, endedAt: at(1, 22), outcome: "Bench written" });
+    const r = merge(
+      [chatMsg(at(3), "Looks good?"), chatMsg(at(3, 20), "Yes, see the result.", "assistant")],
+      [task([think(at(0, 10), "Run the bench"), tool(at(1, 10), "bench.sh")], { stub: review })],
+    );
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "chat"]);
+    expect(units(r.entries[0]).map((u) => u.u)).toEqual(["chapter", "end"]);
+  });
+
+  it("an end line that arrives after an interleaved message stands below it under the title only — never 'continues'", () => {
+    const review = stub({ status: "review", live: false, endedAt: at(6) });
+    const r = merge([chatMsg(at(5), "How far are you?")], [task([think(at(1), "A"), tool(at(2), "t1")], { stub: review })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title"]);
+    expect(units(r.entries[2]).map((u) => u.u)).toEqual(["end"]);
+  });
+
+  it("a finished task without an end time keeps the end line below the newer message, title only", () => {
+    const done = stub({ status: "done", live: false, endedAt: null });
+    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A")], { stub: done })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title"]);
+  });
+
+  it.each(["done", "review", "failed", "aborted"])("%s after the message: title-only band with the end line", (status) => {
+    const s = stub({ status, live: false, endedAt: at(9) });
+    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A")], { stub: s })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title"]);
+  });
+
+  it.each(["done", "review", "failed", "aborted"])("%s before the message: end line in the last segment", (status) => {
+    const s = stub({ status, live: false, endedAt: at(4) });
+    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A")], { stub: s })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat"]);
+    expect(units(r.entries[0]).map((u) => u.u)).toEqual(["chapter", "end"]);
+  });
+
+  it("work after the message still says 'continues', also when the task has finished since", () => {
+    const done = stub({ status: "done", live: false, endedAt: at(9) });
+    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A"), think(at(8), "B")], { stub: done })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:continues"]);
+    expect(units(r.entries[2]).map((u) => u.u)).toEqual(["chapter", "end"]);
+  });
+
+  it("a running task's live row below the message says 'continues'", () => {
+    const live = { block: "thinking" as const, startedAt: at(9), ts: at(12), chars: 900, stale: false };
+    const r = merge([chatMsg(at(11), "Status?")], [task([think(at(10), "A")], { liveRow: live })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:continues"]);
+  });
+
+  it.each(["blocked", "waiting", "user_test"])(
+    "%s (waits for the operator) below the message: title only — the state line stays in the first band (K3)",
+    (status) => {
+      const s = stub({ status, live: true });
+      const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A")], { stub: s })]);
+      expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title"]);
+    },
+  );
+
+  it("a task waiting for the operator stays title-only even while a live row shows", () => {
+    const live = { block: "text" as const, ts: at(6), text: "Which one?", stale: false };
+    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A")], { stub: stub({ status: "waiting" }), liveRow: live })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title"]);
+  });
+
+  it("a delivered task still in the inbox whose agent already writes: 'continues' (NICE-1)", () => {
+    const s = stub({ status: "inbox", live: true });
+    const live = { block: "thinking" as const, startedAt: at(6), ts: at(7), chars: 120, stale: false };
+    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A")], { stub: s, liveRow: live })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:continues"]);
+  });
+
+  it("an end time equal to the next message's time: the chat goes first, the end line below it", () => {
+    const review = stub({ status: "review", live: false, endedAt: at(5) });
+    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A")], { stub: review })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title"]);
+    expect(units(r.entries[2]).map((u) => u.u)).toEqual(["end"]);
+  });
+
+  it("a delivered task not started yet: the pending row below the message is not 'continues'", () => {
+    const s = stub({ status: "inbox", live: true, startedAt: null, startKey: at(0) });
+    const r = merge([chatMsg(at(5), "x")], [task([], { stub: s, hasSession: false })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title"]);
+    expect(units(r.entries[2]).map((u) => u.u)).toEqual(["pending"]);
+  });
+
+  it("a vanished task below the message: title only, never 'continues'", () => {
+    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A")], { detached: true })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title"]);
+  });
+
+  it("a card task finished again after its rework: the end line band says the title only", () => {
+    const s = stub({ status: "review", live: false, endedAt: at(60) });
+    const r = merge(
+      [chatMsg(at(40), "please redo"), chatMsg(at(55), "and?")],
+      [task([think(at(1), "Old"), think(at(50), "Rework")], { stub: s, shape: "card", frozenAtMs: Date.parse(at(30)), endLine: true })],
+    );
+    expect(segHeads(r.entries)).toEqual(["card", "chat", "cont:continues", "chat", "cont:title"]);
+  });
+
+  it("the head is part of a segment's identity: a state flip rebuilds the entry (N5)", () => {
+    const rows = [think(at(1), "A")];
+    const chat = [chatMsg(at(5), "x")];
+    const r1 = merge(chat, [task(rows, { stub: stub({ status: "in_progress" }) })]);
+    const r2 = merge(chat, [task(rows, { stub: stub({ status: "blocked" }) })], { prev: r1 });
+    expect(segHeads(r1.entries)[2]).toBe("cont:continues");
+    expect(segHeads(r2.entries)[2]).toBe("cont:title");
+    expect(r2.entries[2]).not.toBe(r1.entries[2]);
+  });
+});
