@@ -60,6 +60,7 @@ class FakeSession:
     def __init__(self, *, busy: bool = False):
         self.prompts: list[str] = []
         self.modes: list[str] = []
+        self.origins: list = []
         self.new_sessions: list[str] = []
         self.request_ids: list = []
         self.queue_clears = 0
@@ -79,9 +80,10 @@ class FakeSession:
     def close(self):
         self.closed += 1
 
-    def prompt(self, text, mode="now"):
+    def prompt(self, text, mode="now", origin=None):
         self.prompts.append(text)
         self.modes.append(mode)
+        self.origins.append(origin)
         if self._busy and mode != "queue":
             return {"ok": False, "error": "busy"}
         if self._busy:
@@ -275,6 +277,23 @@ def test_new_session_hands_the_request_id_to_the_session(bridge, monkeypatch):
     assert _post(bridge, "/chat/new_session", {})[0] == 200
     assert session.new_sessions == ["queue", "now"]
     assert session.request_ids == ["req-h", None]
+
+
+def test_chat_prompt_hands_the_origin_to_the_session(bridge, monkeypatch):
+    """The composer's prompt says who wrote it (``origin: "operator"``) — the
+    only text the chat daemon offers to send again. The HTTP twin must not
+    drop it (before: no caller's origin ever reached the Hermes session, so
+    "Send again" never appeared). Without it, the session gets nothing."""
+    monkeypatch.setenv("HERMES_DRIVER", "acp")
+    session = FakeSession()
+    daemon = _daemon(bridge, session)
+    monkeypatch.setattr(bridge, "chat_daemon", lambda: daemon)
+
+    assert _post(bridge, "/chat/prompt", {"text": "a", "mode": "queue", "origin": "operator"})[0] == 200
+    assert _post(bridge, "/chat/prompt", {"text": "b", "origin": "operator"})[0] == 200
+    assert _post(bridge, "/chat/prompt", {"text": "c"})[0] == 200
+    assert session.origins == ["operator", "operator", None]
+    assert session.modes == ["queue", "now", "now"]
 
 
 def test_chat_prompt_while_busy_is_409(bridge, monkeypatch):

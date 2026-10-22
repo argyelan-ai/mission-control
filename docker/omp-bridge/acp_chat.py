@@ -140,8 +140,9 @@ _MODEL_UNREACHABLE_NEUTRAL_TEXT = "The model is not answering — check the Runt
 #: composer) — the only text a card ever offers to send again. "task" /
 #: "nudge": Mission Control wrote it (the names of the task path,
 #: `ACPEventMapper.map_user_prompt`); the chat line is then an MC event, not
-#: an operator bubble. Anything else, or nothing (an older caller,
-#: hermes-bridge's dispatch, the omp bridge's wake-up): unknown — shown as
+#: an operator bubble, and a busy refusal of it writes no card (its caller
+#: retries — the omp bridge's wake-up says "nudge"). Anything else, or
+#: nothing (an older caller, hermes-bridge's dispatch): unknown — shown as
 #: before, never offered again. Fail-closed: a caller that forgets to say
 #: who wrote it costs a button, never a second run of a task.
 ORIGIN_OPERATOR = "operator"
@@ -828,7 +829,8 @@ class ChatSession:
 
         `origin`: who wrote it — ORIGIN_OPERATOR, "task"/"nudge", or nothing
         (unknown). Only the operator's text is ever offered to send again
-        (`_origin_of`)."""
+        (`_origin_of`). A busy refusal of an MC prompt ("task"/"nudge") is
+        quiet — its caller retries; everyone else gets one `busy` card."""
         text = str(text or "")
         mode = mode or MODE_NOW
         origin = _origin_of(origin)
@@ -838,6 +840,15 @@ class ChatSession:
             if self._busy:
                 if mode == MODE_QUEUE and not self._closed:
                     return self._enqueue_locked("prompt", text, origin)
+                if origin in _MC_ORIGINS:
+                    # Mission Control's own wake-up or task prompt: its
+                    # caller (the omp bridge's poll, hermes-bridge) keeps it
+                    # pending and tries again on its next poll — nothing is
+                    # lost, so no card. A card per retry flooded the chat
+                    # (one every 5 s while a reply ran, up to 206 a day) and
+                    # each one flushed the open thought and text segment,
+                    # cutting the running reply into pieces (22.10.2026).
+                    return {"ok": False, "error": "busy"}
                 # Rejected, and the operator sees why — silently dropping a
                 # typed message is the worst possible failure here.
                 self._emit_error(

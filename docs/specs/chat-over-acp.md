@@ -17,7 +17,7 @@ For an agent whose driver is ACP, the Sessions chat is the **only** interface an
 
 ## Non-goals
 
-- Multi-turn concurrency. One turn at a time per agent chat session. A second prompt while busy is rejected with `busy` — unless it asks for `mode: "queue"` (the chat does): then the daemon holds it and runs it when the running turn ends (FIFO, see the op table). Steering INTO a running turn is not possible over ACP: omp cancels the running turn when a second `session/prompt` arrives (omp 18.1.10 `AcpAgent.prompt`); steering needs omp's RPC mode (`steer`/`follow_up`).
+- Multi-turn concurrency. One turn at a time per agent chat session. A second prompt while busy is rejected with `busy` — unless it asks for `mode: "queue"` (the chat does): then the daemon holds it and runs it when the running turn ends (FIFO, see the op table). The refusal writes a `busy` card only for the operator or an unknown caller; a prompt Mission Control wrote (`origin` `"task"`/`"nudge"`) is refused quietly — its caller keeps it pending and retries on its next poll (incident 22.10.2026: the omp bridge's wake-up, refused every 5 s while a reply ran, wrote up to 206 cards a day, and each card cut the running reply's thought and text in pieces). Under ACP the omp bridge also reads the daemon's `state` before a wake-up and sends nothing while `busy` is true; wake-ups are never sent with `mode: "queue"` (a held wake-up would come back into the composer on Stop/withdraw, and can be stale by then). Steering INTO a running turn is not possible over ACP: omp cancels the running turn when a second `session/prompt` arrives (omp 18.1.10 `AcpAgent.prompt`); steering needs omp's RPC mode (`steer`/`follow_up`).
 
 Done, no longer a non-goal (fix omp-acp-no-tui-window, 13.09.2026): the native
 TUI in window 0 was removed for `OMP_DRIVER=acp` agents — Mark saw the live
@@ -298,11 +298,11 @@ changed files — must not run twice without the operator deciding it.
   delivers a task again on its own after a restart. One tap on its dispatch
   text (with an attempt id that may be stale by then) could run the task a
   second time. A caller that forgets to say who wrote a text costs a
-  button, never a second run. State 20.10.2026: no caller sends `origin`
-  yet — the backend's composer path (`acp_chat_transport.prompt`) and
-  Hermes' `ChatDaemon.request` have to pass `"operator"` on before any card
-  offers "Send again"; hermes-bridge's `ChatDaemon.prompt` and the omp
-  bridge's wake-up may then say `"task"` / `"nudge"` (follow-up).
+  button, never a second run. State 22.10.2026: the composer
+  (`POST /agents/{id}/chat/input` → `acp_chat_transport.prompt(...,
+  origin="operator")`, and Hermes' `ChatDaemon.request` passing it on) says
+  `"operator"`; the omp bridge's wake-up says `"nudge"`. Jarvis' voice relay
+  and hermes-bridge's own dispatch (`ChatDaemon.prompt`) send none (unknown).
 - While a job runs, the state mirror carries
   `current: {"kind": "prompt" | "new_session", "turn": n | null, "text": "…" | null, "truncated": bool, "startedAt": "…", "origin": "operator" | "task" | "nudge" | null}`,
   set when the job is claimed (`_claim_locked`), `null` when the job ends;
@@ -409,10 +409,9 @@ separator (`… the CLI.Unable to connect. …`).
   (at most 8000 characters). For any other origin the card has no
   `retryText` and says only "The model is not answering — check the
   Runtimes page." The frontend links the card to the Runtimes page (S1-R7).
-  Today no caller sends `origin: "operator"` yet (the backend's composer
-  path and the hermes-bridge send none), so every card is the neutral one
-  without "Send again" until that wiring exists — the same holds for
-  `turn_interrupted` (S1-R5).
+  Since 22.10.2026 the composer's prompt carries `origin: "operator"`
+  (backend and Hermes' HTTP twin), so these cards — and `turn_interrupted`
+  (S1-R5) — offer "Send again" for the operator's own message.
 - No chat state "waiting for the model": the turn is over and the card
   says it. `waiting_model` stays a phase of the task channel (#897).
 - **Deliberate difference to the task path:** the task path has no omp line
@@ -511,7 +510,7 @@ when a restart cannot resume the old one.
 
 | op | request | response |
 |----|---------|----------|
-| `prompt` | `{"op":"prompt","text":"...","mode"?:"now"\|"queue","origin"?:"operator"\|"task"\|"nudge"}` — `origin`: who wrote the text (see "Interrupted turns"); only `"operator"` makes it offerable again | `{"ok":true,"turn":n}` immediately (turn runs async) · busy + `mode:"queue"`: `{"ok":true,"queued":true,"queueId":"…","position":n,"at":"…"}` · busy otherwise: `{"ok":false,"error":"busy"}` · `{"ok":false,"error":"queue_full"}` |
+| `prompt` | `{"op":"prompt","text":"...","mode"?:"now"\|"queue","origin"?:"operator"\|"task"\|"nudge"}` — `origin`: who wrote the text (see "Interrupted turns"); only `"operator"` makes it offerable again | `{"ok":true,"turn":n}` immediately (turn runs async) · busy + `mode:"queue"`: `{"ok":true,"queued":true,"queueId":"…","position":n,"at":"…"}` · busy otherwise: `{"ok":false,"error":"busy"}` (plus one `busy` card, except for `origin` `"task"`/`"nudge"`: quiet, the caller retries) · `{"ok":false,"error":"queue_full"}` |
 | `new_session` | `{"op":"new_session","mode"?:"now"\|"queue","requestId"?:"…"}` — `requestId`: which request of MC's backend asked (see "A new conversation says so") | `{"ok":true,"previousSessionId":"…"}` — `session/new` runs in the worker; a new transcript file starts (the chat view follows it as a rollover), the old file stays, model + thinking carry over, the old ACP session gets `session/close`, the new transcript starts with a `new_conversation` card, `resets` gets a row. Busy: `{"ok":false,"error":"busy"}`, or held in the queue with `mode:"queue"` |
 | `queue_clear` | `{"op":"queue_clear"}` | `{"ok":true,"dropped":[{"id","kind":"prompt"\|"new_session","text","origin"?,"at"}, …]}` oldest first |
 

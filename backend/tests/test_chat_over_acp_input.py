@@ -35,7 +35,7 @@ class _FakeTransport:
     def _answer(self, op: str) -> dict:
         return self._answers.get(op, {"ok": True})
 
-    async def prompt(self, text: str, mode: str | None = None) -> dict:
+    async def prompt(self, text: str, mode: str | None = None, origin: str | None = None) -> dict:
         self.calls.append(("prompt", text, mode))
         return self._answer("prompt")
 
@@ -267,7 +267,7 @@ async def test_router_maps_acp_refusal_to_409(auth_client, make_agent, monkeypat
 
     agent = await make_agent(name="Acp One", agent_runtime="cli-bridge")
 
-    async def _refused(a, text):
+    async def _refused(a, text, **_kw):
         raise AcpChatRefusedError("bad_mode")
 
     monkeypatch.setattr(agent_chat_mod, "send_text", _refused)
@@ -642,7 +642,7 @@ async def test_router_maps_busy_to_409(auth_client, make_agent, monkeypatch):
 
     agent = await make_agent(name="Acp One", agent_runtime="cli-bridge")
 
-    async def _busy(a, text):
+    async def _busy(a, text, **_kw):
         raise AgentBusyError()
 
     monkeypatch.setattr(agent_chat_mod, "send_text", _busy)
@@ -662,7 +662,7 @@ async def test_router_maps_unreachable_to_502(auth_client, make_agent, monkeypat
 
     agent = await make_agent(name="Acp One", agent_runtime="cli-bridge")
 
-    async def _dead(a, text):
+    async def _dead(a, text, **_kw):
         raise AcpChatUnreachableError("socket weg")
 
     monkeypatch.setattr(agent_chat_mod, "send_text", _dead)

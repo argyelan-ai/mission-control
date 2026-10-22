@@ -259,7 +259,12 @@ class ChatDaemon:
             if op == "prompt":
                 mode = payload.get("mode")
                 text = str(payload.get("text") or "")
-                answer = session.prompt(text, mode) if mode else session.prompt(text)
+                # `origin`: who wrote it ("operator" = the composer) — the
+                # session offers "Send again" only for the operator's text.
+                # Passed on only when sent; the session checks the value.
+                extra = {"origin": payload["origin"]} if payload.get("origin") is not None else {}
+                answer = session.prompt(text, mode, **extra) if mode \
+                    else session.prompt(text, **extra)
             elif op == "new_session":
                 mode = payload.get("mode")
                 # `requestId`: which request of MC's backend asked — the
