@@ -6,20 +6,30 @@
  * the chat events; THEN a run of chat events becomes chat items
  * (`buildTimelineItems`, so a chat tool group never spans a task row) and a
  * run of one task's rows becomes a segment (`buildTaskUnits`, so a chapter
- * never spans a chat entry — tools written after the operator's message
- * land below it). Nothing of a task grows above a newer chat entry: the live
- * row, the "waiting" lines and the end line belong to the task's last
- * segment only while that segment is the newest entry; otherwise they form a
- * trailing continuation segment at the bottom. The end line keeps its time:
- * a task that ended before the next chat entry ends its last segment there.
+ * never spans an operator message — tools written after it land below it).
  *
- * A later segment's head follows the task's state at that point (`head`):
- * work rows or a working task (in progress, or its agent already writing) →
- * "<title> · continues"; anything else (the end line of a finished task, a
- * task that waits for the operator, a vanished or not yet started task) →
- * the title alone, whose link says what to do ("Answer" / "Review") — never
- * "continues" for a task that does not run, and never the state line again:
- * the first segment says it (spec A §2.5 continuation header, K3).
+ * Only the operator's own message (or slash command) splits a band (K19,
+ * round-1 user test 22.10.2026): the chat session's other lines — its tools,
+ * thoughts, answers, notices — that fall between two rows of the open band
+ * are held and stand right BELOW the band, in their own order. Before, each
+ * of them cut the task into a new band with the same head (6–10 bands live,
+ * one card after a reload). Another task's row or a card closes the band too.
+ *
+ * Nothing of a task grows above the operator's newer message: the live row,
+ * the "waiting" lines and the end line belong to the task's last segment
+ * while that segment is still open (only held chat lines below it) or the
+ * newest entry; otherwise they form a trailing continuation segment at the
+ * bottom. The end line keeps its time: a task that ended before the next
+ * chat entry ends its last segment there.
+ *
+ * A later segment's head follows the task's state NOW (`head`): a task that
+ * works (in progress, or delivered and its agent already writing) →
+ * "<title> · continues"; a task that does not (finished, waits for the
+ * operator, vanished, not started yet) → the title alone, whose link says
+ * what to do ("Answer" / "Review") — also when the band holds work rows: they
+ * are past work, and "continues" next to "waits for review" contradicts
+ * itself (round-1 MUST-2). Never the state line again: the first segment
+ * says it (spec A §2.5 continuation header, K3).
  *
  * Shapes are decided by the caller once per task per mount (M4): a card
  * stays a card (rows after its freeze time go below as segments), a section
@@ -54,10 +64,10 @@ export interface MergeTask {
  * How a segment's head reads (spec A §2.5):
  * - `full`: title + state line — a task's first segment only (K3: the state
  *   is said once; a later band repeats it nowhere);
- * - `continues`: "<title> · continues" — the task works on in this segment;
- * - `title`: the title alone (its link names the action) — the segment holds
- *   no work and the task does not run (finished, waits for the operator, not
- *   started yet, or no longer active here).
+ * - `continues`: "<title> · continues" — the task works on right now;
+ * - `title`: the title alone (its link names the action) — the task does not
+ *   run (finished, waits for the operator, not started yet, or no longer
+ *   active here), whatever the segment holds.
  */
 export type SegmentHead = "full" | "continues" | "title";
 
@@ -100,16 +110,27 @@ const TAIL_KINDS = new Set<TaskUnit["u"]>(["live", "pending", "detached", "queue
 /** Live states in which the task waits for the operator, not for its agent. */
 const WAITS_FOR_OPERATOR = new Set(["waiting", "blocked", "user_test"]);
 
-/** The head of a task's segment, from what it holds and the task's state now. */
+/** The head of a task's segment, from the task's state now (and, for a
+ *  delivered task whose status has not flipped yet, what the segment holds). */
 export function segmentHead(task: MergeTask, units: readonly TaskUnit[], first: boolean): SegmentHead {
   if (first) return "full";
-  if (units.some((u) => !TAIL_KINDS.has(u.u))) return "continues";
-  if (task.detached || !task.stub.live) return "title";
+  // A task that does not work says so first — past work rows in the band do
+  // not make it run (round-1 MUST-2: "continues" stood next to "waits for
+  // review" for up to 6 min, until a reload).
+  if (task.detached || !task.stub.live || WAITS_FOR_OPERATOR.has(task.stub.status)) return "title";
   if (task.stub.status === "in_progress") return "continues";
-  // Delivered but still `inbox` while its agent already writes (live row):
-  // it works, the status just has not flipped yet (review NICE-1 on #948).
-  if (task.liveRow && !WAITS_FOR_OPERATOR.has(task.stub.status)) return "continues";
+  // Delivered but still `inbox` while its agent already writes (live row or
+  // fresh work rows): it works, the status just has not flipped yet (review
+  // NICE-1 on #948).
+  if (task.liveRow || units.some((u) => !TAIL_KINDS.has(u.u))) return "continues";
   return "title";
+}
+
+/** Does this chat line split a task's band? Only what the operator wrote
+ *  himself — his message or slash command (K19). The chat session's own
+ *  tools, thoughts, answers and notices wait below the open band. */
+export function splitsBand(ev: TimelineChatEvent): boolean {
+  return (ev.kind === "message" && ev.role === "user") || ev.kind === "command";
 }
 
 /** An entry's time: a chat item's / card's own, a segment's first timed unit. */
@@ -216,6 +237,8 @@ export function mergeTimeline(input: MergeInput): MergeResult {
 
   let chatRun: TimelineChatEvent[] = [];
   let seg: { task: MergeTask; rows: TaskStepRow[] } | null = null;
+  /** Chat lines that fell inside the open band (`seg`); they stand below it. */
+  let held: TimelineChatEvent[] = [];
 
   const flushChat = () => {
     if (chatRun.length === 0) return;
@@ -267,15 +290,29 @@ export function mergeTimeline(input: MergeInput): MergeResult {
     pushSegment(task, units, rows[0]?.id ?? "head");
   };
 
+  /** Close the open band, then put the chat lines it held below it. */
+  const closeBand = () => {
+    flushSeg();
+    if (held.length > 0) {
+      chatRun.push(...held);
+      held = [];
+    }
+  };
+
   for (const e of all) {
     if (e.type === "chat") {
-      flushSeg();
+      if (seg && !splitsBand(e.ev)) {
+        held.push(e.ev);
+        continue;
+      }
+      closeBand();
       chatRun.push(e.ev);
       continue;
     }
+    // Another task's row or a card closes the open band.
+    if (seg && (seg.task !== e.task || e.type === "card")) closeBand();
     flushChat();
     if (e.type === "card") {
-      flushSeg();
       const key = `task:${e.task.stub.taskId}:card`;
       const old = prevCards.get(key);
       const ms = Number.isFinite(e.ms) ? e.ms : null;
@@ -283,12 +320,15 @@ export function mergeTimeline(input: MergeInput): MergeResult {
       if (ms != null) unitTimes.push(ms);
       continue;
     }
-    if (seg && seg.task !== e.task) flushSeg();
     seg ??= { task: e.task, rows: [] };
     if (e.type === "row") seg.rows.push(e.row);
   }
   flushChat();
-  flushSeg();
+  // The band still open at the end takes its task's tail (only held chat
+  // lines below it — no empty head under them, round-1 r2 M3).
+  const openAtEnd = seg?.task ?? null;
+  closeBand();
+  flushChat();
 
   // Tails (§6.2 step 5): live row / pending / detached / queued / end line.
   const newestLive = [...tasks].filter((t) => t.stub.live && !t.detached).pop() ?? null;
@@ -329,7 +369,7 @@ export function mergeTimeline(input: MergeInput): MergeResult {
       tail[0].u === "end" &&
       endedMs != null &&
       (entryMs(out[at + 1]) ?? Number.NEGATIVE_INFINITY) > endedMs;
-    if (at != null && (at === out.length - 1 || endsBeforeNext)) {
+    if (at != null && (at === out.length - 1 || task === openAtEnd || endsBeforeNext)) {
       const segEntry = out[at] as Extract<MergedEntry, { kind: "segment" }>;
       const units = [...segEntry.units, ...tail.map((u) => reuseTail(u, prevSegments.get(segEntry.key)))];
       const head = segmentHead(task, units, segEntry.first);

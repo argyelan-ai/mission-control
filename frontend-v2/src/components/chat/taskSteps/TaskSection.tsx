@@ -9,10 +9,12 @@
  * a link by state ("View" / "Review" / "Answer") — the whole line opens the
  * task (K11/K12). The first segment adds the state line under it, which
  * scrolls away. A later segment's head follows the task's state there
- * (`entry.head`): "<title> · continues" only while the task works on in it;
- * the title alone otherwise (finished, waiting for the operator, not
- * started) — its link names the action, and the state line stays with the
- * first segment only (K3). Two regions
+ * (`entry.head`): "<title> · continues" only while the task works; the
+ * title alone otherwise (finished, waiting for the operator, not started) —
+ * also over past work rows — its link names the action, and the state line
+ * stays with the first segment only (K3). Only the operator's own message
+ * starts a new band; the chat's other lines stand below the open one
+ * (`mergeTimeline`). Two regions
  * (K6/S10): `chat-task-head` (its one status colour is the state dot) and
  * `chat-task-steps` (its one status colour is the ocker dot of a failed step).
  */
