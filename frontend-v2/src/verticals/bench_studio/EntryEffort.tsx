@@ -53,7 +53,7 @@ export function EntryEffort({ entry }: { entry: BenchEntry }) {
       <span className="text-xs" style={{ color: C.textMuted }}>
         {parts.join(" · ")}
       </span>
-      {m.truncated && (
+      {m.truncated && entry.status !== "failed" && (
         <span className="text-xs" style={{ color: C.warning }}>
           {t("truncated", { max: m.max_tokens ?? "?" })}
         </span>

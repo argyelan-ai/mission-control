@@ -3767,7 +3767,7 @@
         "max": "Max"
       },
       "checking": "Checking which levels this model honours …",
-      "checkedAt": "checked {when}",
+      "checkedAt": "Checked {when}.",
       "serverDefaultOn": "Default sends nothing — the server thinks by default.",
       "serverDefaultOff": "Default sends nothing — the server does not think by default.",
       "serverDefaultUnknown": "Default sends nothing — the server default governs.",

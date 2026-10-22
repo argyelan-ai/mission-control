@@ -345,7 +345,7 @@ export function NewChallengeDialog({
           </span>
           {models.map((m, i) => (
             <Fragment key={i}>
-            <div className="flex gap-2 items-center">
+            <div className="flex flex-wrap gap-2 items-center">
               <input
                 value={m.label}
                 onChange={(e) => {

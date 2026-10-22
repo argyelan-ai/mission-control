@@ -3767,7 +3767,7 @@
         "max": "Max"
       },
       "checking": "Prüfe, welche Stufen dieses Modell befolgt …",
-      "checkedAt": "geprüft {when}",
+      "checkedAt": "Geprüft {when}.",
       "serverDefaultOn": "Standard schickt nichts — der Server denkt von sich aus.",
       "serverDefaultOff": "Standard schickt nichts — der Server denkt von sich aus nicht.",
       "serverDefaultUnknown": "Standard schickt nichts — es gilt die Server-Vorgabe.",

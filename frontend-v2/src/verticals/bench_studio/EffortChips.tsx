@@ -118,7 +118,7 @@ export function EffortChips({
         )}
       </div>
       <span className="text-xs" style={{ color: C.textMuted }} aria-live="polite">
-        {checked ? `${hint} · ${checked}` : hint}
+        {checked ? `${hint} ${checked}` : hint}
       </span>
     </div>
   );

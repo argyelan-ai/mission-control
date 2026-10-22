@@ -101,9 +101,13 @@ async def observed_agent_effort(session, entry, task) -> dict[str, Any]:
     agent = await session.get(Agent, entry.agent_id) if entry.agent_id else None
     if agent is None:
         return {"source": "unknown", "reason": "agent gone"}
-    harness = getattr(agent, "harness", None)
-    if harness != "omp":
-        return {"source": "unknown", "reason": f"effort of {harness or 'this'} sessions is not read yet"}
+    # Only a harness whose task runs in a session of its OWN has one to read
+    # (the transcript adapter's capability, not a name check here).
+    from app.services.transcript_adapters import adapter_for
+
+    if adapter_for(agent).find_task_session is None:
+        harness = getattr(agent, "harness", None) or "this"
+        return {"source": "unknown", "reason": f"effort of {harness} sessions is not read yet"}
     created = getattr(task, "created_at", None)
     since = None
     if created is not None:
