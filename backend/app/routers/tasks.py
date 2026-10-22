@@ -2043,6 +2043,11 @@ _ACTIVITY_KIND_MAP: dict[str, str] = {
     "task.run_resumed": "system",
 }
 
+# Events whose title already says everything the operator needs: their
+# detail dict is machine context (``action: … · status: …``) and stays in
+# ``meta.detail`` only, not under the title (PR #954 review SHOULD 2).
+_ACTIVITY_DETAIL_IN_TITLE = {"task.chat_write_rejected"}
+
 # Events whose signal is ALWAYS fully represented elsewhere in the timeline
 # (task.status_changed is handled conditionally — see _has_matching_task_event).
 _ACTIVITY_SKIP = {"task.commented", "task.created"}
@@ -2226,7 +2231,11 @@ async def get_task_timeline(
             # MEDIUM 2 review fix: detail dict (the dispatch_failed/blocked/
             # stuck reason lives here) is no longer discarded — compact
             # "key: value" string for display, full dict in meta.detail.
-            "detail": _format_detail_dict(e.detail), "actor": actor,
+            "detail": (
+                None if e.event_type in _ACTIVITY_DETAIL_IN_TITLE
+                else _format_detail_dict(e.detail)
+            ),
+            "actor": actor,
             "meta": {"event_type": e.event_type, "severity": e.severity, "detail": e.detail},
         })
 

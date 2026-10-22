@@ -212,3 +212,74 @@ async def test_a_refusal_lands_in_the_task_timeline(client):
     assert len(events) == 1 and events[0].agent_id == agent_id
     assert events[0].detail == {"action": "comment progress", "status": "in_progress"}
     assert _ACTIVITY_KIND_MAP["task.chat_write_rejected"] == "stuck"
+
+
+async def _enable_comm_v2(agent_id) -> None:
+    """Blocking asks need the messaging-v2 pilot and the chat:write scope."""
+    from app.models.agent import Agent
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent = await s.get(Agent, agent_id)
+        agent.comm_v2 = True
+        agent.scopes = [*agent.scopes, "chat:write"]
+        s.add(agent)
+        await s.commit()
+
+
+async def test_chat_blocking_ask_on_running_task_is_refused(client):
+    """`mc ask --blocking` from the chat would park the RUN's task in
+    `waiting`; the answer then starts a second run next to the first one —
+    the same double work through another endpoint. Refused, status kept."""
+    _board, agent_id, task_id, token = await _setup()
+    await _enable_comm_v2(agent_id)
+    resp = await client.post(
+        "/api/v1/agent/tasks/current/ask",
+        json={"question": "Which colour do you want?", "blocking": True},
+        headers=_auth(token, chat=True),
+    )
+    assert resp.status_code == 409, resp.text
+    assert "chat_session_task_write" in resp.json()["detail"]
+    assert (await _task(task_id)).status == "in_progress"
+
+
+async def test_chat_non_blocking_ask_stays_allowed(client):
+    """A plain question leaves the task status alone — the chat may ask."""
+    _board, agent_id, task_id, token = await _setup()
+    await _enable_comm_v2(agent_id)
+    resp = await client.post(
+        "/api/v1/agent/tasks/current/ask",
+        json={"question": "Shall I tell you more?", "blocking": False},
+        headers=_auth(token, chat=True),
+    )
+    assert resp.status_code == 201, resp.text
+    assert (await _task(task_id)).status == "in_progress"
+
+
+async def test_run_session_blocking_ask_still_parks_the_task(client):
+    _board, agent_id, task_id, token = await _setup()
+    await _enable_comm_v2(agent_id)
+    resp = await client.post(
+        "/api/v1/agent/tasks/current/ask",
+        json={"question": "Which colour do you want?", "blocking": True},
+        headers=_auth(token, chat=False),
+    )
+    assert resp.status_code == 201, resp.text
+    assert (await _task(task_id)).status == "waiting"
+
+
+async def test_refusal_row_in_the_timeline_shows_no_raw_keys(auth_client):
+    """The operator reads the title ("…refused: comment progress"), not the
+    machine dict ("action: … · status: …"); the dict stays in meta."""
+    board_id, _agent, task_id, token = await _setup()
+    await auth_client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        json={"comment_type": "progress", "content": "x"},
+        headers=_auth(token, chat=True),
+    )
+    resp = await auth_client.get(f"/api/v1/boards/{board_id}/tasks/{task_id}/timeline")
+    assert resp.status_code == 200, resp.text
+    row = next(e for e in resp.json()["entries"]
+               if (e.get("meta") or {}).get("event_type") == "task.chat_write_rejected")
+    assert row["title"].endswith("comment progress")
+    assert row["detail"] is None
+    assert row["meta"]["detail"] == {"action": "comment progress", "status": "in_progress"}

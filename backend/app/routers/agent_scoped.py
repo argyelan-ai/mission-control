@@ -1684,6 +1684,7 @@ class AskResponse(BaseModel):
 @router.post("/tasks/current/ask", status_code=status.HTTP_201_CREATED)
 async def agent_ask(
     payload: AskCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.CHAT_WRITE)),
 ):
@@ -1730,6 +1731,14 @@ async def agent_ask(
             session, agent, create_dm_if_missing=True
         )
     else:
+        if payload.blocking:
+            # A blocking ask parks the RUN's task in `waiting`; from the chat
+            # session the answer would then start a second run next to the
+            # first (round-1 user test t1 MUST-1, review SHOULD 1). A plain
+            # question leaves the status alone and stays open to the chat.
+            await refuse_chat_task_write(
+                session, request, agent, current_task, "ask --blocking"
+            )
         # Task 12 (final-review A2, defense-in-depth): a blocking ask parks
         # the task in `waiting` until an answer is delivered — but answer
         # delivery is gated on the comm_v2 pilot. A non-pilot agent parking

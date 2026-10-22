@@ -119,6 +119,7 @@ async def test_running_task_is_named_with_folder_deliverables_and_rule():
     assert "created index.html with three squares" in text
     assert "Do NOT work on these tasks" in text
     assert "mc finish" in text
+    assert "mc ask --blocking" in text
 
 
 async def test_just_finished_run_is_named_after_review_handoff():

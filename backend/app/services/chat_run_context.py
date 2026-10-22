@@ -220,7 +220,8 @@ async def run_context(session: AsyncSession, agent: Agent, *, now: datetime | No
         "Rules for this reply: answer the operator from this state. You may READ the run's "
         "files and `mc task-get <id>`. Do NOT work on these tasks — no files in their folders, "
         "no `mc comment` / `mc checklist` / `mc deliverable` / `mc finish` / `mc ack` / "
-        "`mc recover` for them (the server refuses those calls from the chat). If the operator "
+        "`mc recover` / `mc ask --blocking` for them (the server refuses those calls from the "
+        "chat; a plain `mc ask` without `--blocking` is fine). If the operator "
         "wants a change to such a task, tell them to make it in the task view.",
         END,
     ]

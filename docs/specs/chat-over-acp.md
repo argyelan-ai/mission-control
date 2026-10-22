@@ -535,9 +535,19 @@ a run ended got "0 % — no task is running". Two layers:
   `chat_session_task_write: …` to every run-state write from it on a task
   assigned to or worked by this agent (also after a human-review handoff
   cleared the assignee): comments, status (`ack`/`finish`/`patch`),
-  deliverables, checklist, `recover`. Reading stays open. Each refusal is a
-  `task.chat_write_rejected` event in the task timeline. The marker guards
-  against an honest mistake of the model; it is not authentication.
+  deliverables, checklist, `recover`, and a blocking ask
+  (`POST /agent/tasks/current/ask` with `blocking: true` would park the run's
+  task in `waiting`, and the answer would then start a second run). Reading
+  and a plain question stay open. Each refusal is a
+  `task.chat_write_rejected` event in the task timeline (title only; the
+  `action`/`status` dict stays in `meta.detail`). The marker guards against an
+  honest mistake of the model; it is not authentication.
+- **Deliberately left open from the chat:** `POST /agent/tasks/current/messages`
+  and a non-blocking `ask` (they never change the task status); the PDF
+  endpoints (`/agent/me/pdf`, `.../tasks/{id}/pdf`), `visual-verify`,
+  `/review` and `/review-note` on the agent's own task (low risk, not a
+  run-state write the incident showed); the MCP path (`mc-mcp.py`) sets no
+  role, but omp does not use it.
 
 - **Resume through a run:** an `acp-docker` agent holds no paused run session
   once its task turn ended on a blocking question. So an answer
@@ -547,6 +557,11 @@ a run ended got "0 % — no task is running". Two layers:
   the chat. The bridge's comment wake-up into the chat says "read, tell the
   operator, change nothing" instead of "keep working"
   (`build_comment_nudge_text(chat=True)`).
+  Known window: if the answer arrives while the run's own turn is still
+  going (a continue-nudge in the same run session), the re-dispatch rotates
+  the attempt id under it — from then on that run's status writes get 409
+  (`stale_dispatch_attempt_id`) and the new run takes over. Accepted: the old
+  run cannot finish the task a second time.
 
 Rolling out needs both images: an old daemon ignores `context` and sets no
 role (the guard then never fires); an old backend sends no `context`.
