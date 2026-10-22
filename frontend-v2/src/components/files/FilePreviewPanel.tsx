@@ -8,6 +8,7 @@ import { FolderSearch, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { FsRoot } from "@/lib/types";
 import { C } from "@/lib/colors";
+import { HOST_ONLY_CLASS } from "@/lib/hostOnly";
 import { timeAgo } from "@/lib/utils";
 import { SlideOverPanel } from "@/components/shared/SlideOverPanel";
 import { FilePreview } from "@/components/task/FilePreview";
@@ -72,7 +73,10 @@ export function FilePreviewPanel({ root, subpath, onClose }: FilePreviewPanelPro
   );
 }
 
-function FinderButton({ root, subpath }: { root: FsRoot; subpath: string }) {
+/** Reveals the file in Finder on the Mac MC runs on — so it shows only at a
+ *  desktop with a mouse (HOST_ONLY_CLASS), never on a phone, where it would
+ *  act on a screen the operator cannot see (round-1 user test t4 S7). */
+export function FinderButton({ root, subpath }: { root: FsRoot; subpath: string }) {
   const tr = useTranslations("files");
   const [busy, setBusy] = useState(false);
   const [hidden, setHidden] = useState(false);
@@ -96,12 +100,11 @@ function FinderButton({ root, subpath }: { root: FsRoot; subpath: string }) {
     <button
       onClick={revealInFinder}
       disabled={busy}
-      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium shrink-0 transition-colors cursor-pointer disabled:opacity-60"
+      className={`${HOST_ONLY_CLASS} items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium shrink-0 transition-colors cursor-pointer disabled:opacity-60`}
       style={{ background: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
-      title={tr("revealInFinder")}
     >
-      {busy ? <Loader2 size={12} className="animate-spin" /> : <FolderSearch size={12} />}
-      Reveal in Finder
+      {busy ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <FolderSearch size={12} aria-hidden="true" />}
+      {tr("revealInFinder")}
     </button>
   );
 }
