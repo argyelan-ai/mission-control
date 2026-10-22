@@ -1207,8 +1207,7 @@ async def _render_and_compose(
     for entry in generated:
         try:
             result = await record_entry(entry, challenge)
-            entry.video_path = result.get("video_path")
-            entry.screenshot_path = result.get("screenshot_path")
+            _apply_record_result(entry, result)
             entry.status = "rendered"
             entry.error = None
             rendered.append(entry)
@@ -1251,6 +1250,26 @@ async def _render_and_compose(
     challenge.status = "review"
     session.add(challenge)
     await session.commit()
+
+
+# W0.9: recorder network report -> entry.metrics (§7.2 receipt names). The
+# sidecar's URL sample (blocked_requests) stays in its log, not in the record.
+_RECORD_REPORT_KEYS = ("network_blocked", "network_attempts", "libraries_inlined", "html_bytes")
+
+
+def _apply_record_result(entry: BenchEntry, result: dict) -> None:
+    """Store one /record response on the entry. A response without the
+    network fields (a sidecar older than the block) removes earlier values
+    instead of keeping them, so an entry never claims a block its current
+    recording did not have."""
+    entry.video_path = result.get("video_path")
+    entry.screenshot_path = result.get("screenshot_path")
+    metrics = {k: v for k, v in (entry.metrics or {}).items() if k not in _RECORD_REPORT_KEYS}
+    for key in _RECORD_REPORT_KEYS:
+        if key in result:
+            metrics[key] = result[key]
+    metrics["recorded_at"] = datetime.now(timezone.utc).isoformat()
+    entry.metrics = metrics
 
 
 async def maybe_advance(session: AsyncSession, challenge_id: uuid.UUID) -> None:
@@ -1419,7 +1438,8 @@ async def retire_blocked_entry_task(
 async def reconcile_challenge(
     session: AsyncSession, challenge: BenchChallenge, entries: list[BenchEntry]
 ) -> None:
-    """GET-time fallback sweep: agent tasks that ended in `failed` or
+    """Fallback sweep for one challenge (run by reconcile_open_challenges in
+    the background, never from a GET): agent tasks that ended in `failed` or
     `aborted` never fire the task_done hook — mark their entries failed so
     nothing hangs silently (spec §7, lesson from the Grok review: uncaught
     -> eternal in_progress; `aborted` added 2026-10-19). If such a task is
@@ -1456,6 +1476,69 @@ async def reconcile_challenge(
     if changed:
         await session.commit()
         await maybe_advance(session, challenge.id)
+
+
+# ── Background orphan sweep (W0.8) ────────────────────────────────────────
+# reconcile_challenge used to run only inside GET /challenges/{id}: a GET
+# that wrote, and a list that never healed. Three challenges sat at
+# `generating` from 19.10. on because their tasks were deleted and nobody
+# opened them. The sweep below runs in the vertical itself (registered via
+# hooks.background_loops, ADR-044) and keeps both GETs read-only.
+
+RECONCILE_INTERVAL_S = 60
+# Let the API finish booting before the first sweep (DB pool, other loops).
+RECONCILE_INITIAL_DELAY_S = 15
+
+
+async def reconcile_open_challenges() -> int:
+    """One sweep over every `generating` challenge (archived ones included:
+    archiving only hides a row, its state must still be honest). Each
+    challenge gets its own session, so one broken row never stops the rest.
+    Returns how many challenges left `generating` in this sweep."""
+    from app.database import engine
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        ids = (
+            await session.exec(
+                select(BenchChallenge.id).where(BenchChallenge.status == "generating")
+            )
+        ).all()
+
+    healed = 0
+    for challenge_id in ids:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            try:
+                challenge = await session.get(BenchChallenge, challenge_id)
+                if challenge is None or challenge.status != "generating":
+                    continue
+                entries = (
+                    await session.exec(
+                        select(BenchEntry).where(BenchEntry.challenge_id == challenge_id)
+                    )
+                ).all()
+                await reconcile_challenge(session, challenge, entries)
+                await session.refresh(challenge)
+                if challenge.status != "generating":
+                    healed += 1
+                    logger.info(
+                        "bench sweep: challenge %s -> %s", challenge_id, challenge.status
+                    )
+            except Exception:  # noqa: BLE001 — one bad row never stops the sweep
+                logger.exception("bench sweep: challenge %s reconcile failed", challenge_id)
+                await session.rollback()
+    return healed
+
+
+async def reconcile_loop() -> None:
+    """Runs reconcile_open_challenges every RECONCILE_INTERVAL_S until
+    cancelled. Errors are logged; the loop keeps going."""
+    await asyncio.sleep(RECONCILE_INITIAL_DELAY_S)
+    while True:
+        try:
+            await reconcile_open_challenges()
+        except Exception:  # noqa: BLE001 — a DB hiccup must not end the loop
+            logger.exception("bench sweep failed")
+        await asyncio.sleep(RECONCILE_INTERVAL_S)
 
 
 # ── Operator lifecycle: stop + artifact cleanup (2026-07-12) ───────────────
@@ -1741,8 +1824,7 @@ async def rerender_entry(entry_id: uuid.UUID, challenge_id: uuid.UUID) -> None:
 
                 try:
                     result = await record_entry(entry, challenge)
-                    entry.video_path = result.get("video_path")
-                    entry.screenshot_path = result.get("screenshot_path")
+                    _apply_record_result(entry, result)
                     entry.status = "rendered"
                     entry.error = None
                 except Exception as exc:  # noqa: BLE001

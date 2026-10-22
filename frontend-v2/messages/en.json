@@ -3848,6 +3848,28 @@
       "newChallenge": "New Challenge",
       "emptyState": "No challenges yet — start the first one from the Prompt Library."
     },
+    "status": {
+      "generating": "Generating",
+      "rendering": "Recording",
+      "composing": "Building video",
+      "review": "Done",
+      "drafted": "Draft",
+      "published": "Published",
+      "failed": "Aborted",
+      "abortedWithReason": "Aborted – {reason}",
+      "reason": {
+        "taskDeleted": "task deleted",
+        "taskFailed": "task failed",
+        "taskAborted": "task cancelled",
+        "stopped": "stopped by you",
+        "renderFailed": "recording failed",
+        "composeFailed": "video failed"
+      }
+    },
+    "recording": {
+      "networkBlocked": "Network blocked while recording: {count, plural, one {# request} other {# requests}} stopped — the page tried to load something from the network. A recording may only use the page itself.",
+      "librariesInlined": "Contains pasted library code: {libraries}"
+    },
     "promptLibrary": {
       "searchPlaceholder": "Search …",
       "newTemplate": "New Template",

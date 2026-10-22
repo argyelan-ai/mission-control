@@ -234,7 +234,17 @@ async def lifespan(app: FastAPI):
         )
     except Exception as e:
         logger.error("Telegram topic purge loop failed to schedule: %s", e, exc_info=True)
+
+    # ── Vertical background loops (ADR-044) ───────────────────────────
+    # Loops a vertical registered in hooks.background_loops (e.g. the bench
+    # orphan sweep). API process only, unconditional: the worker does not
+    # load verticals, and the verticals' own state machines run here.
+    from app.verticals import hooks as _vertical_hooks
+    app.state.vertical_loop_tasks = _vertical_hooks.start_background_loops()
     yield
+    await _vertical_hooks.stop_background_loops(
+        getattr(app.state, "vertical_loop_tasks", None) or []
+    )
     # Shutdown — stop Telegram + Intelligence + Task Runner + Watchdog.
     # Phase 29 (ADR-039): Gateway RPC lifecycle removed (no socket to drain).
     # B6 (Rex-Review PR #500): jarvis_briefing_task cancel restored — it was

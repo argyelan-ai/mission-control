@@ -50,6 +50,17 @@ export interface BenchEntryTaskState {
   last_activity_at: string | null;
 }
 
+// W0.9 recorder report stored in entry.metrics (absent on recordings made
+// before the network block). Kept as its own type so parallel bench PRs that
+// extend `metrics` do not collide.
+export interface RecordNetworkMetrics {
+  network_blocked?: boolean;
+  network_attempts?: number;
+  libraries_inlined?: string[];
+  html_bytes?: number;
+  recorded_at?: string;
+}
+
 export type BenchChallengeStatus =
   | "generating"
   | "rendering"

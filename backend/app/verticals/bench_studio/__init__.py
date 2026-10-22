@@ -18,8 +18,13 @@ def register(app) -> None:
     from .drafts import on_x_post_resolved  # noqa: PLC0415
     from .orchestrator import on_task_done, on_task_review  # noqa: PLC0415
     from .routers import router  # noqa: PLC0415
+    from .orchestrator import reconcile_loop  # noqa: PLC0415
 
     app.include_router(router)
+    # W0.8: orphan sweep (hooks.background_loops) — heals challenges whose
+    # agent task failed, was aborted or deleted, without anyone opening them.
+    if reconcile_loop not in hooks.background_loops:
+        hooks.background_loops.append(reconcile_loop)
     if on_task_review not in hooks.task_review_hooks:
         hooks.task_review_hooks.append(on_task_review)
     if on_task_done not in hooks.task_done_hooks:

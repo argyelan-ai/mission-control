@@ -26,11 +26,12 @@ import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { FilePreview } from "@/components/task/FilePreview";
 import { benchApi } from "@/verticals/bench_studio/api";
-import { BENCH_STATUS_COLOR, ENTRY_STATUS_COLOR } from "./ChallengesTab";
+import { ChallengeStatusPill, ENTRY_STATUS_COLOR, challengeErrorLine } from "./ChallengesTab";
+import { abortReason } from "./status";
 import { DraftDialog } from "./DraftDialog";
 import { EntryEffort, failedAtMaxTokens } from "./EntryEffort";
 import { EntryTaskState } from "./EntryTaskState";
-import type { BenchChallenge, ChallengeAction, BenchEntry } from "./types";
+import type { BenchChallenge, ChallengeAction, BenchEntry, RecordNetworkMetrics } from "./types";
 
 function sharedUrl(absPath: string): string {
   return api.files.contentUrl("shared-deliverables", benchApi.sharedSubpath(absPath));
@@ -342,9 +343,7 @@ export function ChallengeDetail({
           <h2 className="text-lg font-semibold truncate" style={{ color: C.textPrimary }}>
             {challenge.title}
           </h2>
-          <Pill color={BENCH_STATUS_COLOR[challenge.status] ?? C.textMuted}>
-            {challenge.status}
-          </Pill>
+          {abortReason(challenge) === null && <ChallengeStatusPill challenge={challenge} />}
           {challenge.archived_at && (
             <Pill color={C.textMuted} variant="outline">
               {tCommon("archivedPill")}
@@ -456,12 +455,19 @@ export function ChallengeDetail({
         </div>
       </div>
 
-      {challenge.error && (
+      {/* A named end reason is a long pill: own line under the header (the
+          phone header row is already full, see W1.6), like in the list. */}
+      {abortReason(challenge) !== null && (
+        <div>
+          <ChallengeStatusPill challenge={challenge} />
+        </div>
+      )}
+      {challengeErrorLine(challenge) && (
         <div
           className="rounded-lg px-3 py-2 text-sm"
           style={{ color: C.error, border: `1px solid ${alpha(C.error, 0.25)}`, backgroundColor: alpha(C.error, 0.06) }}
         >
-          {challenge.error}
+          {challengeErrorLine(challenge)}
         </div>
       )}
 
@@ -543,6 +549,7 @@ export function ChallengeDetail({
             {entry.error && !failedAtMaxTokens(entry) && (
               <span className="text-xs" style={{ color: C.error }}>{entry.error}</span>
             )}
+            <RecordingNetworkNote metrics={entry.metrics} />
             <div className="flex items-center gap-2 mt-auto">
               {entry.artifact_path && (
                 <>
@@ -820,5 +827,30 @@ function EditChallengeDialog({
         </div>
       </div>
     </ResponsiveModal>
+  );
+}
+
+/** W0.9: why a recording may look empty (requests blocked) and whether the
+ *  page pasted a library instead of writing the code. Silent for clean
+ *  recordings and for recordings made before the network block existed. */
+function RecordingNetworkNote({ metrics: raw }: { metrics: BenchEntry["metrics"] }) {
+  const t = useTranslations("bench.recording");
+  const metrics = raw as BenchEntry["metrics"] & RecordNetworkMetrics;
+  const attempts = metrics.network_blocked ? metrics.network_attempts ?? 0 : 0;
+  const libraries = metrics.libraries_inlined ?? [];
+  if (attempts === 0 && libraries.length === 0) return null;
+  return (
+    <>
+      {attempts > 0 && (
+        <span className="text-xs" style={{ color: C.textMuted }}>
+          {t("networkBlocked", { count: attempts })}
+        </span>
+      )}
+      {libraries.length > 0 && (
+        <span className="text-xs" style={{ color: C.textMuted }}>
+          {t("librariesInlined", { libraries: libraries.join(", ") })}
+        </span>
+      )}
+    </>
   );
 }
