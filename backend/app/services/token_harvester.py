@@ -50,7 +50,12 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.model_usage import ModelPrice, ModelUsageEvent, ModelUsageHarvestState
-from app.services.transcript_task_marker import line_may_name_task, task_marker
+from app.services.transcript_task_marker import (
+    ROLE_WORK,
+    line_may_name_task,
+    task_marker,
+    task_marker_role,
+)
 
 # Extracts the MC dispatch task_id out of a "[MC DISPATCH] task_id=<uuid> ..."
 # prompt (Grok prompt_history.jsonl, Hermes first user message).
@@ -288,7 +293,10 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
     # several dispatches in a row. Lines before the offset count too (the
     # dispatch is usually the first user turn, long harvested). An ACP retry
     # session has no dispatch in omp's own file — its bridge copy's header
-    # names the task from the start.
+    # names the task from the start. A review / QA dispatch names the task
+    # the session only checks: it ends the previous task and bills nothing
+    # (those turns fall back to the cwd match) — else a long-lived reviewer
+    # session would keep billing the reviewed task.
     current_task = _bridge_copy_task_id(path)
     # omp-JSONL traegt das cwd NUR auf der `type:"session"`-Headerzeile —
     # message-Zeilen haben keins. Ohne diesen Fallback bleibt jedes omp-Event
@@ -321,9 +329,10 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
                         obj = json.loads(line)
                     except (json.JSONDecodeError, ValueError):
                         obj = None
-                    marker = task_marker(obj) if isinstance(obj, dict) else None
-                    if marker:
-                        current_task = marker
+                    marked = task_marker_role(obj) if isinstance(obj, dict) else None
+                    if marked:
+                        task_id, role = marked
+                        current_task = task_id if role == ROLE_WORK else None
                 rec = parse_transcript_line(line, session_id=session_id)
                 if rec is None:
                     continue
@@ -866,7 +875,8 @@ async def run_harvest(
 
     Returns:
         {"files_scanned": N, "new_events": M, "skipped_private": K,
-         "backfilled_task_id": L, "grok_skipped_no_summary": G,
+         "backfilled_task_id": L, "reattributed_task_id": R,
+         "grok_skipped_no_summary": G,
          "hermes_sessions_scanned": H, "source_errors": E}
     """
     from app.config import settings as app_settings
@@ -927,6 +937,7 @@ async def run_harvest(
         "new_events": 0,
         "skipped_private": 0,
         "backfilled_task_id": 0,
+        "reattributed_task_id": 0,
         "grok_skipped_no_summary": 0,
         "hermes_sessions_scanned": 0,
         "source_errors": 0,
@@ -1054,11 +1065,13 @@ async def run_harvest(
 
     logger.info(
         "run_harvest: files=%d new=%d skipped_private=%d backfilled_task_id=%d "
-        "grok_skipped_no_summary=%d hermes_sessions_scanned=%d source_errors=%d",
+        "reattributed_task_id=%d grok_skipped_no_summary=%d "
+        "hermes_sessions_scanned=%d source_errors=%d",
         stats["files_scanned"],
         stats["new_events"],
         stats["skipped_private"],
         stats["backfilled_task_id"],
+        stats["reattributed_task_id"],
         stats["grok_skipped_no_summary"],
         stats["hermes_sessions_scanned"],
         stats["source_errors"],
@@ -1127,6 +1140,11 @@ async def _process_jsonl_file(
     # uuid → event.id, only for rows still missing task_id
     existing_untasked: dict[str, Any] = {
         row[0]: row[1] for row in existing_rows if row[2] is None
+    }
+    # uuid → (event.id, task_id) for rows that already have a task — the
+    # dispatch marker may correct them (see the re-attribution pass below)
+    existing_tasked: dict[str, tuple[Any, Any]] = {
+        row[0]: (row[1], row[2]) for row in existing_rows if row[2] is not None
     }
 
     new_records = [r for r in records if r["uuid"] not in existing_uuids]
@@ -1234,6 +1252,29 @@ async def _process_jsonl_file(
                 .values(task_id=task_id)
             )
             stats["backfilled_task_id"] += 1
+
+    # Re-attribution pass: rows harvested before the dispatch marker was read
+    # may sit on the wrong task — the old cwd match picks the newest task in
+    # a shared folder (live 19.10.: 14 rows of one session on a neighbouring
+    # bench task). Only the marker overrides a stored task_id, and only when
+    # it resolves (task exists, turn inside its window); the cwd match never
+    # moves a row that already has a task.
+    if existing_tasked:
+        for rec in records:
+            row = existing_tasked.get(rec["uuid"])
+            if row is None:
+                continue
+            event_id, stored_task_id = row
+            ts = _parse_ts(rec["timestamp"])
+            dispatched = _dispatch_task_for_rec(rec, ts, dispatch_tasks)
+            if dispatched is None or dispatched == stored_task_id:
+                continue
+            await session.exec(
+                update(ModelUsageEvent)
+                .where(ModelUsageEvent.id == event_id)
+                .values(task_id=dispatched)
+            )
+            stats["reattributed_task_id"] += 1
 
     # Update harvest state
     total_lines = _count_lines(path)
