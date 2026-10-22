@@ -3890,7 +3890,9 @@
       "notifyActionStarted": "{label} gestartet",
       "notifyActionFailed": "{label} nicht möglich",
       "notifyDownloadFailed": "Download fehlgeschlagen",
-      "notifyOpenFailed": "Öffnen nicht möglich"
+      "notifyOpenFailed": "Öffnen nicht möglich",
+      "costLocal": "lokal",
+      "usageMissing": "Noch keine Token-Daten — das Video zeigt „—“ bei Tokens und Kosten. Video in ein paar Minuten neu erstellen."
     },
     "draftDialog": {
       "ariaLabel": "Draft erstellen",
