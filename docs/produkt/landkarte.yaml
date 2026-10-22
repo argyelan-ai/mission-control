@@ -597,7 +597,8 @@ features:
       # Benchmark studio vertical (ADR-070, backend/app/verticals/bench_studio/):
       # challenge gallery/detail CRUD, draft via approval, rerender/recompose/
       # stop lifecycle, entry retry/rerender/edit, spark model list and the
-      # effort probe's levels (effort-levels) for the new-challenge dialog.
+      # effort probe's levels for the new-challenge dialog (GET effort-levels
+      # reads the stored probe only; POST effort-levels/check probes the box).
       # The entry view URL carries a short-lived
       # resource-scoped view-token so it can be opened on a phone without a
       # Bearer header (router docstring).

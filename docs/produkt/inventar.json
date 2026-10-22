@@ -459,6 +459,7 @@
     "POST /api/v1/bench/challenges/{challenge_id}/rerender",
     "POST /api/v1/bench/challenges/{challenge_id}/stop",
     "POST /api/v1/bench/challenges/{challenge_id}/unarchive",
+    "POST /api/v1/bench/effort-levels/check",
     "POST /api/v1/bench/entries/{entry_id}/rerender",
     "POST /api/v1/bench/entries/{entry_id}/retry",
     "POST /api/v1/boards",

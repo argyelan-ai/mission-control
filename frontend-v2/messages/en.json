@@ -3827,7 +3827,11 @@
       "ompSession": "omp session: {level}",
       "agentUnknown": "Effort: not readable for this agent",
       "truncated": "Stopped at max_tokens ({max}) — thinking used up the budget.",
-      "truncatedFailed": "No page: stopped at max_tokens ({max}) before the HTML — thinking used up the budget."
+      "truncatedFailed": "No page: stopped at max_tokens ({max}) before the HTML — thinking used up the budget.",
+      "unchecked": "Not checked yet which levels this model follows — Default only until you check.",
+      "checkNow": "Check now",
+      "busy": "The Spark is busy right now — check again once the running work is done.",
+      "sending": "sending …"
     },
     "common": {
       "cancel": "Cancel",
@@ -3923,7 +3927,9 @@
       "addModel": "Add model",
       "startChallenge": "Start Challenge",
       "notifyStarted": "Challenge started",
-      "notifyStartFailed": "Challenge could not be started"
+      "notifyStartFailed": "Challenge could not be started",
+      "labelDuplicate": "Same label as model {index} — give this row a different label.",
+      "labelEffortSuffix": "Label repeats — the effort is added to the label: “{label}”."
     },
     "editChallengeDialog": {
       "ariaLabel": "Edit Challenge",

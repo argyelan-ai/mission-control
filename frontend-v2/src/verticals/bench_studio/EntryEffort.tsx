@@ -41,9 +41,13 @@ export function EntryEffort({ entry }: { entry: BenchEntry }) {
   } else {
     const requested = m.effort_requested ?? "default";
     parts.push(t("requested", { level: levelWord(requested) }));
-    parts.push(
-      m.effort_sent ? t("sent", { wire: `${m.effort_sent.key}=${String(m.effort_sent.value)}` }) : t("sentNothing")
-    );
+    // A level was asked for and the run has not reported back yet: it is on
+    // its way, not "nothing" (round-1 user test; the backend stores
+    // effort_sent before the request since P3 — this covers older runs).
+    const inFlight = entry.status === "pending" || entry.status === "generating";
+    if (m.effort_sent) parts.push(t("sent", { wire: `${m.effort_sent.key}=${String(m.effort_sent.value)}` }));
+    else if (inFlight && requested !== "default") parts.push(t("sending"));
+    else parts.push(t("sentNothing"));
     if (observed && "thinking" in observed) {
       parts.push(
         observed.thinking === "on"

@@ -3827,7 +3827,11 @@
       "ompSession": "omp-Sitzung: {level}",
       "agentUnknown": "Effort: für diesen Agenten nicht lesbar",
       "truncated": "Bei max_tokens ({max}) gestoppt — das Denken hat das Budget aufgebraucht.",
-      "truncatedFailed": "Keine Seite: bei max_tokens ({max}) gestoppt, bevor das HTML kam — das Denken hat das Budget aufgebraucht."
+      "truncatedFailed": "Keine Seite: bei max_tokens ({max}) gestoppt, bevor das HTML kam — das Denken hat das Budget aufgebraucht.",
+      "unchecked": "Noch nicht geprüft, welche Stufen dieses Modell befolgt — bis zur Prüfung nur Standard.",
+      "checkNow": "Jetzt prüfen",
+      "busy": "Die Spark arbeitet gerade — nochmal prüfen, wenn die laufende Arbeit fertig ist.",
+      "sending": "wird gesendet …"
     },
     "common": {
       "cancel": "Abbrechen",
@@ -3923,7 +3927,9 @@
       "addModel": "Modell hinzufügen",
       "startChallenge": "Challenge starten",
       "notifyStarted": "Challenge gestartet",
-      "notifyStartFailed": "Challenge konnte nicht gestartet werden"
+      "notifyStartFailed": "Challenge konnte nicht gestartet werden",
+      "labelDuplicate": "Gleiches Label wie Modell {index} — bitte dieser Zeile ein anderes Label geben.",
+      "labelEffortSuffix": "Label doppelt — die Effort-Stufe wird angehängt: „{label}“."
     },
     "editChallengeDialog": {
       "ariaLabel": "Challenge bearbeiten",

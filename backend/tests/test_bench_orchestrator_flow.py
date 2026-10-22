@@ -231,8 +231,9 @@ async def test_on_task_done_collects_html_deliverable(
 
     entry = entries[0]
     await session.refresh(entry)
-    assert entry.artifact_path == str(tmp_path / f"bench-{ch.id}" / "Claude" / "index.html")
-    assert (tmp_path / f"bench-{ch.id}" / "Claude" / "index.html").read_text() == \
+    folder = tmp_path / f"bench-{ch.id}" / f"Claude-{entry.id.hex[:8]}"  # one folder per entry
+    assert entry.artifact_path == str(folder / "index.html")
+    assert (folder / "index.html").read_text() == \
         "<html><body>agent</body></html>"
     assert entry.metrics["duration_ms"] == 42000
     await session.refresh(ch)
