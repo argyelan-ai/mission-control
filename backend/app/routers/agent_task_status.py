@@ -861,10 +861,15 @@ async def get_next_task(
         task.ack_at = utcnow()  # Pull = impliziter ACK
         task.dispatch_phase = None  # reset the gate (like push dispatch)
         task.updated_at = utcnow()
-        # Set the active-task lock (Board Lead only — workers have parallel sessions)
+        # Set the active-task lock. Workers in subagent-dispatch mode
+        # (parallel sessions) take it only while it is free — same rule as
+        # the PATCH ACK (task_lifecycle.point_worker_at_task_if_free).
         from app.config import settings as _pull_settings
         if not (_pull_settings.use_subagent_dispatch and not agent.is_board_lead):
             agent.current_task_id = task.id
+        else:
+            from app.services.task_lifecycle import point_worker_at_task_if_free
+            point_worker_at_task_if_free(agent, task)
         session.add(task)
         session.add(agent)
         await session.commit()
