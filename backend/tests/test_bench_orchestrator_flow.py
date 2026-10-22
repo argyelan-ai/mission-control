@@ -1392,6 +1392,9 @@ async def test_compose_challenge_sends_branding_for_two_entries(session, monkeyp
     a `branding` payload with title/date_label/models/outro_rows shape. Tags:
     spark -> "LOCAL · DIRECT API" (no engine/hardware guess), agent ->
     harness uppercased."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "usage_timezone", "UTC")
     board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
     agent = await make_agent(board_id=board.id, name="Grok-Agent", harness="grok")
 
@@ -1420,13 +1423,12 @@ async def test_compose_challenge_sends_branding_for_two_entries(session, monkeyp
 
     branding = captured["branding"]
     assert branding["title"] == "SVG timeline animation"
-    # the run date (no RUN 0xx counter since 2026-10-22, concept W0.5); the
-    # zone is pinned in test_bench_outro_copy.py — here only "a date, UTC"
-    assert branding["date_label"] in {
-        ch.created_at.date().isoformat(),
-        orchestrator._branding_date_label(ch),
-    }
-    assert "run_label" not in branding
+    # the run date in the operator zone (no RUN 0xx counter on the video since
+    # 2026-10-22, concept W0.5); zone pinned to UTC above
+    assert branding["date_label"] == ch.created_at.date().isoformat()
+    # legacy counter still sent for one release (a not-yet-rebuilt renderer
+    # requires it; see test_bench_outro_copy.py)
+    assert branding["run_label"] == "001"
     assert branding["prompt_line"] == "Build a timeline."
 
     models_by_label = {m["label"]: m["tag"] for m in branding["models"]}

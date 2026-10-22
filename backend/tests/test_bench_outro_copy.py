@@ -51,7 +51,28 @@ async def test_branding_carries_the_run_date_not_a_run_counter(session, monkeypa
     payload = await orchestrator._build_branding_payload(session, ch, [_spark_entry(ch)])
 
     assert payload["date_label"] == "2026-10-21"
-    assert "run_label" not in payload
+
+
+@pytest.mark.asyncio
+async def test_legacy_run_label_is_still_sent_for_an_old_renderer(session, monkeypatch, tmp_path):
+    """Deploy-order guard (review of #944): a renderer image built before
+    W0.5 declares ``run_label: str`` as REQUIRED — without it every compose
+    is a 422. The image build can now fail by design (fonts unreachable), so
+    a new backend may talk to an old renderer for a while. The backend keeps
+    sending the old counter for one release; the new renderer ignores it and
+    the video shows only date_label."""
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    for _ in range(2):
+        await _challenge(session, created_at=datetime(2026, 10, 1, tzinfo=timezone.utc))
+    ch = await _challenge(session, created_at=datetime(2026, 10, 21, 18, 5, tzinfo=timezone.utc))
+
+    payload = await orchestrator._build_branding_payload(session, ch, [_spark_entry(ch)])
+
+    assert payload["run_label"] == "003"
+    # every field the pre-W0.5 renderer BrandingSpec requires
+    for key in ("title", "run_label", "prompt_line", "models", "outro_rows"):
+        assert key in payload
+    assert {"name", "time", "size"} <= set(payload["outro_rows"][0])
 
 
 @pytest.mark.asyncio

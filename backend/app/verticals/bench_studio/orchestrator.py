@@ -750,6 +750,60 @@ async def record_entry(entry: BenchEntry, challenge: BenchChallenge) -> dict:
         return resp.json()
 
 
+DIRECT_API_TAG = "LOCAL · DIRECT API"
+
+
+def _published_episode_no(challenge_id: uuid.UUID) -> int | None:
+    """Episode number of a published run, else None.
+
+    The (private) catalog publisher writes
+    ``<challenge dir>/publish/state.json`` with ``episode_no`` on a
+    successful publish and removes it on unpublish — absent means "not
+    published". Read-only and defensive: anything unexpected is None."""
+    path = challenge_dir(challenge_id) / "publish" / "state.json"
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    episode_no = state.get("episode_no") if isinstance(state, dict) else None
+    if isinstance(episode_no, bool) or not isinstance(episode_no, int) or episode_no < 1:
+        return None
+    return episode_no
+
+
+def _branding_date_label(challenge: BenchChallenge) -> str:
+    """"2026-10-21", or "episode 4 · 2026-10-21" once published.
+
+    The date is the operator's calendar day (``settings.usage_timezone``,
+    the zone Insights counts days in; UTC when unset or unknown)."""
+    from app.config import settings
+
+    created = challenge.created_at or datetime.now(timezone.utc)
+    if created.tzinfo is None:  # SQLite hands back naive UTC
+        created = created.replace(tzinfo=timezone.utc)
+    try:
+        tz = ZoneInfo(settings.usage_timezone) if settings.usage_timezone else timezone.utc
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = timezone.utc
+    label = created.astimezone(tz).date().isoformat()
+    episode_no = _published_episode_no(challenge.id)
+    return f"episode {episode_no} · {label}" if episode_no else label
+
+
+async def _legacy_run_label(session: AsyncSession, challenge: BenchChallenge) -> str:
+    """The pre-W0.5 "RUN 0xx" value (zero-padded count of challenges created
+    at-or-before this one) — only for a not-yet-rebuilt renderer image, see
+    the run_label comment in _build_branding_payload."""
+    prior_ids = (
+        await session.exec(
+            select(BenchChallenge.id).where(
+                BenchChallenge.created_at <= challenge.created_at
+            )
+        )
+    ).all()
+    return f"{len(prior_ids):03d}"
+
+
 def format_speed_label(metrics: dict) -> str:
     """'42 s · 87 tok/s' — optional per-model overlay for the grid (spec §4)."""
     parts: list[str] = []
@@ -820,46 +874,6 @@ def _format_outro_size(artifact_path: str | None) -> str:
         return "—"
 
 
-DIRECT_API_TAG = "LOCAL · DIRECT API"
-
-
-def _published_episode_no(challenge_id: uuid.UUID) -> int | None:
-    """Episode number of a published run, else None.
-
-    The (private) catalog publisher writes
-    ``<challenge dir>/publish/state.json`` with ``episode_no`` on a
-    successful publish and removes it on unpublish — absent means "not
-    published". Read-only and defensive: anything unexpected is None."""
-    path = challenge_dir(challenge_id) / "publish" / "state.json"
-    try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    episode_no = state.get("episode_no") if isinstance(state, dict) else None
-    if isinstance(episode_no, bool) or not isinstance(episode_no, int) or episode_no < 1:
-        return None
-    return episode_no
-
-
-def _branding_date_label(challenge: BenchChallenge) -> str:
-    """"2026-10-21", or "episode 4 · 2026-10-21" once published.
-
-    The date is the operator's calendar day (``settings.usage_timezone``,
-    the zone Insights counts days in; UTC when unset or unknown)."""
-    from app.config import settings
-
-    created = challenge.created_at or datetime.now(timezone.utc)
-    if created.tzinfo is None:  # SQLite hands back naive UTC
-        created = created.replace(tzinfo=timezone.utc)
-    try:
-        tz = ZoneInfo(settings.usage_timezone) if settings.usage_timezone else timezone.utc
-    except (ZoneInfoNotFoundError, ValueError):
-        tz = timezone.utc
-    label = created.astimezone(tz).date().isoformat()
-    episode_no = _published_episode_no(challenge.id)
-    return f"episode {episode_no} · {label}" if episode_no else label
-
-
 async def _build_branding_payload(
     session: AsyncSession, challenge: BenchChallenge, ordered: list[BenchEntry]
 ) -> dict:
@@ -875,6 +889,13 @@ async def _build_branding_payload(
     # date_label: the run's date (+ "episode N" once published) — replaces the
     # old RUN 0xx row counter (concept W0.5, 2026-10-22).
     date_label = _branding_date_label(challenge)
+    # run_label: the old counter, still sent for ONE release — a renderer
+    # image built before W0.5 requires it (BrandingSpec.run_label: str, a
+    # 422 on every compose without it) and the image build can now fail by
+    # design when Fontshare/Google is down, so backend and renderer may be
+    # live in different versions for a while. The new renderer ignores it.
+    # Drop once every renderer image is W0.5 or newer.
+    run_label = await _legacy_run_label(session, challenge)
 
     models: list[dict] = []
     outro_rows: list[dict] = []
@@ -938,6 +959,7 @@ async def _build_branding_payload(
     return {
         "title": challenge.title,
         "date_label": date_label,
+        "run_label": run_label,
         "prompt_line": _first_prompt_line(challenge.prompt_text),
         "models": models,
         "outro_rows": outro_rows,
