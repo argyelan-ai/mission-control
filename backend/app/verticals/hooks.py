@@ -248,3 +248,46 @@ async def collect_home_alerts(session: Any) -> list[dict]:
                 continue
             alerts.append(alert)
     return alerts
+
+
+# Long-running background loops a vertical needs in the API process (e.g.
+# bench_studio's orphan sweep). Signature: a zero-argument callable that
+# returns a coroutine which runs until cancelled. The API lifespan starts
+# every entry once (start_background_loops) and cancels them on shutdown
+# (stop_background_loops). API process only: the mc-worker never runs the
+# vertical discovery, and vertical state machines (render/compose fan-out)
+# already live in the API process. A loop must handle its own errors; a
+# factory that raises is logged and skipped so one broken vertical never
+# blocks the boot.
+background_loops: list[Callable[[], Awaitable[None]]] = []
+
+
+def start_background_loops() -> list[Any]:
+    """Start every registered background loop as a tracked task."""
+    import logging
+
+    from app.utils import create_tracked_task
+
+    logger = logging.getLogger("mc.verticals.hooks")
+    tasks: list[Any] = []
+    for factory in background_loops:
+        name = getattr(factory, "__name__", repr(factory))
+        try:
+            tasks.append(create_tracked_task(factory(), name=f"vertical:{name}"))
+        except Exception:
+            logger.exception("vertical background loop %s failed to start", name)
+    return tasks
+
+
+async def stop_background_loops(tasks: list[Any]) -> None:
+    """Cancel the tasks start_background_loops returned and wait for them."""
+    import asyncio
+
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    for task in tasks:
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass

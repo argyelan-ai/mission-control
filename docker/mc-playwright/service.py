@@ -60,6 +60,12 @@ from media import (
     render_outro_rows_html,
     resolve_contained_path,
 )
+from record_network import (
+    RecordNetworkGuard,
+    detect_inlined_libraries,
+    load_record_network_guard_script,
+    record_proxy_settings,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mc.playwright_service")
@@ -1157,14 +1163,41 @@ async def record(req: RecordRequest):
         fps=RECORD_FPS,
     )
 
+    # W0.9: the page is model-written code — no network except the page
+    # document itself (record_network.py). Routing decides + counts, the dead
+    # proxy catches whatever routing does not see, the init script stubs
+    # WebRTC, service workers are off (they would bypass routing).
+    guard = RecordNetworkGuard(req.target_url)
+    libraries: list[str] = []
+    html_bytes: int | None = None
+    if req.html_path:
+        html_text = html.read_text(encoding="utf-8", errors="replace")
+        html_bytes = html.stat().st_size
+        libraries = detect_inlined_libraries(html_text)
+
+    async def _route(route):
+        if guard.allow(route.request.url):
+            await route.continue_()
+        else:
+            await route.abort("blockedbyclient")
+
+    async def _route_ws(ws):
+        guard.note_blocked(ws.url)
+        await ws.close(code=1008, reason="network disabled in the benchmark recorder")
+
     async with async_playwright() as p:
         browser = await _launch_chromium(p)
         try:
             context = await browser.new_context(
                 viewport=RECORD_VIEWPORT,
                 device_scale_factor=RECORD_DEVICE_SCALE,
+                service_workers="block",
+                proxy=record_proxy_settings(req.target_url),
             )
+            await context.route("**/*", _route)
+            await context.route_web_socket(re.compile(".*"), _route_ws)
             page = await context.new_page()
+            await page.add_init_script(load_record_network_guard_script())
             await page.add_init_script(load_deterministic_shim())
             try:
                 await page.goto(req.target_url, wait_until="load", timeout=30000)
@@ -1199,20 +1232,35 @@ async def record(req: RecordRequest):
                 # (every subprocess/browser failure surfaces as a clean 502
                 # with context, see _run_ffmpeg / _do_form_login / etc.).
                 raise HTTPException(502, f"deterministic capture failed: {e}")
+            # WebRTC attempts the init script stopped (main frame; counted
+            # best-effort — routing/proxy cover every other channel).
+            try:
+                rtc = int(await page.evaluate("() => window.__mcNetBlocked || 0"))
+            except Exception:  # noqa: BLE001 — a crashed page has nothing to add
+                rtc = 0
+            guard.note_blocked("webrtc:", count=rtc)
         finally:
             await browser.close()
 
+    net = guard.report()
     logger.info(
-        "record: %s -> %s (%ds, %d frames @ %dfps, %dx%d)",
+        "record: %s -> %s (%ds, %d frames @ %dfps, %dx%d) network_attempts=%d libraries=%s",
         req.target_url, video_path, req.duration_s, n_frames, RECORD_FPS,
-        RECORD_OUTPUT_WIDTH, RECORD_OUTPUT_HEIGHT,
+        RECORD_OUTPUT_WIDTH, RECORD_OUTPUT_HEIGHT, net["network_attempts"], libraries,
     )
+    if net["network_attempts"]:
+        logger.info("record: blocked %s", net["blocked_requests"])
     return RecordResponse(
         video_path=str(video_path),
         # "" wenn die Thumbnail-Aufnahme uebersprungen wurde (best-effort)
         screenshot_path=str(screenshot_path) if screenshot_path.exists() else "",
         duration_s=req.duration_s,
         bytes=video_path.stat().st_size,
+        network_blocked=net["network_blocked"],
+        network_attempts=net["network_attempts"],
+        blocked_requests=net["blocked_requests"],
+        libraries_inlined=libraries,
+        html_bytes=html_bytes,
     )
 
 

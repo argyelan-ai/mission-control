@@ -85,7 +85,10 @@ backend/app/verticals/*
 # dragged __pycache__ into the index).
 !backend/app/verticals/bench_studio/
 backend/app/verticals/bench_studio/__pycache__/
-frontend-v2/src/verticals/
+frontend-v2/src/verticals/*
+# bench_studio frontend is public too (same as the backend vertical above) —
+# without this, new files there were silently skipped by `git add`.
+!frontend-v2/src/verticals/bench_studio/
 frontend-v2/src/app/content/
 frontend-v2/src/app/news/
 CLAUDE.local.md

@@ -265,8 +265,9 @@ async def get_challenge(
     if challenge is None:
         raise HTTPException(404, "Challenge not found")
     entries = await _entries_for(session, challenge_id)
-    # Poll-fallback for failed agent tasks (they never fire task_done):
-    await orchestrator.reconcile_challenge(session, challenge, entries)
+    # Read-only (W0.8): failed/aborted/deleted agent tasks are healed by the
+    # vertical's background sweep (orchestrator.reconcile_loop), so the list
+    # shows them too and a GET never writes.
     # Why a running agent entry waits (blocked + question, last sign of
     # life) — derived, read-only, never persisted.
     task_states = await orchestrator.entry_task_states(session, entries)

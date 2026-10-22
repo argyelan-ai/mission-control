@@ -405,7 +405,7 @@ async def test_blocked_then_resolved_then_done_collects_delivery(
     monkeypatch.setattr(orchestrator, "compose_challenge", AsyncMock(return_value="/g.mp4"))
     _, task, ch, entries = await _seed_blocked(session, make_board, make_task)
 
-    await orchestrator.reconcile_challenge(session, ch, entries)  # Studio polls
+    await orchestrator.reconcile_challenge(session, ch, entries)  # background sweep runs
 
     src = tmp_path / "agent-out" / "index.html"
     src.parent.mkdir(parents=True)

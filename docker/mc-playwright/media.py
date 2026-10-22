@@ -96,6 +96,14 @@ class RecordResponse(BaseModel):
     screenshot_path: str
     duration_s: int
     bytes: int
+    # W0.9 network block (record_network.py). Defaults describe a recording
+    # WITHOUT the block, so a caller never reads "blocked" from a response
+    # that did not set it.
+    network_blocked: bool = False
+    network_attempts: int = 0
+    blocked_requests: List[str] = Field(default_factory=list)
+    libraries_inlined: List[str] = Field(default_factory=list)
+    html_bytes: Optional[int] = None
 
 
 class BrandingModelSpec(BaseModel):

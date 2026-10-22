@@ -87,6 +87,8 @@ RUN rm -rf /ms-playwright/chromium_headless_shell-*
 COPY media.py /app/media.py
 COPY service.py /app/service.py
 COPY deterministic_shim.js /app/deterministic_shim.js
+COPY record_network.py /app/record_network.py
+COPY record_network_guard.js /app/record_network_guard.js
 COPY templates/ /app/templates/
 
 # Proof by effect, at build time and on whatever architecture builds the

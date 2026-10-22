@@ -16,6 +16,12 @@ export interface BenchEntry {
   video_path: string | null;
   screenshot_path: string | null;
   metrics: {
+    // W0.9 recorder report (absent on recordings made before the block).
+    network_blocked?: boolean;
+    network_attempts?: number;
+    libraries_inlined?: string[];
+    html_bytes?: number;
+    recorded_at?: string;
     duration_ms?: number;
     tokens_in?: number;
     tokens_out?: number;

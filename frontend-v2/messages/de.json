@@ -3812,6 +3812,28 @@
       "newChallenge": "Neue Challenge",
       "emptyState": "Noch keine Challenges — starte die erste aus der Prompt Library."
     },
+    "status": {
+      "generating": "Wird generiert",
+      "rendering": "Wird aufgenommen",
+      "composing": "Video wird gebaut",
+      "review": "Fertig",
+      "drafted": "Entwurf",
+      "published": "Veröffentlicht",
+      "failed": "Abgebrochen",
+      "abortedWithReason": "Abgebrochen – {reason}",
+      "reason": {
+        "taskDeleted": "Auftrag gelöscht",
+        "taskFailed": "Auftrag fehlgeschlagen",
+        "taskAborted": "Auftrag gestoppt",
+        "stopped": "von dir gestoppt",
+        "renderFailed": "Aufnahme fehlgeschlagen",
+        "composeFailed": "Video fehlgeschlagen"
+      }
+    },
+    "recording": {
+      "networkBlocked": "Netz bei der Aufnahme gesperrt: {count, plural, one {# Anfrage} other {# Anfragen}} gestoppt – die Seite lädt Code aus dem Internet.",
+      "librariesInlined": "Enthält eingefügten Bibliotheks-Code: {libraries}"
+    },
     "promptLibrary": {
       "searchPlaceholder": "Suche …",
       "newTemplate": "Neues Template",

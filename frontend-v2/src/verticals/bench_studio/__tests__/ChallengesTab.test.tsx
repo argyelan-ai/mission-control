@@ -76,7 +76,9 @@ describe("ChallengesTab", () => {
   it("renders challenge rows with status chip and series label", async () => {
     renderTab();
     expect(await screen.findByText("Bouncing balls")).toBeTruthy();
-    expect(screen.getByText("rendering")).toBeTruthy();
+    // Status words come from i18n (K10), not the raw API code:
+    expect(screen.getByText("Recording")).toBeTruthy();
+    expect(screen.queryByText("rendering")).toBeNull();
     expect(screen.getByText("Spark Bench #7")).toBeTruthy();
   });
 
@@ -109,5 +111,33 @@ describe("ChallengesTab", () => {
     expect(vi.mocked(benchApi.challenges.list)).toHaveBeenCalledWith(true);
     // Archived row is marked:
     expect(screen.getByText("archived")).toBeTruthy();
+  });
+
+  it("shows a healed orphan as 'Aborted – task deleted' without opening it (W0.8)", async () => {
+    const orphan: BenchChallenge = {
+      ...CHALLENGE, id: "ch-o", title: "Pagoda - OMP", mode: "single", status: "failed",
+      series_label: null, series_no: null,
+      error: "all entries failed during generation",
+      entries: [{
+        ...CHALLENGE.entries[1], id: "e-o", challenge_id: "ch-o", model_label: "omp-alpha",
+        task_id: null, status: "failed", error: "agent task deleted",
+      }],
+    };
+    vi.mocked(benchApi.challenges.list).mockResolvedValue([orphan]);
+    renderTab();
+    expect(await screen.findByText("Aborted – task deleted")).toBeTruthy();
+    // The generic backend line is replaced by the reason, not shown twice:
+    expect(screen.queryByText("all entries failed during generation")).toBeNull();
+    expect(vi.mocked(benchApi.challenges.get)).not.toHaveBeenCalled();
+  });
+
+  it("keeps the raw error line when the reason is unknown", async () => {
+    const odd: BenchChallenge = {
+      ...CHALLENGE, id: "ch-x", status: "failed", error: "fan-out crashed — see backend logs",
+    };
+    vi.mocked(benchApi.challenges.list).mockResolvedValue([odd]);
+    renderTab();
+    expect(await screen.findByText("Aborted")).toBeTruthy();
+    expect(screen.getByText("fan-out crashed — see backend logs")).toBeTruthy();
   });
 });
