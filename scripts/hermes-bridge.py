@@ -281,11 +281,90 @@ def chat_daemon() -> "hermes_acp_chat.ChatDaemon":
         return _chat_daemon_instance
 
 
+# ── ~/.hermes/config.yaml sync (runtime model + window) ─────────────────────
+# Hermes takes its model AND its context window from config.yaml, never from
+# OPENAI_MODEL (deliberately ignored by Hermes). scripts/hermes-config-patch.py
+# copies MC's runtime binding from agent.env into it — but only entrypoint.sh
+# ran it, and the ACP driver never runs entrypoint.sh (start_hermes_session
+# returns chat_daemon().start() first). Live 22.10.2026: config.yaml still
+# said GLM a day after the runtime switched to DeepSeek, Hermes guessed GLM's
+# 202,752-token window, and its chat ring showed 9 % instead of 2 %.
+# So the ACP path patches before EVERY daemon start (boot, /start, /restart —
+# all go through the session factory below). The native path keeps its patch
+# in entrypoint.sh, which runs before tmux starts Hermes.
+CONFIG_PATCH_SCRIPT = Path(__file__).resolve().parent / "hermes-config-patch.py"
+CONFIG_PATCH_TIMEOUT = float(os.environ.get("HERMES_CONFIG_PATCH_TIMEOUT", "30"))
+
+
+def _config_patch_python() -> str:
+    """Same interpreter rule as entrypoint.sh: the backend venv (known to have
+    PyYAML/ruamel), else whatever runs this bridge. launchd starts the bridge
+    with /usr/bin/python3, which usually has neither."""
+    repo = Path(os.environ.get("MC_REPO_PATH") or CONFIG_PATCH_SCRIPT.parent.parent)
+    venv = repo / "backend" / ".venv" / "bin" / "python3"
+    return str(venv) if venv.is_file() and os.access(venv, os.X_OK) else sys.executable
+
+
+def sync_hermes_config(env: dict[str, str]) -> bool:
+    """Run hermes-config-patch.py with agent.env's values. Never raises.
+
+    ``env`` is the agent.env-merged environment (``load_env_from_file``):
+    OPENAI_BASE_URL / OPENAI_MODEL / MC_CONTEXT_WINDOW in it become
+    model.base_url / model.default / model.context_length.
+
+    A failure is LOUD (log.error with rc + the patcher's own output) but
+    never stops the chat: a Hermes on yesterday's config still answers,
+    a Hermes that never starts does not. Returns True when the patch ran
+    clean.
+    """
+    if not CONFIG_PATCH_SCRIPT.is_file():
+        log.error(
+            "hermes config sync SKIPPED: %s missing — ~/.hermes/config.yaml keeps "
+            "its old model/window", CONFIG_PATCH_SCRIPT,
+        )
+        return False
+    python = _config_patch_python()
+    try:
+        result = _sp.run(
+            [python, str(CONFIG_PATCH_SCRIPT)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=CONFIG_PATCH_TIMEOUT,
+        )
+    except Exception as exc:  # noqa: BLE001 — must not stop the chat
+        log.error(
+            "hermes config sync FAILED (%s: %s, interpreter %s) — Hermes starts "
+            "on its old model/window", type(exc).__name__, exc, python,
+        )
+        return False
+    output = " | ".join(
+        line.strip() for line in f"{result.stdout}\n{result.stderr}".splitlines() if line.strip()
+    )[-2000:]
+    if result.returncode != 0:
+        log.error(
+            "hermes config sync FAILED rc=%s (interpreter %s): %s — Hermes starts "
+            "on its old model/window", result.returncode, python, output or "(no output)",
+        )
+        return False
+    log.info("hermes config sync ok: %s", output or "(no output)")
+    return True
+
+
 def _build_chat_session():
+    env = load_env_from_file(ENV_FILE)
+    # BEFORE the `hermes acp` child exists: Hermes reads config.yaml once at
+    # agent init. Every start AND restart builds its session here, so a
+    # runtime switch (agent.env rewritten -> bridge reload) lands too.
+    # NOTE: ChatDaemon calls this factory while holding its _lock, so the
+    # patch delays the chat start AND blocks state()/busy readers for as
+    # long as it runs. Normally well under a second (one small YAML file);
+    # CONFIG_PATCH_TIMEOUT (30 s) caps the worst case — keep it short.
+    sync_hermes_config(env)
     return hermes_acp_chat.build_session(
         workspace=WORKSPACE,
         hermes_bin=HERMES_BIN,
-        env=load_env_from_file(ENV_FILE),
+        env=env,
         cwd=hermes_acp_chat.default_cwd(HOME_DIR),
         root=hermes_acp_chat.repo_root(__file__),
     )

@@ -65,7 +65,8 @@ from app.services.chat_diff import capture_texts
 from app.services.chat_reset_audit import CHAT_SESSION_RESET_EVENT, chat_input_event
 from app.services.chat_task_activity import task_activity
 from app.services.sse import _sse_generator, sse_response
-from app.services.transcript_adapters import adapter_for
+from app.services.runtime_window import agent_runtime_window
+from app.services.transcript_adapters import adapter_for, bind_runtime_window
 from app.services.checklist_todo_sync import chat_todo_sync
 from app.services import fresh_session
 from app.services.transcript_chat import (
@@ -181,7 +182,12 @@ async def _resolve_transcript_path(
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    adapter = adapter_for(agent)
+    # The bound runtime's window rides along into the parser: a harness that
+    # reports a different one (Hermes on a stale model name, 22.10.2026) is
+    # shown the runtime's truth. No-op for Claude Code and unbound agents.
+    adapter = bind_runtime_window(
+        adapter_for(agent), await agent_runtime_window(agent, session)
+    )
 
     tdir = adapter.resolve_transcript_dir(agent)
     if tdir is None:

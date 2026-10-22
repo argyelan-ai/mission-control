@@ -24,6 +24,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 BACKEND = ROOT.parent.parent / "backend"
@@ -364,7 +366,13 @@ def test_prompt_result_cache_tokens_reach_the_cache_hit_rate():
         {
             "inputTokens": 1200,
             "outputTokens": 44,
-            "totalTokens": 1244,
+            # omp's real identity (acp-agent.ts #buildTurnUsage over
+            # openai-shared.ts calculateOpenAIUsageAccounting, v18.10.1):
+            # input EXCLUDES the cache, total = input + output + cacheRead +
+            # cacheWrite. This fixture used to say 1244 (= input + output),
+            # which is the shape of a harness whose input INCLUDES the cache
+            # — see test_hermes_inclusive_input_counts_the_cache_once.
+            "totalTokens": 1200 + 44 + 1000 + 50,
             "cachedReadTokens": 1000,
             "cachedWriteTokens": 50,
         }
@@ -376,6 +384,86 @@ def test_prompt_result_cache_tokens_reach_the_cache_hit_rate():
         "no fake 0% — but no hit rate at all reached the chat event either"
     )
     assert abs(usage["cacheHitRate"] - expected_rate) < 1e-3
+
+
+def _usage_after(prompt_usage: dict) -> tuple[dict, dict]:
+    """(the transcript's message.usage block, the parsed usage event)."""
+    mapper = acp_chat_events.ACPEventMapper()
+    mapper.map_update({"update": {"sessionUpdate": "usage_update", "size": 1048576, "used": 17500}})
+    mapper.set_prompt_usage(prompt_usage)
+    lines = mapper.dump(mapper.map_final_assistant_message("done"))
+    block = next(
+        json.loads(line)["message"]["usage"]
+        for line in lines
+        if json.loads(line).get("message", {}).get("usage")
+    )
+    event = [e for e in parse_all(lines) if e["kind"] == "usage"][0]
+    return block, event
+
+
+def test_hermes_inclusive_input_counts_the_cache_once():
+    """Hermes' ACP usage (acp_adapter/server.py, Hermes Agent 0.18.0):
+    inputTokens = prompt_tokens = uncached + cacheRead + cacheWrite
+    (agent/usage_pricing.py CanonicalUsage.prompt_tokens), totalTokens =
+    prompt + output. Live 22.10.2026: 63,710 uncached + 256,000 cached =
+    319,710 reported as input; the panel computed 256000/(319710+256000) =
+    44 % where the truth is 256000/319710 = 80 %. The mapper normalises such
+    input to omp's convention (uncached only) so every reader is right."""
+    block, event = _usage_after(
+        {
+            "inputTokens": 319_710,
+            "outputTokens": 1_234,
+            "totalTokens": 319_710 + 1_234,
+            "cachedReadTokens": 256_000,
+        }
+    )
+    assert block["input"] == 63_710
+    assert block["cacheRead"] == 256_000
+    assert event["cacheHitRate"] == 0.8007
+    assert round(event["cacheHitRate"], 2) == 0.80
+
+
+def test_omp_exclusive_input_stays_exact():
+    """omp's numbers already exclude the cache — untouched, to the token."""
+    block, event = _usage_after(
+        {
+            "inputTokens": 63_710,
+            "outputTokens": 1_234,
+            "totalTokens": 63_710 + 1_234 + 256_000,
+            "cachedReadTokens": 256_000,
+        }
+    )
+    assert block["input"] == 63_710
+    assert event["cacheHitRate"] == round(256_000 / (256_000 + 63_710), 4)
+
+
+def test_inclusive_input_also_subtracts_cache_writes():
+    block, _ = _usage_after(
+        {
+            "inputTokens": 10_000,
+            "outputTokens": 10,
+            "totalTokens": 10_010,
+            "cachedReadTokens": 6_000,
+            "cachedWriteTokens": 1_000,
+        }
+    )
+    assert block["input"] == 3_000
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        # no total at all (older harness): no basis to decide -> as reported
+        {"inputTokens": 319_710, "outputTokens": 1, "cachedReadTokens": 256_000},
+        # nothing cached: both conventions agree, nothing to correct
+        {"inputTokens": 5_000, "outputTokens": 1, "totalTokens": 5_001},
+        # input smaller than the cache cannot contain it
+        {"inputTokens": 100, "outputTokens": 1, "totalTokens": 101, "cachedReadTokens": 500},
+    ],
+)
+def test_ambiguous_usage_is_left_as_reported(usage):
+    block, _ = _usage_after(usage)
+    assert block["input"] == usage["inputTokens"]
 
 
 # ── tests: user prompt + sink file layout ──────────────────────────────────

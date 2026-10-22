@@ -14,6 +14,7 @@ from sqlmodel import select
 
 from app.config import settings
 from app.database import get_session
+from app.services.runtime_window import runtime_context_window
 from app.services.secrets_helper import get_secret_plaintext_by_key
 from fastapi import Depends
 
@@ -73,6 +74,32 @@ def omp_max_output_tokens(context_window: int, *, local: bool) -> int:
     return min(LOCAL_MAX_OUTPUT_TOKENS, max(context_window // 8, cloud))
 
 
+#: The bound runtime's context window, for EVERY OpenAI-protocol harness.
+#: omp has always had its own ``OMP_CONTEXT_WINDOW`` (kept, its entrypoint
+#: reads it); this is the harness-neutral twin. Hermes reads it via
+#: scripts/hermes-config-patch.py into ``model.context_length``.
+CONTEXT_WINDOW_ENV = "MC_CONTEXT_WINDOW"
+
+
+# rule: R-runtime-window-one-source - Hermes guessed 202k on a 1M runtime
+def _context_window_env(runtime: "Runtime") -> dict[str, str]:
+    """``{MC_CONTEXT_WINDOW: <window>}`` or ``{}`` — never an invented number.
+
+    Live 22.10.2026: MC told omp the window but not Hermes. Hermes then
+    guessed from a stale model name (GLM: 202,752) while the runtime served
+    1,048,576 — its chat ring read 9 % instead of 2 %, and its compaction
+    thresholds were sized for the wrong model. Same rule as omp's window
+    (``runtime_context_window``), so the two can never disagree.
+
+    Only the OpenAI-protocol branches call this: Claude Code / Kimi / Grok
+    talk to their vendor, who knows the window — and an extra key in a host
+    claude agent's agent.env would rewrite the file and bounce its bridge for
+    nothing.
+    """
+    window = runtime_context_window(runtime)
+    return {CONTEXT_WINDOW_ENV: str(window)} if window else {}
+
+
 async def build_runtime_env(
     runtime: "Runtime | None",
     session: AsyncSession,
@@ -87,6 +114,9 @@ async def build_runtime_env(
         resolve_provider_credentials (ADR-056), NO OPENAI_* keys
       - all other runtimes → OPENAI_BASE_URL (from runtime.endpoint) +
         OPENAI_MODEL (from runtime.model_identifier if set)
+      - every OpenAI-protocol branch also carries MC_CONTEXT_WINDOW (the
+        runtime's window, see _context_window_env) so the harness sizes its
+        context to the SERVED model instead of guessing from a name
 
     Phase 24 (HERM-04, ADR-029):
       - runtime_type == "hermes" → host-side Hermes worker, vLLM provider:
@@ -116,6 +146,7 @@ async def build_runtime_env(
             tokens["OPENAI_BASE_URL"] = runtime.endpoint
         if runtime.model_identifier:
             tokens["OPENAI_MODEL"] = runtime.model_identifier
+        tokens.update(_context_window_env(runtime))
         return tokens
 
     from app.services.harness_compat import derive_harness, runtime_protocol
@@ -183,9 +214,10 @@ async def build_runtime_env(
         # (omp_max_output_tokens): local models get room to think, cloud
         # endpoints keep the 32k cap. omp itself still trims a request to the
         # room left in the window.
-        _ctx_window = runtime.max_context_len or runtime.preferred_context_len
+        _ctx_window = runtime_context_window(runtime)
         if _ctx_window:
             tokens["OMP_CONTEXT_WINDOW"] = str(_ctx_window)
+            tokens.update(_context_window_env(runtime))
             tokens["OMP_MAX_TOKENS"] = str(
                 omp_max_output_tokens(_ctx_window, local=_is_local_runtime)
             )
@@ -232,18 +264,24 @@ async def build_runtime_env(
             tokens["OPENAI_BASE_URL"] = runtime.endpoint
         if runtime.model_identifier:
             tokens["OPENAI_MODEL"] = runtime.model_identifier
+        tokens.update(_context_window_env(runtime))
         return tokens
 
     # NULL-harness fallback (regression guard): harness could not be
     # determined from the agent OR derived from the runtime (unclassified
     # runtime_type) — replicate the pre-B3 runtime_type-only behavior so
     # unmigrated/unknown rows keep working exactly as before.
+    #
+    # The host Hermes agent (harness "hermes") lands HERE too: hermes has no
+    # branch of its own above, so this is where its agent.env gets its model
+    # and — since 22.10.2026 — its window.
     if runtime_protocol(runtime) == "anthropic":
         return tokens
     if runtime.endpoint:
         tokens["OPENAI_BASE_URL"] = runtime.endpoint
     if runtime.model_identifier:
         tokens["OPENAI_MODEL"] = runtime.model_identifier
+    tokens.update(_context_window_env(runtime))
     return tokens
 
 

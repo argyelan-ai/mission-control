@@ -2016,6 +2016,11 @@ class ChatTailerManager:
     # (gemessen 50 ms): die erste laeuft sofort, danach genuegt der Zeittakt.
     STATE_PROBE_INTERVAL_SECONDS = 2.0
 
+    # Wie oft der Tailer das Kontextfenster der gebundenen Runtime nachliest
+    # (eine kleine DB-Abfrage, nur auf dem Sonden-Takt). Ein Runtime-Wechsel
+    # dauert ohnehin zehn Sekunden und mehr; schneller braucht der Ring nicht.
+    RUNTIME_WINDOW_REFRESH_SECONDS = 15.0
+
     # A transcript that hasn't grown in this long reads as idle for the
     # Boss/host fallback (no pane to capture) and as the transcript_active
     # signal parse_pane_state uses to disambiguate an input-prompt marker
@@ -2111,7 +2116,28 @@ class ChatTailerManager:
         # Der Harness des Agenten entscheidet, WIE gelesen wird (Parser,
         # Dedup-Feld, Session-Suche, Pane-Regeln). ``agent`` ist nur in
         # Tests None — dann gilt der Claude-Adapter wie bisher.
-        adapter = adapter_for(agent)
+        #
+        # Das Kontextfenster der gebundenen Runtime faehrt mit in den Parser
+        # (wie auf der History-Seite, agent_chat._resolve_transcript_path) —
+        # sonst zeigte der Live-Strom wieder das Fenster, das der Harness nur
+        # GLAUBT (Hermes 22.10.2026: 202.752 statt 1.048.576), und genau diese
+        # falsche Zahl landete unten auch in der geteilten observed-Map.
+        # Beim Start gelesen und danach auf dem Sonden-Takt nachgelesen
+        # (``RUNTIME_WINDOW_REFRESH_SECONDS``): Hermes behaelt seine ACP-
+        # Session ueber den Bridge-Neustart eines Runtime-Wechsels hinweg
+        # (``restart()`` laedt sie neu) — dieser Tailer laeuft also weiter,
+        # und ohne Nachlesen zeigte der Ring bis zum Trennen des letzten
+        # Zuschauers das Fenster der ALTEN Runtime (Review #939).
+        from app.services.runtime_window import (
+            agent_runtime_window,
+            current_agent_runtime_window,
+        )
+        from app.services.transcript_adapters import bind_runtime_window
+
+        base_adapter = adapter_for(agent)
+        runtime_window = await agent_runtime_window(agent)
+        adapter = bind_runtime_window(base_adapter, runtime_window)
+        last_window_check = time.monotonic()
         # ``new_parser`` darf die Sitzungsdatei LESEN, um seinen Anfangs-
         # zustand zu laden (omp: ``seed_from`` liest die ganze Datei, damit
         # der am Dateiende einsteigende Tailer die Effort-Stufe vom
@@ -2248,6 +2274,22 @@ class ChatTailerManager:
                     probe_due = (now - last_probe_at) >= self.STATE_PROBE_INTERVAL_SECONDS
                     if agent is not None and probe_due:
                         last_probe_at = now
+                        if now - last_window_check >= self.RUNTIME_WINDOW_REFRESH_SECONDS:
+                            last_window_check = now
+                            fresh_window = await current_agent_runtime_window(agent)
+                            if fresh_window != runtime_window:
+                                logger.info(
+                                    "chat tailer: runtime window of %s changed %s -> %s",
+                                    agent_id, runtime_window, fresh_window,
+                                )
+                                runtime_window = fresh_window
+                                # Rollover-Parser kommen ab jetzt mit dem
+                                # neuen Fenster; der laufende bekommt es
+                                # direkt (nur der omp-Parser hat den Haken).
+                                adapter = bind_runtime_window(base_adapter, runtime_window)
+                                setter = getattr(parse_line, "set_runtime_window", None)
+                                if callable(setter):
+                                    setter(runtime_window)
                         # Die Sonde laeuft ohnehin alle paar Sekunden — hier
                         # wird der Strom mitgeprueft (Container-Neustart).
                         if preview_state is not None:
