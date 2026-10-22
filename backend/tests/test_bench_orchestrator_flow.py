@@ -2236,3 +2236,145 @@ async def test_cleanup_old_compose_noop_when_same_path(tmp_path):
 async def test_cleanup_old_compose_missing_file_is_safe(tmp_path):
     """Old path already gone (manual cleanup, double-run) -> no crash."""
     orchestrator._cleanup_old_compose(str(tmp_path / "does-not-exist.mp4"), "/sd/new.mp4")
+
+
+# ── honest outro numbers (2026-10-22: video showed "—", local runs priced) ──
+
+
+async def _runtime(session, *, local: bool):
+    from app.models.host import Host
+    from app.models.runtime import Runtime
+
+    host_id = None
+    if local:
+        box = Host(slug=f"box-{uuid.uuid4().hex[:6]}", display_name="BOX", kind="ssh",
+                   ssh_host="192.0.2.10")
+        session.add(box)
+        await session.commit()
+        await session.refresh(box)
+        host_id = box.id
+    rt = Runtime(
+        slug=f"rt-{uuid.uuid4().hex[:6]}", display_name="rt",
+        runtime_type="openai_compatible" if local else "cloud",
+        endpoint="http://192.0.2.10:8000/v1" if local else "https://cloud.invalid/v1",
+        model_identifier="m", host_id=host_id,
+    )
+    session.add(rt)
+    await session.commit()
+    await session.refresh(rt)
+    return rt
+
+
+async def _priced_agent_entry(session, make_board, make_task, make_agent, *, local, costs,
+                              label="Agent"):
+    from app.models.model_usage import ModelUsageEvent
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    rt = await _runtime(session, local=local)
+    agent = await make_agent(board_id=board.id, name=f"A-{uuid.uuid4().hex[:4]}", harness="omp",
+                             runtime_id=rt.id)
+    task = await make_task(board.id, title="[Bench] usage")
+    for i, cost in enumerate(costs):
+        session.add(ModelUsageEvent(
+            task_id=task.id, harness="sparky", model="DeepSeek-V4.1-Flash-1017",
+            session_id="s1", message_uuid=f"m-{uuid.uuid4().hex}", cost_usd=cost,
+            input_tokens=600_000, output_tokens=130_000,
+            ts=datetime(2026, 10, 21, 20, 30, i), source_file="test.jsonl",
+        ))
+    await session.commit()
+    ch = BenchChallenge(title="T", prompt_text="p", mode="single")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+    entry = BenchEntry(challenge_id=ch.id, model_label=label, source_kind="agent",
+                       agent_id=agent.id, task_id=task.id, status="rendered",
+                       video_path="/sd/a.mp4", metrics={"duration_ms": 60000})
+    session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+    return ch, entry
+
+
+@pytest.mark.asyncio
+async def test_outro_local_runtime_shows_local_not_an_api_price(
+    session, monkeypatch, make_board, make_task, make_agent,
+):
+    """A model served on our own box costs no per-token money — the API list
+    price the harvester stored must not appear as if it was spent."""
+    ch, entry = await _priced_agent_entry(session, make_board, make_task, make_agent,
+                                          local=True, costs=(0.30, 0.13))
+    captured = _fake_compose_client(monkeypatch)
+    await orchestrator.compose_challenge(session, ch, [entry])
+    row = captured["branding"]["outro_rows"][0]
+    assert row["cost"] == "local"
+    assert row["tokens"] == "1.2M → 260.0k"
+
+
+@pytest.mark.asyncio
+async def test_outro_cloud_runtime_keeps_the_real_sum(
+    session, monkeypatch, make_board, make_task, make_agent,
+):
+    ch, entry = await _priced_agent_entry(session, make_board, make_task, make_agent,
+                                          local=False, costs=(0.30, 0.13))
+    captured = _fake_compose_client(monkeypatch)
+    await orchestrator.compose_challenge(session, ch, [entry])
+    assert captured["branding"]["outro_rows"][0]["cost"] == "$0.43"
+
+
+@pytest.mark.asyncio
+async def test_outro_zero_price_is_a_dash_and_tiny_cost_is_not_rounded_to_zero(
+    session, monkeypatch, make_board, make_task, make_agent,
+):
+    """The catch-all price row ('*' = 0/0) means "price unknown" — never a
+    fake "$0.00". A real cost below one cent shows as "<$0.01"."""
+    ch, entry = await _priced_agent_entry(session, make_board, make_task, make_agent,
+                                          local=False, costs=(0.0, 0.0))
+    captured = _fake_compose_client(monkeypatch)
+    await orchestrator.compose_challenge(session, ch, [entry])
+    assert captured["branding"]["outro_rows"][0]["cost"] == "—"
+
+    assert orchestrator._format_outro_cost(0.004, "agent", "cloud") == "<$0.01"
+
+
+@pytest.mark.asyncio
+async def test_compose_snapshots_usage_into_entry_metrics(
+    session, monkeypatch, make_board, make_task, make_agent,
+):
+    """One source of truth for video, Bench Studio UI and the episode export:
+    the numbers the outro shows are stored on the entry."""
+    ch, entry = await _priced_agent_entry(session, make_board, make_task, make_agent,
+                                          local=True, costs=(0.30, 0.13))
+    _fake_compose_client(monkeypatch)
+    await orchestrator.compose_challenge(session, ch, [entry])
+    await session.commit()
+    await session.refresh(entry)
+    m = entry.metrics
+    assert m["tokens_in"] == 1_200_000
+    assert m["tokens_out"] == 260_000
+    assert m["locality"] == "local"
+    assert abs(m["cost_usd"] - 0.43) < 1e-9
+    assert m["duration_ms"] == 60000  # untouched
+
+
+@pytest.mark.asyncio
+async def test_task_work_duration_excludes_time_parked_outside_in_progress(
+    session, make_board, make_task,
+):
+    """Live shape (bench run 19.10.): blocked overnight, then finished — the
+    video said 1363.6 min. Only time in in_progress counts."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] t")
+    t0 = datetime(2026, 10, 19, 11, 5, 57)
+    await _add_events(session, task.id, [
+        ("inbox", "in_progress", "agent", t0),
+        ("in_progress", "inbox", "user", t0 + timedelta(minutes=10)),
+        ("inbox", "in_progress", "agent", t0 + timedelta(minutes=10, seconds=2)),
+        ("in_progress", "blocked", "agent", t0 + timedelta(minutes=10, seconds=3)),
+        ("blocked", "inbox", "user", t0 + timedelta(hours=21)),
+        ("inbox", "in_progress", "agent", t0 + timedelta(hours=21, seconds=6)),
+        ("in_progress", "review", "agent", t0 + timedelta(hours=21, minutes=50)),
+    ])
+    # 10 min + 1 s + 49 min 54 s of work
+    assert await orchestrator.task_work_duration_ms(session, task.id) == (
+        (10 * 60 + 1 + 49 * 60 + 54) * 1000
+    )
