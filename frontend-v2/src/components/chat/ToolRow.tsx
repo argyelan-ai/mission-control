@@ -80,6 +80,9 @@ export interface LazyToolDetail {
   event: ToolEvent | null;
   loading: boolean;
   load(): void;
+  /** The fetch failed: the body says so and offers `retry` (never an empty body). */
+  error?: boolean;
+  retry?(): void;
 }
 
 /** What a task section knows about a tool without a result (spec A §2.2). */
@@ -142,7 +145,8 @@ export const ToolRow = memo(function ToolRow({
   useEffect(() => {
     if (liveOutput) setExpanded(detailLevel === "verbose");
   }, [detailLevel, liveOutput, setExpanded]);
-  const needsLoad = !!lazyDetail && expanded && !lazyDetail.event && !lazyDetail.loading;
+  // Not after a failure: that waits for the operator's "Load again" (no loop).
+  const needsLoad = !!lazyDetail && expanded && !lazyDetail.event && !lazyDetail.loading && !lazyDetail.error;
   const load = lazyDetail?.load;
   useEffect(() => {
     if (needsLoad) load?.();
@@ -244,10 +248,28 @@ export const ToolRow = memo(function ToolRow({
               the tap. Same left edge as the rest of the card body (K9). */}
           {images.length > 0 && <ToolImages images={images} />}
           {live && <LiveOutput text={live.text} />}
-          {expanded && lazyDetail && !body && (
-            <p data-testid="tool-row-loading" className="m-0 text-xs" style={{ color: C.textMuted }}>
-              {lazyDetail.loading ? tSteps("loading") : null}
+          {expanded && lazyDetail && !body && !lazyDetail.loading && lazyDetail.error ? (
+            <p data-testid="tool-row-failed" className="m-0 flex items-center gap-2 text-xs" style={{ color: C.textMuted }}>
+              <span>{tSteps("stepLoadFailed")}</span>
+              {lazyDetail.retry && (
+                <button
+                  type="button"
+                  onClick={lazyDetail.retry}
+                  className="min-h-11 bg-transparent border-0 p-0 cursor-pointer text-xs font-medium"
+                  style={{ color: C.textSecondary }}
+                >
+                  {tSteps("retry")}
+                </button>
+              )}
             </p>
+          ) : (
+            expanded &&
+            lazyDetail &&
+            !body && (
+              <p data-testid="tool-row-loading" className="m-0 text-xs" style={{ color: C.textMuted }}>
+                {tSteps("loading")}
+              </p>
+            )
           )}
           {expanded && body && (
             <>

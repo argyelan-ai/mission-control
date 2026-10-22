@@ -57,6 +57,8 @@ export type TaskUnit =
   // Tail units (added by mergeTimeline, never by buildTaskUnits):
   | { u: "live"; key: string; liveRow: import("@/lib/chatTypes").TaskLiveRow | null; lastTs: string | null }
   | { u: "pending"; key: string }
+  /** The steps query failed before any row came in (says so, offers a retry). */
+  | { u: "loadFailed"; key: string }
   | { u: "detached"; key: string }
   | { u: "queued"; key: string; count: number }
   | { u: "end"; key: string };

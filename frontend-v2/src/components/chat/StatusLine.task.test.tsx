@@ -22,11 +22,14 @@ describe("StatusLine — task in the chat", () => {
       "href",
       `/tasks?task=${task.taskId}`,
     );
+    // It comes and goes with scrolling: not a live region (no announcement per scroll).
+    expect(screen.getByTestId("status-label").parentElement).not.toHaveAttribute("aria-live");
   });
 
   it("waiting_model names the task, as a link", () => {
     render(<StatusLine state={state("waiting_model")} connected task={task} taskHeadVisible />);
     expect(screen.getByTestId("status-label")).toHaveTextContent("Waiting for the model · Build the report page");
+    expect(screen.getByTestId("status-label").parentElement).toHaveAttribute("aria-live", "polite");
     expect(screen.getByRole("link", { name: /Build the report page/ })).toBeInTheDocument();
   });
 

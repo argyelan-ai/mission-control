@@ -18,8 +18,7 @@
  * Owns nothing about the Diff/Browser side panel — that's PanelRail's job,
  * orthogonal to this toggle.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
@@ -71,13 +70,14 @@ import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
 import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
 import type { PanelKind } from "./PanelRail";
-import { chatTasksKey, useChatTasks } from "@/hooks/useChatTasks";
+import { useChatTasks } from "@/hooks/useChatTasks";
 import { useTaskSteps, type TaskStepsSpec } from "@/hooks/useTaskSteps";
 import { TaskStepsAgentContext } from "@/hooks/useTaskStepDetail";
 import { ScrollAnchorContext, type ScrollAnchor } from "./useScrollAnchor";
 import { mergeTimeline, type MergeResult, type MergeTask } from "./taskSteps/mergeTimeline";
 import { rowMs } from "./taskSteps/buildTaskUnits";
 import { TaskCard, TaskSegment } from "./taskSteps/TaskSection";
+import { TaskStepsRetryContext } from "./taskSteps/TaskUnits";
 
 // Re-exported from their own module so ChatOptionsSheet can use them without
 // importing ChatView back (see chatOptions.ts). Importers are unaffected.
@@ -207,9 +207,6 @@ export const INITIAL_RENDER_WINDOW = 30;
 /** At most this long an omp chat waits for its task rows before it shows
  *  what it has (spec A S6). */
 export const TASK_LOAD_GATE_MS = 1500;
-/** Chat states whose crossing (to or from) asks for the task stubs at once:
- *  a task was delivered, started or ended (spec A §2.2). */
-const TASK_FLIP_STATES: ReadonlySet<string> = new Set(["task_working", "waiting_model", "idle"]);
 
 const EMPTY_ROWS: never[] = [];
 
@@ -519,22 +516,10 @@ export function ChatView({
   const agentId = agent?.id ?? null;
   const taskGateOn = !head && !!agent && agent.tasks_in_own_session === true && streamEnabled;
   const chatOnScreen = effectiveView === "chat" && voiceOnScreen;
-  const chatTasks = useChatTasks(agentId, taskGateOn && chatOnScreen);
+  // A chat-state flip asks for the stubs at once (inside the hook): a task
+  // delivered to an idle agent must not wait for the 60 s idle poll.
+  const chatTasks = useChatTasks(agentId, taskGateOn && chatOnScreen, stream.state?.status ?? null);
   const tasksApply = taskGateOn && chatTasks.data?.applies === true;
-  // A chat-state flip asks for the stubs at once (spec §2.2/§6.1): a task
-  // delivered to an idle agent would otherwise wait for the 60 s idle poll —
-  // and with WorkingOnRow hidden for these agents nothing would name it
-  // meanwhile (review MUST-2 on #937). The ETag keeps a no-change answer a 304.
-  const queryClient = useQueryClient();
-  const chatStatus = stream.state?.status ?? null;
-  const prevChatStatusRef = useRef(chatStatus);
-  useEffect(() => {
-    const prev = prevChatStatusRef.current;
-    prevChatStatusRef.current = chatStatus;
-    if (!taskGateOn || !agentId || prev == null || prev === chatStatus) return;
-    if (!TASK_FLIP_STATES.has(prev) && !(chatStatus != null && TASK_FLIP_STATES.has(chatStatus))) return;
-    void queryClient.invalidateQueries({ queryKey: chatTasksKey(agentId) });
-  }, [chatStatus, taskGateOn, agentId, queryClient]);
   const currentStubs: ChatTaskStub[] = useMemo(
     () => (tasksApply && chatTasks.data?.applies ? chatTasks.data.tasks : []),
     [tasksApply, chatTasks.data],
@@ -629,6 +614,13 @@ export function ChatView({
   // some task's state object really changed (structural sharing upstream).
   const stepStates = taskEntries.map((e) => steps.get(e.stub.taskId)?.state ?? null);
   const stepsVersion = useStableArray(stepStates);
+  // Failed with nothing loaded: the section says so instead of a bare head.
+  const stepFailures = useStableArray(
+    taskEntries.map((e) => {
+      const st = steps.get(e.stub.taskId);
+      return !!st && st.error && !st.state;
+    }),
+  );
 
   const mergeTasks: MergeTask[] = useMemo(
     () =>
@@ -647,10 +639,11 @@ export function ChatView({
           // Not loaded yet: no "waiting for the first step" flash.
           hasSession: state ? state.hasSession : true,
           detached,
+          loadFailed: stepFailures[i],
           endLine: !stub.live && !detached && (shape.kind === "segments" || wasLive),
         };
       }),
-    [taskEntries, stepsVersion],
+    [taskEntries, stepsVersion, stepFailures],
   );
 
   // The newest chapter of a live task opens by itself — only while the view
@@ -1231,6 +1224,7 @@ export function ChatView({
     <ToolOutputContext.Provider value={toolOutputStore}>
     <ScrollAnchorContext.Provider value={scrollAnchor}>
     <TaskStepsAgentContext.Provider value={agentId}>
+    <TaskStepsRetryContext.Provider value={retrySteps}>
     {/* P2: tool pictures load from THIS agent's media route; a head (no
         agent row) shows none rather than guessing an address. */}
     <ChatMediaContext.Provider value={agent?.id ?? null}>
@@ -1588,7 +1582,9 @@ export function ChatView({
               )
             ) : (
               visibleEntries.map((entry) => {
-                if (entry.kind === "chat") return renderChatItem(entry.item);
+                // The merge's own key: a task row can split a chat tool group,
+                // and both halves would share renderChatItem's turn-uuid key.
+                if (entry.kind === "chat") return <Fragment key={entry.key}>{renderChatItem(entry.item)}</Fragment>;
                 const task = taskById.get(entry.taskId);
                 if (!task) return null;
                 if (entry.kind === "card") {
@@ -1801,6 +1797,7 @@ export function ChatView({
     </div>
     </ChatResendContext.Provider>
     </ChatMediaContext.Provider>
+    </TaskStepsRetryContext.Provider>
     </TaskStepsAgentContext.Provider>
     </ScrollAnchorContext.Provider>
     </ToolOutputContext.Provider>

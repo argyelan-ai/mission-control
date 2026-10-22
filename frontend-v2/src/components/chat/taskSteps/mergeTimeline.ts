@@ -31,6 +31,9 @@ export interface MergeTask {
   liveRow: TaskLiveRow | null;
   omitted: number;
   hasSession: boolean;
+  /** The steps query failed and nothing is loaded: a "could not be loaded"
+   *  tail with a retry replaces the live / end tail (review SHOULD-2 on #937). */
+  loadFailed?: boolean;
   /** The stub vanished in this mount after being live here. */
   detached: boolean;
   /** Show the end line (finished while seen in this mount). Default: a
@@ -71,7 +74,7 @@ export interface MergeInput {
   prev?: MergeResult | null;
 }
 
-const TAIL_KINDS = new Set<TaskUnit["u"]>(["live", "pending", "detached", "queued", "end", "notLoaded"]);
+const TAIL_KINDS = new Set<TaskUnit["u"]>(["live", "pending", "detached", "queued", "end", "notLoaded", "loadFailed"]);
 
 type Entry =
   | { type: "chat"; ms: number; rank: 0; seq: number; ev: TimelineChatEvent }
@@ -248,6 +251,9 @@ export function mergeTimeline(input: MergeInput): MergeResult {
     const tail: TaskUnit[] = [];
     if (task.detached) {
       tail.push({ u: "detached", key: "tail:detached" });
+    } else if (task.loadFailed && task.shape === "segments") {
+      tail.push({ u: "loadFailed", key: "tail:loadFailed" });
+      if (task.stub.live && task === newestLive && queued > 0) tail.push({ u: "queued", key: "tail:queued", count: queued });
     } else if (task.stub.live) {
       if (!task.hasSession && !task.liveRow) {
         if (!hidePending) tail.push({ u: "pending", key: "tail:pending" });

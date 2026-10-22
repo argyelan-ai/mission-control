@@ -11,7 +11,7 @@
  * `memo` and gets its unit object unchanged when nothing changed in it, so a
  * poll with one new row re-renders that row only (§6.4).
  */
-import { memo, useMemo, useState } from "react";
+import { createContext, memo, useContext, useMemo, useState } from "react";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 import { ChevronRight, MessageSquare, ShieldCheck } from "lucide-react";
@@ -36,6 +36,9 @@ export const EDGE = "px-4";
 export const SLOT = "w-4 shrink-0 flex justify-center";
 /** No new step for this long (and no thought running) = quiet "no new steps". */
 export const STALLED_AFTER_MS = 10 * 60_000;
+
+/** "Load again" for a task's steps (the chat's steps query, by task id). */
+export const TaskStepsRetryContext = createContext<(taskId: string) => void>(() => {});
 
 export function taskHref(taskId: string): string {
   return `/tasks?task=${encodeURIComponent(taskId)}`;
@@ -91,8 +94,10 @@ export const TaskToolRow = memo(function TaskToolRow({ row, taskId, taskLive, de
       event: detail.data ? toolEventFromDetail(detail.data, row) : null,
       loading: detail.loading || (want && !detail.data && !detail.error),
       load: () => setWant(true),
+      error: detail.error,
+      retry: detail.retry,
     }),
-    [detail.data, detail.loading, detail.error, want, row],
+    [detail.data, detail.loading, detail.error, detail.retry, want, row],
   );
   const runState: ToolRunState | null =
     row.st !== "running" ? null : taskLive ? { kind: "running", since: row.ts } : { kind: "noResult" };
@@ -146,9 +151,13 @@ function ExpandableText({
     <>
       {lead != null && body(lead)}
       {want ? (
-        <p className="m-0 py-2 text-xs" style={{ color: C.textMuted }}>
-          {detail.error ? tSteps("loadFailed") : tSteps("loading")}
-        </p>
+        detail.error ? (
+          <StepLoadFailed onRetry={detail.retry} />
+        ) : (
+          <p className="m-0 py-2 text-xs" style={{ color: C.textMuted }}>
+            {tSteps("loading")}
+          </p>
+        )
       ) : (
         <button
           ref={ref as React.RefObject<HTMLButtonElement>}
@@ -192,7 +201,14 @@ export const TaskChapterRow = memo(function TaskChapterRow({
         <span className={SLOT} aria-hidden="true" />
         <span className="min-w-0 flex-1 flex flex-col gap-1">
           <span className="flex items-baseline gap-2 min-w-0">
-            <span dir="auto" className="min-w-0 flex-1 text-sm line-clamp-2 break-words" style={{ color: C.textSecondary }}>
+            {/* Clamped only while closed: open, the whole lead shows — a lead
+                the server sent with `more: false` has nothing behind "Show
+                more" (review SHOULD-1 on #937). */}
+            <span
+              dir="auto"
+              className={`min-w-0 flex-1 text-sm ${open ? "" : "line-clamp-2"} break-words`}
+              style={{ color: C.textSecondary }}
+            >
               {unit.lead}
               {unit.count > 1 && <span style={{ color: C.textMuted }}> · {t("repeated", { count: unit.count })}</span>}
             </span>
@@ -340,9 +356,11 @@ export const TaskDeliveryRow = memo(function TaskDeliveryRow({
               <ClampedContent text={detail.data.text} testId="task-delivery-text" className="break-words">
                 <p dir="auto" className="m-0 whitespace-pre-wrap">{detail.data.text}</p>
               </ClampedContent>
+            ) : detail.error ? (
+              <StepLoadFailed onRetry={detail.retry} />
             ) : (
               <p className="m-0 text-xs" style={{ color: C.textMuted }}>
-                {detail.error ? t("loadFailed") : t("loading")}
+                {t("loading")}
               </p>
             )}
           </div>
@@ -351,6 +369,49 @@ export const TaskDeliveryRow = memo(function TaskDeliveryRow({
     </div>
   );
 });
+
+/** One step's full text could not be fetched: say so, offer "Load again". */
+function StepLoadFailed({ onRetry }: { onRetry: () => void }) {
+  const t = useTranslations("sessions.taskSteps");
+  return (
+    <p data-testid="task-step-failed" className="m-0 flex items-center gap-2 text-xs" style={{ color: C.textMuted }}>
+      <span>{t("stepLoadFailed")}</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="min-h-11 bg-transparent border-0 p-0 cursor-pointer text-xs font-medium"
+        style={{ color: C.textSecondary }}
+      >
+        {t("retry")}
+      </button>
+    </p>
+  );
+}
+
+/** A section's steps could not be loaded (no rows yet): say so, offer "Load again". */
+function TaskStepsLoadFailedRow({ taskId }: { taskId: string }) {
+  const t = useTranslations("sessions.taskSteps");
+  const retry = useContext(TaskStepsRetryContext);
+  return (
+    <div
+      data-testid="task-unit"
+      data-unit="loadFailed"
+      className={`${EDGE} min-h-11 flex items-center gap-2 text-xs`}
+      style={{ color: C.textMuted }}
+    >
+      <span className={SLOT} aria-hidden="true" />
+      <span className="min-w-0 truncate">{t("loadFailed")}</span>
+      <button
+        type="button"
+        onClick={() => retry(taskId)}
+        className="shrink-0 min-h-11 bg-transparent border-0 p-0 cursor-pointer text-xs font-medium"
+        style={{ color: C.textSecondary }}
+      >
+        {t("retry")}
+      </button>
+    </div>
+  );
+}
 
 /** A quiet meta line on the text edge: time mark, attempt, not loaded, queued, pending. */
 function MetaRow({ unit, children }: { unit: string; children: React.ReactNode }) {
@@ -478,6 +539,8 @@ export function TaskUnitView({
       return <TaskLiveRow unit={unit} taskId={taskId} />;
     case "pending":
       return <MetaRow unit="pending">{t("firstStepPending")}</MetaRow>;
+    case "loadFailed":
+      return <TaskStepsLoadFailedRow taskId={taskId} />;
     case "queued":
       return <MetaRow unit="queued">{queuedLabel(unit.count)}</MetaRow>;
     case "detached":

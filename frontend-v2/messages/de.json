@@ -1218,6 +1218,7 @@
       "hideSteps": "Schritte ausblenden",
       "loading": "Schritte werden geladen…",
       "loadFailed": "Schritte konnten nicht geladen werden.",
+      "stepLoadFailed": "Dieser Schritt konnte nicht geladen werden.",
       "retry": "Nochmal laden",
       "notLoaded": "{count, plural, one {# früherer Schritt nicht geladen} other {# frühere Schritte nicht geladen}}",
       "detached": "Aufgabe hier nicht mehr aktiv",

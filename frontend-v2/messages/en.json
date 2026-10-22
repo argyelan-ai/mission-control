@@ -1218,6 +1218,7 @@
       "hideSteps": "Hide steps",
       "loading": "Loading steps…",
       "loadFailed": "Steps could not be loaded.",
+      "stepLoadFailed": "This step could not be loaded.",
       "retry": "Load again",
       "notLoaded": "{count, plural, one {# earlier step not loaded} other {# earlier steps not loaded}}",
       "detached": "Task no longer active here",

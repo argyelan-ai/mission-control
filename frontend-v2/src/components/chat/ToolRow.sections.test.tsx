@@ -59,6 +59,19 @@ describe("ToolRow — spec A", () => {
     expect(screen.getByText(/sed -i/)).toBeInTheDocument();
   });
 
+  it("lazyDetail error: the body says so and offers 'Load again' — never an empty body, never a fetch loop", async () => {
+    const load = vi.fn();
+    const retry = vi.fn();
+    render(
+      <ToolRow ev={ev()} detailLevel="normal" liveOutput={false} lazyDetail={{ event: null, loading: false, load, error: true, retry }} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Edit index.html/ }));
+    expect(screen.getByTestId("tool-row-failed")).toHaveTextContent("This step could not be loaded.");
+    expect(load).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Load again" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
   it("liveOutput={false}: neither live output nor Ausführlich opens the row by itself", () => {
     const store = createToolOutputStore();
     store.set({ "tu-1": { kind: "tool_output", uuid: null, ts: "x", toolUseId: "tu-1", text: "streaming…" } });

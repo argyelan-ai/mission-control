@@ -471,6 +471,112 @@ describe("ChatView — task sections (spec A)", () => {
     expect(screen.queryByText("Old task")).not.toBeInTheDocument();
   });
 
+  it("SHOULD-1: an opened chapter shows its whole lead — no clamp while open", async () => {
+    const long = "A".repeat(60) + " " + "B".repeat(60) + " end of the lead";
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), long)]) });
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(0), "go")] }));
+    renderView();
+    const lead = await screen.findByText(long);
+    await waitFor(() => expect(lead.closest("[data-unit]")).toHaveAttribute("data-open", "true"));
+    expect(lead.className).not.toContain("line-clamp-2");
+    fireEvent.click(lead.closest("button") as HTMLElement);
+    expect(lead.closest("[data-unit]")).toHaveAttribute("data-open", "false");
+    expect(lead.className).toContain("line-clamp-2");
+  });
+
+  it("SHOULD-2: a tool whose detail fetch fails says so and loads again on 'Load again'", async () => {
+    serve(
+      { applies: true, tasks: [stub()], queued: 0, hasMore: false },
+      { [TASK_ID]: steps([think(at(1), "Run it"), tool(at(2), "npm test")]) },
+    );
+    vi.mocked(api.chat.taskStepDetail).mockRejectedValueOnce(new Error("502"));
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(0), "go")] }));
+    renderView();
+    const title = await screen.findByText("npm test", { selector: "button *" });
+    fireEvent.click(title.closest("button") as HTMLElement);
+    expect(await screen.findByText("This step could not be loaded.")).toBeInTheDocument();
+    expect(api.chat.taskStepDetail).toHaveBeenCalledTimes(1);
+    vi.mocked(api.chat.taskStepDetail).mockResolvedValueOnce({
+      data: { id: "1:2", ts: at(2), k: "tool", detail: { command: "npm test" }, result: "all green" },
+      etag: '"d2"',
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Load again" }));
+    expect(await screen.findByText(/all green/)).toBeInTheDocument();
+    expect(api.chat.taskStepDetail).toHaveBeenCalledTimes(2);
+  });
+
+  it("SHOULD-2: a live section whose steps fail to load says so under its head and retries", async () => {
+    vi.mocked(api.chat.tasks).mockResolvedValue({ data: { applies: true, tasks: [stub()], queued: 0, hasMore: false }, etag: '"t1"' });
+    vi.mocked(api.chat.taskSteps).mockRejectedValueOnce(new Error("502"));
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(0), "go")] }));
+    renderView();
+    const failed = await screen.findByText("Steps could not be loaded.");
+    expect(failed.closest("[data-testid=chat-task-segment]")).not.toBeNull();
+    vi.mocked(api.chat.taskSteps).mockResolvedValueOnce({ data: steps([think(at(1), "Back again")]), etag: '"s1"' });
+    fireEvent.click(screen.getByRole("button", { name: "Load again" }));
+    expect(await screen.findByText("Back again")).toBeInTheDocument();
+    expect(screen.queryByText("Steps could not be loaded.")).not.toBeInTheDocument();
+  });
+
+  it("SHOULD-3/M3: opening a chapter while scrolled up keeps the tapped row where it was", async () => {
+    serve(
+      { applies: true, tasks: [stub()], queued: 0, hasMore: false },
+      { [TASK_ID]: steps([think(at(1), "Read the files first"), think(at(3), "Now build the page")]) },
+    );
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(0), "go")] }));
+    renderView();
+    await screen.findByText("Now build the page");
+    const { el } = scroller(3000, 600);
+    scrollUp(el, 1200);
+    const button = screen.getByText("Read the files first").closest("button") as HTMLElement;
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    // Layout stand-in: once the chapter is open, the row sits 200 px lower
+    // at the same scroll position (content above it grew).
+    button.getBoundingClientRect = () =>
+      ({ top: 300 + (button.getAttribute("aria-expanded") === "true" ? 200 : 0) - (el.scrollTop - 1200) }) as DOMRect;
+    const before = button.getBoundingClientRect().top;
+    fireEvent.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(button.getBoundingClientRect().top).toBe(before);
+    expect(el.scrollTop).toBe(1400);
+  });
+
+  it("SHOULD-3/10e: an echo sent after scrolling up counts as new on 'Jump to bottom'", async () => {
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "A")]) });
+    const events = [msg(at(0), "go")];
+    mockStream.mockReturnValue(streamOf({ events }));
+    const { rerenderView } = renderView();
+    await screen.findByTestId("chat-task-segment");
+    const { el } = scroller(3000, 600);
+    scrollUp(el, 1200);
+    expect(screen.getByRole("button", { name: /Jump to bottom/ })).not.toHaveTextContent(/new/);
+    mockStream.mockReturnValue(
+      streamOf({ events, pendingEchoes: [{ id: "e1", text: "from the phone", sentAt: Date.now() + 1000, status: "pending" }] }),
+    );
+    rerenderView();
+    expect(screen.getByRole("button", { name: /Jump to bottom/ })).toHaveTextContent("1 new");
+  });
+
+  it("SHOULD-3/M1: a new echo while following is pinned to the end without a resize callback", async () => {
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "A")]) });
+    const events = [msg(at(0), "go")];
+    const toolOutputs = {};
+    mockStream.mockReturnValue(streamOf({ events, toolOutputs }));
+    const { rerenderView } = renderView();
+    await screen.findByTestId("chat-task-segment");
+    await act(async () => {});
+    const { el, setHeight } = scroller(3000, 600);
+    el.scrollTop = 2400; // following, at the end
+    fireEvent.scroll(el);
+    setHeight(3300); // the echo bubble's height
+    mockStream.mockReturnValue(
+      streamOf({ events, toolOutputs, pendingEchoes: [{ id: "e1", text: "next", sentAt: Date.now(), status: "pending" }] }),
+    );
+    rerenderView();
+    // The capturing ResizeObserver never fires here: only the pin effect can move it.
+    expect(el.scrollTop).toBe(3300);
+  });
+
   it("12: the status line names the live task when its head is not on screen", async () => {
     serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Start")]) });
     mockStream.mockReturnValue(streamOf({ state: { kind: "state", status: "task_working", prompt: null } }));

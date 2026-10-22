@@ -259,7 +259,10 @@ export function StatusLine({
       <div
         className={LINE_CLASS}
         style={{ color: waiting ? STATUS_TEXT.warning : C.textMuted }}
-        aria-live="polite"
+        // "Task in progress" comes and goes as the task head scrolls across
+        // the screen edge — announcing that would talk on every scroll. Only
+        // the waiting sentence (a real state change) is announced.
+        aria-live={waiting ? "polite" : undefined}
       >
         <span
           data-testid="status-dot"
