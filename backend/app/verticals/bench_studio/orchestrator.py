@@ -125,7 +125,10 @@ def video_label(entry: BenchEntry) -> str:
     if not level:
         return label
     word = EFFORT_WORDS.get(level, level).lower()
-    if label.strip().lower().endswith(word):
+    # Only a separate trailing word counts ("DeepSeek · Max", "Qwen max") —
+    # not letters at the end of a name ("Qwen-Python" with effort On).
+    last_word = re.split(r"[\s·]+", label.strip().lower())[-1]
+    if last_word == word:
         return label
     return f"{label} · effort {level}"
 
@@ -504,6 +507,24 @@ async def _spark_effort_request(
     }
 
 
+# Direct-API runs this process is executing right now. They run as
+# asyncio tasks inside the API process (start_challenge / retry_entry,
+# uvicorn ``--workers 1``), so a restart ends them without a trace: the
+# entry stayed `generating` forever and the effort check answered 409 for
+# good (review SHOULD-2, PR #955). The sweep heals every `generating`
+# Spark entry that is not in this set.
+_SPARK_RUNS_IN_FLIGHT: set[uuid.UUID] = set()
+
+SPARK_RUN_INTERRUPTED = (
+    "run interrupted — the backend restarted while the Spark was generating; "
+    "retry this entry"
+)
+
+
+def spark_run_in_flight(entry_id: uuid.UUID) -> bool:
+    return entry_id in _SPARK_RUNS_IN_FLIGHT
+
+
 async def generate_spark_entry(
     session: AsyncSession, entry: BenchEntry, prompt: str
 ) -> None:
@@ -511,6 +532,18 @@ async def generate_spark_entry(
 
     Never raises — failures land as entry.status='failed' + error text.
     """
+    # Registered BEFORE the entry turns `generating`, released after its
+    # final write: the sweep never sees a live run as orphaned.
+    _SPARK_RUNS_IN_FLIGHT.add(entry.id)
+    try:
+        await _generate_spark_entry(session, entry, prompt)
+    finally:
+        _SPARK_RUNS_IN_FLIGHT.discard(entry.id)
+
+
+async def _generate_spark_entry(
+    session: AsyncSession, entry: BenchEntry, prompt: str
+) -> None:
     from app.services import reasoning_params
 
     entry.status = "generating"
@@ -1525,12 +1558,21 @@ async def reconcile_challenge(
 
     Also self-heals entries whose task was deleted (FK SET NULL on
     tasks.id): task_id=None means the task_done hook can never fire for that
-    entry again, so it would otherwise hang at `generating` forever."""
+    entry again, so it would otherwise hang at `generating` forever.
+
+    Direct-API (Spark) entries: `generating` without a live run in this
+    process means a restart cut the run off — marked failed (retryable)."""
     from app.models.task import Task
 
     changed = False
     for entry in entries:
-        if entry.status != "generating" or entry.source_kind != "agent":
+        if entry.status != "generating":
+            continue
+        if entry.source_kind == "spark":
+            if await _heal_interrupted_spark_entry(session, entry):
+                changed = True
+            continue
+        if entry.source_kind != "agent":
             continue
         if entry.task_id is None:
             entry.status = "failed"
@@ -1547,6 +1589,24 @@ async def reconcile_challenge(
     if changed:
         await session.commit()
         await maybe_advance(session, challenge.id)
+
+
+async def _heal_interrupted_spark_entry(session: AsyncSession, entry: BenchEntry) -> bool:
+    """A `generating` direct-API entry no run in this process owns was cut
+    off by a restart — mark it failed so the challenge moves on and the
+    Spark counts as idle again. Re-read first: the run may have finished
+    since the sweep loaded the row (it leaves the in-flight set only after
+    its final write)."""
+    if spark_run_in_flight(entry.id):
+        return False
+    await session.refresh(entry)
+    if entry.status != "generating" or spark_run_in_flight(entry.id):
+        return False
+    entry.status = "failed"
+    entry.error = SPARK_RUN_INTERRUPTED
+    session.add(entry)
+    logger.info("bench sweep: spark entry %s had no live run — marked failed", entry.id)
+    return True
 
 
 # ── Background orphan sweep (W0.8) ────────────────────────────────────────

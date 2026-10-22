@@ -50,6 +50,10 @@ _SENTINEL_NONE = "__none__"
 # Live /v1/models lookup when several runtime rows share the Spark endpoint.
 _LIVE_MODELS_TIMEOUT_S = 3.0
 _LIVE_MODELS_TTL = 20
+# A silent box is cached too (JSON ``null``): an offline LAN host hangs for
+# the whole timeout, and without this every model resolution waited 3 s
+# while several rows share the endpoint (review SHOULD-1, PR #955).
+_LIVE_MODELS_SILENT_TTL = 20
 
 
 def _cache_key(slug: str) -> str:
@@ -255,9 +259,9 @@ async def spark_runtime_candidates(session: AsyncSession) -> list[Runtime]:
 
 async def _live_spark_model_ids() -> list[str] | None:
     """Model ids ``settings.spark_llm_url`` serves right now (``/v1/models``),
-    or ``None`` when the box does not answer. Short timeout, cached briefly
-    in Redis — this runs on every model resolution while several runtime
-    rows share the endpoint."""
+    or ``None`` when the box does not answer. Short timeout; both answers
+    (the list and the silence) are cached briefly in Redis — this runs on
+    every model resolution while several runtime rows share the endpoint."""
     import json
 
     import httpx
@@ -273,6 +277,7 @@ async def _live_spark_model_ids() -> list[str] | None:
 
     base = settings.spark_llm_url.rstrip("/")
     url = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+    ids: list[str] | None
     try:
         async with httpx.AsyncClient(timeout=_LIVE_MODELS_TIMEOUT_S) as cli:
             resp = await cli.get(url)
@@ -283,10 +288,11 @@ async def _live_spark_model_ids() -> list[str] | None:
             ]
     except (httpx.HTTPError, ValueError, AttributeError) as exc:
         logger.debug("resolver: live /v1/models of the Spark failed: %s", exc)
-        return None
+        ids = None
     try:
         client = await get_redis()
-        await client.setex(key, _LIVE_MODELS_TTL, json.dumps(ids))
+        ttl = _LIVE_MODELS_TTL if ids is not None else _LIVE_MODELS_SILENT_TTL
+        await client.setex(key, ttl, json.dumps(ids))
     except Exception as exc:  # noqa: BLE001 — cache is optional
         logger.debug("resolver live-models cache write failed: %s", exc)
     return ids

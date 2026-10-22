@@ -156,6 +156,24 @@ async def test_create_appends_effort_when_labels_only_differ_by_effort(
 
 
 @pytest.mark.asyncio
+async def test_appended_effort_keeps_the_label_within_the_edit_limit(
+    auth_client, monkeypatch, _no_background
+):
+    """Review NICE (PR #955): an 80-character label plus " · Medium" was
+    stored at 89 characters — PATCH (max 80) then refused saving it back."""
+    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=_probe_row(["off", "medium"])))
+    long_label = "L" * 80
+    resp = await auth_client.post("/api/v1/bench/challenges", json={
+        "title": "Long", "prompt_text": "one page",
+        "models": [_spec("off", label=long_label), _spec("medium", label=long_label)],
+    })
+    assert resp.status_code == 201, resp.text
+    labels = sorted(e["model_label"] for e in resp.json()["entries"])
+    assert all(len(lbl) <= 80 for lbl in labels), [len(lbl) for lbl in labels]
+    assert labels[0].endswith(" · Medium") and labels[1].endswith(" · Off")
+
+
+@pytest.mark.asyncio
 async def test_create_refuses_true_duplicate_labels(auth_client, monkeypatch, _no_background):
     monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=_probe_row(["off", "max"])))
     resp = await auth_client.post("/api/v1/bench/challenges", json={
@@ -234,6 +252,15 @@ async def test_outro_does_not_repeat_an_effort_already_in_the_label(session):
     ch, (mx,) = await _challenge(session, "max", label=f"{LABEL} · Max")
     payload = await orchestrator._build_branding_payload(session, ch, [mx])
     assert payload["outro_rows"][0]["name"] == f"{LABEL} · Max"
+
+
+@pytest.mark.asyncio
+async def test_outro_keeps_the_effort_when_the_label_only_ends_in_those_letters(session):
+    """Review NICE (PR #955): "Qwen-Python" ends in "on" — the effort On
+    must still be named, only a separate trailing word counts."""
+    ch, (on,) = await _challenge(session, "on", label="Qwen-Python")
+    payload = await orchestrator._build_branding_payload(session, ch, [on])
+    assert payload["outro_rows"][0]["name"] == "Qwen-Python · effort on"
 
 
 # ── effort stored at run start ─────────────────────────────────────────────
@@ -344,3 +371,94 @@ async def test_effort_levels_check_refused_while_an_agent_works_on_the_spark(
     assert resp.status_code == 409
     assert "Worker" in resp.json()["detail"]
     probe.assert_not_awaited()
+
+
+# ── a direct-API run cut off by a restart never blocks the Spark for good ──
+# Review SHOULD-2 (PR #955): the sweep only healed agent entries. A backend
+# restart during a direct-API run (e.g. a deploy) left the entry at
+# `generating`, and POST /effort-levels/check answered 409 forever.
+
+
+@pytest.mark.asyncio
+async def test_spark_run_is_marked_in_flight_only_while_it_runs(session, tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    ch, (entry,) = await _challenge(session, "default")
+    seen: dict = {}
+
+    async def gen(prompt, model, effort_fields=None, max_tokens=0):
+        seen["in_flight"] = orchestrator.spark_run_in_flight(entry.id)
+        return "<html>x</html>", {"duration_ms": 10}
+
+    monkeypatch.setattr(orchestrator, "_spark_generate", gen)
+    await orchestrator.generate_spark_entry(session, entry, ch.prompt_text)
+
+    assert seen["in_flight"] is True
+    assert orchestrator.spark_run_in_flight(entry.id) is False
+
+
+@pytest.mark.asyncio
+async def test_sweep_heals_a_direct_api_run_cut_off_by_a_restart(session, monkeypatch):
+    monkeypatch.setattr(orchestrator, "record_entry", AsyncMock())
+    ch, (entry,) = await _challenge(session, "max")
+    entry.status = "generating"
+    session.add(entry)
+    await session.commit()
+
+    await orchestrator.reconcile_challenge(session, ch, [entry])
+    await session.refresh(entry)
+    await session.refresh(ch)
+
+    assert entry.status == "failed"
+    assert "restart" in entry.error
+    assert ch.status == "failed"  # only entry failed -> the challenge moves on
+
+
+@pytest.mark.asyncio
+async def test_sweep_keeps_a_direct_api_run_that_is_still_going(session, monkeypatch):
+    monkeypatch.setattr(orchestrator, "record_entry", AsyncMock())
+    ch, (entry,) = await _challenge(session, "max")
+    entry.status = "generating"
+    session.add(entry)
+    await session.commit()
+
+    monkeypatch.setattr(orchestrator, "_SPARK_RUNS_IN_FLIGHT", {entry.id})
+    await orchestrator.reconcile_challenge(session, ch, [entry])
+    await session.refresh(entry)
+
+    assert entry.status == "generating"
+    assert entry.error is None
+
+
+@pytest.mark.asyncio
+async def test_effort_check_names_the_challenge_that_is_running(auth_client, session, monkeypatch):
+    probe = AsyncMock()
+    monkeypatch.setattr(effort_probe, "get_or_probe", probe)
+    ch, (entry,) = await _challenge(session, "default")
+    entry.status = "generating"
+    session.add(entry)
+    await session.commit()
+
+    resp = await auth_client.post("/api/v1/bench/effort-levels/check", json={"model": "deepseek-x"})
+    assert resp.status_code == 409
+    assert "Pagoda" in resp.json()["detail"]
+    probe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_effort_check_ignores_a_left_over_entry_of_a_finished_challenge(
+    auth_client, session, monkeypatch
+):
+    """An entry still at `generating` under a challenge that is no longer
+    generating (stopped, failed, archived after review) is no run."""
+    probe = AsyncMock(return_value=_probe_row(["off", "max"]))
+    monkeypatch.setattr(effort_probe, "get_or_probe", probe)
+    ch, (entry,) = await _challenge(session, "default")
+    entry.status = "generating"
+    ch.status = "failed"
+    session.add(entry)
+    session.add(ch)
+    await session.commit()
+
+    resp = await auth_client.post("/api/v1/bench/effort-levels/check", json={"model": "deepseek-x"})
+    assert resp.status_code == 200, resp.text
+    probe.assert_awaited_once()

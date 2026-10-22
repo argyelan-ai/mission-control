@@ -50,6 +50,12 @@ export function EffortChips({
     mutationFn: () => benchApi.effortLevels.check(modelKey || null),
     onSuccess: (fresh) => qc.setQueryData(queryKey, fresh),
   });
+  // A check result (e.g. "Spark busy") belongs to the model it ran for —
+  // forget it when the row switches to another model.
+  const resetCheck = check.reset;
+  useEffect(() => {
+    resetCheck();
+  }, [modelKey, resetCheck]);
   // The backend answers 409 while a bench run or an agent works on the Spark.
   const checkBusy = check.isError && /^API 409\b/.test((check.error as Error)?.message ?? "");
   const data = query.data;

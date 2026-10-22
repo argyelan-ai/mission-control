@@ -29,6 +29,9 @@ logger = logging.getLogger("mc.bench_studio")
 
 router = APIRouter(prefix="/api/v1/bench", tags=["bench-studio"])
 
+# Longest entry label create and PATCH accept (appended effort words included).
+LABEL_MAX_LEN = 80
+
 BENCH_CHALLENGE_RUN_CLAIM_TTL_S = 1800  # self-heal net if the bg task dies without releasing
 
 
@@ -73,7 +76,7 @@ async def _claim_challenge_run(challenge_id: uuid.UUID) -> None:
 
 
 class BenchModelSpec(BaseModel):
-    label: str = Field(min_length=1, max_length=80)
+    label: str = Field(min_length=1, max_length=LABEL_MAX_LEN)
     source_kind: Literal["spark", "agent"]
     spark_model: str | None = None
     agent_id: uuid.UUID | None = None
@@ -121,7 +124,7 @@ class BenchEntryUpdate(BaseModel):
     # name here (mirrors bench_entries.model_label), so opt out.
     model_config = {"protected_namespaces": ()}
 
-    model_label: str | None = Field(default=None, min_length=1, max_length=80)
+    model_label: str | None = Field(default=None, min_length=1, max_length=LABEL_MAX_LEN)
     display_tag: str | None = Field(default=None, max_length=80)
 
 
@@ -247,7 +250,10 @@ def _unique_labels(specs: list[BenchModelSpec], efforts: list[str]) -> None:
             )
         for i in idxs:
             word = orchestrator.EFFORT_WORDS.get(efforts[i], efforts[i])
-            specs[i].label = f"{specs[i].label.strip()} · {word}"
+            suffix = f" · {word}"
+            # Stay within the label limit (80) — PATCH refuses longer ones.
+            base = specs[i].label.strip()[: LABEL_MAX_LEN - len(suffix)].rstrip()
+            specs[i].label = f"{base}{suffix}"
     seen: set[str] = set()
     for spec in specs:
         key = spec.label.strip().casefold()

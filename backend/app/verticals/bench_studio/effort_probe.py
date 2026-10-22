@@ -198,18 +198,28 @@ async def spark_busy_reason(session: AsyncSession) -> str | None:
     (recipe or slot) works on a task — the operator rule "check running
     tasks before loading the Spark"."""
     from app.models.agent import Agent
-    from app.models.bench import BenchEntry
+    from app.models.bench import BenchChallenge, BenchEntry
     from app.services.runtime_model_resolver import spark_runtime_candidates
 
-    generating = (
+    # Only entries of a challenge that is still generating: a left-over row
+    # under a stopped/failed challenge is no run. A run cut off by a restart
+    # is healed by the bench sweep within a minute (review SHOULD-2, PR #955).
+    running = (
         await session.exec(
-            select(BenchEntry.id).where(
-                BenchEntry.source_kind == "spark", BenchEntry.status == "generating"
+            select(BenchChallenge.title)
+            .join(BenchEntry, BenchEntry.challenge_id == BenchChallenge.id)  # type: ignore[arg-type]
+            .where(
+                BenchEntry.source_kind == "spark",
+                BenchEntry.status == "generating",
+                BenchChallenge.status == "generating",
             )
         )
     ).first()
-    if generating is not None:
-        return "A bench run is generating on the Spark right now — check again when it is done."
+    if running is not None:
+        return (
+            f"A bench run is generating on the Spark right now (challenge “{running}”) "
+            "— check again when it is done."
+        )
     runtime_ids = [r.id for r in await spark_runtime_candidates(session)]
     if not runtime_ids:
         return None

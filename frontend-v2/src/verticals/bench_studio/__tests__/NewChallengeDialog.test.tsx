@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, onTestFinished } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -49,6 +49,7 @@ vi.mock("@/lib/notify", () => ({
 import { benchApi } from "@/verticals/bench_studio/api";
 import { api } from "@/lib/api";
 import { NewChallengeDialog } from "../NewChallengeDialog";
+import { EffortChips } from "../EffortChips";
 
 function renderDialog(props?: { prefillTemplate?: PromptTemplate | null }) {
   const qc = new QueryClient({
@@ -749,6 +750,32 @@ describe("NewChallengeDialog — effort check is explicit (round-1 P3)", () => {
     renderDialog();
     await userEvent.click(await screen.findByRole("button", { name: /check now/i }));
     expect(await screen.findByText(/spark is busy/i)).toBeInTheDocument();
+  });
+
+  it("the busy hint of one model does not stick after the row switches model (review NICE)", async () => {
+    const getLevels = vi.mocked(benchApi.effortLevels.get);
+    const original = getLevels.getMockImplementation();
+    getLevels.mockResolvedValue(UNCHECKED);
+    onTestFinished(() => {
+      if (original) getLevels.mockImplementation(original);
+    });
+    vi.mocked(benchApi.effortLevels.check).mockRejectedValueOnce(
+      new Error('API 409: {"detail":"The Spark is busy"}')
+    );
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const chips = (model: string) => (
+      <QueryClientProvider client={qc}>
+        <EffortChips index={0} sourceKind="spark" model={model} sparkOffline={false} value={null} onChange={() => {}} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(chips("model-a"));
+    await userEvent.click(await screen.findByRole("button", { name: /check now/i }));
+    expect(await screen.findByText(/spark is busy/i)).toBeInTheDocument();
+    rerender(chips("model-b"));
+    expect(await screen.findByText(/not checked yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/spark is busy/i)).toBeNull();
   });
 });
 
