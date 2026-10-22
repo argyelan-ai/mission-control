@@ -1206,7 +1206,8 @@ class ChatSession:
         with self._lock:
             client, previous = self._client, self._session_id
             previous_copy = self.transcript_path
-            thinking = self._config_value("thinking")
+            thinking_id = self._thinking_option_id()
+            thinking = self._config_value(thinking_id) if thinking_id else None
         try:
             new_id = client.new_session(self._cwd)
         except Exception as exc:  # noqa: BLE001 — the old session keeps serving
@@ -1237,9 +1238,26 @@ class ChatSession:
                                     previous_copy=previous_copy, request_id=request_id)
         self._absorb_session_result(result)
         self._pin_model()
-        offered = self._config_value("thinking")
+        offered = self._config_value(thinking_id) if thinking_id else None
         if thinking is not None and offered is not None and offered != thinking:
-            self.config("thinking", thinking)
+            self.config(thinking_id, thinking)
+
+    def _thinking_option_id(self) -> Optional[str]:
+        """The id of the thinking-level option, harness-neutral: omp's
+        `thinking` first (as before), else the first option with the ACP
+        standard category `thought_level` (Hermes: `reasoning_effort`).
+        None when the agent offers no thinking level. Twin of the backend's
+        `agent_chat_input._acp_thinking_option` — the chip reads and writes
+        the same row this carry-over keeps."""
+        with self._lock:
+            rows = [o for o in self._config_options if isinstance(o, dict)]
+        for opt in rows:
+            if opt.get("id") == "thinking":
+                return "thinking"
+        for opt in rows:
+            if opt.get("category") == "thought_level" and isinstance(opt.get("id"), str):
+                return opt["id"]
+        return None
 
     def _config_value(self, option_id: str) -> Any:
         """`currentValue` of one config option, None when not offered."""

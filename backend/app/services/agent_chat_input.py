@@ -730,6 +730,39 @@ def _acp_config_option(state: dict | None, option_id: str) -> tuple[list[dict], 
     return [], None
 
 
+#: Die Denk-Stufe eines kopflosen Agenten: omp meldet sie als id
+#: ``thinking``, Hermes (seit dem Upstream-PR "reasoning effort as an ACP
+#: session config option") als ``reasoning_effort`` — beide mit der
+#: ACP-Standardkategorie ``thought_level`` (SessionConfigOption.category).
+#: Zwilling von ``docker/omp-bridge/acp_chat.py::_thinking_option_id``.
+_ACP_THINKING_OPTION_ID = "thinking"
+_ACP_THOUGHT_LEVEL_CATEGORY = "thought_level"
+
+
+def _acp_thinking_option(state: dict | None) -> tuple[str | None, list[dict], str | None]:
+    """``(id, Optionen, aktueller Wert)`` der Denk-Stufe, harness-neutral.
+
+    Gesucht wird zuerst die id ``thinking`` (omp, genau wie bis 22.10.2026),
+    sonst die erste Zeile mit Kategorie ``thought_level`` (Hermes, und jeder
+    Harness, der den ACP-Standard spricht). Die gefundene ECHTE id ist die,
+    die ``_set_effort_acp`` zurueckschickt — Lesen und Schreiben nennen
+    dieselbe Zeile, ein hart kodiertes ``thinking`` bedeutet bei Hermes
+    nichts. ``(None, [], None)``, wenn der Agent keine Denk-Stufe anbietet."""
+    rows = [o for o in (state or {}).get("configOptions") or [] if isinstance(o, dict)]
+    match = next((o for o in rows if o.get("id") == _ACP_THINKING_OPTION_ID), None)
+    if match is None:
+        match = next(
+            (o for o in rows
+             if o.get("category") == _ACP_THOUGHT_LEVEL_CATEGORY and isinstance(o.get("id"), str)),
+            None,
+        )
+    if match is None:
+        return None, [], None
+    option_id = match["id"]
+    options, current = _acp_config_option(state, option_id)
+    return option_id, options, current
+
+
 #: Provider prefix of the models MC renders into an agent's own config
 #: (``mc-openai`` from render-omp-config.sh / host_provisioning / mc-head).
 _MC_MODEL_PROVIDER_PREFIX = "mc-"
@@ -1128,7 +1161,7 @@ async def set_effort(agent, level: str) -> None:
       longer exists."""
     if headless_chat_kind(agent) is not None:
         # Kopflos: die Stufenleiter kommt aus dem Zustand DIESES Agenten
-        # (``configOptions[id=thinking]``), nicht aus einer Harness-Tabelle —
+        # (Denk-Stufen-Zeile der ``configOptions``), nicht aus einer Harness-Tabelle —
         # dieselbe Quelle, aus der der Chip im Composer gebaut wird.
         await _set_effort_acp(agent, level)
         return
@@ -1192,7 +1225,8 @@ async def set_effort(agent, level: str) -> None:
 
 
 async def _set_effort_acp(agent, level: str) -> None:
-    """Denk-Stufe eines kopflosen Agenten: ``config id=thinking``.
+    """Denk-Stufe eines kopflosen Agenten: ``config id=<Denk-Stufen-Zeile>``
+    (omp ``thinking``, Hermes ``reasoning_effort`` — ``_acp_thinking_option``).
 
     Kein Tippen, kein Nachlesen im Pane, kein Aufraeum-Escape — der Daemon
     ANTWORTET, ob die Einstellung angekommen ist (``ok:true`` mit den neuen
@@ -1201,20 +1235,20 @@ async def _set_effort_acp(agent, level: str) -> None:
     angenommen oder abgelehnt.
 
     Zwei Tore davor, beide Spiegel der Capabilities:
-    - keine Zustandsdatei / keine ``thinking``-Optionen -> der Chip ist gar
+    - keine Zustandsdatei / keine Denk-Stufen-Optionen -> der Chip ist gar
       nicht da, also darf auch ein direkter POST nichts schalten
       (``InputNotSupportedError`` -> 409).
     - eine Stufe, die dieser Agent nicht anbietet -> ``ValueError`` (422),
       gleiche Konvention wie die Allowlist der TUI-Pfade."""
     state = await asyncio.to_thread(read_acp_chat_state, agent)
-    options, _current = _acp_config_option(state, "thinking")
+    option_id, options, _current = _acp_thinking_option(state)
     levels = [o["value"] for o in options]
-    if not levels:
+    if option_id is None or not levels:
         raise InputNotSupportedError()
     if level not in levels:
         raise ValueError(f"effort level not allowlisted: {level!r}")
 
-    answer = await transport_for(agent).config("thinking", level)
+    answer = await transport_for(agent).config(option_id, level)
     if not answer.get("ok"):
         raise EffortSwitchRejectedError(
             str(answer.get("detail") or answer.get("error") or "rejected")
@@ -1735,9 +1769,11 @@ async def effort_capabilities(agent) -> dict[str, object]:
     Bedienelement wortlos verschwinden zu lassen.
 
     Kopflose Agenten (``acp-docker``/``acp-http``) beantworten beide Fragen
-    aus EINER Quelle: ``configOptions[id=thinking]`` in der Zustandsdatei des
-    Chat-Daemons. Fehlt sie, ist die Antwort leer mit Grund
-    ``acp_state_missing`` — nie eine Ausnahme.
+    aus EINER Quelle: der Denk-Stufen-Zeile der ``configOptions`` in der
+    Zustandsdatei des Chat-Daemons (id ``thinking`` oder Kategorie
+    ``thought_level``, ``_acp_thinking_option``). Fehlt die Datei, ist die
+    Antwort leer mit Grund ``acp_state_missing``; ist sie da, aber ohne
+    Denk-Stufe, mit ``harness_no_effort`` — nie eine Ausnahme.
 
     Never raises: an unsupported runtime is a normal, expected answer here
     (unlike ``set_effort``, where it's a request the caller made in error),
@@ -1754,9 +1790,17 @@ async def effort_capabilities(agent) -> dict[str, object]:
         # mit Grund, damit das UI es erklaeren kann statt den Chip wortlos
         # verschwinden zu lassen.
         state = await asyncio.to_thread(read_acp_chat_state, agent)
-        options, current = _acp_config_option(state, "thinking")
-        if not options:
+        if state is None:
             return _no_effort("acp_state_missing")
+        _option_id, options, current = _acp_thinking_option(state)
+        if not options:
+            # Die Datei ist da, der Harness bietet nur keine Denk-Stufe an
+            # (Hermes vor dem Upstream-PR: ``configOptions: []``). Das ist
+            # etwas anderes als "noch nichts gemeldet" — der Grund nennt den
+            # Harness, damit das UI ihn beim Namen nennen kann.
+            caps = _no_effort("harness_no_effort")
+            caps["effortHarness"] = getattr(agent, "harness", None)
+            return caps
         levels = [o["value"] for o in options]
         return {
             "effortLevels": levels,
@@ -1922,6 +1966,11 @@ def _no_effort(reason: str) -> dict[str, object]:
     - ``foreign_harness``: diese CLI hat kein Effort-Pendant (kimi).
     - ``no_pane``: die Runtime hat keinen steuerbaren Kanal (Hermes, Jarvis).
     - ``model_no_effort``: Harness kann es, das MODELL des Agenten nicht.
+    - ``acp_state_missing``: kopfloser Agent, sein Chat-Daemon hat (noch)
+      keine Zustandsdatei geschrieben — die Einstellungen sind unbekannt.
+    - ``harness_no_effort``: kopfloser Agent, die Zustandsdatei ist da, sein
+      Harness bietet aber keine Denk-Stufe an. Traegt zusaetzlich
+      ``effortHarness`` (der Harness-Schluessel, z.B. ``hermes``).
 
     ``effortModel`` ist hier immer ``None``: nur beim modellbedingten Fall
     hat die CLI ueberhaupt ein Modell genannt. Das Feld steht trotzdem in
