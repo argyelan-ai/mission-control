@@ -2025,6 +2025,7 @@ _ACTIVITY_KIND_MAP: dict[str, str] = {
     "task.stuck_awaiting_orchestrator_close": "stuck",
     "task.auto_closed_stuck": "stuck",
     "task.late_update_rejected": "stuck",
+    "task.chat_write_rejected": "stuck",
     "task.stale_update_warning": "stuck",
     "task.promoted": "promote",
     "task.promote_approval_required": "promote",
