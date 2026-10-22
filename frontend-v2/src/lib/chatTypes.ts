@@ -647,8 +647,17 @@ export interface ChatCapabilities {
    *    ("Effort not supported for <modell>") — der haeufigste Fall bei
    *    Agenten auf lokalen/eigenen Modellen.
    *  - `foreign_harness`: diese CLI kennt `/effort` gar nicht (kimi, omp).
-   *  - `no_pane`: die Runtime hat keinen steuerbaren Kanal (Hermes, Jarvis). */
+   *  - `no_pane`: die Runtime hat keinen steuerbaren Kanal (Jarvis, Hermes
+   *    auf dem alten tmux-Treiber).
+   *  - `acp_state_missing`: kopfloser Agent (ACP), sein Chat-Daemon hat noch
+   *    keine Einstellungen gemeldet.
+   *  - `harness_no_effort`: kopfloser Agent, Einstellungen gemeldet, aber
+   *    sein Harness bietet keine Denkstufe an (Name in `effortHarness`). */
   effortReason?: string | null;
+  /** Der Harness-Schluessel (z.B. `hermes`) bei `effortReason:
+   *  "harness_no_effort"` — der Satz nennt ihn dann beim Namen
+   *  (`harnessLabel`). Absent = allgemeiner Satz ohne Namen. */
+  effortHarness?: string | null;
   /** Das MODELL, ueber das die CLI die Effort-Aussage gemacht hat — direkt aus
    *  ihrer eigenen Picker-Zeile ("Effort not supported for <modell>"). Nur bei
    *  `effortReason: "model_no_effort"` gesetzt.

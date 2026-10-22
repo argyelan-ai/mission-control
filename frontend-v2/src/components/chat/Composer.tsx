@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { Brain, Square, ArrowUp, ChevronDown, Paperclip, X, FileText} from "lucide-react";
 import { C, STATUS } from "@/lib/colors";
@@ -22,6 +22,7 @@ import {
 } from "@/lib/chatTypes";
 import { CLAUDE_MODELS, SLASH_COMMANDS, formatCompactTokens, type SlashCommand } from "@/lib/claudeCommands";
 import { ContextPanel, cacheHitRateOf } from "./ContextPanel";
+import { harnessLabel } from "@/components/shared/HarnessIcon";
 import { formatShare } from "@/lib/usage";
 
 const MAX_ROWS = 8;
@@ -82,6 +83,16 @@ export function effortReasonText(
         : t("effortLockedModelNoEffortGeneric");
     case "foreign_harness":
       return t("effortLockedForeignHarness");
+    /* Kopflose Agenten (ACP): die Zustandsdatei fehlt noch — oder sie ist da,
+       aber der Harness bietet keine Denkstufe an (Hermes vor seinem
+       Upstream-PR). Beides ist KEIN fehlendes Terminal; vorher landeten
+       beide Codes im Terminal-Satz unten (Operator-Befund 22.10.2026). */
+    case "acp_state_missing":
+      return t("effortLockedStateMissing");
+    case "harness_no_effort":
+      return capabilities?.effortHarness
+        ? t("effortLockedHarnessNoEffort", { harness: harnessLabel(capabilities.effortHarness) })
+        : t("effortLockedHarnessNoEffortGeneric");
     /* `no_pane` ist zugleich der Rueckfall: der Text nennt die fehlende
        Terminal-Steuerung und ist damit fuer aeltere Backends ohne Grund-Feld
        die einzige Aussage, die nicht raet. */
@@ -256,6 +267,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const effortBoxRef = useRef<HTMLDivElement | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
+  /** Ties the locked chip to its reason popover (aria-controls). */
+  const effortReasonId = useId();
   /** Vorschau-Position des Reglers waehrend des Ziehens; `null` = zeige den
    *  echten aktuellen Wert. Erst das Loslassen schickt den Wechsel los. */
   const [draftIndex, setDraftIndex] = useState<number | null>(null);
@@ -1232,28 +1245,66 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                  dann bleibt die Saeule leer — `staticFillPct` ist 0, sobald
                  keine Stufe zuzuordnen ist — und der Chip traegt nur noch den
                  Grund. Das ist der ganze Zweck des Grundes. */
-              <span
-                data-testid="effort-chip-static"
-                data-level={currentEffort ?? "auto"}
-                aria-label={`${t("effortLevelLocked", { level: currentEffort ?? "auto" })} — ${effortReasonText(capabilities, currentModel, t)}`}
-                title={effortReasonText(capabilities, currentModel, t)}
-                data-reason={capabilities?.effortReason ?? "unspecified"}
-                className="inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full cursor-default"
-                style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
-              >
-                <Brain size={15} strokeWidth={1.75} aria-hidden="true" />
-                <span
-                  aria-hidden="true"
-                  className="relative inline-block w-[4px] h-[15px] rounded-full overflow-hidden shrink-0"
-                  style={{ backgroundColor: C.bgHover, border: `1px solid ${C.borderSubtle}` }}
+              /* Seit 22.10.2026 ein Knopf: der Grund stand nur im title — und den
+                 zeigt ein Handy nie. Antippen oeffnet denselben Satz als kleines
+                 Popover (gleiche Optik und Schliess-Regeln wie der Regler:
+                 Klick daneben / Escape, `effortBoxRef`). Gesperrt bleibt
+                 gesperrt: es oeffnet sich nur die Erklaerung, nie ein Regler.
+                 Fingerziel am Handy 44 px (K11) — die Flaeche waechst, die
+                 sichtbare Pille nicht (-my-1 haelt die Zeilenhoehe). */
+              <div className="relative" ref={effortBoxRef}>
+                <button
+                  type="button"
+                  onClick={() => setEffortOpen((v) => !v)}
+                  aria-expanded={effortOpen}
+                  aria-controls={effortOpen ? effortReasonId : undefined}
+                  data-testid="effort-chip-static"
+                  data-level={currentEffort ?? "auto"}
+                  aria-label={`${t("effortLevelLocked", { level: currentEffort ?? "auto" })} — ${effortReasonText(capabilities, currentModel, t)}`}
+                  title={effortReasonText(capabilities, currentModel, t)}
+                  data-reason={capabilities?.effortReason ?? "unspecified"}
+                  className="inline-flex items-center justify-center w-12 h-11 -my-1 md:h-8 md:my-0 cursor-pointer"
+                  style={{ color: C.textMuted }}
                 >
                   <span
-                    data-testid="effort-gauge-fill-static"
-                    className="absolute bottom-0 left-0 right-0 rounded-full"
-                    style={{ height: `${staticFillPct}%`, backgroundColor: STATUS.online }}
-                  />
-                </span>
-              </span>
+                    aria-hidden="true"
+                    className="inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full"
+                    style={{
+                      border: `1px solid ${C.border}`,
+                      backgroundColor: effortOpen ? C.bgHover : "transparent",
+                    }}
+                  >
+                    <Brain size={15} strokeWidth={1.75} aria-hidden="true" />
+                    <span
+                      aria-hidden="true"
+                      className="relative inline-block w-[4px] h-[15px] rounded-full overflow-hidden shrink-0"
+                      style={{ backgroundColor: C.bgHover, border: `1px solid ${C.borderSubtle}` }}
+                    >
+                      <span
+                        data-testid="effort-gauge-fill-static"
+                        className="absolute bottom-0 left-0 right-0 rounded-full"
+                        style={{ height: `${staticFillPct}%`, backgroundColor: STATUS.online }}
+                      />
+                    </span>
+                  </span>
+                </button>
+                {effortOpen && (
+                  <div
+                    id={effortReasonId}
+                    role="status"
+                    data-testid="effort-reason"
+                    className="absolute bottom-full right-0 mb-2 w-64 rounded-lg z-20 p-3 text-xs"
+                    style={{
+                      backgroundColor: C.bgElevated,
+                      border: `1px solid ${C.border}`,
+                      boxShadow: "var(--shadow-elevated)",
+                      color: C.textSecondary,
+                    }}
+                  >
+                    {effortReasonText(capabilities, currentModel, t)}
+                  </div>
+                )}
+              </div>
             ) : (
               /* Aeltere Backends ohne Stufenleiter in den Capabilities: ohne
                  Leiter waere jede Saeulen-Fuellung geraten — dann lieber der

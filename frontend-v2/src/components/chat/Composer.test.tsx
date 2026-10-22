@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Composer } from "./Composer";
+import { Composer, effortReasonText } from "./Composer";
 import type { ChatAttachment, StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
@@ -1042,6 +1042,83 @@ describe("Composer", () => {
       const chip = screen.getByTestId("effort-chip-static");
       expect(chip).toHaveAttribute("data-reason", "no_pane");
       expect(chip.getAttribute("title")).toMatch(/terminal/i);
+    });
+
+    describe("kopflose Agenten: Grund am gesperrten Chip (Hermes, 22.10.2026)", () => {
+      const lockedCaps = (reason: string, harness: string | null = null) => ({
+        effortLevels: [],
+        canSwitchEffort: false,
+        effort: null,
+        effortShared: false,
+        effortReason: reason,
+        effortModel: null,
+        effortHarness: harness,
+      });
+      const en = (key: string, values?: Record<string, string>) =>
+        `${key}${values ? JSON.stringify(values) : ""}`;
+
+      it("hat fuer jeden Grund-Code einen eigenen Text — keiner faellt auf den Terminal-Satz zurueck", () => {
+        expect(effortReasonText(lockedCaps("acp_state_missing"), null, en)).toBe("effortLockedStateMissing");
+        expect(effortReasonText(lockedCaps("harness_no_effort", "hermes"), null, en)).toBe(
+          'effortLockedHarnessNoEffort{"harness":"Hermes"}',
+        );
+        // Ohne Harness-Schluessel (aelteres Backend): der allgemeine Satz, kein leerer Name.
+        expect(effortReasonText(lockedCaps("harness_no_effort"), null, en)).toBe(
+          "effortLockedHarnessNoEffortGeneric",
+        );
+        expect(effortReasonText(lockedCaps("no_pane"), null, en)).toBe("effortLockedHint");
+      });
+
+      it("nennt Hermes beim Namen, wenn der Harness keine Denkstufe anbietet", () => {
+        render(
+          <Composer agentId="a1" usage={null} capabilities={lockedCaps("harness_no_effort", "hermes")}
+            state={null} onSend={vi.fn()} onStop={vi.fn()} />,
+        );
+        const chip = screen.getByTestId("effort-chip-static");
+        expect(chip).toHaveAttribute("data-reason", "harness_no_effort");
+        expect(chip.getAttribute("title")).toBe("Hermes doesn't offer a thinking level.");
+      });
+
+      it("sagt bei fehlender Zustandsdatei, dass der Agent noch nichts gemeldet hat", () => {
+        render(
+          <Composer agentId="a1" usage={null} capabilities={lockedCaps("acp_state_missing")}
+            state={null} onSend={vi.fn()} onStop={vi.fn()} />,
+        );
+        const title = screen.getByTestId("effort-chip-static").getAttribute("title") ?? "";
+        expect(title).toMatch(/not reported its settings yet/);
+        expect(title).not.toMatch(/terminal/i);
+      });
+
+      it("zeigt den Grund beim Antippen (Handy kennt kein title) und schliesst mit Escape", async () => {
+        const user = userEvent.setup();
+        render(
+          <Composer agentId="a1" usage={null} capabilities={lockedCaps("harness_no_effort", "hermes")}
+            state={null} onSend={vi.fn()} onStop={vi.fn()} />,
+        );
+        const chip = screen.getByTestId("effort-chip-static");
+        expect(chip.tagName).toBe("BUTTON");
+        expect(chip).toHaveAttribute("aria-expanded", "false");
+        expect(screen.queryByTestId("effort-reason")).not.toBeInTheDocument();
+
+        await user.click(chip);
+        expect(chip).toHaveAttribute("aria-expanded", "true");
+        expect(screen.getByTestId("effort-reason")).toHaveTextContent("Hermes doesn't offer a thinking level.");
+        // Gesperrt bleibt gesperrt: kein Regler, nur der Satz.
+        expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
+
+        await user.keyboard("{Escape}");
+        expect(screen.queryByTestId("effort-reason")).not.toBeInTheDocument();
+      });
+
+      it("hat am Handy ein 44-px-Fingerziel (K11), am Desktop die alte Hoehe", () => {
+        render(
+          <Composer agentId="a1" usage={null} capabilities={lockedCaps("acp_state_missing")}
+            state={null} onSend={vi.fn()} onStop={vi.fn()} />,
+        );
+        const cls = screen.getByTestId("effort-chip-static").className;
+        expect(cls).toMatch(/(^|\s)h-11(\s|$)/);
+        expect(cls).toMatch(/(^|\s)md:h-8(\s|$)/);
+      });
     });
 
     it("bleibt ohne Grund, ohne Stufen und ohne Wert unsichtbar", () => {
