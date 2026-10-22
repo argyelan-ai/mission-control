@@ -162,29 +162,100 @@ async def list_spark_models(current_user=Depends(require_user)):
     return await orchestrator.spark_models_status()
 
 
+async def _served_model_or_none(model: str | None) -> str | None:
+    """``model`` or, when empty, the Spark's active model (None when the box
+    is unreachable). A /v1/models GET only — never a completion."""
+    served = (model or "").strip()
+    if served:
+        return served
+    status_now = await orchestrator.spark_models_status()
+    if not status_now["reachable"] or not status_now["active"]:
+        return None
+    return status_now["active"]
+
+
 @router.get("/effort-levels")
 async def get_effort_levels(
     model: str | None = None,
-    refresh: bool = False,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
     """Bench W0.6: which effort levels the direct-API row may offer for
-    ``model`` (empty = the Spark's active model). Answered from the probe
-    cache (per runtime, served model and serving_since); a missing, failed
-    or ``refresh``-ed probe runs now — 2-4 tiny requests against the box.
-    Always 200: an unreachable box is ``reachable: false``, a probe that
-    found no working key is ``status: "no_effect"`` (only "default" then)."""
+    ``model`` (empty = the Spark's active model) — from the probe cache
+    ONLY (per runtime, served model and serving_since). Read-only: no DB
+    write and no completion request to the box (round-1 review: opening the
+    dialog used to probe). Never checked for this engine run =
+    ``status: "unchecked"``; the dialog then offers an explicit check
+    (``POST /effort-levels/check``). Always 200."""
     from . import effort_probe
 
-    served = (model or "").strip()
-    if not served:
-        status_now = await orchestrator.spark_models_status()
-        if not status_now["reachable"] or not status_now["active"]:
-            return effort_probe.serialize(None, None, reachable=False)
-        served = status_now["active"]
-    row = await effort_probe.get_or_probe(session, served, refresh=refresh)
+    served = await _served_model_or_none(model)
+    if served is None:
+        return effort_probe.serialize(None, None, reachable=False)
+    row = await effort_probe.stored_probe(session, served)
+    if row is None:
+        return effort_probe.serialize(None, served, status="unchecked")
     return effort_probe.serialize(row, served, reachable=effort_probe.reached(row))
+
+
+class EffortCheckRequest(BaseModel):
+    # Empty / None = the Spark's active model.
+    model: str | None = Field(default=None, max_length=256)
+
+
+@router.post("/effort-levels/check")
+async def check_effort_levels(
+    body: EffortCheckRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Run the effort probe now (2-4 tiny requests against the box) and
+    store it — the operator's explicit "check" in the dialog. 409 while the
+    Spark is busy (a bench run generating there, or an agent on a Spark
+    runtime working on a task). Box unreachable = 200 ``reachable: false``."""
+    from . import effort_probe
+
+    reason = await effort_probe.spark_busy_reason(session)
+    if reason:
+        raise HTTPException(409, reason)
+    served = await _served_model_or_none(body.model)
+    if served is None:
+        return effort_probe.serialize(None, None, reachable=False)
+    row = await effort_probe.get_or_probe(session, served, refresh=True)
+    return effort_probe.serialize(row, served, reachable=effort_probe.reached(row))
+
+
+def _unique_labels(specs: list[BenchModelSpec], efforts: list[str]) -> None:
+    """Every entry of a challenge needs its own label (round-1 user test:
+    "DeepSeek" Off vs Max became two identical rows in the UI and video).
+
+    Rows whose labels collide (case and outer spaces ignored) but asked for
+    different efforts get the effort word appended — "DeepSeek · Max". Rows
+    that collide with the SAME effort are a real duplicate: 422."""
+    groups: dict[str, list[int]] = {}
+    for i, spec in enumerate(specs):
+        groups.setdefault(spec.label.strip().casefold(), []).append(i)
+    for idxs in groups.values():
+        if len(idxs) < 2:
+            continue
+        levels = [efforts[i] for i in idxs]
+        if len(set(levels)) != len(levels):
+            raise HTTPException(
+                422,
+                f"Labels must be unique per challenge: {specs[idxs[0]].label.strip()!r} "
+                "appears twice with the same effort — give one row a different label.",
+            )
+        for i in idxs:
+            word = orchestrator.EFFORT_WORDS.get(efforts[i], efforts[i])
+            specs[i].label = f"{specs[i].label.strip()} · {word}"
+    seen: set[str] = set()
+    for spec in specs:
+        key = spec.label.strip().casefold()
+        if key in seen:
+            raise HTTPException(
+                422, f"Labels must be unique per challenge: {spec.label.strip()!r} appears twice."
+            )
+        seen.add(key)
 
 
 async def _validate_effort(session: AsyncSession, spec: BenchModelSpec) -> str:
@@ -248,6 +319,7 @@ async def create_challenge(
             if not spec.label.strip():
                 spec.label = spec.spark_model
     efforts = [await _validate_effort(session, spec) for spec in body.models]
+    _unique_labels(body.models, efforts)
 
     series_no = None
     if body.series_label:
@@ -533,7 +605,16 @@ async def update_entry(
         )
     fields = body.model_dump(exclude_unset=True)
     if "model_label" in fields and fields["model_label"]:
-        entry.model_label = fields["model_label"].strip() or entry.model_label
+        new_label = fields["model_label"].strip() or entry.model_label
+        siblings = await _entries_for(session, entry.challenge_id)
+        if any(
+            e.id != entry.id and e.model_label.strip().casefold() == new_label.casefold()
+            for e in siblings
+        ):
+            raise HTTPException(
+                409, f"Another entry of this challenge is already called {new_label!r}."
+            )
+        entry.model_label = new_label
     if "display_tag" in fields:
         entry.display_tag = (fields["display_tag"] or "").strip() or None
     session.add(entry)

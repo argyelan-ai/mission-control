@@ -94,7 +94,8 @@ async def test_generate_spark_entry_writes_artifact_and_metrics(
     assert entry.status == "generated"
     assert entry.error is None
     assert entry.artifact_path is not None
-    expected = tmp_path / f"bench-{ch.id}" / "DeepSeek" / "index.html"
+    # One folder per entry: label + entry-id prefix (round-1 P3).
+    expected = tmp_path / f"bench-{ch.id}" / f"DeepSeek-{entry.id.hex[:8]}" / "index.html"
     assert str(expected) == entry.artifact_path
     assert expected.read_text() == "<html><body>ball</body></html>"
     assert entry.metrics["duration_ms"] == 1234

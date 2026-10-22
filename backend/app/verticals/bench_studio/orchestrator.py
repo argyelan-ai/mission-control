@@ -85,6 +85,51 @@ def challenge_dir(challenge_id: uuid.UUID) -> Path:
     return SHARED_DELIVERABLES / f"bench-{challenge_id}"
 
 
+def entry_dir(entry: BenchEntry) -> Path:
+    """Artifact folder of ONE entry: ``<challenge dir>/<label>-<entry id 8>/``.
+
+    The label alone was the folder until round-1 user tests (23.10.2026):
+    two rows with the same model (effort Off vs Max) got the same label,
+    so the second run overwrote the first one's index.html and recording
+    without a trace. The id suffix makes the folder unique per entry; the
+    label stays in front so a human browsing the share can still read it.
+    Existing entries keep their stored artifact_path/video_path."""
+    return challenge_dir(entry.challenge_id) / f"{_safe_label(entry.model_label)}-{entry.id.hex[:8]}"
+
+
+#: Display word for an effort level in labels ("DeepSeek · Max"). English on
+#: purpose: labels are data that ends up in the (English) video, not UI copy.
+EFFORT_WORDS = {
+    "default": "Default", "off": "Off", "on": "On", "low": "Low",
+    "medium": "Medium", "high": "High", "max": "Max",
+}
+
+
+def entry_effort_level(entry: BenchEntry) -> str | None:
+    """The effort a direct-API entry asked for, or None for "default" (the
+    server decides, nothing was sent) and for agent entries (their level is
+    recorded from the session, not chosen)."""
+    if entry.source_kind != "spark":
+        return None
+    level = (entry.metrics or {}).get("effort_requested") or "default"
+    return None if level == "default" else level
+
+
+def video_label(entry: BenchEntry) -> str:
+    """The entry's name in the video (outro row, plain-grid label): the
+    label plus " · effort max" for a direct-API row that asked for a level —
+    unless the label already ends with that word (create appends it to
+    labels that would otherwise collide, "DeepSeek · Max")."""
+    label = entry.model_label
+    level = entry_effort_level(entry)
+    if not level:
+        return label
+    word = EFFORT_WORDS.get(level, level).lower()
+    if label.strip().lower().endswith(word):
+        return label
+    return f"{label} · effort {level}"
+
+
 def _versioned_output_name(prefix: str = "grid") -> str:
     """Cache-busting filename for a compose output: '<prefix>-<8 hex>.mp4'.
 
@@ -302,6 +347,14 @@ async def _probe_spark_models() -> dict:
     except (httpx.HTTPError, KeyError, ValueError):
         return {"reachable": False, "models": [], "active": None}
     active = await spark._resolve_llm_model()
+    if models and active not in models:
+        # The box is the truth: a resolver answer it does not serve would
+        # freeze a wrong model into an "auto" entry (round-1 user test:
+        # "auto" named the stopped GLM while DeepSeek was served).
+        logger.warning(
+            "bench spark-models: resolver said %r, box serves %s — using the box", active, models
+        )
+        active = models[0]
     return {"reachable": True, "models": models, "active": active or None}
 
 
@@ -458,11 +511,24 @@ async def generate_spark_entry(
 
     Never raises — failures land as entry.status='failed' + error text.
     """
+    from app.services import reasoning_params
+
     entry.status = "generating"
     session.add(entry)
     await session.commit()
     try:
         effort_fields, max_tokens, run_params = await _spark_effort_request(session, entry)
+        # Store what goes on the wire BEFORE the request: a run can think for
+        # many minutes, and the detail page read "sent: nothing" the whole
+        # time (round-1 user test). The response below overwrites it with
+        # the same value.
+        entry.metrics = {
+            **(entry.metrics or {}),
+            **run_params,
+            "effort_sent": reasoning_params.wire_fields(effort_fields or {}),
+        }
+        session.add(entry)
+        await session.commit()
         content, metrics = await _spark_generate(
             prompt, entry.spark_model, effort_fields=effort_fields, max_tokens=max_tokens
         )
@@ -482,7 +548,7 @@ async def generate_spark_entry(
                     f"({metrics.get('max_tokens')}) before the page"
                 )
             raise ValueError("model returned no HTML content")
-        out_dir = challenge_dir(entry.challenge_id) / _safe_label(entry.model_label)
+        out_dir = entry_dir(entry)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "index.html"
         out_path.write_text(html, encoding="utf-8")
@@ -806,7 +872,7 @@ async def on_task_done(session: AsyncSession, task) -> None:
         entry.status = "failed"
         entry.error = "task done, but no index.html deliverable found (or path not readable)"
     else:
-        out_dir = challenge_dir(entry.challenge_id) / _safe_label(entry.model_label)
+        out_dir = entry_dir(entry)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "index.html"
         shutil.copyfile(html_src, out_path)
@@ -842,7 +908,7 @@ async def record_entry(entry: BenchEntry, challenge: BenchChallenge) -> dict:
     Uses the challenge's operator-chosen record_duration_s (Bench #18) when
     set, else the legacy RECORD_DURATION_S default — same fallback the
     NewChallengeDialog documents (None -> 10s)."""
-    out_dir = str(challenge_dir(entry.challenge_id) / _safe_label(entry.model_label))
+    out_dir = str(entry_dir(entry))
     duration_s = (
         challenge.record_duration_s
         if challenge.record_duration_s is not None
@@ -1101,6 +1167,11 @@ async def _build_branding_payload(
                         tag = agent.harness.upper()
                     elif agent.name:
                         tag = agent.name.upper()
+        effort = entry_effort_level(entry)
+        if effort and not entry.display_tag:
+            # Two rows of the same model (Off vs Max) looked identical in the
+            # video (round-1 user test). An operator tag stays verbatim.
+            tag = f"{tag} · EFFORT {effort.upper()}"
         models.append({"label": entry.model_label, "tag": tag})
 
         # Fresh snapshot of the attributed usage (agent entries; the
@@ -1124,7 +1195,7 @@ async def _build_branding_payload(
             token_usage = (int(tokens_in), int(tokens_out))
 
         outro_rows.append({
-            "name": entry.model_label,
+            "name": video_label(entry),
             "time": _format_outro_time(duration_ms),
             "size": _format_outro_size(entry.artifact_path),
             "cost": _format_outro_cost(cost_usd, entry.source_kind, metrics.get("locality")),
@@ -1167,7 +1238,7 @@ async def compose_challenge(
     )
     payload: dict = {
         "inputs": [e.video_path for e in ordered],
-        "labels": [e.model_label for e in ordered],
+        "labels": [video_label(e) for e in ordered],
         "layout": "grid",
         "output_path": str(challenge_dir(challenge.id) / output_name),
         # Bench #18: scales the sidecar's branded-compose ffmpeg timeout
