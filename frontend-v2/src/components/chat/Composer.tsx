@@ -402,6 +402,14 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    * der Regler auf der ersten — angezeigt wird trotzdem, was wirklich gilt. */
   const currentEffortIndex = currentEffort ? effortLevels.indexOf(currentEffort) : -1;
   const sliderIndex = draftIndex ?? (currentEffortIndex >= 0 ? currentEffortIndex : 0);
+  /* Was unter dem Regler steht. Meldet der Agent einen Eintrag ohne Rang
+   * (Hermes `default` = konfigurierte Stufe), ruht der Daumen zwar auf der
+   * ersten Stufe, die Beschriftung darf aber nicht "none" behaupten. Beim
+   * Ziehen zeigt sie wieder die Vorschau-Stufe. */
+  const sliderLabel =
+    draftIndex == null && currentEffort != null && !isRankedEffort(currentEffort)
+      ? currentEffort
+      : effortLevels[sliderIndex];
 
   /* Fuellstand der Saeule im Brain-Knopf: Anteil der aktuellen Stufe an der
    * Stufenleiter des Harness. +1, damit schon "low" sichtbar gefuellt ist —
@@ -1189,7 +1197,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                       list="effort-ticks"
                       data-testid="effort-slider"
                       aria-label={t("effortLevel")}
-                      aria-valuetext={effortLevels[sliderIndex]}
+                      aria-valuetext={sliderLabel}
                       disabled={pendingEffort != null}
                       autoFocus
                       /* Ziehen aendert nur die Vorschau. Gesendet wird erst beim
@@ -1216,7 +1224,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                         className="font-mono text-xs"
                         style={{ color: C.accent }}
                       >
-                        {effortLevels[sliderIndex]}
+                        {sliderLabel}
                       </span>
                       {/* Pro Stufe, nicht pauschal: low/medium/high/xhigh
                           schreiben den persistierten Standard des Agenten um,

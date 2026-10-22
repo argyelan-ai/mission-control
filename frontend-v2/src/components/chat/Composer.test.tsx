@@ -1303,6 +1303,20 @@ describe("Composer", () => {
         expect(screen.getByTestId("effort-gauge-fill").style.height).toBe("0%");
       });
 
+      it("names 'default' under the slider instead of the slider's first stop", async () => {
+        // The thumb has to rest somewhere; the label must not claim "none"
+        // while the model thinks at its configured level.
+        const user = userEvent.setup();
+        renderHermes("default");
+        await user.click(screen.getByTestId("effort-chip"));
+        expect(shownLevel()).toBe("default");
+        expect(slider()).toHaveAttribute("aria-valuetext", "default");
+        expect(screen.getByTestId("effort-default")).toHaveAttribute("aria-pressed", "true");
+        // Dragging previews a real level again.
+        fireEvent.change(slider(), { target: { value: String(RANKED.indexOf("low")) } });
+        expect(shownLevel()).toBe("low");
+      });
+
       it("offers 'default' as its own button that sends the value", async () => {
         const user = userEvent.setup();
         renderHermes("max");
