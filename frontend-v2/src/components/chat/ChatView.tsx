@@ -19,6 +19,7 @@
  * orthogonal to this toggle.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
@@ -70,7 +71,7 @@ import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
 import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
 import type { PanelKind } from "./PanelRail";
-import { useChatTasks } from "@/hooks/useChatTasks";
+import { chatTasksKey, useChatTasks } from "@/hooks/useChatTasks";
 import { useTaskSteps, type TaskStepsSpec } from "@/hooks/useTaskSteps";
 import { TaskStepsAgentContext } from "@/hooks/useTaskStepDetail";
 import { ScrollAnchorContext, type ScrollAnchor } from "./useScrollAnchor";
@@ -206,6 +207,9 @@ export const INITIAL_RENDER_WINDOW = 30;
 /** At most this long an omp chat waits for its task rows before it shows
  *  what it has (spec A S6). */
 export const TASK_LOAD_GATE_MS = 1500;
+/** Chat states whose crossing (to or from) asks for the task stubs at once:
+ *  a task was delivered, started or ended (spec A §2.2). */
+const TASK_FLIP_STATES: ReadonlySet<string> = new Set(["task_working", "waiting_model", "idle"]);
 
 const EMPTY_ROWS: never[] = [];
 
@@ -517,6 +521,20 @@ export function ChatView({
   const chatOnScreen = effectiveView === "chat" && voiceOnScreen;
   const chatTasks = useChatTasks(agentId, taskGateOn && chatOnScreen);
   const tasksApply = taskGateOn && chatTasks.data?.applies === true;
+  // A chat-state flip asks for the stubs at once (spec §2.2/§6.1): a task
+  // delivered to an idle agent would otherwise wait for the 60 s idle poll —
+  // and with WorkingOnRow hidden for these agents nothing would name it
+  // meanwhile (review MUST-2 on #937). The ETag keeps a no-change answer a 304.
+  const queryClient = useQueryClient();
+  const chatStatus = stream.state?.status ?? null;
+  const prevChatStatusRef = useRef(chatStatus);
+  useEffect(() => {
+    const prev = prevChatStatusRef.current;
+    prevChatStatusRef.current = chatStatus;
+    if (!taskGateOn || !agentId || prev == null || prev === chatStatus) return;
+    if (!TASK_FLIP_STATES.has(prev) && !(chatStatus != null && TASK_FLIP_STATES.has(chatStatus))) return;
+    void queryClient.invalidateQueries({ queryKey: chatTasksKey(agentId) });
+  }, [chatStatus, taskGateOn, agentId, queryClient]);
   const currentStubs: ChatTaskStub[] = useMemo(
     () => (tasksApply && chatTasks.data?.applies ? chatTasks.data.tasks : []),
     [tasksApply, chatTasks.data],

@@ -198,6 +198,35 @@ describe("ChatView — task sections (spec A)", () => {
     expect(api.chat.tasks).not.toHaveBeenCalled();
   });
 
+  it("§2.2/MUST-2: a chat-state flip asks for the stubs at once — no wait for the 60 s idle poll", async () => {
+    serve({ applies: true, tasks: [], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Delivered work")]) });
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(0), "go")], state: { kind: "state", status: "idle", prompt: null } }));
+    const { rerenderView } = renderView();
+    await screen.findByText("go");
+    await waitFor(() => expect(api.chat.tasks).toHaveBeenCalledTimes(1));
+    // The task is delivered: the server now lists it, the SSE says so.
+    vi.mocked(api.chat.tasks).mockResolvedValue({
+      data: { applies: true, tasks: [stub()], queued: 0, hasMore: false },
+      etag: '"t2"',
+    });
+    mockStream.mockReturnValue(
+      streamOf({ events: [msg(at(0), "go")], state: { kind: "state", status: "task_working", prompt: null } }),
+    );
+    rerenderView();
+    expect(await screen.findByTestId("chat-task-segment")).toBeInTheDocument();
+    expect(api.chat.tasks).toHaveBeenCalledTimes(2);
+    // A flip between two states outside the set (working ↔ waiting_input) asks nothing.
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(0), "go")], state: { kind: "state", status: "working", prompt: null } }));
+    rerenderView();
+    await waitFor(() => expect(api.chat.tasks).toHaveBeenCalledTimes(3)); // task_working → working: a crossing
+    mockStream.mockReturnValue(
+      streamOf({ events: [msg(at(0), "go")], state: { kind: "state", status: "waiting_input", prompt: null } }),
+    );
+    rerenderView();
+    await act(async () => {});
+    expect(api.chat.tasks).toHaveBeenCalledTimes(3);
+  });
+
   it("1/D2: task rows stand at their time, the operator's message between two segments", async () => {
     serve(
       { applies: true, tasks: [stub()], queued: 0, hasMore: false },
