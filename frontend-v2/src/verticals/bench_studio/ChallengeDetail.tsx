@@ -28,6 +28,7 @@ import { FilePreview } from "@/components/task/FilePreview";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { BENCH_STATUS_COLOR, ENTRY_STATUS_COLOR } from "./ChallengesTab";
 import { DraftDialog } from "./DraftDialog";
+import { EntryEffort } from "./EntryEffort";
 import { EntryTaskState } from "./EntryTaskState";
 import type { BenchChallenge, ChallengeAction, BenchEntry } from "./types";
 
@@ -501,6 +502,7 @@ export function ChallengeDetail({
                 generatingLabel={entry.status === "generating" ? t("generating") : t("waiting")}
               />
             ) : null}
+            <EntryEffort entry={entry} />
             {entry.error && (
               <span className="text-xs" style={{ color: C.error }}>{entry.error}</span>
             )}

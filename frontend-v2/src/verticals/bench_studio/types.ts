@@ -16,6 +16,14 @@ export interface BenchEntry {
   video_path: string | null;
   screenshot_path: string | null;
   metrics: {
+    // Effort record (bench W0.6/W0.7) — see EffortRecord.
+    effort_requested?: EffortLevel;
+    effort_sent?: { key: string; value: string | boolean } | null;
+    effort_observed?: EffortObserved;
+    thinking_key?: string | null;
+    finish_reason?: string | null;
+    truncated?: boolean;
+    max_tokens?: number;
     duration_ms?: number;
     tokens_in?: number;
     tokens_out?: number;
@@ -92,6 +100,33 @@ export interface BenchModelSpec {
   // Custom chip tag for the branded video (e.g. "OMP · DGX SPARK");
   // empty/undefined = harness-derived default (backend).
   display_tag?: string | null;
+  // Direct-API rows only: a level the effort probe found for the served
+  // model; null/undefined = "default" (nothing sent). Agent rows: never set.
+  effort?: EffortLevel | null;
+}
+
+// Effort (thinking level) — backend services/reasoning_params.EFFORT_LEVELS.
+export type EffortLevel = "default" | "off" | "on" | "low" | "medium" | "high" | "max";
+
+// What a run showed about thinking. API path: from the engine response;
+// agent path: the thinking level of the task's own omp session.
+export type EffortObserved =
+  | { thinking: "on" | "off"; reasoning_tokens: number | null; reasoning_chars: number }
+  | { source: "omp_session"; level: string; configured: string | null; changed: boolean; attempts: number }
+  | { source: "unknown"; reason: string };
+
+// GET /bench/effort-levels — the effort probe for one served model.
+export interface EffortLevels {
+  served_model_id: string | null;
+  reachable: boolean;
+  // ok: levels found · no_effect: no key changed thinking · failed: the probe could not run
+  status: "ok" | "no_effect" | "failed";
+  thinking_key: string | null;
+  effort_param: string | null;
+  levels: EffortLevel[];
+  default_observed: "on" | "off" | "unknown";
+  probed_at: string | null;
+  serving_since: string | null;
 }
 
 export interface BenchChallengeCreate {
