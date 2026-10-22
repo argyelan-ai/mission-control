@@ -50,6 +50,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.model_usage import ModelPrice, ModelUsageEvent, ModelUsageHarvestState
+from app.services.transcript_task_marker import line_may_name_task, task_marker
 
 # Extracts the MC dispatch task_id out of a "[MC DISPATCH] task_id=<uuid> ..."
 # prompt (Grok prompt_history.jsonl, Hermes first user message).
@@ -280,6 +281,15 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
     """
     records: list[dict[str, Any]] = []
     session_id = _derive_omp_session_id(path)
+    # The task this session works on, as the transcript itself names it
+    # (dispatch prompt ``**Task ID:** <uuid>`` in a user turn, or the omp
+    # bridge's ``taskId`` header) — stamped onto every record as
+    # ``dispatch_task_id``. Per line, not per file: one session can receive
+    # several dispatches in a row. Lines before the offset count too (the
+    # dispatch is usually the first user turn, long harvested). An ACP retry
+    # session has no dispatch in omp's own file — its bridge copy's header
+    # names the task from the start.
+    current_task = _bridge_copy_task_id(path)
     # omp-JSONL traegt das cwd NUR auf der `type:"session"`-Headerzeile —
     # message-Zeilen haben keins. Ohne diesen Fallback bleibt jedes omp-Event
     # cwd-los und damit fuer die Task-Attribution unsichtbar (Bench #18).
@@ -306,6 +316,14 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
                             header_cwd = head.get("cwd") or ""
                     except (json.JSONDecodeError, ValueError):
                         pass
+                if line_may_name_task(line):
+                    try:
+                        obj = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        obj = None
+                    marker = task_marker(obj) if isinstance(obj, dict) else None
+                    if marker:
+                        current_task = marker
                 rec = parse_transcript_line(line, session_id=session_id)
                 if rec is None:
                     continue
@@ -319,10 +337,49 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
                     continue
                 if not rec.get("cwd"):
                     rec["cwd"] = header_cwd
+                rec["dispatch_task_id"] = current_task
                 records.append(rec)
     except OSError as e:
         logger.warning("harvest_file(%s): OS error: %s", path, e)
     return records
+
+
+def _bridge_copy_task_id(path: str) -> str | None:
+    """``taskId`` from the header of the omp bridge's display copy of the
+    same session (``<folder>/.mc/`` or, for old copies, beside omp's file —
+    ``omp_chat.session_files``), or ``None``.
+
+    omp's own file never carries ``taskId``; only the bridge sink of the task
+    path writes it. Read only for files under ``omp-sessions`` and only the
+    first lines of each copy (the header is line 1)."""
+    if "omp-sessions" not in Path(path).parts:
+        return None
+    # Lazy: omp_chat imports this module (``_host_home``).
+    from app.services.omp_chat import session_files
+
+    own = Path(path)
+    try:
+        siblings = session_files(own)
+    except OSError:
+        return None
+    for sibling in siblings:
+        if sibling == own:
+            continue
+        try:
+            with open(sibling, "r", encoding="utf-8", errors="replace") as f:
+                for _, line in zip(range(5), f):
+                    if '"taskId"' not in line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    marker = task_marker(obj) if isinstance(obj, dict) else None
+                    if marker:
+                        return marker
+        except OSError:
+            continue
+    return None
 
 
 # ── Grok Build CLI source (ADR-066 host harness, Bench #18 PR1) ────────────
@@ -731,6 +788,54 @@ def _resolve_task_id(
     return newest["task_id"]
 
 
+async def _load_dispatch_tasks(
+    session: AsyncSession, records: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """{task id (lower-case str): {"task_id", "completed_at"}} for every
+    dispatch marker in ``records`` whose task still exists — a marker for a
+    deleted task must never become a dangling FK
+    (``model_usage_events_task_id_fkey``)."""
+    from app.models.task import Task
+
+    wanted: set[uuid.UUID] = set()
+    for rec in records:
+        marker = rec.get("dispatch_task_id")
+        if not marker:
+            continue
+        try:
+            wanted.add(uuid.UUID(marker))
+        except ValueError:
+            continue
+    if not wanted:
+        return {}
+    result = await session.exec(
+        select(Task.id, Task.completed_at).where(Task.id.in_(wanted))
+    )
+    return {
+        str(task_id).lower(): {"task_id": task_id, "completed_at": completed_at}
+        for task_id, completed_at in result.all()
+    }
+
+
+def _dispatch_task_for_rec(
+    rec: dict[str, Any], ts: datetime, dispatch_tasks: dict[str, dict[str, Any]]
+) -> Any | None:
+    """The task the transcript named before this record, if it exists and the
+    record is not long after that task finished (same grace window as the
+    cwd match — a session that drifts into plain chat after the task is done
+    must not keep billing it)."""
+    marker = rec.get("dispatch_task_id")
+    if not marker:
+        return None
+    task = dispatch_tasks.get(marker)
+    if task is None:
+        return None
+    completed_at = task["completed_at"]
+    if completed_at is not None and _aware(ts) > _aware(completed_at) + _TASK_WINDOW_GRACE:
+        return None
+    return task["task_id"]
+
+
 async def run_harvest(
     session: AsyncSession,
     *,
@@ -1026,10 +1131,16 @@ async def _process_jsonl_file(
 
     new_records = [r for r in records if r["uuid"] not in existing_uuids]
     task_workspace_map = task_workspace_map or {}
+    dispatch_tasks = (
+        await _load_dispatch_tasks(session, records) if head is None else {}
+    )
 
     def _resolve_task_for_rec(rec: dict[str, Any], ts: datetime) -> Any | None:
         if head is not None:
             return head["task_id"]
+        dispatched = _dispatch_task_for_rec(rec, ts, dispatch_tasks)
+        if dispatched is not None:
+            return dispatched
         norm_cwd = _normalize_workspace_path(rec.get("cwd", ""))
         candidates = task_workspace_map.get(norm_cwd)
         if not candidates:

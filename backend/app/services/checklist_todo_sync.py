@@ -74,6 +74,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
 from app.models.checklist import SOURCE_AGENT_TODO, TaskChecklistItem
+from app.services.transcript_task_marker import DISPATCH_MARKER, task_marker
 from app.utils import utcnow
 
 logger = logging.getLogger("mc.checklist_todo_sync")
@@ -186,9 +187,7 @@ _SESSION_GLOBS = ("*.jsonl", "*/*.jsonl", "*/.mc/*.jsonl")
 #: Lines that can name the task a session works on: the omp bridge's session
 #: header (``taskId``) or the dispatch prompt (``**Task ID:** <uuid>``).
 _TASK_LINE = re.compile(rb'Task ID:\*\* |"taskId"')
-_DISPATCH_MARKER = re.compile(
-    r"\*\*Task ID:\*\* ([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
-)
+_DISPATCH_MARKER = DISPATCH_MARKER  # shared with the token harvester
 
 #: How long after a task left ``in_progress`` (review/done/blocked/...) the
 #: loop still settles its checklist with the final snapshot. Several ticks
@@ -248,38 +247,10 @@ def _task_window_start(task: Any) -> datetime | None:
 
 
 def _task_marker(obj: dict[str, Any]) -> str | None:
-    """The task id a transcript entry declares, or ``None``.
-
-    Two sources, both written BEFORE the work they name:
-      * the omp bridge's session header of a task run (``taskId``) — every
-        attempt of a task (continue nudge, reflection retry) is a new ACP
-        session without the dispatch prompt, so the header is what ties it
-        to the task;
-      * the dispatch prompt in a USER turn (``**Task ID:** <uuid>``,
-        ``dispatch_message_builder``) — Claude Code and older bridge images.
-    Tool results and assistant text never count: an agent that prints a
-    dispatch (``mc task show``) does not start working that task."""
-    if obj.get("type") == "session":
-        task_id = obj.get("taskId")
-        return task_id.lower() if isinstance(task_id, str) and task_id else None
-    if obj.get("type") not in ("message", "user"):
-        return None
-    message = obj.get("message")
-    if not isinstance(message, dict) or message.get("role") != "user":
-        return None
-    content = message.get("content")
-    if isinstance(content, str):
-        texts = [content]
-    elif isinstance(content, list):
-        texts = [b.get("text") for b in content if isinstance(b, dict) and b.get("type") == "text"]
-    else:
-        return None
-    for text in texts:
-        if isinstance(text, str):
-            match = _DISPATCH_MARKER.search(text)
-            if match:
-                return match.group(1).lower()
-    return None
+    """The task id a transcript entry declares, or ``None`` — see
+    ``transcript_task_marker`` (shared with the token harvester, which bills
+    a session's tokens to the same task)."""
+    return task_marker(obj)
 
 
 def _newer(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any] | None:
