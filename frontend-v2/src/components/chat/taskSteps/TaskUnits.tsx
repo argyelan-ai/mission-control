@@ -202,7 +202,9 @@ export const TaskChapterRow = memo(function TaskChapterRow({
               </span>
             )}
           </span>
-          {unit.tools.length > 0 && (
+          {/* Line 2 says which tools ran — only while closed: open, the
+              tools stand below as their own rows (K3: not twice). */}
+          {unit.tools.length > 0 && !open && (
             <span className="flex items-center gap-2 min-w-0 text-xs" style={{ color: C.textMuted }}>
               {summary.titles.map((title, i) => (
                 <span key={i} className="min-w-0 truncate font-mono">

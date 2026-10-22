@@ -240,10 +240,14 @@ export const TaskCard = memo(function TaskCard({
       {(stub.outcome || stub.deliverables > 0) && (
         <div className="px-4 pb-2 flex gap-2">
           <span className={SLOT} aria-hidden="true" />
-          <p dir="auto" className="m-0 min-w-0 flex-1 truncate text-sm" style={{ color: C.textSecondary }}>
-            {stub.outcome}
+          <p className="m-0 min-w-0 flex-1 flex items-baseline text-sm" style={{ color: C.textSecondary }}>
+            {stub.outcome && (
+              <span dir="auto" className="min-w-0 truncate">
+                {stub.outcome}
+              </span>
+            )}
             {stub.deliverables > 0 && (
-              <span style={{ color: C.textMuted }}>
+              <span className="shrink-0 whitespace-pre" style={{ color: C.textMuted }}>
                 {stub.outcome ? " · " : ""}
                 {t("files", { count: stub.deliverables })}
               </span>
