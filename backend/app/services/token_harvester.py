@@ -629,13 +629,61 @@ def lead_checkout_path(home: Path | None = None) -> str:
     """The lead host agent's working directory: the stable host-agent checkout
     maintained by docker/shared/ensure-checkout.sh (MC_CHECKOUT_PATH, same
     default). Resolved at call time so HOME_HOST changes are honoured;
-    ``home`` overrides the host home for the default."""
+    ``home`` overrides the host home for the default and for a leading ``~``.
+
+    A configured value is normalised (``~`` → the HOST home, not the
+    container's; trailing slash and ``..`` segments dropped) because Claude
+    Code names the project dir after the absolute cwd. Symlinks are NOT
+    resolved: the value is a host path that need not exist inside the
+    backend container, so it must already be the real path on the host.
+
+    Limit: only sessions started IN this dir count as the lead. Should the
+    lead ever start ``claude`` in a worktree below its checkout, that gets
+    its own project dir and would be booked as an operator session.
+    """
     from app.config import settings as app_settings
 
+    host_home = home or _host_home()
     configured = (getattr(app_settings, "mc_checkout_path", "") or "").strip()
     if configured:
-        return configured.rstrip("/") or configured
-    return str((home or _host_home()) / ".mc" / "checkouts" / "mission-control")
+        if configured == "~" or configured.startswith("~/"):
+            configured = str(host_home) + configured[1:]
+        return os.path.normpath(configured)
+    return str(host_home / ".mc" / "checkouts" / "mission-control")
+
+
+def lead_agent_ids(agent_slug_map: dict[str, Any]) -> list[Any]:
+    """Ids of the lead agent(s): every agent whose slug starts with "boss", in
+    map order. The harvester books new lead rows on the first one; the
+    re-attribution treats all of them as lead rows (historical rows may sit on
+    any). One rule for both, so they cannot drift."""
+    return [aid for slug, aid in agent_slug_map.items() if slug.startswith("boss")]
+
+
+_warned_missing_lead_dirs: set[str] = set()
+
+
+def _warn_if_lead_dir_missing(base: Path, lead_dir: Path) -> None:
+    """Once per process and dir: the lead's project dir is absent although
+    ~/.claude/projects has sessions. Most likely MC_CHECKOUT_PATH differs
+    between the backend (.env) and the host agent's own launch environment —
+    then every lead row would silently land in the operator bucket."""
+    key = str(lead_dir)
+    if key in _warned_missing_lead_dirs or lead_dir.exists():
+        return
+    try:
+        has_sessions = any(p.is_dir() for p in base.iterdir())
+    except OSError:
+        return
+    if not has_sessions:
+        return
+    _warned_missing_lead_dirs.add(key)
+    logger.warning(
+        "token_harvester: lead session dir %s not found under %s — host Claude Code "
+        "usage is booked as operator sessions. Check that MC_CHECKOUT_PATH is the "
+        "same for the backend and the host agents (empty = %s).",
+        lead_dir.name, base, "~/.mc/checkouts/mission-control",
+    )
 
 
 def lead_project_dir_name(checkout: str | None = None) -> str:
@@ -855,10 +903,7 @@ async def run_harvest(
         task_workspace_map = await _build_task_workspace_map(session)
 
     # Boss agent for ~/.claude attribution (host agent, slug starts with "boss")
-    boss_agent_id = next(
-        (aid for slug, aid in agent_slug_map.items() if slug.startswith("boss")),
-        None,
-    )
+    boss_agent_id = next(iter(lead_agent_ids(agent_slug_map)), None)
     grok_agent_id = agent_slug_map.get("grok")
     hermes_agent_id = agent_slug_map.get("hermes")
 
@@ -933,6 +978,7 @@ async def run_harvest(
             if not base.exists():
                 continue
             lead_dir = base / lead_dir_name
+            _warn_if_lead_dir_missing(base, lead_dir)
             for jsonl_path in sorted(base.glob("**/*.jsonl")):
                 # The lead's own sessions (and their subagents) live in exactly
                 # one project dir. Anything else under ~/.claude/projects is the
@@ -1437,13 +1483,10 @@ async def reattribute_operator_sessions(
     """
     from sqlalchemy import and_, func, not_
 
-    from app.models import Agent
-
     root = (claude_projects_root or str(_host_home() / ".claude" / "projects")).rstrip("/") + "/"
     lead_prefix = root + lead_project_dir_name(boss_checkout_path) + "/"
 
-    agents = (await session.exec(select(Agent.id, Agent.name))).all()
-    lead_ids = [aid for aid, name in agents if _slugify_agent_name(name).startswith("boss")]
+    lead_ids = lead_agent_ids(await _build_agent_slug_map(session))
 
     window = [ModelUsageEvent.ts >= since] if since is not None else []
     src = ModelUsageEvent.source_file

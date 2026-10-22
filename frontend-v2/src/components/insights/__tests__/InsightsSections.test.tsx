@@ -10,7 +10,7 @@ import { UsageHeatmap } from "../UsageHeatmap";
 import { SourceSplit } from "../SourceSplit";
 import { LocalShareTrend } from "../LocalShareTrend";
 import { DoneSummary, headsInWindow } from "../DoneSummary";
-import { InsightsDetails, cacheHitRate } from "../InsightsDetails";
+import { InsightsDetails, cacheHitRate, costRowName } from "../InsightsDetails";
 import { mkByModel, mkByTask, mkCosts, mkHeadRun, mkInsights } from "./insightsFixtures";
 
 function wrap(ui: ReactNode) {
@@ -257,6 +257,27 @@ describe("InsightsDetails", () => {
     fireEvent.click(within(screen.getByTestId("details-reports")).getByRole("button"));
     const bold = await screen.findByText("Bold");
     expect(bold.tagName).toBe("STRONG");
+  });
+
+  it("names the agent-less cost buckets in the UI language, not the backend's English", async () => {
+    const tr = (k: string) => `T:${k}`;
+    expect(costRowName({ agent_id: "operator", agent_name: "Operator sessions" }, tr)).toBe("T:operator");
+    expect(costRowName({ agent_id: "heads", agent_name: "Heads" }, tr)).toBe("T:headsUnknown");
+    expect(costRowName({ agent_id: "", agent_name: "Unattributed" }, tr)).toBe("T:unattributed");
+    expect(costRowName({ agent_id: "a1", agent_name: "Coder" }, tr)).toBe("Coder");
+
+    const base = mkCosts(false);
+    vi.spyOn(api.intelligence, "costs").mockResolvedValue({
+      ...base,
+      agents: [
+        ...base.agents,
+        { agent_id: "operator", agent_name: "Operator sessions", tokens_in: 9, tokens_out: 1, event_count: 3, cost_usd: 4.5 },
+      ],
+    });
+    wrap(<InsightsDetails />);
+    fireEvent.click(within(screen.getByTestId("details-agents")).getByRole("button"));
+    expect(await screen.findByText("You, interactive")).toBeInTheDocument();
+    expect(screen.queryByText("Operator sessions")).toBeNull();
   });
 
   it("applies the time range to the details", async () => {

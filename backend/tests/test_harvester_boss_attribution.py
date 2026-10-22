@@ -26,6 +26,7 @@ from app.models.model_usage import ModelUsageEvent
 from app.services.token_harvester import (
     OPERATOR_SESSION_HARNESS,
     encode_cwd,
+    lead_agent_ids,
     lead_checkout_path,
     lead_project_dir_name,
     reattribute_operator_sessions,
@@ -90,6 +91,23 @@ def test_lead_checkout_follows_configured_checkout(home, tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "mc_checkout_path", str(custom) + "/")
     assert lead_checkout_path() == str(custom)
     assert lead_project_dir_name() == encode_cwd(str(custom))
+
+
+def test_configured_checkout_expands_tilde_against_the_host_home(home, monkeypatch):
+    """`~` in MC_CHECKOUT_PATH is the HOST home (HOME_HOST), never the
+    container's /home/mcuser — and `..`/trailing slashes are normalised, or the
+    encoded project dir name would not match Claude Code's."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "mc_checkout_path", "~/stable/../stable/mc/")
+    assert lead_checkout_path() == str(home / "stable" / "mc")
+    assert lead_project_dir_name() == encode_cwd(str(home / "stable" / "mc"))
+
+
+def test_lead_agent_ids_is_the_one_rule_for_harvest_and_reattribution():
+    a, b, c = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    assert lead_agent_ids({"coder": a, "boss": b, "boss-old": c}) == [b, c]
+    assert lead_agent_ids({"coder": a}) == []
 
 
 def test_transcript_chat_and_baseline_use_the_same_lead_dir(home, tmp_path, monkeypatch):
@@ -164,6 +182,34 @@ async def test_only_the_boss_session_dir_is_booked_on_boss(session, home):
     assert "priv-1" not in rows
     assert stats["skipped_private"] == 1
     assert stats["operator_session_events"] == 4
+
+
+async def test_missing_lead_dir_warns_once(session, home, caplog):
+    """A different MC_CHECKOUT_PATH for backend and host agent would silently
+    move every Boss line into the operator bucket — say so in the log, once."""
+    import logging
+
+    from app.services import token_harvester
+
+    token_harvester._warned_missing_lead_dirs.clear()
+    projects = home / ".claude" / "projects"
+    _write(projects / encode_cwd(str(home / "Workspace")) / "op.jsonl",
+           _line("op-w", str(home / "Workspace" / "Projects" / "mission-control"), git_branch="fix/x"))
+
+    with caplog.at_level(logging.WARNING, logger="mc.token_harvester"):
+        await _harvest(session, home, uuid.uuid4())
+        await _harvest(session, home, uuid.uuid4())
+    hits = [r for r in caplog.records if "lead session dir" in r.getMessage()]
+    assert len(hits) == 1
+    assert "MC_CHECKOUT_PATH" in hits[0].getMessage()
+
+    # present lead dir → no warning
+    token_harvester._warned_missing_lead_dirs.clear()
+    caplog.clear()
+    _write(projects / encode_cwd(lead_checkout_path()) / "b.jsonl", _line("boss-w", lead_checkout_path()))
+    with caplog.at_level(logging.WARNING, logger="mc.token_harvester"):
+        await _harvest(session, home, uuid.uuid4())
+    assert not [r for r in caplog.records if "lead session dir" in r.getMessage()]
 
 
 async def test_boss_dir_lines_are_boss_even_without_mc_markers(session, home, tmp_path, monkeypatch):
