@@ -166,11 +166,12 @@ def _event(task_id, to_status: str, *, agent_id=None, from_status="inbox", at: d
 
     return TaskEvent(task_id=task_id, from_status=from_status, to_status=to_status,
                      changed_by="agent", agent_id=agent_id,
-                     created_at=(at or datetime.now(timezone.utc)).replace(tzinfo=None))
+                     created_at=(at or datetime.now(timezone.utc)).astimezone(timezone.utc))
 
 
-def _naive(dt: datetime) -> datetime:
-    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+def _utc(dt: datetime) -> datetime:
+    """A DB time (aware UTC, like the models' own defaults)."""
+    return dt.astimezone(timezone.utc)
 
 
 def _ws(root: Path) -> Path:
@@ -340,8 +341,8 @@ async def test_steps_slim_rows_kinds_caps_and_ids(
     board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
     task = await make_task(board.id, title="Port the checklist", status="in_progress",
-                           assigned_agent_id=agent.id, started_at=_naive(now - timedelta(minutes=30)),
-                           created_at=_naive(now - timedelta(hours=2)))
+                           assigned_agent_id=agent.id, started_at=_utc(now - timedelta(minutes=30)),
+                           created_at=_utc(now - timedelta(hours=2)))
     tid = str(task.id)
     _attempt_file(root, SID_1, "2026-10-20T08-00-00", _basic_attempt(tid, now - timedelta(minutes=30)))
     b2 = Lines(now - timedelta(minutes=10), start_id=1)  # ids restart per file (F3)
@@ -387,7 +388,7 @@ async def test_steps_text_rows_are_capped(
     board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
     task = await make_task(board.id, status="done", assigned_agent_id=agent.id,
-                           started_at=_naive(now - timedelta(minutes=30)))
+                           started_at=_utc(now - timedelta(minutes=30)))
     b = Lines(now - timedelta(minutes=30))
     _attempt_file(root, SID_1, "2026-10-20T08-00-00", [
         _header(SID_1, _iso(now - timedelta(minutes=30)), str(task.id)), b.delivery(str(task.id), "T"),
@@ -406,7 +407,7 @@ async def test_steps_split_a_legacy_glued_final_line(
     board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
     task = await make_task(board.id, status="done", assigned_agent_id=agent.id,
-                           started_at=_naive(now - timedelta(minutes=30)))
+                           started_at=_utc(now - timedelta(minutes=30)))
     thoughts, glued, tail = _thoughts_and_glued()
     b = Lines(now - timedelta(minutes=30))
     lines = [_header(SID_1, _iso(now - timedelta(minutes=30)), str(task.id)), b.delivery(str(task.id), "T")]
@@ -434,7 +435,7 @@ async def test_steps_cursor_delta_open_and_reset(
     board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
     task = await make_task(board.id, status="in_progress", assigned_agent_id=agent.id,
-                           started_at=_naive(now - timedelta(minutes=30)))
+                           started_at=_utc(now - timedelta(minutes=30)))
     tid = str(task.id)
     b = Lines(now - timedelta(minutes=30))
     running = b.tool("pytest -q", result=None)
@@ -473,7 +474,7 @@ async def test_steps_etag_304_and_what_changes_it(
     board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
     task = await make_task(board.id, status="in_progress", assigned_agent_id=agent.id,
-                           started_at=_naive(now - timedelta(minutes=30)))
+                           started_at=_utc(now - timedelta(minutes=30)))
     tid = str(task.id)
     b = Lines(now - timedelta(minutes=30))
     path = _attempt_file(root, SID_1, "2026-10-20T08-00-00", [
@@ -527,7 +528,7 @@ async def test_steps_stale_flag_is_part_of_the_etag(
     board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
     task = await make_task(board.id, status="in_progress", assigned_agent_id=agent.id,
-                           started_at=_naive(now - timedelta(minutes=30)))
+                           started_at=_utc(now - timedelta(minutes=30)))
     tid = str(task.id)
     b = Lines(now - timedelta(minutes=30))
     path = _attempt_file(root, SID_1, "2026-10-20T08-00-00", [
@@ -555,7 +556,7 @@ async def test_steps_preview_overtaken_by_the_transcript_is_not_live(
     board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
     task = await make_task(board.id, status="in_progress", assigned_agent_id=agent.id,
-                           started_at=_naive(now - timedelta(minutes=30)))
+                           started_at=_utc(now - timedelta(minutes=30)))
     tid = str(task.id)
     b = Lines(now - timedelta(minutes=1))
     path = _attempt_file(root, SID_1, "2026-10-20T08-00-00", [
@@ -574,7 +575,7 @@ async def test_steps_privacy_per_file_and_all_denied(
     board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
     task = await make_task(board.id, status="done", assigned_agent_id=agent.id,
-                           started_at=_naive(now - timedelta(minutes=30)))
+                           started_at=_utc(now - timedelta(minutes=30)))
     tid = str(task.id)
     b = Lines(now - timedelta(minutes=30))
     first = _attempt_file(root, SID_1, "2026-10-20T08-00-00", [
@@ -605,7 +606,7 @@ async def test_steps_symlink_swap_after_discovery_is_skipped(
     board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
     task = await make_task(board.id, status="done", assigned_agent_id=agent.id,
-                           started_at=_naive(now - timedelta(minutes=30)))
+                           started_at=_utc(now - timedelta(minutes=30)))
     tid = str(task.id)
     b = Lines(now - timedelta(minutes=30))
     path = _attempt_file(root, SID_1, "2026-10-20T08-00-00", [
@@ -663,7 +664,7 @@ async def test_steps_no_session_yet_and_gates(
 ):
     board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
     task = await make_task(board.id, status="inbox", assigned_agent_id=agent.id,
-                           dispatched_at=_naive(datetime.now(timezone.utc)))
+                           dispatched_at=_utc(datetime.now(timezone.utc)))
     body = (await _steps(auth_client, agent, task)).json()
     assert body["applies"] is True and body["hasSession"] is False and body["live"] is True
     assert body["attempts"] == [] and body["rows"] == [] and body["cursor"] == "v1"
@@ -701,7 +702,7 @@ async def test_step_detail_full_row_and_live(
     board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
     now = datetime.now(timezone.utc)
     task = await make_task(board.id, status="in_progress", assigned_agent_id=agent.id,
-                           started_at=_naive(now - timedelta(minutes=30)))
+                           started_at=_utc(now - timedelta(minutes=30)))
     tid = str(task.id)
     path = _attempt_file(root, SID_1, "2026-10-20T08-00-00", _basic_attempt(tid, now - timedelta(minutes=30)))
     _write(path.parent / "previews" / f"2026-10-20T08-00-01_{SID_1}_abc123.jsonl", [
@@ -750,6 +751,20 @@ async def test_step_detail_full_row_and_live(
 async def test_task_stubs_live_cards_handover_and_outcomes(
     auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
 ):
+    await _stubs_scenario(auth_client, make_agent, make_board, make_task, tmp_path, monkeypatch)
+
+
+@pytest.mark.postgres
+@pytest.mark.asyncio
+async def test_task_stubs_on_postgres(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
+):
+    """The stubs query (outer join on a grouped subquery, coalesce over
+    timestamptz columns, IN-subquery) on the real database engine."""
+    await _stubs_scenario(auth_client, make_agent, make_board, make_task, tmp_path, monkeypatch)
+
+
+async def _stubs_scenario(auth_client, make_agent, make_board, make_task, tmp_path, monkeypatch):
     from app.models.deliverable import TaskDeliverable
     from app.models.task import TaskComment
     from app.models.thread import Message, Thread
@@ -760,31 +775,31 @@ async def test_task_stubs_live_cards_handover_and_outcomes(
 
     # A live task started long ago (older than 20 finished ones).
     old_live = await make_task(board.id, title="Old but running", status="in_progress",
-                               assigned_agent_id=agent.id, started_at=_naive(now - timedelta(days=30)))
+                               assigned_agent_id=agent.id, started_at=_utc(now - timedelta(days=30)))
     # 21 finished tasks, newest first by start.
     done = []
     for i in range(21):
         done.append(await make_task(board.id, title=f"Done {i}", status="done", assigned_agent_id=agent.id,
-                                    started_at=_naive(now - timedelta(hours=i + 1)),
-                                    completed_at=_naive(now - timedelta(hours=i + 1) + timedelta(minutes=30))))
+                                    started_at=_utc(now - timedelta(hours=i + 1)),
+                                    completed_at=_utc(now - timedelta(hours=i + 1) + timedelta(minutes=30))))
     await _add(
         TaskComment(task_id=done[0].id, author_type="agent", comment_type="resolution",
                     content="**Ported** the list.\n\nAll `12` tests green.",
-                    created_at=_naive(now - timedelta(minutes=40))),
+                    created_at=_utc(now - timedelta(minutes=40))),
         TaskComment(task_id=done[0].id, author_type="agent", comment_type="resolution",
-                    content="Older resolution", created_at=_naive(now - timedelta(minutes=50))),
+                    content="Older resolution", created_at=_utc(now - timedelta(minutes=50))),
         TaskDeliverable(task_id=done[0].id, deliverable_type="file", title="a"),
         TaskDeliverable(task_id=done[0].id, deliverable_type="file", title="b"),
     )
     # Delivered, not acked yet: live.
     delivered = await make_task(board.id, title="Just delivered", status="inbox", assigned_agent_id=agent.id,
-                                dispatched_at=_naive(now - timedelta(seconds=20)))
+                                dispatched_at=_utc(now - timedelta(seconds=20)))
     # Queued (inbox, not dispatched) and held ones.
     await make_task(board.id, title="Queued", status="inbox", assigned_agent_id=agent.id)
     await make_task(board.id, title="Held", status="inbox", assigned_agent_id=agent.id, run_control="manual_hold")
     # Worked here, now in progress at another agent: a card, never live.
     handed = await make_task(board.id, title="Handed over", status="in_progress",
-                             assigned_agent_id=other_agent.id, started_at=_naive(now - timedelta(minutes=5)))
+                             assigned_agent_id=other_agent.id, started_at=_utc(now - timedelta(minutes=5)))
     await _add(_event(handed.id, "in_progress", agent_id=agent.id, at=now - timedelta(minutes=90)),
                _event(handed.id, "review", agent_id=agent.id, from_status="in_progress",
                       at=now - timedelta(minutes=80)))
@@ -797,18 +812,18 @@ async def test_task_stubs_live_cards_handover_and_outcomes(
     thread = Thread(kind="task")
     await _add(thread)
     waiting = await make_task(board.id, title="Asks", status="waiting", assigned_agent_id=agent.id,
-                              started_at=_naive(now - timedelta(minutes=10)), thread_id=thread.id)
+                              started_at=_utc(now - timedelta(minutes=10)), thread_id=thread.id)
     await _add(Message(thread_id=thread.id, seq=1, sender_type="agent", message_type="question",
                        body="Which branch should I use?", question_meta={"awaiting": True, "blocking": True}))
     failed = await make_task(board.id, title="Broke", status="failed", assigned_agent_id=agent.id,
-                             started_at=_naive(now - timedelta(minutes=7)))
+                             started_at=_utc(now - timedelta(minutes=7)))
     await _add(TaskComment(task_id=failed.id, author_type="agent", comment_type="blocker",
                            content="The model is unreachable."),
                _event(failed.id, "failed", agent_id=agent.id, from_status="in_progress",
                       at=now - timedelta(minutes=6)))
     # Someone else's task: never listed.
     await make_task(board.id, title="Foreign", status="done", assigned_agent_id=other_agent.id,
-                    started_at=_naive(now - timedelta(minutes=1)))
+                    started_at=_utc(now - timedelta(minutes=1)))
 
     resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/tasks")
     assert resp.status_code == 200, resp.text
