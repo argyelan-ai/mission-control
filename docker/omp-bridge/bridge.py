@@ -2561,6 +2561,7 @@ class _MsgDelivery:
         remind_seconds: float = NUDGE_REMIND_SECONDS,
         log: Optional[Callable[[str], None]] = None,
         acp_prompt: Optional[Callable[[str], bool]] = None,
+        acp_busy: Optional[Callable[[], Optional[bool]]] = None,
     ) -> None:
         self.ctrl = controller
         # Under OMP_DRIVER=acp there is no native TUI in Window 0 (fix
@@ -2568,6 +2569,14 @@ class _MsgDelivery:
         # forever. serve_loop hands in a sender that prompts the chat daemon
         # (acp_chat.py --serve) instead; None keeps the native paste path.
         self._acp_prompt = acp_prompt
+        # Under ACP: "is the chat daemon answering right now?" (its `state`
+        # op) — True / False, None = unknown. The task lock says nothing
+        # about a reply the operator started in the chat; without this the
+        # gate stood open and every poll's wake-up met a running turn
+        # (22.10.2026). Only asked when `acp_prompt` is set.
+        self._acp_busy = acp_busy
+        # Why gate_open() last said no — the callers' log lines name it.
+        self._gate_closed_why: str = "omp arbeitet / Dispatch in flight"
         self.signal_file = signal_file
         self.queue_dir = queue_dir
         self.ack_dir = ack_dir
@@ -2707,7 +2716,22 @@ class _MsgDelivery:
                 return False  # model still processing our last message
         # (2) no dispatch / task-run in flight (the recycler's task lock).
         if os.path.exists(self.task_lock_path):
+            self._gate_closed_why = "omp arbeitet / Dispatch in flight"
             return False
+        # (3) ACP: the chat daemon runs one turn at a time. A wake-up sent
+        #     into a running reply is only refused (`busy`) — ask first and
+        #     send nothing while it answers. Unknown (daemon unreachable, an
+        #     older daemon) keeps the gate open: the prompt then reports its
+        #     own failure and the next poll retries.
+        if self._acp_prompt is not None and self._acp_busy is not None:
+            try:
+                busy = self._acp_busy()
+            except Exception as e:  # noqa: BLE001 — a probe hiccup never kills the poll loop
+                self.log(f"gate: ACP-Status nicht lesbar (swallowed): {type(e).__name__}: {e}")
+                busy = None
+            if busy is True:
+                self._gate_closed_why = "Chat-Daemon antwortet gerade (Zug laeuft)"
+                return False
         return True
 
     def flush(self) -> None:
@@ -2724,7 +2748,7 @@ class _MsgDelivery:
             return
         if not self.gate_open():
             self.log(
-                f"deliver_messages: Gate zu (omp arbeitet / Dispatch in flight) — "
+                f"deliver_messages: Gate zu ({self._gate_closed_why}) — "
                 f"{len(pending)} Message(s) bleiben gequeued, kein Ack."
             )
             return
@@ -2813,7 +2837,7 @@ class _MsgDelivery:
 
     def _nudge_comments(self) -> None:
         if not self.gate_open():
-            self.log("comments: Gate zu (omp arbeitet) — Wecker aufgeschoben.")
+            self.log(f"comments: Gate zu ({self._gate_closed_why}) — Wecker aufgeschoben.")
             return
         text = build_comment_nudge_text(self._pending_comments)
         if self._withdrawn_notice:
@@ -2898,7 +2922,7 @@ class _MsgDelivery:
         global_max = max(seqs.values())
         if not self.gate_open():
             self.log(
-                f"nudge: Gate zu (omp arbeitet / Dispatch in flight) — "
+                f"nudge: Gate zu ({self._gate_closed_why}) — "
                 f"Nudge aufgeschoben (bis seq={global_max})."
             )
             return
@@ -2965,14 +2989,23 @@ def _make_acp_chat_prompt(
     """Wake-up sender for OMP_DRIVER=acp: one ``{"op":"prompt"}`` request to
     the chat daemon's Unix socket (docs/specs/chat-over-acp.md, control
     protocol). Returns True on ``{"ok":true}``; False on ``busy``, a missing /
-    dead socket or garbage — never raises (the caller retries next poll)."""
+    dead socket or garbage — never raises (the caller retries next poll).
+
+    ``origin: "nudge"``: Mission Control wrote this text. The chat shows a
+    delivered wake-up as an MC event (not as the operator's bubble), and a
+    daemon that is busy refuses it WITHOUT a card — the caller keeps it
+    pending and retries. Deliberately no ``mode: "queue"``: a held wake-up
+    would come back into the operator's composer on Stop / withdraw, and it
+    can be stale by the time the reply ends (the next poll sends a fresh one)."""
     import acp_chat  # local sibling module, same as acp_chat_ctl.py
 
     path = socket_path or acp_chat.default_socket_path()
 
     def _send(text: str) -> bool:
         try:
-            resp = acp_chat.request(path, {"op": "prompt", "text": text}, timeout=timeout)
+            resp = acp_chat.request(
+                path, {"op": "prompt", "text": text, "origin": "nudge"}, timeout=timeout,
+            )
         except (OSError, ValueError) as e:
             sys.stderr.write(f"[serve] acp nudge: daemon unreachable ({path}): {e}\n")
             return False
@@ -2983,6 +3016,29 @@ def _make_acp_chat_prompt(
         return True
 
     return _send
+
+
+def _make_acp_chat_busy(
+    socket_path: Optional[str] = None, *, timeout: float = 3.0,
+) -> Callable[[], Optional[bool]]:
+    """Busy probe for OMP_DRIVER=acp: one ``{"op":"state"}`` request to the
+    chat daemon. True = a turn is running, False = idle, None = unknown
+    (unreachable socket, a refusal, no ``busy`` field) — never raises."""
+    import acp_chat  # local sibling module, same as acp_chat_ctl.py
+
+    path = socket_path or acp_chat.default_socket_path()
+
+    def _busy() -> Optional[bool]:
+        try:
+            resp = acp_chat.request(path, {"op": "state"}, timeout=timeout)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(resp, dict) or not resp.get("ok"):
+            return None
+        busy = resp.get("busy")
+        return busy if isinstance(busy, bool) else None
+
+    return _busy
 
 
 def serve_loop(
@@ -3004,6 +3060,7 @@ def serve_loop(
     _child_alive_fn: Optional[Callable[[], bool]] = None,
     _boot_epoch_fn: Optional[Callable[[], Optional[float]]] = None,
     _acp_prompt: Optional[Callable[[str], bool]] = None,
+    _acp_busy: Optional[Callable[[], Optional[bool]]] = None,
     context_pct: Optional[ACPContextPct] = None,
 ) -> int:
     """Persistent poll→native-TUI→lifecycle driver (ADR-049, supersedes the
@@ -3137,14 +3194,16 @@ def serve_loop(
     # on purpose: test_acp_workspace_parity anchors the task branch below on
     # the literal `_acp_env_driver() == "acp"` call form.)
     acp_prompt: Optional[Callable[[str], bool]] = None
+    acp_busy: Optional[Callable[[], Optional[bool]]] = None
     wakeup_driver = _acp_env_driver()
     if wakeup_driver == "acp":
         acp_prompt = _acp_prompt if _acp_prompt is not None else _make_acp_chat_prompt()
+        acp_busy = _acp_busy if _acp_busy is not None else _make_acp_chat_busy()
     delivery = _MsgDelivery(
         tui, signal_file=signal_file, queue_dir=msg_queue_dir,
         ack_dir=msg_ack_dir, task_lock_path=task_lock_path,
         nudge_state_file=nudge_state_file, nudge_msg_file=nudge_msg_file,
-        acp_prompt=acp_prompt,
+        acp_prompt=acp_prompt, acp_busy=acp_busy,
     )
 
     poll_fn = _poll_fn or _make_http_poll(api_url, token, ack_dir=msg_ack_dir)

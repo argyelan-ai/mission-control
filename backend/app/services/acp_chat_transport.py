@@ -7,7 +7,8 @@ ein kleines Protokoll mit dem Chat-Daemon, der die eine lange ACP-Sitzung
 haelt:
 
 ===============  ======================================  ==========================
-``prompt``       ``{"text": "...", "mode"?: "queue"}``   ``{"ok":true,"turn":n}`` ·
+``prompt``       ``{"text": "...", "mode"?: "queue",``   ``{"ok":true,"turn":n}`` ·
+                 ``"origin"?: "operator"}``
                                                          ``{"ok":true,"queued":true,...}`` ·
                                                          ``{"ok":false,"error":"busy"}``
 ``new_session``  ``{"mode"?: "queue",``                 ``{"ok":true,"previousSessionId":...}``
@@ -93,6 +94,24 @@ def _with_mode(payload: dict[str, Any], mode: str | None) -> dict[str, Any]:
     return {**payload, "mode": mode} if mode else payload
 
 
+#: ``prompt``'s ``origin`` for the operator's own message (the composer) —
+#: the daemon's ``acp_chat.ORIGIN_OPERATOR``; the only text a card ever
+#: offers to send again.
+ORIGIN_OPERATOR = "operator"
+
+
+def _prompt_payload(text: str, mode: str | None, origin: str | None) -> dict[str, Any]:
+    """``prompt``: ``origin`` says who wrote the text — ``"operator"`` for the
+    composer. The chat daemon offers "Send again" on a card only for the
+    operator's own text (fail-closed: no origin = unknown = no button). Only
+    when set — without it the request stays byte-identical (an older daemon
+    ignores the field anyway)."""
+    payload: dict[str, Any] = {"text": text}
+    if origin:
+        payload["origin"] = origin
+    return _with_mode(payload, mode)
+
+
 def _new_session_payload(mode: str | None, request_id: str | None) -> dict[str, Any]:
     """``new_session``: ``requestId`` names MC's request in the daemon's card
     and its ``resets`` record (incident 21.10.2026, ``chat_reset_audit``).
@@ -112,7 +131,8 @@ class ChatTransport(Protocol):
     Daemons als ``dict`` (inkl. ``ok:false``) oder wirft
     ``AcpChatUnreachableError``."""
 
-    async def prompt(self, text: str, mode: str | None = None) -> dict: ...
+    async def prompt(self, text: str, mode: str | None = None,
+                     origin: str | None = None) -> dict: ...
 
     async def new_session(self, mode: str | None = None,
                           request_id: str | None = None) -> dict: ...
@@ -240,8 +260,9 @@ class DockerCtlTransport:
             )
         return answer
 
-    async def prompt(self, text: str, mode: str | None = None) -> dict:
-        return await self._call("prompt", _with_mode({"text": text}, mode))
+    async def prompt(self, text: str, mode: str | None = None,
+                     origin: str | None = None) -> dict:
+        return await self._call("prompt", _prompt_payload(text, mode, origin))
 
     async def new_session(self, mode: str | None = None,
                           request_id: str | None = None) -> dict:
@@ -297,8 +318,9 @@ class HttpCtlTransport:
             raise AcpChatUnreachableError(f"hermes bridge {op}: kein JSON-Objekt")
         return answer
 
-    async def prompt(self, text: str, mode: str | None = None) -> dict:
-        return await self._call("prompt", _with_mode({"text": text}, mode))
+    async def prompt(self, text: str, mode: str | None = None,
+                     origin: str | None = None) -> dict:
+        return await self._call("prompt", _prompt_payload(text, mode, origin))
 
     async def new_session(self, mode: str | None = None,
                           request_id: str | None = None) -> dict:
