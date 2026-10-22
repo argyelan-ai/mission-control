@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import AppShell from "@/components/layout/AppShell";
 import { C } from "@/lib/colors";
@@ -15,10 +16,30 @@ export default function BenchStudioPage() {
   const [tab, setTab] = useState<Tab>("challenges");
   // "Challenge starten" from the library prefills the new-challenge dialog:
   const [prefillTemplate, setPrefillTemplate] = useState<PromptTemplate | null>(null);
+  // The open challenge lives in the URL (`?challenge=<id>`): reload, back
+  // button and a shared link land on the same detail page (t2 SOLL-4).
+  // router.replace, not window.history — Next keeps its own copy of the URL.
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const selectedId = searchParams.get("challenge");
+
+  function selectChallenge(id: string | null) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (id) params.set("challenge", id);
+    else params.delete("challenge");
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }
+
+  function showTab(next: Tab) {
+    setTab(next);
+    if (next !== "challenges" && selectedId) selectChallenge(null);
+  }
 
   function startFromTemplate(tpl: PromptTemplate) {
     setPrefillTemplate(tpl);
-    setTab("challenges");
+    showTab("challenges");
   }
 
   return (
@@ -53,8 +74,8 @@ export default function BenchStudioPage() {
               key={key}
               role="tab"
               aria-selected={tab === key}
-              onClick={() => setTab(key)}
-              className="pb-2 text-sm font-medium -mb-px"
+              onClick={() => showTab(key)}
+              className="min-h-11 text-sm font-medium -mb-px"
               style={{
                 color: tab === key ? C.textPrimary : C.textSecondary,
                 borderBottom:
@@ -70,6 +91,8 @@ export default function BenchStudioPage() {
           <ChallengesTab
             prefillTemplate={prefillTemplate}
             onPrefillConsumed={() => setPrefillTemplate(null)}
+            selectedId={selectedId}
+            onSelectedChange={selectChallenge}
           />
         ) : (
           <PromptLibraryTab onStartChallenge={startFromTemplate} />

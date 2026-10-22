@@ -22,6 +22,14 @@ const ENTRY_REASONS: Record<string, AbortReason> = {
   "stopped by operator": "stopped",
 };
 
+/** Why one entry failed, when the backend wrote one of its known reasons —
+ *  the detail page then says it in the UI language instead of showing the
+ *  English error string ("agent task deleted", round-1 t2 SOLL-3). */
+export function entryAbortReason(entry: { status: string; error?: string | null }): AbortReason | null {
+  if (entry.status !== "failed") return null;
+  return ENTRY_REASONS[entry.error ?? ""] ?? null;
+}
+
 /** Why a failed challenge ended, or null when it did not fail or the
  *  reason is not one we can name (the raw error is shown then). */
 export function abortReason(challenge: BenchChallenge): AbortReason | null {

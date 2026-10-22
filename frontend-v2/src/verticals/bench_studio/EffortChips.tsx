@@ -66,6 +66,10 @@ export function EffortChips({
   else if (query.isError || data?.status === "failed") hint = t("failed");
   else if (data?.status === "no_effect") hint = t("noEffect");
   else if (selected === "high" || selected === "max") hint = t("deepHint");
+  // The hint describes the chosen level, not Default (round-1 t2 SOLL-5).
+  else if (selected === "off") hint = t("offHint");
+  else if (selected === "on") hint = t("onHint");
+  else if (selected !== "default") hint = t("levelHint", { level: t(`level.${selected}`) });
   else if (data?.default_observed === "on") hint = t("serverDefaultOn");
   else if (data?.default_observed === "off") hint = t("serverDefaultOff");
   else hint = t("serverDefaultUnknown");
