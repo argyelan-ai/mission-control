@@ -671,7 +671,7 @@
       "scopes": "Scopes",
       "cronJobs": "Cron-Jobs",
       "noTriggers": "Keine aktiven Trigger",
-      "off": "Aus",
+      "off": "aus",
       "configFileAria": "Config-Dateiinhalt",
       "noContent": "Kein Inhalt",
       "activity": "Aktivität",
@@ -3825,7 +3825,8 @@
       "ompSessionDefault": "omp-Sitzungsstandard: {level}",
       "ompSession": "omp-Sitzung: {level}",
       "agentUnknown": "Effort: für diesen Agenten nicht lesbar",
-      "truncated": "Bei max_tokens ({max}) gestoppt — das Denken hat das Budget aufgebraucht."
+      "truncated": "Bei max_tokens ({max}) gestoppt — das Denken hat das Budget aufgebraucht.",
+      "truncatedFailed": "Keine Seite: bei max_tokens ({max}) gestoppt, bevor das HTML kam — das Denken hat das Budget aufgebraucht."
     },
     "common": {
       "cancel": "Abbrechen",

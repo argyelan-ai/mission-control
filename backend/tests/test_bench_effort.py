@@ -663,3 +663,142 @@ async def test_non_omp_agent_effort_is_unknown_with_reason(session, make_agent):
     seen = await agent_effort.observed_agent_effort(session, entry, task)
     assert seen["source"] == "unknown"
     assert "claude" in seen["reason"]
+
+
+# ── review follow-ups (#946) ──────────────────────────────────────────────
+
+
+def test_reasoning_of_counts_text_before_a_lone_think_close():
+    """No reasoning parser + a template that opens <think> in the PROMPT:
+    the answer is ``…</think>42`` — that is thinking, not "off"."""
+    seen = rp.reasoning_of({"content": "17 plus 25 is 42.\n</think>\n\n42"}, {})
+    assert seen["thinking"] == "on"
+    assert seen["reasoning_chars"] == len("17 plus 25 is 42.")
+    # An empty think block closed in the answer is still "off".
+    assert rp.reasoning_of({"content": "\n</think>\n\n42"}, {})["thinking"] == "off"
+    # A full block keeps working; text after </think> is not counted.
+    assert rp.reasoning_of({"content": "<think>ab</think>42"}, {})["reasoning_chars"] == 2
+
+
+@pytest.mark.asyncio
+async def test_probe_sees_default_thinking_without_a_reasoning_parser(monkeypatch):
+    """Engine whose default answer is ``…</think>42`` and that honours
+    enable_thinking: the probe must report default_observed "on" and find
+    the switch — not "server does not think"."""
+
+    def handler(request):
+        body = json.loads(request.content)
+        off = (body.get("chat_template_kwargs") or {}).get("enable_thinking") is False
+        content = "42" if off else "Add them: 42.\n</think>\n\n42"
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+            "usage": {},
+        })
+
+    _route(monkeypatch, handler)
+    result = await effort_probe.run_probe("http://engine/v1", "qwen-x")
+    assert result["default_observed"] == "on"
+    assert result["status"] == "ok"
+    assert result["thinking_key"] == rp.ENABLE_THINKING
+    assert result["levels"] == ["off"]
+
+
+@pytest.mark.asyncio
+async def test_default_on_a_thinking_server_gets_the_on_budget_without_probing(
+    session, tmp_path, monkeypatch, spark_runtime
+):
+    """'default' on a model that thinks by default behaves like 'on' — it
+    gets the same max_tokens (x2), read from the STORED probe; no request."""
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    row = _probe_row(["off"], key=rp.ENABLE_THINKING)
+    row.runtime_id = spark_runtime.id
+    row.serving_since = spark_runtime.serving_since
+    session.add(row)
+    await session.commit()
+    probe = AsyncMock()
+    monkeypatch.setattr(effort_probe, "get_or_probe", probe)
+    gen = AsyncMock(return_value=("<html>x</html>", {"duration_ms": 10}))
+    monkeypatch.setattr(orchestrator, "_spark_generate", gen)
+    ch, entry = await _spark_entry(session, "default")
+
+    await orchestrator.generate_spark_entry(session, entry, ch.prompt_text)
+    await session.refresh(entry)
+
+    probe.assert_not_awaited()
+    gen.assert_awaited_once_with(
+        "make a page", "deepseek-x", effort_fields={}, max_tokens=orchestrator.SPARK_MAX_TOKENS * 2
+    )
+    assert entry.metrics["effort_requested"] == "default"
+    assert entry.metrics["default_observed"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_default_keeps_the_base_budget_when_the_server_does_not_think(
+    session, tmp_path, monkeypatch, spark_runtime
+):
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    row = _probe_row(["on"], key=rp.ENABLE_THINKING)
+    row.default_observed = "off"
+    row.runtime_id = spark_runtime.id
+    row.serving_since = spark_runtime.serving_since
+    session.add(row)
+    await session.commit()
+    gen = AsyncMock(return_value=("<html>x</html>", {"duration_ms": 10}))
+    monkeypatch.setattr(orchestrator, "_spark_generate", gen)
+    ch, entry = await _spark_entry(session, "default")
+
+    await orchestrator.generate_spark_entry(session, entry, ch.prompt_text)
+
+    assert gen.await_args.kwargs["max_tokens"] == orchestrator.SPARK_MAX_TOKENS
+
+
+@pytest.mark.asyncio
+async def test_default_ignores_a_probe_of_an_older_engine_run(
+    session, tmp_path, monkeypatch, spark_runtime
+):
+    """The stored probe belongs to the engine run it was made on: after a
+    restart (new serving_since) it no longer scales 'default'."""
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    row = _probe_row(["off"], key=rp.ENABLE_THINKING)
+    row.runtime_id = spark_runtime.id
+    row.serving_since = spark_runtime.serving_since - timedelta(hours=3)
+    session.add(row)
+    await session.commit()
+    gen = AsyncMock(return_value=("<html>x</html>", {"duration_ms": 10}))
+    monkeypatch.setattr(orchestrator, "_spark_generate", gen)
+    ch, entry = await _spark_entry(session, "default")
+
+    await orchestrator.generate_spark_entry(session, entry, ch.prompt_text)
+
+    assert gen.await_args.kwargs["max_tokens"] == orchestrator.SPARK_MAX_TOKENS
+
+
+@pytest.mark.asyncio
+async def test_spark_generate_logs_the_effort_sent(monkeypatch, caplog):
+    _capture_generate(monkeypatch, "deepseek-x", _HTML_RESPONSE)
+    with caplog.at_level("INFO", logger="mc.bench_studio"):
+        await orchestrator._spark_generate(
+            "p", None, effort_fields={"reasoning_effort": "max"}, max_tokens=65536
+        )
+    line = next(r.getMessage() for r in caplog.records if "bench spark request" in r.getMessage())
+    assert "effort_sent={'key': 'reasoning_effort', 'value': 'max'}" in line
+    assert "max_tokens=65536" in line
+
+
+@pytest.mark.asyncio
+async def test_effort_levels_endpoint_box_offline_for_a_named_model(auth_client, monkeypatch):
+    """Named model, box down: the probe's first request got no HTTP answer
+    -> reachable false ("Box offline"), not "Check failed"."""
+    row = BenchProbe(
+        served_model_id="deepseek-x", status="failed", levels=[], default_observed="unknown",
+        raw={"attempts": [{"key": None, "value": None, "http": None, "error": "ConnectError"}]},
+    )
+    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=row))
+    resp = await auth_client.get("/api/v1/bench/effort-levels?model=deepseek-x")
+    assert resp.json()["reachable"] is False
+    assert resp.json()["status"] == "failed"
+
+    # The box answered, just not with 200 -> reached, the check failed.
+    row.raw = {"attempts": [{"key": None, "value": None, "http": 500, "error": "boom"}]}
+    resp = await auth_client.get("/api/v1/bench/effort-levels?model=deepseek-x")
+    assert resp.json()["reachable"] is True

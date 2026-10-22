@@ -42,8 +42,14 @@ def upgrade() -> None:
             "probed_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()"), nullable=True
         ),
         sa.PrimaryKeyConstraint("id"),
+        # NULLS NOT DISTINCT (Postgres 15+): runtime_id / serving_since can be
+        # NULL, and a plain unique key would let duplicates of one engine in.
         sa.UniqueConstraint(
-            "runtime_id", "served_model_id", "serving_since", name="uq_bench_probes_serving"
+            "runtime_id",
+            "served_model_id",
+            "serving_since",
+            name="uq_bench_probes_serving",
+            postgresql_nulls_not_distinct=True,
         ),
     )
     op.create_index("ix_bench_probes_runtime_id", "bench_probes", ["runtime_id"])

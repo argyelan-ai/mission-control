@@ -139,8 +139,14 @@ class BenchProbe(SQLModel, table=True):
 
     __tablename__ = "bench_probes"
     __table_args__ = (
+        # NULLS NOT DISTINCT: runtime_id / serving_since can be NULL, and a
+        # plain unique key would let two probes of the same engine coexist.
         UniqueConstraint(
-            "runtime_id", "served_model_id", "serving_since", name="uq_bench_probes_serving"
+            "runtime_id",
+            "served_model_id",
+            "serving_since",
+            name="uq_bench_probes_serving",
+            postgresql_nulls_not_distinct=True,
         ),
     )
 

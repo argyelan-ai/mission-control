@@ -6,6 +6,13 @@ import type { BenchEntry, EffortLevel } from "./types";
 
 const KNOWN_LEVELS: EffortLevel[] = ["default", "off", "on", "low", "medium", "high", "max"];
 
+/** True when a failed run's reason is "stopped at max_tokens": EntryEffort
+ *  then says so in the UI language, and the detail page hides the backend's
+ *  English error text for that entry (no mixed languages on a German page). */
+export function failedAtMaxTokens(entry: BenchEntry): boolean {
+  return entry.status === "failed" && !!entry.metrics?.truncated;
+}
+
 /** One line per entry: which effort was asked for, what went on the wire
  *  and what the run showed (bench W0.6/W0.7). Old entries without a record
  *  render nothing — they never stored it. */
@@ -53,9 +60,9 @@ export function EntryEffort({ entry }: { entry: BenchEntry }) {
       <span className="text-xs" style={{ color: C.textMuted }}>
         {parts.join(" · ")}
       </span>
-      {m.truncated && entry.status !== "failed" && (
-        <span className="text-xs" style={{ color: C.warning }}>
-          {t("truncated", { max: m.max_tokens ?? "?" })}
+      {m.truncated && (
+        <span className="text-xs" style={{ color: entry.status === "failed" ? C.error : C.warning }}>
+          {t(entry.status === "failed" ? "truncatedFailed" : "truncated", { max: m.max_tokens ?? "?" })}
         </span>
       )}
     </div>

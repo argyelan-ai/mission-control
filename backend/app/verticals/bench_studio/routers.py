@@ -184,7 +184,7 @@ async def get_effort_levels(
             return effort_probe.serialize(None, None, reachable=False)
         served = status_now["active"]
     row = await effort_probe.get_or_probe(session, served, refresh=refresh)
-    return effort_probe.serialize(row, served)
+    return effort_probe.serialize(row, served, reachable=effort_probe.reached(row))
 
 
 async def _validate_effort(session: AsyncSession, spec: BenchModelSpec) -> str:

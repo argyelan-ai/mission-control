@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { EntryEffort } from "../EntryEffort";
+import { EntryEffort, failedAtMaxTokens } from "../EntryEffort";
 import type { BenchEntry } from "../types";
 
 function entry(over: Partial<BenchEntry>): BenchEntry {
@@ -51,6 +51,20 @@ describe("EntryEffort (bench W0.6/W0.7)", () => {
       />
     );
     expect(screen.getByText(/Stopped at max_tokens \(32768\)/)).toBeInTheDocument();
+  });
+
+  it("a FAILED run that stopped at max_tokens says so in the UI language", () => {
+    const failed = entry({
+      status: "failed",
+      error: "generation failed: model returned no HTML content — stopped at max_tokens (16384) before the page",
+      metrics: { effort_requested: "default", truncated: true, max_tokens: 16384 },
+    });
+    render(<EntryEffort entry={failed} />);
+    expect(screen.getByText(/No page: stopped at max_tokens \(16384\)/)).toBeInTheDocument();
+    // The detail page hides the backend's English error for this entry.
+    expect(failedAtMaxTokens(failed)).toBe(true);
+    expect(failedAtMaxTokens({ ...failed, metrics: { truncated: false } })).toBe(false);
+    expect(failedAtMaxTokens({ ...failed, status: "generated" })).toBe(false);
   });
 
   it("agent entry prints the omp session default", () => {

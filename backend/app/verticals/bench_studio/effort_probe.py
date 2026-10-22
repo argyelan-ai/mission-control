@@ -160,6 +160,20 @@ async def _cached(session: AsyncSession, runtime_id, model: str, serving_since) 
     return (await session.exec(stmt)).first()
 
 
+async def cached_probe(session: AsyncSession, model: str) -> BenchProbe | None:
+    """The stored probe for ``model`` on the Spark as it runs now, WITHOUT
+    probing: ``None`` when there is none, or it failed, or it is stale. Used
+    where an extra request is not wanted (a "default" run only needs to know
+    whether the server thinks by default)."""
+    runtime = await spark_runtime(session)
+    runtime_id = runtime.id if runtime is not None else None
+    serving_since = runtime.serving_since if runtime is not None else None
+    row = await _cached(session, runtime_id, model, serving_since)
+    if row is None or not _fresh(row, serving_since is not None):
+        return None
+    return row
+
+
 async def get_or_probe(session: AsyncSession, model: str, *, refresh: bool = False) -> BenchProbe:
     """The probe for ``model`` on the Spark as it runs now — cached per
     (runtime, model, serving_since), probed when missing, failed, stale
@@ -227,6 +241,17 @@ def serialize(row: BenchProbe | None, model: str | None, *, reachable: bool = Tr
         "probed_at": row.probed_at.isoformat() if row.probed_at else None,
         "serving_since": row.serving_since.isoformat() if row.serving_since else None,
     }
+
+
+def reached(row: BenchProbe) -> bool:
+    """False when the probe's first request never got an HTTP answer (box
+    offline / connection refused) — the dialog then says "Box offline"
+    instead of "Check failed". Any answer, even an error status, counts as
+    reached."""
+    if row.status != "failed":
+        return True
+    attempts = (row.raw or {}).get("attempts") or []
+    return not attempts or attempts[0].get("http") is not None
 
 
 def level_fields(row: BenchProbe, level: str) -> dict[str, Any]:

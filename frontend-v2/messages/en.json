@@ -3825,7 +3825,8 @@
       "ompSessionDefault": "omp session default: {level}",
       "ompSession": "omp session: {level}",
       "agentUnknown": "Effort: not readable for this agent",
-      "truncated": "Stopped at max_tokens ({max}) — thinking used up the budget."
+      "truncated": "Stopped at max_tokens ({max}) — thinking used up the budget.",
+      "truncatedFailed": "No page: stopped at max_tokens ({max}) before the HTML — thinking used up the budget."
     },
     "common": {
       "cancel": "Cancel",

@@ -106,6 +106,9 @@ def reasoning_of(message: dict[str, Any] | None, usage: dict[str, Any] | None) -
     ``usage.completion_tokens_details`` when the engine reports it, and
     ``reasoning_chars`` from the reasoning text (``reasoning_content``,
     ``reasoning`` or a ``<think>`` block in ``content`` — engines differ).
+    An engine without a reasoning parser whose chat template already puts
+    ``<think>`` into the PROMPT answers ``…</think>42``: the text before a
+    lone ``</think>`` is thinking too.
     ``thinking`` = "on" when either is > 0, else "off"."""
     message = message or {}
     usage = usage or {}
@@ -113,9 +116,12 @@ def reasoning_of(message: dict[str, Any] | None, usage: dict[str, Any] | None) -
     content = message.get("content") or ""
     lower = content.lower()
     start = lower.find("<think>")
-    if start >= 0:
+    close = lower.find("</think>")
+    if start >= 0 and (close < 0 or start < close):
         end = lower.find("</think>", start)
         text += content[start + 7 : end if end >= 0 else len(content)]
+    elif close >= 0:
+        text += content[:close]
     details = usage.get("completion_tokens_details") or {}
     tokens = details.get("reasoning_tokens") if isinstance(details, dict) else None
     chars = len(text.strip())

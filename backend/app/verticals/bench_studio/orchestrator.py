@@ -230,6 +230,12 @@ async def _spark_generate(
         "temperature": SPARK_TEMPERATURE,
         **(effort_fields or {}),
     }
+    # One line per run with what went on the wire for effort, so a live
+    # check can read it from the backend log (not only from the entry).
+    logger.info(
+        "bench spark request model=%s effort_sent=%s max_tokens=%s",
+        model, reasoning_params.wire_fields(effort_fields or {}), max_tokens,
+    )
     async with httpx.AsyncClient(timeout=spark.timeout) as cli:
         resp = await cli.post(f"{spark.llm_url}/chat/completions", json=payload)
         resp.raise_for_status()
@@ -409,18 +415,29 @@ async def _spark_effort_request(
     """(request fields, max_tokens, metrics to store) for the effort the
     entry asked for (``metrics["effort_requested"]``, set at create time).
 
-    "default" sends nothing and keeps today's max_tokens — no probe, no
-    extra request. Any other level re-reads the probe for the engine as it
-    runs NOW (cached per serving_since): a model restarted between create
-    and run gets probed again, and a level it no longer offers fails the
-    entry with the reason instead of silently running on the default."""
+    "default" sends nothing and never probes. It keeps today's max_tokens —
+    unless a STORED probe (no extra request) saw that this server thinks by
+    default: then "default" behaves like "on" and gets the same budget, or a
+    model that thinks by default (Qwen) runs out of tokens before the page.
+    Any other level re-reads the probe for the engine as it runs NOW (cached
+    per serving_since): a model restarted between create and run gets probed
+    again, and a level it no longer offers fails the entry with the reason
+    instead of silently running on the default."""
     from app.services import reasoning_params
 
     from . import effort_probe
 
     level = (entry.metrics or {}).get("effort_requested") or "default"
     if level == "default":
-        return {}, SPARK_MAX_TOKENS, {"effort_requested": "default"}
+        cached = await effort_probe.cached_probe(session, entry.spark_model or "")
+        if cached is None or cached.default_observed != "on":
+            return {}, SPARK_MAX_TOKENS, {"effort_requested": "default"}
+        runtime = await effort_probe.spark_runtime(session)
+        limit = getattr(runtime, "max_context_len", None) if runtime is not None else None
+        return {}, reasoning_params.max_tokens_for("on", SPARK_MAX_TOKENS, limit), {
+            "effort_requested": "default",
+            "default_observed": "on",
+        }
     probe = await effort_probe.get_or_probe(session, entry.spark_model or "")
     fields = effort_probe.level_fields(probe, level)
     runtime = await effort_probe.spark_runtime(session)
