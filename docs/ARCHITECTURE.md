@@ -994,6 +994,10 @@ neue Endpunkte fuer den Benchmark-Studio-Workflow:
 — der Bench-Orchestrator schreibt `/shared-deliverables/bench-<id>/<label>/index.html`,
 mc-playwright liest und schreibt in dasselbe Volume (Praezedenz: mcp-screenshots ro→rw).
 
+**Browser (since 2026-10-22):** Playwright 1.64 / Chrome for Testing 156, always started via
+`_launch_chromium` (`channel="chromium"`, new headless mode) so the managed eMudhra distrust
+policy applies; the driver runs on a pinned patched Node, not Playwright's bundled one.
+
 #### bench_studio Vertical (NEU 2026-07-11, ADR-070)
 
 Orchestriert die komplette Benchmark-Studio-Kette.
@@ -1642,6 +1646,17 @@ Alle ADRs in `docs/decisions/`:
 ---
 
 ## Änderungshistorie (high-level)
+
+- **2026-10-22** — **mc-playwright on Playwright 1.64 (eMudhra follow-up):** base
+  `playwright/python:v1.48.0-jammy` → `v1.64.0-noble` (Chrome for Testing 156, Ubuntu 24.04,
+  Python 3.12, ffmpeg 6.1). The driver's bundled Node (1.64: v24.21.0) is replaced by a pinned
+  `node:24.22.1` binary (`PLAYWRIGHT_NODEJS_PATH`, build floor `NODE_MIN`). Every launch goes through
+  `_launch_chromium` = full browser in new headless mode (`channel="chromium"`), because
+  chrome-headless-shell ignores managed policies; the headless shell is removed from the image and
+  the cdp-browser eMudhra `CADistrustedCertificates` policy is installed for Chrome for Testing.
+  The build proves both by effect (`docker/mc-playwright/check_browser.py`: chrome://policy shows
+  the policy with status OK; a launch without the channel finds no browser). Guarded in
+  `backend/tests/test_image_security_floor.py`; `docker/mc-playwright/tests` get their own CI lane.
 
 - **2026-10-22** — **Image security floor (Node 2026-10-21 release + eMudhra CA):** the backend
   image moves from NodeSource Node 20 (end of life) to the 22 line with a build-time floor

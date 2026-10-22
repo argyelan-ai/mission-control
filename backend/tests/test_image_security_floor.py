@@ -12,6 +12,7 @@ Raise the floor here when the next security release lands; never lower it.
 """
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -148,6 +149,7 @@ CA_CERTIFICATES_FLOOR = {
     "bookworm": "20250419~deb12u2",
     "trixie": "20250419+deb13u1",
     "jammy": "20260816ubuntu0.22.04.1",
+    "noble": "20260816ubuntu0.24.04.1",
 }
 # Every apt-based image MC builds, and the distro its FROM resolves to.
 # (python:3.12-slim floats with Debian stable = trixie today.)
@@ -158,13 +160,14 @@ APT_IMAGES = {
     "docker/mc-claude-agent/Dockerfile": "bookworm",
     "docker/mc-kimi-agent/Dockerfile": "bookworm",
     "docker/omp-bridge/Dockerfile": "bookworm",
-    "docker/mc-playwright/Dockerfile": "jammy",
+    "docker/mc-playwright/Dockerfile": "noble",
 }
 _DISTRO_OF_FROM = (
     (r"python:3\.\d+-slim\b", "trixie"),
     (r"-trixie\b|debian:trixie", "trixie"),
     (r"-bookworm\b|debian:bookworm", "bookworm"),
     (r"-jammy\b", "jammy"),
+    (r"-noble\b", "noble"),
 )
 
 
@@ -175,7 +178,13 @@ def test_apt_image_enforces_the_ca_certificates_floor_at_build(rel, distro):
     someone remembered `--pull` / `--no-cache`. Each apt image now declares the
     fixed version and fails its build below it."""
     text = (REPO_ROOT / rel).read_text(encoding="utf-8")
-    first_from = re.search(r"^FROM\s+(\S+)", text, re.MULTILINE).group(1)
+    # The image's own base = the first FROM that is not the `AS node` copy
+    # stage (mc-playwright copies its Node binary out of a node image).
+    first_from = next(
+        m.group(1)
+        for m in re.finditer(r"^FROM\s+(\S+)(.*)$", text, re.MULTILINE)
+        if m.group(2).strip() != "AS node"
+    )
     detected = next((d for pat, d in _DISTRO_OF_FROM if re.search(pat, first_from)), None)
     assert detected == distro, f"{rel}: FROM {first_from} is {detected}, table says {distro}"
     m = re.search(r"^ARG CA_CERTIFICATES_MIN=(\S+)$", text, re.MULTILINE)
@@ -258,3 +267,106 @@ def test_kimi_version_bump_rechecks_the_embedded_node():
             f"kimi {version} ({where}) not checked: does its embedded Node still "
             "accept the eMudhra chain? See the docstring."
         )
+
+
+# ── mc-playwright: Playwright's own Node and Chromium ────────────────────────
+MC_PLAYWRIGHT = "docker/mc-playwright/Dockerfile"
+
+
+def test_mc_playwright_driver_runs_on_a_patched_node():
+    """Playwright's Python driver bundles its own Node (1.48: v20.18.0, end of
+    life; 1.64.0: v24.21.0 — both below the floor). The image swaps in a
+    patched Node from a pinned node image and fails its build below NODE_MIN."""
+    text = (REPO_ROOT / MC_PLAYWRIGHT).read_text(encoding="utf-8")
+    stage = re.search(
+        r"^FROM node:(\d+\.\d+\.\d+)-bookworm-slim@sha256:[0-9a-f]{64} AS node$",
+        text, re.MULTILINE,
+    )
+    assert stage, f"{MC_PLAYWRIGHT}: no pinned `FROM node:<ver>-bookworm-slim@sha256:… AS node` stage"
+    _assert_node_floor(_ver(stage.group(1)), f"{MC_PLAYWRIGHT} node stage")
+    minimum = re.search(r"^ARG NODE_MIN=(\d+\.\d+\.\d+)$", text, re.MULTILINE)
+    assert minimum, f"{MC_PLAYWRIGHT}: no ARG NODE_MIN"
+    _assert_node_floor(_ver(minimum.group(1)), f"{MC_PLAYWRIGHT} NODE_MIN")
+    assert _ver(stage.group(1)) >= _ver(minimum.group(1))
+    assert "COPY --from=node /usr/local/bin/node /usr/local/bin/node" in text
+    assert "ENV PLAYWRIGHT_NODEJS_PATH=/usr/local/bin/node" in text
+    # The bundled binary is replaced, and the floor is checked on the driver
+    # path itself (what Playwright actually starts), at build time.
+    assert 'ln -sf /usr/local/bin/node "$d/node"' in text
+    assert '"$d/node" -e' in text and '"${NODE_MIN}"' in text
+
+
+def test_mc_playwright_package_matches_its_base_image():
+    """The pip `playwright` must match the base image's browser builds — a
+    mismatch makes Playwright look for a browser revision the image lacks."""
+    text = (REPO_ROOT / MC_PLAYWRIGHT).read_text(encoding="utf-8")
+    base = re.findall(r"^FROM\s+(\S+)", text, re.MULTILINE)[-1]
+    m = re.fullmatch(
+        r"mcr\.microsoft\.com/playwright/python:v(\d+\.\d+\.\d+)-noble@sha256:[0-9a-f]{64}", base
+    )
+    assert m, f"{MC_PLAYWRIGHT}: base {base} is not a pinned playwright/python noble tag+digest"
+    pin = re.search(r"^\s+playwright==(\d+\.\d+\.\d+) \\$", text, re.MULTILINE)
+    assert pin and pin.group(1) == m.group(1), (pin and pin.group(1), m.group(1))
+    # 1.48 = Chromium 130 + a Node 20 driver; 1.64 = Chrome for Testing 156.
+    assert _ver(m.group(1)) >= (1, 64, 0)
+
+
+def test_mc_playwright_chromium_gets_the_emudhra_distrust_policy():
+    text = (REPO_ROOT / MC_PLAYWRIGHT).read_text(encoding="utf-8")
+    # Chrome for Testing and Chromium builds read different directories.
+    for d in ("/etc/opt/chrome_for_testing/policies/managed", "/etc/chromium/policies/managed"):
+        assert f"COPY policies/emudhra-distrust.json {d}/emudhra-distrust.json" in text, d
+    # The headless shell ignores managed policies — it is removed, so a
+    # launch without channel="chromium" fails instead of trusting the chain.
+    assert "RUN rm -rf /ms-playwright/chromium_headless_shell-*" in text
+    # …and the build proves both by effect (chrome://policy shows the policy
+    # with status OK; a channel-less launch finds no browser), after the
+    # policy and the service code are in place.
+    check = text.index("RUN python3 /app/check_browser.py")
+    assert check > text.index("COPY media.py /app/media.py")
+    assert check > text.index("RUN rm -rf /ms-playwright/chromium_headless_shell-*")
+    assert check > text.index("/etc/opt/chrome_for_testing/policies/managed/emudhra-distrust.json")
+    assert "COPY check_browser.py /app/check_browser.py" in text
+    # Same certificate list as cdp-browser (pinned by SHA-256 in
+    # test_compose_cdp_browser.py) — one list, two build contexts.
+    ours = (REPO_ROOT / "docker/mc-playwright/policies/emudhra-distrust.json").read_bytes()
+    theirs = (REPO_ROOT / "docker/cdp-browser/policies/emudhra-distrust.json").read_bytes()
+    assert ours == theirs
+
+
+def test_mc_playwright_launches_only_the_policy_honouring_browser():
+    """chrome-headless-shell — Playwright's default for headless=True — reads
+    no managed policy and loaded the emSign test site (measured 2026-10-22,
+    Chrome for Testing 156.0.8078.4); the full browser in new headless mode
+    (`channel="chromium"`) refuses it. Every launch in the service goes
+    through one helper with those kwargs. (Checked as text: service.py
+    imports playwright, which the backend venv does not have — parsed, not
+    imported.)"""
+    media = ast.parse((REPO_ROOT / "docker/mc-playwright/media.py").read_text(encoding="utf-8"))
+    kwargs = next(
+        n.value for n in media.body
+        if isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "CHROMIUM_LAUNCH_KWARGS" for t in n.targets)
+    )
+    assert ast.literal_eval(kwargs) == {"headless": True, "channel": "chromium"}
+
+    service = ast.parse((REPO_ROOT / "docker/mc-playwright/service.py").read_text(encoding="utf-8"))
+    # Every `<x>.chromium.launch(…)` / `.launch_persistent_context(…)` call,
+    # however it is wrapped over lines, with the function it sits in.
+    launches = []
+    helper_calls = 0
+    for fn in ast.walk(service):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            if (isinstance(f, ast.Attribute)
+                    and f.attr in ("launch", "launch_persistent_context")
+                    and isinstance(f.value, ast.Attribute) and f.value.attr == "chromium"):
+                launches.append((fn.name, ast.unparse(node)))
+            if isinstance(f, ast.Name) and f.id == "_launch_chromium":
+                helper_calls += 1
+    assert launches == [("_launch_chromium", "p.chromium.launch(**CHROMIUM_LAUNCH_KWARGS)")], launches
+    assert helper_calls >= 6

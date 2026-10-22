@@ -52,6 +52,7 @@ für die Queue unsichtbar — das ist eine Entscheidung des Operators, keine Age
 | `ci:ci.yml#backend-postgres` | Gate (nicht Pflicht) | Migrationen auf echtem Postgres + `-m postgres`-Tests | Migration scheitert, Postgres-Test rot | Rot-Lauf 34875527024 | nein |
 | `ci:ci.yml#omp-bridge` | Gate (nicht Pflicht) | Test-Suite der omp-Bridge | ein Bridge-Test rot | Rot-Lauf 38326193948 | nein |
 | `ci:ci.yml#cdp-gateway` | Gate (nicht Pflicht) | Test-Suite des CDP-Gateways | ein Gateway-Test rot | Probe 19.10.2026: Kopie der Suite + `assert False` → pytest exit 1 (kein Rot-Lauf in 294 roten CI-Läufen) | nein |
+| `ci:ci.yml#mc-playwright` | Gate (nicht Pflicht) | Pure-Function-Tests des mc-playwright-Dienstes (`docker/mc-playwright/tests`: Request-Modelle, ffmpeg-Befehle, Login-Helfer), pydantic-Pin aus dem Dockerfile | ein Test rot, kein pydantic-Pin im Dockerfile | Probe 22.10.2026: Kopie der Suite, `assert req.duration_s == 10` → `!=` → pytest exit 1 (2 failed, 79 passed) | nein |
 | `ci:ci.yml#mc-cli` | Gate (nicht Pflicht) | Test-Suite von `mc` (stdlib) | ein mc-cli-Test rot | Rot-Lauf 35428791508 | nein |
 | `ci:ci.yml#frontend-v2` | Gate | `tsc --noEmit` + vitest inkl. Design-Ratchet | Typfehler, roter vitest, neuer freier Pixel-/Farbwert | Rot-Lauf 39277948280 | ja |
 | `ci:ci.yml#deploy-portability` | Gate | Frischer Boot über `install.sh --here`, Registrierung, Seed-Prüfungen, Host-uid | Installer/Boot/Migration scheitert, Seed nicht leer, falsches Image | Rot-Lauf 39020437296 | ja |
