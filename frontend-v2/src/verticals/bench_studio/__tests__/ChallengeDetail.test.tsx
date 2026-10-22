@@ -1031,7 +1031,7 @@ describe("ChallengeDetail — usage per entry (video outro numbers)", () => {
       makeChallenge({
         entries: [
           makeEntry({
-            id: "e-1", model_label: "Sparky", source_kind: "agent", agent_id: "a-1",
+            id: "e-1", model_label: "Local agent", source_kind: "agent", agent_id: "a-1",
             metrics: { duration_ms: 60000, tokens_in: 1_117_881, tokens_out: 264_150, cost_usd: 0.43, locality: "local" },
           }),
           makeEntry({
@@ -1043,7 +1043,7 @@ describe("ChallengeDetail — usage per entry (video outro numbers)", () => {
     );
 
     renderDetail();
-    await screen.findByText("Sparky");
+    await screen.findByText("Local agent");
 
     expect(screen.getByText("60 s · 1.1M → 264.1k tok · local")).toBeInTheDocument();
     expect(screen.getByText("12.4k → 1.8k tok · $0.43")).toBeInTheDocument();
