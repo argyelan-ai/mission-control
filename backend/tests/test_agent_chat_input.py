@@ -1908,7 +1908,7 @@ async def test_post_chat_input_204_and_forwards_text(auth_client: AsyncClient, m
 
     calls = []
 
-    async def _fake_send_text(a, text):
+    async def _fake_send_text(a, text, **_kw):
         calls.append((a.id, text))
 
     import app.routers.agent_chat as agent_chat_mod
@@ -1966,7 +1966,7 @@ async def test_post_chat_input_422_other_control_char(auth_client: AsyncClient, 
 async def test_post_chat_input_allows_newline_and_tab(auth_client: AsyncClient, make_agent, monkeypatch):
     agent = await make_agent(name="Rex", agent_runtime="cli-bridge")
 
-    async def _fake_send_text(a, text):
+    async def _fake_send_text(a, text, **_kw):
         pass
 
     import app.routers.agent_chat as agent_chat_mod
@@ -2007,7 +2007,7 @@ async def test_post_chat_input_409_agent_starting(auth_client: AsyncClient, make
 
     import app.routers.agent_chat as agent_chat_mod
 
-    async def _fake_send_text(a, text):
+    async def _fake_send_text(a, text, **_kw):
         raise agent_chat_mod.AgentStartingError()
 
     monkeypatch.setattr(agent_chat_mod, "send_text", _fake_send_text)
@@ -2028,7 +2028,7 @@ async def test_post_chat_input_502_when_boss_bridge_did_not_confirm(auth_client:
 
     import app.routers.agent_chat as agent_chat_mod
 
-    async def _fake_send_text(a, text):
+    async def _fake_send_text(a, text, **_kw):
         raise agent_chat_mod.BossDeliveryError("no server running on /tmp/x")
 
     monkeypatch.setattr(agent_chat_mod, "send_text", _fake_send_text)

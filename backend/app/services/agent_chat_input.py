@@ -878,8 +878,13 @@ async def _wait_for_send_readiness(agent) -> None:
     raise AgentStartingError()
 
 
-async def send_text(agent, text: str) -> ChatReset | None:
-    """Types ``text`` into the agent's live session. Returns a ``ChatReset``
+async def send_text(agent, text: str, *, origin: str | None = None) -> ChatReset | None:
+    """Types ``text`` into the agent's live session.
+
+    ``origin`` (headless/ACP agents only): who wrote the text —
+    ``ORIGIN_OPERATOR`` for the composer (the router). The chat daemon
+    offers "Send again" on a card only for the operator's own text; any
+    other caller (Jarvis' voice relay) leaves it unset = unknown = no button. Returns a ``ChatReset``
     when ``text`` was exactly ``/new`` or ``/clear`` — MC turned it into a new
     chat session (headless agents), or passed it on to the agent's own
     command or its terminal — and the caller records who sent it
@@ -959,7 +964,7 @@ async def send_text(agent, text: str) -> ChatReset | None:
                         "request=%s)", reset.command, slug, reset.previous_session_id,
                         reset.queued, request_id)
             return reset
-        answer = await transport.prompt(text, mode="queue")
+        answer = await transport.prompt(text, mode="queue", origin=origin)
         if not answer.get("ok"):
             # Zurueck kommt hier nur eine Absage, die der Daemon schon als
             # Karte zeigt (``queue_full``); jede andere wird zur Ausnahme.

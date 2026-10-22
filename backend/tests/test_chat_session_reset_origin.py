@@ -59,7 +59,7 @@ class _FakeTransport:
         self.calls: list[tuple] = []
         self.answers: dict = {}
 
-    async def prompt(self, text: str, mode: str | None = None) -> dict:
+    async def prompt(self, text: str, mode: str | None = None, origin: str | None = None) -> dict:
         self.calls.append(("prompt", text, mode))
         return self.answers.get("prompt", {"ok": True, "turn": 1})
 

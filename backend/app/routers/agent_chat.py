@@ -25,7 +25,7 @@ from app.database import get_session, release_session
 from app.models.agent import Agent
 from app.models.task import Task
 from app.redis_client import RedisKeys
-from app.services.acp_chat_transport import AcpChatUnreachableError
+from app.services.acp_chat_transport import ORIGIN_OPERATOR, AcpChatUnreachableError
 from app.services.agent_chat_input import (
     AcpChatRefusedError,
     AgentBusyError,
@@ -1283,7 +1283,9 @@ async def post_chat_input(
         )
 
     try:
-        reset = await send_text(agent, body.text)
+        # The composer: the operator's own text — the only one a chat card
+        # may offer to send again (headless agents; ignored elsewhere).
+        reset = await send_text(agent, body.text, origin=ORIGIN_OPERATOR)
     except InstallCommandBlockedError as e:
         return JSONResponse(
             status_code=409,
