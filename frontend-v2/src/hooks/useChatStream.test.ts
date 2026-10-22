@@ -428,6 +428,41 @@ describe("veraltete Vorschau nach einer festen Zeile (Spec A PR-0, M6)", () => {
     },
   );
 
+  // Review PR #933: the bridge stamps a finished thought and the first answer
+  // snapshot after it in the same call (`_map_one`) — the same millisecond.
+  // Across kinds only an OLDER stamp is stale; the same stamp is new text.
+  it("behaelt eine Antwort-Vorschau mit genau dem Zeitstempel des fertigen Gedankens", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, thought("th1", "2026-10-22T10:00:05.123Z"));
+    st = chatReducer(st, pv("Die Antwort beginnt", "2026-10-22T10:00:05.123Z"));
+    expect(st.preview?.text).toBe("Die Antwort beginnt");
+  });
+
+  it("behaelt einen laufenden Gedanken mit genau dem Zeitstempel der Antwortzeile", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, said("a1", "Abschnitt eins.", "2026-10-22T10:00:05.123Z"));
+    st = chatReducer(st, pv("ich denke weiter", "2026-10-22T10:00:05.123Z", "thinking"));
+    expect(st.preview?.text).toBe("ich denke weiter");
+  });
+
+  it("verwirft ueber die Art hinweg nur einen AELTEREN Schnappschuss", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, thought("th1", "2026-10-22T10:00:05.123Z"));
+    st = chatReducer(st, pv("alte Antwort", "2026-10-22T10:00:05.122Z"));
+    expect(st.preview).toBeNull();
+  });
+
+  // Review PR #933: a pane preview (Claude Code) carries the BACKEND clock,
+  // transcript lines the agent's. The tailer already cuts the pane text off
+  // behind the last permanent line (pane anchor), in the same loop that reads
+  // the transcript — the reducer must not compare the two clocks.
+  it("prueft keine Bildschirm-Vorschau (andere Uhr; der Tailer schneidet sie selbst ab)", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, said("a1", "Erst das.", "2026-10-22T10:00:05.000Z"));
+    st = chatReducer(st, { ...pv("Jetzt das naechste", "2026-10-22T10:00:04.400+00:00"), source: "pane" });
+    expect(st.preview?.text).toBe("Jetzt das naechste");
+  });
+
   it("eine Zeile des Operators und ein Werkzeug beenden nichts", () => {
     let st = createInitialChatState();
     st = chatReducer(st, said("a1", "Erst das.", "2026-10-22T10:00:01.000Z"));
@@ -539,6 +574,15 @@ describe("seedSequence — veraltete Preview-Zeilen sterben beim Seed", () => {
     for (const ev of seedSequence([answer], [live])) st = chatReducer(st, ev);
 
     expect(st.preview?.text).toBe("naechster Zug laeuft…");
+  });
+
+  it("vergleicht Zeitpunkte, nicht Zeichenketten (…05.500Z ist NACH …05Z)", () => {
+    const answer = msg("a1", "Fertig.", "assistant");
+    answer.ts = "2026-08-15T00:00:05Z";
+    const live = pv("naechster Zug laeuft…", "2026-08-15T00:00:05.500Z");
+    expect(seedSequence([answer], [live])).toContain(live);
+    const older = pv("Fertig.", "2026-08-15T00:00:04.999+00:00");
+    expect(seedSequence([answer], [older])).not.toContain(older);
   });
 
   it("behält Previews, wenn die History noch keine assistant-message hat", () => {

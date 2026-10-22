@@ -305,13 +305,26 @@ function instant(ts: string | null | undefined): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-/** Is a preview stamped `ts` already overtaken by the transcript — not newer
- *  than the newest permanent assistant line or finished thought? A preview
- *  without a readable stamp is never called stale (worst case one line too
- *  many, never a missing running answer — as `seedSequence`). Scans from the
- *  end and stops at the first readable line of each kind. */
-function overtakenByTranscript(events: TimelineChatEvent[], ts: string | null | undefined): boolean {
-  const at = instant(ts);
+/** Is this preview already overtaken by the transcript? A snapshot of
+ *  answer text is stale when it is not newer than the newest permanent
+ *  assistant line; a running thought when it is not newer than the newest
+ *  finished thought. Across kinds only an OLDER stamp is stale: the omp
+ *  bridge stamps a finished thought and the first answer snapshot after it
+ *  in the same call — the same millisecond, and the answer is still new.
+ *
+ *  Only bridge previews (`source: "acp"`) are checked. A pane preview
+ *  (Claude Code) is cut off behind the last permanent line by the tailer
+ *  itself (the pane anchor in `transcript_chat.py`), in the same loop that
+ *  reads the transcript, and it carries the BACKEND clock while transcript
+ *  lines carry the agent's — comparing those would drop live text whenever
+ *  the agent's clock runs ahead.
+ *
+ *  A preview without a readable stamp is never called stale (worst case one
+ *  line too many, never a missing running answer — as `seedSequence`).
+ *  Scans from the end and stops at the first readable line of each kind. */
+function overtakenByTranscript(events: TimelineChatEvent[], preview: PreviewEvent): boolean {
+  if (preview.source === "pane") return false;
+  const at = instant(preview.ts);
   if (at === null) return false;
   let answer: number | null = null;
   let thought: number | null = null;
@@ -320,8 +333,8 @@ function overtakenByTranscript(events: TimelineChatEvent[], ts: string | null | 
     if (answer === null && ev.kind === "message" && ev.role === "assistant") answer = instant(ev.ts);
     else if (thought === null && ev.kind === "thinking") thought = instant(ev.ts);
   }
-  const newest = Math.max(answer ?? -Infinity, thought ?? -Infinity);
-  return at <= newest;
+  const [same, other] = preview.block === "thinking" ? [thought, answer] : [answer, thought];
+  return (same !== null && at <= same) || (other !== null && at < other);
 }
 
 /** The tool event this live output belongs to, if it is already known. */
@@ -421,10 +434,11 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
          ZUERST: ein Schnappschuss von Text, der gerade zur festen Zeile wurde,
          kann NACH dieser Zeile eintreffen — und stand dann als zweite Kopie
          darunter, bis zur naechsten Vorschau (nach einem Werkzeug: Minuten).
-         Was nicht neuer ist als die neueste feste Antwort / der neueste
-         fertige Gedanke, hat das Transkript ueberholt (Spec A PR-0, M6;
-         dieselbe Regel wie `seedSequence` und der Aufgaben-Block im Server). */
-      if (overtakenByTranscript(state.events, event.ts)) return state;
+         Was nicht neuer ist als die neueste feste Zeile seiner Art (Antwort
+         bzw. fertiger Gedanke), hat das Transkript ueberholt (Spec A PR-0,
+         M6; dieselbe Regel wie `seedSequence` und der Aufgaben-Block im
+         Server). Nur Bruecken-Vorschauen — Regeln in `overtakenByTranscript`. */
+      if (overtakenByTranscript(state.events, event)) return state;
       return { ...state, preview: event };
     case "tool_output": {
       /* Die Ausgabe-Datei und das Transkript sind zwei Dateien ohne
@@ -536,22 +550,23 @@ export function seedSequence(
      Antwort". Was vor/neben der letzten assistant-message liegt, hat das
      Transkript bestaetigt oder ueberholt: weg. Nur Zeilen, die NACH der
      letzten Antwort stempeln, koennen noch leben (agent schreibt weiter). */
-  let lastAssistantTs: string | null = null;
+  let lastAssistantAt: number | null = null;
   for (let i = history.length - 1; i >= 0; i--) {
     const ev = history[i];
     if (ev.kind === "message" && ev.role === "assistant") {
-      lastAssistantTs = ev.ts ?? null;
+      lastAssistantAt = instant(ev.ts);
       break;
     }
   }
   const stale = (ev: ChatEvent): boolean => {
     if (ev.kind !== "preview") return false;
-    if (lastAssistantTs == null) return false;
-    const ts = (ev as { ts?: string | null }).ts ?? null;
-    // Ohne vergleichbaren Zeitstempel nicht als veraltet erkennbar — behalten
-    // (der live slot ersetzt sich selbst; schlimmstenfalls eine Zeile zu viel,
-    // nie eine fehlende laufende Antwort).
-    return ts != null && ts <= lastAssistantTs;
+    if (lastAssistantAt == null) return false;
+    // Zeitpunkte, nicht Zeichenketten: "…05.500Z" sortiert als Text VOR
+    // "…05Z". Ohne lesbaren Zeitstempel nicht als veraltet erkennbar —
+    // behalten (der live slot ersetzt sich selbst; schlimmstenfalls eine
+    // Zeile zu viel, nie eine fehlende laufende Antwort).
+    const at = instant((ev as { ts?: string | null }).ts);
+    return at != null && at <= lastAssistantAt;
   };
   return [...history, ...buffered.filter((ev) => !stale(ev))];
 }

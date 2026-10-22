@@ -94,6 +94,9 @@ export const SOFT_GAP_MS = 20_000;
 export const QUIET_MS = 20_000;
 /** The final reply is shortened in MC; this only bounds the request. */
 export const FINAL_TEXT_MAX = 4_000;
+/** A closing reply line shorter than this ("Gespeichert.", "Fertig.") is an
+ *  acknowledgement, not the answer: the final reads the line before it too. */
+export const SHORT_REPLY_CHARS = 40;
 const FIELD_MAX = 200;
 /** Only the newest events are scanned; older ones are history. */
 const TAIL = 60;
@@ -284,17 +287,30 @@ export class ProgressTracker {
     return this.emitted(out, now);
   }
 
-  /** The turn's whole answer: every reply line of the turn, in event order.
-   *  A turn can write its answer as several lines (one per text segment, the
-   *  omp bridge after spec A PR-1) — reading only the last one would speak
-   *  "Saved." instead of the answer. Capped from the start, which is the part
-   *  MC reads aloud (`voice_progress.summarize_reply`). */
+  /** The turn's answer, read from its END. MC speaks only the first one or
+   *  two sentences of this text (`voice_progress.summarize_reply`), so those
+   *  must be the conclusion:
+   *  - Claude Code writes one line per text block — "I'll look at the logs
+   *    first." → tool → "The bug was X, fixed." The result is the last line;
+   *    starting with the opening line would speak the plan, not the result.
+   *  - A turn can also close with a short acknowledgement after its answer
+   *    ("Saved.", and more often once the omp bridge writes one line per text
+   *    segment, spec A PR-1). Speaking only that loses the answer.
+   *  So: the last non-empty reply, plus earlier ones put in front only while
+   *  the collected text is shorter than `SHORT_REPLY_CHARS`. Event order,
+   *  joined with a blank line, capped from the start. */
   private lastReplyText(): string {
     const events = this.snap?.events ?? [];
     const wanted = new Set(this.replies);
-    const parts: string[] = [];
+    const texts: string[] = [];
     for (const ev of events) {
-      if (ev.kind === "message" && wanted.has(ev.uuid) && ev.text.trim()) parts.push(ev.text);
+      if (ev.kind === "message" && wanted.has(ev.uuid) && ev.text.trim()) texts.push(ev.text);
+    }
+    const parts: string[] = [];
+    let collected = 0;
+    for (let i = texts.length - 1; i >= 0 && collected < SHORT_REPLY_CHARS; i--) {
+      parts.unshift(texts[i]);
+      collected += texts[i].trim().length;
     }
     return parts.join("\n\n").slice(0, FINAL_TEXT_MAX);
   }

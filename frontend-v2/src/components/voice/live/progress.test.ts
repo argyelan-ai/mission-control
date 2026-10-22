@@ -13,6 +13,7 @@ import {
   PERIODIC_MS,
   ProgressTracker,
   QUIET_MS,
+  SHORT_REPLY_CHARS,
   SOFT_GAP_MS,
   TOOL_MIN_GAP_MS,
   claimsSuccess,
@@ -248,12 +249,13 @@ describe("ProgressTracker — final (never success before the agent said so)", (
   });
 });
 
-// Spec A PR-0 (S2): once the bridge writes one permanent line per text
-// segment (PR-1), a turn's answer can arrive as several assistant lines. The
-// call must read the WHOLE answer, as it does today with one line per turn —
-// not just the last segment ("Saved.").
-describe("ProgressTracker — final reads every reply segment of the turn", () => {
-  it("joins all segments of the turn in order", () => {
+// Spec A PR-0 (S2): a turn's answer can arrive as several assistant lines
+// (Claude Code today, the omp bridge after PR-1). MC speaks only the first one
+// or two sentences of the final text (`summarize_reply`), so the final is read
+// from the END: the closing line, plus the line(s) before it only while the
+// closing text is a short acknowledgement ("Gespeichert.").
+describe("ProgressTracker — final reads the turn's answer from its end", () => {
+  it("a short closing line brings the answer before it, in order", () => {
     const t = new ProgressTracker();
     t.observe(snap(state("idle")), 0);
     t.forwarded(false, 0);
@@ -282,17 +284,44 @@ describe("ProgressTracker — final reads every reply segment of the turn", () =
     expect(t.tick(2000 + FINAL_SETTLE_MS)[0].req.text).toBe("Eins.\n\nZwei.");
   });
 
-  it("the joined answer is capped, from its start", () => {
+  it("opening line → tool → result: speaks the result, not the plan", () => {
     const t = new ProgressTracker();
     t.observe(snap(state("idle")), 0);
     t.forwarded(false, 0);
     t.observe(snap(state("working")), 1000);
-    const a = msg("a".repeat(3_000));
-    const b = msg("b".repeat(3_000));
+    const opening = msg("Ich schaue mir zuerst die Logs an. Danach pruefe ich die Konfiguration.");
+    const toolCall = tool({ result: "ok" });
+    const result = msg("Der Fehler lag im Zeitstempel-Vergleich. Ich habe ihn behoben.");
+    t.observe(snap(state("working"), [opening]), 2000);
+    t.observe(snap(state("working"), [opening, toolCall]), 3000);
+    t.observe(snap(state("idle"), [opening, toolCall, result]), 4000);
+    const out = t.tick(4000 + FINAL_SETTLE_MS);
+    expect(kinds(out)).toEqual(["final"]);
+    expect(out[0].req.text).toBe("Der Fehler lag im Zeitstempel-Vergleich. Ich habe ihn behoben.");
+  });
+
+  it(`stops putting lines in front once the text reaches ${SHORT_REPLY_CHARS} characters`, () => {
+    const t = new ProgressTracker();
+    t.observe(snap(state("idle")), 0);
+    t.forwarded(false, 0);
+    t.observe(snap(state("working")), 1000);
+    const first = msg("Erste Zeile, die nicht mehr gesprochen wird.");
+    const answer = msg("x".repeat(SHORT_REPLY_CHARS - 12));
+    const ack = msg("Gespeichert.");
+    t.observe(snap(state("idle"), [first, answer, ack]), 2000);
+    expect(t.tick(2000 + FINAL_SETTLE_MS)[0].req.text).toBe(`${"x".repeat(SHORT_REPLY_CHARS - 12)}\n\nGespeichert.`);
+  });
+
+  it("the final text is capped, from its start", () => {
+    const t = new ProgressTracker();
+    t.observe(snap(state("idle")), 0);
+    t.forwarded(false, 0);
+    t.observe(snap(state("working")), 1000);
+    const a = msg("a".repeat(5_000));
+    const b = msg("Gespeichert.");
     t.observe(snap(state("idle"), [a, b]), 2000);
     const text = t.tick(2000 + FINAL_SETTLE_MS)[0].req.text ?? "";
-    expect(text.length).toBe(FINAL_TEXT_MAX);
-    expect(text.startsWith("a".repeat(3_000) + "\n\nb")).toBe(true);
+    expect(text).toBe("a".repeat(FINAL_TEXT_MAX));
   });
 });
 
