@@ -2734,7 +2734,8 @@ async def agent_update_task(
             # Live bug 2026-04-24 DGX-Spark task: Boss had to use a direct POST /tasks
             # as a workaround. Skip condition identical to pull dispatch:
             # in subagent-dispatch mode, workers have parallel sessions,
-            # the lock stays with Board Leads.
+            # the lock stays with Board Leads. Workers get the pointer as a
+            # hint (only while free) from update_agent_active_task below.
             from app.config import settings as _ack_settings
             if not (_ack_settings.use_subagent_dispatch and not agent.is_board_lead):
                 if agent.current_task_id != task.id:
