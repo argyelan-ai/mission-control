@@ -14,6 +14,7 @@ import {
   isEffortSwitchRejectedError,
   isInputNotSupportedError,
   isSessionOnlyEffort,
+  isRankedEffort,
   type ChatCapabilities,
   type ChatModelOption,
   type ChatSlashCommand,
@@ -330,7 +331,14 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    * Pane wir grundsaetzlich nicht lesen koennen. Ein deaktivierter Senden-Knopf
    * behauptet dort eine Ruhe, die wir nie festgestellt haben. */
   const showStop = !hasText && (isWorking || statusUnknown || !paneObservable);
-  const effortLevels = resolveEffortLevels(capabilities);
+  /* Die Leiter des Harness, geteilt: die Stufen mit Rang tragen Regler und
+   * Saeule; ein Eintrag ohne Rang (Hermes `default` = zurueck zur
+   * konfigurierten Stufe) ist kein Punkt auf der Skala, sondern ein eigener
+   * Knopf. Vorher stand `default` als unterste Stufe links von `none` und
+   * fuellte die Saeule zu 1/8. */
+  const switchableLevels = resolveEffortLevels(capabilities);
+  const effortLevels = switchableLevels.filter(isRankedEffort);
+  const effortResetLevel = switchableLevels.find((l) => !isRankedEffort(l)) ?? null;
   /* Welche Stufe der Chip anzeigt. Das usage-Ereignis der laufenden Session
    * gewinnt (nur es kennt die session-only-Stufen max/ultracode); solange es
    * fehlt — eine frisch gestartete Session hat noch keines — faellt der Chip auf
@@ -394,6 +402,14 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    * der Regler auf der ersten — angezeigt wird trotzdem, was wirklich gilt. */
   const currentEffortIndex = currentEffort ? effortLevels.indexOf(currentEffort) : -1;
   const sliderIndex = draftIndex ?? (currentEffortIndex >= 0 ? currentEffortIndex : 0);
+  /* Was unter dem Regler steht. Meldet der Agent einen Eintrag ohne Rang
+   * (Hermes `default` = konfigurierte Stufe), ruht der Daumen zwar auf der
+   * ersten Stufe, die Beschriftung darf aber nicht "none" behaupten. Beim
+   * Ziehen zeigt sie wieder die Vorschau-Stufe. */
+  const sliderLabel =
+    draftIndex == null && currentEffort != null && !isRankedEffort(currentEffort)
+      ? currentEffort
+      : effortLevels[sliderIndex];
 
   /* Fuellstand der Saeule im Brain-Knopf: Anteil der aktuellen Stufe an der
    * Stufenleiter des Harness. +1, damit schon "low" sichtbar gefuellt ist —
@@ -403,7 +419,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    * die Saeule des read-only-Chips braucht die Leiter trotzdem. */
   const displayLevels = (capabilities?.effortLevels ?? [])
     .map((l) => l.trim())
-    .filter((l) => l.length > 0);
+    .filter((l) => l.length > 0 && isRankedEffort(l));
   const staticFillPct = (() => {
     const idx = currentEffort ? displayLevels.indexOf(currentEffort) : -1;
     return idx >= 0 && displayLevels.length > 0 ? ((idx + 1) / displayLevels.length) * 100 : 0;
@@ -1181,7 +1197,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                       list="effort-ticks"
                       data-testid="effort-slider"
                       aria-label={t("effortLevel")}
-                      aria-valuetext={effortLevels[sliderIndex]}
+                      aria-valuetext={sliderLabel}
                       disabled={pendingEffort != null}
                       autoFocus
                       /* Ziehen aendert nur die Vorschau. Gesendet wird erst beim
@@ -1208,7 +1224,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                         className="font-mono text-xs"
                         style={{ color: C.accent }}
                       >
-                        {effortLevels[sliderIndex]}
+                        {sliderLabel}
                       </span>
                       {/* Pro Stufe, nicht pauschal: low/medium/high/xhigh
                           schreiben den persistierten Standard des Agenten um,
@@ -1217,7 +1233,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                           Genau diese Frage — "ueberlebt das meine Session?" —
                           muss am gewaehlten Wert stehen, nicht im Kleingedruckten. */}
                       <span className="text-[10px]" style={{ color: C.textMuted }}>
-                        {isSessionOnlyEffort(effortLevels[sliderIndex])
+                        {capabilities?.effortScope === "session" ||
+                        isSessionOnlyEffort(effortLevels[sliderIndex])
                           ? t("effortSessionOnly")
                           : capabilities?.effortShared
                             ? t("effortBecomesDefaultShared")
@@ -1232,6 +1249,24 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                         </span>
                       )}
                     </div>
+                    {effortResetLevel && (
+                      /* Neben-Knopf (K11): Text ohne Rahmen, Fingerziel
+                         44 px am Handy. Akzent, solange die Session auf der
+                         konfigurierten Stufe steht. */
+                      <button
+                        type="button"
+                        data-testid="effort-default"
+                        aria-pressed={currentEffort === effortResetLevel}
+                        disabled={pendingEffort != null}
+                        onClick={() => selectEffort(effortResetLevel)}
+                        className="mt-1 -mx-1 px-1 min-h-[44px] md:min-h-0 md:py-1 text-xs cursor-pointer disabled:cursor-wait"
+                        style={{
+                          color: currentEffort === effortResetLevel ? C.accent : C.textSecondary,
+                        }}
+                      >
+                        {t("effortDefault")}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

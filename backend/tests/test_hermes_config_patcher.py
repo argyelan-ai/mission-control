@@ -136,7 +136,7 @@ def test_mc_mcp_server_gets_agent_env_file(fake_config, monkeypatch):
 
 
 def _patch_with(monkeypatch, fake_config, **env):
-    for key in ("OPENAI_BASE_URL", "OPENAI_MODEL", "MC_CONTEXT_WINDOW"):
+    for key in ("OPENAI_BASE_URL", "OPENAI_MODEL", "MC_CONTEXT_WINDOW", "MC_THINKING_TEMPLATE_KWARG"):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -400,3 +400,53 @@ def test_rollback_backups_are_pruned_to_ours_only(fake_config, monkeypatch):
     assert len(backups) == mod.SYNC_BACKUPS_KEPT
     assert backups[-1].read_bytes() != b"6"  # the newest is this run's copy
     assert foreign.read_text() == "hand backup"  # never touched
+
+
+# ── Thinking-off switch -> model.thinking_template_kwarg (22.10.2026) ──────
+# A self-hosted reasoning runtime (TensorFold/vLLM/SGLang) turns thinking off
+# through its chat template (``chat_template_kwargs.enable_thinking``), not
+# Ollama's ``think``. MC names the switch in agent.env; Hermes (with the
+# ACP reasoning-effort patch) sends it when the chat chip says "none".
+
+_BOUND = dict(OPENAI_BASE_URL="http://192.0.2.10:8000/v1", OPENAI_MODEL="DeepSeek-V4.1-Flash-1017")
+
+
+def test_thinking_switch_written_for_a_reasoning_runtime(fake_config, monkeypatch):
+    _patch_with(monkeypatch, fake_config, MC_THINKING_TEMPLATE_KWARG="enable_thinking", **_BOUND).main()
+    model = pyyaml.safe_load(fake_config.read_text())["model"]
+    assert model["thinking_template_kwarg"] == "enable_thinking"
+
+
+def test_thinking_switch_removed_when_the_runtime_has_none(fake_config, monkeypatch):
+    """Empty = MC knows the runtime has no such switch (cloud, or not a
+    reasoning runtime): the key must go, or a switch to another runtime would
+    keep sending a template flag the new endpoint never heard of."""
+    _patch_with(monkeypatch, fake_config, MC_THINKING_TEMPLATE_KWARG="enable_thinking", **_BOUND).main()
+    _patch_with(monkeypatch, fake_config, MC_THINKING_TEMPLATE_KWARG="", **_BOUND).main()
+    assert "thinking_template_kwarg" not in pyyaml.safe_load(fake_config.read_text())["model"]
+
+
+def test_thinking_switch_untouched_when_mc_says_nothing(fake_config, monkeypatch):
+    """An agent.env from before this change has no key at all — leave a
+    hand-set value alone rather than guess."""
+    cfg = pyyaml.safe_load(fake_config.read_text())
+    cfg["model"] = {"provider": "custom", "default": "DeepSeek-V4.1-Flash-1017",
+                    "base_url": "http://192.0.2.10:8000/v1", "thinking_template_kwarg": "thinking"}
+    fake_config.write_text(pyyaml.safe_dump(cfg, sort_keys=False))
+    _patch_with(monkeypatch, fake_config, **_BOUND).main()
+    assert pyyaml.safe_load(fake_config.read_text())["model"]["thinking_template_kwarg"] == "thinking"
+
+
+def test_thinking_switch_without_runtime_binding_touches_nothing(fake_config, monkeypatch):
+    _patch_with(monkeypatch, fake_config, MC_THINKING_TEMPLATE_KWARG="enable_thinking").main()
+    assert "thinking_template_kwarg" not in (pyyaml.safe_load(fake_config.read_text()).get("model") or {})
+
+
+def test_thinking_switch_is_idempotent(fake_config, monkeypatch, capsys):
+    mod = _patch_with(monkeypatch, fake_config, MC_THINKING_TEMPLATE_KWARG="enable_thinking", **_BOUND)
+    mod.main()
+    before = fake_config.read_text()
+    capsys.readouterr()
+    assert mod.main() == 0
+    assert fake_config.read_text() == before
+    assert "idempotent" in capsys.readouterr().out.lower()

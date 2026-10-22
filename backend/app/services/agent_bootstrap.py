@@ -143,6 +143,11 @@ async def build_hermes_agent_env(
     }
     # OPENAI_BASE_URL / OPENAI_MODEL win over any defaults above
     env.update(runtime_env)
+    # build_runtime_env runs without the agent here (harness derives to
+    # openclaude), so Hermes' own key is added explicitly.
+    from app.routers.internal import thinking_switch_env
+
+    env.update(thinking_switch_env(runtime))
     return env
 
 

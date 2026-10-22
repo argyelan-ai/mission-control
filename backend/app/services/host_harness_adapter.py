@@ -559,7 +559,9 @@ def host_harness_catalog() -> list[dict[str, Any]]:
     ]
 
 
-async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: AsyncSession) -> None:
+async def sync_host_agent_model(
+    agent: Agent, runtime: Runtime, *, session: AsyncSession, write: bool = True
+) -> list[str]:
     """Rewrite the provider model env in the host agent's agent.env from the runtime binding.
 
     Preserves MC_AGENT_TOKEN and any other existing keys (a model-drift sync must
@@ -568,6 +570,11 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
     Writes OPENAI_BASE_URL/OPENAI_MODEL for openai-protocol hosts (hermes) and
     ANTHROPIC_MODEL for anthropic-protocol hosts (boss-host) — see
     build_runtime_env, which is the single place that decides the shape.
+
+    Returns the names of the keys whose value changes (sorted; names only —
+    the values carry the agent token). ``write=False`` computes the same
+    answer without touching any file (``scripts.sync_host_agent_env
+    --dry-run``).
     """
     from app.routers.internal import build_runtime_env
     from app.services.agent_bootstrap import _format_env_file, _unquote_env_value, _home_host
@@ -579,7 +586,7 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
     # derive one from that anchor. anthropic IS syncable — host claude reads
     # ANTHROPIC_MODEL from agent.env (see build_runtime_env's claude branch).
     if runtime_protocol(runtime) not in ("openai", "anthropic", None):
-        return
+        return []
 
     # The on-disk directory is the adapter's business, not always the slug: the
     # legacy boss-host layout uses "boss-host" for the agent whose slug is
@@ -597,6 +604,7 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
                 # .strip("'") leaves '"'"' sequences that re-escape and grow
                 # ~3× on every model-drift sync (13 KB token corruption).
                 existing[key.strip()] = _unquote_env_value(val)
+    before = dict(existing)
     # Pass the agent so an explicitly set agent.harness wins over
     # derive_harness(runtime) — that is what decides ANTHROPIC_MODEL vs
     # OPENAI_MODEL inside build_runtime_env.
@@ -613,6 +621,10 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
 
         existing.setdefault("OMP_PROFILE", omp_host_profile(slug))
 
+    changed = sorted(k for k in existing if before.get(k) != existing[k])
+    if not write:
+        return changed
+
     # Only when the bytes change: a host bridge may watch agent.env (launchd
     # WatchPaths), and a same-content rewrite restarted it on every sync
     # round (live 2026-10-20) — see agent_env_writer.
@@ -624,3 +636,4 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
         from app.services.host_provisioning import render_omp_host_models_yml
 
         render_omp_host_models_yml(slug, existing)
+    return changed

@@ -100,6 +100,29 @@ def _context_window_env(runtime: "Runtime") -> dict[str, str]:
     return {CONTEXT_WINDOW_ENV: str(window)} if window else {}
 
 
+#: How Hermes turns thinking OFF on its runtime (scripts/hermes-config-patch.py
+#: -> ``model.thinking_template_kwarg``). Hermes' default off-switch is
+#: Ollama's ``think: false``; a self-hosted reasoning server (TensorFold, vLLM,
+#: SGLang) reads ``chat_template_kwargs: {"enable_thinking": false}`` instead —
+#: the same field spark_client / bench_studio already send for "no thinking".
+THINKING_TEMPLATE_KWARG_ENV = "MC_THINKING_TEMPLATE_KWARG"
+_CHAT_TEMPLATE_THINKING_KWARG = "enable_thinking"
+
+
+def thinking_switch_env(runtime: "Runtime") -> dict[str, str]:
+    """``{MC_THINKING_TEMPLATE_KWARG: "enable_thinking" | ""}`` for Hermes.
+
+    Named only for a runtime MC knows reasons (``supports_reasoning``) AND
+    runs on a host of our own (``host_id`` — the Runtime contract: cloud/HTTP
+    runtimes have none): that is where the chat-template switch exists. Every
+    other runtime gets ``""`` — an explicit "none", because the agent.env sync
+    merges over the old file and would otherwise keep the previous runtime's
+    switch after a runtime change. Never guessed for an unknown runtime.
+    """
+    known = bool(runtime.supports_reasoning) and runtime.host_id is not None
+    return {THINKING_TEMPLATE_KWARG_ENV: _CHAT_TEMPLATE_THINKING_KWARG if known else ""}
+
+
 async def build_runtime_env(
     runtime: "Runtime | None",
     session: AsyncSession,
@@ -147,6 +170,7 @@ async def build_runtime_env(
         if runtime.model_identifier:
             tokens["OPENAI_MODEL"] = runtime.model_identifier
         tokens.update(_context_window_env(runtime))
+        tokens.update(thinking_switch_env(runtime))
         return tokens
 
     from app.services.harness_compat import derive_harness, runtime_protocol
@@ -282,6 +306,10 @@ async def build_runtime_env(
     if runtime.model_identifier:
         tokens["OPENAI_MODEL"] = runtime.model_identifier
     tokens.update(_context_window_env(runtime))
+    from app.services.harness_compat import reads_thinking_switch
+
+    if reads_thinking_switch(harness):
+        tokens.update(thinking_switch_env(runtime))
     return tokens
 
 
