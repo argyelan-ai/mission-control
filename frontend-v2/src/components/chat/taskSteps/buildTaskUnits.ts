@@ -246,7 +246,8 @@ export function chapterSummary(tools: readonly ToolStep[]): {
 } {
   const running = tools.find((t) => t.st === "running") ?? null;
   const ordered = running ? [running, ...tools.filter((t) => t !== running)] : [...tools];
-  const titles = ordered.slice(0, 2).map((t) => t.title);
+  // One line each: a title can hold a newline (a script's first line).
+  const titles = ordered.slice(0, 2).map((t) => t.title.replace(/\s+/g, " ").trim());
   return {
     titles,
     more: Math.max(0, tools.length - titles.length),
