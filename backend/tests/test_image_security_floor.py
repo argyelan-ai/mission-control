@@ -12,6 +12,7 @@ Raise the floor here when the next security release lands; never lower it.
 """
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -258,6 +259,14 @@ def test_mc_playwright_chromium_gets_the_emudhra_distrust_policy():
     # The headless shell ignores managed policies — it is removed, so a
     # launch without channel="chromium" fails instead of trusting the chain.
     assert "RUN rm -rf /ms-playwright/chromium_headless_shell-*" in text
+    # …and the build proves both by effect (chrome://policy shows the policy
+    # with status OK; a channel-less launch finds no browser), after the
+    # policy and the service code are in place.
+    check = text.index("RUN python3 /app/check_browser.py")
+    assert check > text.index("COPY media.py /app/media.py")
+    assert check > text.index("RUN rm -rf /ms-playwright/chromium_headless_shell-*")
+    assert check > text.index("/etc/opt/chrome_for_testing/policies/managed/emudhra-distrust.json")
+    assert "COPY check_browser.py /app/check_browser.py" in text
     # Same certificate list as cdp-browser (pinned by SHA-256 in
     # test_compose_cdp_browser.py) — one list, two build contexts.
     ours = (REPO_ROOT / "docker/mc-playwright/policies/emudhra-distrust.json").read_bytes()
@@ -271,13 +280,33 @@ def test_mc_playwright_launches_only_the_policy_honouring_browser():
     Chrome for Testing 156.0.8078.4); the full browser in new headless mode
     (`channel="chromium"`) refuses it. Every launch in the service goes
     through one helper with those kwargs. (Checked as text: service.py
-    imports playwright, which the backend venv does not have.)"""
-    media = (REPO_ROOT / "docker/mc-playwright/media.py").read_text(encoding="utf-8")
-    assert re.search(
-        r'^CHROMIUM_LAUNCH_KWARGS = \{"headless": True, "channel": "chromium"\}$',
-        media, re.MULTILINE,
+    imports playwright, which the backend venv does not have — parsed, not
+    imported.)"""
+    media = ast.parse((REPO_ROOT / "docker/mc-playwright/media.py").read_text(encoding="utf-8"))
+    kwargs = next(
+        n.value for n in media.body
+        if isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "CHROMIUM_LAUNCH_KWARGS" for t in n.targets)
     )
-    service = (REPO_ROOT / "docker/mc-playwright/service.py").read_text(encoding="utf-8")
-    assert re.findall(r"\.chromium\.launch\((.*?)\)", service) == ["**CHROMIUM_LAUNCH_KWARGS"]
-    assert "async def _launch_chromium(" in service
-    assert len(re.findall(r"await _launch_chromium\(p\)", service)) >= 6
+    assert ast.literal_eval(kwargs) == {"headless": True, "channel": "chromium"}
+
+    service = ast.parse((REPO_ROOT / "docker/mc-playwright/service.py").read_text(encoding="utf-8"))
+    # Every `<x>.chromium.launch(…)` / `.launch_persistent_context(…)` call,
+    # however it is wrapped over lines, with the function it sits in.
+    launches = []
+    helper_calls = 0
+    for fn in ast.walk(service):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            if (isinstance(f, ast.Attribute)
+                    and f.attr in ("launch", "launch_persistent_context")
+                    and isinstance(f.value, ast.Attribute) and f.value.attr == "chromium"):
+                launches.append((fn.name, ast.unparse(node)))
+            if isinstance(f, ast.Name) and f.id == "_launch_chromium":
+                helper_calls += 1
+    assert launches == [("_launch_chromium", "p.chromium.launch(**CHROMIUM_LAUNCH_KWARGS)")], launches
+    assert helper_calls >= 6

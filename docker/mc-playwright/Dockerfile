@@ -50,7 +50,7 @@ RUN pip install --no-cache-dir \
     "certifi>=2026.10.19"
 
 # Playwright's driver runs on a Node it bundles — 1.64.0 bundles v24.21.0,
-# below the Node.js 2026-10-21 security release (24.22.1: TLS hostname-check
+# below the Node.js 2026-10-20 security release (24.22.1: TLS hostname-check
 # bypasses, Brotli RCE, eMudhra-free CA store). Playwright reads the Node to
 # use from PLAYWRIGHT_NODEJS_PATH (playwright/_impl/_driver.py); the bundled
 # binary is replaced by a link to the patched one so nothing — not the env
@@ -88,6 +88,13 @@ COPY media.py /app/media.py
 COPY service.py /app/service.py
 COPY deterministic_shim.js /app/deterministic_shim.js
 COPY templates/ /app/templates/
+
+# Proof by effect, at build time and on whatever architecture builds the
+# image: the service's browser lists the policy on chrome://policy, and a
+# launch without the channel finds no headless shell. Either one wrong -> the
+# build fails (check_browser.py; no network needed).
+COPY check_browser.py /app/check_browser.py
+RUN python3 /app/check_browser.py
 
 # Bench-video branding fonts: fetched + inlined at build time (never
 # committed — Fontshare fonts must not be redistributed verbatim, see

@@ -1654,7 +1654,9 @@ Alle ADRs in `docs/decisions/`:
   `_launch_chromium` = full browser in new headless mode (`channel="chromium"`), because
   chrome-headless-shell ignores managed policies; the headless shell is removed from the image and
   the cdp-browser eMudhra `CADistrustedCertificates` policy is installed for Chrome for Testing.
-  Guarded in `backend/tests/test_image_security_floor.py`.
+  The build proves both by effect (`docker/mc-playwright/check_browser.py`: chrome://policy shows
+  the policy with status OK; a launch without the channel finds no browser). Guarded in
+  `backend/tests/test_image_security_floor.py`; `docker/mc-playwright/tests` get their own CI lane.
 
 - **2026-10-22** — **Image security floor (Node 2026-10-21 release + eMudhra CA):** the backend
   image moves from NodeSource Node 20 (end of life) to the 22 line with a build-time floor
