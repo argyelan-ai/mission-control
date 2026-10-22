@@ -1055,6 +1055,7 @@
     "effortLockedStateMissing": "Der Agent hat seine Einstellungen noch nicht gemeldet — die Denkstufe erscheint, sobald er es tut.",
     "effortLockedHarnessNoEffort": "{harness} bietet keine Denkstufe an.",
     "effortLockedHarnessNoEffortGeneric": "Der Harness dieses Agenten bietet keine Denkstufe an.",
+    "effortDefault": "Standard — die eingestellte Stufe des Agenten",
     "effortSessionOnly": "nur diese Session",
     "effortBecomesDefault": "wird Standard",
     "effortBecomesDefaultShared": "wird Standard — auch für deine lokalen Claude-Sessions (geteilte Config)",

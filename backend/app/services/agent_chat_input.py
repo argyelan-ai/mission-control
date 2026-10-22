@@ -1812,6 +1812,11 @@ async def effort_capabilities(agent) -> dict[str, object]:
             # damit juenger als jedes usage-Ereignis, gleiche Begruendung wie
             # bei der omp-Statuszeile.
             "effortLive": True,
+            # Eine ACP-Config-Option gehoert der Session: ``_set_effort_acp``
+            # schreibt nichts in die Einstellungen des Agenten (der Daemon
+            # traegt sie nur ueber ein /new). Der Regler darf darum nicht
+            # "wird Standard" versprechen — fuer keine Stufe.
+            "effortScope": "session",
         }
 
     harness = getattr(agent, "harness", None)

@@ -1055,6 +1055,7 @@
     "effortLockedStateMissing": "The agent has not reported its settings yet — the thinking level shows up once it has.",
     "effortLockedHarnessNoEffort": "{harness} doesn't offer a thinking level.",
     "effortLockedHarnessNoEffortGeneric": "This agent's harness doesn't offer a thinking level.",
+    "effortDefault": "Default — the agent’s configured level",
     "effortSessionOnly": "this session only",
     "effortBecomesDefault": "becomes the default",
     "effortBecomesDefaultShared": "becomes the default — for your local Claude sessions too (shared config)",

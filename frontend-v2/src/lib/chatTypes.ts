@@ -738,6 +738,12 @@ export interface ChatCapabilities {
    *  zeigte nach Neuladen "high", Pane sagte "low"). Absent/false = der Wert
    *  ist der settings.json-Standard fuer NEUE Sessions, usage bleibt vorn. */
   effortLive?: boolean;
+  /** `"session"`: a switch holds for the running chat session only and is
+   *  never written into the agent's own settings — every ACP agent (the level
+   *  is a session config option). Then every level gets the "this session
+   *  only" hint, not just the ones `SESSION_ONLY_EFFORT_LEVELS` names.
+   *  Absent = the per-level rule below applies. */
+  effortScope?: "session" | null;
   /** WARUM sich der Effort nicht umschalten laesst — damit das UI es erklaeren
    *  kann, statt das Bedienelement wortlos wegzulassen. Nur gesetzt, wenn
    *  `canSwitchEffort` false ist; `null`/absent = kein Grund noetig oder
@@ -836,6 +842,18 @@ export const SESSION_ONLY_EFFORT_LEVELS = new Set(["max", "ultracode", "off"]);
 
 export function isSessionOnlyEffort(level: string): boolean {
   return SESSION_ONLY_EFFORT_LEVELS.has(level);
+}
+
+/**
+ * Ladder entries that are not a level but a hand-back to the agent's own
+ * configured level (Hermes over ACP reports `default` first in its list).
+ * They have no rank: no stop on the slider, no fill in the gauge — the chip
+ * offers them as a separate "Default" button instead.
+ */
+export const UNRANKED_EFFORT_LEVELS = new Set(["default", "auto"]);
+
+export function isRankedEffort(level: string): boolean {
+  return !UNRANKED_EFFORT_LEVELS.has(level);
 }
 
 /** Eine hochgeladene Datei, wie sie der Anhang-Endpunkt zurueckgibt.
