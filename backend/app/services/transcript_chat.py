@@ -2111,7 +2111,20 @@ class ChatTailerManager:
         # Der Harness des Agenten entscheidet, WIE gelesen wird (Parser,
         # Dedup-Feld, Session-Suche, Pane-Regeln). ``agent`` ist nur in
         # Tests None — dann gilt der Claude-Adapter wie bisher.
-        adapter = adapter_for(agent)
+        #
+        # Das Kontextfenster der gebundenen Runtime faehrt mit in den Parser
+        # (wie auf der History-Seite, agent_chat._resolve_transcript_path) —
+        # sonst zeigte der Live-Strom wieder das Fenster, das der Harness nur
+        # GLAUBT (Hermes 22.10.2026: 202.752 statt 1.048.576), und genau diese
+        # falsche Zahl landete unten auch in der geteilten observed-Map.
+        # Einmal je Tailer-Lauf gelesen, wie ``observed_windows``; ein
+        # Runtime-Wechsel startet den Agenten neu und damit die Session.
+        from app.services.runtime_window import agent_runtime_window
+        from app.services.transcript_adapters import bind_runtime_window
+
+        adapter = bind_runtime_window(
+            adapter_for(agent), await agent_runtime_window(agent)
+        )
         # ``new_parser`` darf die Sitzungsdatei LESEN, um seinen Anfangs-
         # zustand zu laden (omp: ``seed_from`` liest die ganze Datei, damit
         # der am Dateiende einsteigende Tailer die Effort-Stufe vom

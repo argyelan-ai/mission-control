@@ -32,6 +32,7 @@ erzeugen.
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -352,6 +353,33 @@ def adapter_for(agent: Any | None) -> TranscriptAdapter:
     harness = getattr(agent, "harness", None)
     builder = _BUILDERS.get(harness or CLAUDE, _claude_adapter)
     return builder()
+
+
+def bind_runtime_window(adapter: TranscriptAdapter, window: int | None) -> TranscriptAdapter:
+    """``adapter`` whose parsers know the agent's runtime context window.
+
+    The readers with DB access (agent_chat router, transcript tailer) resolve
+    the window (``runtime_window.agent_runtime_window``) and bind it here, so
+    the parsers stay pure — the same way ``observed_windows`` flows in from
+    the caller. Duck-typed on the parser's ``set_runtime_window`` hook: the
+    omp-format parser (omp + Hermes) has it, Claude Code's plain parse
+    function does not and is returned untouched — its statusline knows the
+    real window and a catalog value must never overrule that.
+
+    ``window`` falsy -> the adapter itself (cloud / unbound agents unchanged).
+    """
+    if not window:
+        return adapter
+    base = adapter.new_parser
+
+    def new_parser(*args: Any, **kwargs: Any):
+        parser = base(*args, **kwargs)
+        setter = getattr(parser, "set_runtime_window", None)
+        if callable(setter):
+            setter(window)
+        return parser
+
+    return dataclasses.replace(adapter, new_parser=new_parser)
 
 
 def adapter_for_harness(name: str | None) -> TranscriptAdapter | None:

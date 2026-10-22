@@ -1021,8 +1021,14 @@ class OmpLineParser:
     daran nicht sterben).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, runtime_window: int | None = None) -> None:
         self._effort: str | None = None
+        # The bound runtime's context window (``runtime_window
+        # .runtime_context_window``), handed in by the reader that has DB
+        # access — this parser stays pure. Agent context, not session state:
+        # ``reset()`` keeps it. See ``_effective_window``.
+        self.runtime_window: int | None = None
+        self.set_runtime_window(runtime_window)
         # toolCallId -> {"path", "content"} for a seeded tool call whose
         # arguments carry a WHOLE new file body (omp's native `write` tool,
         # or the ACP bridge forwarding the same tool generically under
@@ -1037,6 +1043,18 @@ class OmpLineParser:
         # user line is a prompt MC wrote — files written before the bridge
         # stamped ``attribution: "mc"`` (19.10.2026) are recognised by this.
         self._task_session = False
+
+    def set_runtime_window(self, window: int | None) -> None:
+        """Bind the agent's runtime window (``None``/invalid = unbound).
+
+        ``transcript_adapters.bind_runtime_window`` calls this on every parser
+        it hands out — duck-typed, so a parser without the hook (Claude Code)
+        is simply never affected."""
+        try:
+            value = int(window) if window is not None else 0
+        except (TypeError, ValueError):
+            value = 0
+        self.runtime_window = value if value > 0 else None
 
     def reset(self) -> None:
         self._effort = None
@@ -1386,6 +1404,15 @@ class OmpLineParser:
                 isinstance(omp_window, (int, float)) and omp_window > 0 and
                 isinstance(used_tokens, (int, float)) and used_tokens >= 0
             )
+            # The window the ring divides by. The harness' FILL (usedTokens)
+            # is a measurement and stays; its WINDOW is only what the harness
+            # believes it runs on — and Hermes believed GLM (202,752) while
+            # the runtime served 1,048,576 (live 22.10.2026, ring 9 % vs 2 %).
+            # The bound runtime row is the window MC told the harness
+            # (MC_CONTEXT_WINDOW / OMP_CONTEXT_WINDOW), so it wins.
+            window = self._effective_window(
+                model, int(omp_window) if has_fill_truth else None, observed_windows
+            )
             # Cache hit rate (cacheRead / (cacheRead + input)) is a RATIO,
             # not a window breakdown — unlike `components` above it survives
             # `has_fill_truth` on purpose. An ACP agent's `_usage_block`
@@ -1419,18 +1446,14 @@ class OmpLineParser:
                     # Aus der zuletzt gesehenen thinking_level_change-Zeile —
                     # omp schreibt die Stufe nicht an den Zug (s. Docstring).
                     "effort": self._effort,
-                    "contextWindow": (
-                        int(omp_window)
-                        if has_fill_truth
-                        else resolve_context_window(model, observed_windows)
-                    ),
+                    "contextWindow": window,
                     # Kein Breakdown aus kumulativen Buckets ableitbar (s.o.)
                     # — ehrlich gar keine statt einer falschen.
                     "components": components if not has_fill_truth else None,
                     "cacheHitRate": cache_hit_rate,
                     **(
                         {
-                            "usedPct": round(used_tokens / omp_window * 100, 1),
+                            "usedPct": round(used_tokens / window * 100, 1),
                             "source": "cli",
                         }
                         if has_fill_truth
@@ -1447,6 +1470,31 @@ class OmpLineParser:
             events.append(usage_ev)
 
         return events
+
+    # rule: R-runtime-window-one-source - a stale harness belief must not set the ring
+    def _effective_window(
+        self,
+        model: Any,
+        reported: int | None,
+        observed_windows: dict[str, int] | None,
+    ) -> int | None:
+        """The context window a usage event shows.
+
+        1. The bound runtime's window, when the reader handed one in — it is
+           what MC rendered into the harness' config, so a harness reporting
+           something else runs on a stale belief (logged once per drift).
+        2. Otherwise the harness' own reported window (omp's live
+           accounting) — cloud/unbound agents keep exactly their old number.
+        3. Otherwise the model-name estimate (``resolve_context_window``).
+        """
+        runtime_window = self.runtime_window
+        if runtime_window:
+            if reported is not None and reported != runtime_window:
+                _log_window_drift(model, reported, runtime_window)
+            return runtime_window
+        if reported is not None:
+            return reported
+        return resolve_context_window(model, observed_windows)
 
     def _parse_tool_result(self, message: dict[str, Any]) -> list[dict[str, Any]]:
         """``role: toolResult`` -> internes ``_tool_result``-Ereignis.
@@ -1730,7 +1778,33 @@ def _mode_event(d: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"kind": "mode", "uuid": d["id"], "ts": d["timestamp"], "modeId": mode_id[:64]}]
 
 
-def new_parser(session_path: Path | None = None) -> OmpLineParser:
+#: (model, reported, runtime) triples already logged — the drift warning
+#: fires once per distinct disagreement and backend process, not once per
+#: usage line (a history page re-parses the whole session on every load).
+_WINDOW_DRIFT_LOGGED: set[tuple[str, int, int]] = set()
+_WINDOW_DRIFT_LOG_CAP = 256
+
+
+def _log_window_drift(model: Any, reported: int, runtime_window: int) -> None:
+    key = (str(model), int(reported), int(runtime_window))
+    if key in _WINDOW_DRIFT_LOGGED:
+        return
+    if len(_WINDOW_DRIFT_LOGGED) >= _WINDOW_DRIFT_LOG_CAP:
+        _WINDOW_DRIFT_LOGGED.clear()
+    _WINDOW_DRIFT_LOGGED.add(key)
+    logger.warning(
+        "omp_chat: context window drift for model %r — harness reports %s, "
+        "bound runtime says %s; showing the runtime value (the harness config "
+        "is stale: check MC_CONTEXT_WINDOW / its model config)",
+        model,
+        reported,
+        runtime_window,
+    )
+
+
+def new_parser(
+    session_path: Path | None = None, *, runtime_window: int | None = None
+) -> OmpLineParser:
     """Frischer Parser, optional mit dem Zustand der bereits geschriebenen
     Zeilen vorgeladen.
 
@@ -1745,8 +1819,13 @@ def new_parser(session_path: Path | None = None) -> OmpLineParser:
 
     Fail-silent: eine fehlende oder unlesbare Datei laesst den Parser
     schlicht ohne Vorgabe starten.
+
+    ``runtime_window``: das Kontextfenster der gebundenen Runtime (siehe
+    ``OmpLineParser._effective_window``). Wird vom Leser mit DB-Zugriff
+    mitgegeben (``transcript_adapters.bind_runtime_window``) — der Parser
+    selbst fragt nie die DB.
     """
-    parser = OmpLineParser()
+    parser = OmpLineParser(runtime_window=runtime_window)
     if session_path is not None:
         parser.seed_from(session_path)
     return parser

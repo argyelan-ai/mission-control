@@ -506,6 +506,38 @@ def _clean_cost(raw: Any) -> Optional[dict[str, Any]]:
     return {"amount": float(amount), "currency": currency}
 
 
+def _input_includes_cache(
+    input_tokens: int,
+    output_tokens: int,
+    cache_read: int,
+    cache_write: int,
+    total: Any,
+) -> bool:
+    """Does this ACP ``Usage`` count cached tokens INSIDE ``inputTokens``?
+
+    The ACP spec names the fields but not their convention, and the two
+    harnesses we drive differ:
+
+    * omp (acp-agent.ts ``#buildTurnUsage``, v18.10.1): input is the UNCACHED
+      part; ``totalTokens`` = input + output + cacheRead + cacheWrite.
+    * Hermes (acp_adapter/server.py, 0.18.0): input is ``prompt_tokens`` =
+      uncached + cacheRead + cacheWrite; ``totalTokens`` = input + output.
+
+    The backend computes the hit rate as cacheRead / (cacheRead + input) —
+    omp's convention. Fed Hermes' numbers it counted the cache twice (live
+    22.10.2026: 44 % shown, 80 % true). Decided from the DATA, not from the
+    harness name: when something was cached, the two conventions give
+    different totals, and ``total == input + output`` only holds when the
+    cache sits inside ``input``. No total, nothing cached, or an input too
+    small to contain the cache -> leave the numbers exactly as reported (omp
+    and every unknown harness stay byte-identical).
+    """
+    cached = cache_read + cache_write
+    if cached <= 0 or isinstance(total, bool) or not isinstance(total, (int, float)):
+        return False
+    return int(total) == input_tokens + output_tokens and input_tokens >= cached
+
+
 @dataclass
 class ACPEventMapper:
     """Accumulates one ACP run's events into omp-format transcript line dicts.
@@ -1023,11 +1055,19 @@ class ACPEventMapper:
             return None
         usage = self._prompt_usage or {}
         window = self._usage_window or {}
+        input_tokens = int(usage.get("inputTokens") or 0)
+        cache_read = int(usage.get("cachedReadTokens") or 0)
+        cache_write = int(usage.get("cachedWriteTokens") or 0)
+        output = int(usage.get("outputTokens") or 0)
+        if _input_includes_cache(
+            input_tokens, output, cache_read, cache_write, usage.get("totalTokens")
+        ):
+            input_tokens -= cache_read + cache_write
         block: dict[str, Any] = {
-            "input": int(usage.get("inputTokens") or 0),
-            "cacheRead": int(usage.get("cachedReadTokens") or 0),
-            "cacheWrite": int(usage.get("cachedWriteTokens") or 0),
-            "output": int(usage.get("outputTokens") or 0),
+            "input": input_tokens,
+            "cacheRead": cache_read,
+            "cacheWrite": cache_write,
+            "output": output,
             "contextWindow": window.get("size"),
             "usedTokens": window.get("used"),
         }

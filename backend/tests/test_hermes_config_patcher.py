@@ -126,3 +126,167 @@ def test_mc_mcp_server_gets_agent_env_file(fake_config, monkeypatch):
     cfg = pyyaml.safe_load(fake_config.read_text())
     env = cfg["mcp_servers"]["mc"].get("env") or {}
     assert env.get("MC_AGENT_ENV_FILE", "").endswith("/.mc/agents/hermes/agent.env")
+
+
+# ── Runtime window -> model.context_length (22.10.2026) ────────────────────
+# Hermes guesses its context window from its own model-name table unless
+# model.context_length says otherwise. With a stale model name it guessed
+# GLM's 202,752 while the runtime served 1,048,576 — wrong chat ring AND
+# compaction thresholds. MC now sends MC_CONTEXT_WINDOW in agent.env.
+
+
+def _patch_with(monkeypatch, fake_config, **env):
+    for key in ("OPENAI_BASE_URL", "OPENAI_MODEL", "MC_CONTEXT_WINDOW"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    mod = _load_module()
+    monkeypatch.setattr(mod, "CONFIG_PATH", fake_config)
+    monkeypatch.setattr(mod, "BACKUP_PATH", fake_config.with_suffix(".yaml.bak"))
+    return mod
+
+
+def test_context_length_written_from_runtime_window(fake_config, monkeypatch):
+    mod = _patch_with(
+        monkeypatch,
+        fake_config,
+        OPENAI_BASE_URL="http://192.0.2.10:8000/v1",
+        OPENAI_MODEL="DeepSeek-V4.1-Flash-1017",
+        MC_CONTEXT_WINDOW="1048576",
+    )
+    assert mod.main() == 0
+    model = pyyaml.safe_load(fake_config.read_text())["model"]
+    assert model["default"] == "DeepSeek-V4.1-Flash-1017"
+    assert model["base_url"] == "http://192.0.2.10:8000/v1"
+    # An INT: Hermes rejects anything else ("must be a plain integer").
+    assert model["context_length"] == 1048576
+
+
+def test_context_length_is_idempotent(fake_config, monkeypatch, capsys):
+    mod = _patch_with(
+        monkeypatch,
+        fake_config,
+        OPENAI_BASE_URL="http://192.0.2.10:8000/v1",
+        OPENAI_MODEL="m",
+        MC_CONTEXT_WINDOW="1048576",
+    )
+    mod.main()
+    before = fake_config.read_text()
+    capsys.readouterr()
+    assert mod.main() == 0
+    assert fake_config.read_text() == before
+    assert "idempotent" in capsys.readouterr().out.lower()
+
+
+def test_stale_glm_block_is_corrected_and_unrelated_keys_survive(fake_config, monkeypatch):
+    """The live state of 22.10.2026: config still on GLM, plus Hermes' own keys."""
+    cfg = pyyaml.safe_load(fake_config.read_text())
+    cfg["model"] = {
+        "provider": "custom",
+        "base_url": "http://192.0.2.10:8000/v1",
+        "default": "GLM-5.3-Flash-EXL3",
+        "max_tokens": 8192,
+    }
+    cfg["display"] = {"skin": "default"}
+    fake_config.write_text(pyyaml.safe_dump(cfg, sort_keys=False))
+    mod = _patch_with(
+        monkeypatch,
+        fake_config,
+        OPENAI_BASE_URL="http://192.0.2.10:8000/v1",
+        OPENAI_MODEL="DeepSeek-V4.1-Flash-1017",
+        MC_CONTEXT_WINDOW="1048576",
+    )
+    assert mod.main() == 0
+    result = pyyaml.safe_load(fake_config.read_text())
+    assert result["model"]["default"] == "DeepSeek-V4.1-Flash-1017"
+    assert result["model"]["context_length"] == 1048576
+    assert result["model"]["max_tokens"] == 8192
+    assert result["display"] == {"skin": "default"}
+
+
+def test_window_change_on_same_model_is_applied(fake_config, monkeypatch):
+    """Recipe switch that keeps the model name but changes the window
+    (GLM vLLM 250k -> GLM TensorFold 1M, 01.10.2026)."""
+    common = dict(OPENAI_BASE_URL="http://192.0.2.10:8000/v1", OPENAI_MODEL="GLM")
+    _patch_with(monkeypatch, fake_config, MC_CONTEXT_WINDOW="250000", **common).main()
+    _patch_with(monkeypatch, fake_config, MC_CONTEXT_WINDOW="1048576", **common).main()
+    assert pyyaml.safe_load(fake_config.read_text())["model"]["context_length"] == 1048576
+
+
+def test_old_window_is_dropped_when_the_model_changes_without_one(fake_config, monkeypatch):
+    """A window that belonged to the PREVIOUS model is worse than none —
+    Hermes would trust it over its own detection."""
+    _patch_with(
+        monkeypatch, fake_config,
+        OPENAI_BASE_URL="http://192.0.2.10:8000/v1", OPENAI_MODEL="old-model",
+        MC_CONTEXT_WINDOW="1048576",
+    ).main()
+    _patch_with(
+        monkeypatch, fake_config,
+        OPENAI_BASE_URL="http://192.0.2.10:8000/v1", OPENAI_MODEL="new-model",
+    ).main()
+    model = pyyaml.safe_load(fake_config.read_text())["model"]
+    assert model["default"] == "new-model"
+    assert "context_length" not in model
+
+
+def test_hand_set_window_survives_when_mc_sends_none_and_model_is_unchanged(
+    fake_config, monkeypatch
+):
+    cfg = pyyaml.safe_load(fake_config.read_text())
+    cfg["model"] = {"provider": "custom", "base_url": "http://192.0.2.10:8000/v1",
+                    "default": "same", "context_length": 65536}
+    fake_config.write_text(pyyaml.safe_dump(cfg, sort_keys=False))
+    _patch_with(
+        monkeypatch, fake_config,
+        OPENAI_BASE_URL="http://192.0.2.10:8000/v1", OPENAI_MODEL="same",
+    ).main()
+    assert pyyaml.safe_load(fake_config.read_text())["model"]["context_length"] == 65536
+
+
+def test_garbage_window_is_ignored_loudly(fake_config, monkeypatch, capsys):
+    mod = _patch_with(
+        monkeypatch, fake_config,
+        OPENAI_BASE_URL="http://192.0.2.10:8000/v1", OPENAI_MODEL="m",
+        MC_CONTEXT_WINDOW="1M",
+    )
+    assert mod.main() == 0
+    assert "context_length" not in pyyaml.safe_load(fake_config.read_text())["model"]
+    assert "MC_CONTEXT_WINDOW" in capsys.readouterr().err
+
+
+def test_window_without_runtime_binding_touches_nothing(fake_config, monkeypatch):
+    """No OPENAI_* = no MC binding: a hand-written (cloud) model block stays."""
+    cfg = pyyaml.safe_load(fake_config.read_text())
+    cfg["model"] = {"provider": "ollama-cloud", "default": "kimi-k2.6"}
+    fake_config.write_text(pyyaml.safe_dump(cfg, sort_keys=False))
+    _patch_with(monkeypatch, fake_config, MC_CONTEXT_WINDOW="1048576").main()
+    assert "context_length" not in pyyaml.safe_load(fake_config.read_text())["model"]
+
+
+def test_write_keeps_the_config_private(fake_config, monkeypatch):
+    """config.yaml holds provider keys: the atomic replace must not widen it
+    to the umask's 0644."""
+    import os
+    import stat
+
+    os.chmod(fake_config, 0o600)
+    mod = _patch_with(
+        monkeypatch, fake_config,
+        OPENAI_BASE_URL="http://192.0.2.10:8000/v1", OPENAI_MODEL="m",
+        MC_CONTEXT_WINDOW="1048576",
+    )
+    old_umask = os.umask(0o022)
+    try:
+        assert mod.main() == 0
+    finally:
+        os.umask(old_umask)
+    assert stat.S_IMODE(fake_config.stat().st_mode) == 0o600
+    assert not list(fake_config.parent.glob("*.tmp-25-07"))
+
+
+def test_hermes_home_is_respected(tmp_path, monkeypatch):
+    """Hermes reads $HERMES_HOME/config.yaml when set — so must the patcher."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hh"))
+    mod = _load_module()
+    assert mod.CONFIG_PATH == tmp_path / "hh" / "config.yaml"
