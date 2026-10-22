@@ -1785,6 +1785,11 @@
       "run": "Seite starten",
       "runHint": "Die Seite läuft erst, wenn du sie startest.",
       "isolationLabel": "Agenten-Seite · isolierte Vorschau – hier nie Passwörter eingeben"
+    },
+    "svg": {
+      "codeOnly": "MC zeigt SVG-Bilder nur als Code – eine SVG-Datei kann die App einfrieren.",
+      "downloadToView": "Zum Ansehen herunterladen.",
+      "shortened": "Lange Datei – nur der Anfang wird gezeigt."
     }
   },
   "settings": {

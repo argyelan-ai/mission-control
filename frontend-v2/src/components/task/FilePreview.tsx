@@ -10,6 +10,13 @@ import { useAuthBlob } from "@/hooks/useAuthBlob";
 import { C } from "@/lib/colors";
 import { VaultMarkdown } from "@/components/vault/VaultMarkdown";
 import { HtmlPreview, type FolderUrl } from "./HtmlPreview";
+import {
+  SvgPreview,
+  SVG_EXTS,
+  SVG_SOURCE_MAX_BYTES,
+  SVG_SOURCE_MAX_LINES,
+  SVG_HIGHLIGHT_MAX_BYTES,
+} from "./SvgPreview";
 
 // ── Hilfsfunktionen ────────────────────────────────────────────────────────
 
@@ -20,10 +27,30 @@ type PreviewKind =
   | "pdf"
   | "markdown"
   | "html"
+  | "svg"
   | "code"
   | "unsupported";
 
-const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"]);
+// Raster pictures only, each with the type its bytes get before they are
+// drawn. No "svg": an SVG is markup that can freeze MC when drawn, so it is
+// shown as its source (SvgPreview), never as an <img>. The type comes from
+// the NAME, not from the server: the deliverable endpoint types a file by a
+// symlink's target, so "chart.png" can arrive as image/svg+xml. Typed as
+// image/png, the browser refuses SVG bytes (load error, nothing drawn).
+const RASTER_TYPES: Readonly<Record<string, string>> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+};
+const IMAGE_EXTS = new Set(Object.keys(RASTER_TYPES));
+// The PDF frame gets a PDF-typed blob for the same reason: a ".pdf" that
+// arrives as text/html would otherwise be an HTML page in a blob: frame,
+// which runs with MC's own origin.
+const PDF_TYPE = "application/pdf";
 const VIDEO_EXTS = new Set(["mp4", "mov", "webm", "mkv", "avi"]);
 const AUDIO_EXTS = new Set(["mp3", "wav", "ogg", "flac", "m4a", "aac"]);
 const MARKDOWN_EXTS = new Set(["md", "markdown"]);
@@ -48,6 +75,7 @@ function fileName(path: string): string {
 
 function classifyPath(path: string): PreviewKind {
   const ext = getExtension(path);
+  if (SVG_EXTS.has(ext)) return "svg";
   if (IMAGE_EXTS.has(ext)) return "image";
   if (VIDEO_EXTS.has(ext)) return "video";
   if (AUDIO_EXTS.has(ext)) return "audio";
@@ -65,7 +93,7 @@ function langForExt(ext: string): string {
     h: "c", cs: "csharp", rb: "ruby", php: "php", swift: "swift",
     kt: "kotlin", sh: "bash", bash: "bash", zsh: "bash", sql: "sql",
     md: "markdown", json: "json", yaml: "yaml", yml: "yaml",
-    toml: "toml", css: "css", scss: "scss", html: "html", htm: "html", xml: "xml",
+    toml: "toml", css: "css", scss: "scss", html: "html", htm: "html", xml: "xml", svg: "xml",
   };
   return map[ext] ?? "plaintext";
 }
@@ -74,8 +102,41 @@ function langForExt(ext: string): string {
 // (useAuthBlob lebt jetzt in hooks/useAuthBlob.ts — auch die Chat-Anhaenge
 //  brauchen ihn.)
 
-function useAuthText(url: string | null): { text: string | null; loading: boolean; error: boolean } {
+/** Reads at most `maxBytes` of a response as UTF-8 text, then stops the
+ *  download. A cut inside a multi-byte character drops that character
+ *  (the decoder is never flushed after a cut), so no U+FFFD appears. */
+async function readTextHead(r: Response, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
+  const reader = r.body?.getReader();
+  if (!reader) {
+    const all = await r.text();
+    const bytes = new TextEncoder().encode(all);
+    if (bytes.length <= maxBytes) return { text: all, truncated: false };
+    return { text: new TextDecoder().decode(bytes.subarray(0, maxBytes), { stream: true }), truncated: true };
+  }
+  const decoder = new TextDecoder();
+  let text = "";
+  let read = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return { text: text + decoder.decode(), truncated: false };
+    if (read + value.byteLength > maxBytes) {
+      text += decoder.decode(value.subarray(0, maxBytes - read), { stream: true });
+      reader.cancel().catch(() => undefined);
+      return { text, truncated: true };
+    }
+    read += value.byteLength;
+    text += decoder.decode(value, { stream: true });
+  }
+}
+
+/** Fetches a text file with the Bearer header. With `maxBytes`, only the
+ *  start of a longer file is read (`truncated` says so). */
+function useAuthText(
+  url: string | null,
+  maxBytes?: number,
+): { text: string | null; truncated: boolean; loading: boolean; error: boolean } {
   const [text, setText] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
@@ -87,14 +148,31 @@ function useAuthText(url: string | null): { text: string | null; loading: boolea
     fetch(url, { headers: { Authorization: `Bearer ${getToken()}` } })
       .then((r) => {
         if (!r.ok) throw new Error(`${r.status}`);
-        return r.text();
+        return maxBytes === undefined ? r.text().then((t) => ({ text: t, truncated: false })) : readTextHead(r, maxBytes);
       })
-      .then((t) => { if (active) { setText(t); setLoading(false); } })
+      .then((res) => {
+        if (!active) return;
+        setText(res.text);
+        setTruncated(res.truncated);
+        setLoading(false);
+      })
       .catch(() => { if (active) { setError(true); setLoading(false); } });
     return () => { active = false; };
-  }, [url]);
+  }, [url, maxBytes]);
 
-  return { text, loading, error };
+  return { text, truncated, loading, error };
+}
+
+/** The first `maxLines` lines of `text`, and whether anything was left out. */
+function headLines(text: string, maxLines: number): { text: string; cut: boolean } {
+  let at = -1;
+  for (let i = 0; i < maxLines; i++) {
+    at = text.indexOf("\n", at + 1);
+    if (at < 0) return { text, cut: false };
+  }
+  // Exactly maxLines lines, ending in a newline: nothing left out.
+  if (at === text.length - 1) return { text, cut: false };
+  return { text: text.slice(0, at), cut: true };
 }
 
 /**
@@ -133,7 +211,7 @@ function DownloadButton({ fileUrl, path }: { fileUrl: string; path: string }) {
     <button
       onClick={handleDownload}
       disabled={busy}
-      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors cursor-pointer disabled:opacity-60"
+      className="inline-flex items-center gap-1.5 min-h-11 md:min-h-8 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors cursor-pointer disabled:opacity-60"
       style={{ background: C.bgElevated, color: C.textSecondary, border: `1px solid ${C.border}` }}
       onMouseEnter={(e) => (e.currentTarget.style.color = C.textPrimary)}
       onMouseLeave={(e) => (e.currentTarget.style.color = C.textSecondary)}
@@ -156,8 +234,10 @@ function CodePreview({ fileUrl, path }: { fileUrl: string; path: string }) {
   return <CodeView text={text} path={path} />;
 }
 
-function CodeView({ text, path }: { text: string; path: string }) {
-  const lang = langForExt(getExtension(path));
+/** `highlight={false}` shows the text plain ("text" skips the highlighter):
+ *  about two elements per line instead of several per token. */
+function CodeView({ text, path, highlight = true }: { text: string; path: string; highlight?: boolean }) {
+  const lang = highlight ? langForExt(getExtension(path)) : "text";
   return (
     <div style={{ maxHeight: 400, overflow: "auto", borderRadius: 6 }}>
       <SyntaxHighlighter
@@ -191,6 +271,44 @@ function HtmlFilePreview({ fileUrl, path, folderUrl }: { fileUrl: string; path: 
       name={fileName(path)}
       code={<CodeView text={text} path={path} />}
       folderUrl={folderUrl}
+    />
+  );
+}
+
+/** SVG: fetched as TEXT (with the Bearer header) and shown as its source,
+ *  never drawn — no object URL, no <img>, no frame (see SvgPreview).
+ *  The source view has a cost too (several elements per token), so only the
+ *  start of a long file is read and shown, plain; only a small file is
+ *  highlighted. */
+function SvgFilePreview({ fileUrl, path, downloadOffered }: { fileUrl: string; path: string; downloadOffered: boolean }) {
+  const { text, truncated, loading, error } = useAuthText(fileUrl, SVG_SOURCE_MAX_BYTES);
+
+  if (loading) return <PreviewLoader />;
+  if (error || text === null) return <PreviewError />;
+
+  const head = headLines(text, SVG_SOURCE_MAX_LINES);
+  const shortened = truncated || head.cut;
+  const highlight = !shortened && new TextEncoder().encode(text).length <= SVG_HIGHLIGHT_MAX_BYTES;
+  return (
+    <SvgPreview
+      code={<CodeView text={head.text} path={path} highlight={highlight} />}
+      downloadOffered={downloadOffered}
+      shortened={shortened}
+    />
+  );
+}
+
+/** A raster picture; bytes that are no picture (a load error) show the
+ *  error state instead of a broken-image icon. */
+function RasterImage({ src, alt }: { src: string; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <PreviewError />;
+  return (
+    <img
+      src={src}
+      alt={alt}
+      onError={() => setFailed(true)}
+      style={{ maxWidth: "100%", maxHeight: 400, borderRadius: 6, objectFit: "contain" }}
     />
   );
 }
@@ -249,6 +367,8 @@ export function FilePreview({ fileUrl, path, showDownload = true, htmlFolderUrl 
   const kind = classifyPath(path);
   const { blobUrl, loading, error } = useAuthBlob(
     kind === "image" || kind === "video" || kind === "audio" || kind === "pdf" ? fileUrl : null,
+    // The type of the NAME, never the server's (see RASTER_TYPES).
+    kind === "image" ? RASTER_TYPES[getExtension(path)] : kind === "pdf" ? PDF_TYPE : undefined,
   );
 
   const download = showDownload ? (
@@ -264,6 +384,8 @@ export function FilePreview({ fileUrl, path, showDownload = true, htmlFolderUrl 
     body = <MarkdownPreview fileUrl={fileUrl} />;
   } else if (kind === "html") {
     body = <HtmlFilePreview fileUrl={fileUrl} path={path} folderUrl={htmlFolderUrl} />;
+  } else if (kind === "svg") {
+    body = <SvgFilePreview fileUrl={fileUrl} path={path} downloadOffered={showDownload} />;
   } else if (kind === "code") {
     body = <CodePreview fileUrl={fileUrl} path={path} />;
   } else if (kind === "unsupported") {
@@ -280,13 +402,7 @@ export function FilePreview({ fileUrl, path, showDownload = true, htmlFolderUrl 
   } else if (error || !blobUrl) {
     body = <PreviewError />;
   } else if (kind === "image") {
-    body = (
-      <img
-        src={blobUrl}
-        alt={fileName(path)}
-        style={{ maxWidth: "100%", maxHeight: 400, borderRadius: 6, objectFit: "contain" }}
-      />
-    );
+    body = <RasterImage key={blobUrl} src={blobUrl} alt={fileName(path)} />;
   } else if (kind === "video") {
     body = (
       <video

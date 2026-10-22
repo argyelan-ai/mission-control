@@ -1785,6 +1785,11 @@
       "run": "Run page",
       "runHint": "The page runs only when you start it.",
       "isolationLabel": "Agent page · isolated preview – never enter passwords here"
+    },
+    "svg": {
+      "codeOnly": "MC shows SVG images as code only – an SVG file can freeze the app.",
+      "downloadToView": "Download it to see the image.",
+      "shortened": "Long file – only the beginning is shown."
     }
   },
   "settings": {
