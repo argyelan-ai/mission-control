@@ -340,18 +340,43 @@ def _is_delivery(event: dict[str, Any]) -> bool:
     return event.get("role") == "teammate" and source.get("kind") in ("task", "nudge")
 
 
+#: Teammate lines that are NOT input to the model: they appear in the middle
+#: of a turn (a permission request/decision, a chat notice, an error card).
+_IN_TURN_SOURCES = frozenset({"system", "notice", "error"})
+
+
+def _starts_turn(event: dict[str, Any]) -> bool:
+    """Does this event hand the model new input — a delivery, a nudge, an
+    inbox message, a user line? Each such input starts a new turn, and each
+    turn wrote its OWN legacy glued final line, starting with THAT turn's
+    first thought (a continue-nudge runs a new turn in the same session,
+    ``bridge.py`` ``acp_run(nudge, origin_kind="nudge")``)."""
+    if event.get("kind") != "message":
+        return False
+    role = event.get("role")
+    if role == "user":
+        return True
+    if role != "teammate":
+        return False
+    source = event.get("source") if isinstance(event.get("source"), dict) else {}
+    return source.get("kind") not in _IN_TURN_SOURCES
+
+
 def slim_events(events: list[dict[str, Any]], attempt: int) -> list[tuple[int, dict[str, Any]]]:
     """One attempt's events -> slim rows ``(event_index, row)``, in event
     order. Row id = ``"<attempt>:<index>"``; pieces recovered from a legacy
     glued final line get ``"<attempt>:<index>.<k>"`` and the ts of the
     thought they followed (the tail: the line's own ts) — the chat sorts by
-    ts, so they land right after their thought."""
+    ts, so they land right after their thought. The thoughts a glued line
+    is matched against are those of its own turn (:func:`_starts_turn`)."""
     rows: list[tuple[int, dict[str, Any]]] = []
     thoughts: list[tuple[int, dict[str, Any]]] = []
     delivered = False
     for i, ev in enumerate(events):
         kind = ev.get("kind")
         base = {"id": f"{attempt}:{i}", "ts": ev.get("ts")}
+        if _starts_turn(ev):
+            thoughts = []  # a glued line holds the thoughts of its own turn only
         if kind == "thinking":
             text = ev.get("text") or ""
             if not text.strip():
@@ -483,7 +508,7 @@ def page_rows(
 
 # ── files ───────────────────────────────────────────────────────────────────
 
-_discovery: dict[tuple[str, str], tuple[float, list[Path]]] = {}
+_discovery: dict[tuple[str, str], tuple[float, list[Any]]] = {}
 _parsed: OrderedDict[tuple[Any, ...], "_Attempt"] = OrderedDict()
 #: Reads run in worker threads (``asyncio.to_thread``): one lock for both caches.
 _cache_lock = threading.Lock()
@@ -516,25 +541,54 @@ class _Opened:
             pass
 
 
-def open_pinned(path: Path, *, binary: bool = False) -> _Opened | None:
-    """Open ``path`` read-only WITHOUT following a symlink, and only if the
-    opened file is the one ``lstat`` saw a moment before (a regular file,
-    same device + inode). ``None`` otherwise — the caller skips the file."""
+def open_pinned(
+    root: Path, path: Path, identity: tuple[int, int] | None = None, *, binary: bool = False
+) -> _Opened | None:
+    """Open ``path`` (inside ``root``) read-only, or ``None`` — the caller
+    then skips the file, never falls back to a plain ``open()``.
+
+    Spec A S3, two locks:
+
+    * **No symlink anywhere below ``root``.** The path is walked one part at
+      a time with ``O_NOFOLLOW`` relative to the folder opened before it
+      (``dir_fd``). ``O_NOFOLLOW`` alone guards only the LAST part — an
+      agent's sandbox could swap ``.mc/`` or its cwd folder for a symlink
+      after the path was checked, and a plain open would go through it. A
+      path that is not lexically inside ``root`` is refused.
+    * **The file is the one discovery saw.** With ``identity`` (the
+      ``(st_dev, st_ino)`` of discovery's ``lstat``, :class:`TaskFile`) the
+      opened file's ``fstat`` must match it. It is never compared with a
+      fresh ``lstat``: that would run after a swap too and agree with it.
+
+    ``O_NONBLOCK`` on the last open: a FIFO swapped in can never hang the
+    worker thread (it is then refused as "not a regular file")."""
     try:
-        lst = os.lstat(path)
+        parts = path.relative_to(root).parts
+    except ValueError:
+        return None
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        return None
+    try:
+        dir_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
     except OSError:
         return None
-    if not stat.S_ISREG(lst.st_mode):
-        return None
+    fd = -1
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        for part in parts[:-1]:
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+            os.close(dir_fd)
+            dir_fd = nxt
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
     except OSError:
         return None
+    finally:
+        os.close(dir_fd)
     try:
         st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or (st.st_dev, st.st_ino) != (lst.st_dev, lst.st_ino):
+        if not stat.S_ISREG(st.st_mode) or (identity is not None and (st.st_dev, st.st_ino) != identity):
             os.close(fd)
             return None
+        os.set_blocking(fd, True)
         fh = os.fdopen(fd, "rb") if binary else os.fdopen(fd, "r", encoding="utf-8", errors="replace")
     except OSError:
         try:
@@ -545,21 +599,30 @@ def open_pinned(path: Path, *, binary: bool = False) -> _Opened | None:
     return _Opened(path=path, st=st, fh=fh)
 
 
-def _discover(adapter: Any, tdir: Path, task_id: str, since: float | None) -> list[Path]:
+def _discover(adapter: Any, tdir: Path, task_id: str, since: float | None) -> list[Any]:
+    """The task's files with their discovery identity (:class:`TaskFile`),
+    cached briefly — the identity stays pinned to the FIRST lstat until the
+    entry is dropped (:func:`_forget`) or expires."""
     key = (str(tdir), task_id)
     with _cache_lock:
         hit = _discovery.get(key)
     now = time.monotonic()
     if hit is not None:
         ttl = _DISCOVERY_TTL_S if hit[1] else _DISCOVERY_EMPTY_TTL_S
-        if now - hit[0] < ttl and all(os.path.lexists(p) for p in hit[1]):
+        if now - hit[0] < ttl and all(os.path.lexists(f.path) for f in hit[1]):
             return hit[1]
-    paths = list(adapter.find_task_sessions(tdir, task_id, since))
+    files = list(adapter.find_task_sessions(tdir, task_id, since))
     with _cache_lock:
         if len(_discovery) > 256:
             _discovery.clear()
-        _discovery[key] = (now, paths)
-    return paths
+        _discovery[key] = (now, files)
+    return files
+
+
+def _forget(tdir: Path, task_id: str) -> None:
+    """Drop a task's discovery: the next poll discovers (and pins) again."""
+    with _cache_lock:
+        _discovery.pop((str(tdir), task_id), None)
 
 
 def _quiet(adapter: Any) -> Any:
@@ -644,7 +707,10 @@ def _open_preview(agent: Any, adapter: Any, tdir: Path, last: Path) -> _Opened |
         return None
     if not adapter.transcript_allowed(agent, ppath):
         return None
-    return open_pinned(ppath, binary=True)
+    # No discovery identity exists for the preview (``preview_channel``
+    # picks the newest file of ``previews/`` on each call); the walk below
+    # ``tdir`` without any symlink is what keeps it inside the agent folder.
+    return open_pinned(tdir, ppath, binary=True)
 
 
 def _live_row(preview: _Opened, newest: datetime | None, text_max: int) -> dict[str, Any] | None:
@@ -697,11 +763,19 @@ def _iso(dt: Any) -> str | None:
     return aware.isoformat() if aware else None
 
 
+def _live_state():
+    return or_(Task.status.in_(LIVE_STATUSES), and_(Task.status == "inbox", Task.dispatched_at.is_not(None)))
+
+
 def _live_clause(agent_id: Any):
-    return and_(
-        Task.assigned_agent_id == agent_id,
-        or_(Task.status.in_(LIVE_STATUSES), and_(Task.status == "inbox", Task.dispatched_at.is_not(None))),
-    )
+    return and_(Task.assigned_agent_id == agent_id, _live_state())
+
+
+def _not_live_clause(agent_id: Any):
+    """NOT :func:`_live_clause`, NULL-safe: a task with no assignee (or
+    another one) is "not live here" — a plain ``NOT`` would drop it as
+    NULL."""
+    return or_(Task.assigned_agent_id.is_(None), Task.assigned_agent_id != agent_id, ~_live_state())
 
 
 def is_live(task: Task, agent_id: Any) -> bool:
@@ -811,12 +885,16 @@ async def task_stubs(session: AsyncSession, agent: Agent, limit: int = 20) -> di
             or_(
                 and_(Task.assigned_agent_id == agent.id, start_key.is_not(None)),
                 Task.id.in_(worked_here),
-            )
+            ),
+            # Live tasks are excluded HERE, not by the capped live list: a
+            # live task beyond the defensive cap must never come back as a
+            # finished-looking card (review on #935).
+            _not_live_clause(agent.id),
         )
         .order_by(start_key.desc())
-        .limit(limit + 1 + len(live_ids))
+        .limit(limit + 1)
     )
-    rows = [(t, fip) for t, fip in (await session.exec(stmt)).all() if t.id not in live_ids]
+    rows = list((await session.exec(stmt)).all())
     has_more = len(rows) > limit
     rows = rows[:limit]
     first_ip_of: dict[Any, Any] = {t.id: fip for t, fip in rows}
@@ -941,16 +1019,25 @@ def _open_attempts(agent: Any, adapter: Any, tdir: Path, task: Task) -> tuple[li
     """(``(attempt number, opened file)`` of every attempt this agent may
     show, whether any file was found at all). The number is the attempt's
     place among ALL the task's files — a hidden attempt keeps the others'
-    numbers (and row ids) stable."""
-    paths = _discover(adapter, tdir, str(task.id), _task_since(task))
+    numbers (and row ids) stable.
+
+    A file that does not open as the one discovery saw is skipped, and the
+    task's discovery is dropped so the next poll looks again (a file
+    legitimately replaced then gets its new identity pinned)."""
+    files = _discover(adapter, tdir, str(task.id), _task_since(task))
     opened: list[tuple[int, _Opened]] = []
-    for n, path in enumerate(paths, start=1):
-        if not adapter.transcript_allowed(agent, path):
+    refused = False
+    for n, found in enumerate(files, start=1):
+        if not adapter.transcript_allowed(agent, found.path):
             continue
-        handle = open_pinned(path)
-        if handle is not None:
-            opened.append((n, handle))
-    return opened, bool(paths)
+        handle = open_pinned(tdir, found.path, found.identity)
+        if handle is None:
+            refused = True
+            continue
+        opened.append((n, handle))
+    if refused:
+        _forget(tdir, str(task.id))
+    return opened, bool(files)
 
 
 def _close_all(handles: list[tuple[int, _Opened]]) -> None:
@@ -1021,6 +1108,19 @@ def _clamped(text: str) -> dict[str, Any]:
     return {"text": capped, "truncated": truncated}
 
 
+def _clamp_values(value: Any) -> Any:
+    """A tool's arguments with every string clamped to
+    :data:`_DETAIL_TEXT_MAX` (a write tool can carry megabytes of content).
+    Shape kept; nothing else touched."""
+    if isinstance(value, str):
+        return value if len(value) <= _DETAIL_TEXT_MAX else value[:_DETAIL_TEXT_MAX]
+    if isinstance(value, dict):
+        return {k: _clamp_values(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clamp_values(v) for v in value]
+    return value
+
+
 def _detail_of(events: list[dict[str, Any]], attempt: int, index: int, piece: int | None) -> dict[str, Any] | None:
     if index >= len(events):
         return None
@@ -1028,7 +1128,9 @@ def _detail_of(events: list[dict[str, Any]], attempt: int, index: int, piece: in
     row_id = f"{attempt}:{index}" + (f".{piece}" if piece is not None else "")
     base = {"id": row_id, "ts": ev.get("ts")}
     kind = ev.get("kind")
-    thoughts = [e.get("text") or "" for e in events[:index] if e.get("kind") == "thinking" and (e.get("text") or "").strip()]
+    turn = next((j for j in range(index, -1, -1) if _starts_turn(events[j])), 0)
+    thoughts = [e.get("text") or "" for e in events[turn:index]
+                if e.get("kind") == "thinking" and (e.get("text") or "").strip()]
     if piece is not None:
         if kind != "message" or ev.get("role") != "assistant":
             return None
@@ -1043,7 +1145,7 @@ def _detail_of(events: list[dict[str, Any]], attempt: int, index: int, piece: in
         return out
     if kind == "tool":
         out = {**base, "k": "tool", "name": ev.get("name"), "title": ev.get("title"), "st": _tool_state(ev),
-               "detail": ev.get("detail"), "result": ev.get("result")}
+               "detail": _clamp_values(ev.get("detail")), "result": ev.get("result")}
         for key in ("diffs", "locations", "stats"):
             if ev.get(key):
                 out[key] = ev[key]
@@ -1092,8 +1194,10 @@ def step_detail(agent: Any, task: Task, live: bool, row_id: str, if_none_match: 
                 return Answer(304, None, tag)
             if preview is None:
                 return Answer(200, {"liveRow": None}, tag)
-            events, _started = _read_events(last, adapter)
-            newest = max((t for t in (_parse_ts(e.get("ts")) for e in events) if t), default=None)
+            # The parse cache (keyed by the file's identity, size and mtime):
+            # while only the preview changes this is a hit, not a parse of a
+            # tens-of-MB attempt file on every 2 s poll.
+            newest = _attempt_rows(last, adapter, handles[-1][0]).newest_ts
             row = _live_row(preview, newest, _DETAIL_LIVE_MAX)
             preview = None
             return Answer(200, {"liveRow": row}, tag)

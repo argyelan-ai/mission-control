@@ -265,6 +265,48 @@ def test_split_glued_recovers_reply_pieces_and_the_tail():
     assert split.dropped == 1
 
 
+def test_slim_events_splits_the_glued_line_of_every_turn():
+    """Test 6b: a continue-nudge runs a NEW turn in the same session, and
+    each turn wrote its own glued final line, starting with ITS first
+    thought. Both are split; a permission line inside a turn does not
+    start a new one."""
+    def th(text, ts):
+        return {"kind": "thinking", "text": text, "ts": ts}
+
+    def reply(text, ts):
+        return {"kind": "message", "role": "assistant", "text": text, "ts": ts}
+
+    def deliver(kind, ts):
+        return {"kind": "message", "role": "teammate", "text": "# Card\nDo it",
+                "source": {"kind": kind, "title": "T"}, "ts": ts}
+
+    permission = {"kind": "message", "role": "teammate", "ts": "t42",
+                  "text": "Freigabe-Anfrage (execute): ls [Allow once]",
+                  "source": {"kind": "system", "title": "acp-permission"}}
+    one = ["Turn one thought A is long enough to say something.", "Turn one thought B with words here.",
+           "Turn one thought C closing it."]
+    two = ["Turn two thought X after the nudge arrives here.", "Turn two thought Y that continues work.",
+           "Turn two thought Z finishing the job."]
+    events = [deliver("task", "t0")] + [th(t, f"t1{i}") for i, t in enumerate(one)]
+    events += [reply("".join(one) + "REPLY ONE", "t2"), deliver("nudge", "t3")]
+    events += [th(two[0], "t40"), th(two[1], "t41"), permission, th(two[2], "t43")]
+    events += [reply("".join(two) + "REPLY TWO", "t5")]
+    texts = [(i, r) for i, r in chat_task_steps.slim_events(events, 1) if r["k"] == "text"]
+    assert [r["text"] for _i, r in texts] == ["REPLY ONE", "REPLY TWO"]
+    assert [r["id"] for _i, r in texts] == ["1:4.0", "1:10.0"]
+    assert texts[1][1]["ts"] == "t5"  # the tail of turn two: the line's own ts
+    # The detail view splits the same way (same per-turn thoughts).
+    assert chat_task_steps._detail_of(events, 1, 10, 0)["text"] == "REPLY TWO"
+    assert chat_task_steps._detail_of(events, 1, 10, None) is None  # the glued line itself
+
+
+def test_clamp_values_caps_nested_strings_in_a_tool_detail():
+    big = "y" * 50_000
+    out = chat_task_steps._clamp_values({"path": "a.py", "edits": [{"new": big}], "n": 3})
+    assert len(out["edits"][0]["new"]) == chat_task_steps._DETAIL_TEXT_MAX
+    assert out["path"] == "a.py" and out["n"] == 3
+
+
 def test_split_glued_leaves_a_normal_reply_alone():
     thoughts, _glued, _tail = _thoughts_and_glued()
     assert split_glued("All done: the checklist is ported.", thoughts) is None
@@ -324,11 +366,14 @@ def test_find_task_sessions_all_attempts_deduped_safe(tmp_path):
     (root / "linked").symlink_to(outside, target_is_directory=True)
 
     found = omp_chat.find_task_sessions(root, tid, None)
-    assert found == [first, second]
+    assert [f.path for f in found] == [first, second]
+    # Each file carries the identity discovery's lstat saw (S3: the reader pins to it).
+    assert [f.identity for f in found] == [
+        (os.lstat(p).st_dev, os.lstat(p).st_ino) for p in (first, second)]
     # ``since`` skips files last written before it.
     for copy in (first, ws / f"2026-10-20T08-00-00_{SID_1}.jsonl", ws / f"2026-10-20T08-00-00-000Z_{SID_1}.jsonl"):
         os.utime(copy, (time.time() - 3600, time.time() - 3600))
-    assert omp_chat.find_task_sessions(root, tid, time.time() - 600) == [second]
+    assert [f.path for f in omp_chat.find_task_sessions(root, tid, time.time() - 600)] == [second]
 
 
 # ── steps ──────────────────────────────────────────────────────────────────
@@ -634,28 +679,140 @@ async def test_steps_symlink_swap_after_discovery_is_skipped(
     assert "private words" not in resp.text
 
 
+@pytest.mark.asyncio
+async def test_steps_parent_folder_swap_after_discovery_is_never_served(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
+):
+    """S3 (review MUST on #935): after discovery the agent's sandbox swaps
+    the ``.mc/`` folder for a symlink to a folder holding a file of the
+    SAME name. Neither the steps nor a row's detail may serve it, and the
+    task's discovery is dropped so the next poll looks again."""
+    board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    task = await make_task(board.id, status="done", assigned_agent_id=agent.id,
+                           started_at=_utc(now - timedelta(minutes=30)))
+    tid = str(task.id)
+    b = Lines(now - timedelta(minutes=30))
+    path = _attempt_file(root, SID_1, "2026-10-20T08-00-00", [
+        _header(SID_1, _iso(now - timedelta(minutes=30)), tid), b.delivery(tid, "T"), b.text("my own words")])
+    first = (await _steps(auth_client, agent, task)).json()
+    assert any(r.get("text") == "my own words" for r in first["rows"])
+
+    planted = _write(tmp_path / "foreign" / path.name, [
+        _header(SID_1, _iso(now - timedelta(minutes=30)), tid), b.delivery(tid, "T"),
+        b.text("private words of someone else")])
+    real_allowed = omp_chat.transcript_allowed
+
+    def swap_right_after_the_check(a, p):
+        """The window the review names: the per-file check passes, THEN
+        the sandbox swaps the parent folder."""
+        ok = real_allowed(a, p)
+        if ok and not path.parent.is_symlink():
+            path.parent.rename(path.parent.with_name(".mc-moved"))
+            path.parent.symlink_to(planted.parent, target_is_directory=True)
+        return ok
+
+    monkeypatch.setattr(omp_chat, "transcript_allowed", swap_right_after_the_check)
+    resp = await _steps(auth_client, agent, task)
+    assert path.parent.is_symlink() and os.path.lexists(path)
+    assert resp.status_code == 404 and "private words" not in resp.text
+    assert (str(root), tid) not in chat_task_steps._discovery
+    # The detail route, same window: undo the swap, discover again, then ask for one row.
+    path.parent.unlink()
+    path.parent.with_name(".mc-moved").rename(path.parent)
+    monkeypatch.setattr(omp_chat, "transcript_allowed", real_allowed)
+    assert (await _steps(auth_client, agent, task)).status_code == 200  # discovery cached again
+    monkeypatch.setattr(omp_chat, "transcript_allowed", swap_right_after_the_check)
+    detail = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/tasks/{task.id}/steps/1:2")
+    assert path.parent.is_symlink()
+    assert detail.status_code == 404 and "private words" not in detail.text
+    # Re-discovered: the file behind the link resolves outside the tree, so it is not found at all.
+    monkeypatch.setattr(omp_chat, "transcript_allowed", real_allowed)
+    again = await _steps(auth_client, agent, task)
+    assert "private words" not in again.text
+
+
+@pytest.mark.asyncio
+async def test_steps_file_replaced_after_discovery_is_skipped_then_rediscovered(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
+):
+    """The opened file's identity is compared with the one PINNED at
+    discovery, not with a fresh lstat: a file replaced at the same name is
+    not served on that poll; the next poll discovers (and pins) anew."""
+    board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    task = await make_task(board.id, status="done", assigned_agent_id=agent.id,
+                           started_at=_utc(now - timedelta(minutes=30)))
+    tid = str(task.id)
+    b = Lines(now - timedelta(minutes=30))
+    head = [_header(SID_1, _iso(now - timedelta(minutes=30)), tid), b.delivery(tid, "T")]
+    path = _attempt_file(root, SID_1, "2026-10-20T08-00-00", head + [b.text("first version")])
+    assert (await _steps(auth_client, agent, task)).status_code == 200
+    replacement = _write(path.with_name("tmp.jsonl"), head + [b.text("second version")])
+    os.replace(replacement, path)
+    resp = await _steps(auth_client, agent, task)
+    assert resp.status_code == 404 and "second version" not in resp.text
+    body = (await _steps(auth_client, agent, task)).json()
+    assert any(r.get("text") == "second version" for r in body["rows"])
+
+
 def test_open_pinned_refuses_a_symlink_and_a_file_swapped_while_opening(tmp_path, monkeypatch):
-    """S3: the file read is the file checked — a symlink is refused, and so
-    is a file replaced between the ``lstat`` and the ``open`` (new inode at
-    the same name)."""
-    path = _write(tmp_path / "a.jsonl", [{"n": 1}])
-    other = _write(tmp_path / "b.jsonl", [{"n": 2}])
-    opened = chat_task_steps.open_pinned(path)
+    """S3: the file read is the file discovery saw — a symlink is refused,
+    and so is a file replaced at the same name (new inode) before the
+    open. The compare is against the identity PINNED at discovery."""
+    root = tmp_path / "root"
+    path = _write(root / "ws" / "a.jsonl", [{"n": 1}])
+    other = _write(root / "ws" / "b.jsonl", [{"n": 2}])
+    pinned = (os.lstat(path).st_dev, os.lstat(path).st_ino)
+    opened = chat_task_steps.open_pinned(root, path, pinned)
     assert opened is not None and json.loads(opened.fh.read()) == {"n": 1}
     opened.close()
-    link = tmp_path / "link.jsonl"
+    link = root / "ws" / "link.jsonl"
     link.symlink_to(path)
-    assert chat_task_steps.open_pinned(link) is None
+    assert chat_task_steps.open_pinned(root, link) is None
+    # Outside ``root`` (lexically): refused before any open.
+    assert chat_task_steps.open_pinned(root / "ws", root / "a.jsonl") is None
 
     real_open = os.open
 
     def racing_open(p, flags, *a, **kw):
-        if str(p) == str(path):
+        if str(p) == path.name:
             os.replace(other, path)
         return real_open(p, flags, *a, **kw)
 
     monkeypatch.setattr(chat_task_steps.os, "open", racing_open)
-    assert chat_task_steps.open_pinned(path) is None
+    assert chat_task_steps.open_pinned(root, path, pinned) is None
+
+
+def test_open_pinned_never_hangs_on_a_fifo(tmp_path):
+    """A file swapped for a FIFO (no writer) must be refused at once, not
+    block the worker thread on ``open``."""
+    import threading
+
+    root = tmp_path / "root"
+    (root / "ws").mkdir(parents=True)
+    fifo = root / "ws" / "a.jsonl"
+    os.mkfifo(fifo)
+    result: list[object] = []
+    worker = threading.Thread(target=lambda: result.append(chat_task_steps.open_pinned(root, fifo)), daemon=True)
+    worker.start()
+    worker.join(5)
+    assert not worker.is_alive() and result == [None]
+
+
+def test_open_pinned_refuses_a_parent_folder_swapped_for_a_symlink(tmp_path):
+    """S3: ``O_NOFOLLOW`` guards only the LAST part of a path. A parent
+    folder (``.mc/``) swapped for a symlink to a folder holding a file of
+    the same name must never be read — neither through the walk nor
+    because a fresh lstat would agree with the planted file."""
+    root = tmp_path / "root"
+    path = _write(root / "ws" / ".mc" / "a.jsonl", [{"mine": True}])
+    pinned = (os.lstat(path).st_dev, os.lstat(path).st_ino)
+    planted = _write(tmp_path / "elsewhere" / "a.jsonl", [{"secret": True}])
+    (root / "ws" / ".mc").rename(root / "ws" / ".mc-old")
+    (root / "ws" / ".mc").symlink_to(planted.parent, target_is_directory=True)
+    assert chat_task_steps.open_pinned(root, path, pinned) is None
+    assert chat_task_steps.open_pinned(root, path) is None  # the walk alone refuses it too
 
 
 @pytest.mark.asyncio
@@ -742,6 +899,44 @@ async def test_step_detail_full_row_and_live(
         f"/api/v1/agents/{agent.id}/chat/tasks/{task.id}/steps/{by_kind['think']['id']}",
         headers={"If-None-Match": tagged.headers["etag"]})
     assert again.status_code == 304
+
+
+@pytest.mark.asyncio
+async def test_step_detail_live_does_not_reparse_the_attempt_while_only_the_preview_changes(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
+):
+    """Review SHOULD on #935: while a thought is open the preview changes on
+    every 2 s poll. The live detail takes the transcript's newest time from
+    the parse cache (keyed by the file's identity, size, mtime) — the
+    attempt file (tens of MB in real tasks) is parsed once, not per poll."""
+    board, agent, root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    task = await make_task(board.id, status="in_progress", assigned_agent_id=agent.id,
+                           started_at=_utc(now - timedelta(minutes=30)))
+    tid = str(task.id)
+    path = _attempt_file(root, SID_1, "2026-10-20T08-00-00", _basic_attempt(tid, now - timedelta(minutes=30)))
+    preview = _write(path.parent / "previews" / f"2026-10-20T08-00-01_{SID_1}_abc123.jsonl", [
+        _preview(_iso(now), "thinking one", started=_iso(now - timedelta(seconds=30)))])
+    parses: list[str] = []
+    real_read = chat_task_steps._read_events
+
+    def counting(opened, adapter):
+        parses.append(opened.path.name)
+        return real_read(opened, adapter)
+
+    monkeypatch.setattr(chat_task_steps, "_read_events", counting)
+    url = f"/api/v1/agents/{agent.id}/chat/tasks/{task.id}/steps/live"
+    first = (await auth_client.get(url)).json()
+    assert first["liveRow"]["text"] == "thinking one"
+    for k in range(3):
+        _append(preview, [_preview(_iso(now + timedelta(seconds=2 * (k + 1))), f"thinking {k + 2}",
+                                   started=_iso(now - timedelta(seconds=30)))])
+        assert (await auth_client.get(url)).json()["liveRow"]["text"] == f"thinking {k + 2}"
+    assert parses == [path.name]
+    # The transcript grows: parsed again, once.
+    _append(path, [Lines(now + timedelta(seconds=1)).text("more")])
+    await auth_client.get(url)
+    assert parses == [path.name, path.name]
 
 
 # ── stubs ──────────────────────────────────────────────────────────────────
@@ -855,6 +1050,25 @@ async def _stubs_scenario(auth_client, make_agent, make_board, make_task, tmp_pa
     small = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/tasks", params={"limit": 2})).json()
     assert len([t for t in small["tasks"] if not t["live"]]) == 2
     assert (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/tasks", params={"limit": 0})).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_task_stubs_a_live_task_beyond_the_cap_is_never_a_card(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
+):
+    """More live tasks than the defensive cap: the extra one is left out,
+    never shown as a finished-looking card with ``live: false``."""
+    board, agent, _root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    cap = chat_task_steps._LIVE_CAP
+    for k in range(cap + 2):
+        await make_task(board.id, title=f"Running {k}", status="in_progress", assigned_agent_id=agent.id,
+                        started_at=_utc(now - timedelta(minutes=k + 1)))
+    await make_task(board.id, title="Finished", status="done", assigned_agent_id=agent.id,
+                    started_at=_utc(now - timedelta(hours=2)))
+    body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/tasks")).json()
+    assert len([t for t in body["tasks"] if t["live"]]) == cap
+    assert [t["title"] for t in body["tasks"] if not t["live"]] == ["Finished"]
 
 
 @pytest.mark.asyncio

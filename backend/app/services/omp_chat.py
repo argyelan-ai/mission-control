@@ -96,6 +96,7 @@ from app.services.transcript_chat import (
     resolve_context_window,
 )
 from app.services.token_harvester import _host_home
+from app.services.transcript_adapters import TaskFile
 from app.services.chat_diff import build_diff, diffs_from_acp
 from app.services.chat_todos import (
     ACP_PLAN_CUSTOM_TYPE,
@@ -712,7 +713,7 @@ def find_task_session(tdir: Path, task_id: str, since: float | None = None) -> P
 _TASK_HEADER_CACHE: dict[tuple[str, int], tuple[str, str, str]] = {}
 
 
-def find_task_sessions(tdir: Path, task_id: str, since: float | None = None) -> list[Path]:
+def find_task_sessions(tdir: Path, task_id: str, since: float | None = None) -> list[TaskFile]:
     """EVERY session file of ``task_id`` under ``tdir`` — one per attempt,
     oldest first. (``find_task_session`` answers only the newest one, the
     live attempt; the chat's task steps show all attempts in order.)
@@ -726,6 +727,9 @@ def find_task_sessions(tdir: Path, task_id: str, since: float | None = None) -> 
       copy wins, the attempt is listed once;
     * ``since`` (epoch seconds) skips files last written before it.
 
+    Each file comes with the ``(st_dev, st_ino)`` of the ``lstat`` taken
+    here: the reader pins its open to it (spec A S3, :class:`TaskFile`).
+
     Order: the header's ``timestamp``, then the file's mtime."""
     want = (task_id or "").strip().lower()
     if not want or not tdir.is_dir():
@@ -734,7 +738,7 @@ def find_task_sessions(tdir: Path, task_id: str, since: float | None = None) -> 
         root = tdir.resolve()
     except OSError:
         return []
-    by_session: dict[str, tuple[bool, str, float, Path]] = {}
+    by_session: dict[str, tuple[bool, str, float, Path, tuple[int, int]]] = {}
     for pattern in _SESSION_GLOBS:
         try:
             candidates = list(tdir.glob(pattern))
@@ -777,9 +781,9 @@ def find_task_sessions(tdir: Path, task_id: str, since: float | None = None) -> 
             in_mc = candidate.parent.name == _MC_SINK_DIRNAME
             prev = by_session.get(sid)
             if prev is None or (in_mc and not prev[0]):
-                by_session[sid] = (in_mc, ts, st.st_mtime, candidate)
+                by_session[sid] = (in_mc, ts, st.st_mtime, candidate, (st.st_dev, st.st_ino))
     ordered = sorted(by_session.values(), key=lambda v: (v[1], v[2]))
-    return [v[3] for v in ordered]
+    return [TaskFile(path=v[3], identity=v[4]) for v in ordered]
 
 
 def prefers_sibling(new_path: Path, current_path: Path) -> bool:
