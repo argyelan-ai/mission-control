@@ -81,6 +81,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import stat
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -703,6 +704,82 @@ def find_task_session(tdir: Path, task_id: str, since: float | None = None) -> P
             if found == want:
                 best = (st.st_mtime, candidate)
     return best[1] if best else None
+
+
+#: ``find_task_sessions`` answers, by ``(path, inode)``: ``(taskId, session
+#: id, header timestamp)`` of the file's bridge header. Same reasoning as
+#: ``_TASK_ID_CACHE``: a header never changes once written.
+_TASK_HEADER_CACHE: dict[tuple[str, int], tuple[str, str, str]] = {}
+
+
+def find_task_sessions(tdir: Path, task_id: str, since: float | None = None) -> list[Path]:
+    """EVERY session file of ``task_id`` under ``tdir`` — one per attempt,
+    oldest first. (``find_task_session`` answers only the newest one, the
+    live attempt; the chat's task steps show all attempts in order.)
+
+    Safe by construction, because the answer is read out to the chat:
+
+    * a symlink is never a candidate (``lstat``), and neither is anything
+      whose resolved path leaves ``tdir`` (a folder symlinked to elsewhere);
+    * one attempt = one session id: the bridge's display copy can lie beside
+      omp's file (old layout) AND in ``.mc/`` (after the move). The ``.mc/``
+      copy wins, the attempt is listed once;
+    * ``since`` (epoch seconds) skips files last written before it.
+
+    Order: the header's ``timestamp``, then the file's mtime."""
+    want = (task_id or "").strip().lower()
+    if not want or not tdir.is_dir():
+        return []
+    try:
+        root = tdir.resolve()
+    except OSError:
+        return []
+    by_session: dict[str, tuple[bool, str, float, Path]] = {}
+    for pattern in _SESSION_GLOBS:
+        try:
+            candidates = list(tdir.glob(pattern))
+        except OSError:
+            continue
+        for candidate in candidates:
+            try:
+                st = candidate.lstat()
+            except OSError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                continue  # a symlink (or anything else that is not a plain file)
+            if since is not None and st.st_mtime < since:
+                continue
+            try:
+                if not candidate.resolve().is_relative_to(root):
+                    continue
+            except OSError:
+                continue
+            key = (str(candidate), st.st_ino)
+            info = _TASK_HEADER_CACHE.get(key)
+            if info is None:
+                header = _session_header(candidate)
+                if header is None:
+                    continue
+                raw = header.get("taskId")
+                sid = header.get("id")
+                ts = header.get("timestamp")
+                info = (
+                    raw.strip().lower() if isinstance(raw, str) else "",
+                    sid if isinstance(sid, str) and sid else session_id_for(candidate),
+                    ts if isinstance(ts, str) else "",
+                )
+                if len(_TASK_HEADER_CACHE) > 4096:
+                    _TASK_HEADER_CACHE.clear()
+                _TASK_HEADER_CACHE[key] = info
+            found, sid, ts = info
+            if found != want:
+                continue
+            in_mc = candidate.parent.name == _MC_SINK_DIRNAME
+            prev = by_session.get(sid)
+            if prev is None or (in_mc and not prev[0]):
+                by_session[sid] = (in_mc, ts, st.st_mtime, candidate)
+    ordered = sorted(by_session.values(), key=lambda v: (v[1], v[2]))
+    return [v[3] for v in ordered]
 
 
 def prefers_sibling(new_path: Path, current_path: Path) -> bool:

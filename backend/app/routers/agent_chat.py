@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -58,7 +58,7 @@ from app.services.reference_ingest import (
     store_reference,
 )
 from app.models.activity import ActivityEvent
-from app.services import chat_actions, chat_media, commit_llm
+from app.services import chat_actions, chat_media, chat_task_steps, commit_llm
 from app.services.activity import emit_event
 from app.services.chat_changes import aggregate_changes
 from app.services.chat_diff import capture_texts
@@ -302,6 +302,117 @@ async def get_chat_task_activity(
     the task inside the chat itself. Reads only (files + one count)."""
     agent = await _load_agent_or_404(agent_id, session)
     return await task_activity(session, agent)
+
+
+def _cached_json(answer: "chat_task_steps.Answer") -> Response:
+    """A read answer with its ETag; ``304`` carries headers only."""
+    headers = {"Cache-Control": "no-cache, private"}
+    if answer.etag:
+        headers["ETag"] = answer.etag
+    if answer.status == 304:
+        return Response(status_code=304, headers=headers)
+    return JSONResponse(status_code=answer.status, content=answer.body, headers=headers)
+
+
+_NO_TASK = {"reason": "no_task"}
+
+
+@router.get("/agents/{agent_id}/chat/tasks")
+async def get_chat_tasks(
+    agent_id: uuid.UUID,
+    request: Request,
+    limit: int = Query(20, ge=1, le=50),
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """The tasks of this agent's chat (spec A, variant A: a task's work at
+    its time inside the chat) — task stubs: every LIVE task assigned to the
+    agent, plus the newest ``limit`` finished ones (cards), each with its
+    state, times, outcome line and deliverables count; ``queued`` = more
+    inbox tasks waiting. ``{"applies": false}`` for a harness whose tasks run
+    inside the chat. Reads only; ETag/304."""
+    agent = await _load_agent_or_404(agent_id, session)
+    body = await chat_task_steps.task_stubs(session, agent, limit)
+    tag = chat_task_steps.body_etag(body)
+    if request.headers.get("if-none-match") == tag:
+        return _cached_json(chat_task_steps.Answer(304, None, tag))
+    return _cached_json(chat_task_steps.Answer(200, body, tag))
+
+
+def _open_ids_or_422(raw: str | None) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    ids = tuple(dict.fromkeys(x for x in raw.split(",") if x))
+    if len(ids) > chat_task_steps.MAX_OPEN_IDS or not all(chat_task_steps.ROW_ID_RE.match(i) for i in ids):
+        raise HTTPException(status_code=422, detail="open: up to 50 row ids like 1:13")
+    return ids
+
+
+async def _steps_target(agent_id: uuid.UUID, task_id: uuid.UUID, session: AsyncSession):
+    """(agent, task, live) — or the answer to send instead: ``applies:
+    false`` for a harness whose tasks run inside the chat, ``no_task`` for a
+    task neither assigned to nor worked by this agent (N13)."""
+    agent = await _load_agent_or_404(agent_id, session)
+    if not chat_task_steps.applies(adapter_for(agent)):
+        return JSONResponse(status_code=200, content=dict(chat_task_steps.NOT_APPLICABLE))
+    task = await chat_task_steps.related_task(session, agent, task_id)
+    if task is None:
+        return JSONResponse(status_code=404, content=_NO_TASK)
+    return agent, task, chat_task_steps.is_live(task, agent.id)
+
+
+@router.get("/agents/{agent_id}/chat/tasks/{task_id}/steps")
+async def get_chat_task_steps(
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    request: Request,
+    limit: int = Query(200, ge=1, le=1000),
+    after: str | None = Query(None, max_length=400),
+    open_ids: str | None = Query(None, alias="open", max_length=1200),
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """One task's steps across ALL its attempts, slim (spec A §4.2): one
+    short row per step (a thought's first sentence, a tool's title and state,
+    a comment, a text), oldest first. ``after`` = the cursor of the last
+    page: only rows behind it, at most ``limit``, ``hasMore`` -> fetch again
+    at once. ``open`` = row ids of running tools: their current row comes
+    back in ``updated``. ``liveRow`` = the running thought/text (live task
+    only). Reads only; ETag/304."""
+    target = await _steps_target(agent_id, task_id, session)
+    if isinstance(target, JSONResponse):
+        return target
+    agent, task, live = target
+    query = chat_task_steps.StepsQuery(limit=limit, after=after, open_ids=_open_ids_or_422(open_ids))
+    answer = await asyncio.to_thread(
+        chat_task_steps.task_steps, agent, task, live, query, request.headers.get("if-none-match")
+    )
+    return _cached_json(answer)
+
+
+@router.get("/agents/{agent_id}/chat/tasks/{task_id}/steps/{row_id}")
+async def get_chat_task_step(
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    row_id: str,
+    request: Request,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """One step in full, on tap (spec A §4.3): a thought's text, a tool's
+    command + output (as the bridge stored it), the task text, a text
+    piece; ``live`` = the running thought's end. ``row_id`` is checked by
+    shape and looked up in the discovered attempts — never a path."""
+    if row_id != "live" and not chat_task_steps.ROW_ID_RE.match(row_id):
+        raise HTTPException(status_code=422, detail="row_id: like 1:13, 1:13.0 or live")
+    target = await _steps_target(agent_id, task_id, session)
+    if isinstance(target, JSONResponse):
+        return target
+    agent, task, live = target
+    answer = await asyncio.to_thread(
+        chat_task_steps.step_detail, agent, task, live, row_id, request.headers.get("if-none-match")
+    )
+    return _cached_json(answer)
 
 
 #: Erlaubte Gestalt einer ``runId``. Der Wert wird SYNTAKTISCH geprueft, bevor

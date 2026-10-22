@@ -220,6 +220,13 @@ class TranscriptAdapter:
     #: showed nothing of a running ACP task).
     find_task_session: Callable[[Path, str, float | None], Path | None] | None = None
 
+    #: ``(transcript_dir, task_id, since_epoch) -> [Path, ...]``: EVERY
+    #: session file of a task (one per attempt), oldest first — or ``None``
+    #: for a harness whose tasks run inside the chat. Read by the chat's
+    #: task steps (``chat_task_steps``, spec A): a task's whole work, across
+    #: all its attempts, at its time in the chat.
+    find_task_sessions: Callable[[Path, str, float | None], list[Path]] | None = None
+
     #: Does this harness run tasks in sessions of their own RIGHT NOW? Asked
     #: at call time (omp: only when the chat runs over ACP — under the
     #: native driver the task IS the chat). Hermes never does: over ACP its
@@ -309,6 +316,7 @@ def _omp_adapter(harness: str = OMP) -> TranscriptAdapter:
         # ``daemon.prompt``): the chat shows the work, a task block would be
         # an empty box (review R1, 20.10.2026).
         find_task_session=omp_chat.find_task_session if harness == OMP else None,
+        find_task_sessions=omp_chat.find_task_sessions if harness == OMP else None,
         tasks_in_own_session=(
             (lambda: omp_chat.chat_runs_over_acp(harness)) if harness == OMP else (lambda: False)
         ),
