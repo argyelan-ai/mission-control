@@ -20,7 +20,7 @@ from datetime import datetime
 from app.utils import utcnow
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Text, Uuid, text
+from sqlalchemy import JSON, DateTime, ForeignKey, Text, UniqueConstraint, Uuid, text
 from sqlmodel import Column, Field, SQLModel
 
 
@@ -113,3 +113,55 @@ class BenchEntry(SQLModel, table=True):
         default_factory=dict, sa_column=Column(JSON, nullable=False)
     )
     error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+
+
+class BenchProbe(SQLModel, table=True):
+    """Which thinking key the served model honours (bench W0.6).
+
+    One row per (runtime, served model, serving_since): a restart of the
+    engine (new ``serving_since``) or another model gets a fresh probe; the
+    same running engine is probed once. Filled by
+    ``bench_studio.effort_probe`` with 2-4 tiny requests.
+
+    - ``thinking_key``: the key that switched thinking (dotted for nested
+      fields, see ``services.reasoning_params.THINKING_KEYS``); NULL = no
+      tried key had an effect.
+    - ``effort_param``: the key that carries graded levels
+      (``reasoning_effort``) — NULL when only on/off works.
+    - ``levels``: what the bench may offer besides "default".
+    - ``default_observed``: "on" | "off" | "unknown" — thinking without any key.
+    - ``status``: "ok" | "no_effect" | "failed".
+    - ``raw``: every attempt (key, value, http status, reasoning seen).
+
+    serving_since is nullable (the watcher clears it while an engine is
+    down), so the key is a unique constraint over a surrogate id, not a
+    composite primary key."""
+
+    __tablename__ = "bench_probes"
+    __table_args__ = (
+        UniqueConstraint(
+            "runtime_id", "served_model_id", "serving_since", name="uq_bench_probes_serving"
+        ),
+    )
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    runtime_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            Uuid, ForeignKey("runtimes.id", ondelete="CASCADE"), nullable=True, index=True
+        ),
+    )
+    served_model_id: str = Field(sa_column=Column(Text, nullable=False))
+    serving_since: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    thinking_key: str | None = None
+    effort_param: str | None = None
+    levels: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    default_observed: str = Field(default="unknown")
+    status: str = Field(default="ok")
+    raw: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    probed_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
+    )

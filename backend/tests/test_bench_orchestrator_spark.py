@@ -99,8 +99,11 @@ async def test_generate_spark_entry_writes_artifact_and_metrics(
     assert expected.read_text() == "<html><body>ball</body></html>"
     assert entry.metrics["duration_ms"] == 1234
     assert entry.metrics["tok_per_s"] == 72.9
-    # The model override must reach the spark call:
-    orchestrator._spark_generate.assert_awaited_once_with("make a page", "deepseek-x")
+    # The model override must reach the spark call (no effort requested:
+    # nothing extra sent, today's max_tokens):
+    orchestrator._spark_generate.assert_awaited_once_with(
+        "make a page", "deepseek-x", effort_fields={}, max_tokens=orchestrator.SPARK_MAX_TOKENS
+    )
 
 
 @pytest.mark.asyncio
@@ -313,7 +316,7 @@ async def test_generate_spark_entry_usage_events_not_deduped_across_reruns(
     monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
     ch, entry = await _make_challenge_entry(session, spark_model="deepseek-x")
 
-    async def _mock_generate(prompt, model):
+    async def _mock_generate(prompt, model, **_effort):
         return (
             "<html><body>ok</body></html>",
             {"duration_ms": 100, "tokens_in": 10, "tokens_out": 5, "model": model},
@@ -419,7 +422,7 @@ async def test_build_branding_payload_reads_tokens_from_entry_metrics_for_spark(
     assert payload["outro_rows"][0]["tokens"] == "200 → 50"
 
 
-# ── _spark_generate thinking guard ────────────────────────────────────────
+# ── _spark_generate: no model-name thinking guard ────────────────────────────────────────
 
 
 class _FakeThinkResp:
@@ -435,15 +438,14 @@ class _FakeThinkResp:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "model,expects_guard",
-    [("Qwen/Qwen3.6-35B-A3B-FP8", True), ("poolside/Laguna-S-2.1-NVFP4", False)],
+    "model", ["Qwen/Qwen3.6-35B-A3B-FP8", "poolside/Laguna-S-2.1-NVFP4"]
 )
-async def test_spark_generate_thinking_guard_is_model_aware(
-    monkeypatch, model, expects_guard
-):
-    """Qwen gets enable_thinking=False (content=null guard); other models must
-    NOT send chat_template_kwargs so the serving-side default governs and
-    reasoning models (Laguna) keep their think phase."""
+async def test_spark_generate_has_no_model_name_thinking_guard(monkeypatch, model):
+    """Bench W0.6: the old "qwen in the name -> enable_thinking false"
+    switch is gone — it ran every Qwen bench without thinking and never
+    said so. With no effort requested NO model gets chat_template_kwargs:
+    the serving default governs and is recorded (effort_observed); a level
+    is sent only as the probed key (test_bench_effort.py)."""
     captured = {}
 
     class _FakeClient:
@@ -477,7 +479,5 @@ async def test_spark_generate_thinking_guard_is_model_aware(
     payload = captured["json"]
     assert content == "<html></html>"
     assert payload["max_tokens"] == orchestrator.SPARK_MAX_TOKENS
-    if expects_guard:
-        assert payload["chat_template_kwargs"] == {"enable_thinking": False}
-    else:
-        assert "chat_template_kwargs" not in payload
+    assert "chat_template_kwargs" not in payload
+    assert metrics["effort_sent"] is None
