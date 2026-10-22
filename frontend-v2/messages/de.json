@@ -3831,7 +3831,7 @@
       }
     },
     "recording": {
-      "networkBlocked": "Netz bei der Aufnahme gesperrt: {count, plural, one {# Anfrage} other {# Anfragen}} gestoppt – die Seite lädt Code aus dem Internet.",
+      "networkBlocked": "Netz bei der Aufnahme gesperrt: {count, plural, one {# Anfrage} other {# Anfragen}} gestoppt – die Seite wollte etwas aus dem Netz laden. Eine Aufnahme darf nur die Seite selbst nutzen.",
       "librariesInlined": "Enthält eingefügten Bibliotheks-Code: {libraries}"
     },
     "promptLibrary": {

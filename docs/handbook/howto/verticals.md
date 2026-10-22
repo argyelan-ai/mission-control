@@ -62,6 +62,11 @@ The tutorial walks these steps with working code:
    API surface disappears when the vertical is stripped.
 2. Expose `register(app)` in the package `__init__.py`: include the router,
    append to the hook registries.
+   A vertical that needs a long-running job appends a zero-argument factory
+   to `background_loops`; the API lifespan starts each loop once at boot and
+   cancels it on shutdown (API process only, never the worker). The loop
+   handles its own errors; a factory that raises is logged and skipped.
+   `bench_studio` uses this for its orphan sweep.
 3. Add tests at the boundary — a router smoke test, a `register(app)` test
    proving routes and hooks land, and a core test that patches
    `app.verticals.hooks.task_done_hooks` rather than importing the vertical.

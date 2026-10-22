@@ -112,7 +112,7 @@ describe("ChallengeDetail — recorder network note (W0.9)", () => {
     }));
     renderDetail();
     expect(
-      await screen.findByText("Network blocked while recording: 2 requests stopped — the page loads code from the internet."),
+      await screen.findByText("Network blocked while recording: 2 requests stopped — the page tried to load something from the network. A recording may only use the page itself."),
     ).toBeTruthy();
   });
 
