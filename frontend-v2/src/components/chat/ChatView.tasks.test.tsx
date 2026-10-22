@@ -394,6 +394,23 @@ describe("ChatView — task sections (spec A)", () => {
     expect(screen.getByText("please rework").compareDocumentPosition(rework)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
+  it("5/D6: a task that finishes while the chat is open does not collapse — it ends with the end line", async () => {
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Working")]) });
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(0), "go")] }));
+    const { qc } = renderView();
+    await screen.findByText("Working");
+    const done = stub({ status: "done", live: false, endedAt: at(20), outcome: "Report ready", deliverables: 2 });
+    vi.mocked(api.chat.tasks).mockResolvedValue({ data: { applies: true, tasks: [done], queued: 0, hasMore: false }, etag: '"t9"' });
+    vi.mocked(api.chat.taskSteps).mockResolvedValue({ data: steps([], { live: false, status: "done" }), etag: '"s-end"' });
+    await act(async () => {
+      await qc.refetchQueries({ queryKey: ["chat-tasks", "agent-a"] });
+    });
+    await screen.findByText(/Report ready/);
+    expect(screen.queryByTestId("chat-task-card")).not.toBeInTheDocument();
+    expect(screen.getByText("Working")).toBeInTheDocument();
+    expect(screen.getByText(/2 files/)).toBeInTheDocument();
+  });
+
   it("M4: a stub that vanishes keeps its rows and says the task is no longer active here", async () => {
     serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Kept")]) });
     mockStream.mockReturnValue(streamOf({ events: [msg(at(0), "go")] }));

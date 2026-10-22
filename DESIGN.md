@@ -202,6 +202,17 @@ Farbe und Form regelt der Rest dieser Datei. Dieser Abschnitt regelt, **wie viel
 | **K13** | **Signatur bleibt.** Ruhe heisst nicht beliebig: Off-Cream ist der einzige Akzent; Mono steht nur bei Maschinenwerten, dort aber sorgfältig (Tabellenziffern, Kopier-Symbol); Clash Display nur für Seitentitel; unterhalb des Kopfes darf pro Bereich eine Abschnittsmarke (`label-sys`) stehen. Ein Entwurf, der wie eine beliebige SaaS-Seite aussieht, ist durchgefallen. |
 | **K14** | **Zahlen sind ein Boden, kein Ziel — Aufbau braucht den Blick des Operators.** Grüne Messwerte heissen nur „nicht durchgefallen". Wer alles auf eine Grösse setzt, um K5 zu erfüllen, hat die Regel verletzt. Änderungen am **Aufbau** (neuer Block, neue Seite, Umbau eines Kopfbereichs) werden erst gemergt, wenn der Operator das Handy-Bild (390 px, vorher/nachher) gesehen hat. Kein Agent ändert diesen Abschnitt still; neue Regeln werden mit ID vorgeschlagen. |
 
+**Vorgeschlagen (Spec A „Aufgaben-Schritte im Chat", gelten erst, wenn der Operator die Bilder gesehen hat — bis dahin Vorschlag, K14):**
+
+| ID | Regel |
+|---|---|
+| **K15** | **Arbeitsschritte dürfen kürzen.** In Arbeitsschritt-Zeilen (Kapitel-Satz, Werkzeug-Titel, Zusammenfassung) ist `…` erlaubt, wenn der volle Text einen Tipp entfernt ist. Ausnahme zu K3 „`…` nur beim Titel". |
+| **K16** | **Kapitel statt Symbol-Teppich.** Eine Denkphase ist eine Kapitel-Zeile: erster sinnvoller Satz, ohne Symbol, nicht kursiv, auf der Textkante; darunter die ersten 1–2 Werkzeuge + „+N". Symbole nur bei Werkzeug- und Systemzeilen. Agenten-Inhalt bleibt in seiner Sprache (K10 gilt für die Oberfläche), `dir="auto"`. |
+| **K17** | **Abgeschlossene Dauern in der Dauer-Form.** Dauern erst ab 1 min, immer mit `formatDuration` („15 min", „1 h 4 min"); Spannen „seit/vor" mit `formatSpan`. Nie `m:ss` für eine abgeschlossene Dauer. Die laufende Denk-Uhr bleibt eine Stoppuhr. |
+| **K18** | **Lange Arbeit hat Marken.** Innerhalb einer Aufgabe steht eine leise Uhrzeit nach ≥ 15 min ohne Zeitangabe; jeder weitere Versuch beginnt mit „Versuch n · hh:mm". |
+| **K19** | **Eine Zeitleiste, nichts wächst über dem Neuesten.** Aufgaben-Schritte stehen zu ihrer Zeit im Chat; was nach einer Chat-Nachricht entsteht, steht unter ihr (Kapitel werden dort geteilt). Senden springt ans Ende. Aufklappen lässt die angetippte Zeile stehen. Die Form einer Aufgabe (Karte oder Abschnitt) wechselt nie, solange die Ansicht offen ist. Der haftende Kopf ist einzeilig. Das Eingabefeld sagt, wohin eine Nachricht geht. |
+| **K20** | **Fehlschritt ist kein Fehler** *(Operator-Bild nötig)*. Ein fehlgeschlagener Zwischenschritt zeigt nur einen Warn-Punkt (Ocker), Titel bleibt sekundär, kein roter Rahmen; Rot bleibt dem Scheitern der Aufgabe / des Zugs. Ein Aufgaben-Abschnitt hat zwei Bereiche (`chat-task-head`, `chat-task-steps`) mit je ≤ 1 Statusfarbe: im Schritt-Bereich sind „läuft" neutral und Diff-Zahlen gedämpft. Umschalter: `STEP_FAILED_TONE` in `colors.ts` (eine Zeile). |
+
 Ablauf, Rubrik und Anti-Slop-Liste: [`docs/design/ui-craft.md`](docs/design/ui-craft.md).
 
 **Noch offen (Operator entscheidet, bis dahin gilt der alte Stand):** Schriftstärken-Fix #326 · `label-sys` ausserhalb des Kopfbereichs zurückstufen · Schriftskala und ob 2/6/20 px zur Abstandsskala gehören · die Variante für den Kopf der Task-Detailseite.
