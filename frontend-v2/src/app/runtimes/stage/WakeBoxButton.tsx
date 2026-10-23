@@ -16,6 +16,8 @@
  * and the cockpit of the same box agree — no "Wake" in one while the other
  * says "Waking…".
  * A viewer only looks: waking a box is an operator action (403 otherwise).
+ * When the wake helper on the Mac is not running the backend says so (503)
+ * and the button says it too — no "Waking…" for a box nobody wakes.
  */
 
 import { useEffect } from "react";
@@ -26,6 +28,13 @@ import { api } from "@/lib/api";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { useAppStore } from "@/lib/store";
 import type { Host } from "@/lib/types";
+
+/** The backend answers 503 when the Mac's wake helper left a request unread:
+ *  nothing woke the box, so the card says why instead of "Waking…"
+ *  (PR #976 review, MUST 1). `request()` throws `Error("API 503: …")`. */
+function helperDown(err: unknown): boolean {
+  return err instanceof Error && err.message.startsWith("API 503");
+}
 
 /** How long a sent wake keeps the button off: a box needs ~1–2 min to boot. */
 export const WAKE_SENT_MS = 180_000;
@@ -87,7 +96,7 @@ export function WakeBoxButton({ host }: { host: Host }) {
       )}
       {wake.isError && !sent && (
         <span className="text-xs min-w-0" style={{ color: STATUS_TEXT.error }} data-testid="wake-failed" role="alert">
-          {tRuntimes("wakeFailed")}
+          {helperDown(wake.error) ? t("helperDown") : tRuntimes("wakeFailed")}
         </span>
       )}
     </div>

@@ -142,6 +142,22 @@ describe("sleeping card from the host flag", () => {
     await waitFor(() => expect(within(card).getByTestId("wake-failed")).toBeInTheDocument());
     expect(within(card).getByTestId("wake-box")).not.toBeDisabled();
   });
+
+  it("no wake helper on the Mac (503): says the box was not woken, no 'Waking…'", async () => {
+    vi.spyOn(api.hosts, "metrics").mockResolvedValue(ASLEEP);
+    vi.spyOn(api.hosts, "wake").mockRejectedValue(
+      new Error('API 503: {"detail":"Wake helper on the Mac is not running"}'),
+    );
+    wrap(<FleetStage stageGroups={[]} sleepingGroups={[{ host: wolHost, runtimes: unflaggedRows }]} onOpen={() => {}} />);
+    const card = await screen.findByTestId("asleep-box");
+    await waitFor(() => expect(card).toHaveTextContent("asleep"));
+    fireEvent.click(within(card).getByTestId("wake-box"));
+    const failed = await within(card).findByTestId("wake-failed");
+    expect(failed).toHaveTextContent("wake helper on the Mac is not running");
+    expect(within(card).queryByTestId("wake-sent")).not.toBeInTheDocument();
+    expect(card).not.toHaveTextContent("Waking");
+    expect(within(card).getByTestId("wake-box")).not.toBeDisabled();
+  });
 });
 
 describe("FreeBox — no Start model while asleep or checking", () => {
@@ -154,15 +170,23 @@ describe("FreeBox — no Start model while asleep or checking", () => {
     expect(within(card).getByTestId("wake-box")).toBeInTheDocument();
   });
 
-  it("while its own check is out: neither Start model nor Wake", async () => {
+  it("a power-managed box while its own check is out: neither Start model nor Wake", async () => {
     vi.spyOn(api.hosts, "metrics").mockImplementation(() => new Promise(() => {}));
-    const spark = makeHost({ slug: "spark", display_name: "Spark" });
-    wrap(<FreeBox host={spark} slot={null} onOpenCockpit={() => {}} />);
+    wrap(<FreeBox host={wolHost} slot={null} onOpenCockpit={() => {}} />);
     const card = await screen.findByTestId("free-box");
     expect(card).toHaveTextContent("checking");
     // Give the recipes query time to land — the switcher must still stay away.
     await waitFor(() => expect(api.hosts.recipes).toHaveBeenCalled());
     expect(card).not.toHaveTextContent("Start model");
+    expect(within(card).queryByTestId("wake-box")).not.toBeInTheDocument();
+  });
+
+  it("any other box keeps Start model while a slow metrics call is out (PR #976 review)", async () => {
+    vi.spyOn(api.hosts, "metrics").mockImplementation(() => new Promise(() => {}));
+    const spark = makeHost({ slug: "spark", display_name: "Spark" });
+    wrap(<FreeBox host={spark} slot={null} onOpenCockpit={() => {}} />);
+    const card = await screen.findByTestId("free-box");
+    await waitFor(() => expect(card).toHaveTextContent("Start model"));
     expect(within(card).queryByTestId("wake-box")).not.toBeInTheDocument();
   });
 
@@ -179,6 +203,7 @@ describe("FreeBox — no Start model while asleep or checking", () => {
     vi.spyOn(api.hosts, "metrics").mockResolvedValue({ reachable: true, vram_total_mb: 8192, vram_used_mb: 1024 });
     vi.spyOn(api.hosts, "recipes").mockResolvedValue([
       makeRecipe({ slug: "duo", topology: { nodes: 2 }, fit: "duo", capacity: { ok: true, warnings: [] } as never }),
+      makeRecipe({ slug: "trio", topology: { nodes: 3 } as never, fit: "duo", capacity: { ok: true, warnings: [] } as never }),
       makeRecipe({ slug: "solo-ok", capacity: { ok: true, warnings: [] } as never }),
       makeRecipe({ slug: "solo-big", capacity: { ok: false, warnings: [] } as never }),
     ]);

@@ -2965,6 +2965,32 @@ async def _restart_runtime_impl(
     return {"ok": False, "message": f"Unbekannter runtime_type: {runtime_type}"}
 
 
+# The host-side wake watcher runs on every new file (WatchPaths) and at least
+# every 30 s (StartInterval) and retires each request at once. A request still
+# waiting after this long means nobody reads the folder: the helper is not
+# installed or not running (round-5 re-check L1 review, MUST 1).
+WAKE_HELPER_STALE_S = 120
+
+
+def _stale_wake_request_age(wake_dir: Path) -> float | None:
+    """Age in seconds of the oldest request the watcher left waiting, if any."""
+    import time as _time
+
+    now = _time.time()
+    oldest: float | None = None
+    try:
+        for req in wake_dir.glob("*.request.json"):
+            try:
+                age = now - req.stat().st_mtime
+            except OSError:
+                continue
+            if age > WAKE_HELPER_STALE_S and (oldest is None or age > oldest):
+                oldest = age
+    except OSError:
+        return None
+    return oldest
+
+
 def _write_wake_request(*, slug: str, label: str, mac: str, ip: str | None) -> dict:
     """Drop the Wake-on-LAN trigger file — the ONE wake path (runtime or host).
 
@@ -2972,10 +2998,38 @@ def _write_wake_request(*, slug: str, label: str, mac: str, ip: str | None) -> d
     it drops a trigger file into settings.wake_request_dir (under the ~/.mc host
     bind-mount). A launchd watcher on the Mac host picks it up and runs the wake
     script configured for the watcher. See the WoL host-helper docs.
+
+    The backend cannot see the watcher itself, but it sees its trace: a request
+    that is still waiting after ``WAKE_HELPER_STALE_S`` was never read. Then no
+    new request is written and the answer is ``ok: False, helper_down: True`` —
+    "Waking…" for a box nobody wakes would be false (round-5 L1 review).
+    A request for the same box that is still fresh is left as it is: the wake
+    is already on its way, and rewriting it would hide its real age.
     """
     import datetime as _dt
 
     safe_slug = re.sub(r"[^A-Za-z0-9._-]", "_", str(slug))
+    wake_dir = Path(settings.wake_request_dir)
+    stale_age = _stale_wake_request_age(wake_dir)
+    if stale_age is not None:
+        minutes = int(stale_age // 60)
+        logger.warning(
+            "Wake-Helfer läuft nicht: Anfrage in %s wartet seit %d min — kein Wake für %s",
+            wake_dir, minutes, slug,
+        )
+        return {
+            "ok": False,
+            "helper_down": True,
+            "message": "Wake helper on the Mac is not running — a wake request "
+            f"has been waiting for {minutes} min. {label} was not woken.",
+        }
+    pending = wake_dir / f"{safe_slug}.request.json"
+    if pending.exists():
+        return {
+            "ok": True,
+            "message": f"Wake-on-LAN für {label} ist schon unterwegs. "
+            "Box braucht ~1-2 Min bis erreichbar.",
+        }
     payload = {
         "slug": slug,
         "mac": mac,
@@ -2984,9 +3038,8 @@ def _write_wake_request(*, slug: str, label: str, mac: str, ip: str | None) -> d
         "requested_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
     }
     try:
-        wake_dir = Path(settings.wake_request_dir)
         wake_dir.mkdir(parents=True, exist_ok=True)
-        target = wake_dir / f"{safe_slug}.request.json"
+        target = pending
         target.write_text(json.dumps(payload), encoding="utf-8")
         logger.info("Wake-on-LAN Trigger geschrieben: %s (mac=%s)", target, mac)
         return {

@@ -19,7 +19,8 @@ import de from "../messages/de.json";
 
 declare global {
   interface Window {
-    __mountWakeBox?: (opts: { locale: "en" | "de" }) => void;
+    __mountWakeBox?: (opts: { locale: "en" | "de"; helperDown?: boolean }) => void;
+    __wakeHelperDown?: boolean;
   }
 }
 
@@ -77,7 +78,18 @@ a.hosts.recipes = async () => [
   recipe({ slug: "solo", display_name: "Solo model", capacity: { ok: true, warnings: [] } as never }),
   recipe({ slug: "duo", display_name: "Two-box model", topology: { nodes: 2 }, fit: "duo", capacity: { ok: true, warnings: [] } as never }),
 ];
-a.hosts.wake = () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, message: "ok" }), 400));
+// `helperDown`: what the backend answers when the Mac's wake helper left a
+// request unread (503) — PR #976 review, MUST 1.
+a.hosts.wake = () =>
+  new Promise((resolve, reject) =>
+    setTimeout(
+      () =>
+        window.__wakeHelperDown
+          ? reject(new Error('API 503: {"detail":"Wake helper on the Mac is not running"}'))
+          : resolve({ ok: true, message: "ok" }),
+      400,
+    ),
+  );
 a.hosts.metricsHistory = async () => ({ points: [], window: 3600, sample_seconds: 5 });
 a.hosts.pulse = async () => ({ points: [], now_tps: null, idle_seconds: null, available: false });
 a.hosts.autostart = async (id: string) => ({
@@ -88,7 +100,7 @@ a.nodes.devices = async () => [];
 (a.runtimes.db as Record<string, unknown>).agents = async (slug: string) => ({ runtime_slug: slug, count: slug === "ws-slot" ? 1 : 2, agents: [] });
 a.localRegistry.list = async () => ({ recipes: [], total: 0, sources: [] });
 
-function App({ locale }: { locale: "en" | "de" }) {
+function App({ locale }: { locale: "en" | "de"; helperDown?: boolean }) {
   const [qc] = React.useState(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }));
   return (
     <NextIntlClientProvider locale={locale} messages={(locale === "de" ? de : en) as never}>

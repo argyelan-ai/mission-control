@@ -7,6 +7,8 @@
  *   1. the sleeping box: "asleep" + "Wake", no "Start model"
  *   2. right after "Wake": "Waking…" + how long it takes
  *   3. its cockpit: "asleep" instead of telemetry, "Wake" instead of Restart
+ *   4. Wake while the Mac's wake helper is not running (503): "not woken",
+ *      no "Waking…" (PR #976 review, MUST 1)
  *
  * Checks what jsdom cannot: no sideways scroll, Wake tap target >= 44 px (K11).
  *
@@ -143,6 +145,21 @@ for (const vp of VIEWPORTS) {
     await page.screenshot({ path: file });
     shots += 1;
     console.log(`${label}: 3-cockpit -> ${file}`);
+    // 4. fresh mount, the wake helper on the Mac is not running.
+    await page.evaluate((locale) => {
+      window.__wakeHelperDown = true;
+      window.__mountWakeBox({ locale, helperDown: true });
+    }, locale);
+    const card4 = page.locator('[data-testid="asleep-box"][data-host-slug="ws"]');
+    await card4.getByTestId("wake-box").waitFor({ timeout: 30000 });
+    await page.waitForTimeout(300);
+    await card4.getByTestId("wake-box").click();
+    await card4.getByTestId("wake-failed").waitFor({ timeout: 5000 });
+    if (await card4.getByTestId("wake-sent").count()) failures.push(`${label}: helper down but card says "Waking…"`);
+    const h4 = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    if (h4 > 0) failures.push(`${label}: helper-down card scrolls sideways by ${h4}px`);
+    await page.waitForTimeout(150);
+    await shoot("4-helper-down");
     if (errors.length) failures.push(`${label}: page errors: ${errors.join(" | ")}`);
     await page.close();
   }

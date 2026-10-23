@@ -194,3 +194,99 @@ async def test_wake_forgets_the_remembered_asleep(auth_client, tmp_path):
         after = (await auth_client.get(f"/api/v1/hosts/{host_id}/metrics")).json()
     assert probe.await_count == 1
     assert after["status"] == "awake"
+
+
+# ── the wake helper on the Mac is not running (PR #976 review, MUST 1) ──────
+
+
+def _leave_a_stale_request(wake_dir, name: str = "other-box", age_s: int = 600):
+    """A request the host-side watcher never read — what a missing helper leaves."""
+    import os
+    import time
+
+    wake_dir.mkdir(parents=True, exist_ok=True)
+    stale = wake_dir / f"{name}.request.json"
+    stale.write_text(json.dumps({"slug": name, "mac": _MAC}), encoding="utf-8")
+    old = time.time() - age_s
+    os.utime(stale, (old, old))
+    return stale
+
+
+@pytest.mark.asyncio
+async def test_wake_host_says_so_when_the_helper_left_a_request_waiting(tmp_path):
+    """No "Waking…" for a box nobody wakes: an unread old request means no helper."""
+    stale = _leave_a_stale_request(tmp_path)
+    host = ResolvedHost(
+        slug="wake-host", display_name="Wake Host", kind="flask_wol",
+        control_url="http://192.0.2.20:5555", wol_mac_address=_MAC, power_managed=True,
+        source="registry",
+    )
+    with patch.object(runtime_manager.settings, "wake_request_dir", tmp_path):
+        result = await runtime_manager.wake_host(host)
+    assert result["ok"] is False
+    assert result["helper_down"] is True
+    assert "not running" in result["message"]
+    # Nothing new is queued, and the old request is left for the helper.
+    assert not (tmp_path / "wake-host.request.json").exists()
+    assert stale.exists()
+
+
+@pytest.mark.asyncio
+async def test_wake_runtime_says_so_too(tmp_path):
+    """The per-runtime wake shares the path — same honest answer."""
+    _leave_a_stale_request(tmp_path)
+    runtime = {"slug": "wake-rt", "display_name": "Wake RT", "power_managed": True,
+               "wol_mac_address": _MAC, "host": "192.0.2.20"}
+    with patch.object(runtime_manager.settings, "wake_request_dir", tmp_path):
+        result = await runtime_manager.wake_runtime(runtime)
+    assert result["ok"] is False and result["helper_down"] is True
+    assert not (tmp_path / "wake-rt.request.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_waiting_request_is_not_a_missing_helper(tmp_path):
+    """The watcher runs at least every 30 s — a request a minute old is on its way."""
+    _leave_a_stale_request(tmp_path, age_s=60)
+    host = ResolvedHost(
+        slug="wake-host", display_name="Wake Host", kind="flask_wol",
+        control_url="http://192.0.2.20:5555", wol_mac_address=_MAC, power_managed=True,
+        source="registry",
+    )
+    with patch.object(runtime_manager.settings, "wake_request_dir", tmp_path):
+        result = await runtime_manager.wake_host(host)
+    assert result["ok"] is True, result
+    assert (tmp_path / "wake-host.request.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_second_wake_keeps_the_first_request_and_its_age(tmp_path):
+    """Rewriting a waiting request would reset its age and hide a dead helper."""
+    host = ResolvedHost(
+        slug="wake-host", display_name="Wake Host", kind="flask_wol",
+        control_url="http://192.0.2.20:5555", wol_mac_address=_MAC, power_managed=True,
+        source="registry",
+    )
+    with patch.object(runtime_manager.settings, "wake_request_dir", tmp_path):
+        assert (await runtime_manager.wake_host(host))["ok"] is True
+        first = (tmp_path / "wake-host.request.json").read_text()
+        import os
+        import time
+        old = time.time() - 30
+        os.utime(tmp_path / "wake-host.request.json", (old, old))
+        assert (await runtime_manager.wake_host(host))["ok"] is True
+    req = tmp_path / "wake-host.request.json"
+    assert req.read_text() == first
+    assert req.stat().st_mtime == pytest.approx(old, abs=1)
+
+
+@pytest.mark.asyncio
+async def test_route_answers_503_when_the_helper_is_down(auth_client, tmp_path):
+    """503, not 400: the request is fine, the host-side helper is missing."""
+    created = (await auth_client.post("/api/v1/hosts", json=_wol_host_body("helperless"))).json()
+    _leave_a_stale_request(tmp_path)
+    with patch.object(runtime_manager.settings, "wake_request_dir", tmp_path):
+        resp = await auth_client.post(f"/api/v1/hosts/{created['id']}/wake")
+    assert resp.status_code == 503, resp.text
+    assert "not running" in resp.json()["detail"]
+    # Nothing was queued for a helper that is not there.
+    assert not (tmp_path / "helperless.request.json").exists()

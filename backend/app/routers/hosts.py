@@ -744,7 +744,9 @@ async def wake_host(
         raise HTTPException(status_code=404, detail=f"Host '{host_id}' not found")
     result = await runtime_manager.wake_host(resolved_host_from_row(host))
     if not result["ok"]:
-        raise HTTPException(status_code=400, detail=result["message"])
+        # 503: the request is fine, the host-side wake helper is not there.
+        status = 503 if result.get("helper_down") else 400
+        raise HTTPException(status_code=status, detail=result["message"])
     # The box is waking: the remembered "asleep" and the readiness of the
     # runtimes on it are stale — the next poll asks again.
     await host_liveness.forget(host.id)
