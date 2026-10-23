@@ -5,7 +5,7 @@
  * ready") nor fold into the "nothing is running" empty state.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Host } from "@/lib/types";
@@ -78,5 +78,46 @@ describe("FleetStage — probe timed out", () => {
     // Only one box and nothing running → the empty state, no timeout wording.
     expect(screen.getByTestId("empty-stage")).toBeInTheDocument();
     expect(screen.queryByText(/probe timed out/)).not.toBeInTheDocument();
+  });
+
+  // Round-2 user test (t4 S1): the page now paints from the unprobed rows
+  // (container_status "not_probed") while the live probes run. Such a box is
+  // "being checked" — never "free · ready", never the empty state.
+  it("a box whose rows are not probed yet says it is being checked", async () => {
+    renderStage([{ host: alpha, runtimes: [{ ...recipe, state: "unknown", container_status: "not_probed" }] }]);
+    expect(screen.queryByTestId("empty-stage")).not.toBeInTheDocument();
+    const card = screen.getByTestId("free-box");
+    expect(card).toHaveTextContent("Checking…");
+    expect(card).not.toHaveTextContent("no model · ready");
+  });
+
+  // t4 S2: a sleeping box was painted "free · no model · ready" although its
+  // own metrics said reachable:false / asleep. "ready" needs reachable:true.
+  it("a box that does not answer is shown asleep/unreachable, never ready", async () => {
+    vi.spyOn(api.hosts, "metrics").mockResolvedValue({
+      kind: "flask_wol", reachable: false, awake: false, status: "asleep",
+    } as never);
+    const sleeper = makeHost({ slug: "sleeper", display_name: "Sleeper", kind: "flask_wol", power_managed: true });
+    const other = makeHost({ slug: "beta", display_name: "Box Beta", ui_order: 1 });
+    const serving = { ...recipe, id: "rt-2", slug: "rt-2", state: "ready" as const, host: { id: "beta", slug: "beta", display_name: "Box Beta" } };
+    renderStage([
+      { host: sleeper, runtimes: [{ ...recipe, host: { id: "sleeper", slug: "sleeper", display_name: "Sleeper" }, state: "stopped" }] },
+      { host: other, runtimes: [serving] },
+    ]);
+    const card = await screen.findByTestId("free-box");
+    await screen.findByText("asleep · not reachable");
+    expect(card).not.toHaveTextContent("no model · ready");
+    expect(card).toHaveTextContent("asleep");
+  });
+
+  it("a box that answers keeps 'no model · ready'", async () => {
+    const other = makeHost({ slug: "beta", display_name: "Box Beta", ui_order: 1 });
+    const serving = { ...recipe, id: "rt-2", slug: "rt-2", state: "ready" as const, host: { id: "beta", slug: "beta", display_name: "Box Beta" } };
+    renderStage([
+      { host: alpha, runtimes: [{ ...recipe, state: "stopped" }] },
+      { host: other, runtimes: [serving] },
+    ]);
+    const card = await screen.findByTestId("free-box");
+    await waitFor(() => expect(card).toHaveTextContent("no model · ready"));
   });
 });

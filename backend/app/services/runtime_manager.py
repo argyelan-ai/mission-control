@@ -479,11 +479,26 @@ def join_probe_url(endpoint: str, healthcheck_path: str) -> str:
     return base + path
 
 
+#: TCP connect limit of one HTTP probe — separate from the 5 s answer limit.
+#: A box that drops packets (asleep, off, unplugged) never refuses the
+#: connect; before this limit every probe to it waited the full 5 s, and the
+#: runtimes list, the agent page and every box's recipe list waited with it
+#: (round-2 user test, 23.10.2026: 5.1 s per list, 10.9 s for the Models
+#: tab). Measured the same day: a live box connects in 5–30 ms on the LAN,
+#: a cloud endpoint incl. TLS in ~170 ms — 2 s is still >10x headroom.
+_PROBE_CONNECT_TIMEOUT_S = 2.0
+_PROBE_TIMEOUT = httpx.Timeout(5.0, connect=_PROBE_CONNECT_TIMEOUT_S)
+
+
 async def _probe_http(endpoint: str, healthcheck_path: str) -> bool:
-    """Checks whether the runtime's HTTP endpoint responds."""
+    """Checks whether the runtime's HTTP endpoint responds.
+
+    A connected engine keeps the full 5 s to answer (a busy engine answers
+    late, not never); only the connect itself is cut short.
+    """
     url = join_probe_url(endpoint, healthcheck_path)
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT) as client:
             resp = await client.get(url)
             return resp.status_code == 200
     except Exception:

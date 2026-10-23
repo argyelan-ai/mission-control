@@ -1388,6 +1388,17 @@ def _heartbeat_body() -> bytes:
             body["context_pct"] = float(pct)
     except Exception:  # noqa: BLE001 — scrape darf heartbeat nie reissen
         pass
+    if "context_pct" not in body:
+        # Under ACP there is no pane to scrape: report the fill the chat
+        # daemon got from the agent (the chat ring's figure, round-2 user
+        # test 23.10.2026). Own try — it must never cost the status below.
+        try:
+            if driver_is_acp():
+                acp_pct = chat_daemon().context_pct()
+                if acp_pct is not None:
+                    body["context_pct"] = float(acp_pct)
+        except Exception:  # noqa: BLE001 — never breaks the heartbeat
+            pass
     try:
         if driver_is_acp():
             is_busy = chat_daemon().busy()

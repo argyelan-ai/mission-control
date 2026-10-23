@@ -725,7 +725,22 @@
       "runtimeLabel": "Runtime"
     },
     "fleetCountWithPaused": "{active} aktiv · {paused} pausiert",
-    "fleetCountActive": "{active} aktiv"
+    "fleetCountActive": "{active} aktiv",
+    "runtimeLoading": "Runtime wird geladen…",
+    "noRuntime": "Keine Runtime gebunden",
+    "status": {
+      "working": "Arbeitet",
+      "online": "Online",
+      "idle": "Bereit",
+      "error": "Fehler",
+      "restarting": "Startet neu…",
+      "provisioning": "Wird eingerichtet",
+      "offline": "Offline",
+      "paused": "Pausiert · keine neuen Aufgaben",
+      "pausedWorking": "Pausiert · beendet laufende Aufgabe",
+      "pausedShort": "Pausiert",
+      "pausedHint": "Pausiert heisst: MC gibt diesem Agenten keine neuen Aufgaben. Eine laufende Aufgabe wird noch zu Ende geführt."
+    }
   },
   "inbox": {
     "title": "Eingang",
@@ -3268,7 +3283,10 @@
       "lockStale": "Der Agent hat sich seit {age} nicht gemeldet. Solange bleibt der Modus gesperrt.",
       "lockStaleNever": "Der Agent hat sich noch nie gemeldet. Solange bleibt der Modus gesperrt.",
       "lockUnknownMode": "Die Steuer-Skripte fehlen auf der Box. Auf der Box",
-      "lockUnknownModeTail": "wiederholen, dann lässt sich der Modus stellen."
+      "lockUnknownModeTail": "wiederholen, dann lässt sich der Modus stellen.",
+      "modeHint": "{mode}: ≈{watt} W, ≈{temp} °C — schreibt gleich schnell wie die anderen",
+      "modeHintPrefill": "{mode}: ≈{watt} W, ≈{temp} °C — schreibt gleich schnell wie die anderen, Einlesen langer Texte dauert +{pct} %",
+      "modeHintRisky": "{mode}: ≈{watt} W, ≈{temp} °C — schreibt gleich schnell wie die anderen; kann unter Dauerlast drosseln oder abschalten"
     },
     "vllmCatalog": {
       "endpointNotDetected": "Endpoint nicht erkannt",
@@ -3758,7 +3776,13 @@
         "member_down": "Mitglied-Box ausgefallen",
         "crash_loop": "Neustart-Schleife, von MC angehalten",
         "unknown": "Grund unbekannt"
-      }
+      },
+      "cornerChecking": "prüft",
+      "checkingLine": "Wird geprüft…",
+      "asleepLine": "schläft · nicht erreichbar",
+      "unreachableLine": "nicht erreichbar",
+      "kpiSpeedModeNoAgent": "Tempo · {mode} · kein Agent",
+      "kpiSpeedNoAgentHint": "Kein Agent dieser Box arbeitet. Die Last kommt von woanders — zum Beispiel von einem Bench-Lauf oder einem direkten API-Aufruf."
     },
     "cockpit": {
       "modeNoDevice": "Kein Node-Agent mit dieser Box gekoppelt — die Modus-Liste ist nicht verfügbar.",

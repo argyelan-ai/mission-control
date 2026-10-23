@@ -45,6 +45,7 @@ import { headOnBoxes, useHeadOccupancy } from "@/components/heads/HeadOccupancy"
 import { useHeadPairsForLabels } from "@/components/heads/HeadStateCard";
 import { runPairLabel, type HeadBusy } from "@/lib/heads";
 import { fleetCount } from "@/app/agents/fleetCount";
+import { isAgentWorking } from "@/lib/agentStatus";
 
 export interface StageMember {
   host: Host;
@@ -224,7 +225,11 @@ export function Stage({
   );
   const agentSplit = fleetCount(boundAgents);
   const activeAgents = boundAgents.filter((a) => a.operational_mode !== "paused");
-  const busyAgents = activeAgents.filter((a) => a.status === "busy");
+  // WORKING = a turn is running, whatever the mode (round-2 user test t4 N8:
+  // "73 tok/s · 0 working" while an agent worked). The heartbeat says
+  // "working", not "busy"; and "paused" only stops NEW tasks — a paused
+  // agent finishing its task is load on this box all the same.
+  const busyAgents = boundAgents.filter((a) => isAgentWorking(a.status));
   // Review fix round 5: only a genuinely reachable, idle agent is CONNECTED —
   // `status !== "busy"` used to also count offline/error/provisioning/
   // restarting agents as connected, which overstated the box's own number.
@@ -284,11 +289,15 @@ export function Stage({
   );
 
   const endpointPort = runtime.endpoint?.match(/:(\d+)/)?.[1] ?? null;
+  // Tokens flow but nobody on the card works: say where the load is NOT
+  // from, instead of leaving "73 tok/s · 0 working" to guess (t4 N8).
+  const loadWithoutAgent = tps != null && Math.round(tps) > 0 && workingCount === 0;
   const cells: KpiCell[] = [
     { value: fmtCtx(live?.served_context_len ?? runtime.max_context_len), label: t("kpiContext") },
     {
       value: tps != null ? t("tpsValue", { tps: Math.round(tps) }) : "–",
-      label: t("kpiSpeedMode", { mode: modeLabel }),
+      label: loadWithoutAgent ? t("kpiSpeedModeNoAgent", { mode: modeLabel }) : t("kpiSpeedMode", { mode: modeLabel }),
+      title: loadWithoutAgent ? t("kpiSpeedNoAgentHint") : undefined,
       testId: "kpi-speed",
     },
     {

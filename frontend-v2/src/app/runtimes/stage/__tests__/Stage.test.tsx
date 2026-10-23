@@ -341,3 +341,47 @@ describe("Stage — live speed lives in the SPEED tile", () => {
     expect(screen.getByTestId("stage-now-line")).toHaveTextContent(/^solo · 6 ms$/);
   });
 });
+
+// Round-2 user test (t4 N8): the card read "73 tok/s" next to "0 working"
+// while an agent was working on a task. Two causes: the heartbeat status is
+// "working" (the card only counted "busy"), and a PAUSED agent was never
+// counted — but pause only means "no new tasks", the running one goes on.
+// When the load really comes from no agent (a bench run, a direct call) the
+// speed tile now says so instead of leaving the reader to guess.
+describe("Stage — who makes the load", () => {
+  const live = { reachable: true, served_model: "m", latency_ms: 6, last_probe_at: "", consecutive_failures: 0, drift: false };
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(api.hosts, "pulse").mockResolvedValue({ points: [{ t: 1, tps: 73 }], now_tps: 73, idle_seconds: 0, available: true });
+    vi.spyOn(api.hosts, "metrics").mockResolvedValue({ reachable: true, gpu_util_pct: 95, vram_used_mb: 1024, vram_total_mb: 8192, gpu_temp_c: 60 });
+    vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
+      runtime_slug: "rt", count: 1, agents: [{ id: "sp", name: "Alpha", agent_runtime: "cli-bridge" }],
+    });
+  });
+
+  it("a paused agent that is still working counts as working", async () => {
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      { id: "sp", name: "Alpha", status: "working", operational_mode: "paused" },
+    ] as never);
+    renderWithQuery(<Stage runtime={makeRuntime({ slug: "rt" })} members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]} live={live} onOpenCockpit={() => {}} />);
+    const tile = await screen.findByTestId("kpi-in-use");
+    await vi.waitFor(() => expect(tile).toHaveTextContent(/^1working/));
+    const speed = screen.getByTestId("kpi-speed");
+    expect(speed).not.toHaveAttribute("title");
+  });
+
+  it("load without a working agent is labelled as such", async () => {
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      { id: "sp", name: "Alpha", status: "idle", operational_mode: "paused" },
+    ] as never);
+    renderWithQuery(<Stage runtime={makeRuntime({ slug: "rt" })} members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]} live={live} onOpenCockpit={() => {}} />);
+    const speed = await screen.findByTestId("kpi-speed");
+    await vi.waitFor(() => expect(speed).toHaveTextContent("73 tok/s"));
+    await vi.waitFor(() => expect(speed).toHaveTextContent("Speed · solo · no agent"));
+    expect(speed).toHaveAttribute(
+      "title",
+      "No agent on this box is working. The load comes from somewhere else — for example a bench run or a direct API call.",
+    );
+  });
+});

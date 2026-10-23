@@ -18,7 +18,8 @@ import {
   Brain, Wrench, FileText, Play, Pause, Server,
   HardDrive, FolderArchive, RefreshCw, Package, Box,
 } from "lucide-react";
-import { cn, contextPercent, contextColor, timeAgo } from "@/lib/utils";
+import { cn, contextPercent, contextColor, formatContextPct, timeAgo } from "@/lib/utils";
+import { agentStatusView } from "@/lib/agentStatus";
 import { C, STATUS, alpha } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { useAgentStream } from "@/lib/sse";
@@ -78,19 +79,8 @@ const LANGUAGE_OPTIONS = [
 ];
 
 // ── Status Mapping ─────────────────────────────────────────────────────────────
-
-type DotStatus = "online" | "busy" | "idle" | "offline" | "error" | "warning";
-
-function agentStatusToDot(status: string): DotStatus {
-  switch (status) {
-    case "online": return "online";
-    case "busy": return "busy";
-    case "error": return "error";
-    case "restarting": return "warning";
-    case "idle": return "idle";
-    default: return "offline";
-  }
-}
+// Dot + label come from `agentStatusView` (lib/agentStatus.ts) — one rule for
+// the detail page, the roster and the cards.
 
 const PROVISION_CONFIG: Record<string, { labelKey: string; color: string }> = {
   local: { labelKey: "provLocal", color: C.textDim },
@@ -1603,7 +1593,7 @@ export default function AgentDetailPage() {
   const isCliBridge = agent.agent_runtime === "cli-bridge";
   const pct = contextPercent(agent.context_tokens, agent.context_max);
   const barColor = contextColor(pct);
-  const dotStatus = agentStatusToDot(agent.status);
+  const statusView = agentStatusView(agent);
   const provCfg = PROVISION_CONFIG[agent.provision_status] ?? PROVISION_CONFIG.local;
 
   return (
@@ -1650,14 +1640,22 @@ export default function AgentDetailPage() {
                   {agent.role && (
                     <span className="text-sm text-[var(--color-text-secondary)]">-- {agent.role}</span>
                   )}
-                  <Pill color={provCfg.color} size="sm">{t(provCfg.labelKey)}</Pill>
-                  {agent.operational_mode === "paused" && (
-                    <Pill color={C.warning} size="sm">{t("detail.paused")}</Pill>
+                  {/* ONE state (round-2 user test t4 S5/S-neu-2: "LIVE · PAUSED ·
+                      Working" at once). The provisioning chip only when it
+                      says something — "live" is the normal case — and pause
+                      folded into the status label, which says what pause
+                      means ("no new tasks"). */}
+                  {agent.provision_status !== "provisioned" && (
+                    <Pill color={provCfg.color} size="sm">{t(provCfg.labelKey)}</Pill>
                   )}
-                  <div className="flex items-center gap-1.5 ml-auto">
-                    <StatusDot status={dotStatus} pulse={dotStatus === "online" || dotStatus === "busy"} />
-                    <span className="text-sm capitalize text-[var(--color-text-secondary)]">
-                      {agent.status === "restarting" ? t("detail.restarting") : agent.status}
+                  <div
+                    className="flex items-center gap-1.5 ml-auto"
+                    data-testid="agent-status"
+                    title={statusView.paused ? t("status.pausedHint") : undefined}
+                  >
+                    <StatusDot status={statusView.dot} pulse={statusView.dot === "online" || statusView.dot === "busy"} />
+                    <span className="text-sm text-[var(--color-text-secondary)]">
+                      {t(statusView.labelKey)}
                     </span>
                   </div>
                 </div>
@@ -1716,7 +1714,7 @@ export default function AgentDetailPage() {
                 <div className="mt-4 max-w-sm">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[10px] text-[var(--color-text-muted)]">{t("contextLabel")}</span>
-                    <span className="text-[10px] text-[var(--color-text-muted)]">{pct === null ? "—" : `${pct}%`}</span>
+                    <span className="text-[10px] text-[var(--color-text-muted)]">{formatContextPct(agent.context_tokens, agent.context_max)}</span>
                   </div>
                   <div className="h-1.5 rounded-full bg-[var(--color-bg-elevated)] overflow-hidden">
                     <motion.div

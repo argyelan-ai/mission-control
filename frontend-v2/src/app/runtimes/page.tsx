@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useRuntimeRows } from "@/lib/runtimeRows";
 import type {
   Host,
   Runtime,
@@ -781,12 +782,20 @@ export default function RuntimesPage() {
 
   // GET /runtimes live-enriches the whole fleet (~6 s cold) — placeholderData
   // from the last visit paints the page instantly; the fresh fetch replaces it.
-  const { data, isLoading, error, isPlaceholderData } = useQuery({
+  const { data: probedData, isLoading: probedLoading, error, isPlaceholderData } = useQuery({
     queryKey: ["runtimes"],
     queryFn: () => fetchWithCache("runtimes", () => api.runtimes.list()),
     placeholderData: () => loadCached<Awaited<ReturnType<typeof api.runtimes.list>>>("runtimes"),
     refetchInterval: 15_000,
   });
+  // First visit (no cached copy): the unprobed rows answer in milliseconds
+  // and paint the page while the probes run (round-2 user test t4 S1: 5.1 s
+  // of spinner). Their rows say container_status "not_probed" — the stage
+  // shows those boxes as "being checked" and lets the watcher's live view
+  // decide what runs. The probed list replaces them the moment it lands.
+  const { data: rowsData } = useRuntimeRows(probedData == null);
+  const data = probedData ?? rowsData;
+  const isLoading = probedLoading && rowsData == null;
 
   const { data: hostsData, isLoading: hostsLoading } = useQuery<Host[]>({
     queryKey: ["hosts"],

@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, RotateCcw } from "lucide-react";
 import { api } from "@/lib/api";
+import { useRuntimeRows } from "@/lib/runtimeRows";
 import { notify } from "@/lib/notify";
 import { C } from "@/lib/colors";
 import { cn } from "@/lib/utils";
@@ -47,10 +48,9 @@ export function AgentApiKeySection({ agent, agentId }: { agent: Agent; agentId: 
     queryKey: ["secrets"],
     queryFn: () => api.secrets.list(),
   });
-  const { data: runtimesData, isError: runtimesError } = useQuery({
-    queryKey: ["runtimes"],
-    queryFn: () => api.runtimes.list(),
-  });
+  // Which key fits is a property of the row, not of its live state — the
+  // unprobed rows answer in milliseconds instead of waiting for every box.
+  const { data: runtimesData, isError: runtimesError } = useRuntimeRows();
 
   const savedId = agent.secret_id ?? null;
   const [selectedSecretId, setSelectedSecretId] = useState<string | null>(savedId);

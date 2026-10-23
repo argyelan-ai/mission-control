@@ -23,6 +23,7 @@ export function FreeBox({
   slot,
   device,
   probeTimedOut = false,
+  probePending = false,
   onOpenCockpit,
 }: {
   host: Host;
@@ -33,13 +34,16 @@ export function FreeBox({
   /** GET /runtimes cut this box's state probe off: nothing is known about
    *  it, so the card must not claim "free · no model · ready". */
   probeTimedOut?: boolean;
+  /** The page painted from the unprobed rows (round-2 Q6) and the live
+   *  probe has not answered yet — "being checked", not "free". */
+  probePending?: boolean;
   onOpenCockpit: () => void;
 }) {
   const t = useTranslations("runtimes.stage");
   const tRuntimes = useTranslations("runtimes");
   const currentUser = useAppStore((s) => s.currentUser);
 
-  const { data: metrics } = useQuery({
+  const { data: metrics, isError: metricsFailed } = useQuery({
     queryKey: ["hosts", host.id, "metrics"],
     queryFn: () => api.hosts.metrics(host.id),
     refetchInterval: 5_000,
@@ -75,6 +79,29 @@ export function FreeBox({
 
   const endpointPort = slot?.endpoint?.match(/:(\d+)/)?.[1] ?? recipes?.[0]?.port ?? null;
 
+  // What the card may claim (round-2 user test t4 S2: a sleeping box read
+  // "free · no model · ready" while its own metrics said reachable:false).
+  // "ready" needs the box to answer; until its metrics are in, or while the
+  // page still paints from the unprobed rows, it is being checked.
+  const unreachable = metrics?.reachable === false;
+  const asleep = unreachable && (host.power_managed || metrics?.status === "asleep");
+  // A failed metrics call says nothing about the box — the runtime probe
+  // already called it free, so the card keeps that instead of "checking"
+  // forever.
+  const checking = probePending || (metrics == null && !metricsFailed);
+  const corner = probeTimedOut
+    ? t("cornerUnknown")
+    : unreachable
+      ? asleep ? t("cornerAsleep") : t("cornerUnreachable")
+      : checking
+        ? t("cornerChecking")
+        : t("cornerFree");
+  const line = unreachable
+    ? asleep ? t("asleepLine") : t("unreachableLine")
+    : checking
+      ? t("checkingLine")
+      : t("freeLine");
+
   const cells: KpiCell[] = [
     { value: memFreeGb != null ? String(memFreeGb) : "–", unit: memFreeGb != null ? "GB" : undefined, label: t("kpiMemoryFree") },
     { value: recipesFit != null ? String(recipesFit) : "–", label: t("kpiRecipesFit") },
@@ -104,7 +131,7 @@ export function FreeBox({
             {host.display_name}
           </span>
           <span className="font-mono uppercase shrink-0" style={{ fontSize: "10px", letterSpacing: "0.1em", color: C.textMuted }}>
-            {probeTimedOut ? t("cornerUnknown") : t("cornerFree")}
+            {corner}
           </span>
         </div>
         <HeatStrip empty />
@@ -113,8 +140,8 @@ export function FreeBox({
             {tRuntimes("unknownProbeTimedOut")}
           </div>
         ) : (
-          <div className="text-xs mt-2 pb-4" style={{ color: C.textMuted }}>
-            {t("freeLine")}
+          <div className="text-xs mt-2 pb-4" style={{ color: C.textMuted }} data-testid="free-box-line">
+            {line}
           </div>
         )}
       </div>

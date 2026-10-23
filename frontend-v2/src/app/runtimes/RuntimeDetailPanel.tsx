@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { isRuntimeUnprobed } from "@/lib/runtimeRows";
 import { C, STATUS, STATUS_TEXT, alpha } from "@/lib/colors";
 import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
 import { SlideOverPanel } from "@/components/shared/SlideOverPanel";
@@ -380,8 +381,12 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
   );
 
   const effectiveState = runtime.state ?? "unknown";
-  const canStart = effectiveState === "stopped";
-  const canStop = effectiveState !== "stopped";
+  // A row from the page's unprobed first paint (round-2 Q6): its state is
+  // not asked yet — no Stop for something that may not run, no Start for
+  // something that may.
+  const probePending = isRuntimeUnprobed(runtime);
+  const canStart = effectiveState === "stopped" && !probePending;
+  const canStop = effectiveState !== "stopped" && !probePending;
   // GET /runtimes cuts a live probe off after a time limit; the runtime is
   // then "unknown" for a known reason, which is worth showing everywhere.
   const probeTimedOut = runtime.container_status === "probe_timeout";
@@ -458,7 +463,11 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
               style={{ color: C.textSecondary }}
               title={probeTimedOut ? t("probeTimedOutHint") : undefined}
             >
-              {probeTimedOut ? t("unknownProbeTimedOut") : t(`states.${effectiveState}`)}
+              {probeTimedOut
+                ? t("unknownProbeTimedOut")
+                : probePending
+                  ? t("stage.checkingLine")
+                  : t(`states.${effectiveState}`)}
             </span>
             <span style={{ color: C.borderSubtle }}>·</span>
           </>

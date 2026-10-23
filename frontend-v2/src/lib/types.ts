@@ -1,6 +1,6 @@
 // ── Core Entities ──────────────────────────────────────────────────────────────
 
-export type AgentStatus = "online" | "offline" | "busy" | "idle" | "error" | "provisioning" | "restarting" | "archived";
+export type AgentStatus = "online" | "offline" | "busy" | "working" | "idle" | "error" | "provisioning" | "restarting" | "archived";
 export type TaskStatus = "inbox" | "in_progress" | "review" | "user_test" | "waiting" | "done" | "blocked" | "failed" | "aborted";
 export type Priority = "low" | "medium" | "high" | "critical";
 export type Severity = "info" | "warning" | "error" | "critical";

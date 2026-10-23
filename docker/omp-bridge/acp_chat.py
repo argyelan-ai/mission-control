@@ -370,6 +370,11 @@ class ChatSession:
         # Last `session_info_update` (title/updatedAt) — mirrored into the
         # state file, never a chat line.
         self._session_info: dict = {}
+        # Latest context fill from the agent's `usage_update` ({used, size,
+        # pct}) — what the chat ring shows, kept here so the host bridge can
+        # report the SAME figure on its heartbeat (Hermes has no TUI pane to
+        # scrape under ACP). None = no reading yet in this session.
+        self._context: Optional[dict] = None
         # Every reset job and what became of it, and every reset the daemon
         # did on its own (`_record_reset`), newest last, at most
         # RESET_HISTORY_MAX — mirrored as `resets`. Taken over from the
@@ -1116,6 +1121,7 @@ class ChatSession:
                     for e in self._elicitations.values()
                 ],
                 "sessionInfo": dict(self._session_info),
+                "context": dict(self._context) if self._context else None,
                 "resets": [dict(r) for r in self._resets],
                 "updatedAt": _now_iso(),
                 "lastError": json.loads(json.dumps(self._last_error))
@@ -1270,6 +1276,8 @@ class ChatSession:
                 logger.warning("session/close %s failed: %s", previous, exc)
         with self._lock:
             self._session_id = new_id
+            # A fresh conversation has no fill yet — never report the old one.
+            self._context = None
             self._mapper.set_session_id(new_id)
             self._sink = acp_chat_events.ChatEventSink(self._sessions_dir, new_id)
             self._preview = acp_chat_events.PreviewEventSink.beside(self._sink.path, new_id)
@@ -1474,6 +1482,10 @@ class ChatSession:
             # dict there would make the set lookup raise.
             if isinstance(su, str) and su in _STATE_UPDATES:
                 self._apply_state_update(update, su)
+            if su == "usage_update":
+                # State, not a chat line: a load's replay ends on the
+                # session's current fill, which is exactly the reading.
+                self._apply_context_fill(update)
             if replaying:
                 # A load's replay (see _muted_replay): state only — no
                 # mapper, no transcript, no preview, no turn text.
@@ -1504,6 +1516,20 @@ class ChatSession:
                     self._throttle["pending"] = entry
         except Exception:  # noqa: BLE001 — a broken update must not kill the turn
             logger.exception("event handling failed")
+
+    def _apply_context_fill(self, update: dict) -> None:
+        """`usage_update` -> `_context`. Same validation as the task path
+        (bridge.py G5) and the chat mapper: ints, size > 0, 0 <= used <= size.
+        Anything else is ignored — it never replaces a good reading."""
+        size, used = update.get("size"), update.get("used")
+        if isinstance(size, bool) or isinstance(used, bool):
+            return
+        if not (isinstance(size, int) and size > 0
+                and isinstance(used, int) and 0 <= used <= size):
+            return
+        with self._lock:
+            self._context = {"used": used, "size": size,
+                             "pct": round(used / size * 100.0, 1)}
 
     def _apply_state_update(self, update: dict, su: str) -> None:
         """One of `_STATE_UPDATES` -> in-memory state + the state mirror.

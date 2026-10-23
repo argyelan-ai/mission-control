@@ -491,6 +491,23 @@ describe("CompactDeviceModeSwitch", () => {
     expect(screen.getByTestId("mini-mode-eco")).toBeDisabled();
   });
 
+  // Round-2 user test (t4 NICE): the active step was only a colour and
+  // nothing said what a step does. Radio semantics (aria-checked) stay — a
+  // radiogroup is the right role, aria-pressed would be wrong here — and
+  // every step now explains itself on hover/long-press.
+  it("marks the chosen step for assistive tech and explains every step", () => {
+    renderWithQuery(<CompactDeviceModeSwitch device={makeDevice()} canControl />);
+    expect(screen.getByRole("radiogroup")).toBeInTheDocument();
+    expect(screen.getByTestId("mini-mode-eco")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("mini-mode-normal")).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByTestId("mini-mode-eco+")).toHaveAttribute(
+      "title", "eco+: ≈27 W, ≈69 °C — writes as fast as the others, reading long texts takes +11 %",
+    );
+    expect(screen.getByTestId("mini-mode-boost")).toHaveAttribute(
+      "title", "boost: ≈60 W, ≈87 °C — writes as fast as the others; can throttle or shut down under long load",
+    );
+  });
+
   it("marks the active mode via data-active, not a colored pill background", () => {
     renderWithQuery(<CompactDeviceModeSwitch device={makeDevice()} canControl />);
     expect(screen.getByTestId("mini-mode-eco")).toHaveAttribute("data-active", "true");

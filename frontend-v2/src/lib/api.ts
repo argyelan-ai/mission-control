@@ -2048,6 +2048,14 @@ export const api = {
   runtimes: {
     list: (): Promise<RuntimesResponse> =>
       request("/api/v1/runtimes"),
+    // The same rows straight from the DB, without the live probes (round-2
+    // user test: the probed list waits for the slowest box — 5.1 s for one
+    // sleeping box). Every row comes back state "unknown" with
+    // container_status "not_probed". For readers that only need the row
+    // (model, box, window) and for the runtimes page's first paint — never
+    // for anything that decides on a state.
+    listRows: (): Promise<RuntimesResponse> =>
+      request("/api/v1/runtimes?probe=false"),
     // ADR-056 — harness x runtime compatibility matrix for the harness
     // selector in RuntimeSwitchModal.
     compatMatrix: (): Promise<import("@/lib/types").CompatMatrix> =>

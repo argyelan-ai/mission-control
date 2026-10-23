@@ -245,6 +245,12 @@ export function pickServing(
   if (activeState.length > 0) return pickBest(activeState);
 
   const reachable = candidates.filter((rt) => liveFor(rt)?.reachable === true);
+  // Several recipes of one box share a port, so ALL of them answer while one
+  // engine runs. The watcher's `drift` says whose model is actually served —
+  // that one owns the stage. Matters on the first paint from the unprobed
+  // rows (round-2 Q6), where no DB state can break the tie yet.
+  const ownModel = reachable.filter((rt) => liveFor(rt)?.drift === false);
+  if (ownModel.length > 0) return pickBest(ownModel);
   if (reachable.length > 0) return pickBest(reachable);
 
   // 4. Engine death: nothing serves, but the watcher says THIS runtime was
@@ -264,6 +270,13 @@ export function pickServing(
  *  slot runtime is ignored — it is only the box's address, not a recipe. */
 export function hostProbeTimedOut(group: HostGroup): boolean {
   return group.runtimes.some((rt) => !rt.is_slot && rt.container_status === "probe_timeout");
+}
+
+/** The box's rows come from the unprobed first paint (`GET /runtimes?probe=
+ *  false`, round-2 Q6): its state is not asked yet. Like a timed-out probe it
+ *  is neither "free" nor part of "nothing is running" — it is being checked. */
+export function hostProbePending(group: HostGroup): boolean {
+  return group.runtimes.some((rt) => !rt.is_slot && rt.container_status === "not_probed");
 }
 
 /** Die Slot-Zeile dieser Box (ADR-078) — die feste „Box-URL", an der die

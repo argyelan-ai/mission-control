@@ -219,6 +219,17 @@ describe("pickServing", () => {
     expect(pickServing({ host: makeHost({}), runtimes: [cold] },
       { c: live({ reachable: true }) })?.slug).toBe("c");
   });
+  // Round-2 user test (t4 S1): the page paints from unprobed rows first —
+  // every state "unknown", only the watcher's live view decides. Two recipes
+  // on one port both answer; only the one whose model is actually served
+  // (drift false) may take the stage, or the card would flip after the probe.
+  it("among reachable runtimes, the one serving its own model wins", () => {
+    const glm = makeRuntime({ slug: "glm", state: "unknown", container_status: "not_probed", ui_order: 0 });
+    const ds = makeRuntime({ slug: "ds", state: "unknown", container_status: "not_probed", ui_order: 1 });
+    const res = pickServing({ host: makeHost({}), runtimes: [glm, ds] },
+      { glm: live({ reachable: true, drift: true }), ds: live({ reachable: true, drift: false }) });
+    expect(res?.slug).toBe("ds");
+  });
   it("returns null for an idle host", () => {
     expect(pickServing({ host: makeHost({}), runtimes: [makeRuntime({ state: "stopped" })] })).toBeNull();
   });
