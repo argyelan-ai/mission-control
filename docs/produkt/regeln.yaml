@@ -404,10 +404,10 @@ rules:
     checked: 2026-10-22
 
   - id: R-chat-never-works-own-run
-    says: "A call from an agent's chat session (X-MC-Session-Role: chat) never writes the run state of a task a run of that agent holds (assigned and live, or delivered; for a reviewer the review_handoff card in review, without a time limit) or let go of within 30 minutes: run-state comments, status, deliverables, checklist, recover, a blocking ask, and question/help/delegate (they set the run's task to blocked) and review verdicts (mc review / mc review-note) are refused with 409; reading, a plain question, mc msg and a reply (message comment) stay open (the reply not on the card the agent's review run works), and so do tasks no run holds. A chat reply or chat mc msg never ACKs a delivered task; the reply is stored as chat_reply and no watchdog counts it as the run's sign of life. One timeline row per task and action per 10 minutes. The omp chat turn is told what the run is doing instead, on the operator's clock, in plain status words, as a snapshot (as of HH:MM)."
+    says: "A call from an agent's chat session (X-MC-Session-Role: chat) never writes the run state of a task a run of that agent holds (assigned and live, or delivered; for a reviewer the review_handoff card in review, without a time limit) or let go of within 30 minutes: run-state comments, status, deliverables, checklist, recover, a blocking ask, and question/help/delegate (they set the run's task to blocked) and review verdicts (mc review / mc review-note) are refused with 409; reading, a plain question, mc msg and a reply (message comment) stay open (the reply not on the card the agent's review run works), and so do tasks no run holds. A chat reply or chat mc msg never ACKs a delivered task; the reply is stored as chat_reply, the chat's thread messages (mc msg, a plain mc ask) carry Message.from_chat, and no watchdog counts either as the run's sign of life (silent card, silent mailbox, stale check, stuck check). One timeline row per task and action per 10 minutes. The omp chat turn is told what the run is doing instead, on the operator's clock, in plain status words, as a snapshot (as of HH:MM)."
     source: "docs/specs/chat-over-acp.md (The chat never works its agent's own task)"
     owner: backend/app/services/chat_session_guard.py
-    applies_to: ["backend/app/services/chat_session_guard.py", "backend/app/services/chat_run_context.py", "backend/app/routers/agent_comments.py", "backend/app/routers/agent_task_status.py", "backend/app/routers/agent_scoped.py", "backend/app/routers/agents.py", "backend/app/services/task_evidence.py", "backend/app/comment_types.py", "docker/omp-bridge/acp_chat.py", "scripts/mc-cli/mc_cli/client.py", "scripts/mc-cli/mc_cli/commands.py"]
+    applies_to: ["backend/app/services/chat_session_guard.py", "backend/app/services/chat_run_context.py", "backend/app/routers/agent_comments.py", "backend/app/routers/agent_task_status.py", "backend/app/routers/agent_scoped.py", "backend/app/routers/agents.py", "backend/app/services/task_evidence.py", "backend/app/comment_types.py", "backend/app/services/messaging.py", "backend/app/services/task_runner.py", "backend/app/models/thread.py", "docker/omp-bridge/acp_chat.py", "scripts/mc-cli/mc_cli/client.py", "scripts/mc-cli/mc_cli/commands.py"]
     enforced_by:
       - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_progress_comment_on_running_task_is_refused"}
       - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_finish_on_running_task_is_refused"}
@@ -428,6 +428,13 @@ rules:
       - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_thread_msg_never_claims_a_dispatched_task"}
       - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_reply_is_no_sign_of_life_of_the_run"}
       - {test: "backend/tests/test_silent_mailbox_watchdog.py::test_a_chat_reply_does_not_hide_a_silent_mailbox"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_reply_does_not_move_the_stale_check_clock"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_msg_does_not_move_the_stale_check_clock_for_comm_v2"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_thread_msg_does_not_move_the_stale_check_clock_for_comm_v2"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_plain_ask_does_not_move_the_stale_check_clock_for_comm_v2"}
+      - {test: "backend/tests/test_stuck_in_progress_watchdog.py::test_fresh_chat_reply_does_not_hide_a_silent_run"}
+      - {test: "backend/tests/test_watchdog_structural_reads.py::test_chat_reply_after_resolution_does_not_hide_it_from_the_stale_check"}
+      - {test: "backend/tests/test_proof_gate_r2.py::test_chat_reply_is_no_verdict"}
       - {test: "backend/tests/test_chat_run_context.py::test_times_are_the_operators_local_time"}
       - {test: "backend/tests/test_chat_run_context.py::test_the_block_forbids_review_decisions_and_raw_snapshots"}
       - {test: "scripts/mc-cli/tests/test_task_get_board_fallback.py::test_task_get_with_an_id_and_no_board_reads_the_board_from_me"}

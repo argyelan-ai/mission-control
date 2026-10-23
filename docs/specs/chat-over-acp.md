@@ -570,9 +570,14 @@ a run ended got "0 % — no task is running". Two layers:
   spoken (`proof_gate`). A chat reply never ACKs a delivered task and is
   stored as `chat_reply` (server-only type, shown like a `message`): no
   watchdog counts it as the run's sign of life (`task_evidence.last_real_activity_at`,
-  the silent-mailbox clock) and it is no reviewer verdict (`proof_gate`) —
-  "how far are you?" on a hanging run must not push the silent-card alarm
-  back (round-3 r1 S3). Not covered
+  the silent-mailbox clock, the stale check's `messaging.last_task_activity`
+  and the stuck check's Guard 14 in `task_runner`) and it is no reviewer
+  verdict (`proof_gate`) — "how far are you?" on a hanging run must not push
+  the silent-card alarm, the nudge or the block back (round-3 r1 S3, re-review
+  M1). The chat's thread messages (`mc msg`, `mc msg --thread`, a plain
+  `mc ask`) carry `Message.from_chat` (set by the server from the role header,
+  migration 0222), and the stale check's clock leaves them out for comm_v2
+  agents as well. Not covered
   (round-2 review, "not too wide"): a task whose run ended more than 30
   minutes ago, and a task no run holds yet — e.g. the one the chat just
   created for itself (inbox, not delivered). Each refusal is a
