@@ -1486,8 +1486,9 @@ export interface ScheduledJobRun {
 }
 
 export interface ScheduleJobStats {
-  success_rate_7d: number;       // 0-1
-  success_rate_30d: number;
+  /** 0-1; null when the window holds no run (nothing to rate). */
+  success_rate_7d: number | null;
+  success_rate_30d: number | null;
   avg_duration_ms: number;
   p95_duration_ms: number;
   total_runs_30d: number;

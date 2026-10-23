@@ -49,6 +49,9 @@ export interface ChatTasksResult {
   /** The first answer (or an error) is in. */
   settled: boolean;
   error: boolean;
+  /** When the current answer came in (ms; 0 = none yet). The steps of a
+   *  task carry its status too — the newer of the two wins (round-3 t1). */
+  updatedAt: number;
 }
 
 export function useChatTasks(
@@ -90,5 +93,6 @@ export function useChatTasks(
     data: query.data?.data ?? null,
     settled: query.isFetched || query.isError,
     error: query.isError,
+    updatedAt: query.dataUpdatedAt,
   };
 }

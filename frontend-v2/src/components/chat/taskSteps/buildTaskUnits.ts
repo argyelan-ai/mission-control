@@ -55,7 +55,16 @@ export type TaskUnit =
   | { u: "mark"; key: string; ts: string | null }
   | { u: "notLoaded"; key: string; count: number }
   // Tail units (added by mergeTimeline, never by buildTaskUnits):
-  | { u: "live"; key: string; liveRow: import("@/lib/chatTypes").TaskLiveRow | null; lastTs: string | null }
+  | {
+      u: "live";
+      key: string;
+      liveRow: import("@/lib/chatTypes").TaskLiveRow | null;
+      lastTs: string | null;
+      /** The only content of its band (a new band under the operator's
+       *  message): with nothing streaming yet it says "Thinking…" instead of
+       *  leaving the band empty (round-3 t1 NICE-1). */
+      alone?: boolean;
+    }
   | { u: "pending"; key: string }
   /** The steps query failed before any row came in (says so, offers a retry). */
   | { u: "loadFailed"; key: string }

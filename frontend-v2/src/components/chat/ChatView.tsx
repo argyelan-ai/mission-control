@@ -71,6 +71,7 @@ import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
 import type { PanelKind } from "./PanelRail";
 import { useChatTasks } from "@/hooks/useChatTasks";
+import { observedStub, statusLineState } from "./taskSteps/observedState";
 import { useTaskSteps, type TaskStepsSpec } from "@/hooks/useTaskSteps";
 import { TaskStepsAgentContext } from "@/hooks/useTaskStepDetail";
 import { ScrollAnchorContext, type ScrollAnchor } from "./useScrollAnchor";
@@ -622,9 +623,35 @@ export function ChatView({
     }),
   );
 
+  // The task's state from the freshest source (round-3 t1 NICE-2/3): the
+  // steps poll (2 s) carries the status too and is usually ahead of the stub
+  // poll (10 s). Same object while nothing changes, so the memos below hold.
+  const observedRef = useRef(new Map<string, { base: ChatTaskStub; seen: ChatTaskStub }>());
+  const observed = useStableArray(
+    taskEntries.map(({ stub, detached }) => {
+      if (detached) return stub;
+      const st = steps.get(stub.taskId);
+      const seen = observedStub(stub, st?.state ?? null, chatTasks.updatedAt, st?.updatedAt ?? 0);
+      if (seen === stub) return stub;
+      const prev = observedRef.current.get(stub.taskId);
+      if (
+        prev &&
+        prev.base === stub &&
+        prev.seen.status === seen.status &&
+        prev.seen.live === seen.live &&
+        prev.seen.startedAt === seen.startedAt
+      ) {
+        return prev.seen;
+      }
+      observedRef.current.set(stub.taskId, { base: stub, seen });
+      return seen;
+    }),
+  );
+
   const mergeTasks: MergeTask[] = useMemo(
     () =>
-      taskEntries.map(({ stub, shape, detached, wasLive }, i) => {
+      taskEntries.map(({ shape, detached, wasLive }, i) => {
+        const stub = observed[i];
         const state = stepsVersion[i];
         // A card that was never live in this mount keeps all its rows; one that
         // went live again shows the new work below it (M4).
@@ -643,7 +670,7 @@ export function ChatView({
           endLine: !stub.live && !detached && (shape.kind === "segments" || wasLive),
         };
       }),
-    [taskEntries, stepsVersion, stepFailures],
+    [taskEntries, stepsVersion, stepFailures, observed],
   );
 
   // The newest chapter of a live task opens by itself — only while the view
@@ -690,6 +717,16 @@ export function ChatView({
   }, [merged]);
   const taskById = useMemo(() => new Map(mergeTasks.map((t) => [t.stub.taskId, t])), [mergeTasks]);
   const liveTask = useMemo(() => [...mergeTasks].reverse().find((t) => t.stub.live && !t.detached) ?? null, [mergeTasks]);
+  // The task turn ended (no live task left) — the chat probe lags behind it.
+  const statusState = useMemo(
+    () =>
+      statusLineState(stream.state, {
+        tasksShown: tasksApply,
+        tasksKnown: chatTasks.settled && !chatTasks.error,
+        liveTask: liveTask != null,
+      }),
+    [stream.state, tasksApply, chatTasks.settled, chatTasks.error, liveTask],
+  );
 
   // Load gate (S6): an omp chat shows its timeline once history, task stubs
   // and the first steps page of each live task are in — at most 1.5 s — so
@@ -1723,7 +1760,7 @@ export function ChatView({
           ) : (
             <>
               <StatusLine
-                state={stream.state}
+                state={statusState}
                 connected={stream.connected}
                 activity={activity}
                 aliveness={aliveness}

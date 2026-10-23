@@ -42,6 +42,8 @@ import type {
   TaskStatus,
 } from "@/lib/types";
 import { C, LANE, STATUS_TEXT, alpha } from "@/lib/colors";
+import { NotFoundState } from "@/components/shared/NotFoundState";
+import { formatChartDay, nextRunAbsolute, runStatusLabel } from "@/components/schedule/jobDisplay";
 
 // Helpers
 function formatMs(ms: number): string {
@@ -165,6 +167,7 @@ export default function ScheduleJobDetailPage() {
   });
 
   const board = boards.find((b: Board) => b.id === job?.task_board_id) ?? null;
+  const hasFailedDay = (stats?.runs_by_day ?? []).some((d) => d.failed > 0);
   const agentLookup = useMemo(() => {
     const m = new Map<string, Agent>();
     for (const a of agents as Agent[]) m.set(a.id, a);
@@ -176,24 +179,12 @@ export default function ScheduleJobDetailPage() {
   if (!job && (jobsLoaded || jobsFailed)) {
     return (
       <AppShell>
-        <div className="flex flex-col items-center justify-center h-full gap-3 py-16 text-center">
-          <p className="text-sm font-medium" style={{ color: C.textPrimary }}>
-            {jobsFailed ? t("jobLoadFailed") : t("jobNotFound")}
-          </p>
-          {!jobsFailed && (
-            <p className="text-xs" style={{ color: C.textMuted }}>
-              {t("jobNotFoundHint")}
-            </p>
-          )}
-          <Link
-            href="/schedule"
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 min-h-11 sm:min-h-0 rounded-md transition-colors"
-            style={{ color: C.accent, border: `1px solid ${C.borderAccent}` }}
-          >
-            <ArrowLeft size={13} aria-hidden />
-            {t("backToSchedule")}
-          </Link>
-        </div>
+        <NotFoundState
+          title={jobsFailed ? t("jobLoadFailed") : t("jobNotFound")}
+          hint={jobsFailed ? null : t("jobNotFoundHint")}
+          backHref="/schedule"
+          backLabel={t("backToSchedule")}
+        />
       </AppShell>
     );
   }
@@ -232,7 +223,7 @@ export default function ScheduleJobDetailPage() {
             <span className="max-sm:hidden" style={{ color: C.textMuted }}>/</span>
             {/* h2 intentionally — this is a sub-page breadcrumb, h1 already in AppShell nav */}
             <h1
-              className="display text-xl font-semibold flex-1 min-w-0 truncate"
+              className="display text-xl font-semibold flex-1 min-w-0 break-words line-clamp-3 md:truncate"
               style={{ color: C.textPrimary }}
             >
               {job.name}
@@ -331,6 +322,7 @@ export default function ScheduleJobDetailPage() {
                     <CartesianGrid strokeDasharray="3 3" stroke={C.borderSubtle} />
                     <XAxis
                       dataKey="date"
+                      tickFormatter={(d: string) => formatChartDay(d, dateLocale)}
                       tick={{ fill: C.textMuted, fontSize: 11 }}
                       stroke={C.borderActive}
                     />
@@ -340,6 +332,7 @@ export default function ScheduleJobDetailPage() {
                       allowDecimals={false}
                     />
                     <Tooltip
+                      labelFormatter={(d) => formatChartDay(String(d), dateLocale)}
                       contentStyle={{
                         background: C.bgSurface,
                         border: `1px solid ${C.border}`,
@@ -350,17 +343,23 @@ export default function ScheduleJobDetailPage() {
                     <Area
                       type="monotone"
                       dataKey="success"
+                      name={t("runStatus.success")}
                       stackId="1"
                       stroke={C.online}
                       fill={alpha(C.online, 0.3)}
                     />
-                    <Area
-                      type="monotone"
-                      dataKey="failed"
-                      stackId="1"
-                      stroke={C.error}
-                      fill={alpha(C.error, 0.3)}
-                    />
+                    {/* No failure in the window: no red series. It drew a red
+                        line on top of the green area at "0 failed". */}
+                    {hasFailedDay && (
+                      <Area
+                        type="monotone"
+                        dataKey="failed"
+                        name={t("runStatus.failed")}
+                        stackId="1"
+                        stroke={C.error}
+                        fill={alpha(C.error, 0.3)}
+                      />
+                    )}
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -376,23 +375,10 @@ export default function ScheduleJobDetailPage() {
               </h2>
               <dl className="flex flex-col gap-3 text-xs">
                 <ConfigRow label={t("colTrigger")} value={scheduleLabel(job, t)} />
-                <ConfigRow
-                  label={t("nextRun")}
-                  value={
-                    job.next_run_at
-                      ? new Date(job.next_run_at).toLocaleString(dateLocale, {
-                          weekday: "short",
-                          day: "2-digit",
-                          month: "2-digit",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })
-                      : "—"
-                  }
-                />
+                <ConfigRow label={t("nextRun")} value={nextRunAbsolute(job, t, dateLocale)} />
                 <ConfigRow
                   label={t("lastStatus")}
-                  value={job.last_run_status ?? "—"}
+                  value={runStatusLabel(job.last_run_status, t)}
                   valueColor={
                     job.last_run_status === "failed"
                       ? STATUS_TEXT.error

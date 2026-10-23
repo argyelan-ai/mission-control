@@ -729,7 +729,11 @@
       "recreateTitle": "Fully recreate container {name}?",
       "recreateBody": "This pulls the current Docker image (~30-90s). The running worker session will be terminated.",
       "recreateWarn": "Warning: the agent is currently working on a task — the run will be aborted. Confirm to continue anyway (force=true).",
-      "runtimeLabel": "Runtime"
+      "runtimeLabel": "Runtime",
+      "notFoundTitle": "Agent not found",
+      "notFoundHint": "It may have been deleted or archived, or the link is out of date.",
+      "agentLoadFailed": "Could not load this agent.",
+      "backToAgents": "Back to agents"
     },
     "fleetCountWithPaused": "{active} active · {paused} paused",
     "fleetCountActive": "{active} active",
@@ -1533,7 +1537,17 @@
     },
     "jobNotFound": "Job not found",
     "jobNotFoundHint": "It may have been deleted, or the link is out of date.",
-    "jobLoadFailed": "Could not load the job list."
+    "jobLoadFailed": "Could not load the job list.",
+    "nextPaused": "— (paused)",
+    "nextLabel": "Next: {when}",
+    "jobActions": "Actions for {name}",
+    "snoozeMenu": "Snooze for a few hours",
+    "runStatus": {
+      "success": "Succeeded",
+      "failed": "Failed",
+      "running": "Running",
+      "skipped": "Skipped"
+    }
   },
   "office": {
     "title": "Org Chart",
@@ -4681,5 +4695,10 @@
       "unknown": "The test failed for a reason MC does not know."
     },
     "details": "Details from the server"
+  },
+  "notFound": {
+    "title": "Page not found",
+    "hint": "Mission Control has no page at this address. The link may be out of date or mistyped.",
+    "home": "Go to home"
   }
 }
