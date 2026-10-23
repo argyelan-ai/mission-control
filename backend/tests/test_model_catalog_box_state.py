@@ -317,3 +317,41 @@ async def test_host_metrics_remembers_the_answer(auth_client, monkeypatch, fake_
         await auth_client.get(f"/api/v1/hosts/{created['id']}/metrics")
 
     assert await host_liveness.recall(created["id"]) is True
+
+
+# ── PR #971 review (NICE): one definition of "awake", no needless host loads ──
+
+
+@pytest.mark.asyncio
+async def test_page_probe_is_the_watchers_check_with_the_page_limit():
+    """host_liveness asks the same /health check the runtime watcher uses —
+    only with the shorter page-load limit, not a copy of it."""
+    from app.services import runtime_manager
+
+    check = AsyncMock(return_value=True)
+    with patch.object(runtime_manager, "_control_server_reachable", new=check):
+        assert await host_liveness._probe_control_server("http://192.0.2.77:5555") is True
+    check.assert_awaited_once_with("http://192.0.2.77:5555", timeout=host_liveness.PROBE_TIMEOUT_S)
+
+
+@pytest.mark.asyncio
+async def test_cached_success_does_not_load_the_boxes(session, monkeypatch, fake_redis):
+    """A remembered success wins for a dark port — its boxes are not needed."""
+    mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": [{"id": "m"}]}))
+    use_fake_redis(monkeypatch, fake_redis)
+    control_server(monkeypatch, awake=True)
+    host = await sleeper_box(session)
+    await add_runtime(session, host)
+    await mark_live(fake_redis, "box-model", reachable=True, consecutive_failures=0)
+    first = entry_for(await model_catalog.build_catalog(session), "box-model")
+    assert first["status"] == model_catalog.STATUS_OK
+
+    await mark_live(fake_redis, "box-model", reachable=False, consecutive_failures=12)
+    hosts_of = AsyncMock(side_effect=model_catalog._hosts_of)
+    monkeypatch.setattr(model_catalog, "_hosts_of", hosts_of)
+
+    entry = entry_for(await model_catalog.build_catalog(session), "box-model")
+
+    assert entry["status"] == model_catalog.STATUS_OK
+    assert entry["cached"] is True
+    hosts_of.assert_not_awaited()
