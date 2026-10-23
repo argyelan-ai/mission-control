@@ -35,7 +35,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  ArrowLeft, Check, ChevronDown, ChevronLeft, CircleDot, ClipboardCopy, Copy, ExternalLink, Link2, MessagesSquare, MoreHorizontal, Save, Trash2, X,
+  ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, CircleDot, ClipboardCopy, Copy, ExternalLink, Link2, MessagesSquare, MoreHorizontal, Save, Trash2, X,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -46,6 +46,7 @@ import { BAR_SLOT, DetailActionBar, type DetailMainAction } from "@/components/s
 import { findMainAction, runMainAction } from "@/lib/taskDetail/mainAction";
 import { TaskDescription } from "./TaskDescription";
 import { TaskActions } from "./TaskActions";
+import { useScrollEdges } from "@/hooks/useScrollEdges";
 import { TaskComments } from "./TaskComments";
 import { TaskHistory } from "./TaskHistory";
 import { TaskTimeline } from "./TaskTimeline";
@@ -622,6 +623,11 @@ export function TaskDetailBody({
   }
 
   const agent = agents.find((a) => a.id === task.assigned_agent_id);
+  // Nobody holds a card in the operator's review: the agent that delivered
+  // it stays named (round-2 Q5) instead of "Unassigned".
+  const deliverer = !agent && task.delivered_by_agent_id
+    ? agents.find((a) => a.id === task.delivered_by_agent_id)
+    : undefined;
   const isActive = task.status === "in_progress" || task.status === "review";
   const currentUser = useAppStore((s) => s.currentUser);
   const [confirmStatus, setConfirmStatus] = useState<TaskStatus | null>(null);
@@ -635,21 +641,24 @@ export function TaskDetailBody({
   // step's one primary button. Re-read whenever the head region changes
   // (state card swaps, a button enables once a reason is picked).
   const headRef = useRef<HTMLDivElement>(null);
-  const [mainFound, setMainFound] = useState<{ label: string; kind: string | null } | null>(null);
+  const [mainFound, setMainFound] = useState<{ label: string; kind: string | null; waiting: boolean } | null>(null);
   useEffect(() => {
     const root = headRef.current;
     if (!root || !onBack) return;
     const read = () => {
       const found = findMainAction(root);
       setMainFound((prev) => {
-        const next = found ? { label: found.label, kind: found.kind } : null;
-        return prev?.label === next?.label && prev?.kind === next?.kind ? prev : next;
+        const next = found ? { label: found.label, kind: found.kind, waiting: found.el.disabled } : null;
+        return prev?.label === next?.label && prev?.kind === next?.kind && prev?.waiting === next?.waiting
+          ? prev
+          : next;
       });
     };
     read();
     if (typeof MutationObserver === "undefined") return;
     const mo = new MutationObserver(read);
-    mo.observe(root, { subtree: true, childList: true, characterData: true });
+    // `disabled` flips when a reason is picked — the bar dims with it.
+    mo.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["disabled"] });
     return () => mo.disconnect();
   }, [onBack, task.id]);
 
@@ -1062,7 +1071,9 @@ export function TaskDetailBody({
               ? `${tHeads("runs.fact")} · ${pairShort(latestHeadRun)}`
               : agent
                 ? agent.name
-                : t("unassigned")
+                : deliverer
+                  ? t("detail.factAgentDelivered", { name: deliverer.name })
+                  : t("unassigned")
           }
           options={agents.map((a) => ({ id: a.id, label: a.name, active: a.id === task.assigned_agent_id }))}
           onSelect={(id) => id && updateMutation.mutate({ assigned_agent_id: id } as Partial<Task>)}
@@ -1143,6 +1154,14 @@ export function TaskDetailBody({
   );
 
   const commentCount = comments.length;
+  // Phone: 7 tabs are wider than 390 px — show where more of them hide.
+  const tabEdges = useScrollEdges<HTMLDivElement>(`${tabs.length}:${commentCount}`);
+  const scrollTabs = (dir: 1 | -1) => {
+    const strip = tabEdges.el;
+    if (!strip) return;
+    const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    strip.scrollBy({ left: dir * Math.round(strip.clientWidth * 0.7), behavior: reduce ? "auto" : "smooth" });
+  };
   // The next step above already carries the one primary button (K11).
   const headerHasPrimary =
     stateCard?.kind === "needs_you" ||
@@ -1240,46 +1259,84 @@ export function TaskDetailBody({
           )}
           {showActions && (
             <div className="mt-4">
-              <TaskActions task={task} boardId={boardId} primaryTaken={headerHasPrimary} />
+              <TaskActions
+                task={task}
+                boardId={boardId}
+                primaryTaken={headerHasPrimary}
+                // The phone bar mirrors the FIRST primary: this one only
+                // when the next step above has none of its own.
+                mirroredOnPhone={!!onBack && !headerHasPrimary}
+              />
             </div>
           )}
         </div>
 
-        {/* Tabs — one strip at every width, sticky under the context bar */}
-        <div
-          className="sticky top-0 z-10 flex gap-1 px-2 scroll-px-2 @min-[560px]:px-4 @min-[560px]:scroll-px-4 tab-strip"
-          style={{ background: "var(--detail-bg, var(--color-bg-surface))", borderBottom: `1px solid ${C.border}` }}
-          role="tablist"
-          aria-label={t("detail.sectionSelect")}
-        >
-          {tabs.map((x) => {
-            const active = activeTab === x.key;
-            const count = x.key === "comments" && commentCount > 0 ? commentCount : null;
-            return (
-              <button
-                key={x.key}
-                id={tabId(x.key)}
-                data-tab-key={x.key}
-                role="tab"
-                aria-selected={active}
-                aria-controls={panelId}
-                tabIndex={active ? 0 : -1}
-                onKeyDown={onTabKeyDown}
-                onClick={() => selectTab(x.key)}
-                className="shrink-0 h-11 px-2 text-sm whitespace-nowrap cursor-pointer transition-colors -mb-px"
-                style={{
-                  color: active ? C.textPrimary : C.textMuted,
-                  fontWeight: 500,
-                  borderBottom: `2px solid ${active ? C.accent : "transparent"}`,
-                }}
-              >
-                {x.label}
-                {count != null && (
-                  <span aria-hidden className="ml-1 tabular-nums" style={{ color: C.textMuted }}>{count}</span>
-                )}
-              </button>
-            );
-          })}
+        {/* Tabs — one strip at every width, sticky under the context bar.
+            On a narrow phone a chevron at each edge says (and scrolls to)
+            where more tabs hide (round-2 Q5, t4 N9) — replaces the static fade. */}
+        <div className="sticky top-0 z-10">
+          <div
+            ref={tabEdges.ref}
+            className="flex gap-1 px-2 scroll-px-2 @min-[560px]:px-4 @min-[560px]:scroll-px-4 tab-strip tab-strip--hinted"
+            style={{ background: "var(--detail-bg, var(--color-bg-surface))", borderBottom: `1px solid ${C.border}` }}
+            role="tablist"
+            aria-label={t("detail.sectionSelect")}
+          >
+            {tabs.map((x) => {
+              const active = activeTab === x.key;
+              const count = x.key === "comments" && commentCount > 0 ? commentCount : null;
+              return (
+                <button
+                  key={x.key}
+                  id={tabId(x.key)}
+                  data-tab-key={x.key}
+                  role="tab"
+                  aria-selected={active}
+                  aria-controls={panelId}
+                  tabIndex={active ? 0 : -1}
+                  onKeyDown={onTabKeyDown}
+                  onClick={() => selectTab(x.key)}
+                  className="shrink-0 h-11 px-2 text-sm whitespace-nowrap cursor-pointer transition-colors -mb-px"
+                  style={{
+                    color: active ? C.textPrimary : C.textMuted,
+                    fontWeight: 500,
+                    borderBottom: `2px solid ${active ? C.accent : "transparent"}`,
+                  }}
+                >
+                  {x.label}
+                  {count != null && (
+                    <span aria-hidden className="ml-1 tabular-nums" style={{ color: C.textMuted }}>{count}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          {tabEdges.start && (
+            <button
+              type="button"
+              tabIndex={-1}
+              onClick={() => scrollTabs(-1)}
+              aria-label={t("detail.earlierSections")}
+              data-testid="tabs-scroll-start"
+              className="absolute top-0 left-0 h-11 w-11 flex items-center justify-start pl-2 cursor-pointer"
+              style={{ color: C.textSecondary, background: "linear-gradient(to left, transparent, var(--detail-bg, var(--color-bg-surface)) 55%)" }}
+            >
+              <ChevronLeft size={16} aria-hidden />
+            </button>
+          )}
+          {tabEdges.end && (
+            <button
+              type="button"
+              tabIndex={-1}
+              onClick={() => scrollTabs(1)}
+              aria-label={t("detail.moreSections")}
+              data-testid="tabs-scroll-end"
+              className="absolute top-0 right-0 h-11 w-11 flex items-center justify-end pr-2 cursor-pointer"
+              style={{ color: C.textSecondary, background: "linear-gradient(to right, transparent, var(--detail-bg, var(--color-bg-surface)) 55%)" }}
+            >
+              <ChevronRight size={16} aria-hidden />
+            </button>
+          )}
         </div>
 
         <div
@@ -1426,6 +1483,7 @@ export function TaskDetailBody({
             mainFound && mainFound.kind !== "reply"
               ? ({
                   label: mainFound.label,
+                  waiting: mainFound.waiting,
                   onClick: () => {
                     const found = findMainAction(headRef.current);
                     if (found) runMainAction(found.el);

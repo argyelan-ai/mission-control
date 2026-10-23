@@ -37,6 +37,13 @@ logger = logging.getLogger("mc.watchdog")
 # should be working), so a deliberately parked card only alerts once the
 # park itself looks forgotten. A whitelist ("never alert on waiting") would
 # silence genuinely forgotten parked cards forever.
+# "Review decision missing" nudges per review round (round-2 user test,
+# t4 S-neu-5: 12 nudges in 5.5 h on one card, also after the escalation).
+# After the lid, or once the round was escalated (lead informed / operator
+# notice), the agent is not reminded again — the escalation owns the card.
+REVIEW_DECISION_NUDGE_CAP = 3
+REVIEW_ROUND_ESCALATION_EVENTS = ("task.review_escalation", "task.review_stuck")
+
 SILENT_CARD_STATUSES = ("in_progress", "waiting")
 SILENT_CARD_THRESHOLD_MINUTES = {
     "in_progress": 30,
@@ -1325,6 +1332,50 @@ class TaskMonitorMixin:
                 )
                 logger.warning("Review stuck approval for '%s' (%dmin)", task.title, int(age_minutes))
 
+    async def _review_nudges_exhausted(self, session: AsyncSession, task: Task) -> bool:
+        """True when this review round already had REVIEW_DECISION_NUDGE_CAP
+        decision-missing nudges or an escalation.
+
+        The round starts with the latest status move into ``review``; nudges
+        and escalations of earlier rounds do not count. No such move recorded
+        → the whole history counts (the safe direction: fewer nudges).
+        """
+        from app.models.activity import ActivityEvent
+        from sqlalchemy import func
+
+        round_start = (await session.exec(
+            select(func.max(TaskEvent.created_at)).where(
+                TaskEvent.task_id == task.id,
+                TaskEvent.to_status == "review",
+            )
+        )).one()
+
+        def _in_round(stmt):
+            return stmt.where(ActivityEvent.created_at >= round_start) if round_start else stmt
+
+        escalated = (await session.exec(_in_round(
+            select(func.count()).select_from(ActivityEvent).where(
+                ActivityEvent.task_id == task.id,
+                ActivityEvent.event_type.in_(REVIEW_ROUND_ESCALATION_EVENTS),  # type: ignore[attr-defined]
+            )
+        ))).one()
+        if escalated:
+            logger.info("Decision-missing nudge skipped for '%s' — review already escalated", task.title)
+            return True
+        nudged = (await session.exec(_in_round(
+            select(func.count()).select_from(ActivityEvent).where(
+                ActivityEvent.task_id == task.id,
+                ActivityEvent.event_type == "task.review_decision_missing",
+            )
+        ))).one()
+        if nudged >= REVIEW_DECISION_NUDGE_CAP:
+            logger.info(
+                "Decision-missing nudge skipped for '%s' — %d nudges this round (cap %d)",
+                task.title, nudged, REVIEW_DECISION_NUDGE_CAP,
+            )
+            return True
+        return False
+
     async def _check_review_decision_missing(
         self,
         session: AsyncSession,
@@ -1379,6 +1430,10 @@ class TaskMonitorMixin:
         dedup_key = f"mc:watchdog:review_decision_missing:{task.id}"
         if await redis.get(dedup_key):
             return  # Already nudged, cooldown running
+
+        # 7. Lid per review round: N nudges, none after an escalation.
+        if await self._review_nudges_exhausted(session, task):
+            return
 
         # ── Fresh status check BEFORE nudging (identity-map trap) ──
         # `task` was fetched once at the top of _check_review_tasks and, with

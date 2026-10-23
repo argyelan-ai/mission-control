@@ -22,6 +22,7 @@ import { C, LANE, alpha } from "@/lib/colors";
 import { STATUS_LABEL_KEY } from "@/lib/taskDetail/statusLabels";
 import { headListLine, type HeadRun } from "@/lib/heads";
 import { useHeadRuns } from "@/components/heads/useHeadRuns";
+import { taskMatchesAgent } from "@/lib/taskDelivery";
 import type { Agent, Project, Task, TaskStatus } from "@/lib/types";
 import { ProjectReferencesDialog } from "./ProjectReferencesDialog";
 import { EntityIcon } from "@/components/shared/EntityIcon";
@@ -93,7 +94,9 @@ function ListRow({
   const tHeads = useTranslations("heads");
   const locale = useLocale();
   const qc = useQueryClient();
-  const agent = agents.find((a) => a.id === task.assigned_agent_id);
+  // Nobody holds a card in the operator's review — its row still shows the
+  // agent that delivered it (round-2 Q5).
+  const agent = agents.find((a) => a.id === (task.assigned_agent_id ?? task.delivered_by_agent_id));
   const isDone = task.status === "done";
   const headLine = headRun ? headListLine(headRun, tHeads, locale) : null;
 
@@ -418,7 +421,7 @@ export default function TaskListColumn({
     const q = query.trim().toLowerCase();
     return tasks.filter((t) => {
       if (t.parent_task_id) return false;
-      if (agentFilter && t.assigned_agent_id !== agentFilter) return false;
+      if (agentFilter && !taskMatchesAgent(t, agentFilter)) return false;
       if (q && !t.title.toLowerCase().includes(q)) return false;
       return true;
     });

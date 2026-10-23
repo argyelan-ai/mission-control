@@ -1357,3 +1357,11 @@ option {
   }
 }
 
+
+/* Task detail tabs (round-2 Q5, t4 N9): chevron buttons at the edges say
+   where more tabs hide, so the static fade would only dim the last tab at
+   the end of the strip. */
+.tab-strip.tab-strip--hinted {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
