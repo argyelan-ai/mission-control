@@ -46,7 +46,7 @@ export function RuntimePill({ agent, variant = "default" }: Props) {
   // The unprobed rows (DB only): the pill needs model, box and window, never
   // the live state. Round-2 user test (t4 S-neu-1): reading the probed list
   // made the agent page wait 5.1 s for one sleeping box.
-  const { data, isLoading } = useRuntimeRows(!!agent.runtime_id);
+  const { data, isLoading, isError } = useRuntimeRows(!!agent.runtime_id);
 
   const rt = data?.runtimes.find(
     (r) => r.id === agent.runtime_id || r.slug === agent.runtime_id,
@@ -163,6 +163,9 @@ export function RuntimePill({ agent, variant = "default" }: Props) {
       </span>
     );
   }
+
+  // The rows could not be read: say nothing rather than a false "none".
+  if (agent.runtime_id && isError) return null;
 
   // cli-bridge without a matching runtime row — shouldn't happen after
   // migration 0079. Only said once the rows are loaded, and translated.

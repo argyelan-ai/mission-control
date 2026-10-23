@@ -85,6 +85,14 @@ describe("RuntimePill", () => {
     expect(await screen.findByText("No runtime bound")).toBeInTheDocument();
   });
 
+  it("says nothing when the rows cannot be read — never a false 'none'", async () => {
+    const rows = vi.spyOn(api.runtimes, "listRows").mockRejectedValue(new Error("down"));
+    const { container } = renderWithQuery(<RuntimePill agent={mkAgent()} />);
+    await waitFor(() => expect(rows).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId("runtime-pill-loading")).not.toBeInTheDocument());
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("renders host scope chip for host agents without runtime_id", () => {
     renderWithQuery(
       <RuntimePill

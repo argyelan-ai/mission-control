@@ -355,13 +355,6 @@ function AgentRosterRow({
           {agent.provision_status !== "provisioned" && (
             <Pill color={prov.color} size="sm">{t(prov.labelKey)}</Pill>
           )}
-          {/* Per-row pause marker (round-2 user test t4 S5: the header said
-              "3 paused" and no row said which). */}
-          {statusView.paused && (
-            <span title={t("status.pausedHint")} className="shrink-0" data-testid="agent-row-paused">
-              <Pill color={C.warning} size="sm">{t("status.pausedShort")}</Pill>
-            </span>
-          )}
           {agent.harness && (
             // "hermes" (ADR-060, host-only) has no HARNESS_LABELS entry — fall
             // back to the raw value instead of indexing out of bounds.
@@ -391,9 +384,19 @@ function AgentRosterRow({
             </span>
           )}
         </span>
-        {agent.role && (
+        {/* Per-row pause marker (round-2 user test t4 S5: the header said
+            "3 paused" and no row said which). On the second line, so it
+            never pushes the name into "G…" on a phone. */}
+        {(agent.role || statusView.paused) && (
           <span className="block text-[10px] truncate mt-0.5" style={{ color: C.textMuted }}>
             {agent.role}
+            {statusView.paused && (
+              // Muted on purpose: the ocker dot already carries the colour
+              // (DESIGN K6 — one signal, not dot AND word in ocker).
+              <span data-testid="agent-row-paused" title={t("status.pausedHint")}>
+                {agent.role ? " · " : ""}{t("status.pausedShort")}
+              </span>
+            )}
           </span>
         )}
       </Link>

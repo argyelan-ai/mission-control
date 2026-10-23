@@ -23,7 +23,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from tests.conftest import test_engine
 
 
-async def _agent_on_runtime(*, runtime_type: str, slug: str, window: int | None):
+async def _agent_on_runtime(*, runtime_type: str, slug: str, window: int | None, tokens: int | None = None):
     from app.auth import generate_agent_token
     from app.models.agent import Agent
     from app.models.runtime import Runtime
@@ -48,6 +48,7 @@ async def _agent_on_runtime(*, runtime_type: str, slug: str, window: int | None)
             status="idle",
             runtime_id=rt.id,
             context_max=200_000,
+            context_tokens=tokens,
             agent_token_hash=token_hash,
             scopes=["heartbeat", "tasks:read"],
         )
@@ -125,3 +126,18 @@ async def test_runtime_without_a_window_keeps_the_agent_default(client: AsyncCli
     agent = await _fresh(agent_id)
     assert agent.context_max == 200_000
     assert agent.context_tokens == 100_000
+
+
+@pytest.mark.asyncio
+async def test_a_window_change_keeps_the_last_reported_percent(client: AsyncClient):
+    """The stored tokens came from a percent against the old window; until the
+    next reading the page must keep that percent, not shrink it 5x."""
+    agent_id, token = await _agent_on_runtime(
+        runtime_type="openai_compatible", slug="ctx-rescale", window=1_000_000, tokens=20_000
+    )
+
+    await _heartbeat(client, token)  # no reading this cycle
+
+    agent = await _fresh(agent_id)
+    assert agent.context_max == 1_000_000
+    assert agent.context_tokens == 100_000  # still 10 %

@@ -4652,6 +4652,11 @@ async def agent_heartbeat(
 
             _window = agent_shown_window(await session.get(_Runtime, agent.runtime_id))
             if _window and agent.context_max != _window:
+                # The stored tokens were derived from the agent's reported
+                # PERCENT (below) against the old window — keep that percent
+                # until the next reading instead of shrinking it 5x.
+                if agent.context_tokens is not None and agent.context_max:
+                    agent.context_tokens = round(agent.context_tokens / agent.context_max * _window)
                 agent.context_max = _window
         except Exception:  # noqa: BLE001 — a display figure never breaks the heartbeat
             logger.warning("heartbeat: runtime window of %s not readable", agent.name, exc_info=True)

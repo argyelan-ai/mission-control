@@ -376,11 +376,13 @@ rules:
     checked: 2026-10-19
 
   - id: R-runtime-window-one-source
-    says: "The bound runtime's context window has one source (runtime_window.runtime_context_window): every OpenAI-protocol harness is told it (MC_CONTEXT_WINDOW, omp also OMP_CONTEXT_WINDOW; Hermes via model.context_length), and the omp-format chat shows it over a harness-reported window that disagrees. Two harnesses on one runtime never show two different windows."
+    says: "The bound runtime's context window has one source (runtime_window.runtime_context_window): every OpenAI-protocol harness is told it (MC_CONTEXT_WINDOW, omp also OMP_CONTEXT_WINDOW; Hermes via model.context_length), and the omp-format chat shows it over a harness-reported window that disagrees. Two harnesses on one runtime never show two different windows. The agent row's context_max follows the same window on every heartbeat (agent_shown_window), so the agent page and the chat divide by one number; vendor-window harnesses (Claude Code, Grok, Kimi) keep their own."
     source: "ADR-086 (harness x runtime cross-switch); ADR-064 (host model sync)"
     owner: backend/app/services/runtime_window.py
-    applies_to: ["backend/app/services/runtime_window.py", "backend/app/routers/internal.py", "backend/app/services/omp_chat.py", "scripts/hermes-config-patch.py", "scripts/hermes-bridge.py"]
+    applies_to: ["backend/app/services/runtime_window.py", "backend/app/routers/internal.py", "backend/app/services/omp_chat.py", "scripts/hermes-config-patch.py", "scripts/hermes-bridge.py", "backend/app/routers/agents.py"]
     enforced_by:
+      - {test: "backend/tests/test_agent_context_window_from_runtime.py::test_heartbeat_sizes_the_agent_to_its_runtime_window"}
+      - {test: "backend/tests/test_agent_context_window_from_runtime.py::test_vendor_window_agents_keep_their_own_number"}
       - {test: "backend/tests/test_hermes_runtime_window_sync.py::test_parity_omp_and_hermes_show_the_runtime_window"}
       - {test: "backend/tests/test_hermes_runtime_window_sync.py::test_hermes_harness_gets_the_runtime_window"}
       - {test: "backend/tests/test_hermes_bridge_config_sync.py::test_acp_start_patches_config_before_hermes_starts"}
