@@ -205,4 +205,45 @@ describe("ChallengeDetail — effort as its own field (round-2 Q2)", () => {
     expect(within(context).getByRole("button", { name: "Challenges" })).toBeTruthy();
     expect(context.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
+
+  it("the download name carries a chosen level as its key, never 'default' or a UI word", async () => {
+    // Review NICE-2: the list leaves "default" out, the download used to add
+    // "Standard"; and a file name in the UI language ("…-Aus-index.html").
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      challenge({
+        entries: [
+          entry({ model_label: "DeepSeek-V4.1", metrics: { effort_requested: "default" } }),
+          entry({ id: "e-2", model_label: "DeepSeek-V4.1", metrics: { effort_requested: "max" } }),
+        ],
+      }),
+    );
+    const names: string[] = [];
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue({ ok: true, blob: async () => new Blob(["x"]) } as Response);
+    const urlApi = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown };
+    const prevCreate = urlApi.createObjectURL;
+    const prevRevoke = urlApi.revokeObjectURL;
+    urlApi.createObjectURL = () => "blob:x";
+    urlApi.revokeObjectURL = () => {};
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        names.push(this.download);
+      });
+    try {
+      renderDetail();
+      const cards = await screen.findAllByTestId("bench-entry");
+      for (const card of cards) {
+        within(card).getByRole("button", { name: /HTML/i }).click();
+      }
+      await vi.waitFor(() => expect(names).toHaveLength(2));
+      expect(names).toEqual(["DeepSeek-V4.1-index.html", "DeepSeek-V4.1-max-index.html"]);
+    } finally {
+      fetchSpy.mockRestore();
+      clickSpy.mockRestore();
+      urlApi.createObjectURL = prevCreate;
+      urlApi.revokeObjectURL = prevRevoke;
+    }
+  });
 });

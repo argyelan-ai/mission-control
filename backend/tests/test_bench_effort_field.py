@@ -305,3 +305,88 @@ async def test_renderer_features_reads_health_and_fails_closed(monkeypatch):
 ])
 def test_outro_time_names_minutes_and_seconds(ms, shown):
     assert orchestrator._format_outro_time(ms) == shown
+
+
+# ── labels from before round-2 Q2 ("… · Off" / "… · Max") ──────────────────
+# Create used to append the effort word to labels that collided. Those rows
+# are still stored (23.10. test runs); now that the effort is its own pill
+# they must not show it twice — UI, video tile, outro and plain grid.
+
+
+async def _old_style(session, *efforts: str):
+    ch, entries = await _challenge(session, *efforts)
+    for e, effort in zip(entries, efforts):
+        e.model_label = f"{LABEL} · {orchestrator.EFFORT_WORDS[effort]}"
+        session.add(e)
+    ch.status = "review"
+    session.add(ch)
+    await session.commit()
+    return ch, entries
+
+
+@pytest.mark.parametrize(
+    ("label", "effort", "shown"),
+    [
+        (f"{LABEL} · Off", "off", LABEL),
+        (f"{LABEL} · Max", "max", LABEL),
+        (f"{LABEL} · max", "max", LABEL),  # case ignored
+        (f"{LABEL} · Default", "default", LABEL),
+        (f"{LABEL} · Default", None, LABEL),
+        # Not this entry's level: the operator's text stays.
+        (f"{LABEL} · Max", "off", f"{LABEL} · Max"),
+        # Not the form create wrote: part of a model name.
+        ("Qwen Max", "max", "Qwen Max"),
+        ("Qwen-Max", "max", "Qwen-Max"),
+        # Nothing left in front of the word: keep it.
+        (" · Max", "max", " · Max"),
+        (LABEL, "max", LABEL),
+    ],
+)
+def test_display_label_cuts_only_the_own_appended_level(label, effort, shown):
+    assert orchestrator.display_label(label, effort) == shown
+
+
+@pytest.mark.asyncio
+async def test_old_style_labels_are_clean_in_the_api(auth_client, session):
+    ch, _ = await _old_style(session, "off", "max")
+    resp = await auth_client.get(f"/api/v1/bench/challenges/{ch.id}")
+    assert resp.status_code == 200, resp.text
+    entries = resp.json()["entries"]
+    assert [e["model_label"] for e in entries] == [LABEL, LABEL]
+    assert [e["metrics"]["effort_requested"] for e in entries] == ["off", "max"]
+
+
+@pytest.mark.asyncio
+async def test_old_style_labels_are_clean_in_the_video(session, monkeypatch):
+    ch, (off, mx) = await _old_style(session, "off", "max")
+    new = await orchestrator._build_branding_payload(session, ch, [off, mx], effort_field=True)
+    assert [m["label"] for m in new["models"]] == [LABEL, LABEL]
+    assert [r["name"] for r in new["outro_rows"]] == [LABEL, LABEL]
+    assert [m["effort"] for m in new["models"]] == ["Off", "Max"]
+
+    old = await orchestrator._build_branding_payload(session, ch, [off, mx], effort_field=False)
+    assert [r["name"] for r in old["outro_rows"]] == [f"{LABEL} · effort off", f"{LABEL} · effort max"]
+
+    # Plain grid (3+ entries / speed labels): one word, never "· Max · Max".
+    words = orchestrator.video_effort_words([off, mx])
+    assert [orchestrator.video_label(e, words[e.id]) for e in (off, mx)] == [
+        f"{LABEL} · Off", f"{LABEL} · Max",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rename_compares_old_style_labels_as_shown(auth_client, session):
+    """An old "… · Max" and a new "…", both Max, show the same — refused;
+    renaming the old row to its clean name is fine (Off vs Max differ)."""
+    _, (off, mx) = await _old_style(session, "off", "max")
+    resp = await auth_client.patch(f"/api/v1/bench/entries/{mx.id}", json={"model_label": LABEL})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["model_label"] == LABEL
+
+    ch, (a, b) = await _old_style(session, "max", "off")
+    b.metrics = {"effort_requested": "max"}
+    b.model_label = "Other"
+    session.add(b)
+    await session.commit()
+    resp = await auth_client.patch(f"/api/v1/bench/entries/{b.id}", json={"model_label": LABEL})
+    assert resp.status_code == 409, resp.text

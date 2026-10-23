@@ -145,10 +145,17 @@ def _serialize(
     return {
         **challenge.model_dump(),
         "entries": [
-            {**e.model_dump(), "task_state": states.get(e.id)}
+            {**_entry_dict(e), "task_state": states.get(e.id)}
             for e in sorted(entries, key=orchestrator.entry_order_key)
         ],
     }
+
+
+def _entry_dict(entry: BenchEntry) -> dict:
+    """An entry as the UI gets it: ``model_label`` as shown — an effort word
+    that create appended before round-2 Q2 ("DeepSeek · Off") is cut, the
+    level is the pill next to it (orchestrator.display_label)."""
+    return {**entry.model_dump(), "model_label": orchestrator.entry_display_label(entry)}
 
 
 async def _entries_for(session: AsyncSession, challenge_id: uuid.UUID) -> list[BenchEntry]:
@@ -638,7 +645,7 @@ async def update_entry(
     session.add(entry)
     await session.commit()
     await session.refresh(entry)
-    return entry.model_dump()
+    return _entry_dict(entry)
 
 
 @router.post("/challenges/{challenge_id}/recompose")

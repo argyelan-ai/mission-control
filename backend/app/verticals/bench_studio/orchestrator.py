@@ -141,14 +141,40 @@ def entry_effort_level(entry: BenchEntry) -> str | None:
     return None if level == "default" else level
 
 
+def display_label(label: str, effort: str | None) -> str:
+    """The label as the UI and the video show it: without a trailing
+    " · <effort word>" that names the entry's OWN level.
+
+    Before round-2 Q2 create appended that word to labels that would
+    otherwise collide ("DeepSeek · Off" / "DeepSeek · Max"). Those labels
+    are still stored; now that the effort is shown as its own pill they
+    would read "DeepSeek · Off" + "Aus", "… · Max · Max" in the plain grid.
+    Only the exact form create wrote counts (" · " + the English word of
+    this entry's level, case ignored) — a model literally called "Qwen Max",
+    or "DeepSeek · Max" on an Off entry, keeps its text. Stored data is not
+    touched; a rename stores the clean label."""
+    level = effort or "default"
+    suffix = f" · {EFFORT_WORDS.get(level, level.capitalize())}".casefold()
+    stripped = label.strip()
+    if len(stripped) > len(suffix) and stripped.casefold().endswith(suffix):
+        return stripped[: -len(suffix)].rstrip()
+    return label
+
+
+def entry_display_label(entry: BenchEntry) -> str:
+    """:func:`display_label` for a stored entry."""
+    return display_label(entry.model_label, (entry.metrics or {}).get("effort_requested"))
+
+
 def entry_label_key(label: str, source_kind: str, effort: str | None) -> tuple[str, str]:
     """What makes two entries of a challenge the same: label (case and outer
     spaces ignored) AND effort. The effort is its own field since round-2
     Q2 — "DeepSeek" Off and "DeepSeek" Max are two different entries, the
     label is not rewritten to tell them apart. Agent rows have no chosen
-    effort."""
+    effort. The label is compared as shown (:func:`display_label`), so an
+    old "DeepSeek · Max" and a new "DeepSeek", both Max, are the same."""
     level = (effort or "default") if source_kind == "spark" else "default"
-    return (label.strip().casefold(), level)
+    return (display_label(label, level).strip().casefold(), level)
 
 
 def video_effort_words(entries: list[BenchEntry]) -> dict[uuid.UUID, str]:
@@ -174,7 +200,8 @@ def video_effort_words(entries: list[BenchEntry]) -> dict[uuid.UUID, str]:
 def video_label(entry: BenchEntry, effort_word: str = "") -> str:
     """The entry's name on the plain grid video (3+ entries, speed-label
     variant): the label plus " · Max" when the entry has an effort word."""
-    return f"{entry.model_label} · {effort_word}" if effort_word else entry.model_label
+    label = entry_display_label(entry)
+    return f"{label} · {effort_word}" if effort_word else label
 
 
 def _legacy_video_label(entry: BenchEntry) -> str:
@@ -182,8 +209,9 @@ def _legacy_video_label(entry: BenchEntry) -> str:
     of PR #955 ("DeepSeek · effort max") so an older image still shows the
     effort. Not repeated when the label already ends with that word as a
     separate word (labels of runs from before round-2 Q2 carry it, "DeepSeek
-    · Max"). Drop once every renderer image announces the feature."""
-    label = entry.model_label
+    · Max", cut by :func:`display_label`; "Qwen max" by the check below).
+    Drop once every renderer image announces the feature."""
+    label = entry_display_label(entry)
     level = entry_effort_level(entry)
     if not level:
         return label
@@ -713,7 +741,7 @@ async def dispatch_agent_entry(
     task = Task(
         id=uuid.uuid4(),
         board_id=agent.board_id,
-        title=f"[Bench] {challenge.title} — {entry.model_label}"[:200],
+        title=f"[Bench] {challenge.title} — {entry_display_label(entry)}"[:200],
         description=AGENT_BRIEF_TEMPLATE.format(prompt=challenge.prompt_text),
         status="inbox",
         priority="medium",
@@ -1300,7 +1328,7 @@ async def _build_branding_payload(
                         tag = agent.harness.upper()
                     elif agent.name:
                         tag = agent.name.upper()
-        model: dict = {"label": entry.model_label, "tag": tag}
+        model: dict = {"label": entry_display_label(entry), "tag": tag}
         if effort_field:
             model["effort"] = effort_words[entry.id]
         else:
@@ -1332,7 +1360,7 @@ async def _build_branding_payload(
             token_usage = (int(tokens_in), int(tokens_out))
 
         row = {
-            "name": entry.model_label if effort_field else _legacy_video_label(entry),
+            "name": entry_display_label(entry) if effort_field else _legacy_video_label(entry),
             "time": _format_outro_time(duration_ms),
             "size": _format_outro_size(entry.artifact_path),
             "cost": _format_outro_cost(cost_usd, entry.source_kind, metrics.get("locality")),

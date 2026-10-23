@@ -186,7 +186,9 @@ async def test_branding_leaves_default_effort_and_operator_tag_alone(session):
 async def test_outro_does_not_repeat_an_effort_already_in_the_label(session):
     ch, (mx,) = await _challenge(session, "max", label=f"{LABEL} · Max")
     payload = await orchestrator._build_branding_payload(session, ch, [mx])
-    assert payload["outro_rows"][0]["name"] == f"{LABEL} · Max"
+    # Round-2 Q2: the old appended word is cut (display_label), the level is
+    # named once — never "… · Max · effort max".
+    assert payload["outro_rows"][0]["name"] == f"{LABEL} · effort max"
 
 
 @pytest.mark.asyncio

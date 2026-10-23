@@ -174,10 +174,22 @@ export function ChallengeDetail({
   const effortWord = useEffortWord();
   const locale = useLocale();
   // Two rows of the same model differ only by effort since round-2 Q2: names
-  // that leave the card (download file, button label) carry it too.
-  const entryName = (entry: BenchEntry) => {
+  // that leave the card (download file, button label) carry it too — a
+  // chosen level only, like the list ("default" is no choice). The file
+  // name uses the level key, not the UI word: a download is the same file
+  // in every UI language.
+  const chosenLevel = (entry: BenchEntry) => {
     const level = entry.source_kind === "spark" ? entry.metrics?.effort_requested : null;
+    return level && level !== "default" ? level : null;
+  };
+  const entryName = (entry: BenchEntry) => {
+    const level = chosenLevel(entry);
     return level ? `${entry.model_label} · ${effortWord(level)}` : entry.model_label;
+  };
+  const entryFileName = (entry: BenchEntry) => {
+    const level = chosenLevel(entry);
+    const base = level ? `${entry.model_label} · ${level}` : entry.model_label;
+    return `${base.replace(/\s*·\s*/g, "-")}-index.html`;
   };
   const qc = useQueryClient();
   const [draftOpen, setDraftOpen] = useState(false);
@@ -639,7 +651,7 @@ export function ChallengeDetail({
                     onClick={() =>
                       downloadFile(
                         entry.artifact_path!,
-                        `${entryName(entry).replace(/\s*·\s*/g, "-")}-index.html`,
+                        entryFileName(entry),
                         t("notifyDownloadFailed"),
                       )
                     }
