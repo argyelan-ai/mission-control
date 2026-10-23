@@ -18,7 +18,7 @@ import { api } from "@/lib/api";
 import type { VaultNote, VaultNoteType } from "@/lib/types";
 import type { VaultScope } from "@/hooks/useVaultSearch";
 import type { VaultFilterState } from "./VaultFilterStrip";
-import { useVaultSearch } from "@/hooks/useVaultSearch";
+import { useVaultSearch, VAULT_SEARCH_LIMIT } from "@/hooks/useVaultSearch";
 import { useVaultList } from "@/hooks/useVaultList";
 import { useVaultStream } from "@/hooks/useVaultStream";
 import { useVoiceHighlight } from "@/hooks/useVoiceHighlight";
@@ -120,6 +120,15 @@ export default function VaultMemoryPage() {
     type: urlType,
   });
   const [selectedPath, setSelectedPath] = useState<string | null>(urlPath ?? null);
+  // The URL wins: when the browser steps back (phone swipe / back button) and
+  // ?path= leaves the URL, the open note closes — and a forward step reopens
+  // it. Clicks set both state and URL, so this only acts on history moves.
+  useEffect(() => {
+    setSelectedPath(urlPath ?? null);
+  }, [urlPath]);
+  // Phone only: did the open note come from a tap in the list (then there is
+  // a list entry in the history to step back to) or from a link/reload?
+  const openedFromListRef = useRef(false);
 
   // ── Filter panel toggle ──
   // Default collapsed (mobile AND desktop) — the goal is to give the list back
@@ -163,7 +172,7 @@ export default function VaultMemoryPage() {
       path?: string | null;
       view?: VaultView;
       task?: string | null;
-    }) => {
+    }, mode: "replace" | "push" = "replace") => {
       const params = new URLSearchParams();
       const q = "q" in overrides ? overrides.q : query;
       const scope = "scope" in overrides ? overrides.scope : filters.scope;
@@ -182,7 +191,12 @@ export default function VaultMemoryPage() {
       if (task) params.set("task", task);
 
       const qs = params.toString();
-      router.replace(qs ? `/memory?${qs}` : "/memory", { scroll: false });
+      const href = qs ? `/memory?${qs}` : "/memory";
+      // Default replace: filters, typing and desktop note switching change
+      // the URL in place — a history entry per keystroke/click would make
+      // "back" tedious. Opening a note on the phone pushes (see below).
+      if (mode === "push") router.push(href, { scroll: false });
+      else router.replace(href, { scroll: false });
     },
     [query, filters, selectedPath, view, urlTask, router]
   );
@@ -211,11 +225,25 @@ export default function VaultMemoryPage() {
 
   function handleSelectNote(note: VaultNote) {
     setSelectedPath(note.path);
-    pushUrl({ path: note.path });
+    // Phone: the note is a full-screen page over the list. Push a history
+    // entry so the browser back button / iOS swipe returns to the list
+    // instead of leaving Memory (round-3 user test t4 S6).
+    if (isMobile) {
+      openedFromListRef.current = true;
+      pushUrl({ path: note.path }, "push");
+    } else {
+      pushUrl({ path: note.path });
+    }
   }
 
   function handleClosePanel() {
     setSelectedPath(null);
+    if (isMobile && openedFromListRef.current) {
+      // Same step as the swipe: back to the list entry we pushed from.
+      openedFromListRef.current = false;
+      router.back();
+      return;
+    }
     pushUrl({ path: null });
   }
 
@@ -326,7 +354,10 @@ export default function VaultMemoryPage() {
   const didAutoSelectRef = useRef(false);
   useEffect(() => {
     if (didAutoSelectRef.current) return;
-    if (isMobile) return;
+    // Read the viewport directly: on the first commit `isMobile` is still its
+    // initial false (its effect has not re-rendered yet), and a list that is
+    // already in the query cache would auto-open a note over the phone list.
+    if (isMobile || window.matchMedia("(max-width: 767px)").matches) return;
     if (notes.length === 0) return; // wait for the list to load
     didAutoSelectRef.current = true;
     if (selectedPath) return; // deeplink / restored state — respect it
@@ -334,8 +365,10 @@ export default function VaultMemoryPage() {
     pushUrl({ path: notes[0].path });
   }, [notes, selectedPath, isMobile, pushUrl]);
 
-  // Stats for header
+  // Stats for header. A search returns at most VAULT_SEARCH_LIMIT hits, so a
+  // full page means "at least that many" — shown as "100+", not "100".
   const noteCount = isSearchMode ? notes.length : totalCount;
+  const noteCountCapped = isSearchMode && !isTaskMode && notes.length >= VAULT_SEARCH_LIMIT;
   const agentCount = knownAgents.length;
 
   const isGraphView = view === "graph";
@@ -401,6 +434,7 @@ export default function VaultMemoryPage() {
         {/* Header */}
         <VaultHeader
           noteCount={noteCount}
+          noteCountCapped={noteCountCapped}
           agentCount={agentCount}
           actions={
             <CreateVaultNoteModal
@@ -464,7 +498,7 @@ export default function VaultMemoryPage() {
                 className="font-mono uppercase tracking-[0.14em] shrink-0"
                 style={{ fontSize: "10px", color: C.accent }}
               >
-                task-klammer
+                {t("taskBannerLabel")}
               </span>
               <span
                 className="text-xs truncate"
@@ -503,7 +537,7 @@ export default function VaultMemoryPage() {
               className="font-mono uppercase tracking-[0.14em]"
               style={{ fontSize: "10px", color: C.accent }}
             >
-              voice highlight
+              {t("voiceHighlightLabel")}
             </span>
             <span
               className="font-mono"

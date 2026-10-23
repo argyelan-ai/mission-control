@@ -36,17 +36,7 @@ export const TYPE_COLORS: Record<VaultNoteType, string> = {
                              //           by brightness instead of hue
 };
 
-// ── Human-readable type labels (German) ──────────────────────────────────────
-
-export const TYPE_LABELS_DE: Record<VaultNoteType, string> = {
-  lesson:       "Lesson",
-  knowledge:    "Wissen",
-  reference:    "Referenz",
-  journal:      "Journal",
-  weekly_review:"Weekly Review",
-  note:         "Notiz",
-  deliverable:  "Anhang",
-};
+// Type labels live in the i18n catalog (vault.noteType.*).
 
 // ── Node sizing ───────────────────────────────────────────────────────────────
 

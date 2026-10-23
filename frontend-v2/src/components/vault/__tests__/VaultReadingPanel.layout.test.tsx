@@ -33,7 +33,10 @@ vi.mock("@/hooks/useVaultNote", () => ({
     isError: false,
   }),
 }));
-vi.mock("../VaultMarkdown", () => ({ VaultMarkdown: () => <div data-testid="note-body">Body text</div> }));
+vi.mock("../VaultMarkdown", () => ({
+  VaultMarkdown: () => <div data-testid="note-body">Body text</div>,
+  stripLeadingTitle: (content: string) => content,
+}));
 vi.mock("../AttachmentPreview", () => ({ AttachmentPreview: () => null }));
 
 import { VaultReadingPanel } from "../VaultReadingPanel";

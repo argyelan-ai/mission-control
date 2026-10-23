@@ -25,6 +25,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useLocale, useTranslations } from "next-intl";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Link2, Pencil, Trash2, X } from "lucide-react";
@@ -32,6 +33,7 @@ import { Check, Link2, Pencil, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useVaultNote } from "@/hooks/useVaultNote";
 import { VaultMarkdown } from "@/components/vault/VaultMarkdown";
+import { formatLongDate, noteTypeLabel } from "@/components/vault/VaultNoteRow";
 import { colorForAgent } from "@/components/vault/agentColors";
 import { ConfirmDeleteModal } from "@/components/vault/ConfirmDeleteModal";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
@@ -184,6 +186,8 @@ export function NoteSidePanel({
   onWikilinkClick,
   className,
 }: NoteSidePanelProps) {
+  const t = useTranslations("vault");
+  const locale = useLocale();
   const { data, isLoading, isError } = useVaultNote(path);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -210,7 +214,7 @@ export function NoteSidePanel({
       setEditError(null);
     },
     onError: (err: Error) => {
-      setEditError(err.message || "Save failed");
+      setEditError(err.message || t("saveFailed"));
     },
   });
 
@@ -241,25 +245,12 @@ export function NoteSidePanel({
   const fmDate = typeof fm.date === "string" ? fm.date : null;
   let displayDate: string | null = null;
   if (fmDate) {
-    const d = new Date(fmDate);
-    if (!isNaN(d.getTime())) {
-      displayDate = d
-        .toLocaleDateString("en-US", {
-          month: "long",
-          day: "numeric",
-          year: "numeric",
-        })
-        .toUpperCase();
-    }
+    if (!isNaN(new Date(fmDate).getTime())) displayDate = formatLongDate(fmDate, locale);
   }
   if (!displayDate && path) {
     const stem = path.split("/").pop() ?? "";
     const m = stem.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (m) {
-      const months = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"];
-      const monthName = months[parseInt(m[2], 10) - 1] ?? m[2];
-      displayDate = `${monthName} ${parseInt(m[3], 10)}, ${m[1]}`;
-    }
+    if (m) displayDate = formatLongDate(`${m[1]}-${m[2]}-${m[3]}T12:00:00`, locale);
   }
 
   const startEdit = useCallback(() => {
@@ -328,7 +319,7 @@ export function NoteSidePanel({
             background: "var(--color-bg-surface)",
             borderLeft: "1px solid var(--color-border)",
           }}
-          aria-label="Note detail panel"
+          aria-label={t("noteDetail")}
         >
           {/* ── Header ─────────────────────────────────────────────────────── */}
           <header
@@ -358,8 +349,8 @@ export function NoteSidePanel({
                         cursor: saveMutation.isPending ? "default" : "pointer",
                         opacity: saveMutation.isPending ? 0.4 : 1,
                       }}
-                      aria-label="Cancel edit"
-                      title="Cancel (Esc)"
+                      aria-label={t("cancelEdit")}
+                      title={t("cancelEditTitle")}
                     >
                       <X style={{ width: "13px", height: "13px" }} />
                     </button>
@@ -374,8 +365,8 @@ export function NoteSidePanel({
                         border: `1px solid ${alpha(C.online, 0.3)}`,
                         cursor: saveMutation.isPending ? "default" : "pointer",
                       }}
-                      aria-label="Save edit"
-                      title="Save (⌘S)"
+                      aria-label={t("saveEdit")}
+                      title={t("saveEditTitle")}
                     >
                       {saveMutation.isPending ? (
                         <span
@@ -416,8 +407,8 @@ export function NoteSidePanel({
                         (e.currentTarget as HTMLButtonElement).style.background =
                           "transparent";
                       }}
-                      aria-label="Edit note"
-                      title="Edit"
+                      aria-label={t("editNote")}
+                      title={t("edit")}
                     >
                       <Pencil style={{ width: "12px", height: "12px" }} />
                     </button>
@@ -442,8 +433,8 @@ export function NoteSidePanel({
                         (e.currentTarget as HTMLButtonElement).style.background =
                           "transparent";
                       }}
-                      aria-label="Delete note"
-                      title="Move note to trash"
+                      aria-label={t("deleteNote")}
+                      title={t("moveToTrash")}
                     >
                       <Trash2 style={{ width: "13px", height: "13px" }} />
                     </button>
@@ -465,7 +456,7 @@ export function NoteSidePanel({
                         (e.currentTarget as HTMLButtonElement).style.color =
                           "var(--color-text-muted)";
                       }}
-                      aria-label="Close note panel"
+                      aria-label={t("closeNote")}
                     >
                       <X style={{ width: "14px", height: "14px" }} />
                     </button>
@@ -493,7 +484,7 @@ export function NoteSidePanel({
                     className="font-mono"
                     style={{ fontSize: "10px", color: "var(--color-text-muted)" }}
                   >
-                    {noteType}
+                    {noteTypeLabel(t, noteType)}
                   </span>
                 </>
               )}
@@ -520,7 +511,7 @@ export function NoteSidePanel({
                 type="text"
                 value={draftTitle}
                 onChange={(e) => setDraftTitle(e.target.value)}
-                placeholder="Title"
+                placeholder={t("titlePlaceholder")}
                 className="w-full bg-transparent outline-none"
                 style={{
                   fontSize: "17px",
@@ -561,7 +552,7 @@ export function NoteSidePanel({
                   type="text"
                   value={draftTags}
                   onChange={(e) => setDraftTags(e.target.value)}
-                  placeholder="tag1, tag2"
+                  placeholder={t("tagsPlaceholder")}
                   className="w-full bg-transparent outline-none font-mono"
                   style={{
                     fontSize: "11.5px",
@@ -636,7 +627,7 @@ export function NoteSidePanel({
               <textarea
                 value={draftBody}
                 onChange={(e) => setDraftBody(e.target.value)}
-                placeholder="Markdown body"
+                placeholder={t("bodyPlaceholder")}
                 spellCheck={false}
                 className="w-full h-full bg-transparent outline-none resize-none font-mono"
                 style={{

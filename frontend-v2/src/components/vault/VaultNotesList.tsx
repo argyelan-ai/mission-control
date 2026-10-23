@@ -1,9 +1,9 @@
 "use client";
 
 import { useRef, useCallback } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import type { VaultNote } from "@/lib/types";
-import { VaultNoteRow, MonthMarker, parseDateFromNote } from "./VaultNoteRow";
+import { VaultNoteRow, MonthMarker, parseDateFromNote, formatMonthLabel } from "./VaultNoteRow";
 import { VaultEmptyState } from "./VaultEmptyState";
 
 // ── Grouping ──────────────────────────────────────────────────────────────────
@@ -12,17 +12,24 @@ import { VaultEmptyState } from "./VaultEmptyState";
 // path stem, then null. Far fewer notes end up in "Undated" than the previous
 // path-only logic (most vault notes name files by slug, not date prefix).
 
-function groupByMonth(notes: VaultNote[]): Array<{ label: string; notes: VaultNote[] }> {
-  const groups: Map<string, VaultNote[]> = new Map();
+// Keys are locale-neutral ("2026-10"); the label is formatted in the UI
+// language ("Oct 2026" / "Okt. 2026"). null label = undated.
+function groupByMonth(
+  notes: VaultNote[],
+  locale: string,
+): Array<{ key: string; label: string | null; notes: VaultNote[] }> {
+  const groups: Map<string, { label: string | null; notes: VaultNote[] }> = new Map();
 
   for (const note of notes) {
     const date = parseDateFromNote(note);
-    const label = date ? date.monthKey : "Undated";
-    if (!groups.has(label)) groups.set(label, []);
-    groups.get(label)!.push(note);
+    const key = date ? date.monthKey : "undated";
+    if (!groups.has(key)) {
+      groups.set(key, { label: date ? formatMonthLabel(date, locale) : null, notes: [] });
+    }
+    groups.get(key)!.notes.push(note);
   }
 
-  return Array.from(groups.entries()).map(([label, notes]) => ({ label, notes }));
+  return Array.from(groups.entries()).map(([key, g]) => ({ key, ...g }));
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -53,6 +60,7 @@ export function VaultNotesList({
   onLoadMore,
 }: VaultNotesListProps) {
   const t = useTranslations("vault");
+  const locale = useLocale();
   const observerRef = useRef<IntersectionObserver | null>(null);
 
   // Infinite scroll sentinel
@@ -139,13 +147,13 @@ export function VaultNotesList({
     return <VaultEmptyState query={query} scope={scope} />;
   }
 
-  const groups = groupByMonth(notes);
+  const groups = groupByMonth(notes, locale);
 
   return (
     <div className="flex flex-col">
-      {groups.map(({ label, notes: groupNotes }) => (
-        <div key={label}>
-          <MonthMarker label={label === "Undated" ? t("undated") : label} />
+      {groups.map(({ key, label, notes: groupNotes }) => (
+        <div key={key}>
+          <MonthMarker label={label ?? t("undated")} />
           <div>
             {groupNotes.map((note) => (
               <VaultNoteRow
