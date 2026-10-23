@@ -27,6 +27,7 @@ import type { ScheduledJob } from "@/lib/types";
 import cronstrue from "cronstrue/i18n";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { nextRunRelative, relativeJobTime } from "./jobDisplay";
 
 /**
  * Column template shared by the table header (JobsTable) and every row. They
@@ -69,7 +70,7 @@ function tagColor(tag: string): string {
 
 type Translate = (key: string, values?: Record<string, string | number>) => string;
 
-function describeTrigger(j: ScheduledJob, t: Translate, locale: string): string {
+export function describeTrigger(j: ScheduledJob, t: Translate, locale: string): string {
   if (j.schedule_cron) {
     try {
       return cronstrue.toString(j.schedule_cron, { locale: locale === "de" ? "de" : "en" });
@@ -87,28 +88,7 @@ function describeTrigger(j: ScheduledJob, t: Translate, locale: string): string 
   return "—";
 }
 
-function relativeTime(iso: string | null, t: Translate): string {
-  if (!iso) return "—";
-  const ts = new Date(iso).getTime();
-  const diff = Date.now() - ts;
-  if (diff < 0) {
-    const mAhead = Math.floor(-diff / 60000);
-    if (mAhead < 60) return t("inM", { count: mAhead });
-    const hAhead = Math.floor(mAhead / 60);
-    if (hAhead < 48) return t("inH", { count: hAhead });
-    const dAhead = Math.floor(hAhead / 24);
-    return t("inD", { count: dAhead });
-  }
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return t("justNow");
-  if (mins < 60) return t("mAgo", { count: mins });
-  const hours = Math.floor(mins / 60);
-  if (hours < 48) return t("hAgo", { count: hours });
-  const days = Math.floor(hours / 24);
-  return t("dAgo", { count: days });
-}
-
-function StatusDot({ job }: { job: ScheduledJob }) {
+export function StatusDot({ job }: { job: ScheduledJob }) {
   const t = useTranslations("schedule");
   if (!job.enabled) {
     return (
@@ -260,7 +240,7 @@ export function JobRow({
         {describeTrigger(job, t, locale)}
       </div>
 
-      <div className="text-xs" style={{ color: C.textSecondary }}>{relativeTime(job.next_run_at, t)}</div>
+      <div className="text-xs" style={{ color: C.textSecondary }}>{nextRunRelative(job, t)}</div>
 
       <div className="flex items-center gap-1.5 text-xs" style={{ color: C.textSecondary }}>
         {job.last_run_status === "success" && (
@@ -269,7 +249,7 @@ export function JobRow({
         {job.last_run_status === "failed" && (
           <XCircle size={12} style={{ color: C.error }} />
         )}
-        <span>{relativeTime(job.last_run_at, t)}</span>
+        <span>{relativeJobTime(job.last_run_at, t)}</span>
       </div>
 
       <div className="min-w-0 truncate text-xs" style={{ color: C.textSecondary }}>

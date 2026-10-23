@@ -18,6 +18,10 @@ export interface KpiCell {
   copyValue?: string;
   /** Tooltip der ganzen Zelle (z.B. "In use": wer die Box gerade nutzt). */
   title?: string;
+  /** A short sentence under the label, in normal type — for what is said to
+   *  a person, not a machine value (round-3 r2 N2: "no agent" in the
+   *  mono-caps label wrapped on a phone). */
+  note?: string;
   testId?: string;
   /** Tap target content (review fix round 5, bauplan §4: "Antippen zeigt
    *  wer" — a bare `title` tooltip never fires on a phone). When set, the
@@ -55,6 +59,15 @@ function CellBody({ cell, copied, onCopy }: { cell: KpiCell; copied: boolean; on
         </span>
       )}
       <span className="label-sys">{cell.label}</span>
+      {cell.note && (
+        <span
+          className="text-xs"
+          style={{ color: C.textMuted }}
+          data-testid={cell.testId ? `${cell.testId}-note` : undefined}
+        >
+          {cell.note}
+        </span>
+      )}
     </>
   );
 }

@@ -44,6 +44,8 @@ export interface TaskStepsEntry {
   error: boolean;
   /** `{"applies": false}` from the server. */
   notApplicable: boolean;
+  /** When the current answer came in (ms; 0 = none yet). */
+  updatedAt: number;
   retry(): void;
 }
 
@@ -119,6 +121,7 @@ export function useTaskSteps(
       loading: !!r && r.isFetching && !r.data,
       error: !!r && r.isError,
       notApplicable,
+      updatedAt: r?.dataUpdatedAt ?? 0,
       retry: () => void r?.refetch(),
     });
   });

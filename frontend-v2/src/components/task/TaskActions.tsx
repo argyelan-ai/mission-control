@@ -8,6 +8,7 @@ import type { Task, ReviewDecision } from "@/lib/types";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { PRIMARY_BTN, PRIMARY_STYLE, QUIET_BTN, RAISED } from "./detail/nextStepStyle";
 import { isOperatorReview, isSelfReviewStall } from "@/lib/reviewRouting";
+import { isAgentWorking } from "@/lib/agentStatus";
 import { useTranslations } from "next-intl";
 import { useKeyboardOpen } from "@/hooks/useKeyboardOpen";
 
@@ -218,13 +219,37 @@ export function TaskActions({ task, boardId, primaryTaken = false, mirroredOnPho
     },
   });
 
-  // A review has a run only while an agent holds the card. The operator's
-  // own review (explicit request, or a card nobody holds) has nothing to
-  // stop — "Stop run" there was a button without an effect (round-2 Q5,
-  // t4 N-neu-6). A self-review stall (the builder still holds its own card)
-  // keeps it: the agent still gets watchdog reminders, and Stop run
-  // (run_control=stopped) is the UI's way to quiet them (PR #961 review NICE 2).
-  const agentHoldsReview = task.status === "review" && !!task.assigned_agent_id && !task.human_review_required;
+  // A review has a run only while an agent works on it. The operator's own
+  // review (explicit request, or a card nobody holds) has nothing to stop —
+  // "Stop run" there was a button without an effect (round-2 Q5, t4
+  // N-neu-6). Neither has a card whose agent sits idle (round-3 t4 Q5 rest:
+  // "in review · with <agent>", the agent idle) or works on another task.
+  // A waiting review is quieted with Hold in the decision panel instead
+  // (review_decision=hold stops the reminders like run_control does).
+  //
+  // The run is read from the agent itself, not from its current_task_id: a
+  // worker's backend never points that at a review card (it is set only for
+  // in_progress, the heartbeat clears it for anything else), so a reviewer
+  // that really works on the card reports status "working" with the pointer
+  // empty (PR #963 review MUST 1). Pointer empty or on this card = this run;
+  // pointer on another task = the agent works elsewhere.
+  const reviewByAgent =
+    task.status === "review" && !!task.assigned_agent_id && !task.human_review_required && task.dispatched_at != null;
+  const { data: agents } = useQuery({
+    queryKey: ["agents", boardId],
+    queryFn: () => api.agents.list(boardId),
+    staleTime: 60_000,
+    // The run starts and ends without the card changing: look again while
+    // the button depends on it, so it does not stay a minute out of date.
+    refetchInterval: reviewByAgent ? 15_000 : false,
+    enabled: reviewByAgent,
+  });
+  // Unknown while the agents load: no button that may vanish a moment later.
+  const reviewer = reviewByAgent ? agents?.find((a) => a.id === task.assigned_agent_id) : undefined;
+  const agentHoldsReview =
+    !!reviewer &&
+    (isAgentWorking(reviewer.status) || reviewer.run_state === "running") &&
+    (reviewer.current_task_id == null || reviewer.current_task_id === task.id);
   const hasActiveRun =
     task.status === "in_progress" ||
     (task.status === "inbox" && task.dispatched_at != null) ||

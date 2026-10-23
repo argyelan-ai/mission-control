@@ -205,6 +205,59 @@ describe("ModelCatalogSection", () => {
     expect(screen.getByTestId("catalog-provider")).toHaveAttribute("data-status", "unreachable");
   });
 
+  // Round-3 user test (t4 S3): a box the runtime watcher already knows is
+  // dark is not probed (the tab waited 30.7 s for two sleeping providers).
+  // It says so in plain words — calm, not an error, and not "no models".
+  it("status asleep: says the box is asleep or off, calmly, and how to ask anyway", async () => {
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "openai:sleepy-box",
+          protocol: "openai",
+          display_name: undefined as unknown as string,
+          label: "Sleepy Box",
+          status: "asleep",
+          reason: null,
+          models: [],
+          new_count: 0,
+        }),
+      ]),
+    );
+    renderSection();
+
+    const banner = await screen.findByTestId("catalog-status-banner");
+    expect(banner).toHaveTextContent(/asleep or off/);
+    expect(banner).toHaveTextContent(/Refetch/);
+    expect(banner).not.toHaveTextContent(/Runtime offline/);
+    expect(screen.getByTestId("catalog-provider")).toHaveAttribute("data-status", "asleep");
+    // The provider's own name, not its internal key "openai:sleepy-box".
+    expect(screen.getByText("Sleepy Box")).toBeInTheDocument();
+    expect(screen.queryByText("openai:sleepy-box")).not.toBeInTheDocument();
+    // Nothing to list, nothing to unfold: the group stays closed.
+    expect(screen.queryByText(/No list available/)).not.toBeInTheDocument();
+  });
+
+  // PR #964 review: the slot name "<box> :8000 (aktuell: <model>)" repeated the
+  // model that is listed right below it, and was cut on the phone.
+  it("drops the slot's '(aktuell: …)' suffix while the models are listed", async () => {
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "openai:slot-box",
+          protocol: "openai",
+          display_name: undefined as unknown as string,
+          label: "Slot Box :8000 (aktuell: Some-Model-1017)",
+          models: [mkModel("Some-Model-1017", true)],
+          new_count: 0,
+        }),
+      ]),
+    );
+    renderSection();
+
+    expect(await screen.findByText("Slot Box :8000")).toBeInTheDocument();
+    expect(screen.queryByText(/aktuell:/)).not.toBeInTheDocument();
+  });
+
   it("status cli_config: names the CLI config as the source, not 'live' and not 'Manifest'", async () => {
     vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
       mkList([

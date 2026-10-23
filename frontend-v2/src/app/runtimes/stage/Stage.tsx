@@ -302,7 +302,11 @@ export function Stage({
     { value: fmtCtx(live?.served_context_len ?? runtime.max_context_len), label: t("kpiContext") },
     {
       value: tps != null ? t("tpsValue", { tps: Math.round(tps) }) : "–",
-      label: loadWithoutAgent ? t("kpiSpeedModeNoAgent", { mode: modeLabel }) : t("kpiSpeedMode", { mode: modeLabel }),
+      label: t("kpiSpeedMode", { mode: modeLabel }),
+      // A sentence for people, not a machine value: it used to ride in the
+      // mono-caps label ("SPEED · DUO · NO AGENT") and wrapped on a phone
+      // (round-3 r2 N2) without saying who loads the box (t3 NICE-3).
+      note: loadWithoutAgent ? t("kpiSpeedNoAgentNote") : undefined,
       title: loadWithoutAgent ? t("kpiSpeedNoAgentHint") : undefined,
       testId: "kpi-speed",
     },
@@ -317,8 +321,10 @@ export function Stage({
       // lives in the message catalog, where a locale-aware render can
       // actually exercise both branches.
       unit: agentsUnknown ? undefined : t("kpiWorkingUnit", { count: workingCount }),
+      // Unknown is one "–" over the plain label — "– · – connected" read
+      // like a broken figure (round-3 t3 NICE-5c).
       label: agentsUnknown
-        ? t("kpiConnectedUnknown")
+        ? t("kpiAgents")
         : connectedCount > 0
           ? t("kpiConnected", { count: connectedCount })
           : t("kpiConnectedNone"),
@@ -346,10 +352,14 @@ export function Stage({
       <div className="relative px-4 pt-4" style={{ zIndex: 2, opacity: status === "switching" ? 0.75 : 1 }}>
         <div className="flex items-center gap-2.5">
           <span className="w-2 h-2 rounded-full shrink-0" style={{ background: dotColor }} />
+          {/* Wraps to a second line instead of being cut: on a phone the
+              cut fell into the version ("DeepSeek V4.1 Flash 1…"), the one
+              part that tells two recipes apart (round-3 t3 NICE-4). */}
           <span
-            className="display font-semibold text-[22px] sm:text-[28px] flex-1 min-w-0 truncate"
+            className="display font-semibold text-[22px] sm:text-[28px] flex-1 min-w-0 line-clamp-2 break-words leading-tight"
             style={{ color: C.textPrimary }}
             title={runtime.display_name}
+            data-testid="stage-title"
           >
             {shortModelTitle(runtime.display_name)}
           </span>

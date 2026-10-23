@@ -709,6 +709,8 @@
       "workLanguageLabel": "Work",
       "workLanguageTitle": "Work-Sprache — Agent-zu-Agent-Verkehr (Task-Kommentare, Reflexionen, Handoffs, Checklist-Items, Deliverable-Text)",
       "lastSeenAgo": "Zuletzt gesehen: {ago}",
+      "contextReportedLabel": "Kontext · zuletzt gemeldet",
+      "contextReportedHint": "Vom Agenten zuletzt gemeldet, meist aus seiner Arbeits-Sitzung. Der Chat zeigt den Wert seiner eigenen Sitzung – darum kann die Zahl dort abweichen.",
       "provisioningFailed": "Provisionierung fehlgeschlagen:",
       "restartWorker": "Worker neu starten",
       "restartWorkerTitle": "Worker-Session neu starten",
@@ -729,7 +731,11 @@
       "recreateTitle": "Container {name} komplett neu erstellen?",
       "recreateBody": "Das zieht das aktuelle Docker-Image (~30-90s). Die laufende Worker-Session wird beendet.",
       "recreateWarn": "Achtung: Der Agent arbeitet gerade an einer Aufgabe — der Lauf wird abgebrochen. Bestätige, um trotzdem fortzufahren (force=true).",
-      "runtimeLabel": "Runtime"
+      "runtimeLabel": "Runtime",
+      "notFoundTitle": "Agent nicht gefunden",
+      "notFoundHint": "Vielleicht wurde er gelöscht oder archiviert, oder der Link ist veraltet.",
+      "agentLoadFailed": "Dieser Agent konnte nicht geladen werden.",
+      "backToAgents": "Zurück zu den Agenten"
     },
     "fleetCountWithPaused": "{active} aktiv · {paused} pausiert",
     "fleetCountActive": "{active} aktiv",
@@ -1033,7 +1039,7 @@
     "contextUsed": "Kontext: {pct}% belegt",
     "contextTokensUsed": "≈{used}/{win} belegt. ",
     "contextSourceEstimate": "Schätzung",
-    "contextRingTooltip": "{detail}Quelle: {source}. Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt.",
+    "contextRingTooltip": "Dieser Chat: {detail}Quelle: {source}. Die Agent-Seite zeigt den zuletzt gemeldeten Wert der Arbeits-Sitzung, die CLI-Statuszeile den Rest bis zur Auto-Komprimierung — andere Sitzung bzw. Basis, beide korrekt.",
     "contextRingCacheHint": " Cache {rate}.",
     "contextPanelTitle": "Kontext",
     "contextPanelSegment": {
@@ -1533,7 +1539,17 @@
     },
     "jobNotFound": "Job nicht gefunden",
     "jobNotFoundHint": "Vielleicht wurde er gelöscht, oder der Link ist veraltet.",
-    "jobLoadFailed": "Die Job-Liste konnte nicht geladen werden."
+    "jobLoadFailed": "Die Job-Liste konnte nicht geladen werden.",
+    "nextPaused": "— (pausiert)",
+    "nextLabel": "Nächster: {when}",
+    "jobActions": "Aktionen für {name}",
+    "snoozeMenu": "Für einige Stunden aussetzen",
+    "runStatus": {
+      "success": "Erfolgreich",
+      "failed": "Fehlgeschlagen",
+      "running": "Läuft",
+      "skipped": "Übersprungen"
+    }
   },
   "office": {
     "title": "Organigramm",
@@ -3408,6 +3424,8 @@
       "statusCliConfigHeadline": "Live-Abfrage fehlgeschlagen — die Liste kommt aus der Config des CLI selbst (dieselbe Datei, die das Tool zur Modellwahl liest). Aktuell, aber nicht vom Anbieter bestätigt.",
       "statusCredentialMissingLabel": "Zugangsdaten fehlen",
       "statusCredentialMissingHeadline": "Die Zugangsdaten sind für das Backend nicht erreichbar — der Anbieter konnte nicht abgefragt werden. Das ist keine leere Modell-Liste.",
+      "statusAsleepLabel": "schläft oder aus",
+      "statusAsleepHeadline": "Die Box antwortet seit mehreren Prüfungen nicht – sie schläft oder ist aus. Nicht abgefragt, damit die Seite nicht wartet. „Neu abfragen“ fragt trotzdem.",
       "statusUnreachableLabel": "Runtime offline",
       "statusUnreachableHeadline": "Runtime offline — der Endpoint antwortet nicht. Ob es dort Modelle gibt, ist unbekannt.",
       "contextK": "{n}k Kontext",
@@ -3736,7 +3754,6 @@
       "inUsePaused": "Pausiert: {names}",
       "kpiEndpoint": "Endpunkt",
       "freeLineNoReadings": "kein Modell · keine Messwerte",
-      "kpiConnectedUnknown": "– verbunden",
       "kpiEndpointIdle": "Endpunkt · frei",
       "kpiEndpointOff": "Endpunkt · aus",
       "kpiContext": "Kontext",
@@ -3791,9 +3808,7 @@
       },
       "cornerChecking": "prüft",
       "checkingLine": "Wird geprüft…",
-      "asleepLine": "schläft · nicht erreichbar",
-      "unreachableLine": "nicht erreichbar",
-      "kpiSpeedModeNoAgent": "Tempo · {mode} · kein Agent",
+      "kpiSpeedNoAgentNote": "ohne Agent — z. B. Bench oder API-Aufruf",
       "kpiSpeedNoAgentHint": "Kein Agent dieser Box arbeitet. Die Last kommt von woanders — zum Beispiel von einem Bench-Lauf oder einem direkten API-Aufruf."
     },
     "cockpit": {
@@ -4681,5 +4696,10 @@
       "unknown": "Die Prüfung ist fehlgeschlagen. Den Grund kennt MC nicht."
     },
     "details": "Details vom Server (englisch)"
+  },
+  "notFound": {
+    "title": "Seite nicht gefunden",
+    "hint": "Diese Adresse gibt es in Mission Control nicht. Vielleicht ist der Link veraltet oder vertippt.",
+    "home": "Zur Startseite"
   }
 }

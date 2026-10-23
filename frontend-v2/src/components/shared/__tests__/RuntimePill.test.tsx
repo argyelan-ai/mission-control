@@ -72,6 +72,23 @@ describe("RuntimePill", () => {
     expect(probed).not.toHaveBeenCalled();
   });
 
+  // Round-3 (t3 NICE-5b): a slot row's name already carries the model
+  // ("BOX-A :8000 (aktuell: <model>)") and the pill leads with the model —
+  // it read "Model-X · BOX-A :8000 (aktuell: Model-X)", the model twice.
+  it("names the model once for a slot row", async () => {
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
+      runtimes: [
+        { id: "rt-1", slug: "box-a-slot", display_name: "BOX-A :8000 (aktuell: Model-X)",
+          runtime_type: "openai_compatible", endpoint: "http://x/v1", enabled: true,
+          model_identifier: "Model-X", is_slot: true, max_context_len: 1_048_576 } as never,
+      ],
+    } as never);
+    const { container } = renderWithQuery(<RuntimePill agent={mkAgent()} />);
+    await waitFor(() => expect(container).toHaveTextContent("BOX-A :8000"));
+    expect(container.textContent?.match(/Model-X/g) ?? []).toHaveLength(1);
+    expect(container).not.toHaveTextContent("aktuell");
+  });
+
   it("shows a neutral placeholder while loading — never 'no runtime'", () => {
     vi.spyOn(api.runtimes, "listRows").mockImplementation(() => new Promise(() => {}));
     renderWithQuery(<RuntimePill agent={mkAgent()} />);

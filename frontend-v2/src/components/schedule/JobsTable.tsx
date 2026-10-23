@@ -11,6 +11,7 @@ import { Search, X, Pause, Play, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { ScheduledJob } from "@/lib/types";
 import { JobRow, JOB_GRID_COLS } from "./JobRow";
+import { JobCard } from "./JobCard";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
@@ -230,9 +231,34 @@ export function JobsTable({
         )}
       </AnimatePresence>
 
-      {/* ── Table (horizontal scroll on mobile, M11/M17) ── */}
+      {/* ── Phone: one card per job (round-3 t4 S8 — the table was cut off) ── */}
+      <div className="md:hidden flex flex-col gap-2">
+        {filteredJobs.length === 0 ? (
+          <div
+            className="rounded-lg border border-dashed p-8 text-center text-sm"
+            style={{ borderColor: C.border, color: C.textMuted }}
+          >
+            {jobs.length === 0 ? t("noJobsYet") : t("noMatches")}
+          </div>
+        ) : (
+          filteredJobs.map((j) => (
+            <JobCard
+              key={j.id}
+              job={j}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onTrigger={onTrigger}
+              onToggleEnabled={onToggleEnabled}
+              onSnooze={onSnooze}
+              onDuplicate={onDuplicate}
+            />
+          ))
+        )}
+      </div>
+
+      {/* ── Table from md up ── */}
       <div
-        className="overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0"
+        className="hidden md:block overflow-x-auto"
         style={{ overscrollBehaviorX: "contain" } as React.CSSProperties}
         tabIndex={0}
         role="region"

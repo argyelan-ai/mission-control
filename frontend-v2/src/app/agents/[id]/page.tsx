@@ -3,6 +3,8 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import AppShell from "@/components/layout/AppShell";
+import { NotFoundState } from "@/components/shared/NotFoundState";
+import { isMissingRecord } from "@/lib/apiStatus";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { agentTabFromParam, agentTabHref, type AgentTab } from "../agentTabParam";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
@@ -1464,10 +1466,14 @@ export default function AgentDetailPage() {
   );
   useAgentStream(handleAgentEvent);
 
-  const { data: agent } = useQuery({
+  // A missing agent (deleted, archived, a typo in the link) answers 404, a
+  // malformed id 422 — neither changes on a retry or a poll (round-3 t4 S1:
+  // the spinner turned for good while the API had already said "gone").
+  const { data: agent, error: agentError } = useQuery({
     queryKey: ["agent", id],
     queryFn: () => api.agents.get(id),
-    refetchInterval: 60_000,
+    refetchInterval: (q) => (isMissingRecord(q.state.error) ? false : 60_000),
+    retry: (count, err) => !isMissingRecord(err) && count < 1,
   });
 
   const { data: config } = useQuery({
@@ -1579,6 +1585,20 @@ export default function AgentDetailPage() {
     },
     onError: () => notify.error(t("detail.reconfigureFailed")),
   });
+
+  if (!agent && agentError) {
+    const missing = isMissingRecord(agentError);
+    return (
+      <AppShell>
+        <NotFoundState
+          title={missing ? t("detail.notFoundTitle") : t("detail.agentLoadFailed")}
+          hint={missing ? t("detail.notFoundHint") : null}
+          backHref="/agents"
+          backLabel={t("detail.backToAgents")}
+        />
+      </AppShell>
+    );
+  }
 
   if (!agent) {
     return (
@@ -1710,10 +1730,13 @@ export default function AgentDetailPage() {
                   <span>{t("detail.lastSeenAgo", { ago: timeAgo(agent.last_seen_at, locale) })}</span>
                 </div>
 
-                {/* Context bar */}
-                <div className="mt-4 max-w-sm">
+                {/* Context bar — the agent's last REPORTED figure (its work
+                    session). The chat ring measures the chat's own session;
+                    both are right, so each says which one it is (round-3
+                    user test t3 NICE-1: 2 % here vs 5 % in the chat). */}
+                <div className="mt-4 max-w-sm" title={t("detail.contextReportedHint")} data-testid="agent-context-bar">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] text-[var(--color-text-muted)]">{t("contextLabel")}</span>
+                    <span className="text-[10px] text-[var(--color-text-muted)]">{t("detail.contextReportedLabel")}</span>
                     <span className="text-[10px] text-[var(--color-text-muted)]">{formatContextPct(agent.context_tokens, agent.context_max)}</span>
                   </div>
                   <div className="h-1.5 rounded-full bg-[var(--color-bg-elevated)] overflow-hidden">

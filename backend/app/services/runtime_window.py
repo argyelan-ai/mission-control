@@ -135,3 +135,24 @@ def agent_shown_window(runtime: Any | None) -> int | None:
     if runtime_protocol(runtime) in _VENDOR_WINDOW_PROTOCOLS:
         return None
     return runtime_context_window(runtime)
+
+
+def shown_context(
+    context_tokens: int | None, context_max: int | None, window: int | None
+) -> tuple[int | None, int | None]:
+    """The agent's context figures measured against ``window``.
+
+    ``window`` is ``agent_shown_window(runtime)``; ``None`` keeps the agent's
+    own figures. The stored tokens came from a reported PERCENT against the
+    stored window, so a new window keeps that percent (10 % of 200k → 10 % of
+    1M) instead of shrinking it 5x; unknown tokens stay unknown.
+
+    One rule for the heartbeat (which stores the result) and for the agent
+    reads (which only show it — round-3 user test r1 NICE-1: an agent without
+    a recent heartbeat kept 131k on a 1M runtime).
+    """
+    if not window or window == context_max:
+        return context_tokens, context_max
+    if context_tokens is not None and context_max:
+        return round(context_tokens / context_max * window), window
+    return context_tokens, window

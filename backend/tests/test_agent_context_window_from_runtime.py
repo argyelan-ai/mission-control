@@ -141,3 +141,72 @@ async def test_a_window_change_keeps_the_last_reported_percent(client: AsyncClie
     agent = await _fresh(agent_id)
     assert agent.context_max == 1_000_000
     assert agent.context_tokens == 100_000  # still 10 %
+
+
+# ── Read time, not only heartbeat time (round-3 user test, r1 NICE-1) ────────
+# The window was only brought in line on a heartbeat. An agent that has not
+# beaten since its runtime changed (Rex: 131,072 on a 1,048,576 runtime, last
+# heartbeat three weeks old) kept the stale window on its page. The API now
+# derives the shown window from the runtime when it is READ.
+
+
+@pytest.mark.asyncio
+async def test_agent_detail_shows_the_runtime_window_without_a_heartbeat(auth_client: AsyncClient):
+    agent_id, _ = await _agent_on_runtime(
+        runtime_type="openai_compatible", slug="ctx-read", window=1_000_000, tokens=20_000
+    )
+
+    resp = await auth_client.get(f"/api/v1/agents/{agent_id}")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["context_max"] == 1_000_000
+    assert body["context_tokens"] == 100_000  # the stored 10 % is kept
+
+
+@pytest.mark.asyncio
+async def test_agent_list_shows_the_runtime_window_without_a_heartbeat(auth_client: AsyncClient):
+    agent_id, _ = await _agent_on_runtime(
+        runtime_type="openai_compatible", slug="ctx-list", window=1_000_000, tokens=40_000
+    )
+
+    resp = await auth_client.get("/api/v1/agents")
+
+    assert resp.status_code == 200, resp.text
+    row = next(a for a in resp.json() if a["id"] == str(agent_id))
+    assert row["context_max"] == 1_000_000
+    assert row["context_tokens"] == 200_000  # the stored 20 % is kept
+
+
+def test_shown_context_keeps_unknown_tokens_unknown():
+    from app.services.runtime_window import shown_context
+
+    assert shown_context(None, 200_000, 1_000_000) == (None, 1_000_000)
+    assert shown_context(20_000, 200_000, None) == (20_000, 200_000)
+    assert shown_context(20_000, 200_000, 200_000) == (20_000, 200_000)
+
+
+@pytest.mark.asyncio
+async def test_read_time_leaves_vendor_window_agents_alone(auth_client: AsyncClient):
+    agent_id, _ = await _agent_on_runtime(
+        runtime_type="anthropic_oauth", slug="anthropic-claude-read", window=1_000_000, tokens=20_000
+    )
+
+    body = (await auth_client.get(f"/api/v1/agents/{agent_id}")).json()
+
+    assert body["context_max"] == 200_000
+    assert body["context_tokens"] == 20_000
+
+
+@pytest.mark.asyncio
+async def test_read_time_does_not_write_the_row(auth_client: AsyncClient):
+    """A GET is a read: the stored figures change on the next heartbeat only."""
+    agent_id, _ = await _agent_on_runtime(
+        runtime_type="openai_compatible", slug="ctx-nowrite", window=1_000_000, tokens=20_000
+    )
+
+    await auth_client.get(f"/api/v1/agents/{agent_id}")
+
+    agent = await _fresh(agent_id)
+    assert agent.context_max == 200_000
+    assert agent.context_tokens == 20_000

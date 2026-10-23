@@ -404,10 +404,45 @@ async def list_agents(
     # frontend's strict `role === "reviewer"` check needs a value it can trust,
     # so add the canonical form here instead of duplicating the enum-matching
     # heuristic in TypeScript. Raw `role` stays untouched for display purposes.
+    windows = await _shown_windows(session, agents)
     return [
-        {**a.model_dump(), "role_canonical": normalize_agent_role(a.role)}
+        {
+            **a.model_dump(),
+            **_shown_context_fields(a, windows.get(a.runtime_id)),
+            "role_canonical": normalize_agent_role(a.role),
+        }
         for a in agents
     ]
+
+
+# rule: R-runtime-window-one-source - the agent page divides by the chat's window
+async def _shown_windows(session: AsyncSession, agents) -> dict:
+    """``runtime_id → agent_shown_window`` for every bound agent, one query.
+
+    The heartbeat stores the runtime's window on the agent, but an agent that
+    has not beaten since its runtime changed kept the old one on its page
+    (round-3 user test r1 NICE-1: 131k on a 1M runtime). Reads derive it the
+    same way, without writing the row. A failure only costs the correction.
+    """
+    ids = {a.runtime_id for a in agents if a.runtime_id is not None}
+    if not ids:
+        return {}
+    try:
+        from app.models.runtime import Runtime as _Runtime
+        from app.services.runtime_window import agent_shown_window
+
+        rows = (await session.exec(select(_Runtime).where(_Runtime.id.in_(ids)))).all()
+        return {rt.id: agent_shown_window(rt) for rt in rows}
+    except Exception:  # noqa: BLE001 — a display figure never breaks the list
+        logger.warning("agents: runtime windows not readable", exc_info=True)
+        return {}
+
+
+def _shown_context_fields(agent: Agent, window: int | None) -> dict:
+    from app.services.runtime_window import shown_context
+
+    tokens, ctx_max = shown_context(agent.context_tokens, agent.context_max, window)
+    return {"context_tokens": tokens, "context_max": ctx_max}
 
 
 @router.get("/agents/stream")
@@ -846,7 +881,8 @@ async def get_agent(
     agent = await session.get(Agent, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return agent
+    windows = await _shown_windows(session, [agent])
+    return {**agent.model_dump(), **_shown_context_fields(agent, windows.get(agent.runtime_id))}
 
 
 @router.patch("/agents/{agent_id}")
@@ -4650,14 +4686,16 @@ async def agent_heartbeat(
             from app.models.runtime import Runtime as _Runtime
             from app.services.runtime_window import agent_shown_window
 
+            from app.services.runtime_window import shown_context
+
             _window = agent_shown_window(await session.get(_Runtime, agent.runtime_id))
             if _window and agent.context_max != _window:
                 # The stored tokens were derived from the agent's reported
-                # PERCENT (below) against the old window — keep that percent
-                # until the next reading instead of shrinking it 5x.
-                if agent.context_tokens is not None and agent.context_max:
-                    agent.context_tokens = round(agent.context_tokens / agent.context_max * _window)
-                agent.context_max = _window
+                # PERCENT (below) against the old window — shown_context keeps
+                # that percent until the next reading instead of shrinking it.
+                agent.context_tokens, agent.context_max = shown_context(
+                    agent.context_tokens, agent.context_max, _window
+                )
         except Exception:  # noqa: BLE001 — a display figure never breaks the heartbeat
             logger.warning("heartbeat: runtime window of %s not readable", agent.name, exc_info=True)
 
