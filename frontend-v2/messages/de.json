@@ -3794,7 +3794,7 @@
       },
       "cornerChecking": "prüft",
       "checkingLine": "Wird geprüft…",
-      "kpiSpeedNoAgentNote": "ohne Agent – z. B. Bench oder API-Aufruf",
+      "kpiSpeedNoAgentNote": "ohne Agent — z. B. Bench oder API-Aufruf",
       "kpiSpeedNoAgentHint": "Kein Agent dieser Box arbeitet. Die Last kommt von woanders — zum Beispiel von einem Bench-Lauf oder einem direkten API-Aufruf."
     },
     "cockpit": {

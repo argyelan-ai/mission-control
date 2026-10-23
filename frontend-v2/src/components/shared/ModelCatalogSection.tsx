@@ -50,6 +50,7 @@ import { SectionOrFragment } from "@/components/shared/Section";
 import { CappedList } from "@/components/shared/CappedList";
 import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { boxLabel } from "@/components/shared/RuntimePill";
 
 // ── Status-Vokabular ─────────────────────────────────────────────────────────
 // Jeder Zustand bekommt eigene Worte. „unreachable" darf NIE wie „leer"
@@ -263,8 +264,10 @@ function ProviderGroup({
           />
         }
         // The backend names the provider in `label`; the internal key
-        // ("openai:<slug>") was shown as the name (round-3 t4 picture).
-        name={provider.display_name || provider.label || provider.key}
+        // ("openai:<slug>") was shown as the name (round-3 t4 picture). A slot
+        // name's "(aktuell: <model>)" suffix is dropped while the models are
+        // listed right below it — same rule as RuntimePill (PR #964 review).
+        name={boxLabel(provider.display_name || provider.label || provider.key, models.length > 0)}
         summary={[provider.protocol, `${models.length}`, t(chrome.labelKey)].join(" · ")}
         chips={
           <>

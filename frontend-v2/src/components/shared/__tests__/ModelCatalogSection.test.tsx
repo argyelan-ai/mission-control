@@ -237,6 +237,27 @@ describe("ModelCatalogSection", () => {
     expect(screen.queryByText(/No list available/)).not.toBeInTheDocument();
   });
 
+  // PR #964 review: the slot name "<box> :8000 (aktuell: <model>)" repeated the
+  // model that is listed right below it, and was cut on the phone.
+  it("drops the slot's '(aktuell: …)' suffix while the models are listed", async () => {
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "openai:slot-box",
+          protocol: "openai",
+          display_name: undefined as unknown as string,
+          label: "Slot Box :8000 (aktuell: Some-Model-1017)",
+          models: [mkModel("Some-Model-1017", true)],
+          new_count: 0,
+        }),
+      ]),
+    );
+    renderSection();
+
+    expect(await screen.findByText("Slot Box :8000")).toBeInTheDocument();
+    expect(screen.queryByText(/aktuell:/)).not.toBeInTheDocument();
+  });
+
   it("status cli_config: names the CLI config as the source, not 'live' and not 'Manifest'", async () => {
     vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
       mkList([
