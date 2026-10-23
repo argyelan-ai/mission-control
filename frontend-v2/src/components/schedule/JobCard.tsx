@@ -57,7 +57,7 @@ export function JobCard({
     <div
       data-testid="job-card"
       data-region="job-card"
-      className="md:hidden flex items-start gap-2 rounded-lg pl-3 py-2"
+      className="flex items-start gap-2 rounded-lg pl-3 py-2"
       style={{ border: `1px solid ${C.border}`, background: C.borderSubtle }}
     >
       <span className="w-4 h-11 shrink-0 flex items-center justify-center" aria-hidden="true">

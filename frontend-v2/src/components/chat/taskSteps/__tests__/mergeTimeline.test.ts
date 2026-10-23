@@ -377,6 +377,14 @@ describe("mergeTimeline — a band never stands empty (round-3 t1 NICE-1)", () =
     expect((tail[0] as Extract<TaskUnit, { u: "live" }>).alone).toBe(true);
   });
 
+  // PR #963 review NICE-1: a live task that waits for the operator has
+  // nobody thinking — the band must not say "Thinking…".
+  it.each(["blocked", "waiting", "user_test"] as const)("a %s task's new band is not marked alone", (status) => {
+    const r = merge([chatMsg(at(11), "Status?")], [task([think(at(10), "A")], { stub: stub({ status }) })]);
+    const live = units(r.entries[2]).find((u) => u.u === "live") as Extract<TaskUnit, { u: "live" }> | undefined;
+    expect(live?.alone).toBeFalsy();
+  });
+
   it("next to work rows the live row is not alone", () => {
     const r = merge([chatMsg(at(1), "Go")], [task([think(at(10), "A")])]);
     const live = units(r.entries[1]).find((u) => u.u === "live") as Extract<TaskUnit, { u: "live" }>;

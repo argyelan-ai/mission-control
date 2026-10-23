@@ -90,7 +90,8 @@ describe("JobsTable — paused job", () => {
     const onTrigger = vi.fn();
     render(<JobsTable jobs={[PAUSED]} onEdit={noop} onDelete={noop} onTrigger={onTrigger} onToggleEnabled={noop} onSnooze={noop} onDuplicate={noop} />);
     const card = screen.getByTestId("job-card");
-    expect(card.className).toMatch(/md:hidden/);
+    // The card list shows only below md (one md:hidden, on the list's wrapper).
+    expect(card.closest(".md\\:hidden")).not.toBeNull();
     expect(within(card).getByText("Morning Briefing for the whole team")).not.toHaveClass("truncate");
     expect(within(card).getByText(/— \(paused\)/)).toBeInTheDocument();
     // The table itself only from md up.

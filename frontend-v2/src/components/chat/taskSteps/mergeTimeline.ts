@@ -107,15 +107,18 @@ export interface MergeInput {
 
 const TAIL_KINDS = new Set<TaskUnit["u"]>(["live", "pending", "detached", "queued", "end", "notLoaded", "loadFailed"]);
 
+/** Live states in which the task waits for the operator, not for its agent. */
+const WAITS_FOR_OPERATOR = new Set(["waiting", "blocked", "user_test"]);
+
 /** A band whose only content is its tail: its live row says so (`alone`),
- *  so a fresh band never stands empty (round-3 t1 NICE-1). */
-function markAlone(units: TaskUnit[]): TaskUnit[] {
+ *  so a fresh band never stands empty (round-3 t1 NICE-1). Not for a task
+ *  that waits for the operator (blocked, waiting, user test): nothing
+ *  thinks there, "Thinking…" would be a lie (PR #963 review NICE-1). */
+function markAlone(task: MergeTask, units: TaskUnit[]): TaskUnit[] {
+  if (WAITS_FOR_OPERATOR.has(task.stub.status)) return units;
   if (units.some((u) => !TAIL_KINDS.has(u.u))) return units;
   return units.map((u) => (u.u === "live" ? { ...u, alone: true } : u));
 }
-
-/** Live states in which the task waits for the operator, not for its agent. */
-const WAITS_FOR_OPERATOR = new Set(["waiting", "blocked", "user_test"]);
 
 /** The head of a task's segment, from the task's state now (and, for a
  *  delivered task whose status has not flipped yet, what the segment holds). */
@@ -378,7 +381,7 @@ export function mergeTimeline(input: MergeInput): MergeResult {
       (entryMs(out[at + 1]) ?? Number.NEGATIVE_INFINITY) > endedMs;
     if (at != null && (at === out.length - 1 || task === openAtEnd || endsBeforeNext)) {
       const segEntry = out[at] as Extract<MergedEntry, { kind: "segment" }>;
-      const own = segEntry.units.every((u) => TAIL_KINDS.has(u.u)) ? markAlone(tail) : tail;
+      const own = segEntry.units.every((u) => TAIL_KINDS.has(u.u)) ? markAlone(task, tail) : tail;
       const units = [...segEntry.units, ...own.map((u) => reuseTail(u, prevSegments.get(segEntry.key)))];
       const head = segmentHead(task, units, segEntry.first);
       const old = prevSegments.get(segEntry.key);
@@ -393,7 +396,7 @@ export function mergeTimeline(input: MergeInput): MergeResult {
   for (const { task, units } of trailing) {
     const key = `task:${task.stub.taskId}:seg:tail`;
     const old = prevSegments.get(key);
-    const reused = markAlone(units).map((u) => reuseTail(u, old));
+    const reused = markAlone(task, units).map((u) => reuseTail(u, old));
     const first = !lastSegIndex.has(task.stub.taskId) && task.shape === "segments";
     const head = segmentHead(task, reused, first);
     out.push(
