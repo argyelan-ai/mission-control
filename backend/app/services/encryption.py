@@ -12,6 +12,7 @@ import base64
 import hashlib
 import logging
 import re
+import unicodedata
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -124,8 +125,14 @@ def mask(value: str, visible_chars: int = 4, *, reveal_tail: bool = True) -> str
 # the safe way to be wrong.
 #
 # rule: R-mask-no-length-no-password - camelCase/prefix secret names showed 4 chars
+#
+# "pass" covers password/passwd/passphrase/passwort and the keytool names
+# keypass/storepass; "pw" covers pwd and the short "_pw"; "phrase" covers
+# keyphrase/seedphrase; "kennwort" is the other German word. Review of
+# round-4 K5 found "keypass", "keystore_pw", "keyphrase", "passwort_key"
+# still showing a tail because "key" let them through (23.10.2026).
 _NO_TAIL_NAME_PARTS = (
-    "password", "passwd", "pwd", "passphrase", "pin",
+    "pass", "pw", "phrase", "kennwort", "pin",
     "secret", "seed", "private", "otp",  # "otp" also covers "totp"
     "content",  # free text: its last characters may be a secret too
 )
@@ -138,7 +145,11 @@ _TAIL_NAME_PARTS = ("token", "key")
 
 
 def _normalise_field_name(field: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", str(field).lower())
+    # NFKC first: a full-width or otherwise compatibility-encoded
+    # "ｐａｓｓｗｏｒｄ" folds to plain ASCII before the match, instead of
+    # being stripped as "not a-z0-9" and leaving only "token".
+    folded = unicodedata.normalize("NFKC", str(field)).lower()
+    return re.sub(r"[^a-z0-9]", "", folded)
 
 
 def _is_no_tail_field(field: str) -> bool:

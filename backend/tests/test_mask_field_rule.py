@@ -51,6 +51,18 @@ LONG = "S" * 40 + "WXYZ"  # 44 characters — long enough for a tail
         "x_access_token_secret",
         "apiSecretKey",
         "content",
+        # Review SHOULD-1: "key"/"token" plus a password word that is not
+        # spelled "password" (Java keytool, German, short forms, full-width).
+        "keypass",
+        "key_pass",
+        "KEYSTORE_PASS",
+        "keystore_pw",
+        "api_key_pw",
+        "SIGNING_KEY_PW",
+        "keyphrase",
+        "passwort_key",
+        "kennwort_token",
+        "\uff50\uff41\uff53\uff53\uff57\uff4f\uff52\uff44_token",  # full-width "password"
     ],
 )
 def test_password_like_names_in_any_spelling_never_show_a_tail(field):
@@ -135,3 +147,17 @@ async def test_secret_routes_mask_with_the_field_rule(auth_client: AsyncClient, 
     patched = await auth_client.patch(f"/api/v1/secrets/{key}", json={"value": LONG})
     assert patched.status_code == 200, patched.text
     assert patched.json()["value_masked"] == want
+
+
+@pytest.mark.asyncio
+async def test_github_owner_is_a_name_not_a_secret(auth_client: AsyncClient):
+    """Review NICE-1: the GitHub owner is a public user/org name, like a
+    credential's ``username``. The settings page shows ``value_masked`` as the
+    only hint of what is set — fully masked, nobody could see WHICH owner."""
+    created = await auth_client.post("/api/v1/secrets", json={"key": "github_owner", "value": "example-org"})
+    assert created.status_code == 201, created.text
+    assert created.json()["value_masked"] == "example-org"
+
+    listed = await auth_client.get("/api/v1/secrets")
+    row = next(r for r in listed.json() if r["key"] == "github_owner")
+    assert row["value_masked"] == "example-org"

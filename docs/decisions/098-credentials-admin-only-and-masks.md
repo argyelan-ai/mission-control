@@ -47,12 +47,15 @@ Round-3 user tests (package R1) found two holes in the credentials Vault
    `totp_seed` show 4 characters, a nested value leaked the end of its
    text form, and `GET /api/v1/secrets` masked without any field rule. Now
    one rule serves both stores (`encryption.mask_credential_field`): the
-   field name is normalised (lower case, separators and camelCase folded)
-   and matched as a substring. `password`, `passwd`, `pwd`, `passphrase`,
-   `pin`, `secret`, `seed`, `private`, `otp`/`totp` and `content` → always
-   the fixed run. Only `token`/`key`-like names may keep the 4-character
-   tail (20+ characters); every other name — known or not — gets the fixed
-   run. A nested value (dict, list) is hidden in full, as one string.
+   field name is normalised (NFKC, lower case, separators and camelCase
+   folded) and matched as a substring. `pass` (password, passwd,
+   passphrase, passwort, keypass, storepass), `pw` (pwd, `_pw`), `phrase`,
+   `kennwort`, `pin`, `secret`, `seed`, `private`, `otp`/`totp` and
+   `content` → always the fixed run. Only `token`/`key`-like names may keep
+   the 4-character tail (20+ characters); every other name — known or not —
+   gets the fixed run. A nested value (dict, list) is hidden in full, as
+   one string. The one exception is the settings key `github_owner`: a
+   public user/org name, shown in full like a credential's `username`.
 
 ## Alternativen
 

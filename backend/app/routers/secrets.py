@@ -249,6 +249,13 @@ class SecretUpdate(BaseModel):
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 
+# Settings keys that hold a public NAME, not a secret — shown in full, like a
+# credential's ``username`` (credentials._NON_SENSITIVE_FIELDS). The GitHub
+# owner is the user/org every repo URL already shows; masked, the settings
+# page could not say WHICH owner is set (review of round-4 K5, NICE-1).
+_PLAIN_SECRET_KEYS = ("github_owner",)
+
+
 def _mask_secret(key: str, value: str | None) -> str:
     """The API-key list masks under the same field rule as the credentials
     Vault (round-4 K5, r1 N1): "x_api_secret" or "SMTP_PASSWORD" never show
@@ -256,6 +263,8 @@ def _mask_secret(key: str, value: str | None) -> str:
     long. ``None`` means the stored value could not be decrypted."""
     if value is None:
         return MASK + " [decrypt error]"
+    if key in _PLAIN_SECRET_KEYS:
+        return value
     return mask_credential_field(key, value)
 
 

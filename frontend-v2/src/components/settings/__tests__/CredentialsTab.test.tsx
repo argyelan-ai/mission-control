@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CredentialsTab } from "../CredentialsTab";
@@ -109,6 +109,23 @@ describe("CredentialsTab — phone targets and a neutral type mark (round-4 K5)"
     expect(api.credentials.delete).not.toHaveBeenCalled();
     const confirm = screen.getByRole("button", { name: /really/i });
     expect(/\bmin-h-touch\b/.test(confirm.className)).toBe(true);
+  });
+
+  it("gives the form's type picker 44 px targets on the type scale (review NICE-2)", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<CredentialsTab />);
+    await screen.findByText("Example token");
+    await user.click(screen.getByRole("button", { name: /^new$/i }));
+    const picker = screen.getByRole("group", { name: /type/i });
+    const options = within(picker).getAllByRole("button");
+    expect(options).toHaveLength(3);
+    for (const el of options) {
+      expect(/\bmin-h-touch\b/.test(el.className), el.outerHTML).toBe(true);
+      expect(el.className).toMatch(/\btext-xs\b/);
+      expect(el.className).not.toMatch(/text-\[\d+px\]|\bfont-mono\b/);
+    }
+    // The selected type says so to a screen reader, not only by colour.
+    expect(options.filter((el) => el.getAttribute("aria-pressed") === "true")).toHaveLength(1);
   });
 
   it("shows the type mark on the type scale, in a neutral tone", async () => {

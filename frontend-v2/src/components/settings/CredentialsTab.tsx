@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Plus, Pencil, Trash2, Eye, EyeOff, KeyRound, FileText, X } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -55,6 +55,7 @@ export function CredentialsTab() {
   const [url, setUrl] = useState("");
   const [notes, setNotes] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const typeLabelId = useId();
 
   const { data: credentials, isLoading } = useQuery({
     queryKey: ["credentials"],
@@ -273,8 +274,10 @@ export function CredentialsTab() {
                 </label>
 
                 {/* Type selector */}
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] shrink-0" style={{ color: C.textMuted }}>{t("type")}</span>
+                {/* Phone: 44 px targets on the type scale, like Edit/Delete
+                    (review of round-4 K5, NICE-2: they were ~22 px, mono 11 px). */}
+                <div className="flex flex-wrap items-center gap-2" role="group" aria-labelledby={typeLabelId}>
+                  <span id={typeLabelId} className="text-xs shrink-0" style={{ color: C.textMuted }}>{t("type")}</span>
                   {(["login", "token", "custom"] as CredentialType[]).map((ct) => {
                     const cfg = TYPE_CONFIG[ct];
                     return (
@@ -282,7 +285,8 @@ export function CredentialsTab() {
                         key={ct}
                         type="button"
                         onClick={() => setCredType(ct)}
-                        className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-sm cursor-pointer transition-all"
+                        aria-pressed={credType === ct}
+                        className="min-h-touch px-3 text-xs font-medium rounded-sm cursor-pointer transition-all"
                         style={{
                           // Selection = surface + border in the one accent,
                           // the same for every type (no category colour).

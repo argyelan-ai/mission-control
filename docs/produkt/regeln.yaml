@@ -473,7 +473,7 @@ rules:
     checked: 2026-10-23
 
   - id: R-mask-no-length-no-password
-    says: "A masked secret never shows its length: always a fixed run of dots. One field rule serves the credentials Vault and the API-key list: a name that, lower-cased with separators and camelCase folded, contains password/passwd/pwd/passphrase/pin/secret/seed/private/otp or content never shows a tail; only token/key-like names keep the last 4 characters, and only for 20+ characters; every other name gets the fixed run. A nested value (dict/list) is hidden in full."
+    says: "A masked secret never shows its length: always a fixed run of dots. One field rule serves the credentials Vault and the API-key list: a name that, NFKC-folded, lower-cased with separators and camelCase folded, contains pass/pw/phrase/kennwort/pin/secret/seed/private/otp or content never shows a tail; only token/key-like names keep the last 4 characters, and only for 20+ characters; every other name gets the fixed run. A nested value (dict/list) is hidden in full. Only the public name github_owner is shown in full."
     source: "ADR-098 (amended round-4 K5); round-3 user tests (t4 S4); round-4 r1 N1"
     owner: backend/app/services/encryption.py
     applies_to: ["backend/app/services/encryption.py", "backend/app/routers/credentials.py", "backend/app/routers/secrets.py"]
@@ -485,18 +485,21 @@ rules:
       - {test: "backend/tests/test_mask_field_rule.py::test_unknown_names_never_show_a_tail"}
       - {test: "backend/tests/test_mask_field_rule.py::test_nested_values_are_hidden_in_full"}
       - {test: "backend/tests/test_mask_field_rule.py::test_secret_routes_mask_with_the_field_rule"}
+      - {test: "backend/tests/test_mask_field_rule.py::test_github_owner_is_a_name_not_a_secret"}
     status: active
     checked: 2026-10-23
 
   - id: R-stop-only-own-run
-    says: "A task card offers Stop run only for a run that is provably its own: the agent's current_task_id names the card, or the bridge's live run record (run_task_id on the agent read, from acp-task-state.json) names it. A busy agent with an empty pointer is no proof — with two review cards delivered, Stop on card B used to end run A."
-    source: "round-4 user tests K5 (r1 N2)"
+    says: "A task card offers Stop run only for a run that is provably its own: the agent's current_task_id names the card, or the bridge's live run record (run_task_id on the agent read, from acp-task-state.json) names it. A busy agent with an empty pointer is no proof — with two review cards delivered, Stop on card B used to end run A. The stop API holds the same line: a review card that is not the agent's run gets 409, and stopping any card sets the agent idle only when it does not provably run a different card."
+    source: "round-4 user tests K5 (r1 N2); K5 review SHOULD-2"
     owner: frontend-v2/src/components/task/TaskActions.tsx
-    applies_to: ["frontend-v2/src/components/task/TaskActions.tsx", "backend/app/routers/agents.py", "backend/app/services/acp_chat_transport.py"]
+    applies_to: ["frontend-v2/src/components/task/TaskActions.tsx", "backend/app/routers/agents.py", "backend/app/services/acp_chat_transport.py", "backend/app/services/operations.py"]
     enforced_by:
       - {test: "frontend-v2/src/components/task/__tests__/TaskActions.reviewQ5.test.tsx::review: Stop run only while an agent reviews"}
       - {test: "backend/tests/test_agent_run_task_id.py::test_agents_list_and_detail_carry_run_task_id"}
       - {test: "backend/tests/test_agent_run_task_id.py::test_a_live_task_phase_names_its_task"}
+      - {test: "backend/tests/test_stop_only_own_run.py::test_review_card_of_another_run_is_refused"}
+      - {test: "backend/tests/test_stop_only_own_run.py::test_stopping_a_card_keeps_the_agent_running_when_it_runs_another"}
     status: active
     checked: 2026-10-23
 
