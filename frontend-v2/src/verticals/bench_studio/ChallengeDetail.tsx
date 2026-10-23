@@ -497,8 +497,10 @@ export function ChallengeDetail({
                 endpoint that isn't a safe same-origin path (F3) is dropped
                 above — never rendered, so there's no button to click
                 through. While the challenge still runs there is nothing to
-                publish yet: the action waits (t2 KANN-4). */}
-            {overlayActions.map((action) => {
+                publish yet: the action is not shown at all, Stop is the one
+                next step (round-4 t2 SOLL-4 — a greyed button without a
+                reason sat next to Stop). It appears once the run is over. */}
+            {!isRunning && overlayActions.map((action) => {
               const isPendingThisAction =
                 (challengeActionMutation.isPending && pendingActionId === action.id) ||
                 action.busy;
@@ -506,7 +508,7 @@ export function ChallengeDetail({
                 <button
                   key={action.id}
                   onClick={() => runChallengeAction(action)}
-                  disabled={action.disabled || isPendingThisAction || isRunning}
+                  disabled={action.disabled || isPendingThisAction}
                   title={action.disabled ? action.disabled_reason ?? undefined : undefined}
                   className="flex items-center gap-2 px-3 min-h-11 rounded-lg text-sm font-medium disabled:opacity-40"
                   style={CHALLENGE_ACTION_STYLE[action.style]}
@@ -788,6 +790,12 @@ export function ChallengeDetail({
  *  Same Leitstand pattern as NewChallengeDialog (ResponsiveModal + dark
  *  inputs). Saves only changed fields; recompose stays a separate,
  *  deliberate action in the header ("Video neu erstellen"). */
+// The backend's limits (routers.BenchChallengeUpdate / BenchEntryUpdate) —
+// the edit fields stop there, like the create dialog (review NICE-2).
+const EDIT_TITLE_MAX = 200;
+const EDIT_LABEL_MAX = 80;
+const EDIT_TAG_MAX = 80;
+
 function EditChallengeDialog({
   challenge,
   open,
@@ -863,6 +871,7 @@ function EditChallengeDialog({
 
         <input
           value={title}
+          maxLength={EDIT_TITLE_MAX}
           onChange={(e) => setTitle(e.target.value)}
           placeholder={t("titlePlaceholder")}
           aria-label={t("titleAria")}
@@ -878,6 +887,7 @@ function EditChallengeDialog({
             <div key={entry.id} className="flex gap-2 items-center">
               <input
                 value={entryEdits[entry.id]?.model_label ?? ""}
+                maxLength={EDIT_LABEL_MAX}
                 onChange={(e) => setEdit(entry.id, { model_label: e.target.value })}
                 placeholder={t("modelNamePlaceholder")}
                 aria-label={t("modelNameAria", { index: i + 1 })}
@@ -886,6 +896,7 @@ function EditChallengeDialog({
               />
               <input
                 value={entryEdits[entry.id]?.display_tag ?? ""}
+                maxLength={EDIT_TAG_MAX}
                 onChange={(e) => setEdit(entry.id, { display_tag: e.target.value })}
                 placeholder={t("tagPlaceholder")}
                 aria-label={t("tagAria", { index: i + 1 })}

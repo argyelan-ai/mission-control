@@ -1102,3 +1102,30 @@ def test_route_order_static_before_parameterised():
     steps = paths.index("/api/v1/agents/{agent_id}/chat/tasks/{task_id}/steps")
     detail = paths.index("/api/v1/agents/{agent_id}/chat/tasks/{task_id}/steps/{row_id}")
     assert tasks < steps < detail
+
+
+@pytest.mark.asyncio
+async def test_task_stubs_name_the_card_a_review_run_works(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
+):
+    """Round-4 review r1 S2: a review handoff gives the `review` card to the
+    reviewer, and its review run works it — the chat probe says
+    `task_working`. The card is not ``live`` (it is no section with a run of
+    its own state), so the status line cut that state to "ready". The stub
+    says so instead: ``reviewRun`` — and only for the reviewer's own card."""
+    board, agent, _root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    reviewing = await make_task(board.id, title="Reviewing", status="review", assigned_agent_id=agent.id,
+                                dispatch_intent="review_handoff", started_at=_utc(now - timedelta(minutes=9)),
+                                dispatched_at=_utc(now - timedelta(minutes=1)))
+    await make_task(board.id, title="Own done", status="done", assigned_agent_id=agent.id,
+                    started_at=_utc(now - timedelta(hours=1)))
+    await make_task(board.id, title="Own review", status="review", assigned_agent_id=agent.id,
+                    started_at=_utc(now - timedelta(hours=2)))
+    body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/tasks")).json()
+    tasks = {t["title"]: t for t in body["tasks"]}
+    assert tasks["Reviewing"]["reviewRun"] is True
+    assert tasks["Reviewing"]["live"] is False
+    assert tasks["Own done"]["reviewRun"] is False
+    assert tasks["Own review"]["reviewRun"] is False
+    assert str(reviewing.id) == tasks["Reviewing"]["taskId"]

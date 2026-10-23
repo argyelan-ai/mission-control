@@ -24,7 +24,8 @@ from pydantic import BaseModel, field_validator
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.scopes import Scope, require_scope
+from app.auth import require_agent
+from app.scopes import Scope, get_agent_effective_scopes, require_scope
 from app.database import get_session
 from app.models.agent import Agent
 from app.models.memory import BoardMemory
@@ -284,6 +285,14 @@ async def agent_add_comment(
 # caller. Gated on TASKS_MANAGE (Board Leads/orchestrators only) so a
 # regular worker without an active task still gets a clear 403 here
 # instead of silently landing on its own active task via a different verb.
+#
+# One exception (round-4 user test t1 SHOULD-1): a chat reply. An agent's
+# chat session has no TASK_ID / BOARD_ID of its own (acp_chat
+# ``chat_child_env``), so `mc comment message "…" --task-id <id>` is the
+# only way it can answer in a task thread — and a developer's chat got
+# "Missing scopes: tasks:manage" for it. A ``message`` from the chat needs
+# TASKS_WRITE here, the same right the board route above asks for any task
+# on the agent's board; everything else stays TASKS_MANAGE.
 # ─────────────────────────────────────────────────────────────────────
 @router.post("/tasks/{task_id}/comments", status_code=status.HTTP_201_CREATED)
 async def agent_add_comment_by_task_id(
@@ -291,8 +300,16 @@ async def agent_add_comment_by_task_id(
     payload: AgentCommentCreate,
     request: Request,
     session: AsyncSession = Depends(get_session),
-    agent: Agent = Depends(require_scope(Scope.TASKS_MANAGE)),
+    agent: Agent = Depends(require_agent),
 ):
+    chat_reply = is_chat_session(request) and payload.comment_type in CHAT_REPLY_COMMENT_TYPES
+    needed = Scope.TASKS_WRITE if chat_reply else Scope.TASKS_MANAGE
+    if needed.value not in get_agent_effective_scopes(agent):
+        # Same answer as ``require_scope`` gives.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Missing scopes: {needed.value}",
+        )
     task = await session.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")

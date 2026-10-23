@@ -39,3 +39,25 @@ export function startedAt(iso: string | null | undefined, locale: string, timeZo
     ...(timeZone ? { timeZone } : {}),
   }).format(d);
 }
+
+/** The English effort word create once appended to a label — the backend's
+ *  `orchestrator.EFFORT_WORDS`. */
+const EFFORT_WORDS: Record<string, string> = {
+  default: "Default", off: "Off", on: "On", low: "Low", medium: "Medium", high: "High", max: "Max",
+};
+
+/** A label as the backend compares it (`orchestrator.display_label`):
+ *  without a trailing " · <English word of this row's OWN level>". "DeepSeek
+ *  · Max" on a Max row is "DeepSeek"; "Qwen Max", or "DeepSeek · Max" on an
+ *  Off row, keep their text (round-4 K1, t2 KANN-1: the dialog let such a
+ *  pair through and the backend refused it with a 422). */
+export function displayLabel(label: string, effort: string | null | undefined): string {
+  const level = effort || "default";
+  const word = EFFORT_WORDS[level] ?? level.charAt(0).toUpperCase() + level.slice(1);
+  const suffix = ` · ${word}`.toLowerCase();
+  const stripped = label.trim();
+  if (stripped.length > suffix.length && stripped.toLowerCase().endsWith(suffix)) {
+    return stripped.slice(0, -suffix.length).trimEnd();
+  }
+  return label;
+}

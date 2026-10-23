@@ -212,3 +212,19 @@ def test_mc_task_get_runs_in_the_chat_childs_env(tmp_path, monkeypatch):
         assert mc_commands._cmd_task_get(None, _Client(), cfg) == 0
     assert calls[-1] == ("GET", f"/api/v1/agent/boards/{board}/tasks/{tid}/detail")
     assert '"status": "in_progress"' in buf.getvalue()
+
+
+def test_comment_wakeup_in_the_chat_allows_a_reply_but_no_run_state():
+    """Round-4 user test t1 SHOULD-1: the chat wake-up said "kein mc comment"
+    flat out, so the chat never answered in the task thread — although a
+    plain reply is allowed there and is stored as the chat's reply. Run-state
+    comments stay forbidden; the reply names the one form the chat can run
+    (it has no TASK_ID, so `--task-id`). No echo loop: the agent's own
+    comments are never delivered back to it (agents._is_deliverable_for)."""
+    import bridge
+
+    chat = bridge.build_comment_nudge_text({"t-1": 2}, chat=True)
+    assert "kein mc comment/checklist" not in chat
+    assert "kein mc comment progress/resolution/evidence/blocker/reflection" in chat
+    assert 'mc comment message "<Antwort>" --task-id t-1' in chat
+    assert "um eine Antwort" in chat

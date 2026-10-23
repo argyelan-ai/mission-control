@@ -303,6 +303,17 @@ describe("ChallengeDetail — edit + recompose", () => {
     expect(screen.queryByText("Grid Video")).toBeNull();
   });
 
+  it("edit dialog fields stop at the backend's limits (title 200, model name and tag 80)", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({ entries: [makeEntry({ id: "e-1", model_label: "Qwen 3.6", display_tag: null })] })
+    );
+    renderDetail();
+    await userEvent.click(await findMenuItem(/^Edit$/));
+    expect(((await screen.findByRole("textbox", { name: /Title/ })) as HTMLInputElement).maxLength).toBe(200);
+    expect((screen.getByRole("textbox", { name: /Model name 1/ }) as HTMLInputElement).maxLength).toBe(80);
+    expect((screen.getByRole("textbox", { name: /^Tag 1$/ }) as HTMLInputElement).maxLength).toBe(80);
+  });
+
   it("edit dialog saves title and changed entry fields only", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(
       makeChallenge({

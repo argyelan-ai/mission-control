@@ -1014,6 +1014,8 @@
       "waitingForAnswer": "Waiting for your answer",
       "waitingApproval": "Waiting for approval",
       "unknown": "Status unknown — check the terminal",
+      "unknownNoTerminal": "Status unknown",
+      "loading": "Loading…",
       "ended": "Session ended — a new message starts the next session",
       "sent": "Sent…",
       "workingWords": "Working|Thinking|Pondering|Mulling|Tinkering|Puzzling|Computing|Musing|Figuring|Polishing|Sorting|Combining|Distilling|Tracing|Turning ideas|Pulling threads",
@@ -4040,14 +4042,22 @@
       "activeModelAuto": "Active model (auto)",
       "agentAria": "Agent {index}",
       "agentSelectPlaceholder": "Select agent …",
-      "tagPlaceholder": "Tag ({tag})",
+      "tagPlaceholder": "Tag (empty: {tag})",
+      "tagPlaceholderSpark": "Tag (empty: local · direct API)",
+      "tagPlaceholderAgent": "Tag (empty: the agent's harness)",
       "tagAria": "Tag {index}",
       "removeModelAria": "Remove model {index}",
       "addModel": "Add model",
       "startChallenge": "Start Challenge",
       "notifyStarted": "Challenge started",
       "notifyStartFailed": "Challenge could not be started",
-      "labelDuplicate": "Same label and the same effort as model {index} — choose another effort or give this row its own label."
+      "labelDuplicate": "Same label and the same effort as model {index} — choose another effort or give this row its own label.",
+      "fieldError": {
+        "tooLong": "At most {max} characters.",
+        "required": "Please fill this in.",
+        "range": "Outside the allowed range.",
+        "invalid": "This value is not accepted."
+      }
     },
     "editChallengeDialog": {
       "ariaLabel": "Edit Challenge",

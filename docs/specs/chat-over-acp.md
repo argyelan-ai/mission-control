@@ -567,7 +567,15 @@ a run ended got "0 % — no task is running". Two layers:
   a `message` comment (a reply in the task thread) stay open — the reply
   not on the card the agent's review run works, where any reviewer comment
   ends the review wait (`review_park`) and counts as the reviewer having
-  spoken (`proof_gate`). A chat reply never ACKs a delivered task and is
+  spoken (`proof_gate`). The chat has no task env of its own, so it replies
+  by id: `mc comment message "…" --task-id <id>` — the board-agnostic route
+  takes a chat reply with `tasks:write` (everything else there stays
+  `tasks:manage`), and both the chat's context block and its comment
+  wake-up name exactly that reply (round-4 user test t1 SHOULD-1: told only
+  what was refused, the chat claimed the server blocked a reply it never
+  tried). The block also names, per `review` card, who decides it: the
+  operator with the task view's two buttons, the agent's own review run, or a
+  reviewer agent's run (t1 NICE-3). A chat reply never ACKs a delivered task and is
   stored as `chat_reply` (server-only type, shown like a `message`): no
   watchdog counts it as the run's sign of life (`task_evidence.last_real_activity_at`,
   the silent-mailbox clock, the stale check's `messaging.last_task_activity`

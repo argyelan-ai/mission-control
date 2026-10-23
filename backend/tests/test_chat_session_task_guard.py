@@ -872,3 +872,96 @@ async def test_run_plain_ask_still_moves_the_stale_check_clock_for_comm_v2(clien
     assert resp.status_code == 201, resp.text
     assert (await _thread_rows(thread_id))[-1].from_chat is False
     assert await _stale_clock(task_id, comm_v2=True) is not None
+
+
+# ── Round 4: the reply the chat may write must be reachable ────────────────
+#
+# Round-4 user test t1 SHOULD-1: asked to put its answer on the task, the
+# chat said "the server blocks that" and did not try. Even when it tries, the
+# chat has no TASK_ID / BOARD_ID of its own (acp_chat.chat_child_env), so the
+# only way is `mc comment message "…" --task-id <id>` — the board-agnostic
+# route, gated on tasks:manage (Board Leads). A developer's chat got 403
+# there. A chat reply is the one write that route now lets through with
+# tasks:write — the same right the board route asks for.
+
+
+async def test_chat_reply_by_task_id_works_without_tasks_manage(client):
+    _board, _agent, task_id, token = await _setup()
+    resp = await client.post(
+        f"/api/v1/agent/tasks/{task_id}/comments",
+        json={"comment_type": "message", "content": "As of 13:23: steps 1-3 done."},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 201, resp.text
+    assert [c.comment_type for c in await _comments(task_id)] == ["chat_reply"]
+    assert (await _task(task_id)).status == "in_progress"
+
+
+async def test_chat_reply_by_task_id_on_a_human_review_card(client):
+    """The t1 card: handed to human review (assignee cleared) a minute ago."""
+    _board, _agent, task_id, token = await _setup(
+        status="review", assigned=False, left_run_ago=timedelta(minutes=1),
+    )
+    resp = await client.post(
+        f"/api/v1/agent/tasks/{task_id}/comments",
+        json={"comment_type": "message", "content": "Waits for your review."},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 201, resp.text
+    assert [c.comment_type for c in await _comments(task_id)] == ["chat_reply"]
+
+
+async def test_run_session_by_task_id_still_needs_tasks_manage(client):
+    _board, _agent, task_id, token = await _setup()
+    resp = await client.post(
+        f"/api/v1/agent/tasks/{task_id}/comments",
+        json={"comment_type": "message", "content": "x"},
+        headers=_auth(token, chat=False),
+    )
+    assert resp.status_code == 403, resp.text
+    assert "tasks:manage" in resp.text
+    assert await _comments(task_id) == []
+
+
+async def test_chat_run_state_by_task_id_still_needs_tasks_manage(client):
+    _board, _agent, task_id, token = await _setup()
+    resp = await client.post(
+        f"/api/v1/agent/tasks/{task_id}/comments",
+        json={"comment_type": "progress", "content": "x"},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 403, resp.text
+    assert await _comments(task_id) == []
+
+
+async def test_chat_reply_by_task_id_on_another_board_is_forbidden(client):
+    from app.models.board import Board
+    from app.models.task import Task
+
+    _board, _agent, _task_id, token = await _setup()
+    other_board, other_task = uuid.uuid4(), uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Board(id=other_board, name="Other", slug=f"ob-{uuid.uuid4().hex[:6]}"))
+        await s.commit()
+        s.add(Task(id=other_task, board_id=other_board, title="[Probe] Foreign", status="in_progress"))
+        await s.commit()
+    resp = await client.post(
+        f"/api/v1/agent/tasks/{other_task}/comments",
+        json={"comment_type": "message", "content": "x"},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 403, resp.text
+    assert await _comments(other_task) == []
+
+
+async def test_chat_reply_by_task_id_on_its_review_runs_card_is_refused(client):
+    _board, _agent, task_id, token = await _setup(
+        status="review", assigned=True, dispatched=True, intent="review_handoff",
+    )
+    resp = await client.post(
+        f"/api/v1/agent/tasks/{task_id}/comments",
+        json={"comment_type": "message", "content": "Reviewing it now."},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 409, resp.text
+    assert await _comments(task_id) == []

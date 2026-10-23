@@ -23,3 +23,22 @@ describe("bench words — one word per action (de)", () => {
     expect(en.bench.draftDialog.createDraft).toBe(en.bench.challengeDetail.draft);
   });
 });
+
+// Round-4 K1: the field messages and the tag placeholder exist in both
+// languages; German says the spark default in German (r2 N7 — it read
+// "Tag (LOCAL · DIRECT API)").
+describe("bench dialog — field messages and tag placeholder (round-4 K1)", () => {
+  it("de and en carry the same new-challenge keys", () => {
+    const keys = (o: object) => JSON.stringify(Object.keys(o).sort());
+    expect(keys(de.bench.newChallengeDialog)).toBe(keys(en.bench.newChallengeDialog));
+    expect(keys(de.bench.newChallengeDialog.fieldError)).toBe(keys(en.bench.newChallengeDialog.fieldError));
+  });
+
+  it("de: no English capitals in the tag placeholders, a German limit message", () => {
+    const d = de.bench.newChallengeDialog;
+    for (const v of [d.tagPlaceholder, d.tagPlaceholderSpark, d.tagPlaceholderAgent]) {
+      expect(v).not.toMatch(/LOCAL|DIRECT|empty/);
+    }
+    expect(d.fieldError.tooLong).toBe("Höchstens {max} Zeichen.");
+  });
+});

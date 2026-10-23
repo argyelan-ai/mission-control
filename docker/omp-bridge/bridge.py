@@ -2493,18 +2493,29 @@ def build_comment_nudge_text(pending: dict, *, chat: bool = False) -> str:
     working right away" made that chat do the task itself (round-1 user test
     t1, MUST-1); the server refuses such writes from the chat now
     (chat_session_guard). So: read, tell the operator, do not change it — a
-    task that needs more work gets a new run from MC."""
+    task that needs more work gets a new run from MC.
+
+    Round-4 user test t1 SHOULD-1: "kein mc comment" flat out kept the chat
+    from ever answering in the task thread. A plain reply (``message``) is
+    allowed there — the server stores it as the chat's reply, no watchdog
+    counts it — so the chat may answer when the operator asks for it; the
+    run-state comments stay forbidden. No echo loop: the agent's own comments
+    are never delivered back to it (backend ``agents._is_deliverable_for``)."""
     parts = [
         f"Task {tid}: {n} neue(r) Kommentar(e) — lies sie jetzt mit: mc task-get {tid}"
         for tid, n in pending.items()
     ]
     if chat:
+        reply_id = next(iter(pending)) if len(pending) == 1 else "<id>"
         return (
             "📬 Neue Kommentare auf deiner Aufgabe (Operator/Lead/System). "
             + " | ".join(parts)
             + " — Die Aufgabe selbst wird nur in ihrem eigenen Lauf bearbeitet, nicht "
             "hier im Chat: lies die Kommentare und sag dem Operator kurz, was drinsteht. "
-            "Aendere nichts an der Aufgabe (kein mc comment/checklist/deliverable/finish)."
+            "Aendere nichts an der Aufgabe (kein mc comment progress/resolution/evidence/"
+            "blocker/reflection, kein mc checklist/deliverable/finish). Bittet der Operator "
+            "im Kommentar um eine Antwort, darfst du sie dort geben: "
+            f'mc comment message "<Antwort>" --task-id {reply_id}'
         )
     return (
         "📬 Neue Kommentare auf deinem aktiven Task (Operator/Lead/System). "

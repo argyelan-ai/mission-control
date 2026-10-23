@@ -57,6 +57,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.models.agent import Agent
 from app.models.deliverable import TaskDeliverable
 from app.models.task import Task, TaskComment, TaskEvent
+from app.services.chat_run_context import review_run_holds
 from app.services.transcript_adapters import adapter_for
 from app.services.transcript_chat import preview_event, read_history
 
@@ -974,6 +975,10 @@ async def task_stubs(session: AsyncSession, agent: Agent, limit: int = 20) -> di
             "assignee": assignee,
             "outcome": outcomes.get(task.id),
             "deliverables": deliverables.get(task.id, 0),
+            # A review run of this agent works the card (round-4 review r1
+            # S2): not a live section, but the chat's task turn is real —
+            # the status line must not call it ready.
+            "reviewRun": review_run_holds(task, agent),
         }
 
     return {

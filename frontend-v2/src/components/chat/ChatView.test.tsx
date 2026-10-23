@@ -25,6 +25,7 @@ import {
   ACTIVITY_GROUP_MIN_SIZE,
   headerSideReservation,
   MOBILE_HEADER_METRICS,
+  FIRST_STATE_GRACE_MS,
 } from "./ChatView";
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
 import { useHeadTranscript } from "@/hooks/useHeadTranscript";
@@ -1963,6 +1964,35 @@ describe("ChatView", () => {
     renderChatView();
     expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "active");
     expect(screen.getByTestId("session-badge")).toHaveTextContent("live");
+  });
+
+  it('says "live" while a task turn runs, though the chat transcript is quiet (round-4 t1 NICE-4)', () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        session: { sessionId: "s1", live: false, startedAt: null, aliveness: "idle" },
+        state: { kind: "state", status: "task_working", prompt: null, aliveness: "idle" },
+      })
+    );
+    renderChatView();
+    expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "active");
+    expect(screen.getByTestId("session-badge")).toHaveTextContent("live");
+  });
+
+  it('opens with a neutral "Loading…" until the first state — never "check the terminal" (round-4 t1 NICE-2)', () => {
+    vi.useFakeTimers();
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ state: null, connected: false }));
+      renderChatView();
+      expect(screen.getByTestId("status-label")).toHaveTextContent("Loading…");
+      expect(screen.queryByText(/check the terminal/)).not.toBeInTheDocument();
+      // A probe that never answers is a real unknown again after the grace.
+      act(() => {
+        vi.advanceTimersByTime(FIRST_STATE_GRACE_MS + 10);
+      });
+      expect(screen.getByTestId("status-label")).toHaveTextContent("Status unknown — check the terminal");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("follows the LIVE state frame over a stale history session (badge must not freeze)", () => {
