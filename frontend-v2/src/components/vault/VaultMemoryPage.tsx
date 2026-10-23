@@ -404,11 +404,12 @@ export default function VaultMemoryPage() {
   const noteCount = isSearchMode ? notes.length : totalCount;
   const noteCountCapped = isSearchMode && !isTaskMode && notes.length >= VAULT_SEARCH_LIMIT;
   // Agents behind the notes shown: a search or a task subset counts its own
-  // rows; the list counts the vault's agents (one when an agent is selected).
+  // rows; the list counts the vault's agents (one when an agent is selected
+  // and it has notes under the other filters, else none).
   const agentCount = isTaskMode || isSearchMode
     ? new Set(notes.map((n) => n.agent).filter(Boolean)).size
     : effectiveAgent
-    ? 1
+    ? (noteCount > 0 ? 1 : 0)
     : vaultAgents.length;
 
   const isGraphView = view === "graph";

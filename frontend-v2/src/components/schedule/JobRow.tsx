@@ -243,7 +243,7 @@ export function JobRow({
 
       <div className="text-xs" style={{ color: C.textSecondary }}>{nextRunRelative(job, t)}</div>
 
-      <div className="flex items-center gap-1.5 text-xs" style={{ color: C.textSecondary }}>
+      <div className="flex min-w-0 items-center gap-1.5 text-xs" style={{ color: C.textSecondary }}>
         {job.last_run_status === "success" && (
           <CheckCircle2 size={12} className="shrink-0" style={{ color: C.online }} />
         )}
@@ -251,7 +251,12 @@ export function JobRow({
           <XCircle size={12} className="shrink-0" style={{ color: C.error }} />
         )}
         {/* Same words as the phone card ("26 days ago", not "26d ago"). */}
-        <span>{job.last_run_at ? timeAgo(job.last_run_at, locale) : "—"}</span>
+        <span
+          className="truncate whitespace-nowrap"
+          title={job.last_run_at ? new Date(job.last_run_at).toLocaleString(locale) : undefined}
+        >
+          {job.last_run_at ? timeAgo(job.last_run_at, locale) : "—"}
+        </span>
       </div>
 
       <div className="min-w-0 truncate text-xs" style={{ color: C.textSecondary }}>

@@ -5,14 +5,16 @@
  * not the agents that happen to be on the first page.
  */
 import React from "react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { VaultNote } from "@/lib/types";
 
+const nav = vi.hoisted(() => ({ query: "" }));
+const list = vi.hoisted(() => ({ notes: null as unknown, totalCount: 1881 }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(nav.query),
   usePathname: () => "/memory",
 }));
 vi.mock("@/components/layout/AppShell", () => ({
@@ -41,7 +43,7 @@ vi.mock("@/hooks/useVaultSearch", () => ({
 }));
 vi.mock("@/hooks/useVaultList", () => ({
   useVaultList: () => ({
-    notes: PAGE, totalCount: 1881, agents: ALL_AGENTS, isLoading: false, isError: false,
+    notes: (list.notes as VaultNote[] | null) ?? PAGE, totalCount: list.totalCount, agents: ALL_AGENTS, isLoading: false, isError: false,
     fetchNextPage: vi.fn(), hasNextPage: true, isFetchingNextPage: false,
   }),
 }));
@@ -70,7 +72,38 @@ vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} unobs
 
 import VaultMemoryPage from "../VaultMemoryPage";
 
+function renderPage() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <VaultMemoryPage />
+    </QueryClientProvider>,
+  );
+}
+
 describe("Memory — agents in header and filter", () => {
+  beforeEach(() => {
+    nav.query = "";
+    list.notes = null;
+    list.totalCount = 1881;
+  });
+
+  it("counts one agent when an agent is selected and it has notes", () => {
+    nav.query = "agent=head";
+    list.notes = [PAGE[0]];
+    list.totalCount = 1;
+    renderPage();
+    expect(screen.getByTestId("agent-count")).toHaveTextContent(/^1$/);
+  });
+
+  it("counts no agent when the selected agent has no notes under the other filters", () => {
+    nav.query = "agent=researcher&type=decision";
+    list.notes = [];
+    list.totalCount = 0;
+    renderPage();
+    expect(screen.getByTestId("agent-count")).toHaveTextContent(/^0$/);
+  });
+
   it("counts and offers every agent of the vault, not the first page's two", () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
