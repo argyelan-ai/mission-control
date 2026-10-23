@@ -80,15 +80,38 @@ describe("review: Stop run only while an agent reviews", () => {
   });
 
   it("a reviewer agent working on the card can still be stopped", async () => {
-    apiMock.agentsList.mockResolvedValue([{ id: "rev", name: "Checker", role_canonical: "reviewer" }]);
+    apiMock.agentsList.mockResolvedValue([{ id: "rev", name: "Checker", role_canonical: "reviewer", current_task_id: "t1" }]);
     renderActions(mkTask({ status: "review", assigned_agent_id: "rev", dispatch_intent: "review_handoff" } as Partial<Task>));
     expect(await screen.findByRole("button", { name: "Stop run" })).toBeInTheDocument();
   });
 
-  it("a self-review stall (the builder still holds its card) keeps Stop run", () => {
-    apiMock.agentsList.mockResolvedValue([{ id: "dev", name: "Builder", role_canonical: "reviewer" }]);
+  it("a self-review stall while the builder still works on its card keeps Stop run", async () => {
+    apiMock.agentsList.mockResolvedValue([{ id: "dev", name: "Builder", role_canonical: "reviewer", current_task_id: "t1" }]);
     renderActions(mkTask({ status: "review", assigned_agent_id: "dev", dispatch_intent: "root" } as Partial<Task>));
-    expect(screen.getByRole("button", { name: "Stop run" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Stop run" })).toBeInTheDocument();
+  });
+
+  // Round-3 t4 Q5 rest: "In review · with <agent>", the agent idle,
+  // its current task another one — "Stop run" stopped nothing.
+  it("an agent that holds the card but works on nothing (or on another task) has no run to stop", async () => {
+    apiMock.agentsList.mockResolvedValue([
+      { id: "dev", name: "Builder", role_canonical: "reviewer", current_task_id: null },
+      { id: "rev", name: "Checker", role_canonical: "reviewer", current_task_id: "other" },
+    ]);
+    const { unmount } = renderActions(mkTask({ status: "review", assigned_agent_id: "dev", dispatch_intent: "root" } as Partial<Task>));
+    await waitFor(() => expect(apiMock.agentsList).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByRole("button", { name: "Stop run" })).toBeNull();
+    unmount();
+    renderActions(mkTask({ status: "review", assigned_agent_id: "rev", dispatch_intent: "review_handoff" } as Partial<Task>));
+    await screen.findByText(/is reviewing/);
+    expect(screen.queryByRole("button", { name: "Stop run" })).toBeNull();
+  });
+
+  it("no Stop run flashes while the agents are still loading", () => {
+    apiMock.agentsList.mockReturnValue(new Promise(() => {}));
+    renderActions(mkTask({ status: "review", assigned_agent_id: "rev", dispatch_intent: "review_handoff" } as Partial<Task>));
+    expect(screen.queryByRole("button", { name: "Stop run" })).toBeNull();
   });
 
   it("in progress keeps Stop run", () => {

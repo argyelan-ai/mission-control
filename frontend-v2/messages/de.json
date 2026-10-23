@@ -729,7 +729,11 @@
       "recreateTitle": "Container {name} komplett neu erstellen?",
       "recreateBody": "Das zieht das aktuelle Docker-Image (~30-90s). Die laufende Worker-Session wird beendet.",
       "recreateWarn": "Achtung: Der Agent arbeitet gerade an einer Aufgabe — der Lauf wird abgebrochen. Bestätige, um trotzdem fortzufahren (force=true).",
-      "runtimeLabel": "Runtime"
+      "runtimeLabel": "Runtime",
+      "notFoundTitle": "Agent nicht gefunden",
+      "notFoundHint": "Vielleicht wurde er gelöscht oder archiviert, oder der Link ist veraltet.",
+      "agentLoadFailed": "Dieser Agent konnte nicht geladen werden.",
+      "backToAgents": "Zurück zu den Agenten"
     },
     "fleetCountWithPaused": "{active} aktiv · {paused} pausiert",
     "fleetCountActive": "{active} aktiv",
@@ -1533,7 +1537,17 @@
     },
     "jobNotFound": "Job nicht gefunden",
     "jobNotFoundHint": "Vielleicht wurde er gelöscht, oder der Link ist veraltet.",
-    "jobLoadFailed": "Die Job-Liste konnte nicht geladen werden."
+    "jobLoadFailed": "Die Job-Liste konnte nicht geladen werden.",
+    "nextPaused": "— (pausiert)",
+    "nextLabel": "Nächster: {when}",
+    "jobActions": "Aktionen für {name}",
+    "snoozeMenu": "Für einige Stunden aussetzen",
+    "runStatus": {
+      "success": "Erfolgreich",
+      "failed": "Fehlgeschlagen",
+      "running": "Läuft",
+      "skipped": "Übersprungen"
+    }
   },
   "office": {
     "title": "Organigramm",
@@ -4681,5 +4695,10 @@
       "unknown": "Die Prüfung ist fehlgeschlagen. Den Grund kennt MC nicht."
     },
     "details": "Details vom Server (englisch)"
+  },
+  "notFound": {
+    "title": "Seite nicht gefunden",
+    "hint": "Diese Adresse gibt es in Mission Control nicht. Vielleicht ist der Link veraltet oder vertippt.",
+    "home": "Zur Startseite"
   }
 }

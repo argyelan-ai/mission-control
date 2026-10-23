@@ -652,3 +652,78 @@ describe("ChatView — task sections (spec A)", () => {
     expect(screen.getByTestId("status-label")).toHaveTextContent("Task in progress · Build the report page");
   });
 });
+
+// Round-3 user test t1 NICE-1/2/3 (R5 "honest states"): the chat's task band
+// and status line lagged behind what the steps already showed.
+describe("ChatView — task state from the freshest source (round 3)", () => {
+  const delivered = (over = {}) => stub({ status: "inbox", live: true, startedAt: null, startKey: at(0), ...over });
+
+  it("NICE-2: steps already say 'in progress' → the band does not say 'not started'", async () => {
+    // The stub poll (10 s) still has inbox; the steps poll (2 s) is newer.
+    serve(
+      { applies: true, tasks: [delivered()], queued: 0, hasMore: false },
+      { [TASK_ID]: steps([think(at(1), "ACK first"), tool(at(1, 10), "mc ack")], { status: "in_progress" }) },
+    );
+    mockStream.mockReturnValue(streamOf({ state: { kind: "state", status: "task_working", prompt: null } }));
+    renderView();
+    await screen.findByText("ACK first");
+    const line = screen.getByTestId("chat-task-state");
+    await waitFor(() => expect(line).toHaveTextContent("Task in progress"));
+    expect(line).not.toHaveTextContent(/not started|waiting for the model/);
+  });
+
+  it("NICE-2: delivered and the agent already writing → 'in progress' even before the status flips", async () => {
+    serve(
+      { applies: true, tasks: [delivered()], queued: 0, hasMore: false },
+      { [TASK_ID]: steps([think(at(1), "ACK first")], { status: "inbox" }) },
+    );
+    mockStream.mockReturnValue(streamOf({ state: { kind: "state", status: "task_working", prompt: null } }));
+    renderView();
+    await screen.findByText("ACK first");
+    await waitFor(() => expect(screen.getByTestId("chat-task-state")).toHaveTextContent("Task in progress"));
+  });
+
+  it("NICE-2 counter-case: delivered, nothing written yet → still 'not started'", async () => {
+    serve({ applies: true, tasks: [delivered()], queued: 0, hasMore: false }, { [TASK_ID]: steps([], { status: "inbox" }) });
+    mockStream.mockReturnValue(streamOf({ state: { kind: "state", status: "waiting_model", prompt: null } }));
+    renderView();
+    const line = await screen.findByTestId("chat-task-state");
+    await waitFor(() => expect(api.chat.taskSteps).toHaveBeenCalled());
+    expect(line).toHaveTextContent("Task not started");
+  });
+
+  it("NICE-3: the steps say the task went to review → band and status line end at once", async () => {
+    serve(
+      { applies: true, tasks: [stub()], queued: 0, hasMore: false },
+      { [TASK_ID]: steps([think(at(1), "Done, handing over")], { status: "review", live: false }) },
+    );
+    // The chat probe still reports the task turn (it lags up to ~15 s).
+    mockStream.mockReturnValue(streamOf({ state: { kind: "state", status: "task_working", prompt: null } }));
+    renderView();
+    await screen.findByText("Done, handing over");
+    await waitFor(() => expect(screen.getByTestId("chat-task-head")).toHaveTextContent("Review"));
+    expect(screen.queryByText("Working on a task")).toBeNull();
+    expect(screen.queryByText(/Task in progress · Build the report page/)).toBeNull();
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+  });
+
+  it("NICE-1: the new band under the operator's message says 'Thinking' at once, not empty", async () => {
+    // Now-relative: a band quiet for minutes says "no new steps" instead.
+    const ago = (s: number) => new Date(Date.now() - s * 1000).toISOString();
+    serve(
+      { applies: true, tasks: [stub({ startedAt: ago(120), startKey: ago(120), deliveredAt: ago(125) })], queued: 0, hasMore: false },
+      { [TASK_ID]: steps([think(ago(60), "Build it")]) },
+    );
+    mockStream.mockReturnValue(
+      streamOf({
+        events: [msg(ago(5), "How far?")],
+        state: { kind: "state", status: "task_working", prompt: null },
+      }),
+    );
+    renderView();
+    await screen.findByText("Build it");
+    const segs = await screen.findAllByTestId("chat-task-segment");
+    const last = segs[segs.length - 1];
+    expect(within(last).getByText(/Thinking/)).toBeInTheDocument();
+  });
+});

@@ -14,7 +14,7 @@
 import { createContext, memo, useContext, useMemo, useState } from "react";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
-import { ChevronRight, MessageSquare, ShieldCheck } from "lucide-react";
+import { Brain, ChevronRight, MessageSquare, ShieldCheck } from "lucide-react";
 import { C, stepFailedStyle } from "@/lib/colors";
 import type { ChatTaskStub, TaskStepDetail, TaskStepLiveDetail, ToolEvent } from "@/lib/chatTypes";
 import { formatDuration } from "@/lib/taskDetail/format";
@@ -476,8 +476,33 @@ export const TaskLiveRow = memo(function TaskLiveRow({
       </div>
     );
   }
+  // Nothing streams yet and the band holds nothing else (a new band under
+  // the operator's message): say the agent is at it instead of an empty band
+  // for the first poll (round-3 t1 NICE-1). Next to past rows it stays quiet.
+  if (unit.alone) return <TaskThinkingWait />;
   return null;
 });
+
+/** "Thinking…" — the live row's quiet form before the first piece arrives. */
+function TaskThinkingWait() {
+  const t = useTranslations("sessions");
+  return (
+    <div
+      data-testid="task-unit"
+      data-unit="live"
+      data-waiting=""
+      className={`${EDGE} min-h-11 flex items-center gap-2 text-xs`}
+      style={{ color: C.textSecondary }}
+    >
+      <span className={SLOT} aria-hidden="true">
+        <Brain size={13} className="animate-pulse motion-reduce:animate-none" style={{ color: C.textMuted }} />
+      </span>
+      <span role="status" className="min-w-0 truncate">
+        {t("thinkingLive")}…
+      </span>
+    </div>
+  );
+}
 
 export const TaskEndLine = memo(function TaskEndLine({ stub }: { stub: ChatTaskStub }) {
   const t = useTranslations("sessions.taskSteps");

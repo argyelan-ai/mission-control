@@ -230,11 +230,18 @@ async def get_job_stats(
         .order_by(ScheduledJobRun.started_at)
     )
     runs = runs_result.all()
-    runs_7d = [r for r in runs if r.started_at >= cutoff_7d]
 
-    def success_rate(run_list: list) -> float:
+    def _aware(ts: datetime) -> datetime:
+        # SQLite (tests) hands back naive times; Postgres aware ones — both UTC.
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+    runs_7d = [r for r in runs if _aware(r.started_at) >= cutoff_7d]
+
+    def success_rate(run_list: list) -> float | None:
+        # No run in the window = no rate (round-3 t4 S8: a paused job read
+        # "0 %" without a single run). The UI shows "—" for null.
         if not run_list:
-            return 0.0
+            return None
         return sum(1 for r in run_list if r.status == "success") / len(run_list)
 
     def avg_duration_ms(run_list: list) -> float:
