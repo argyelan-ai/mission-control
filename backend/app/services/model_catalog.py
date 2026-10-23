@@ -141,6 +141,8 @@ logger = logging.getLogger(__name__)
 # runtime watcher sees the box answer again (``_woke_up``).
 CACHE_TTL = 15 * 60
 NEGATIVE_CACHE_TTL = 5 * 60
+#: Failures of providers no runtime watcher looks at (cloud APIs).
+UNWATCHED_NEGATIVE_CACHE_TTL = 60
 
 #: Connect limit 2 s, the same as ``runtime_manager._PROBE_CONNECT_TIMEOUT_S``:
 #: a box that drops packets (asleep, off) never refuses the connect, so a flat
@@ -804,11 +806,9 @@ async def discover_provider(session: AsyncSession, target: ProviderTarget) -> Di
 
 async def _probe(target: ProviderTarget, creds: dict[str, str]) -> Discovery:
     """The network half of ``discover_provider`` — touches no DB session, so
-    several of them can run at once."""
-    adapter = ADAPTERS.get(target.protocol)
-    if adapter is None:
-        return Discovery(STATUS_UNREACHABLE, [], f"Kein Adapter für '{target.protocol}'.")
-
+    several of them can run at once. Callers have already turned an unknown
+    protocol into ``unreachable``."""
+    adapter = ADAPTERS[target.protocol]
     try:
         return await adapter(target, creds)
     except _CredentialUnavailable as exc:
@@ -863,11 +863,17 @@ async def _store(target: ProviderTarget, discovery: Discovery) -> dict:
     # local file, not a transient outage that a retry could heal. The shorter
     # negative TTL is reserved for states that really might fix themselves
     # (provider 5xx, runtime just booting).
-    ttl = (
-        CACHE_TTL
-        if discovery.status in (STATUS_OK, STATUS_CLI_CONFIG)
-        else NEGATIVE_CACHE_TTL
-    )
+    # Only a watched provider earns the long negative TTL: ``_woke_up`` drops
+    # its remembered failure the moment the watcher sees the box answer again.
+    # The catalog reads live snapshots for openai providers only (see
+    # ``build_catalog``), so for anthropic/gemini/... nothing would clear a
+    # passing 5xx early — they keep the old 60 s.
+    if discovery.status in (STATUS_OK, STATUS_CLI_CONFIG):
+        ttl = CACHE_TTL
+    elif target.protocol == "openai" and target.runtime_slugs:
+        ttl = NEGATIVE_CACHE_TTL
+    else:
+        ttl = UNWATCHED_NEGATIVE_CACHE_TTL
     await _cache_set(target.key, payload, ttl)
     return {**payload, "cached": False}
 
@@ -984,10 +990,21 @@ async def build_catalog(session: AsyncSession, *, force: bool = False) -> list[d
     for target in targets:
         if not force:
             cached = await _cache_get(target.key)
-            if cached is not None and not _woke_up(target, cached, live):
+            dark = _dark_failures(target, live)
+            # A remembered SUCCESS still wins (its model list is real). A
+            # remembered FAILURE does not: the hourly checker and "Neu
+            # abfragen" really probe a sleeping box, and their `unreachable`
+            # would otherwise show a red "Runtime offline" for the whole
+            # negative TTL instead of the calm `asleep` (PR #964 review).
+            cached_ok = cached is not None and cached.get("status") in (
+                STATUS_OK,
+                STATUS_CLI_CONFIG,
+            )
+            if cached is not None and (cached_ok or dark is None) and not _woke_up(
+                target, cached, live
+            ):
                 entries[target.key] = {**cached, "cached": True}
                 continue
-            dark = _dark_failures(target, live)
             if dark is not None:
                 entries[target.key] = {
                     **_entry(

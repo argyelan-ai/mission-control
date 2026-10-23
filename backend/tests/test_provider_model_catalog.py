@@ -1446,6 +1446,88 @@ async def test_cached_failure_is_dropped_once_the_box_answers_again(session, mon
     assert second[0]["status"] == model_catalog.STATUS_OK
 
 
+@pytest.mark.asyncio
+async def test_cached_failure_does_not_hide_that_the_box_is_asleep(session, monkeypatch, fake_redis):
+    """The hourly checker / "Neu abfragen" probe a sleeping box for real and
+    remember ``unreachable`` for 5 minutes. While the watcher calls the box
+    dark, that remembered failure must still read as the calm ``asleep`` —
+    not a red "Runtime offline" (PR #964 review)."""
+    seen = mock_httpx(
+        monkeypatch, lambda r: (_ for _ in ()).throw(httpx.ConnectTimeout("dark", request=r))
+    )
+    use_fake_redis(monkeypatch, fake_redis)
+    patch_creds(monkeypatch, {})
+    await add_runtime(
+        session, slug="sleepy-box", runtime_type="vllm_docker",
+        endpoint="http://192.0.2.77:5559/v1",
+    )
+    await _mark_live(fake_redis, "sleepy-box", reachable=False, consecutive_failures=12)
+
+    forced = await model_catalog.build_catalog(session, force=True)
+    assert forced[0]["status"] == model_catalog.STATUS_UNREACHABLE
+    probes_after_force = len(seen)
+
+    providers = await model_catalog.build_catalog(session)
+
+    entry = next(p for p in providers if p["key"] == "openai:sleepy-box")
+    assert entry["status"] == model_catalog.STATUS_ASLEEP
+    assert len(seen) == probes_after_force, "the asleep answer must not probe again"
+
+
+@pytest.mark.asyncio
+async def test_cached_success_still_wins_over_a_dark_watcher(session, monkeypatch, fake_redis):
+    """A remembered model list is real data — it is kept even when the box
+    has since gone dark (only a remembered FAILURE gives way to asleep)."""
+    mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": [{"id": "m"}]}))
+    use_fake_redis(monkeypatch, fake_redis)
+    patch_creds(monkeypatch, {})
+    await add_runtime(
+        session, slug="nap-box", runtime_type="vllm_docker",
+        endpoint="http://192.0.2.80:8000/v1",
+    )
+    await model_catalog.build_catalog(session)
+    await _mark_live(fake_redis, "nap-box", reachable=False, consecutive_failures=4)
+
+    providers = await model_catalog.build_catalog(session)
+
+    entry = next(p for p in providers if p["key"] == "openai:nap-box")
+    assert entry["status"] == model_catalog.STATUS_OK
+    assert entry["cached"] is True
+
+
+@pytest.mark.asyncio
+async def test_cloud_failure_keeps_the_short_ttl(session, monkeypatch, fake_redis):
+    """A non-openai cloud provider is not read from the runtime watcher, so
+    nothing would clear its remembered 5xx early — it keeps the short 60 s
+    (PR #964 review)."""
+    mock_httpx(monkeypatch, lambda r: httpx.Response(503, text="busy"))
+    use_fake_redis(monkeypatch, fake_redis)
+    patch_creds(monkeypatch, {"CLAUDE_CODE_OAUTH_TOKEN": "sk-oauth-test"})
+
+    target = await anthropic_target(session)
+    await model_catalog.get_provider_catalog(session, target)
+
+    ttl = await fake_redis.ttl(model_catalog.RedisKeys.model_catalog_provider("anthropic"))
+    assert 0 < ttl <= model_catalog.UNWATCHED_NEGATIVE_CACHE_TTL <= 60
+
+
+@pytest.mark.asyncio
+async def test_watched_box_failure_is_remembered_five_minutes(session, monkeypatch, fake_redis):
+    mock_httpx(
+        monkeypatch, lambda r: (_ for _ in ()).throw(httpx.ConnectTimeout("dark", request=r))
+    )
+    use_fake_redis(monkeypatch, fake_redis)
+    patch_creds(monkeypatch, {})
+    await add_runtime(
+        session, slug="far-box", runtime_type="vllm_docker",
+        endpoint="http://192.0.2.81:8000/v1",
+    )
+    await model_catalog.build_catalog(session)
+
+    ttl = await fake_redis.ttl(model_catalog.RedisKeys.model_catalog_provider("openai:far-box"))
+    assert model_catalog.UNWATCHED_NEGATIVE_CACHE_TTL < ttl <= model_catalog.NEGATIVE_CACHE_TTL
+
+
 def test_failure_is_remembered_at_least_five_minutes():
     assert model_catalog.NEGATIVE_CACHE_TTL >= 300
 
