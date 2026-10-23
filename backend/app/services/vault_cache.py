@@ -2,9 +2,9 @@
 
 The graph build path (``vault_graph.build_graph``) is the slowest read in
 the vault subsystem — it scrolls every embedding out of Qdrant, runs
-k-means with silhouette scoring, and optionally performs N nearest-
-neighbour queries for "ghost" similarity edges. On a 320-note vault that
-adds up to 1.5-4 seconds of cold-path latency.
+k-means with silhouette scoring, and optionally computes the "ghost"
+similarity edges (one local cosine pass over the scrolled vectors). The
+router also makes sure only one cold build per version runs at a time.
 
 Caching strategy: **versioned key**, no manual eviction.
 
