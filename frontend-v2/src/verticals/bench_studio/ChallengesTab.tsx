@@ -6,6 +6,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { Plus, FlaskConical, Archive } from "lucide-react";
 import { C } from "@/lib/colors";
 import { Pill } from "@/components/shared/Pill";
+import { useEffortWord } from "@/lib/effortWord";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { ChallengeDetail } from "./ChallengeDetail";
 import { NewChallengeDialog } from "./NewChallengeDialog";
@@ -46,7 +47,11 @@ export function ChallengeStatusPill({ challenge }: { challenge: BenchChallenge }
     : t.has(challenge.status)
       ? t(challenge.status)
       : challenge.status;
-  return <Pill color={BENCH_STATUS_COLOR[challenge.status] ?? C.textMuted}>{label}</Pill>;
+  return (
+    <Pill color={BENCH_STATUS_COLOR[challenge.status] ?? C.textMuted} casing="sentence">
+      {label}
+    </Pill>
+  );
 }
 
 /** The backend's raw error line — only when the pill could not name the
@@ -216,7 +221,7 @@ function ChallengeRow({
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           {challenge.archived_at && (
-            <Pill color={C.textMuted} variant="outline">
+            <Pill color={C.textMuted} variant="outline" casing="sentence">
               {archivedLabel}
             </Pill>
           )}
@@ -237,8 +242,18 @@ function ChallengeRow({
   );
 }
 
+/** A direct-API entry's chosen effort ("off", "max") — the label no longer
+ *  carries it (round-2 Q2), so the list names it after the label. */
+function chosenEffort(entry: BenchEntry): string | null {
+  if (entry.source_kind !== "spark") return null;
+  const level = entry.metrics?.effort_requested;
+  return level && level !== "default" ? level : null;
+}
+
 function EntryProgress({ entry }: { entry: BenchEntry }) {
   const color = ENTRY_STATUS_COLOR[entry.status] ?? C.textMuted;
+  const word = useEffortWord();
+  const effort = chosenEffort(entry);
   return (
     <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: C.textSecondary }}>
       <span
@@ -246,7 +261,7 @@ function EntryProgress({ entry }: { entry: BenchEntry }) {
         className="inline-block w-1.5 h-1.5 rounded-full"
         style={{ backgroundColor: color }}
       />
-      {entry.model_label}
+      {effort ? `${entry.model_label} · ${word(effort)}` : entry.model_label}
     </span>
   );
 }

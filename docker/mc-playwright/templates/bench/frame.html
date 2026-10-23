@@ -17,14 +17,23 @@
   justify-content:center; font-family:'JetBrains Mono',monospace; font-size:22px;
   color:#2E3444; letter-spacing:.3em; }
 .chip { position:absolute; top:236px; width:872px; display:flex;
-  justify-content:space-between; align-items:center; }
+  justify-content:space-between; align-items:center; gap:24px; }
 .chip.a { left:64px; } .chip.b { right:64px; }
 .chip .model { font-family:'JetBrains Mono',monospace; font-size:23px;
   color:var(--text); letter-spacing:.08em; text-transform:uppercase;
   padding-left:18px; border-left:3px solid var(--cyan);
-  max-width:560px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.chip .speed { font-family:'JetBrains Mono',monospace; font-size:21px;
-  color:var(--cyan); letter-spacing:.05em; }
+  min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chip .speed { flex:none; font-family:'JetBrains Mono',monospace; font-size:21px;
+  color:var(--cyan); letter-spacing:.05em; white-space:nowrap; }
+.chip .who { display:flex; align-items:center; gap:16px; min-width:0; }
+/* Effort pill (round-2 Q2): the thinking level as its own value next to the
+   name — it never wraps and an empty one leaves nothing behind. */
+.effort { flex:none; display:inline-block; font-family:'JetBrains Mono',monospace;
+  font-size:17px; line-height:1; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--text); border:1px solid rgba(0,229,255,.5); border-radius:999px;
+  padding:6px 12px 5px; white-space:nowrap; }
+.effort::before { content:"effort "; color:var(--text2); }
+.effort:empty { display:none; }
 .bottom { position:absolute; left:64px; right:64px; bottom:44px;
   display:flex; justify-content:space-between; align-items:center; }
 .prompt { font-family:'JetBrains Mono',monospace; font-size:19px; color:var(--muted);
@@ -40,8 +49,8 @@
   </div>
   <div class="meta">one prompt · one shot<br><b>{{MODE_LINE}}</b></div>
 </div>
-<div class="chip a"><span class="model">{{MODEL_A}}</span><span class="speed">{{TAG_A}}</span></div>
-<div class="chip b"><span class="model">{{MODEL_B}}</span><span class="speed">{{TAG_B}}</span></div>
+<div class="chip a"><span class="who"><span class="model">{{MODEL_A}}</span><span class="effort">{{EFFORT_A}}</span></span><span class="speed">{{TAG_A}}</span></div>
+<div class="chip b"><span class="who"><span class="model">{{MODEL_B}}</span><span class="effort">{{EFFORT_B}}</span></span><span class="speed">{{TAG_B}}</span></div>
 <div class="slot a"><div class="ph">VIDEO A</div></div>
 <div class="slot b"><div class="ph">VIDEO B</div></div>
 <div class="bottom">

@@ -855,25 +855,37 @@ describe("NewChallengeDialog — labels stay apart (round-1 P3)", () => {
 
   it("same label and same effort: error, Start stays off", async () => {
     await twoRows("DeepSeek", "deepseek ");
-    expect(screen.getByText(/same label as model 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/same effort as model 1/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Start Challenge/i })).toBeDisabled();
   });
 
   it("the hint sits inside the model's own block, under its heading (phone layout P4)", async () => {
     await twoRows("DeepSeek", "DeepSeek");
-    const hint = screen.getByText(/same label as model 1/i);
+    const hint = screen.getByText(/same effort as model 1/i);
     const block = hint.closest("[data-testid='bench-model-row']") as HTMLElement;
     expect(block).not.toBeNull();
     expect(block.textContent).toContain("Model 2");
   });
 
-  it("same label, different effort: says the effort gets appended, Start allowed", async () => {
+  it("same label, different effort: not a duplicate — no hint, the label is sent as typed (round-2 Q2)", async () => {
+    vi.mocked(benchApi.challenges.create).mockClear();
     await twoRows("DeepSeek", "DeepSeek");
     const groups = screen.getAllByRole("radiogroup");
     const maxChip = Array.from(groups[1].querySelectorAll('[role="radio"]')).find((c) => c.textContent === "Max");
     await userEvent.click(maxChip as HTMLElement);
-    expect(screen.queryByText(/same label as model 1/i)).toBeNull();
-    expect(screen.getAllByText(/effort is added to the label/i).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /Start Challenge/i })).toBeEnabled();
+    expect(screen.queryByText(/same label/i)).toBeNull();
+    expect(screen.queryByText(/added to the label/i)).toBeNull();
+    const start = screen.getByRole("button", { name: /Start Challenge/i });
+    expect(start).toBeEnabled();
+    await userEvent.click(start);
+    await waitFor(() => expect(benchApi.challenges.create).toHaveBeenCalled());
+    const body = vi.mocked(benchApi.challenges.create).mock.calls[0][0];
+    expect(body.models.map((m) => m.label)).toEqual(["DeepSeek", "DeepSeek"]);
+    expect(body.models.map((m) => m.effort ?? "default")).toEqual(["default", "max"]);
+  });
+
+  it("same label and same effort names both ways out: another effort or an own label", async () => {
+    await twoRows("DeepSeek", "DeepSeek");
+    expect(screen.getByText(/same label and the same effort as model 1/i)).toBeInTheDocument();
   });
 });

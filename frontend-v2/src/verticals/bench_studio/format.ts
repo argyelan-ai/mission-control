@@ -5,10 +5,19 @@
 // clock, not UTC.
 import { formatDuration, parseTs } from "@/lib/taskDetail/format";
 
-/** "8 min" / "1 h 32 min" / "45 s" for a run that took `ms` milliseconds. */
+/** "45 s" / "1 min 35 s" / "1 h 32 min" for a run that took `ms`
+ *  milliseconds. Below an hour the seconds stay: a run time is a measurement,
+ *  and "1 min" for 95 s read wrong next to the video's "1 min 35 s" (round-2
+ *  t2 NICE-3 — the outro uses the same form). From an hour on the app's
+ *  duration form takes over. */
 export function runDuration(ms: number | null | undefined, locale: string): string | null {
   if (ms == null || Number.isNaN(ms) || ms <= 0) return null;
-  return formatDuration(Math.round(ms / 1000), locale);
+  const total = Math.round(ms / 1000);
+  if (total >= 3600) return formatDuration(total, locale);
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  if (minutes === 0) return `${seconds} s`;
+  return seconds ? `${minutes} min ${seconds} s` : `${minutes} min`;
 }
 
 /** 39200 -> "39,200" (en) / "39.200" (de) — the same grouping the effort line uses. */

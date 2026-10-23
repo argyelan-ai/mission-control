@@ -106,10 +106,22 @@ class RecordResponse(BaseModel):
     html_bytes: Optional[int] = None
 
 
+#: What this renderer understands beyond the base payload — GET /health
+#: lists it, the backend only sends a field the image announces (an older
+#: image would silently drop it).
+#: - branding_effort: ``effort`` per model chip and outro row (2026-10-23).
+RENDERER_FEATURES = ("branding_effort",)
+
+
 class BrandingModelSpec(BaseModel):
-    """One model's chip in the branded frame (label + tag, e.g. 'LOCAL · SPARK')."""
+    """One model's chip in the branded frame (label + tag, e.g. 'LOCAL · SPARK').
+
+    `effort`: the thinking level in English ("Off", "Max", "Default"), drawn
+    as its own pill next to the name — "" = no pill (round-2 Q2: inside the
+    tag the level wrapped onto a second line)."""
     label: str
     tag: str
+    effort: str = ""
 
 
 class BrandingOutroRow(BaseModel):
@@ -126,6 +138,8 @@ class BrandingOutroRow(BaseModel):
     size: str = "\u2014"
     cost: str = "\u2014"
     tokens: str = "\u2014"
+    # Thinking level, a pill after the name ("" = none) — see BrandingModelSpec.
+    effort: str = ""
 
 
 class BrandingSpec(BaseModel):
@@ -474,6 +488,8 @@ def render_outro_rows_html(rows: List["BrandingOutroRow"]) -> str:
     parts = []
     for row in rows:
         name = _html.escape(row.name)
+        if row.effort:
+            name += f' <span class="effort">{_html.escape(row.effort)}</span>'
         time_val = _html.escape(row.time)
         cost_val = _html.escape(row.cost)
         tokens_val = _html.escape(row.tokens)
@@ -513,8 +529,10 @@ def build_frame_tokens(branding: "BrandingSpec") -> dict:
             **common,
             "MODEL_A": model_a.label,
             "TAG_A": model_a.tag,
+            "EFFORT_A": model_a.effort,
             "MODEL_B": model_b.label,
             "TAG_B": model_b.tag,
+            "EFFORT_B": model_b.effort,
             "MODE_LINE": BENCH_MODE_LINE,
         }
     (model,) = branding.models
@@ -522,6 +540,7 @@ def build_frame_tokens(branding: "BrandingSpec") -> dict:
         **common,
         "MODEL": model.label,
         "TAG": model.tag,
+        "EFFORT": model.effort,
         "MODE_LINE": BENCH_MODE_LINE_SINGLE,
     }
 

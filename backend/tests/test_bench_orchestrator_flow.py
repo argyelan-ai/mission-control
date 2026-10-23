@@ -1437,8 +1437,8 @@ async def test_compose_challenge_sends_branding_for_two_entries(session, monkeyp
     assert models_by_label["Qwen 3.6 35B A3B"] == "LOCAL · DIRECT API"
 
     rows_by_name = {r["name"]: r for r in branding["outro_rows"]}
-    assert rows_by_name["Qwen 3.6 35B A3B"]["time"] == "12.8 min"
-    assert rows_by_name["Grok 4.5"]["time"] == "9.4 min"
+    assert rows_by_name["Qwen 3.6 35B A3B"]["time"] == "12 min 48 s"
+    assert rows_by_name["Grok 4.5"]["time"] == "9 min 24 s"
     # No artifact_path on either entry here -> size falls back to "—"
     assert rows_by_name["Qwen 3.6 35B A3B"]["size"] == "—"
 
@@ -1475,7 +1475,7 @@ async def test_compose_challenge_sends_branding_for_one_entry(session, monkeypat
     assert branding["models"][0]["label"] == "Qwen 3.6 35B A3B"
     assert branding["models"][0]["tag"] == "LOCAL · DIRECT API"
     assert len(branding["outro_rows"]) == 1
-    assert branding["outro_rows"][0]["time"] == "12.8 min"
+    assert branding["outro_rows"][0]["time"] == "12 min 48 s"
     assert len(captured["inputs"]) == 1
 
 
@@ -1929,7 +1929,7 @@ async def test_branding_time_derived_defensively_from_events(session, monkeypatc
     captured = _fake_compose_client(monkeypatch)
     await orchestrator.compose_challenge(session, ch, entries)
     rows = {r["name"]: r for r in captured["branding"]["outro_rows"]}
-    assert rows["A"]["time"] == "6.0 min"  # from events
+    assert rows["A"]["time"] == "6 min"  # from events
     assert rows["B"]["time"] == "—"        # spark without metrics -> dash
 
 

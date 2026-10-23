@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
+import { useEffortWord } from "@/lib/effortWord";
 import {
   Archive,
   ArchiveRestore,
   ArrowLeft,
+  ChevronLeft,
   Download,
   ExternalLink,
   Film,
@@ -32,7 +34,7 @@ import { apiErrorDetail } from "./apiError";
 import { abortReason, entryAbortReason } from "./status";
 import { runDuration, tokenCount } from "./format";
 import { DraftDialog } from "./DraftDialog";
-import { EntryEffort, failedAtMaxTokens } from "./EntryEffort";
+import { EntryEffort, EntryEffortPill, failedAtMaxTokens } from "./EntryEffort";
 import { EntryTaskState } from "./EntryTaskState";
 import type { BenchChallenge, ChallengeAction, BenchEntry, RecordNetworkMetrics } from "./types";
 
@@ -108,8 +110,8 @@ function costLabel(entry: BenchEntry, localLabel: string): string | null {
   return m.cost_usd < 0.01 ? "<$0.01" : `~$${m.cost_usd.toFixed(2)}`;
 }
 
-/** "8 min · 74 tok/s · 111 → 39,200 tok · local": the duration in the app's
- *  duration form and token counts in the locale's grouping, so the line
+/** "8 min 52 s · 74 tok/s · 111 → 39,200 tok · local": the duration with its
+ *  seconds below an hour (format.runDuration) and token counts in the locale's grouping, so the line
  *  matches the effort line next to it ("33,328 reasoning tok") — round-1
  *  t2 KANN-1 / r2 S5 found "532 s" and "39.2k" beside "33.328". The video
  *  outro keeps its own compact form; it is a picture, not this page. */
@@ -124,9 +126,18 @@ function metricsLine(entry: BenchEntry, localLabel: string, locale: string): str
   } else if (m.tokens_out) {
     parts.push(`${tokenCount(m.tokens_out, locale)} tok`);
   }
+  // "local" alone (a run that has not measured anything yet) says nothing
+  // the Direct API pill does not already say — once is enough (r2 S5, K3).
   const cost = costLabel(entry, localLabel);
-  if (cost) parts.push(cost);
+  if (cost && parts.length > 0) parts.push(cost);
   return parts.join(" · ");
+}
+
+/** The entry has nothing to show yet and its card shows the
+ *  "Generating…"/"Waiting…" placeholder instead of a video. */
+function showsPlaceholder(entry: BenchEntry): boolean {
+  return !entry.video_path && !entry.screenshot_path &&
+    (entry.status === "generating" || entry.status === "pending");
 }
 
 /** A finished agent entry whose task has no attributed token rows yet: the
@@ -160,7 +171,14 @@ export function ChallengeDetail({
   const tCommon = useTranslations("bench.common");
   const tStatus = useTranslations("bench.status");
   const entryStatusWord = useEntryStatusWord();
+  const effortWord = useEffortWord();
   const locale = useLocale();
+  // Two rows of the same model differ only by effort since round-2 Q2: names
+  // that leave the card (download file, button label) carry it too.
+  const entryName = (entry: BenchEntry) => {
+    const level = entry.source_kind === "spark" ? entry.metrics?.effort_requested : null;
+    return level ? `${entry.model_label} · ${effortWord(level)}` : entry.model_label;
+  };
   const qc = useQueryClient();
   const [draftOpen, setDraftOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -407,33 +425,34 @@ export function ChallengeDetail({
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Header (K12): context + title row, state line, next step. */}
-      <div className="flex flex-col gap-3">
-        <div data-region="bench-detail-title" className="flex items-start gap-2">
+      {/* Header (K12): context row (‹ Challenges · ⋯), title, state line,
+          next step. The list's own header (kicker, page title, tabs) is not
+          shown above a detail any more (r2 S3) — the page starts here. */}
+      <div data-region="bench-detail-title" className="flex flex-col gap-3">
+        <div data-testid="bench-detail-context" className="flex items-center justify-between gap-2">
           <button
             onClick={onBack}
-            aria-label={t("backAria")}
-            className="flex items-center justify-center w-11 h-11 -ml-3 shrink-0 rounded-md cursor-pointer"
+            className="flex items-center gap-1 min-h-11 -ml-2 pr-2 text-sm cursor-pointer"
             style={{ color: C.textSecondary }}
           >
-            <ArrowLeft size={18} />
+            <ChevronLeft size={18} aria-hidden="true" />
+            {t("backToChallenges")}
           </button>
-          {/* K1: the title wraps and is cut after 3 lines at most — never 0 px. */}
-          <h2
-            className="flex-1 min-w-0 pt-2 text-lg font-semibold line-clamp-3 break-words"
-            style={{ color: C.textPrimary }}
-          >
-            {challenge.title}
-          </h2>
-          <div className="shrink-0">
-            <OverflowMenu actions={moreActions} label={t("moreAria")} testId="bench-detail-more" />
-          </div>
+          <OverflowMenu actions={moreActions} label={t("moreAria")} testId="bench-detail-more" />
         </div>
+        {/* K1: the title is the largest type of the view; it wraps and is
+            cut after 3 lines at most — never 0 px. */}
+        <h1
+          className="display text-xl font-semibold line-clamp-3 break-words"
+          style={{ color: C.textPrimary }}
+        >
+          {challenge.title}
+        </h1>
 
         <div className="flex flex-wrap items-center gap-2">
           <ChallengeStatusPill challenge={challenge} />
           {challenge.archived_at && (
-            <Pill color={C.textMuted} variant="outline">
+            <Pill color={C.textMuted} variant="outline" casing="sentence">
               {tCommon("archivedPill")}
             </Pill>
           )}
@@ -536,31 +555,47 @@ export function ChallengeDetail({
         {challenge.entries.map((entry) => (
           <div
             key={entry.id}
+            data-testid="bench-entry"
             className="min-w-0 rounded-xl p-3 flex flex-col gap-2"
             style={{ backgroundColor: C.bgSurface, border: `1px solid ${C.borderSubtle}` }}
           >
-            {/* min-w-0 on card and label: a long model name is cut with "…"
-                instead of pushing the status pill out of the card on a phone. */}
-            <div className="flex items-center justify-between gap-2">
-              <span className="min-w-0 text-sm font-medium truncate" style={{ color: C.textPrimary }}>
-                {entry.model_label}
-              </span>
-              <div className="flex items-center gap-1.5 shrink-0">
-                {entry.source_kind === "spark" && (
-                  <Pill color={C.textMuted} variant="outline">
-                    {t("directApiPill")}
-                  </Pill>
-                )}
-                <Pill color={ENTRY_STATUS_COLOR[entry.status] ?? C.textMuted}>
+            {/* The label gets its own line and wraps instead of being cut
+                with "…": on a phone the cut took exactly what told two rows
+                of the same model apart (r2 S2, t2 SOLL-2). The effort is its
+                own pill right under it, next to source and state. */}
+            <span
+              data-testid="bench-entry-label"
+              className="min-w-0 text-sm font-medium break-words"
+              style={{ color: C.textPrimary }}
+            >
+              {entry.model_label}
+            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <EntryEffortPill entry={entry} />
+              {entry.source_kind === "spark" && (
+                <Pill color={C.textMuted} variant="outline" casing="sentence">
+                  {t("directApiPill")}
+                </Pill>
+              )}
+              {/* While the spinner below says "Generating…"/"Waiting…" the
+                  pill would only repeat it (r2 S5: the state stood three
+                  times) — the state is said once per level. */}
+              {!showsPlaceholder(entry) && (
+                <Pill
+                  color={ENTRY_STATUS_COLOR[entry.status] ?? C.textMuted}
+                  casing="sentence"
+                  data-testid="bench-entry-status"
+                >
                   {entryStatusWord(entry.status)}
                 </Pill>
-              </div>
+              )}
             </div>
             {metricsLine(entry, t("costLocal"), locale) && (
-              <span className="text-xs font-mono" style={{ color: C.textMuted }}>
+              <span className="text-xs tabular-nums" style={{ color: C.textMuted }}>
                 {metricsLine(entry, t("costLocal"), locale)}
               </span>
             )}
+            <EntryEffort entry={entry} />
             {usageMissing(entry) && (
               <span className="text-xs" style={{ color: C.textMuted }}>
                 {t("usageMissing")}
@@ -570,13 +605,12 @@ export function ChallengeDetail({
               <FilePreview fileUrl={sharedUrl(entry.video_path)} path={entry.video_path} />
             ) : entry.screenshot_path ? (
               <FilePreview fileUrl={sharedUrl(entry.screenshot_path)} path={entry.screenshot_path} />
-            ) : entry.status === "generating" || entry.status === "pending" ? (
+            ) : showsPlaceholder(entry) ? (
               <EntryTaskState
                 state={entry.status === "generating" ? entry.task_state : null}
                 generatingLabel={entry.status === "generating" ? t("generating") : t("waiting")}
               />
             ) : null}
-            <EntryEffort entry={entry} />
             {entry.error && !failedAtMaxTokens(entry) && (() => {
               const reason = entryAbortReason(entry);
               // The header pill already says it ("Aborted – task deleted"):
@@ -603,7 +637,11 @@ export function ChallengeDetail({
                   </button>
                   <button
                     onClick={() =>
-                      downloadFile(entry.artifact_path!, `${entry.model_label}-index.html`, t("notifyDownloadFailed"))
+                      downloadFile(
+                        entry.artifact_path!,
+                        `${entryName(entry).replace(/\s*·\s*/g, "-")}-index.html`,
+                        t("notifyDownloadFailed"),
+                      )
                     }
                     className="flex items-center gap-1 min-h-11 text-xs"
                     style={{ color: C.textSecondary }}
@@ -630,7 +668,7 @@ export function ChallengeDetail({
                   <button
                     onClick={() => entryRerenderMutation.mutate(entry.id)}
                     disabled={isRunning || entryRerenderMutation.isPending}
-                    aria-label={t("rerenderEntryAria", { label: entry.model_label })}
+                    aria-label={t("rerenderEntryAria", { label: entryName(entry) })}
                     className="flex items-center gap-1 min-h-11 text-xs disabled:opacity-40"
                     style={{ color: C.textSecondary }}
                   >

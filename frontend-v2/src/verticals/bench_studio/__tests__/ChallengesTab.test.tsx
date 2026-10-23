@@ -181,3 +181,34 @@ describe("ChallengesTab — list on a phone (P4, t2 SOLL-4)", () => {
     expect(btn.className).toContain("min-h-11");
   });
 });
+
+describe("ChallengesTab — effort next to the entry name (round-2 Q2)", () => {
+  it("two rows of the same model are told apart by the effort word", async () => {
+    const base = CHALLENGE.entries[0];
+    vi.mocked(benchApi.challenges.list).mockResolvedValue([
+      {
+        ...CHALLENGE,
+        entries: [
+          { ...base, id: "e-off", model_label: "DeepSeek-V4.1", metrics: { effort_requested: "off" } },
+          { ...base, id: "e-max", model_label: "DeepSeek-V4.1", metrics: { effort_requested: "max" } },
+        ],
+      },
+    ]);
+    renderTab();
+    expect(await screen.findByText("DeepSeek-V4.1 · Off")).toBeTruthy();
+    expect(screen.getByText("DeepSeek-V4.1 · Max")).toBeTruthy();
+  });
+
+  it("a row without a chosen effort shows only its name", async () => {
+    vi.mocked(benchApi.challenges.list).mockResolvedValue([CHALLENGE]);
+    renderTab();
+    expect(await screen.findByText("DeepSeek")).toBeTruthy();
+  });
+
+  it("the status pill is in sentence case", async () => {
+    vi.mocked(benchApi.challenges.list).mockResolvedValue([CHALLENGE]);
+    renderTab();
+    const pill = await screen.findByText("Recording");
+    expect(pill.className).not.toMatch(/uppercase/);
+  });
+});

@@ -3856,15 +3856,6 @@
     "effort": {
       "label": "Effort",
       "groupAria": "Effort for model {index}",
-      "level": {
-        "default": "Default",
-        "off": "Off",
-        "on": "On",
-        "low": "Low",
-        "medium": "Medium",
-        "high": "High",
-        "max": "Max"
-      },
       "checking": "Checking which levels this model honours …",
       "checkedAt": "Checked {when}.",
       "serverDefaultOn": "Default sends nothing — the server thinks by default.",
@@ -3879,21 +3870,21 @@
       "retry": "Check again",
       "deepHint": "Deep levels can think for a long time: the token budget grows up to 4×.",
       "agentNote": "Effort: the agent session's own level — recorded after the run, not settable yet.",
-      "requested": "Effort: {level}",
-      "sent": "sent {wire}",
-      "sentNothing": "sent: nothing",
       "thinkingOn": "thinking on",
       "thinkingOnTokens": "thinking on · {count} reasoning tok",
       "thinkingOff": "thinking off",
-      "ompSessionDefault": "omp session default: {level}",
-      "ompSession": "omp session: {level}",
       "agentUnknown": "Effort: not readable for this agent",
       "truncated": "Stopped at max_tokens ({max}) — thinking used up the budget.",
       "truncatedFailed": "No page: stopped at max_tokens ({max}) before the HTML — thinking used up the budget.",
       "unchecked": "Not checked yet which levels this model follows — Default only until you check.",
       "checkNow": "Check now",
       "busy": "The Spark is busy right now — check again once the running work is done.",
-      "sending": "sending …"
+      "pillAria": "Effort: {level}",
+      "sentTitle": "Sent with the request: {wire}",
+      "sentNothingTitle": "Nothing sent — the server default applies.",
+      "sendingTitle": "Is sent with the request.",
+      "ompSessionDefaultTitle": "Level of the agent's omp session (its default)",
+      "ompSessionTitle": "Level of the agent's omp session"
     },
     "common": {
       "cancel": "Cancel",
@@ -3998,8 +3989,7 @@
       "startChallenge": "Start Challenge",
       "notifyStarted": "Challenge started",
       "notifyStartFailed": "Challenge could not be started",
-      "labelDuplicate": "Same label as model {index} — give this row a different label.",
-      "labelEffortSuffix": "Label repeats — the effort is added to the label: “{label}”."
+      "labelDuplicate": "Same label and the same effort as model {index} — choose another effort or give this row its own label."
     },
     "editChallengeDialog": {
       "ariaLabel": "Edit Challenge",
@@ -4069,7 +4059,8 @@
       "notifyDownloadFailed": "Download failed",
       "notifyOpenFailed": "Could not open",
       "costLocal": "local",
-      "usageMissing": "No token data yet — the video shows “—” for tokens and cost. Choose “Rebuild video” in a few minutes. If it stays empty, MC cannot count this agent’s tokens yet."
+      "usageMissing": "No token data yet — the video shows “—” for tokens and cost. Choose “Rebuild video” in a few minutes. If it stays empty, MC cannot count this agent’s tokens yet.",
+      "backToChallenges": "Challenges"
     },
     "draftDialog": {
       "ariaLabel": "Create draft",
@@ -4112,6 +4103,20 @@
     "listRow": {
       "expand": "Show details",
       "collapse": "Hide details"
+    },
+    "effortLevel": {
+      "default": "Default",
+      "auto": "Auto",
+      "none": "Off",
+      "off": "Off",
+      "on": "On",
+      "minimal": "Minimal",
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "xhigh": "Extra high",
+      "max": "Max",
+      "ultracode": "Ultracode"
     }
   },
   "chat": {

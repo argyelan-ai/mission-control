@@ -2,6 +2,7 @@
 
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
+import { useEffortWord } from "@/lib/effortWord";
 import { Brain, Square, ArrowUp, ChevronDown, Paperclip, X, FileText} from "lucide-react";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
@@ -260,6 +261,9 @@ export const EFFORT_SETTLE_MS = 320;
 
 export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
   const t = useTranslations("sessions");
+  // One word per effort level, the same as the bench (round-2 Q2):
+  // "High" / "Hoch" instead of the raw "high" the harness reports.
+  const effortWord = useEffortWord();
   const locale = useLocale();
   const [text, setText] = useState("");
   useEffect(() => {
@@ -1135,7 +1139,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   onClick={() => setEffortOpen((v) => !v)}
                   aria-haspopup="listbox"
                   aria-expanded={effortOpen}
-                  aria-label={t("effortLevelCurrent", { level: currentEffort ?? "auto" })}
+                  aria-label={t("effortLevelCurrent", { level: effortWord(currentEffort ?? "auto") })}
                   data-testid="effort-chip"
                   data-level={currentEffort ?? "auto"}
                   data-pending={pendingEffort != null}
@@ -1197,7 +1201,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                       list="effort-ticks"
                       data-testid="effort-slider"
                       aria-label={t("effortLevel")}
-                      aria-valuetext={sliderLabel}
+                      aria-valuetext={effortWord(sliderLabel)}
                       disabled={pendingEffort != null}
                       autoFocus
                       /* Ziehen aendert nur die Vorschau. Gesendet wird erst beim
@@ -1214,17 +1218,17 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                       onBlur={commitSlider}
                       className="w-full cursor-pointer accent-[var(--color-accent)] disabled:cursor-wait"
                     />
-                    <div className="flex justify-between mt-1 font-mono text-[10px]" style={{ color: C.textMuted }}>
-                      <span>{effortLevels[0]}</span>
-                      <span>{effortLevels[effortLevels.length - 1]}</span>
+                    <div className="flex justify-between mt-1 text-[10px]" style={{ color: C.textMuted }}>
+                      <span>{effortWord(effortLevels[0])}</span>
+                      <span>{effortWord(effortLevels[effortLevels.length - 1])}</span>
                     </div>
                     <div className="mt-2 flex items-baseline gap-2">
                       <span
                         data-testid="effort-slider-value"
-                        className="font-mono text-xs"
+                        className="text-xs font-medium"
                         style={{ color: C.accent }}
                       >
-                        {sliderLabel}
+                        {effortWord(sliderLabel)}
                       </span>
                       {/* Pro Stufe, nicht pauschal: low/medium/high/xhigh
                           schreiben den persistierten Standard des Agenten um,
@@ -1298,7 +1302,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   aria-controls={effortOpen ? effortReasonId : undefined}
                   data-testid="effort-chip-static"
                   data-level={currentEffort ?? "auto"}
-                  aria-label={`${t("effortLevelLocked", { level: currentEffort ?? "auto" })} — ${effortReasonText(capabilities, currentModel, t)}`}
+                  aria-label={`${t("effortLevelLocked", { level: effortWord(currentEffort ?? "auto") })} — ${effortReasonText(capabilities, currentModel, t)}`}
                   title={effortReasonText(capabilities, currentModel, t)}
                   data-reason={capabilities?.effortReason ?? "unspecified"}
                   className="inline-flex items-center justify-center w-12 h-11 -my-1 md:h-8 md:my-0 cursor-pointer"
@@ -1351,10 +1355,10 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 data-testid="effort-chip-static"
                 title={effortReasonText(capabilities, currentModel, t)}
                 data-reason={capabilities?.effortReason ?? "unspecified"}
-                className="font-mono text-xs font-medium px-2 py-1 rounded-lg"
+                className="text-xs font-medium px-2 py-1 rounded-lg"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
               >
-                {currentEffort}
+                {effortWord(currentEffort)}
               </span>
             ))}
             {voiceSlot}

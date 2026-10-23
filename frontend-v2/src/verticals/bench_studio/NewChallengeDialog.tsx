@@ -15,13 +15,6 @@ import type { BenchModelSpec, EffortLevel, PromptTemplate } from "./types";
 
 const EMPTY_MODEL: BenchModelSpec = { label: "", source_kind: "spark", spark_model: "", display_tag: "" };
 
-// Mirrors backend orchestrator.EFFORT_WORDS: the word create appends to
-// labels that only differ by effort ("DeepSeek · Max"). English on purpose —
-// labels are data that ends up in the (English) video, not UI copy.
-const EFFORT_WORDS: Record<EffortLevel, string> = {
-  default: "Default", off: "Off", on: "On", low: "Low", medium: "Medium", high: "High", max: "Max",
-};
-
 const RECORD_DURATION_MIN = 5;
 const RECORD_DURATION_MAX = 60;
 const RECORD_DURATION_DEFAULT = 20;
@@ -224,7 +217,7 @@ export function NewChallengeDialog({
     return m.label.trim().length > 0;
   }
 
-  // Every entry needs its own label (round-1 user test: two "DeepSeek" rows,
+  // Every entry has to be told apart (round-1 user test: two "DeepSeek" rows,
   // Off vs Max, overwrote each other). The label a row will really get:
   // typed, or for an untouched auto row the model the backend resolves.
   function effectiveLabel(m: BenchModelSpec): string {
@@ -233,23 +226,21 @@ export function NewChallengeDialog({
     return isAutoSparkRow(m) ? (sparkModels?.active ?? "").trim() : "";
   }
   const rowEffort = (m: BenchModelSpec): EffortLevel => (m.source_kind === "spark" ? m.effort ?? "default" : "default");
-  // Per row: a real duplicate (same label AND same effort as an earlier row —
-  // the backend refuses it) or a clash the backend resolves by appending the
-  // effort word (same as backend routers._unique_labels).
-  type LabelClash = { kind: "duplicate" | "suffix"; index: number; label: string };
-  const labelClash = models.map((m, i): LabelClash | null => {
+  // Since round-2 Q2 the effort is its own field: the same model twice with
+  // different efforts is two entries (the UI and the video show the effort
+  // next to the name) and needs no hint. Only the same label AND the same
+  // effort as an earlier row is a duplicate — the backend refuses it
+  // (routers._unique_labels): the box answers deterministically, the second
+  // row would repeat the first and nobody could tell them apart.
+  const duplicateOf = models.map((m, i): number | null => {
     const key = effectiveLabel(m).toLowerCase();
     if (!key) return null;
-    const same = models
-      .map((o, j) => ({ o, j }))
-      .filter(({ o, j }) => j !== i && effectiveLabel(o).toLowerCase() === key);
-    if (same.length === 0) return null;
-    const twin = same.find(({ o, j }) => j < i && rowEffort(o) === rowEffort(m));
-    if (twin) return { kind: "duplicate", index: twin.j + 1, label: effectiveLabel(m) };
-    if (same.some(({ o }) => rowEffort(o) === rowEffort(m))) return null; // the later twin carries the error
-    return { kind: "suffix", index: i + 1, label: `${effectiveLabel(m)} · ${EFFORT_WORDS[rowEffort(m)]}` };
+    const twin = models.findIndex(
+      (o, j) => j < i && effectiveLabel(o).toLowerCase() === key && rowEffort(o) === rowEffort(m),
+    );
+    return twin >= 0 ? twin + 1 : null;
   });
-  const hasDuplicateLabel = labelClash.some((c) => c?.kind === "duplicate");
+  const hasDuplicateLabel = duplicateOf.some((index) => index !== null);
 
   const valid =
     !hasDuplicateLabel &&
@@ -500,16 +491,11 @@ export function NewChallengeDialog({
               value={m.effort}
               onChange={(effort) => setModel(i, { effort })}
             />
-            {/* Label clash hints close the model's own block (above the
+            {/* The duplicate hint closes the model's own block (above the
                 divider to the next model); error text tone via STATUS_TEXT. */}
-            {labelClash[i]?.kind === "duplicate" && (
+            {duplicateOf[i] !== null && (
               <span className="text-xs" role="alert" style={{ color: STATUS_TEXT.error }}>
-                {t("labelDuplicate", { index: labelClash[i]?.index ?? 0 })}
-              </span>
-            )}
-            {labelClash[i]?.kind === "suffix" && (
-              <span className="text-xs" style={{ color: C.textMuted }}>
-                {t("labelEffortSuffix", { label: labelClash[i]?.label ?? "" })}
+                {t("labelDuplicate", { index: duplicateOf[i] ?? 0 })}
               </span>
             )}
             </div>

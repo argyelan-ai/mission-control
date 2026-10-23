@@ -3,9 +3,11 @@
 - Every entry writes into its OWN folder — two rows with the same label
   (same model, effort Off vs Max) used to share one folder, and the second
   run silently overwrote the first one's page and video.
-- Create refuses true duplicate labels; labels that only differ by effort
-  get the effort word appended, so the two rows stay apart everywhere.
-- The video carries the effort: frame tag and outro row.
+- Create refuses true duplicate labels (same label AND same effort). Labels
+  that only differ by effort stay as typed since round-2 Q2 — the effort is
+  its own field (test_bench_effort_field.py).
+- The video carries the effort: frame tag and outro row (old renderer form
+  here; the effort-field form in test_bench_effort_field.py).
 - The requested effort is on the entry as soon as the run starts (the UI
   said "sent: nothing" while the max run was already on the wire).
 - GET /bench/effort-levels answers from the cache only — no DB write, no
@@ -142,38 +144,6 @@ def _spec(effort=None, label=LABEL, model="deepseek-x"):
 
 
 @pytest.mark.asyncio
-async def test_create_appends_effort_when_labels_only_differ_by_effort(
-    auth_client, monkeypatch, _no_background
-):
-    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=_probe_row(["off", "max"])))
-    resp = await auth_client.post("/api/v1/bench/challenges", json={
-        "title": "Off vs Max", "prompt_text": "one page",
-        "models": [_spec("off"), _spec("max")],
-    })
-    assert resp.status_code == 201, resp.text
-    labels = sorted(e["model_label"] for e in resp.json()["entries"])
-    assert labels == [f"{LABEL} · Max", f"{LABEL} · Off"]
-
-
-@pytest.mark.asyncio
-async def test_appended_effort_keeps_the_label_within_the_edit_limit(
-    auth_client, monkeypatch, _no_background
-):
-    """Review NICE (PR #955): an 80-character label plus " · Medium" was
-    stored at 89 characters — PATCH (max 80) then refused saving it back."""
-    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=_probe_row(["off", "medium"])))
-    long_label = "L" * 80
-    resp = await auth_client.post("/api/v1/bench/challenges", json={
-        "title": "Long", "prompt_text": "one page",
-        "models": [_spec("off", label=long_label), _spec("medium", label=long_label)],
-    })
-    assert resp.status_code == 201, resp.text
-    labels = sorted(e["model_label"] for e in resp.json()["entries"])
-    assert all(len(lbl) <= 80 for lbl in labels), [len(lbl) for lbl in labels]
-    assert labels[0].endswith(" · Medium") and labels[1].endswith(" · Off")
-
-
-@pytest.mark.asyncio
 async def test_create_refuses_true_duplicate_labels(auth_client, monkeypatch, _no_background):
     monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=_probe_row(["off", "max"])))
     resp = await auth_client.post("/api/v1/bench/challenges", json={
@@ -182,41 +152,6 @@ async def test_create_refuses_true_duplicate_labels(auth_client, monkeypatch, _n
     })
     assert resp.status_code == 422
     assert "label" in resp.json()["detail"].lower()
-
-
-@pytest.mark.asyncio
-async def test_create_two_auto_rows_with_different_effort_stay_apart(
-    auth_client, monkeypatch, _no_background
-):
-    """Two "active model (auto)" rows: the backend fills both labels with the
-    resolved model — they must not end up identical."""
-    monkeypatch.setattr(orchestrator, "resolve_spark_model_or_422", AsyncMock(return_value="deepseek-x"))
-    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=_probe_row(["off", "max"])))
-    resp = await auth_client.post("/api/v1/bench/challenges", json={
-        "title": "Auto", "prompt_text": "one page",
-        "models": [
-            {"label": " ", "source_kind": "spark", "effort": "off"},
-            {"label": " ", "source_kind": "spark"},
-        ],
-    })
-    assert resp.status_code == 201, resp.text
-    labels = sorted(e["model_label"] for e in resp.json()["entries"])
-    assert labels == ["deepseek-x · Default", "deepseek-x · Off"]
-
-
-@pytest.mark.asyncio
-async def test_rename_entry_to_a_sibling_label_is_refused(auth_client, session):
-    ch, (a, b) = await _challenge(session, "off", "max")
-    a.model_label, b.model_label = "Alpha", "Beta"
-    a.status = b.status = "rendered"
-    session.add(a)
-    session.add(b)
-    ch.status = "review"
-    session.add(ch)
-    await session.commit()
-
-    resp = await auth_client.patch(f"/api/v1/bench/entries/{b.id}", json={"model_label": "alpha"})
-    assert resp.status_code == 409, resp.text
 
 
 # ── video: effort in tag and outro ─────────────────────────────────────────
