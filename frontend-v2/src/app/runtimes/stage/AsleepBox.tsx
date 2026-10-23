@@ -20,6 +20,7 @@ export function AsleepBox({
   runtime,
   lastSeen,
   checking = false,
+  noReadings = false,
   onOpenCockpit,
 }: {
   host: Host;
@@ -29,6 +30,9 @@ export function AsleepBox({
   /** The box's own check has not answered yet: nothing proves it sleeps
    *  (round-4 t3 S1) — the card says it is being checked, not "asleep". */
   checking?: boolean;
+  /** The box's own check could not be made (the metrics call failed): no
+   *  proof either way — "unknown", never "asleep" (PR #971 review). */
+  noReadings?: boolean;
   onOpenCockpit: () => void;
 }) {
   const t = useTranslations("runtimes.stage");
@@ -43,7 +47,7 @@ export function AsleepBox({
     { value: "–", label: t("kpiMemoryFree") },
     { value: "–", label: t("kpiRecipesFit") },
     { value: "–", label: t("kpiAgents") },
-    { value: "–", label: checking ? t("kpiEndpoint") : t("kpiEndpointOff") },
+    { value: "–", label: checking || noReadings ? t("kpiEndpoint") : t("kpiEndpointOff") },
   ];
 
   return (
@@ -60,7 +64,7 @@ export function AsleepBox({
             {host.display_name}
           </span>
           <span className="font-mono uppercase shrink-0" style={{ fontSize: "10px", letterSpacing: "0.1em", color: C.textMuted }}>
-            {checking ? t("cornerChecking") : t("cornerAsleep")}
+            {checking ? t("cornerChecking") : noReadings ? t("cornerUnknown") : t("cornerAsleep")}
           </span>
         </div>
         <div style={{ opacity: 0.6 }}>
@@ -69,7 +73,9 @@ export function AsleepBox({
         <div className="text-xs mt-2 pb-4" style={{ color: C.textMuted }}>
           {checking
             ? t("checkingLine")
-            : lastSeen
+            : noReadings
+              ? t("noReadingsLine")
+              : lastSeen
               ? t("poweredOffLastSeen", { time: lastSeen })
               : t("poweredOff")}
         </div>
@@ -78,17 +84,22 @@ export function AsleepBox({
         <KpiRow cells={cells} />
       </div>
       <div className="flex items-center gap-2 px-4 py-3" style={{ borderTop: `1px dashed ${C.borderSubtle}` }}>
-        <button
-          type="button"
-          onClick={() => wakeMutation.mutate()}
-          disabled={wakeMutation.isPending}
-          data-testid="wake-box"
-          className="flex items-center gap-1.5 text-xs px-3.5 py-2.5 rounded-md cursor-pointer disabled:opacity-50"
-          style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
-        >
-          {wakeMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Power size={12} />}
-          {t("wake")}
-        </button>
+        {/* Not while the check is out: an awake box would read "checking"
+            next to "Wake" and then flip to "Start model" — the contradicting
+            claim round 4 reported (PR #971 review). */}
+        {!checking && (
+          <button
+            type="button"
+            onClick={() => wakeMutation.mutate()}
+            disabled={wakeMutation.isPending}
+            data-testid="wake-box"
+            className="flex items-center gap-1.5 text-xs px-3.5 py-2.5 rounded-md cursor-pointer disabled:opacity-50"
+            style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
+          >
+            {wakeMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Power size={12} />}
+            {t("wake")}
+          </button>
+        )}
         <button
           type="button"
           onClick={onOpenCockpit}

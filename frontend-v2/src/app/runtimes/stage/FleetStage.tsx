@@ -177,7 +177,7 @@ function SleepingBox({
   device?: Device;
   onOpenCockpit: () => void;
 }) {
-  const { data: metrics } = useQuery({
+  const { data: metrics, isError: metricsFailed } = useQuery({
     queryKey: ["hosts", group.host.id, "metrics"],
     queryFn: () => api.hosts.metrics(group.host.id),
     refetchInterval: 5_000,
@@ -195,7 +195,16 @@ function SleepingBox({
     );
   }
   return (
-    <AsleepBox host={group.host} runtime={runtime} checking={metrics == null} onOpenCockpit={onOpenCockpit} />
+    // A failed first metrics call (backend 5xx, restart) is no answer from the
+    // box: not "checking" forever, not "asleep" either — the readings are
+    // missing (PR #971 review; FreeBox does the same since PR #960).
+    <AsleepBox
+      host={group.host}
+      runtime={runtime}
+      checking={metrics == null && !metricsFailed}
+      noReadings={metrics == null && metricsFailed}
+      onOpenCockpit={onOpenCockpit}
+    />
   );
 }
 

@@ -3855,6 +3855,7 @@
       },
       "cornerChecking": "checking",
       "checkingLine": "Checking…",
+      "noReadingsLine": "no readings · state unknown",
       "kpiSpeedNoAgentNote": "no agent — e.g. a bench run or an API call",
       "kpiSpeedNoAgentHint": "No agent on this box is working. The load comes from somewhere else — for example a bench run or a direct API call."
     },

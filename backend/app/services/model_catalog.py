@@ -110,6 +110,7 @@ import asyncio
 import json
 import logging
 import tomllib
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -241,7 +242,7 @@ class ProviderTarget:
     runtime: Runtime | None = None
     #: Boxes behind the runtime rows (``runtime.host_id``) and whether any row
     #: is power-managed itself (legacy flag) — what "is the box asleep?" asks.
-    host_ids: list = field(default_factory=list)
+    host_ids: list[uuid.UUID] = field(default_factory=list)
     power_managed: bool = False
 
     def add_row(self, rt: Runtime) -> None:
@@ -1075,8 +1076,6 @@ async def build_catalog(session: AsyncSession, *, force: bool = False) -> list[d
     dark_hosts: dict[str, tuple[list[Host], int]] = {}
     for target in targets:
         dark = _dark_failures(target, live)
-        if dark is not None:
-            dark_hosts[target.key] = (await _hosts_of(session, target), dark)
         if not force:
             cached = await _cache_get(target.key)
             # A remembered SUCCESS still wins (its model list is real). A
@@ -1093,7 +1092,11 @@ async def build_catalog(session: AsyncSession, *, force: bool = False) -> list[d
             ):
                 entries[target.key] = {**cached, "cached": True}
                 continue
-            if dark is not None:
+        if dark is not None:
+            # Only now its boxes are needed — a cached success above never
+            # asks them (PR #971 review, NICE).
+            dark_hosts[target.key] = (await _hosts_of(session, target), dark)
+            if not force:
                 to_classify.append((target, *dark_hosts[target.key]))
                 continue
         if target.protocol not in ADAPTERS:

@@ -296,8 +296,13 @@ function ProviderGroup({
         // The backend names the provider in `label`; the internal key
         // ("openai:<slug>") was shown as the name (round-3 t4 picture). A slot
         // name's "(aktuell: <model>)" suffix is dropped while the models are
-        // listed right below it — same rule as RuntimePill (PR #964 review).
-        name={boxLabel(provider.display_name || provider.label || provider.key, models.length > 0)}
+        // listed right below it — same rule as RuntimePill (PR #964 review) —
+        // and for `no_model`, whose label and banner already say it (PR #971
+        // review: "kein Modell" three times in one block).
+        name={boxLabel(
+          provider.display_name || provider.label || provider.key,
+          models.length > 0 || provider.status === "no_model",
+        )}
         summary={[provider.protocol, `${models.length}`, t(chrome.labelKey)].join(" · ")}
         chips={
           <>

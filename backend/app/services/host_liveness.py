@@ -21,8 +21,6 @@ from __future__ import annotations
 import logging
 import uuid
 
-import httpx
-
 from app.models.host import Host
 from app.redis_client import RedisKeys, get_redis
 from app.utils import ensure_aware, utcnow
@@ -65,13 +63,12 @@ async def recall(host_id: uuid.UUID | str) -> bool | None:
 
 
 async def _probe_control_server(control_url: str) -> bool:
-    url = control_url.strip().rstrip("/") + "/health"
-    try:
-        async with httpx.AsyncClient(timeout=PROBE_TIMEOUT_S) as client:
-            resp = await client.get(url)
-            return resp.status_code == 200
-    except Exception:  # noqa: BLE001 — a sleeping box is an answer, not an error
-        return False
+    # Same check the runtime watcher uses (one definition of "awake"), with
+    # the page-load limit. Imported here: runtime_manager is heavy and must
+    # not be pulled in by every importer of this small module.
+    from app.services.runtime_manager import _control_server_reachable
+
+    return await _control_server_reachable(control_url, timeout=PROBE_TIMEOUT_S)
 
 
 def _heartbeat_fresh(host: Host) -> bool:

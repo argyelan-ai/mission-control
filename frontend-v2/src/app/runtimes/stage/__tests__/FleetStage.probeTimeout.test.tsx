@@ -204,6 +204,9 @@ describe("FleetStage — probe timed out", () => {
     const card = await screen.findByTestId("asleep-box");
     expect(card).toHaveTextContent("checking");
     expect(card).not.toHaveTextContent(/asleep/i);
+    // No "Wake" next to "checking" — an awake box would flip to "Start model"
+    // right after (PR #971 review, SHOULD 1).
+    expect(screen.queryByTestId("wake-box")).not.toBeInTheDocument();
 
     answer({ kind: "flask_wol", reachable: true, awake: true, status: "awake" });
     const free = await screen.findByTestId("free-box");
@@ -223,6 +226,28 @@ describe("FleetStage — probe timed out", () => {
     );
     const card = await screen.findByTestId("asleep-box");
     await waitFor(() => expect(card).toHaveTextContent("asleep"));
+    expect(screen.getByTestId("wake-box")).toBeInTheDocument();
+  });
+
+  // PR #971 review, SHOULD 2: a failed metrics call (backend 5xx, restart)
+  // left the sleeping card on "Checking…" until a later call succeeded. It is
+  // no answer from the box either — so "unknown · no readings", not "asleep".
+  it("a power-managed box whose metrics call fails reads unknown, not checking and not asleep", async () => {
+    vi.spyOn(api.hosts, "metrics").mockRejectedValue(new Error("HTTP 502"));
+    const box = makeHost({ slug: "wol", display_name: "Wake Box", kind: "flask_wol", power_managed: true });
+    const pmRow = { ...recipe, id: "rt-pm", slug: "rt-pm", power_managed: true, state: "stopped" as const, host: { id: "wol", slug: "wol", display_name: "Wake Box" } };
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <FleetStage stageGroups={[]} sleepingGroups={[{ host: box, runtimes: [pmRow] }]} onOpen={() => {}} />
+      </QueryClientProvider>,
+    );
+    const card = await screen.findByTestId("asleep-box");
+    await waitFor(() => expect(card).toHaveTextContent("no readings · state unknown"));
+    expect(card).toHaveTextContent("unknown");
+    expect(card).not.toHaveTextContent("Checking…");
+    expect(card).not.toHaveTextContent(/asleep|powered off|Endpoint · off/i);
+    // Waking stays possible — the box may well be asleep.
     expect(screen.getByTestId("wake-box")).toBeInTheDocument();
   });
 

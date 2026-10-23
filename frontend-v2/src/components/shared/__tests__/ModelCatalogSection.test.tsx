@@ -329,6 +329,54 @@ describe("ModelCatalogSection", () => {
     expect(screen.queryByText(/aktuell:/)).not.toBeInTheDocument();
   });
 
+  // PR #971 review: "kein Modell" three times in one block — slot suffix,
+  // status label and banner. For no_model the suffix goes too.
+  it("drops the slot's '(aktuell: kein Modell)' suffix for an awake box without a model", async () => {
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "openai:slot-box",
+          protocol: "openai",
+          display_name: undefined as unknown as string,
+          label: "Slot Box :8000 (aktuell: kein Modell)",
+          status: "no_model" as ModelCatalogProvider["status"],
+          reason: "no_model",
+          cached_at: null,
+          models: [],
+          new_count: 0,
+        }),
+      ]),
+    );
+    renderSection();
+
+    expect(await screen.findByText("Slot Box :8000")).toBeInTheDocument();
+    expect(screen.queryByText(/aktuell:/)).not.toBeInTheDocument();
+  });
+
+  // PR #971 review: the fallback for an unknown code had no test of its own —
+  // every code the "never raw" test used is mapped. Free text still shows.
+  it("hides an unknown reason code but keeps a free-text reason", async () => {
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "grok", protocol: "grok", display_name: "Grok",
+          status: "unreachable", reason: "some_future_code", models: [], new_count: 0,
+        }),
+        mkProvider({
+          key: "kimi", protocol: "kimi", display_name: "Kimi Code",
+          status: "unreachable", reason: "HTTP 502 from upstream", models: [], new_count: 0,
+        }),
+      ]),
+    );
+    renderSection();
+
+    await screen.findAllByTestId("catalog-status-banner");
+    expect(document.body.textContent).not.toContain("some_future_code");
+    const reasons = screen.getAllByTestId("catalog-status-reason");
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toHaveTextContent("HTTP 502 from upstream");
+  });
+
   it("status cli_config: names the CLI config as the source, not 'live' and not 'Manifest'", async () => {
     vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
       mkList([
