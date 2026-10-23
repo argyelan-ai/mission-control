@@ -76,3 +76,15 @@ def test_comment_parser_task_id_defaults_to_none():
 
     args = build_parser().parse_args(["comment", "message", "hallo"])
     assert args.task_id is None
+
+
+def test_comment_command_help_names_the_chat_reply_rule():
+    """Round-5 code review r1 N3: `mc --help` still said "--task-id … (Board
+    Lead, Scope tasks:manage)" only — a chat that reads the command list first
+    concluded "I can't write on that card" again. The command help must name
+    the chat way (message with tasks:write) like the --task-id help does, and
+    that the reply is no sign of the run."""
+    spec = commands.REGISTRY["comment"]
+    assert "tasks:manage" in spec.help
+    assert "Chat" in spec.help and "message" in spec.help and "tasks:write" in spec.help
+    assert "keine Aktivitaet" in spec.help

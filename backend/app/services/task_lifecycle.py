@@ -2545,9 +2545,12 @@ async def trigger_feedback_lesson(
             name=f"feedback:approved:{task.id}",
         )
     elif new_status == "in_progress":
+        from app.comment_types import activity_comment_filter
+        # The feedback that sent the card back — never a chat session's
+        # reply that happened to land last (round-5 r1 N5).
         last_cmt = (await session.exec(
             select(TaskComment)
-            .where(TaskComment.task_id == task.id)
+            .where(TaskComment.task_id == task.id, activity_comment_filter())
             .order_by(TaskComment.created_at.desc())
             .limit(1)
         )).first()

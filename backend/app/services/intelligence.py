@@ -20,6 +20,7 @@ from sqlalchemy import func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.comment_types import activity_comment_filter
 from app.config import settings
 from app.database import engine
 from app.models.agent import Agent, AgentMetrics
@@ -367,10 +368,11 @@ class IntelligenceService:
         details: list[dict] = []
 
         for task in failed_tasks:
-            # Load last comment as failure reason
+            # Load last comment as failure reason — the run's word, never a
+            # chat session's reply (comment_types.NOT_ACTIVITY_COMMENT_TYPES)
             comment_result = await session.exec(
                 select(TaskComment)
-                .where(TaskComment.task_id == task.id)
+                .where(TaskComment.task_id == task.id, activity_comment_filter())
                 .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
                 .limit(1)
             )
@@ -526,10 +528,11 @@ class IntelligenceService:
             )
             tasks_completed = completed_result.one()
 
-            # Comments posted (in this hour)
+            # Comments posted (in this hour) — the agent's run, not its chat
             comments_result = await session.exec(
                 select(func.count()).where(
                     TaskComment.author_agent_id == agent.id,
+                    activity_comment_filter(),
                     TaskComment.created_at >= period_start,  # type: ignore[operator]
                     TaskComment.created_at < period_end,  # type: ignore[operator]
                 )

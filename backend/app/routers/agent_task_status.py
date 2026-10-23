@@ -39,6 +39,7 @@ from sqlmodel import select, or_, and_
 from app.auth import require_agent
 from app.scopes import Scope, require_scope
 from app.database import get_session
+from app.comment_types import activity_comment_filter
 from app.models.agent import Agent
 from app.models.approval import Approval
 from app.models.board import Board, Project
@@ -473,7 +474,8 @@ async def dispatch_callback_to_parent(parent_task_id, subtask_id):
         last_comment = (
             await session.exec(
                 select(TaskComment)
-                .where(TaskComment.task_id == subtask.id)
+                # the subtask run's last word, not its chat's reply
+                .where(TaskComment.task_id == subtask.id, activity_comment_filter())
                 .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
                 .limit(1)
             )
@@ -523,7 +525,8 @@ async def dispatch_resume_to_agent(subtask):
 
         comment_q = (
             select(TaskComment)
-            .where(TaskComment.task_id == subtask.id)
+            # the helper run's last word, not its chat's reply
+            .where(TaskComment.task_id == subtask.id, activity_comment_filter())
             .order_by(TaskComment.created_at.desc())
             .limit(1)
         )
@@ -2303,11 +2306,14 @@ async def agent_update_task(
             is_reviewer = False
 
         if is_reviewer:
+            # The review run's own verdict text: a chat reply ("not approved
+            # yet") must not flip a rework into done (round-5 r1 N5).
             recent_cmt = (await session.exec(
                 select(TaskComment)
                 .where(
                     TaskComment.task_id == task.id,
                     TaskComment.author_agent_id == agent.id,
+                    activity_comment_filter(),
                 )
                 .order_by(TaskComment.created_at.desc())
                 .limit(1)
@@ -2373,7 +2379,11 @@ async def agent_update_task(
     if "status" in updates and old_status == "review" and is_reviewer:
         recent_cmt = (await session.exec(
             select(TaskComment)
-            .where(TaskComment.task_id == task.id, TaskComment.author_agent_id == agent.id)
+            .where(
+                TaskComment.task_id == task.id,
+                TaskComment.author_agent_id == agent.id,
+                activity_comment_filter(),
+            )
             .order_by(TaskComment.created_at.desc())
             .limit(1)
         )).first()
@@ -3171,7 +3181,11 @@ async def agent_update_task(
 
             blocker_cmt = (await session.exec(
                 select(TaskComment)
-                .where(TaskComment.task_id == task.id, TaskComment.author_agent_id == agent.id)
+                .where(
+                    TaskComment.task_id == task.id,
+                    TaskComment.author_agent_id == agent.id,
+                    activity_comment_filter(),  # the run's blocker, not its chat
+                )
                 .order_by(TaskComment.created_at.desc())
                 .limit(1)
             )).first()
@@ -3353,7 +3367,7 @@ async def agent_update_task(
                     )
                     hint_cmt = (await session.exec(
                         select(TaskComment)
-                        .where(TaskComment.task_id == task.id)
+                        .where(TaskComment.task_id == task.id, activity_comment_filter())
                         .order_by(TaskComment.created_at.desc())
                         .limit(1)
                     )).first()

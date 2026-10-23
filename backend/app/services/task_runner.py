@@ -29,7 +29,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.database import engine
 from app.models.agent import Agent
 from app.models.approval import Approval
-from app.comment_types import CHAT_REPLY_COMMENT_TYPE
+from app.comment_types import activity_comment_filter
 from app.models.task import Task, TaskComment
 from app.utils import utcnow, ensure_aware
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
@@ -1039,7 +1039,8 @@ class TaskRunnerService:
 
         comments_result = await session.exec(
             select(TaskComment)
-            .where(TaskComment.task_id == task.id)
+            # a chat session's reply is no sign of the run (round-5 r1 N5)
+            .where(TaskComment.task_id == task.id, activity_comment_filter())
             .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
             .limit(3)
         )
@@ -1640,7 +1641,7 @@ class TaskRunnerService:
                 select(TaskComment)
                 .where(
                     TaskComment.task_id == task.id,
-                    TaskComment.comment_type != CHAT_REPLY_COMMENT_TYPE,
+                    activity_comment_filter(),
                 )
                 .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
                 .limit(1)
@@ -1941,7 +1942,7 @@ class TaskRunnerService:
                 select(TaskComment)
                 .where(
                     TaskComment.task_id == task.id,
-                    TaskComment.comment_type != CHAT_REPLY_COMMENT_TYPE,
+                    activity_comment_filter(),
                 )
                 .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
                 .limit(1)

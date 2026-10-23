@@ -56,10 +56,12 @@ def _format_minutes(total_minutes: int) -> str:
 async def _load_recent_comments(
     session: AsyncSession, task_id: uuid.UUID, limit: int = 2
 ) -> list[TaskComment]:
-    """Load the last N comments of a task."""
+    """Load the last N comments of a task — the run's, not its chat's."""
+    from app.comment_types import activity_comment_filter
+
     result = await session.exec(
         select(TaskComment)
-        .where(TaskComment.task_id == task_id)
+        .where(TaskComment.task_id == task_id, activity_comment_filter())
         .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
         .limit(limit)
     )

@@ -48,12 +48,41 @@ ALL_COMMENT_TYPES: Final[frozenset[str]] = frozenset({
 # ``X-MC-Session-Role: chat``) is stored as. Round-3 code review (23.10.2026,
 # r1 S3): stored as a plain ``message`` it counted as the run's sign of life —
 # the operator asked "how far are you?" on a hanging run, the chat answered,
-# and the silent-card watchdog pushed its alarm back (or retracted it). The
-# watchdogs skip this type (``task_evidence.last_real_activity_at``); the UI
-# shows it like a ``message``. Deliberately NOT in ALL_COMMENT_TYPES: an
+# and the silent-card watchdog pushed its alarm back (or retracted it). Every
+# activity reader skips it (``NOT_ACTIVITY_COMMENT_TYPES`` below); the UI
+# labels it "Chat reply" / "Chat-Antwort". Deliberately NOT in ALL_COMMENT_TYPES: an
 # agent cannot send it, so a run cannot hide its own note from the watchdog.
 CHAT_REPLY_COMMENT_TYPE: Final[str] = "chat_reply"
 assert CHAT_REPLY_COMMENT_TYPE not in ALL_COMMENT_TYPES
+
+# Comment types that are NOT the run's activity — the one list every reader
+# of "last activity" / "the run's latest word" filters on (round-5 code review
+# r1 S1 + N5, 23.10.2026). A chat session's reply proves the chat answered,
+# not that the run lives: the task list's "no activity for X min", the daily
+# digest's stale cards, the watchdogs' silent-card clock, "has the reviewer /
+# the Lead reacted", the builder a rework goes back to, a failure's reason —
+# none of them may move or read it as the run. Display readers (timeline,
+# transcript, comment tab) still show it. Use ``activity_comment_filter()``
+# in a query, ``is_activity_comment_type()`` in Python — never a second list.
+NOT_ACTIVITY_COMMENT_TYPES: Final[frozenset[str]] = frozenset({CHAT_REPLY_COMMENT_TYPE})
+
+
+def is_activity_comment_type(comment_type: str | None) -> bool:
+    """True when a comment of this type is the run's own activity."""
+    return comment_type not in NOT_ACTIVITY_COMMENT_TYPES
+
+
+def activity_comment_filter():
+    """SQL clause: only ``TaskComment`` rows that count as the run's activity.
+
+    Lazy import: ``app.models`` must stay importable without this module and
+    vice versa (this file is the dependency-free comment-type registry).
+    """
+    from sqlmodel import col
+
+    from app.models.task import TaskComment
+
+    return col(TaskComment.comment_type).not_in(NOT_ACTIVITY_COMMENT_TYPES)
 
 # Comment_types that get delivered as actionable system events to the
 # responsible agent via /me/poll. Subset of ALL_COMMENT_TYPES, minus the

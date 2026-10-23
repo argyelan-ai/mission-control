@@ -85,7 +85,7 @@ async def last_real_activity_at(session: AsyncSession, task, children=()) -> dat
       branch, cleared+re-set by tier-3 — a repair attempt must not
       reset a silence clock)
     """
-    from app.comment_types import CHAT_REPLY_COMMENT_TYPE
+    from app.comment_types import activity_comment_filter
     from app.models.task import TaskComment
 
     last_real_comment = (await session.exec(
@@ -93,7 +93,7 @@ async def last_real_activity_at(session: AsyncSession, task, children=()) -> dat
         .where(
             TaskComment.task_id == task.id,
             TaskComment.author_type != "system",
-            TaskComment.comment_type != CHAT_REPLY_COMMENT_TYPE,
+            activity_comment_filter(),
         )
         .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
         .limit(1)

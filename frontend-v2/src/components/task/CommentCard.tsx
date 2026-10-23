@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { useLocale } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import { parseComment, type ParsedComment } from "@/lib/parseComment";
@@ -21,7 +21,8 @@ type CommentType =
   | "message"
   | "reflection"
   | "needs_decision"
-  | "waiting_on_callback";
+  | "waiting_on_callback"
+  | "chat_reply";
 
 interface CommentCardProps {
   comment: TaskComment;
@@ -41,6 +42,7 @@ const TYPE_COLORS: Record<CommentType, string> = {
   reflection: STATUS_TEXT.info,
   needs_decision: C.warning,
   waiting_on_callback: C.warning,
+  chat_reply: C.textSecondary,
 };
 
 const TYPE_LABELS: Record<CommentType, string> = {
@@ -54,6 +56,7 @@ const TYPE_LABELS: Record<CommentType, string> = {
   reflection: "Self-Reflection",
   needs_decision: "Entscheid offen",
   waiting_on_callback: "Waiting on Callback",
+  chat_reply: "Chat reply", // replaced by the i18n label (tasks.chatReply) at render
 };
 
 const STATUS_PILL_COLORS: Record<string, { bg: string; text: string }> = {
@@ -178,11 +181,13 @@ function renderContentWithStatusPills(text: string): React.ReactNode[] {
 
 // ── Sub-Components ─────────────────────────────────────────────────────────────
 
-function TypeBadge({ type, color }: { type: CommentType; color: string }) {
+function TypeBadge({ type, color, label, hint }: { type: CommentType; color: string; label?: string; hint?: string }) {
   if (type === "message") return null;
 
   return (
     <span
+      data-testid="comment-type-badge"
+      title={hint}
       style={{
         display: "inline-block",
         padding: "2px 8px",
@@ -196,7 +201,7 @@ function TypeBadge({ type, color }: { type: CommentType; color: string }) {
         border: `1px solid ${alpha(color, 0.2)}`,
       }}
     >
-      {TYPE_LABELS[type]}
+      {label ?? TYPE_LABELS[type]}
     </span>
   );
 }
@@ -339,7 +344,11 @@ function StructuredBody({ parsed }: { parsed: ParsedComment }) {
 
 export function CommentCard({ comment, agentMap }: CommentCardProps) {
   const locale = useLocale();
+  const t = useTranslations("tasks");
   const type = resolveType(comment);
+  // The agent's chat answering on the card: tagged, so it never reads as a
+  // comment of the run (it is no activity — backend NOT_ACTIVITY_COMMENT_TYPES).
+  const isChatReply = type === "chat_reply";
   const color = TYPE_COLORS[type];
   const author = resolveAuthor(comment, agentMap);
   const parsed = parseComment(comment.content, comment.comment_type);
@@ -395,7 +404,12 @@ export function CommentCard({ comment, agentMap }: CommentCardProps) {
           borderBottom: `1px solid ${C.borderSubtle}`,
         }}
       >
-        <TypeBadge type={type} color={color} />
+        <TypeBadge
+          type={type}
+          color={color}
+          label={isChatReply ? t("chatReply.label") : undefined}
+          hint={isChatReply ? t("chatReply.hint") : undefined}
+        />
         {isSystem && (
           <span
             style={{

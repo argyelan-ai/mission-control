@@ -459,14 +459,18 @@ async def list_tasks(
     result = await session.exec(query)
     tasks = result.all()
 
-    # Compute last_activity_at: max(started_at, updated_at, last comment)
+    # Compute last_activity_at: max(started_at, updated_at, last comment).
+    # A chat session's reply is no sign of the run (round-5 r1 S1): "how far
+    # are you?" on a hanging card must not turn its red "no activity" clock
+    # back to 0 — same rule as the watchdogs (comment_types.NOT_ACTIVITY_…).
     task_ids = [t.id for t in tasks if t.status == "in_progress"]
     last_comment_map: dict[uuid.UUID, datetime] = {}
     if task_ids:
         from sqlalchemy import func as sa_func
+        from app.comment_types import activity_comment_filter
         comment_query = (
             select(TaskComment.task_id, sa_func.max(TaskComment.created_at).label("last_comment"))
-            .where(TaskComment.task_id.in_(task_ids))  # type: ignore[union-attr]
+            .where(TaskComment.task_id.in_(task_ids), activity_comment_filter())  # type: ignore[union-attr]
             .group_by(TaskComment.task_id)
         )
         comment_result = await session.exec(comment_query)  # type: ignore[arg-type]

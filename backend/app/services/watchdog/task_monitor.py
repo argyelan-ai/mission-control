@@ -17,6 +17,7 @@ from sqlalchemy import or_, and_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.comment_types import activity_comment_filter
 from app.models.agent import Agent
 from app.models.task import Task, TaskComment, TaskEvent
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
@@ -376,7 +377,8 @@ class TaskMonitorMixin:
 
                     comments = (await session.exec(
                         select(TaskComment)
-                        .where(TaskComment.task_id == child_id)
+                        # the child run's own output, not its chat's replies
+                        .where(TaskComment.task_id == child_id, activity_comment_filter())
                         .order_by(TaskComment.created_at.desc())
                         .limit(5)
                     )).all()
@@ -1411,12 +1413,14 @@ class TaskMonitorMixin:
         from app.models.task import TaskComment
         from sqlalchemy import func
 
-        # 4. Has the reviewer commented?
+        # 4. Has the reviewer commented? Its chat session's reply is no
+        # review activity (round-5 r1 N5) — only the review run's own words.
         reviewer_comments = await session.exec(
             select(TaskComment)
             .where(
                 TaskComment.task_id == task.id,
                 TaskComment.author_agent_id == task.assigned_agent_id,
+                activity_comment_filter(),
             )
             .order_by(TaskComment.created_at.desc())
             .limit(1)
@@ -1974,8 +1978,6 @@ class TaskMonitorMixin:
           specific card proves the queue has been non-empty at least that
           long, even with no other signal
         """
-        from app.comment_types import CHAT_REPLY_COMMENT_TYPE
-
         comment_result = await session.exec(
             select(TaskComment)
             .join(Task, Task.id == TaskComment.task_id)  # type: ignore[arg-type]
@@ -1984,7 +1986,7 @@ class TaskMonitorMixin:
                 Task.board_id == board_id,
                 TaskComment.author_type != "system",
                 # A chat reply proves the chat, not the mailbox (round-3 r1 S3).
-                TaskComment.comment_type != CHAT_REPLY_COMMENT_TYPE,
+                activity_comment_filter(),
             )
             .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
             .limit(1)
@@ -2025,7 +2027,9 @@ class TaskMonitorMixin:
         """Explicit definition of "the Lead reacted" (task card, 2026-09-12).
 
         Reaction means, AFTER ``since`` (the stage-1 message):
-        - the Board Lead posted ANY comment on the card himself, or
+        - the Board Lead posted ANY comment on the card himself (his chat
+          session's ``chat_reply`` excluded — answering the operator in the
+          chat is not acting on the card), or
         - the card's status changed with the Board Lead as the author
           (``mc review``/``mc done``/PATCH — every real status change is a
           TaskEvent row).
@@ -2038,6 +2042,9 @@ class TaskMonitorMixin:
                 TaskComment.task_id == task.id,
                 TaskComment.author_agent_id == lead.id,
                 TaskComment.author_type == "agent",
+                # The Lead's chat answering the operator is not the Lead
+                # acting on the card (round-5 r1 N5): escalate anyway.
+                activity_comment_filter(),
                 TaskComment.created_at > since,  # type: ignore[union-attr]
             )
             .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
