@@ -94,6 +94,18 @@ const MODE_LABEL_KEY: Record<GpuMode, string> = {
   boost: "modeBoost",
 };
 
+type Translate = (key: string, values?: Record<string, string | number>) => string;
+
+/** What a step does, in one line — the button's tooltip (round-2 user test:
+ *  the chosen step was only a colour and nothing said what a step costs).
+ *  Same reference measurement as the bars, never a live figure. */
+function modeHint(t: Translate, mode: GpuMode): string {
+  const f = MODE_FACTS[mode];
+  const values = { mode: t(MODE_LABEL_KEY[mode]), watt: Math.round(f.watt), temp: f.tempC, pct: f.prefillPenaltyPct };
+  if (f.risky) return t("modeHintRisky", values);
+  return f.prefillPenaltyPct > 0 ? t("modeHintPrefill", values) : t("modeHint", values);
+}
+
 // Ampel — Farben und Texte kommen aus dem Status, den das Backend rechnet
 // (services/device_state.py). Hier wird nichts nachgerechnet.
 /** Ampel → Ton der Host-Zeile, damit der Punkt links den Gerätezustand trägt. */
@@ -374,6 +386,7 @@ function ModeScale({
                   role="radio"
                   aria-checked={current === mode}
                   aria-label={t(MODE_LABEL_KEY[mode])}
+                  title={modeHint(t, mode)}
                   disabled={disabled}
                   onClick={() => onPick(mode)}
                   data-testid={`mode-${mode}`}
@@ -542,6 +555,7 @@ function CompactModeSwitch({
               role="radio"
               aria-checked={current === mode}
               aria-label={t(MODE_LABEL_KEY[mode])}
+              title={modeHint(t, mode)}
               disabled={disabled}
               onClick={() => onPick(mode)}
               data-testid={`compact-mode-${mode}`}
@@ -734,6 +748,7 @@ function MiniModeSwitch({
             role="radio"
             aria-checked={current === mode}
             aria-label={t(MODE_LABEL_KEY[mode])}
+            title={modeHint(t, mode)}
             disabled={disabled}
             onClick={() => onPick(mode)}
             data-testid={`mini-mode-${mode}`}

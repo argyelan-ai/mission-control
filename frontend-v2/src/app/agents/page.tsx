@@ -13,7 +13,8 @@ import {
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { useAgentStream } from "@/lib/sse";
-import { contextPercent, timeAgo } from "@/lib/utils";
+import { contextPercent, formatContextPct, timeAgo } from "@/lib/utils";
+import { agentStatusView } from "@/lib/agentStatus";
 import { notify } from "@/lib/notify";
 import { AgentGrid } from "@/components/agent/AgentGrid";
 import { GlassCard } from "@/components/shared/GlassCard";
@@ -274,16 +275,9 @@ function TemplatesTab({
 // actions in a ⋮ sheet, row tap opens the detail (stretched-link pattern —
 // the name link covers the row via ::after, no button-in-button).
 
-const DOT_STATUS = (status: string) => {
-  switch (status) {
-    case "online": return "online" as const;
-    case "busy": return "busy" as const;
-    case "error": return "error" as const;
-    case "restarting": return "warning" as const;
-    case "idle": return "idle" as const;
-    default: return "offline" as const;
-  }
-};
+// Dot + label: `agentStatusView` (lib/agentStatus.ts), the same rule as the
+// detail page — a working agent ("working" from the heartbeat) used to fall
+// through to the grey "offline" dot here.
 
 // labelKey resolves via t() at the render site (agents.* namespace).
 const PROVISION_MAP: Record<string, { labelKey: string; color: string }> = {
@@ -293,14 +287,13 @@ const PROVISION_MAP: Record<string, { labelKey: string; color: string }> = {
   error: { labelKey: "provError", color: C.error },
 };
 
-function ContextBar({ pct: pctIn }: { pct: number | null }) {
+function ContextBar({ pct: pctIn, text }: { pct: number | null; text: string }) {
   // null = unbekannt: leerer Balken, "—" statt einer alten Zahl
   const pct = pctIn ?? 0;
-  const known = pctIn !== null;
   const t = useTranslations("agents");
   const color = pct >= 90 ? C.error : pct >= 70 ? C.warning : C.info;
   return (
-    <span className="flex items-center gap-1.5 shrink-0" title={t("contextPct", { pct })}>
+    <span className="flex items-center gap-1.5 shrink-0" title={`${t("contextLabel")} ${text}`}>
       <span
         className="h-1 w-10 sm:w-14 rounded-full overflow-hidden"
         style={{ backgroundColor: "var(--color-bg-elevated)" }}
@@ -314,7 +307,7 @@ function ContextBar({ pct: pctIn }: { pct: number | null }) {
         className="text-[10px] tabular-nums w-8 text-right"
         style={{ color: pct >= 70 ? color : C.textMuted }}
       >
-        {known ? `${pct}%` : "—"}
+        {text}
       </span>
     </span>
   );
@@ -336,7 +329,8 @@ function AgentRosterRow({
   const pct = contextPercent(agent.context_tokens, agent.context_max);
   const prov = PROVISION_MAP[agent.provision_status] ?? PROVISION_MAP.local;
   const model = agent.model ? agent.model.split("/").pop() : null;
-  const dot = DOT_STATUS(agent.status);
+  const statusView = agentStatusView(agent);
+  const dot = statusView.dot;
 
   return (
     <div className="relative flex items-center gap-2.5 sm:gap-3 px-3 sm:px-4 min-h-[56px] py-2 transition-colors hover:bg-[var(--color-bg-hover)]">
@@ -390,9 +384,19 @@ function AgentRosterRow({
             </span>
           )}
         </span>
-        {agent.role && (
+        {/* Per-row pause marker (round-2 user test t4 S5: the header said
+            "3 paused" and no row said which). On the second line, so it
+            never pushes the name into "G…" on a phone. */}
+        {(agent.role || statusView.paused) && (
           <span className="block text-[10px] truncate mt-0.5" style={{ color: C.textMuted }}>
             {agent.role}
+            {statusView.paused && (
+              // Muted on purpose: the ocker dot already carries the colour
+              // (DESIGN K6 — one signal, not dot AND word in ocker).
+              <span data-testid="agent-row-paused" title={t("status.pausedHint")}>
+                {agent.role ? " · " : ""}{t("status.pausedShort")}
+              </span>
+            )}
           </span>
         )}
       </Link>
@@ -412,7 +416,7 @@ function AgentRosterRow({
       <span className="text-[10px] shrink-0 max-lg:hidden" style={{ color: C.textDim }}>
         HB {agent.heartbeat_config?.interval ?? "5m"}
       </span>
-      <ContextBar pct={pct} />
+      <ContextBar pct={pct} text={formatContextPct(agent.context_tokens, agent.context_max)} />
       <span
         className="text-[11px] tabular-nums w-9 text-right shrink-0 max-sm:hidden"
         style={{ color: "var(--color-text-secondary)" }}
@@ -467,9 +471,9 @@ function AgentActionsSheet({
   useBodyScrollLock(true);
   // Esc closes (panel register rule 4) — backdrop click is below.
   useEscapeKey(onClose);
-  const pct = contextPercent(agent.context_tokens, agent.context_max);
   const displaySkills = agent.skill_filter ?? agent.skills ?? [];
-  const dot = DOT_STATUS(agent.status);
+  const statusView = agentStatusView(agent);
+  const dot = statusView.dot;
 
   const itemCls =
     "flex items-center gap-3 w-full px-4 py-3 min-h-touch text-[13px] text-left rounded-lg transition-colors cursor-pointer hover:bg-[var(--color-bg-hover)]";
@@ -515,8 +519,8 @@ function AgentActionsSheet({
               </div>
               <div className="flex items-center gap-2 text-[10px]" style={{ color: C.textMuted }}>
                 <StatusDot status={dot} />
-                <span className="capitalize">{agent.status}</span>
-                <span>· {pct === null ? "—" : t("contextPct", { pct })}</span>
+                <span>{t(statusView.labelKey)}</span>
+                <span>· {t("contextLabel")} {formatContextPct(agent.context_tokens, agent.context_max)}</span>
                 {agent.last_seen_at && <span>· {timeAgo(agent.last_seen_at, locale)}</span>}
               </div>
             </div>

@@ -9,7 +9,7 @@ import re as _re
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -592,8 +592,26 @@ async def _probe_state_with_limit(rt_dict: dict, host) -> dict:
         }
 
 
+#: ``container_status`` of a row that was deliberately not probed
+#: (``GET /runtimes?probe=false``) — same slot ``probe_timeout`` uses, so the
+#: frontend can tell "not asked yet" from "asked, no answer".
+NOT_PROBED_CONTAINER_STATUS = "not_probed"
+_NOT_PROBED_STATE = {
+    "state": "unknown",
+    "http_reachable": False,
+    "container_status": NOT_PROBED_CONTAINER_STATUS,
+}
+
+
 @router.get("")
 async def list_runtimes(
+    probe: bool = Query(
+        True,
+        description=(
+            "false = the rows straight from the DB, no live probe "
+            "(state 'unknown', container_status 'not_probed')."
+        ),
+    ),
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
@@ -601,6 +619,13 @@ async def list_runtimes(
 
     Phase 16 (D-01/D-03): Reads exclusively from the DB table `runtimes`.
     The JSON file `backend/config/runtimes.json` is now only a bootstrap seed.
+
+    ``probe=false`` (round-2 user test, 23.10.2026): the same rows without the
+    live probes — milliseconds instead of the slowest box. For readers that
+    only need the row (the agent page's runtime pill: model, box, window) and
+    for the runtimes page's first paint while the probed list is on its way.
+    Nothing that DECIDES on a state (recipe switcher, start/stop) may read
+    this variant: its state is "unknown" on purpose.
     """
     runtimes = await runtime_manager.list_db_runtimes(session)
 
@@ -651,9 +676,12 @@ async def list_runtimes(
     # 23.09.2026: 29 runtimes, 14.2 s sequential, two unreachable boxes alone
     # cost 5 s each). No cache on purpose: the recipe switcher reads this
     # list and must never act on a stale state.
-    states = await asyncio.gather(
-        *(_probe_state_with_limit(rt_dict, host) for _, rt_dict, host in probe_targets)
-    )
+    if probe:
+        states = await asyncio.gather(
+            *(_probe_state_with_limit(rt_dict, host) for _, rt_dict, host in probe_targets)
+        )
+    else:
+        states = [dict(_NOT_PROBED_STATE) for _ in probe_targets]
 
     result = []
     for (rt, rt_dict, host), state_info in zip(probe_targets, states):

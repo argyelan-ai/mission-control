@@ -16,7 +16,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { C } from "@/lib/colors";
 import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
 import type { HostGroup } from "../grouping";
-import { hostProbeTimedOut, pickServing, pickSlot } from "../grouping";
+import { hostProbePending, hostProbeTimedOut, pickServing, pickSlot } from "../grouping";
 import { useDevices } from "../DeviceControl";
 import { Stage, type StageMember } from "./Stage";
 import { FreeBox } from "./FreeBox";
@@ -203,7 +203,9 @@ export function FleetStage({
   const freeGroups = stageGroups.filter((g) => freeHostIds.has(g.host.id));
   // A box whose probe timed out is not "free" — its state is unknown. It
   // keeps its own card, so the page never claims "nothing is running".
-  const isFullyEmpty = stages.length === 0 && !freeGroups.some(hostProbeTimedOut);
+  // Same for a box whose rows are not probed yet (first paint, round-2 Q6).
+  const isFullyEmpty =
+    stages.length === 0 && !freeGroups.some((g) => hostProbeTimedOut(g) || hostProbePending(g));
   const reduceMotion = useReducedMotion();
 
   // Duo→Solo-Übergang (Spec, PR 6 "Schliff"): löst sich ein Verbund auf (eine
@@ -248,6 +250,7 @@ export function FleetStage({
                   slot={slot}
                   device={devices.get(g.host.id)}
                   probeTimedOut={hostProbeTimedOut(g)}
+                  probePending={hostProbePending(g)}
                   onOpenCockpit={() =>
                     openCockpit({
                       members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id), slot }],

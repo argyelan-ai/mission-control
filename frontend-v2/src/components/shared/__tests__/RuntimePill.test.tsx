@@ -37,7 +37,7 @@ describe("RuntimePill", () => {
   });
 
   it("renders the display_name once runtime data resolves (compact)", async () => {
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
       runtimes: [
         {
           id: "rt-1",
@@ -53,6 +53,46 @@ describe("RuntimePill", () => {
     await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
   });
 
+  // Round-2 user test (t4 S-neu-1): the pill used to wait for the live-probed
+  // list (5.1 s, held up by one sleeping box) and said "no runtime" in
+  // English the whole time. It now reads the unprobed rows (DB only, ms) and
+  // shows a neutral placeholder while they load.
+  it("reads the unprobed rows, never the live-probed list", async () => {
+    const probed = vi.spyOn(api.runtimes, "list").mockRejectedValue(new Error("must not be used"));
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
+      runtimes: [
+        { id: "rt-1", slug: "s", display_name: "Spark Slot", runtime_type: "openai_compatible",
+          endpoint: "http://x/v1", enabled: true, max_context_len: 1_048_576,
+          state: "unknown", container_status: "not_probed" } as never,
+      ],
+    } as never);
+    renderWithQuery(<RuntimePill agent={mkAgent()} />);
+    await waitFor(() => expect(screen.getByText("Spark Slot")).toBeInTheDocument());
+    expect(screen.getByText((_, el) => el?.textContent === "· 1.0M")).toBeInTheDocument();
+    expect(probed).not.toHaveBeenCalled();
+  });
+
+  it("shows a neutral placeholder while loading — never 'no runtime'", () => {
+    vi.spyOn(api.runtimes, "listRows").mockImplementation(() => new Promise(() => {}));
+    renderWithQuery(<RuntimePill agent={mkAgent()} />);
+    expect(screen.getByTestId("runtime-pill-loading")).toHaveAttribute("aria-label", "Loading runtime…");
+    expect(screen.queryByText(/no runtime/i)).not.toBeInTheDocument();
+  });
+
+  it("says 'no runtime' only once the rows are loaded and none matches — translated", async () => {
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({ runtimes: [] } as never);
+    renderWithQuery(<RuntimePill agent={mkAgent()} />);
+    expect(await screen.findByText("No runtime bound")).toBeInTheDocument();
+  });
+
+  it("says nothing when the rows cannot be read — never a false 'none'", async () => {
+    const rows = vi.spyOn(api.runtimes, "listRows").mockRejectedValue(new Error("down"));
+    const { container } = renderWithQuery(<RuntimePill agent={mkAgent()} />);
+    await waitFor(() => expect(rows).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId("runtime-pill-loading")).not.toBeInTheDocument());
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("renders host scope chip for host agents without runtime_id", () => {
     renderWithQuery(
       <RuntimePill
@@ -65,7 +105,7 @@ describe("RuntimePill", () => {
   });
 
   it("renders hermes runtime with the distinct accent-hover pill color", async () => {
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
       runtimes: [
         {
           id: "rt-hermes",
@@ -93,7 +133,7 @@ describe("RuntimePill", () => {
   });
 
   it("renders the lock icon when runtime.single_instance === true", async () => {
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
       runtimes: [
         {
           id: "rt-hermes",
@@ -111,7 +151,7 @@ describe("RuntimePill", () => {
   });
 
   it("does not render the lock icon when single_instance is false/undefined", async () => {
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
       runtimes: [
         {
           id: "rt-1",
@@ -147,7 +187,7 @@ describe("RuntimePill", () => {
   };
 
   it("puts the served model before the box name and shows the window", async () => {
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
       runtimes: [SPARK_RT as never],
     } as never);
     renderWithQuery(<RuntimePill agent={mkAgent({ runtime_id: "rt-spark" })} />);
@@ -161,7 +201,7 @@ describe("RuntimePill", () => {
   });
 
   it("omits the window when the runtime has none", async () => {
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
       runtimes: [{ ...SPARK_RT, max_context_len: 0 } as never],
     } as never);
     renderWithQuery(<RuntimePill agent={mkAgent({ runtime_id: "rt-spark" })} />);
@@ -170,7 +210,7 @@ describe("RuntimePill", () => {
   });
 
   it("still names the box when no model is bound yet", async () => {
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
       runtimes: [{ ...SPARK_RT, model_identifier: null } as never],
     } as never);
     renderWithQuery(<RuntimePill agent={mkAgent({ runtime_id: "rt-spark" })} />);

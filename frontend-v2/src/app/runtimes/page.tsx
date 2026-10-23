@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useRuntimeRows } from "@/lib/runtimeRows";
 import type {
   Host,
   Runtime,
@@ -781,12 +782,19 @@ export default function RuntimesPage() {
 
   // GET /runtimes live-enriches the whole fleet (~6 s cold) — placeholderData
   // from the last visit paints the page instantly; the fresh fetch replaces it.
-  const { data, isLoading, error, isPlaceholderData } = useQuery({
+  const { data: probedData, isLoading: probedLoading, error, isPlaceholderData } = useQuery({
     queryKey: ["runtimes"],
     queryFn: () => fetchWithCache("runtimes", () => api.runtimes.list()),
     placeholderData: () => loadCached<Awaited<ReturnType<typeof api.runtimes.list>>>("runtimes"),
     refetchInterval: 15_000,
   });
+  // First visit (no cached copy): the unprobed rows answer in milliseconds
+  // and paint the page while the probes run (round-2 user test t4 S1: 5.1 s
+  // of spinner). Their rows say container_status "not_probed" — the stage
+  // shows those boxes as "being checked" and lets the watcher's live view
+  // decide what runs. The probed list replaces them the moment it lands.
+  const { data: rowsData } = useRuntimeRows(probedData == null);
+  const data = probedData ?? rowsData;
 
   const { data: hostsData, isLoading: hostsLoading } = useQuery<Host[]>({
     queryKey: ["hosts"],
@@ -796,11 +804,19 @@ export default function RuntimesPage() {
 
   // Live status stays uncached on purpose: stale health/reachability claims
   // are exactly what this redesign eliminates. 19 ms from the watcher cache.
-  const { data: liveData } = useQuery({
+  const { data: liveData, isPending: livePending } = useQuery({
     queryKey: ["runtimes", "live-status"],
     queryFn: () => api.runtimes.liveStatus(),
     refetchInterval: 30_000,
   });
+
+  // The unprobed rows know no state — only the watcher's live view says
+  // which model runs (and that two boxes run it together). Painted before
+  // that view landed, a running duo showed as two free boxes with an armed
+  // "Start model", then flickered to its stage card (PR #960 review,
+  // SHOULD 1). So the rows paint once the live view answered (or failed);
+  // the probed list never waits for it, it carries its own state.
+  const isLoading = probedLoading && (rowsData == null || livePending);
 
   const allRuntimes = data?.runtimes ?? [];
   const hosts = hostsData ?? [];

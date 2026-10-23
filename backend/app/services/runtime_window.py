@@ -110,3 +110,28 @@ async def current_agent_runtime_window(agent: Any | None) -> int | None:
             "runtime_window: agent %s not readable", agent_id, exc_info=True
         )
         return None
+
+
+#: Protocols whose harness learns its window from its vendor, never from MC —
+#: the same set ``internal._context_window_env`` skips (Claude Code, Grok,
+#: Kimi, the voice sockets). For those the runtime row is not the truth.
+_VENDOR_WINDOW_PROTOCOLS: frozenset[str] = frozenset({"anthropic", "grok", "kimi", "voice"})
+
+
+def agent_shown_window(runtime: Any | None) -> int | None:
+    """The window an agent's context figures are measured against, or ``None``.
+
+    ``None`` means "keep the agent's own ``context_max``": no runtime, a
+    runtime without a known window, or a vendor-window harness. Otherwise the
+    runtime's window — the one MC TELLS the harness (``MC_CONTEXT_WINDOW`` /
+    ``OMP_CONTEXT_WINDOW``) and the one the chat ring divides by. Round-2
+    user test (23.10.2026): the agent row kept its creation default (200k)
+    on a 1M runtime, so the agent page and the chat disagreed.
+    """
+    if runtime is None:
+        return None
+    from app.services.harness_compat import runtime_protocol
+
+    if runtime_protocol(runtime) in _VENDOR_WINDOW_PROTOCOLS:
+        return None
+    return runtime_context_window(runtime)

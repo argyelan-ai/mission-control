@@ -4640,6 +4640,27 @@ async def agent_heartbeat(
         if agent.current_task_id is not None:
             agent.current_task_id = None
 
+    # rule: R-runtime-window-one-source - the agent page divides by the chat's window
+    # The agent's window follows its runtime (round-2 user test 23.10.2026:
+    # 200k on the row, 1M served, agent page vs chat disagreed). Read here,
+    # BEFORE the pool-hygiene commit below — it is DB work and must not pin
+    # a connection across the Redis awaits. Never breaks a heartbeat.
+    if agent.runtime_id is not None:
+        try:
+            from app.models.runtime import Runtime as _Runtime
+            from app.services.runtime_window import agent_shown_window
+
+            _window = agent_shown_window(await session.get(_Runtime, agent.runtime_id))
+            if _window and agent.context_max != _window:
+                # The stored tokens were derived from the agent's reported
+                # PERCENT (below) against the old window — keep that percent
+                # until the next reading instead of shrinking it 5x.
+                if agent.context_tokens is not None and agent.context_max:
+                    agent.context_tokens = round(agent.context_tokens / agent.context_max * _window)
+                agent.context_max = _window
+        except Exception:  # noqa: BLE001 — a display figure never breaks the heartbeat
+            logger.warning("heartbeat: runtime window of %s not readable", agent.name, exc_info=True)
+
     # CTX-01 (Phase 6): Docker self-report context-window usage. Inverts the
     # display formula at line 166 so frontend bars stay accurate.
     # Pool hygiene (incident 2026-09-14): the task selects above opened a

@@ -18,10 +18,10 @@
  * Host (Boss) and openclaw (Henry) agents fall back to a muted scope chip.
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Lock } from "lucide-react";
-import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
+import { useRuntimeRows } from "@/lib/runtimeRows";
 import { C, alpha } from "@/lib/colors";
 import { fmtCtx } from "@/lib/utils";
 
@@ -42,18 +42,31 @@ interface Props {
 }
 
 export function RuntimePill({ agent, variant = "default" }: Props) {
-  const { data } = useQuery({
-    queryKey: ["runtimes-list"],
-    queryFn: () => api.runtimes.list(),
-    staleTime: 60_000,
-    enabled: !!agent.runtime_id,
-  });
+  const t = useTranslations("agents");
+  // The unprobed rows (DB only): the pill needs model, box and window, never
+  // the live state. Round-2 user test (t4 S-neu-1): reading the probed list
+  // made the agent page wait 5.1 s for one sleeping box.
+  const { data, isLoading, isError } = useRuntimeRows(!!agent.runtime_id);
 
   const rt = data?.runtimes.find(
     (r) => r.id === agent.runtime_id || r.slug === agent.runtime_id,
   );
 
   const isCompact = variant === "compact";
+
+  // Still loading: a quiet placeholder of the pill's own size, never a claim
+  // ("no runtime" was false and English for the whole wait).
+  if (agent.runtime_id && isLoading) {
+    return (
+      <span
+        role="status"
+        aria-label={t("runtimeLoading")}
+        data-testid="runtime-pill-loading"
+        className={`inline-block rounded-md animate-pulse ${isCompact ? "h-4 w-20" : "h-5 w-40"}`}
+        style={{ backgroundColor: "var(--color-bg-elevated)" }}
+      />
+    );
+  }
 
   if (rt) {
     const color = RUNTIME_TYPE_COLOR[rt.runtime_type] ?? C.textDim;
@@ -151,10 +164,14 @@ export function RuntimePill({ agent, variant = "default" }: Props) {
     );
   }
 
-  // cli-bridge without runtime_id — shouldn't happen after migration 0079
+  // The rows could not be read: say nothing rather than a false "none".
+  if (agent.runtime_id && isError) return null;
+
+  // cli-bridge without a matching runtime row — shouldn't happen after
+  // migration 0079. Only said once the rows are loaded, and translated.
   return (
-    <span className={`font-mono text-[var(--color-text-muted)] ${isCompact ? "text-[10px]" : "text-[12px]"}`}>
-      no runtime
+    <span className={`text-[var(--color-text-muted)] ${isCompact ? "text-[10px]" : "text-[12px]"}`}>
+      {t("noRuntime")}
     </span>
   );
 }

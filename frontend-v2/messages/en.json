@@ -732,7 +732,22 @@
       "runtimeLabel": "Runtime"
     },
     "fleetCountWithPaused": "{active} active · {paused} paused",
-    "fleetCountActive": "{active} active"
+    "fleetCountActive": "{active} active",
+    "runtimeLoading": "Loading runtime…",
+    "noRuntime": "No runtime bound",
+    "status": {
+      "working": "Working",
+      "online": "Online",
+      "idle": "Idle",
+      "error": "Error",
+      "restarting": "Restarting…",
+      "provisioning": "Setting up",
+      "offline": "Offline",
+      "paused": "Paused · no new tasks",
+      "pausedWorking": "Paused · finishing its task",
+      "pausedShort": "Paused",
+      "pausedHint": "Paused means: MC gives this agent no new tasks. A task that is already running is finished."
+    }
   },
   "inbox": {
     "title": "Inbox",
@@ -3277,7 +3292,10 @@
       "lockStale": "The agent has not reported for {age}. The mode stays locked until it does.",
       "lockStaleNever": "The agent has never reported. The mode stays locked until it does.",
       "lockUnknownMode": "The control scripts are missing on the box. Run",
-      "lockUnknownModeTail": "on the box again, then the mode can be set."
+      "lockUnknownModeTail": "on the box again, then the mode can be set.",
+      "modeHint": "{mode}: ≈{watt} W, ≈{temp} °C — writes as fast as the others",
+      "modeHintPrefill": "{mode}: ≈{watt} W, ≈{temp} °C — writes as fast as the others, reading long texts takes +{pct} %",
+      "modeHintRisky": "{mode}: ≈{watt} W, ≈{temp} °C — writes as fast as the others; can throttle or shut down under long load"
     },
     "vllmCatalog": {
       "endpointNotDetected": "Endpoint not detected",
@@ -3716,6 +3734,9 @@
       "inUseHeadNoTitle": "Head: (no title)",
       "inUseAgents": "Agents: {names}",
       "inUsePaused": "Paused: {names}",
+      "kpiEndpoint": "Endpoint",
+      "freeLineNoReadings": "no model · no readings",
+      "kpiConnectedUnknown": "– connected",
       "kpiEndpointIdle": "Endpoint · idle",
       "kpiEndpointOff": "Endpoint · off",
       "kpiContext": "Context",
@@ -3767,7 +3788,13 @@
         "member_down": "a member box went down",
         "crash_loop": "restart loop, stopped by MC",
         "unknown": "reason unknown"
-      }
+      },
+      "cornerChecking": "checking",
+      "checkingLine": "Checking…",
+      "asleepLine": "asleep · not reachable",
+      "unreachableLine": "not reachable",
+      "kpiSpeedModeNoAgent": "Speed · {mode} · no agent",
+      "kpiSpeedNoAgentHint": "No agent on this box is working. The load comes from somewhere else — for example a bench run or a direct API call."
     },
     "cockpit": {
       "modeNoDevice": "No node agent is paired with this box — the mode list is unavailable.",

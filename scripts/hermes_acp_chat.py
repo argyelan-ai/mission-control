@@ -232,6 +232,22 @@ class ChatDaemon:
             log.warning("acp chat daemon state unreadable", exc_info=True)
             return True
 
+    def context_pct(self) -> Optional[float]:
+        """The session's last context fill in percent (the chat ring's figure),
+        or None — not running, no `usage_update` yet, or unreadable. The
+        heartbeat reports it when the pane scrape has nothing (no TUI under
+        ACP; round-2 user test 23.10.2026: page "—", chat "2 %")."""
+        session = self.session
+        if session is None:
+            return None
+        context = session.state().get("context")
+        if not isinstance(context, dict):
+            return None
+        pct = context.get("pct")
+        if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+            return None
+        return float(pct) if 0 <= pct <= 100 else None
+
     def prompt(self, text: str) -> dict:
         status, answer = self.request("prompt", {"text": text})
         return answer if status != 502 else {"ok": False, "error": "unreachable"}
