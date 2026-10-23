@@ -736,8 +736,9 @@ async def wake_host(
     Round-5 re-check (L1): the box's ``power_managed`` flag lives on the host
     row; a box whose runtime rows lack it (or that has none) still sleeps and
     must still be wakeable. Same trigger-file path as
-    ``POST /runtimes/{id}/wake`` (runtime_manager), keyed by the host.
-    A viewer only looks — waking a box is an operator action.
+    ``POST /runtimes/{id}/wake`` (runtime_manager), keyed by the host, and the
+    same rules (round-7 L5): a viewer only looks — waking a box is an operator
+    action; 503 when the wake helper on the Mac sends no heartbeat.
     """
     host = await _get_host(session, host_id)
     if not host:

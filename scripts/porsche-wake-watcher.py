@@ -12,7 +12,19 @@ This watcher (driven by a launchd LaunchAgent on WatchPaths + StartInterval) is 
 ONE-SHOT processor: it scans the dir once, fires the real wake script for each
 pending request via fire-and-forget (--wait 0), and retires the request so it is
 not reprocessed. It never crashes the caller — malformed files are logged and
-skipped. Idempotent: re-running with no pending requests is a no-op.
+skipped. Idempotent: re-running with no pending requests only beats.
+
+Heartbeat (round-7 re-check, L5): every run touches <wake dir>/watcher.alive,
+also when nothing waits, and again before each request. The backend treats the
+helper as down when that file is missing or older than ~90 s
+(runtime_manager.WAKE_HELPER_HEARTBEAT_S) and answers 503 instead of
+"Waking…". The file is updated IN PLACE (utime) — a new directory entry would
+fire launchd's WatchPaths again and loop the job.
+
+Old requests are not woken: a request older than MAX_REQUEST_AGE_S (default
+5 min) is retired with a status "expired" and no magic packet. A helper that
+was down (or is installed fresh while an old request still lies there) must
+not wake the box minutes or weeks after the click.
 
 stdlib only. Logs to stdout (launchd redirects to ~/.mc/logs/).
 """
@@ -21,6 +33,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # --- Config (overridable via env for testing) ---
@@ -38,6 +51,15 @@ DEFAULT_MAC = os.environ.get("PORSCHE_MAC", "")
 DEFAULT_IP = os.environ.get("PORSCHE_LAN_IP", "")
 # Limited broadcast — funktioniert in jedem LAN ohne Subnetz-Annahme.
 DEFAULT_BROADCAST = os.environ.get("PORSCHE_BROADCAST", "255.255.255.255")
+
+# Sign of life for the backend — must match runtime_manager.WAKE_HELPER_HEARTBEAT_NAME.
+HEARTBEAT_NAME = "watcher.alive"
+HEARTBEAT = WAKE_DIR / HEARTBEAT_NAME
+
+# A request older than this is retired without waking. Above the backend's
+# WAKE_HELPER_STALE_S (120 s): a request the backend still counts as "on its
+# way" is always woken.
+MAX_REQUEST_AGE_S = int(os.environ.get("MC_WAKE_REQUEST_MAX_AGE_S", "300"))
 
 
 def _now_iso() -> str:
@@ -78,9 +100,39 @@ def _retire(req_path: Path) -> None:
             log(f"  !! could not delete {req_path.name}: {exc2}")
 
 
+def _touch(path: Path) -> None:
+    """Update the heartbeat's mtime in place; create it only when missing."""
+    try:
+        os.utime(path, None)
+    except FileNotFoundError:
+        path.write_text(json.dumps({"pid": os.getpid(), "since": _now_iso()}) + "\n")
+
+
+def beat() -> None:
+    """Tell the backend this helper runs. Never fails the run."""
+    try:
+        _touch(HEARTBEAT)
+    except OSError as exc:
+        log(f"  ! could not write heartbeat {HEARTBEAT}: {exc}")
+
+
+def _request_age_s(req_path: Path) -> float | None:
+    try:
+        return time.time() - req_path.stat().st_mtime
+    except OSError:
+        return None
+
+
 def process_request(req_path: Path) -> bool:
     """Process a single *.request.json. Returns True if the wake was fired."""
     slug = req_path.name[: -len(".request.json")]
+    age = _request_age_s(req_path)
+    if age is not None and age > MAX_REQUEST_AGE_S:
+        detail = f"expired: waited {int(age)} s (limit {MAX_REQUEST_AGE_S} s) — not woken"
+        log(f"  request {req_path.name} {detail}")
+        _write_status(req_path, slug, ok=False, detail=detail)
+        _retire(req_path)
+        return False
     try:
         data = json.loads(req_path.read_text())
     except (OSError, ValueError) as exc:
@@ -144,9 +196,14 @@ def process_request(req_path: Path) -> bool:
 
 def main() -> int:
     if not WAKE_DIR.is_dir():
-        # Nothing to do — dir not created yet. Not an error.
-        log(f"wake dir {WAKE_DIR} does not exist — nothing to do")
-        return 0
+        # Created by the host user, so this helper can always retire requests
+        # (a folder the root container created may not be writable for it).
+        try:
+            WAKE_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            log(f"wake dir {WAKE_DIR} missing and not creatable: {exc}")
+            return 0
+    beat()
 
     requests = sorted(WAKE_DIR.glob("*.request.json"))
     if not requests:
@@ -155,6 +212,9 @@ def main() -> int:
 
     log(f"found {len(requests)} pending request(s)")
     for req_path in requests:
+        # One wake script may take up to 60 s: beat before each, so a long
+        # queue never reads as a dead helper.
+        beat()
         try:
             process_request(req_path)
         except Exception as exc:  # belt-and-suspenders: one bad file never kills the run
