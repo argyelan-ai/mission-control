@@ -43,6 +43,14 @@ interface StatusLineProps {
   task?: { taskId: string; title: string } | null;
   /** A head of the live task's section is in the viewport. */
   taskHeadVisible?: boolean;
+  /** The chat just opened and no state has arrived yet (round-4 t1 NICE-2).
+   *  Says "Loading…" in neutral tones instead of the ocker warning; the
+   *  caller ends it after a short grace, so a probe that never answers
+   *  still reads as unknown. A real state always wins. */
+  loading?: boolean;
+  /** The agent has a terminal the operator can open. An ACP agent has none
+   *  (`headless_chat`) — its unknown state then does not point at one. */
+  hasTerminal?: boolean;
 }
 
 /** One line, left edge on the message column (px-4 md:px-5). */
@@ -108,10 +116,18 @@ function useWorkingWord(active: boolean): string {
 
 type Labels = (key: string) => string;
 
-const unknownDisplay = (t: Labels): StatusDisplay => ({
+const unknownDisplay = (t: Labels, hasTerminal: boolean): StatusDisplay => ({
   dotColor: C.warning,
   textColor: STATUS_TEXT.warning,
-  label: t("unknown"),
+  label: t(hasTerminal ? "unknown" : "unknownNoTerminal"),
+  pulse: false,
+});
+
+// Before the first state frame: nothing is known yet, and nothing is wrong.
+const loadingDisplay = (t: Labels): StatusDisplay => ({
+  dotColor: C.textDim,
+  textColor: C.textMuted,
+  label: t("loading"),
   pulse: false,
 });
 
@@ -145,6 +161,8 @@ function resolveDisplay(
   workingWord: string,
   activity: { title: string } | null,
   t: Labels,
+  loading = false,
+  hasTerminal = true,
 ): StatusDisplay {
   // Outranks the pane probe on purpose: right after a send the probe still
   // reports the PREVIOUS state (idle), and showing "Bereit" one frame after the
@@ -155,8 +173,11 @@ function resolveDisplay(
   if (aliveness === "ended") {
     return endedDisplay(t);
   }
+  if (loading && !state) {
+    return loadingDisplay(t);
+  }
   if (!connected || !state || state.status === "unknown") {
-    return unknownDisplay(t);
+    return unknownDisplay(t, hasTerminal);
   }
 
   switch (state.status) {
@@ -225,6 +246,8 @@ export function StatusLine({
   activity = null,
   task = null,
   taskHeadVisible = false,
+  loading = false,
+  hasTerminal = true,
 }: StatusLineProps) {
   const t = useTranslations("sessions.status");
   const tAll = useTranslations();
@@ -232,7 +255,7 @@ export function StatusLine({
   // Der Hook muss VOR jedem fruehen Return laufen (Regeln der Hooks); er ist nur
   // aktiv, wenn wirklich gearbeitet wird, und laesst sonst keinen Timer laufen.
   const workingWord = useWorkingWord(connected && state?.status === "working" && !sending);
-  const display = resolveDisplay(state, connected, aliveness, sending, workingWord, activity, t);
+  const display = resolveDisplay(state, connected, aliveness, sending, workingWord, activity, t, loading, hasTerminal);
   const working = !sending && aliveness !== "ended" && connected && state?.status === "working";
   // Only a running CHAT turn shows its tool title (mono, one line).
   const toolRuns = !sending && aliveness !== "ended" && connected && !!activity

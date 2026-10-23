@@ -435,6 +435,10 @@ export interface ChatTaskStub {
   /** One plain line: result / question / reason (≤ 200 chars), or null. */
   outcome: string | null;
   deliverables: number;
+  /** A review run of this agent works the card (a review handoff gave it
+   *  the `review` card): not live, but a real task turn (round-4 r1 S2).
+   *  Absent on an older backend = false. */
+  reviewRun?: boolean;
 }
 
 export type ChatTasksResponse =

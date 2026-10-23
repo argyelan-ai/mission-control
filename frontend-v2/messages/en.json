@@ -1014,6 +1014,8 @@
       "waitingForAnswer": "Waiting for your answer",
       "waitingApproval": "Waiting for approval",
       "unknown": "Status unknown — check the terminal",
+      "unknownNoTerminal": "Status unknown",
+      "loading": "Loading…",
       "ended": "Session ended — a new message starts the next session",
       "sent": "Sent…",
       "workingWords": "Working|Thinking|Pondering|Mulling|Tinkering|Puzzling|Computing|Musing|Figuring|Polishing|Sorting|Combining|Distilling|Tracing|Turning ideas|Pulling threads",

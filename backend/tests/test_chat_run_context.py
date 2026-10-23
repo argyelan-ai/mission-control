@@ -344,3 +344,106 @@ async def test_reviewers_review_card_is_named_as_live():
     assert "status: your review run is reviewing it" in text
     assert "started 22:17" in text
     assert "awaits review" not in text
+
+
+# ── Round 4 (23.10.2026): honest about replies and who decides a review ────
+
+
+async def test_the_block_names_the_reply_the_chat_may_write():
+    """t1 SHOULD-1: asked to put its answer on the task, the chat said "the
+    server blocks that" — it had not tried. The block only listed what is
+    refused; the reply that is allowed (stored as ``chat_reply``) was named
+    nowhere. Now it is, with the one form the chat can run (no TASK_ID in
+    the chat's env, so ``--task-id``), and the rule against made-up
+    refusals."""
+    agent = await _agent()
+    task = await _running_task(agent)
+    text = await _context(agent)
+    assert "A reply in the task thread IS allowed" in text
+    assert '`mc comment message "<text>" --task-id <id>`' in text
+    assert "when the operator asks" in text
+    assert "not move the run" in text
+    assert "Never say the server refuses a call you have not made" in text
+    assert str(task.id) in text
+
+
+async def test_a_human_review_card_names_the_operator_and_the_button():
+    """t1 NICE-3: on a card with human review the refusal said "the verdict
+    is your review run's … press 'Genehmigen'". There was no review run, and
+    the button is "Annehmen". The block names who decides, per card."""
+    from app.models.task import Task
+
+    agent = await _agent(operator_language="de")
+    task = await _handed_off_task(agent, left_at=NOW - timedelta(minutes=2))
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        row = await s.get(Task, task.id)
+        row.human_review_required = True
+        s.add(row)
+        await s.commit()
+    text = await _context(agent)
+    assert "the operator decides it in the task view" in text
+    assert '"Annehmen" / "Änderungen anfordern"' in text
+    assert "review run" not in text
+
+
+async def test_a_human_review_card_names_the_english_buttons():
+    agent = await _agent()
+    await _handed_off_task(agent, left_at=NOW - timedelta(minutes=2))
+    text = await _context(agent)
+    assert '"Approve" / "Request changes"' in text
+    assert "review run" not in text
+
+
+async def test_an_agent_review_names_the_reviewer_agent():
+    """The developer's card went to a reviewer agent (review handoff): its
+    run decides — not the operator, not this chat."""
+    from app.models.task import Task, TaskEvent
+
+    developer = await _agent()
+    reviewer = await _agent(role="reviewer")
+    task = Task(id=uuid.uuid4(), board_id=developer.board_id, title="[Probe] Under review",
+                status="review", assigned_agent_id=reviewer.id, dispatch_intent="review_handoff",
+                started_at=NOW - timedelta(minutes=9), dispatched_at=NOW - timedelta(minutes=1))
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(task)
+        await s.commit()
+        s.add(TaskEvent(task_id=task.id, from_status="inbox", to_status="in_progress",
+                        changed_by="agent", agent_id=developer.id, created_at=NOW - timedelta(minutes=9)))
+        s.add(TaskEvent(task_id=task.id, from_status="in_progress", to_status="review",
+                        changed_by="agent", agent_id=developer.id, created_at=NOW - timedelta(minutes=2)))
+        await s.commit()
+    dev_text = await _context(developer)
+    assert "a reviewer agent's review run decides it" in dev_text
+    assert "the operator decides" not in dev_text
+    rev_text = await _context(reviewer)
+    assert "your own review run decides it — not this chat" in rev_text
+    # Its review run's card: a reply from the chat is refused there too.
+    assert "not on a card your review run is reviewing" in rev_text
+
+
+async def test_a_running_task_names_no_reviewer():
+    agent = await _agent()
+    await _running_task(agent)
+    text = await _context(agent)
+    assert "decides it" not in text
+
+
+async def test_a_review_card_still_with_the_developer_names_no_reviewer():
+    """Before a handoff the card can sit in `review` with the developer as
+    assignee: no reviewer is known, so the block names none."""
+    from app.models.task import Task, TaskEvent
+
+    agent = await _agent()
+    task = Task(id=uuid.uuid4(), board_id=agent.board_id, title="[Probe] Just finished",
+                status="review", assigned_agent_id=agent.id, started_at=NOW - timedelta(minutes=9))
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(task)
+        await s.commit()
+        s.add(TaskEvent(task_id=task.id, from_status="inbox", to_status="in_progress",
+                        changed_by="agent", agent_id=agent.id, created_at=NOW - timedelta(minutes=9)))
+        s.add(TaskEvent(task_id=task.id, from_status="in_progress", to_status="review",
+                        changed_by="agent", agent_id=agent.id, created_at=NOW - timedelta(minutes=1)))
+        await s.commit()
+    text = await _context(agent)
+    assert "it waits for its review — neither you nor this chat decides it." in text
+    assert "reviewer agent" not in text and "review run" not in text
