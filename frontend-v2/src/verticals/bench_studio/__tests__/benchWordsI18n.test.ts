@@ -42,3 +42,18 @@ describe("bench dialog — field messages and tag placeholder (round-4 K1)", () 
     expect(d.fieldError.tooLong).toBe("Höchstens {max} Zeichen.");
   });
 });
+
+// Round-6 L4: the server's own refusals are said in the UI language.
+describe("bench dialog — the server's own refusals (round-6 L4)", () => {
+  const keys = ["agentLabelRequired", "effortNotOffered", "effortAgentPath", "sparkUnreachable"] as const;
+  it("exist in both languages and German says them in German", () => {
+    for (const k of keys) {
+      const d = (de.bench.newChallengeDialog.fieldError as Record<string, string>)[k];
+      const e = (en.bench.newChallengeDialog.fieldError as Record<string, string>)[k];
+      expect(d, k).toBeTruthy();
+      expect(e, k).toBeTruthy();
+      expect(d, k).not.toBe(e);
+    }
+    expect(de.bench.newChallengeDialog.fieldError.sparkUnreachable).toMatch(/nicht erreichbar/);
+  });
+});

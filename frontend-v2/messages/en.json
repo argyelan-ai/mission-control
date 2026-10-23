@@ -4094,7 +4094,11 @@
         "tooLong": "At most {max} characters.",
         "required": "Please fill this in.",
         "range": "Outside the allowed range.",
-        "invalid": "This value is not accepted."
+        "invalid": "This value is not accepted.",
+        "agentLabelRequired": "Give this agent row a name.",
+        "effortNotOffered": "This model does not offer this effort — choose another one or “Default”.",
+        "effortAgentPath": "Effort cannot be set for an agent row yet — the session's own level is recorded.",
+        "sparkUnreachable": "Spark is not reachable — the active model cannot be determined right now. Pick a model or try again in a moment."
       }
     },
     "editChallengeDialog": {

@@ -11,7 +11,14 @@ import { C } from "@/lib/colors";
  *  27 px next to 44 px text fields (round-4 t2 SOLL-5). With
  *  `appearance-none` the select takes the field's height; the arrow the
  *  browser no longer draws is a lucide chevron that lets taps through.
- *  The native picker (wheel on the iPhone) stays. */
+ *  The native picker (wheel on the iPhone) stays.
+ *
+ *  The wrapper is the arrow's positioning box, so it must be exactly as tall
+ *  as the select: `h-fit` stops a grid row from stretching it to a
+ *  neighbour's height (label + error message) — the arrow sat below the
+ *  select's middle (round-5 t2 NICE-1) — and `block` drops the inline
+ *  baseline gap. Not `self-start`: in a flex column that also shrinks the
+ *  width. */
 export function NativeSelect({
   className = "",
   wrapperClassName = "",
@@ -19,8 +26,8 @@ export function NativeSelect({
   ...props
 }: SelectHTMLAttributes<HTMLSelectElement> & { wrapperClassName?: string }) {
   return (
-    <div className={`relative min-w-0 ${wrapperClassName}`}>
-      <select {...props} className={`appearance-none pr-8 cursor-pointer ${className}`}>
+    <div className={`relative min-w-0 h-fit ${wrapperClassName}`}>
+      <select {...props} className={`block appearance-none pr-8 cursor-pointer ${className}`}>
         {children}
       </select>
       <ChevronDown

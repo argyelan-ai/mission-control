@@ -1147,6 +1147,105 @@ describe("NewChallengeDialog — round-4 K1 (R6 rest)", () => {
     await waitFor(() => expect(notify.error).toHaveBeenCalledWith("mode: Input should be single"));
   });
 
+  // Round-6 L4 (round-5 r1 N2): the server's OWN refusals come in FastAPI's
+  // list shape with a stable `type`; the dialog says each at the row's field
+  // in the UI language — never the English `msg` as a toast.
+  const ownRefusal = (index: number, field: string, type: string, ctx?: object) =>
+    new Error(
+      "API 422: " +
+        JSON.stringify({
+          detail: [{ loc: ["body", "models", index, field], msg: "English server sentence", type, ...(ctx ? { ctx } : {}) }],
+        }),
+    );
+
+  it("the server's duplicate refusal is said at the later row's label, in words, no toast", async () => {
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify.error).mockClear();
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce(ACTIVE);
+    vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(
+      ownRefusal(1, "label", "bench_duplicate_entry", { row: 2, other_row: 1 }),
+    );
+    renderDialog();
+    await screen.findByRole("radio", { name: "Max" });
+    await fillTitleAndPrompt();
+    await userEvent.click(screen.getByRole("button", { name: /add model/i }));
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    const label = screen.getByRole("textbox", { name: "Label 2" });
+    await waitFor(() => expect(label).toHaveAttribute("aria-invalid", "true"));
+    const message = document.getElementById(label.getAttribute("aria-describedby") ?? "");
+    expect(message?.textContent).toMatch(/same label and the same effort as model 1/i);
+    expect(document.activeElement).toBe(label);
+    expect(notify.error).not.toHaveBeenCalled();
+    expect(screen.queryByText("English server sentence")).toBeNull();
+  });
+
+  it("the server's 'agent row needs a label' is said at that row's label", async () => {
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify.error).mockClear();
+    vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(ownRefusal(0, "label", "bench_agent_label_required"));
+    renderDialog();
+    await fillTitleAndPrompt();
+    await userEvent.type(screen.getByRole("textbox", { name: "Label 1" }), "DeepSeek");
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    const label = screen.getByRole("textbox", { name: "Label 1" });
+    await waitFor(() => expect(label).toHaveAttribute("aria-invalid", "true"));
+    const message = document.getElementById(label.getAttribute("aria-describedby") ?? "");
+    expect(message?.textContent).toBe("Give this agent row a name.");
+    expect(notify.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["bench_effort_not_offered", /does not offer this effort/i],
+    ["bench_effort_agent_path", /cannot be set for an agent row/i],
+    ["literal_error", /does not offer this effort/i],
+  ])("an effort refusal (%s) is said under the row's effort chips and focuses them", async (type, words) => {
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify.error).mockClear();
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce(ACTIVE);
+    vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(ownRefusal(0, "effort", type));
+    renderDialog();
+    await screen.findByRole("radio", { name: "Max" });
+    await fillTitleAndPrompt();
+    await userEvent.click(screen.getByRole("radio", { name: "Max" }));
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    const group = screen.getByRole("radiogroup", { name: /effort for model 1/i });
+    await waitFor(() => expect(group).toHaveAttribute("aria-invalid", "true"));
+    const message = document.getElementById(group.getAttribute("aria-describedby") ?? "");
+    expect(message?.textContent).toMatch(words);
+    expect(document.activeElement).toBe(group);
+    expect(notify.error).not.toHaveBeenCalled();
+    // Picking another level takes the message away.
+    await userEvent.click(screen.getByRole("radio", { name: "Off" }));
+    expect(group).not.toHaveAttribute("aria-invalid");
+  });
+
+  it("the server's 'Spark unreachable' is said under the auto row's model select, not as a German toast", async () => {
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify.error).mockClear();
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce(ACTIVE);
+    vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(ownRefusal(0, "spark_model", "bench_spark_unreachable"));
+    renderDialog();
+    await screen.findByRole("radio", { name: "Max" });
+    await fillTitleAndPrompt();
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    const select = screen.getByRole("combobox", { name: "vLLM model 1" });
+    await waitFor(() => expect(select).toHaveAttribute("aria-invalid", "true"));
+    const message = document.getElementById(select.getAttribute("aria-describedby") ?? "");
+    expect(message?.textContent).toMatch(/Spark is not reachable/i);
+    expect(notify.error).not.toHaveBeenCalled();
+  });
+
+  it("a select's box only wraps the select, so its arrow stays centred next to a field with a message (t2 NICE-1)", async () => {
+    renderDialog();
+    const source = await screen.findByRole("combobox", { name: "Source 1" });
+    // The wrapper is the arrow's positioning box: a grid row stretched it to
+    // the label + message height and the arrow sat below the select's middle.
+    // h-fit (not self-start): in a flex column self-start would also shrink
+    // the width.
+    expect(source.parentElement?.className).toContain("h-fit");
+    expect(source.className).toContain("block");
+  });
+
   it("every select draws its own box: appearance none and 44 px, also in WebKit (t2 SOLL-5)", async () => {
     vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce(ACTIVE);
     renderDialog();

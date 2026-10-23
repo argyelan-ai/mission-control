@@ -24,6 +24,9 @@ export function EffortChips({
   sparkOffline,
   value,
   onChange,
+  id,
+  "aria-invalid": ariaInvalid,
+  "aria-describedby": ariaDescribedBy,
 }: {
   index: number;
   sourceKind: "spark" | "agent";
@@ -32,6 +35,11 @@ export function EffortChips({
   sparkOffline: boolean;
   value: EffortLevel | null | undefined;
   onChange: (level: EffortLevel | null) => void;
+  // The dialog's field wiring: a server refusal of this row's effort is said
+  // under the chips and focuses the group (round-6 L4).
+  id?: string;
+  "aria-invalid"?: boolean;
+  "aria-describedby"?: string;
 }) {
   const t = useTranslations("bench.effort");
   const word = useEffortWord();
@@ -129,6 +137,10 @@ export function EffortChips({
     <div className="flex flex-col gap-1">
       <div
         role="radiogroup"
+        id={id}
+        tabIndex={id ? -1 : undefined}
+        aria-invalid={ariaInvalid}
+        aria-describedby={ariaDescribedBy}
         aria-label={t("groupAria", { index: index + 1 })}
         className="flex flex-wrap items-center gap-2"
       >
