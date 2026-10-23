@@ -172,3 +172,43 @@ if __name__ == "__main__":
     import pytest
 
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_mc_task_get_runs_in_the_chat_childs_env(tmp_path, monkeypatch):
+    """Round-2 review r1 S1: the block and the guard's 409 tell the chat to
+    read with `mc task-get <id>`. With the chat child's env (no run ids, its
+    own empty context file, no BOARD_ID) the real CLI must get through: the
+    board comes from the agent's own `/agent/me`."""
+    import io
+    import os
+    from contextlib import redirect_stdout
+
+    repo_root = Path(__file__).resolve().parents[3]
+    sys.path.insert(0, str(repo_root / "scripts" / "mc-cli"))
+    from mc_cli import commands as mc_commands
+    from mc_cli.config import Config
+
+    tid = "d3e397c0-9983-4d6a-b866-af984d5c534e"
+    board = "b0a7d000-0000-4000-8000-000000000003"
+    monkeypatch.setattr(acp_chat, "CHAT_CONTEXT_ENV_PATH", str(tmp_path / "none.env"))
+    boot = {"MC_AGENT_TOKEN": "tok", "MC_API_URL": "http://backend.invalid",
+            "TASK_ID": "run-task", "X_DISPATCH_ATTEMPT_ID": "run-attempt"}
+    child = acp_chat.chat_child_env(boot)
+    monkeypatch.setattr(os, "environ", dict(child))
+    cfg = Config.from_env().with_task_id(tid)
+    assert cfg.session_role == "chat" and cfg.task_id == tid and not cfg.board_id
+
+    calls: list = []
+
+    class _Client:
+        def request(self, method, path, **kw):
+            calls.append((method, path))
+            if path == "/api/v1/agent/me":
+                return {"id": "a1", "board_id": board}
+            return {"id": tid, "board_id": board, "status": "in_progress"}
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        assert mc_commands._cmd_task_get(None, _Client(), cfg) == 0
+    assert calls[-1] == ("GET", f"/api/v1/agent/boards/{board}/tasks/{tid}/detail")
+    assert '"status": "in_progress"' in buf.getvalue()

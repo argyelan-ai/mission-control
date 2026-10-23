@@ -526,22 +526,42 @@ a run ended got "0 % — no task is running". Two layers:
   daemon puts it in front of the operator's text for the model only — the
   transcript line stays the operator's text, the state mirror never shows it.
   Hermes (`acp-http`) gets none: its tasks run inside its chat session.
+  Times are on the operator's clock (`settings.usage_timezone`, named once in
+  the "State as of" line, `DD.MM.` added for another day) — never UTC: the
+  chat repeated "01:04 UTC" while the UI said 03:03 (round-2 user test). The
+  status is a plain word in the agent's `operator_language` ("in Arbeit",
+  "awaits the operator's review"), never the raw code. The block tells the
+  model to answer from it first and to read more only when needed; its read
+  hint `mc task-get <id>` works in the chat: without `BOARD_ID` in the env
+  the CLI takes the board from the agent's own `/agent/me`.
 - **Guard (enforce):** the daemon starts its `omp acp` child with
   `MC_SESSION_ROLE=chat` and its own `MC_CONTEXT_ENV_PATH`
   (`/tmp/mc-chat-context.env`, without the boot env's `TASK_ID` /
   `BOARD_ID` / `X_DISPATCH_ATTEMPT_ID`), so the chat never holds the run's
   attempt id. The `mc` CLI sends the role as `X-MC-Session-Role: chat`.
   `chat_session_guard.refuse_chat_task_write` answers 409
-  `chat_session_task_write: …` to every run-state write from it on a task
-  assigned to or worked by this agent (also after a human-review handoff
-  cleared the assignee): comments, status (`ack`/`finish`/`patch`),
-  deliverables, checklist, `recover`, and a blocking ask
-  (`POST /agent/tasks/current/ask` with `blocking: true` would park the run's
-  task in `waiting`, and the answer would then start a second run). Reading
-  and a plain question stay open. Each refusal is a
+  `chat_session_task_write: …` to every run-state write from it on a task a
+  run of this agent holds — assigned to it and live (`in_progress`,
+  `waiting`, `blocked`, `user_test`, or delivered in the inbox) — or let go
+  of within the last 30 minutes (the same window as the context block; it
+  covers a human-review handoff that cleared the assignee — the incident's
+  comment came 36 s after it): run-state comments (every type but
+  `message`), status (`ack`/`finish`/`patch`), deliverables, checklist,
+  `recover`, a blocking ask (`POST /agent/tasks/current/ask` with
+  `blocking: true` would park the run's task in `waiting`), and the three
+  calls that set the run's task to `blocked`: `mc question`
+  (`/clarification`), `mc help` (`/help-request`) and `mc delegate`
+  (`/delegate`, which also hangs a subtask and a progress note on it) — the
+  answer or callback would start a second run. Reading, a plain question and
+  a `message` comment (a reply in the task thread — it never ACKs a
+  delivered task and does not count as run activity) stay open. Not covered
+  (round-2 review, "not too wide"): a task whose run ended more than 30
+  minutes ago, and a task no run holds yet — e.g. the one the chat just
+  created for itself (inbox, not delivered). Each refusal is a
   `task.chat_write_rejected` event in the task timeline (title only; the
-  `action`/`status` dict stays in `meta.detail`). The marker guards against an
-  honest mistake of the model; it is not authentication.
+  `action`/`status` dict stays in `meta.detail`), at most one per task and
+  action every 10 minutes however often the model retries. The marker guards
+  against an honest mistake of the model; it is not authentication.
 - **Deliberately left open from the chat:** `POST /agent/tasks/current/messages`
   and a non-blocking `ask` (they never change the task status); the PDF
   endpoints (`/agent/me/pdf`, `.../tasks/{id}/pdf`), `visual-verify`,

@@ -402,16 +402,24 @@ rules:
     checked: 2026-10-22
 
   - id: R-chat-never-works-own-run
-    says: "A call from an agent's chat session (X-MC-Session-Role: chat) never writes the run state of a task assigned to or worked by that agent: comments, status, deliverables, checklist, recover and a blocking ask are refused with 409; reading and a plain question stay open. The omp chat turn is told what the run is doing instead."
+    says: "A call from an agent's chat session (X-MC-Session-Role: chat) never writes the run state of a task a run of that agent holds (assigned and live, or delivered) or let go of within 30 minutes: run-state comments, status, deliverables, checklist, recover, a blocking ask, and question/help/delegate (they set the run's task to blocked) are refused with 409; reading, a plain question and a reply (message comment) stay open, and so do tasks no run holds. One timeline row per task and action per 10 minutes. The omp chat turn is told what the run is doing instead, on the operator's clock and in plain status words."
     source: "docs/specs/chat-over-acp.md (The chat never works its agent's own task)"
     owner: backend/app/services/chat_session_guard.py
-    applies_to: ["backend/app/services/chat_session_guard.py", "backend/app/routers/agent_comments.py", "backend/app/routers/agent_task_status.py", "backend/app/routers/agent_scoped.py", "backend/app/routers/agents.py", "docker/omp-bridge/acp_chat.py", "scripts/mc-cli/mc_cli/client.py"]
+    applies_to: ["backend/app/services/chat_session_guard.py", "backend/app/services/chat_run_context.py", "backend/app/routers/agent_comments.py", "backend/app/routers/agent_task_status.py", "backend/app/routers/agent_scoped.py", "backend/app/routers/agents.py", "docker/omp-bridge/acp_chat.py", "scripts/mc-cli/mc_cli/client.py", "scripts/mc-cli/mc_cli/commands.py"]
     enforced_by:
       - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_progress_comment_on_running_task_is_refused"}
       - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_finish_on_running_task_is_refused"}
       - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_comment_after_review_handoff_is_refused"}
       - {test: "backend/tests/test_chat_session_task_guard.py::test_run_session_progress_comment_still_accepted"}
       - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_blocking_ask_on_running_task_is_refused"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_question_does_not_block_the_running_task"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_help_request_does_not_block_the_running_task"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_delegate_does_not_block_the_running_task"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_reply_comment_on_running_task_is_allowed"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_may_write_a_task_whose_run_ended_long_ago"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_repeated_refusals_leave_one_timeline_row"}
+      - {test: "backend/tests/test_chat_run_context.py::test_times_are_the_operators_local_time"}
+      - {test: "scripts/mc-cli/tests/test_task_get_board_fallback.py::test_task_get_with_an_id_and_no_board_reads_the_board_from_me"}
     status: active
     checked: 2026-10-23
 

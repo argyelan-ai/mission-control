@@ -466,8 +466,24 @@ def _add_patch_args(p):
 
 
 def _cmd_task_get(args, client, cfg):
-    """mc task-get — Aktuellen Task-Status abrufen."""
-    board_id, task_id = cfg.require_task_context()
+    """mc task-get [<task-id>] — Task-Status und Details abrufen.
+
+    Without BOARD_ID in the env (an agent's chat session: the run's context
+    is not its own) the board comes from the caller's `/agent/me`, like
+    `mc delegate` does — the run-context block and the chat guard's 409 tell
+    the chat to read with `mc task-get <id>` (round-2 review r1 S1)."""
+    task_id = getattr(cfg, "task_id", None)
+    if task_id and not getattr(cfg, "board_id", None):
+        me = client.request("GET", "/api/v1/agent/me")
+        board_id = me.get("board_id") if isinstance(me, dict) else None
+        if not board_id:
+            raise UsageError(
+                "BOARD_ID ist nicht gesetzt und /api/v1/agent/me liefert kein "
+                "Board — `mc task-get` braucht das Board der Aufgabe. Setze "
+                "BOARD_ID in der Env."
+            )
+    else:
+        board_id, task_id = cfg.require_task_context()
     resp = client.request("GET", f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/detail")
     # NOT through _emit(): its dict-with-"id" short form printed only the task
     # UUID, so `mc task-get` never showed the status/description it promises
