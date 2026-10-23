@@ -2542,6 +2542,11 @@ export const api = {
       request(`/api/v1/hosts/${id}`, { method: "DELETE" }),
     metrics: (id: string): Promise<HostMetrics> =>
       request(`/api/v1/hosts/${id}/metrics`),
+    // Wake a power-managed box via Wake-on-LAN from its host row (round-5
+    // re-check L1) — no runtime row needs the flag. Operator/admin only;
+    // 400 with a sentence when the box is not power-managed or has no MAC.
+    wake: (id: string): Promise<{ ok: boolean; message: string }> =>
+      request(`/api/v1/hosts/${id}/wake`, { method: "POST" }),
     // Telemetrie-Verlauf 1h (Bühne v2 §6/§7 PR 3) — Ring gefüllt vom obigen
     // metrics()-Poll, kein eigener Sammler. Leerer Host (noch kein Poll) →
     // {points: []}, nie ein Fehler.

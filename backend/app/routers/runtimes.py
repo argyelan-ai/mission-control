@@ -1064,7 +1064,9 @@ async def wake_runtime(
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
     result = await runtime_manager.wake_runtime(rt, host=host)
     if not result["ok"]:
-        raise HTTPException(status_code=400, detail=result["message"])
+        # 503: the request is fine, the host-side wake helper is not there.
+        status = 503 if result.get("helper_down") else 400
+        raise HTTPException(status_code=status, detail=result["message"])
     # Box is waking → drop any stale "asleep" readiness cache so the next poll re-probes.
     await runtime_readiness.invalidate_readiness(rt.get("slug") or runtime_id)
     return result

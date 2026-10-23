@@ -3811,6 +3811,12 @@
       "adminOnly": "Nur Admins dürfen den Autostart schalten.",
       "loading": "Autostart wird geladen …"
     },
+    "wakeBox": {
+      "waking": "Wird geweckt…",
+      "sent": "Die Box braucht 1–2 Min.",
+      "helperDown": "Nicht geweckt: Der Weck-Helfer auf dem Mac läuft nicht.",
+      "cockpitAsleep": "Schläft — keine Messwerte, bis die Box wach ist."
+    },
     "stage": {
       "stopFailed": "Stop fehlgeschlagen: {message}",
       "restartFailed": "Neustart fehlgeschlagen: {message}",

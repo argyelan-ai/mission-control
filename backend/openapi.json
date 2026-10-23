@@ -3209,6 +3209,15 @@
         ]
       }
     },
+    "/api/v1/hosts/{host_id}/wake": {
+      "post": {
+        "operationId": "wake_host_api_v1_hosts__host_id__wake_post",
+        "summary": "Wake Host",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
     "/api/v1/intelligence/config": {
       "get": {
         "operationId": "get_intelligence_config_api_v1_intelligence_config_get",

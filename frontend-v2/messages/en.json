@@ -3811,6 +3811,12 @@
       "adminOnly": "Only admins may switch autostart.",
       "loading": "Loading autostart …"
     },
+    "wakeBox": {
+      "waking": "Waking…",
+      "sent": "The box needs 1–2 min.",
+      "helperDown": "Not woken: the wake helper on the Mac is not running.",
+      "cockpitAsleep": "Asleep — no readings until the box is awake."
+    },
     "stage": {
       "stopFailed": "Stop failed: {message}",
       "restartFailed": "Restart failed: {message}",

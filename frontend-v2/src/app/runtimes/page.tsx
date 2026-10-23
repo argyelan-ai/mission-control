@@ -824,17 +824,14 @@ export default function RuntimesPage() {
 
   const groups = groupRuntimes(allRuntimes, hosts);
 
-  // Power-managed hosts render as AsleepBox (Spec §3 "Blaupause") instead of
-  // a full stage ONLY when nothing is serving AND the group actually carries
-  // the power-managed runtime (the runtime AsleepBox's "Wake" button
-  // targets) — a power-managed host whose runtimes happen to lack that flag
-  // must still render as a stage, never vanish.
+  // Power-managed hosts with nothing serving render as the sleeping row
+  // (Spec §3 "Blaupause"): the box's own check decides between "asleep"
+  // (with "Wake") and a free card. The HOST flag decides (round-5 re-check
+  // L1): a box whose runtime rows lack the flag slept as a free card with
+  // "Start model" and no way to wake it. "Wake" goes to the host
+  // (POST /hosts/{id}/wake), so no runtime row needs the flag.
   const sleepingGroups = groups.hosts.filter(
-    (g) =>
-      g.host.enabled &&
-      g.host.power_managed &&
-      pickServing(g, live) === null &&
-      g.runtimes.some((rt) => rt.power_managed === true)
+    (g) => g.host.enabled && g.host.power_managed && pickServing(g, live) === null
   );
   const sleepingHostIds = new Set(sleepingGroups.map((g) => g.host.id));
   // Every other enabled host gets a stage — with runtimes (serving, ready

@@ -21,7 +21,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { RefreshCw, RotateCcw, X } from "lucide-react";
 import { api } from "@/lib/api";
@@ -37,6 +37,7 @@ import { AutostartGroup } from "./AutostartGroup";
 import { ConnectionGroup } from "./ConnectionGroup";
 import { useHeadConflictText } from "@/components/heads/HeadOccupancy";
 import { RecipeGroup } from "./RecipeGroup";
+import { WakeBoxButton } from "../WakeBoxButton";
 
 export interface BoxCockpitMember {
   host: Host;
@@ -93,6 +94,7 @@ export function BoxCockpit({
   runtime: Runtime | null;
 }) {
   const t = useTranslations("runtimes.cockpit");
+  const tWake = useTranslations("runtimes.wakeBox");
   const headConflictText = useHeadConflictText();
   const tHosts = useTranslations("runtimes.hosts");
   const currentUser = useAppStore((s) => s.currentUser);
@@ -108,6 +110,20 @@ export function BoxCockpit({
     [members, activeHostId]
   );
   const siblings = members.filter((m) => m.host.id !== active?.host.id);
+
+  // The box's own check — same query (and cache) as its card. A sleeping box
+  // has no telemetry to collect and nothing to restart; the cockpit says it
+  // sleeps and offers "Wake" (round-5 re-check L1, t2: "collecting…" with
+  // "Restart" next to a box that does not answer).
+  const activeId = active?.host.id ?? null;
+  const { data: activeMetrics } = useQuery({
+    queryKey: ["hosts", activeId, "metrics"],
+    queryFn: () => api.hosts.metrics(activeId as string),
+    enabled: open && activeId != null,
+  });
+  const activeAsleep =
+    activeMetrics?.reachable === false &&
+    (active?.host.power_managed === true || activeMetrics.status === "asleep");
 
   // Fokus-Falle (Spec §4): beim Öffnen auf den Schliessen-Knopf, Tab/Shift-Tab
   // bleiben innerhalb des Inhalts.
@@ -233,7 +249,13 @@ export function BoxCockpit({
         </div>
 
         <GroupRow label={t("groupTelemetry")} testId="cockpit-group-telemetry" first>
-          <TelemetryChart hostId={active.host.id} />
+          {activeAsleep ? (
+            <span className="text-xs" style={{ color: C.textMuted }} data-testid="cockpit-asleep">
+              {tWake("cockpitAsleep")}
+            </span>
+          ) : (
+            <TelemetryChart hostId={active.host.id} />
+          )}
         </GroupRow>
 
         <GroupRow label={t("groupMode")} testId="cockpit-group-mode">
@@ -301,33 +323,43 @@ export function BoxCockpit({
         )}
 
         <div className="cockpit-ft px-4 py-3 mt-3" style={{ background: C.bgDeep }}>
-          <button
-            type="button"
-            onClick={() => probeMutation.mutate()}
-            disabled={!runtime || probeMutation.isPending}
-            data-testid="cockpit-reprobe"
-            className="inline-flex items-center justify-center gap-1.5 text-xs px-3 rounded-md cursor-pointer disabled:opacity-40 min-h-touch sm:min-h-9"
-            style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
-          >
-            <RefreshCw size={12} />
-            {t("reprobe")}
-          </button>
-          <button
-            type="button"
-            onClick={() => restartMutation.mutate()}
-            disabled={!runtime || restartMutation.isPending}
-            data-testid="cockpit-restart"
-            title={
-              (runtime?.member_hosts ?? []).length > 0
-                ? t("restartMultiNodeHint")
-                : t("restartHint")
-            }
-            className="inline-flex items-center justify-center gap-1.5 text-xs px-3 rounded-md cursor-pointer disabled:opacity-40 min-h-touch sm:min-h-9"
-            style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
-          >
-            <RotateCcw size={12} />
-            {t("restart")}
-          </button>
+          {activeAsleep ? (
+            // A sleeping box answers no probe and restarts nothing — it is
+            // woken first. Full row on the narrow drawer (two-column grid).
+            <div style={{ gridColumn: "1 / -1" }}>
+              <WakeBoxButton host={active.host} />
+            </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => probeMutation.mutate()}
+                disabled={!runtime || probeMutation.isPending}
+                data-testid="cockpit-reprobe"
+                className="inline-flex items-center justify-center gap-1.5 text-xs px-3 rounded-md cursor-pointer disabled:opacity-40 min-h-touch sm:min-h-9"
+                style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
+              >
+                <RefreshCw size={12} />
+                {t("reprobe")}
+              </button>
+              <button
+                type="button"
+                onClick={() => restartMutation.mutate()}
+                disabled={!runtime || restartMutation.isPending}
+                data-testid="cockpit-restart"
+                title={
+                  (runtime?.member_hosts ?? []).length > 0
+                    ? t("restartMultiNodeHint")
+                    : t("restartHint")
+                }
+                className="inline-flex items-center justify-center gap-1.5 text-xs px-3 rounded-md cursor-pointer disabled:opacity-40 min-h-touch sm:min-h-9"
+                style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
+              >
+                <RotateCcw size={12} />
+                {t("restart")}
+              </button>
+            </>
+          )}
           <span className="cockpit-ft-spacer" />
           <button
             type="button"

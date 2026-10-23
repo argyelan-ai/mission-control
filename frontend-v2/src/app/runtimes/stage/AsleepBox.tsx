@@ -6,26 +6,24 @@
  * + Zahnrad.
  */
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
-import { Loader2, Power, Settings } from "lucide-react";
-import { api } from "@/lib/api";
+import { Settings } from "lucide-react";
 import { C } from "@/lib/colors";
-import type { Host, Runtime } from "@/lib/types";
+import type { Host } from "@/lib/types";
 import { HeatStrip } from "./HeatStrip";
 import { KpiRow, type KpiCell } from "./KpiRow";
+import { WakeBoxButton } from "./WakeBoxButton";
 
 export function AsleepBox({
   host,
-  runtime,
   lastSeen,
   checking = false,
   noReadings = false,
   onOpenCockpit,
 }: {
+  /** The box — its power_managed flag carries "Wake" (POST /hosts/{id}/wake),
+   *  no runtime row needs the flag (round-5 re-check L1). */
   host: Host;
-  /** Die power_managed-Runtime dieser Box — trägt den Wake-Aufruf. */
-  runtime: Runtime;
   lastSeen?: string | null;
   /** The box's own check has not answered yet: nothing proves it sleeps
    *  (round-4 t3 S1) — the card says it is being checked, not "asleep". */
@@ -36,12 +34,6 @@ export function AsleepBox({
   onOpenCockpit: () => void;
 }) {
   const t = useTranslations("runtimes.stage");
-  const queryClient = useQueryClient();
-
-  const wakeMutation = useMutation({
-    mutationFn: () => api.runtimes.wake(runtime.id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["runtimes"] }),
-  });
 
   const cells: KpiCell[] = [
     { value: "–", label: t("kpiMemoryFree") },
@@ -87,19 +79,7 @@ export function AsleepBox({
         {/* Not while the check is out: an awake box would read "checking"
             next to "Wake" and then flip to "Start model" — the contradicting
             claim round 4 reported (PR #971 review). */}
-        {!checking && (
-          <button
-            type="button"
-            onClick={() => wakeMutation.mutate()}
-            disabled={wakeMutation.isPending}
-            data-testid="wake-box"
-            className="flex items-center gap-1.5 text-xs px-3.5 py-2.5 rounded-md cursor-pointer disabled:opacity-50"
-            style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
-          >
-            {wakeMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Power size={12} />}
-            {t("wake")}
-          </button>
-        )}
+        {!checking && <WakeBoxButton host={host} />}
         <button
           type="button"
           onClick={onOpenCockpit}

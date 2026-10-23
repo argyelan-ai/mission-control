@@ -165,15 +165,15 @@ function EmptyStage({ groups, onOpenCockpit }: { groups: HostGroup[]; onOpenCock
  * sleeps is the box's own check to say (round-4 t3 S1): until that answers
  * the card is being checked, and a box that answers is free, not asleep.
  * Same query key as FreeBox, so switching cards costs no second request.
+ * The HOST flag makes a box this row (round-5 re-check L1) — "Wake" goes to
+ * the host, so no runtime row needs the flag.
  */
 function SleepingBox({
   group,
-  runtime,
   device,
   onOpenCockpit,
 }: {
   group: HostGroup;
-  runtime: Runtime;
   device?: Device;
   onOpenCockpit: () => void;
 }) {
@@ -200,7 +200,6 @@ function SleepingBox({
     // missing (PR #971 review; FreeBox does the same since PR #960).
     <AsleepBox
       host={group.host}
-      runtime={runtime}
       checking={metrics == null && !metricsFailed}
       noReadings={metrics == null && metricsFailed}
       onOpenCockpit={onOpenCockpit}
@@ -316,14 +315,14 @@ export function FleetStage({
       )}
       <AnimatePresence initial={false}>
         {sleepingGroups.map((g) => {
-          const rt = g.runtimes.find((r) => r.power_managed === true);
-          if (!rt) return null;
+          // The cockpit's runtime: the box's power-managed row if it has one,
+          // else its slot — a box without either still shows (and wakes).
           const slot = pickSlot(g);
+          const rt = g.runtimes.find((r) => r.power_managed === true) ?? slot;
           return (
             <motion.div key={g.host.id} {...cardMotionProps}>
               <SleepingBox
                 group={g}
-                runtime={rt}
                 device={devices.get(g.host.id)}
                 onOpenCockpit={() =>
                   openCockpit({
