@@ -16,7 +16,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import require_user, require_role, Role
 from app.database import get_session
 from app.models.secret import Secret
-from app.services.encryption import MASK, encrypt, decrypt, safe_decrypt, mask
+from app.services.encryption import MASK, encrypt, decrypt, safe_decrypt, mask_credential_field
 
 router = APIRouter(prefix="/api/v1", tags=["secrets"])
 
@@ -249,6 +249,25 @@ class SecretUpdate(BaseModel):
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 
+# Settings keys that hold a public NAME, not a secret — shown in full, like a
+# credential's ``username`` (credentials._NON_SENSITIVE_FIELDS). The GitHub
+# owner is the user/org every repo URL already shows; masked, the settings
+# page could not say WHICH owner is set (review of round-4 K5, NICE-1).
+_PLAIN_SECRET_KEYS = ("github_owner",)
+
+
+def _mask_secret(key: str, value: str | None) -> str:
+    """The API-key list masks under the same field rule as the credentials
+    Vault (round-4 K5, r1 N1): "x_api_secret" or "SMTP_PASSWORD" never show
+    a tail, "GITHUB_TOKEN" / "OPENAI_API_KEY" keep 4 characters once 20+
+    long. ``None`` means the stored value could not be decrypted."""
+    if value is None:
+        return MASK + " [decrypt error]"
+    if key in _PLAIN_SECRET_KEYS:
+        return value
+    return mask_credential_field(key, value)
+
+
 @router.get("/secrets/providers")
 async def list_provider_templates(current_user=Depends(require_user)):
     """Provider templates for the UI (which keys exist)."""
@@ -272,7 +291,7 @@ async def list_secrets(
         items.append({
             "id": str(s.id),
             "key": s.key,
-            "value_masked": mask(decrypted) if decrypted else MASK + " [decrypt error]",
+            "value_masked": _mask_secret(s.key, decrypted),
             "provider": s.provider,
             "label": s.label,
             "description": s.description,
@@ -310,7 +329,7 @@ async def create_secret(
     return {
         "id": str(secret.id),
         "key": secret.key,
-        "value_masked": mask(payload.value),
+        "value_masked": _mask_secret(secret.key, payload.value),
         "provider": secret.provider,
         "label": secret.label,
     }
@@ -346,7 +365,7 @@ async def update_secret(
     return {
         "id": str(secret.id),
         "key": secret.key,
-        "value_masked": mask(decrypted) if decrypted else MASK + " [decrypt error]",
+        "value_masked": _mask_secret(secret.key, decrypted),
         "provider": secret.provider,
         "label": secret.label,
     }

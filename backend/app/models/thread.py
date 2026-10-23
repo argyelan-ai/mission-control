@@ -137,7 +137,7 @@ class Message(SQLModel, table=True):
     question_meta: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     # Written by an agent's chat session (session-role header), set by the
     # server only. The run's clocks leave it out: the chat answering the
-    # operator is no sign of life of the run (round-3 re-review M1, 0222).
+    # operator is no sign of life of the run (round-3 re-review M1, migration 0223_message_from_chat).
     from_chat: bool = Field(
         default=False,
         sa_column=Column(Boolean, server_default=text("false"), nullable=False),

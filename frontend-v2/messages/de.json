@@ -2218,7 +2218,8 @@
       "types": {
         "login": "Login",
         "token": "Token",
-        "custom": "Freitext"
+        "custom": "Freitext",
+        "sshKey": "SSH-Key"
       },
       "customSummary": "(Freitext)",
       "sshKeySummary": "SSH-Key ({username}, von Host-Onboarding verwaltet)",

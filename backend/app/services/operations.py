@@ -265,6 +265,34 @@ async def stop_task_run(
 
     agent = await session.get(Agent, task.assigned_agent_id) if task.assigned_agent_id else None
 
+    # rule: R-stop-only-own-run - Stop on review card B stopped run A
+    # Which card does the agent's live run work on? The pointer is set only
+    # for in_progress; the bridge's run record (acp-task-state.json) names the
+    # card for every phase, review included. A ``stopped`` card makes the
+    # agent's poll end its session, whatever that session works on — so the
+    # stop must never land on a card that is not the live run (round-4 K5,
+    # r1 N2; review SHOULD-2: the card only hid the button, the API still let
+    # card B end run A).
+    run_task_id: str | None = None
+    if agent is not None:
+        from app.services.acp_chat_transport import read_acp_task_run_id
+        run_task_id = read_acp_task_run_id(agent)
+    this_card = str(task.id)
+    agent_on_this_card = agent is not None and (
+        agent.current_task_id == task.id or run_task_id == this_card
+    )
+    agent_on_other_card = agent is not None and not agent_on_this_card and (
+        agent.current_task_id is not None or run_task_id is not None
+    )
+    # A review card has no run of its own until the reviewer picks it up —
+    # "status review" alone does not say the run is this card's.
+    if task.status == "review" and not agent_on_this_card:
+        raise HTTPException(
+            status_code=409,
+            detail="The agent's run is not this review card — stopping it would end "
+                   "another run. Use Hold to pause a waiting review.",
+        )
+
     # Phase 29: Gateway session reset no longer applies with the gateway sunset.
     # spawn_session_key stays on the model until Phase 30 (DB drop). cli-bridge /
     # host / claude-code runtimes have no remote-session concept — the
@@ -300,7 +328,10 @@ async def stop_task_run(
     # resume.
     # Live bug 2026-04-24: the operator stopped a Sparky task + restarted the container,
     # on resume the task ended up in inbox with assigned_agent_id=None.
-    if agent:
+    # Only the agent's OWN run ends: an agent that provably runs a different
+    # card (pointer or run record) stays "running" — stopping a queued card
+    # must not mark its busy agent idle.
+    if agent and not agent_on_other_card:
         agent.run_state = "idle"
         if agent.current_task_id == task.id:
             agent.current_task_id = None

@@ -411,12 +411,11 @@ _TASK_STATE_MAX_AGE_S = 120.0
 _TASK_STATE_MAX_SKEW_S = 60.0
 
 
-def read_acp_task_phase(agent) -> str | None:
-    """``"working"`` / ``"delivered"`` / ``None`` — what the agent's TASK
-    channel does right now (follow-up to ADR-097: while a task ran, the chat
-    said "Ready", because only the chat daemon's ``busy`` was read; a task
-    runs through the bridge's own ACP client). None for idle and for a
-    missing, garbled, stale or future-dated file. Never raises."""
+def _read_acp_task_state(agent) -> dict | None:
+    """The bridge's task-state record (``acp-task-state.json``) when it is
+    live: phase ``working``/``delivered`` and a fresh ``updatedAt``. None
+    for idle and for a missing, garbled, stale or future-dated file. Never
+    raises."""
     from datetime import datetime, timezone
 
     from app.services.omp_chat import resolve_transcript_dir
@@ -430,8 +429,7 @@ def read_acp_task_phase(agent) -> str | None:
         return None
     if not isinstance(data, dict):
         return None
-    phase = data.get("phase")
-    if phase not in ("working", "delivered"):
+    if data.get("phase") not in ("working", "delivered"):
         return None
     try:
         stamp = datetime.fromisoformat(str(data.get("updatedAt")).replace("Z", "+00:00"))
@@ -442,7 +440,32 @@ def read_acp_task_phase(agent) -> str | None:
     age = (datetime.now(timezone.utc) - stamp).total_seconds()
     if age > _TASK_STATE_MAX_AGE_S or age < -_TASK_STATE_MAX_SKEW_S:
         return None
-    return phase
+    return data
+
+
+def read_acp_task_phase(agent) -> str | None:
+    """``"working"`` / ``"delivered"`` / ``None`` — what the agent's TASK
+    channel does right now (follow-up to ADR-097: while a task ran, the chat
+    said "Ready", because only the chat daemon's ``busy`` was read; a task
+    runs through the bridge's own ACP client). None for idle and for a
+    missing, garbled, stale or future-dated file. Never raises."""
+    data = _read_acp_task_state(agent)
+    return data["phase"] if data is not None else None
+
+
+def read_acp_task_run_id(agent) -> str | None:
+    """The id of the task the agent's live run works on, from the same
+    record — or None (no live run, no record, not an ACP agent).
+
+    A worker's ``current_task_id`` is never set for a review card, so it
+    cannot tell WHICH delivered review a busy reviewer works. "Stop run" on
+    review card B used to stop run A (round-4 K5, r1 N2); the task card asks
+    this instead. Never raises."""
+    data = _read_acp_task_state(agent)
+    if data is None:
+        return None
+    task_id = data.get("taskId")
+    return str(task_id) if isinstance(task_id, str) and task_id else None
 
 
 def read_acp_turn_status(

@@ -76,7 +76,9 @@ def _mask_data(data: dict, credential_type: str) -> dict:
         elif k in _NON_SENSITIVE_FIELDS:
             masked[k] = v
         else:
-            masked[k] = mask_credential_field(k, str(v)) if v else ""
+            # The raw value, not str(v): a nested dict/list must be hidden
+            # in full, never as the tail of its text form (round-4 K5).
+            masked[k] = mask_credential_field(k, v) if v else ""
     return masked
 
 
