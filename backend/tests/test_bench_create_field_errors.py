@@ -103,9 +103,10 @@ async def test_effort_on_an_agent_row_names_the_rows_effort(auth_client, _no_bac
 async def test_spark_unreachable_names_the_auto_rows_model(auth_client, monkeypatch, _no_background):
     monkeypatch.setattr(
         orchestrator, "resolve_spark_model_or_422",
-        AsyncMock(side_effect=HTTPException(422, "Spark nicht erreichbar — Modell nicht auflösbar")),
+        AsyncMock(side_effect=HTTPException(422, "Spark is not reachable, so the active model cannot be resolved right now.")),
     )
     resp = await _create(auth_client, _agent(label="Worker"), _spark(model=None))
     item = _only_item(resp)
     assert item["loc"] == ["body", "models", 1, "spark_model"]
     assert item["type"] == "bench_spark_unreachable"
+    assert item["msg"].startswith("Spark is not reachable")

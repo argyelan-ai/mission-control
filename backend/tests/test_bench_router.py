@@ -185,7 +185,7 @@ async def test_create_challenge_spark_unreachable_422(auth_client, monkeypatch):
 
     monkeypatch.setattr(
         orchestrator, "resolve_spark_model_or_422",
-        AsyncMock(side_effect=HTTPException(422, "Spark nicht erreichbar — Modell nicht auflösbar")),
+        AsyncMock(side_effect=HTTPException(422, "Spark is not reachable, so the active model cannot be resolved right now.")),
     )
     body = _create_body()
     body["models"] = [{"label": "DeepSeek", "source_kind": "spark", "spark_model": None}]

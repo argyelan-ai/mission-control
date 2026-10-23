@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
-import { C } from "@/lib/colors";
+import { C, STATUS_TEXT } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
 import { useEffortWord } from "@/lib/effortWord";
 import { benchApi } from "@/verticals/bench_studio/api";
@@ -114,6 +114,10 @@ export function EffortChips({
 
   const chip = (level: EffortLevel) => {
     const active = selected === level;
+    // A refused level frames the chips in the error tone, like a refused
+    // input's frame (DESIGN.md "Grenzen und Fehler"); the frame goes with
+    // the message (round-6 L4 review SHOULD-1).
+    const frame = ariaInvalid ? STATUS_TEXT.error : active ? C.borderAccent : C.border;
     return (
       <button
         key={level}
@@ -125,7 +129,7 @@ export function EffortChips({
         style={{
           backgroundColor: active ? C.accentSubtle : "transparent",
           color: active ? C.accent : C.textSecondary,
-          border: `1px solid ${active ? C.borderAccent : C.border}`,
+          border: `1px solid ${frame}`,
         }}
       >
         {word(level)}

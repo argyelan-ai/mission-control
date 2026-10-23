@@ -1214,9 +1214,14 @@ describe("NewChallengeDialog — round-4 K1 (R6 rest)", () => {
     expect(message?.textContent).toMatch(words);
     expect(document.activeElement).toBe(group);
     expect(notify.error).not.toHaveBeenCalled();
-    // Picking another level takes the message away.
+    // The chips themselves carry the error frame, like a refused input.
+    const radios = Array.from(group.querySelectorAll('[role="radio"]'));
+    expect(radios.length).toBeGreaterThan(0);
+    for (const r of radios) expect(r.getAttribute("style")).toContain("status-error-text");
+    // Picking another level takes the message and the frame away.
     await userEvent.click(screen.getByRole("radio", { name: "Off" }));
     expect(group).not.toHaveAttribute("aria-invalid");
+    for (const r of group.querySelectorAll('[role="radio"]')) expect(r.getAttribute("style")).not.toContain("status-error-text");
   });
 
   it("the server's 'Spark unreachable' is said under the auto row's model select, not as a German toast", async () => {
