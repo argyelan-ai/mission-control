@@ -9,6 +9,7 @@ import { C, STATUS_TEXT } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { benchApi } from "@/verticals/bench_studio/api";
+import { apiErrorDetail } from "./apiError";
 import { EffortChips } from "./EffortChips";
 import type { BenchModelSpec, EffortLevel, PromptTemplate } from "./types";
 
@@ -20,25 +21,6 @@ const EMPTY_MODEL: BenchModelSpec = { label: "", source_kind: "spark", spark_mod
 const EFFORT_WORDS: Record<EffortLevel, string> = {
   default: "Default", off: "Off", on: "On", low: "Low", medium: "Medium", high: "High", max: "Max",
 };
-
-/** request() throws `Error("API <status>: <raw body>")` — pull the backend's
- *  `detail` string back out (e.g. the 422 "Spark nicht erreichbar…") so the
- *  toast shows the real reason instead of a generic one. Mirrors
- *  ChallengeDetail.tsx's apiErrorDetail. */
-function apiErrorDetail(err: unknown, fallback: string): string {
-  if (err instanceof Error) {
-    const match = err.message.match(/^API \d+: ([\s\S]*)$/);
-    if (match) {
-      try {
-        const body = JSON.parse(match[1]);
-        if (typeof body?.detail === "string" && body.detail) return body.detail;
-      } catch {
-        // body wasn't JSON — fall through to fallback
-      }
-    }
-  }
-  return fallback;
-}
 
 const RECORD_DURATION_MIN = 5;
 const RECORD_DURATION_MAX = 60;

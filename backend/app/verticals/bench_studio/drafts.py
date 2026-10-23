@@ -27,7 +27,7 @@ from app.models.board import Board
 from app.models.content import ContentPipeline
 from app.services import x_publisher
 
-from .orchestrator import compose_challenge, pending_x_post_approval
+from .orchestrator import compose_challenge, entry_order_key, pending_x_post_approval
 
 logger = logging.getLogger("mc.bench_studio")
 
@@ -69,7 +69,7 @@ async def create_draft(
     ).all()
     rendered = sorted(
         [e for e in entries if e.status == "rendered" and e.video_path],
-        key=lambda e: e.model_label,
+        key=entry_order_key,
     )
 
     media_path = challenge.composed_video_path

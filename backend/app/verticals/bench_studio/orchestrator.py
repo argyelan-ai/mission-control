@@ -93,8 +93,28 @@ def entry_dir(entry: BenchEntry) -> Path:
     so the second run overwrote the first one's index.html and recording
     without a trace. The id suffix makes the folder unique per entry; the
     label stays in front so a human browsing the share can still read it.
-    Existing entries keep their stored artifact_path/video_path."""
-    return challenge_dir(entry.challenge_id) / f"{_safe_label(entry.model_label)}-{entry.id.hex[:8]}"
+
+    Once a run has written the folder (``artifact_path`` points into it),
+    the entry keeps that folder: renaming the entry afterwards used to put
+    the next recording into a fresh folder and orphan the old one (round-2
+    review r1 NICE-7). Only a folder of this entry counts — inside this
+    challenge's root and ending in this entry's id — never a legacy
+    label-only folder that same-label rows shared."""
+    root = challenge_dir(entry.challenge_id)
+    suffix = f"-{entry.id.hex[:8]}"
+    if entry.artifact_path:
+        stored = Path(entry.artifact_path).parent
+        if stored.parent == root and stored.name.endswith(suffix):
+            return stored
+    return root / f"{_safe_label(entry.model_label)}{suffix}"
+
+
+def entry_order_key(entry: BenchEntry) -> tuple[int, str]:
+    """Sort key for entries everywhere they are listed or composed: the
+    operator's row order from the create dialog (``position``), the label
+    only as a tie-break. Was the label alone until round-2 user tests —
+    "DeepSeek · Max" then always came before "DeepSeek · Off"."""
+    return (entry.position or 0, entry.model_label)
 
 
 #: Display word for an effort level in labels ("DeepSeek · Max"). English on
@@ -1263,7 +1283,7 @@ async def compose_challenge(
     name (drafts.py's "grid-speeds.mp4") pass it explicitly."""
     if output_name is None:
         output_name = _versioned_output_name()
-    ordered = sorted(rendered, key=lambda e: e.model_label)
+    ordered = sorted(rendered, key=entry_order_key)
     duration_s = (
         challenge.record_duration_s
         if challenge.record_duration_s is not None

@@ -76,7 +76,12 @@ async def _claim_challenge_run(challenge_id: uuid.UUID) -> None:
 
 
 class BenchModelSpec(BaseModel):
-    label: str = Field(min_length=1, max_length=LABEL_MAX_LEN)
+    # May arrive empty: the dialog's default row "Aktives Modell (auto)"
+    # sends "" on purpose and create fills it from the model it resolves.
+    # "Not empty" is checked in create_challenge AFTER that resolution — a
+    # min_length here refused the default row with a Pydantic 422 before
+    # the fill-in could run (round-2 user test t2 MUSS-1).
+    label: str = Field(default="", max_length=LABEL_MAX_LEN)
     source_kind: Literal["spark", "agent"]
     spark_model: str | None = None
     agent_id: uuid.UUID | None = None
@@ -141,7 +146,7 @@ def _serialize(
         **challenge.model_dump(),
         "entries": [
             {**e.model_dump(), "task_state": states.get(e.id)}
-            for e in sorted(entries, key=lambda e: e.model_label)
+            for e in sorted(entries, key=orchestrator.entry_order_key)
         ],
     }
 
@@ -315,15 +320,24 @@ async def create_challenge(
     # fire N sequential probes against the same box for the same answer
     # (review finding).
     resolved_spark_model: str | None = None
-    for spec in body.models:
+    for row, spec in enumerate(body.models, start=1):
         if spec.source_kind == "agent" and spec.agent_id is None:
             raise HTTPException(400, f"model {spec.label!r}: agent_id required")
         if spec.source_kind == "spark" and not (spec.spark_model or "").strip():
             if resolved_spark_model is None:
                 resolved_spark_model = await orchestrator.resolve_spark_model_or_422()
             spec.spark_model = resolved_spark_model
-            if not spec.label.strip():
-                spec.label = spec.spark_model
+        if not spec.label.strip():
+            if spec.source_kind == "spark":
+                # The model this row will really run (resolved above for the
+                # auto row, typed for a fixed one) — cut to the label limit,
+                # the model id itself stays whole.
+                spec.label = (spec.spark_model or "").strip()[:LABEL_MAX_LEN].rstrip()
+            else:
+                raise HTTPException(
+                    422,
+                    f"Model row {row}: the label is empty — give this agent row a name.",
+                )
     efforts = [await _validate_effort(session, spec) for spec in body.models]
     _unique_labels(body.models, efforts)
 
@@ -360,8 +374,10 @@ async def create_challenge(
             # The requested effort lives in metrics until the W1 schema PR
             # moves it into a column (concept §7: same field names).
             metrics={"effort_requested": effort},
+            # The dialog's row order is the order everywhere (t2 SOLL-1).
+            position=position,
         )
-        for spec, effort in zip(body.models, efforts)
+        for position, (spec, effort) in enumerate(zip(body.models, efforts))
     ]
     for e in entries:
         session.add(e)

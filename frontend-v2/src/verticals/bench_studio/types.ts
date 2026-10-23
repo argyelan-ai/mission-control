@@ -5,6 +5,9 @@ export interface BenchEntry {
   id: string;
   challenge_id: string;
   model_label: string;
+  // Row index from the create dialog (0-based); the API already returns the
+  // entries in this order (round-2 user test t2 SOLL-1), so the UI keeps it.
+  position?: number;
   source_kind: "spark" | "agent";
   spark_model: string | null;
   agent_id: string | null;

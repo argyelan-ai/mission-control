@@ -20,7 +20,7 @@ from datetime import datetime
 from app.utils import utcnow
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Text, UniqueConstraint, Uuid, text
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, Text, UniqueConstraint, Uuid, text
 from sqlmodel import Column, Field, SQLModel
 
 
@@ -84,7 +84,14 @@ class BenchEntry(SQLModel, table=True):
             index=True,
         ),
     )
-    model_label: str  # display label, also used for the artifact directory
+    model_label: str  # display label, also the front part of the artifact folder name
+    # Row index from the create request (0-based). The operator's order is
+    # the order everywhere — API, detail page, grid video, outro — instead
+    # of A-Z by label (round-2 user test t2 SOLL-1). Migration 0221
+    # backfilled older rows in label order.
+    position: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default=text("0"))
+    )
     source_kind: str  # spark | agent (extensible later: "api", spec §8)
     spark_model: str | None = None  # vLLM model name override (spark entries)
     # Custom chip tag for the branded video frame (e.g. "OMP · DGX SPARK").
