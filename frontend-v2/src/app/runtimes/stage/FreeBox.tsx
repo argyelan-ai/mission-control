@@ -86,9 +86,11 @@ export function FreeBox({
   const unreachable = metrics?.reachable === false;
   const asleep = unreachable && (host.power_managed || metrics?.status === "asleep");
   // A failed metrics call says nothing about the box — the runtime probe
-  // already called it free, so the card keeps that instead of "checking"
-  // forever.
+  // already called it free (no model), so the corner keeps "free" instead of
+  // "checking" forever; the line says the readings are missing rather than
+  // claiming "ready" without a proof (PR #960 review, NICE).
   const checking = probePending || (metrics == null && !metricsFailed);
+  const noReadings = !checking && metrics == null && metricsFailed;
   const corner = probeTimedOut
     ? t("cornerUnknown")
     : unreachable
@@ -100,7 +102,9 @@ export function FreeBox({
     ? asleep ? t("asleepLine") : t("unreachableLine")
     : checking
       ? t("checkingLine")
-      : t("freeLine");
+      : noReadings
+        ? t("freeLineNoReadings")
+        : t("freeLine");
 
   const cells: KpiCell[] = [
     { value: memFreeGb != null ? String(memFreeGb) : "–", unit: memFreeGb != null ? "GB" : undefined, label: t("kpiMemoryFree") },
@@ -108,7 +112,8 @@ export function FreeBox({
     { value: String(agentsData?.count ?? 0), label: t("kpiAgents") },
     {
       value: endpointPort != null ? `:${endpointPort}` : "–",
-      label: t("kpiEndpointIdle"),
+      // "· idle" is a claim about the engine — not made while unchecked.
+      label: probePending ? t("kpiEndpoint") : t("kpiEndpointIdle"),
       copyValue: endpointPort != null ? slot?.endpoint ?? `:${endpointPort}` : undefined,
     },
   ];
@@ -157,7 +162,12 @@ export function FreeBox({
         />
       </div>
       <div className="flex items-center gap-2 px-4 py-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
-        <HostRecipeSwitcher hostId={host.id} hostName={host.slug} servingName={null} compact primary label={t("startModel")} />
+        {/* No armed "Start model" while the box is still being checked: on
+            the first paint a running duo would offer to start a second
+            model onto its own boxes (PR #960 review, SHOULD 1). */}
+        {!probePending && (
+          <HostRecipeSwitcher hostId={host.id} hostName={host.slug} servingName={null} compact primary label={t("startModel")} />
+        )}
         <button
           type="button"
           onClick={onOpenCockpit}

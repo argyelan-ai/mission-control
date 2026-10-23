@@ -126,7 +126,7 @@ export function Stage({
   // Head-Box (ADR-078), nicht am laufenden Rezept — `runtime` bleibt nur
   // Fallback für Boxen ohne eigene Slot-Zeile (ältere Stände).
   const agentsSlug = (headHost?.slot?.slug ?? headHost?.slot?.id ?? runtime.slug ?? runtime.id) as string;
-  const { data: agentsData } = useQuery({
+  const { data: agentsData, isPending: agentsPending } = useQuery({
     queryKey: ["runtime-agents", agentsSlug],
     queryFn: () => api.runtimes.db.agents(agentsSlug),
     enabled: !!agentsSlug,
@@ -136,7 +136,7 @@ export function Stage({
 
   // The runtime-agents answer has no operational mode — the roster (same
   // query as /agents and the sidebar) says which bound agents are paused.
-  const { data: roster } = useQuery({
+  const { data: roster, isPending: rosterPending } = useQuery({
     queryKey: ["agents"],
     queryFn: () => api.agents.list(),
     staleTime: 15_000,
@@ -215,11 +215,14 @@ export function Stage({
   // agent as the same "1" (bauplan `heads-sichtbar` PR 3 §4 — the approved
   // mockup's own annotation: "'2' zählt einen arbeitenden Head und einen
   // ruhenden Agenten gleich."). Split instead into WORKING (heads on this
-  // box + bound agents actually `status === "busy"`) and CONNECTED (the
-  // box's other active-but-idle bound agents) — a paused agent counts as
-  // neither (same split as the /agents page and the sidebar counter). An
-  // agent the roster does not know yet counts as active-and-idle: better
-  // counted as merely connected than missing from a free-looking box.
+  // box + bound agents whose turn runs, `isAgentWorking`, paused or not)
+  // and CONNECTED (the box's other active, idle bound agents) — an idle
+  // paused agent counts as neither (same split as the /agents page and the
+  // sidebar counter). An agent the roster does not know counts as
+  // active-and-idle: better counted as merely connected than missing from a
+  // free-looking box. While the bound list or the roster is still loading,
+  // the tile shows "–" instead (PR #960 review, SHOULD 3: the fast first
+  // paint showed "+3 connected" for paused agents, later "+1").
   const boundAgents = (agentsData?.agents ?? []).map(
     (ref) => roster?.find((a) => a.id === ref.id) ?? ({ ...ref, operational_mode: "active", status: "idle" } as unknown as Agent),
   );
@@ -238,6 +241,7 @@ export function Stage({
   const pausedNames = boundAgents.filter((a) => a.operational_mode === "paused").map((a) => a.name).filter(Boolean);
   const workingCount = headsOnCard.length + busyAgents.length;
   const connectedCount = connectedAgents.length;
+  const agentsUnknown = agentsPending || (rosterPending && (agentsData?.agents.length ?? 0) > 0);
   // The tooltip keeps its own existing "N heads · N active agents" summary
   // (unchanged by the working/connected split above — it still answers
   // "who, in total, is on this box", heads first since they are the ones
@@ -301,7 +305,7 @@ export function Stage({
       testId: "kpi-speed",
     },
     {
-      value: String(workingCount),
+      value: agentsUnknown ? "–" : String(workingCount),
       // One ICU plural key, not a ternary between two catalog keys (review
       // fix round 6, finding 4): a ternary is only ever exercised by the
       // test suite's hardcoded-English next-intl mock, where "working" is
@@ -310,8 +314,12 @@ export function Stage({
       // green. Real pluralisation (German needs "arbeitet"/"arbeiten") now
       // lives in the message catalog, where a locale-aware render can
       // actually exercise both branches.
-      unit: t("kpiWorkingUnit", { count: workingCount }),
-      label: connectedCount > 0 ? t("kpiConnected", { count: connectedCount }) : t("kpiConnectedNone"),
+      unit: agentsUnknown ? undefined : t("kpiWorkingUnit", { count: workingCount }),
+      label: agentsUnknown
+        ? t("kpiConnectedUnknown")
+        : connectedCount > 0
+          ? t("kpiConnected", { count: connectedCount })
+          : t("kpiConnectedNone"),
       title: inUseTitle,
       testId: "kpi-in-use",
       popoverContent: inUsePopover,

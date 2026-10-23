@@ -108,6 +108,37 @@ describe("RuntimesPage", () => {
     expect(screen.queryByTestId("empty-stage")).not.toBeInTheDocument();
   });
 
+  // PR #960 review SHOULD 1: painted before the watcher's live view, the
+  // rows showed a running duo as two free boxes with an armed "Start model",
+  // then an empty moment, then the stage card. The rows wait for that view.
+  it("(q6) the unprobed rows wait for the live view before painting the stage", async () => {
+    const spark = makeHost({ slug: "spark", display_name: "DGX Spark", ui_order: 0 });
+    const serving = makeRuntime({
+      slug: "ds", display_name: "DeepSeek Flash", runtime_type: "ssh_process", state: "unknown",
+      container_status: "not_probed", host: { id: "spark", slug: "spark", display_name: "DGX Spark" },
+    });
+    vi.spyOn(api.runtimes, "list").mockImplementation(() => new Promise(() => {}));
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({ runtimes: [serving] });
+    vi.spyOn(api.hosts, "list").mockResolvedValue([spark]);
+    let answerLive: (v: typeof emptyLive) => void = () => {};
+    vi.spyOn(api.runtimes, "liveStatus").mockImplementation(() => new Promise((r) => { answerLive = r; }));
+
+    renderPage();
+
+    await waitFor(() => expect(api.runtimes.listRows).toHaveBeenCalled());
+    // Rows are in, live view is not: nothing claims "free".
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId("free-box")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("stage-card")).not.toBeInTheDocument();
+
+    answerLive({
+      ...emptyLive,
+      live: { ds: { reachable: true, served_model: "m", latency_ms: 5, last_probe_at: "", consecutive_failures: 0, drift: false } },
+    });
+    expect(await screen.findByTestId("stage-card")).toHaveTextContent("DeepSeek Flash");
+    expect(screen.queryByTestId("free-box")).not.toBeInTheDocument();
+  });
+
   it("(a) an omp runtime on an enabled host with nothing else running is visible via the empty stage AND the register", async () => {
     // The only host in the fixture has nothing serving — FleetStage's
     // isFullyEmpty branch renders EmptyStage (Spec §3 "Leer"), not a FreeBox

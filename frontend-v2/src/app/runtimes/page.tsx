@@ -795,7 +795,6 @@ export default function RuntimesPage() {
   // decide what runs. The probed list replaces them the moment it lands.
   const { data: rowsData } = useRuntimeRows(probedData == null);
   const data = probedData ?? rowsData;
-  const isLoading = probedLoading && rowsData == null;
 
   const { data: hostsData, isLoading: hostsLoading } = useQuery<Host[]>({
     queryKey: ["hosts"],
@@ -805,11 +804,19 @@ export default function RuntimesPage() {
 
   // Live status stays uncached on purpose: stale health/reachability claims
   // are exactly what this redesign eliminates. 19 ms from the watcher cache.
-  const { data: liveData } = useQuery({
+  const { data: liveData, isPending: livePending } = useQuery({
     queryKey: ["runtimes", "live-status"],
     queryFn: () => api.runtimes.liveStatus(),
     refetchInterval: 30_000,
   });
+
+  // The unprobed rows know no state — only the watcher's live view says
+  // which model runs (and that two boxes run it together). Painted before
+  // that view landed, a running duo showed as two free boxes with an armed
+  // "Start model", then flickered to its stage card (PR #960 review,
+  // SHOULD 1). So the rows paint once the live view answered (or failed);
+  // the probed list never waits for it, it carries its own state.
+  const isLoading = probedLoading && (rowsData == null || livePending);
 
   const allRuntimes = data?.runtimes ?? [];
   const hosts = hostsData ?? [];

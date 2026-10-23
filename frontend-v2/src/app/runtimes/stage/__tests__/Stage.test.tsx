@@ -384,4 +384,24 @@ describe("Stage — who makes the load", () => {
       "No agent on this box is working. The load comes from somewhere else — for example a bench run or a direct API call.",
     );
   });
+
+  // PR #960 review SHOULD 3: before the roster lands, bound agents used to
+  // count as "active, connected" — the fast first paint read "+3 connected"
+  // for three paused agents, later "+1". Unknown is "–", not a number.
+  it("shows '–' until the roster has answered", async () => {
+    vi.spyOn(api.agents, "list").mockImplementation(() => new Promise(() => {}));
+    renderWithQuery(<Stage runtime={makeRuntime({ slug: "rt" })} members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]} live={live} onOpenCockpit={() => {}} />);
+    const tile = await screen.findByTestId("kpi-in-use");
+    await vi.waitFor(() => expect(tile).toHaveTextContent(/^–– connected/));
+    expect(tile).not.toHaveTextContent(/\+ 1 connected/);
+  });
+
+  it("counts once the roster has answered", async () => {
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      { id: "sp", name: "Alpha", status: "idle", operational_mode: "active" },
+    ] as never);
+    renderWithQuery(<Stage runtime={makeRuntime({ slug: "rt" })} members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]} live={live} onOpenCockpit={() => {}} />);
+    const tile = await screen.findByTestId("kpi-in-use");
+    await vi.waitFor(() => expect(tile).toHaveTextContent(/^0working\+ 1 connected/));
+  });
 });

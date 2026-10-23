@@ -92,6 +92,26 @@ describe("FleetStage — probe timed out", () => {
     await waitFor(() => expect(card).toHaveTextContent("7GB"));
     expect(card).toHaveTextContent("Checking…");
     expect(card).not.toHaveTextContent("no model · ready");
+    // PR #960 review SHOULD 1: no armed "Start model" and no "· idle" claim
+    // on an unchecked box — on the first paint it may be half of a running duo.
+    expect(card).not.toHaveTextContent("Start model");
+    expect(card).not.toHaveTextContent("Endpoint · idle");
+    expect(card).toHaveTextContent("Endpoint");
+  });
+
+  // PR #960 review (NICE): failed metrics are no proof of "ready".
+  it("a free box whose metrics fail says the readings are missing, not 'ready'", async () => {
+    vi.spyOn(api.hosts, "metrics").mockRejectedValue(new Error("boom"));
+    const other = makeHost({ slug: "beta", display_name: "Box Beta", ui_order: 1 });
+    const serving = { ...recipe, id: "rt-2", slug: "rt-2", state: "ready" as const, host: { id: "beta", slug: "beta", display_name: "Box Beta" } };
+    renderStage([
+      { host: alpha, runtimes: [{ ...recipe, state: "stopped" }] },
+      { host: other, runtimes: [serving] },
+    ]);
+    const card = await screen.findByTestId("free-box");
+    await waitFor(() => expect(card).toHaveTextContent("no model · no readings"));
+    expect(card).not.toHaveTextContent("no model · ready");
+    expect(card).toHaveTextContent("Start model");
   });
 
   // t4 S2: a sleeping box was painted "free · no model · ready" although its
