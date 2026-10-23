@@ -5,6 +5,9 @@
  * power-managed box that sleeps — its host carries the flag, none of its
  * runtime rows does (the case the re-check found). Every API call the cards
  * make is stubbed here: nothing leaves the page, no box is woken.
+ * Round-7 re-check L5: also mounts the REAL `RuntimeDetailPanel` of a
+ * sleeping power-managed runtime — the second wake path — so its "Wake"
+ * answers can be seen (helper down / sent), same stubs.
  * Not a test: real layout only exists in a real browser.
  */
 import React from "react";
@@ -14,12 +17,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Host, HostRecipe, Runtime } from "@/lib/types";
 import { FleetStage } from "@/app/runtimes/stage/FleetStage";
+import { RuntimeDetailPanel } from "@/app/runtimes/RuntimeDetailPanel";
 import en from "../messages/en.json";
 import de from "../messages/de.json";
 
 declare global {
   interface Window {
     __mountWakeBox?: (opts: { locale: "en" | "de"; helperDown?: boolean }) => void;
+    __mountRuntimeDetail?: (opts: { locale: "en" | "de"; helperDown?: boolean }) => void;
     __wakeHelperDown?: boolean;
   }
 }
@@ -78,18 +83,20 @@ a.hosts.recipes = async () => [
   recipe({ slug: "solo", display_name: "Solo model", capacity: { ok: true, warnings: [] } as never }),
   recipe({ slug: "duo", display_name: "Two-box model", topology: { nodes: 2 }, fit: "duo", capacity: { ok: true, warnings: [] } as never }),
 ];
-// `helperDown`: what the backend answers when the Mac's wake helper left a
-// request unread (503) — PR #976 review, MUST 1.
-a.hosts.wake = () =>
+// `helperDown`: what the backend answers when the Mac's wake helper sends no
+// heartbeat (503) — PR #976 review MUST 1, round-7 L5. Both wake paths.
+const fakeWake = () =>
   new Promise((resolve, reject) =>
     setTimeout(
       () =>
         window.__wakeHelperDown
-          ? reject(new Error('API 503: {"detail":"Wake helper on the Mac is not running"}'))
-          : resolve({ ok: true, message: "ok" }),
+          ? reject(new Error('API 503: {"detail":"Weck-Helfer auf dem Mac läuft nicht (kein Lebenszeichen). Workstation wurde nicht geweckt."}'))
+          : resolve({ ok: true, message: "Wake-on-LAN ausgelöst für Workstation. Box braucht ~1-2 Min bis erreichbar." }),
       400,
     ),
   );
+a.hosts.wake = fakeWake;
+a.runtimes.wake = fakeWake;
 a.hosts.metricsHistory = async () => ({ points: [], window: 3600, sample_seconds: 5 });
 a.hosts.pulse = async () => ({ points: [], now_tps: null, idle_seconds: null, available: false });
 a.hosts.autostart = async (id: string) => ({
@@ -117,7 +124,27 @@ function App({ locale }: { locale: "en" | "de"; helperDown?: boolean }) {
   );
 }
 
+// The power-managed runtime of the sleeping box, as the runtime detail sees it.
+const sleepingRuntime = runtime({
+  id: "ws-unsloth", slug: "ws-unsloth", display_name: "Unsloth (Workstation)",
+  runtime_type: "flask_wol", provider: "unsloth", power_managed: true,
+  container_status: "asleep", control_url: "http://192.0.2.20:5555",
+  wol_mac_address: "00:00:5E:00:53:01", endpoint: "http://192.0.2.20:8000/v1",
+});
+
+function Detail({ locale }: { locale: "en" | "de"; helperDown?: boolean }) {
+  const [qc] = React.useState(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+  return (
+    <NextIntlClientProvider locale={locale} messages={(locale === "de" ? de : en) as never}>
+      <QueryClientProvider client={qc}>
+        <RuntimeDetailPanel open runtime={sleepingRuntime} onClose={() => {}} />
+      </QueryClientProvider>
+    </NextIntlClientProvider>
+  );
+}
+
 export function mount() {
   const root = createRoot(document.getElementById("root")!);
   window.__mountWakeBox = (opts) => root.render(<App key={JSON.stringify(opts)} {...opts} />);
+  window.__mountRuntimeDetail = (opts) => root.render(<Detail key={"d" + JSON.stringify(opts)} {...opts} />);
 }

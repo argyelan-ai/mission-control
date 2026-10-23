@@ -32,6 +32,8 @@ import { ContextSettingsPanel, loadStoredCtx } from "./ContextSettings";
 import { AutostartToggle } from "./AutostartToggle";
 import { useHeadConflictText } from "@/components/heads/HeadOccupancy";
 import { fmtCtx } from "@/lib/utils";
+import { useAppStore } from "@/lib/store";
+import { isWakeHelperDown } from "./wakeHelper";
 
 // typeLabel inlined from RuntimeListCard.tsx (that component doesn't exist on
 // this branch yet — Task 1/5 own its reintroduction). Copied verbatim from
@@ -423,11 +425,17 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
     onError: () => setActionMsg(t("restartFailed")),
   });
 
+  // Same words as the box card's Wake (round-7 L5, r1 N1): the backend's
+  // message is German only, and a 503 means the wake helper on the Mac is
+  // not running — "Wake failed." alone would hide why.
   const wakeMutation = useMutation({
     mutationFn: () => api.runtimes.wake(runtime.id),
-    onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg(t("wakeFailed")),
+    onSuccess: () => { setActionMsg(t("wakeBox.sent")); invalidate(); },
+    onError: (err: Error) =>
+      setActionMsg(isWakeHelperDown(err) ? t("wakeBox.helperDown") : t("wakeFailed")),
   });
+  // Waking a box is an operator action (403 for a viewer, like the host route).
+  const canWake = useAppStore((s) => s.currentUser?.role) !== "viewer";
 
   const probeMutation = useMutation({
     mutationFn: () => api.runtimes.probeModel(runtime.id),
@@ -505,7 +513,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
         <>
           <SectionDivider label={t("sectionControl")} />
           <div className="px-4 pb-2 flex items-center gap-1.5">
-            {caps.wake && (
+            {caps.wake && canWake && (
               <ActionButton
                 icon={Power}
                 label={t("wake")}

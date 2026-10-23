@@ -465,6 +465,20 @@ rules:
     status: active
     checked: 2026-10-23
 
+  - id: R-wake-needs-helper-heartbeat
+    says: "Wake (box card and runtime detail) queues a Wake-on-LAN request only while the host-side wake helper shows a heartbeat (watcher.alive younger than 90 s) and no request waits longer than 120 s; otherwise both wake routes answer 503 and nothing is queued. The helper never wakes a request older than 5 minutes. Both wake routes are operator-only."
+    source: "Round-7 re-check L5 (r1 S1, N1, N2); PR #976 review MUST 1"
+    owner: backend/app/services/runtime_manager.py
+    applies_to: ["backend/app/services/runtime_manager.py", "backend/app/routers/hosts.py", "backend/app/routers/runtimes.py", "scripts/porsche-wake-watcher.py", "scripts/launchd/com.mc.porsche-wake-watcher.plist"]
+    enforced_by:
+      - {test: "backend/tests/test_host_wake.py::test_an_empty_folder_without_heartbeat_is_a_missing_helper"}
+      - {test: "backend/tests/test_host_wake.py::test_runtime_route_answers_503_without_heartbeat"}
+      - {test: "backend/tests/test_host_wake.py::test_runtime_route_viewer_may_not_wake"}
+      - {test: "backend/tests/test_porsche_wake_watcher.py::test_a_run_without_requests_still_beats"}
+      - {test: "backend/tests/test_porsche_wake_watcher.py::test_an_old_request_is_retired_without_waking"}
+    status: active
+    checked: 2026-10-23
+
   - id: R-credentials-admin-only
     says: "The credentials Vault API (list, get, create, update, delete) is admin-only; the masked secret list is operator or higher. Agents read credentials only through their own scope-checked routes."
     source: "ADR-098 (amends ADR-033); round-3 user tests (R1)"

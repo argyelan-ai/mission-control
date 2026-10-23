@@ -3012,6 +3012,7 @@ def _wake_helper_heartbeat_age(wake_dir: Path) -> float | None:
     return max(0.0, _time.time() - mtime)
 
 
+# rule: R-wake-needs-helper-heartbeat - an empty folder said "Waking…" with no helper installed
 def _wake_helper_down(wake_dir: Path) -> tuple[str, str] | None:
     """Why no helper reads ``wake_dir`` — ``(reason, German detail)`` — or None.
 
