@@ -74,19 +74,18 @@ describe("BenchStudioPage — open challenge in the URL (P4, t2 SOLL-4)", () => 
     expect(nav.replace).toHaveBeenCalledWith("/bench", { scroll: false });
   });
 
-  it("switching to the library leaves the open challenge", async () => {
+  it("an open challenge replaces the list header: no page title, no tabs (r2 S3)", () => {
     nav.search = "challenge=ch-9";
     render(<BenchStudioPage />);
-    await userEvent.click(screen.getByRole("tab", { name: "Prompt Library" }));
-    expect(nav.replace).toHaveBeenCalledWith("/bench", { scroll: false });
-    expect(screen.getByTestId("library")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Benchmark Studio" })).toBeNull();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.getByTestId("selected").textContent).toBe("ch-9");
   });
 
-  it("a tap on the Challenges tab itself leads back to the list (also out of a dead link)", async () => {
-    nav.search = "challenge=gone";
+  it("the list keeps its header and tabs", () => {
     render(<BenchStudioPage />);
-    await userEvent.click(screen.getByRole("tab", { name: "Challenges" }));
-    expect(nav.replace).toHaveBeenCalledWith("/bench", { scroll: false });
+    expect(screen.getByRole("heading", { name: "Benchmark Studio" })).toBeTruthy();
+    expect(screen.getByRole("tablist")).toBeTruthy();
   });
 
   it("tab clicks without an open challenge do not touch the URL", async () => {

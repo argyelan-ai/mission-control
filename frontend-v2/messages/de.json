@@ -3913,15 +3913,6 @@
     "effort": {
       "label": "Effort",
       "groupAria": "Effort für Modell {index}",
-      "level": {
-        "default": "Standard",
-        "off": "Aus",
-        "on": "An",
-        "low": "Niedrig",
-        "medium": "Mittel",
-        "high": "Hoch",
-        "max": "Max"
-      },
       "checking": "Prüfe, welche Stufen dieses Modell befolgt …",
       "checkedAt": "Geprüft {when}.",
       "serverDefaultOn": "Standard schickt nichts — der Server denkt von sich aus.",
@@ -3936,21 +3927,21 @@
       "retry": "Nochmal prüfen",
       "deepHint": "Hohe Stufen können lange denken: das Token-Budget wächst bis aufs 4-Fache.",
       "agentNote": "Effort: die eigene Stufe der Agent-Sitzung — wird nach dem Lauf aufgezeichnet, noch nicht einstellbar.",
-      "requested": "Effort: {level}",
-      "sent": "gesendet {wire}",
-      "sentNothing": "gesendet: nichts",
       "thinkingOn": "denkt",
       "thinkingOnTokens": "denkt · {count} Denk-Token",
       "thinkingOff": "denkt nicht",
-      "ompSessionDefault": "omp-Sitzungsstandard: {level}",
-      "ompSession": "omp-Sitzung: {level}",
       "agentUnknown": "Effort: für diesen Agenten nicht lesbar",
       "truncated": "Bei max_tokens ({max}) gestoppt — das Denken hat das Budget aufgebraucht.",
       "truncatedFailed": "Keine Seite: bei max_tokens ({max}) gestoppt, bevor das HTML kam — das Denken hat das Budget aufgebraucht.",
       "unchecked": "Noch nicht geprüft, welche Stufen dieses Modell befolgt — bis zur Prüfung nur Standard.",
       "checkNow": "Jetzt prüfen",
       "busy": "Die Spark arbeitet gerade — nochmal prüfen, wenn die laufende Arbeit fertig ist.",
-      "sending": "wird gesendet …"
+      "pillAria": "Effort: {level}",
+      "sentTitle": "Mit der Anfrage gesendet: {wire}",
+      "sentNothingTitle": "Nichts gesendet — es gilt die Server-Vorgabe.",
+      "sendingTitle": "Wird mit der Anfrage gesendet.",
+      "ompSessionDefaultTitle": "Stufe der omp-Sitzung des Agenten (ihr Standard)",
+      "ompSessionTitle": "Stufe der omp-Sitzung des Agenten"
     },
     "common": {
       "cancel": "Abbrechen",
@@ -4055,8 +4046,7 @@
       "startChallenge": "Challenge starten",
       "notifyStarted": "Challenge gestartet",
       "notifyStartFailed": "Challenge konnte nicht gestartet werden",
-      "labelDuplicate": "Gleiches Label wie Modell {index} — bitte dieser Zeile ein anderes Label geben.",
-      "labelEffortSuffix": "Label doppelt — die Effort-Stufe wird angehängt: „{label}“."
+      "labelDuplicate": "Gleiches Label und gleiche Effort-Stufe wie Modell {index} — wähle eine andere Stufe oder gib dieser Zeile ein eigenes Label."
     },
     "editChallengeDialog": {
       "ariaLabel": "Challenge bearbeiten",
@@ -4126,7 +4116,8 @@
       "notifyDownloadFailed": "Download fehlgeschlagen",
       "notifyOpenFailed": "Öffnen nicht möglich",
       "costLocal": "lokal",
-      "usageMissing": "Noch keine Token-Daten — das Video zeigt „—“ bei Tokens und Kosten. In ein paar Minuten „Video neu bauen“ wählen. Bleibt es leer, kann MC die Token dieses Agenten noch nicht zählen."
+      "usageMissing": "Noch keine Token-Daten — das Video zeigt „—“ bei Tokens und Kosten. In ein paar Minuten „Video neu bauen“ wählen. Bleibt es leer, kann MC die Token dieses Agenten noch nicht zählen.",
+      "backToChallenges": "Challenges"
     },
     "draftDialog": {
       "ariaLabel": "Entwurf erstellen",
@@ -4169,6 +4160,20 @@
     "listRow": {
       "expand": "Details anzeigen",
       "collapse": "Details ausblenden"
+    },
+    "effortLevel": {
+      "default": "Standard",
+      "auto": "Auto",
+      "none": "Aus",
+      "off": "Aus",
+      "on": "An",
+      "minimal": "Minimal",
+      "low": "Niedrig",
+      "medium": "Mittel",
+      "high": "Hoch",
+      "xhigh": "Sehr hoch",
+      "max": "Max",
+      "ultracode": "Ultracode"
     }
   },
   "chat": {

@@ -117,12 +117,18 @@ def entry_order_key(entry: BenchEntry) -> tuple[int, str]:
     return (entry.position or 0, entry.model_label)
 
 
-#: Display word for an effort level in labels ("DeepSeek · Max"). English on
-#: purpose: labels are data that ends up in the (English) video, not UI copy.
+#: The effort word in the video ("Off", "Max", "Default"). English on
+#: purpose: the video is public and English (operator decision 23.10.2026,
+#: "benchvideo englisch ja"); the MC UI shows the same level through i18n.
 EFFORT_WORDS = {
     "default": "Default", "off": "Off", "on": "On", "low": "Low",
     "medium": "Medium", "high": "High", "max": "Max",
 }
+
+#: Renderer feature (mc-playwright GET /health ``features``): the branding
+#: payload may carry ``effort`` as its own value per model and outro row.
+RENDERER_FEATURE_BRANDING_EFFORT = "branding_effort"
+_RENDERER_HEALTH_TIMEOUT_S = 3.0
 
 
 def entry_effort_level(entry: BenchEntry) -> str | None:
@@ -135,22 +141,101 @@ def entry_effort_level(entry: BenchEntry) -> str | None:
     return None if level == "default" else level
 
 
-def video_label(entry: BenchEntry) -> str:
-    """The entry's name in the video (outro row, plain-grid label): the
-    label plus " · effort max" for a direct-API row that asked for a level —
-    unless the label already ends with that word (create appends it to
-    labels that would otherwise collide, "DeepSeek · Max")."""
-    label = entry.model_label
+def display_label(label: str, effort: str | None) -> str:
+    """The label as the UI and the video show it: without a trailing
+    " · <effort word>" that names the entry's OWN level.
+
+    Before round-2 Q2 create appended that word to labels that would
+    otherwise collide ("DeepSeek · Off" / "DeepSeek · Max"). Those labels
+    are still stored; now that the effort is shown as its own pill they
+    would read "DeepSeek · Off" + "Aus", "… · Max · Max" in the plain grid.
+    Only the exact form create wrote counts (" · " + the English word of
+    this entry's level, case ignored) — a model literally called "Qwen Max",
+    or "DeepSeek · Max" on an Off entry, keeps its text. Stored data is not
+    touched; a rename stores the clean label."""
+    level = effort or "default"
+    suffix = f" · {EFFORT_WORDS.get(level, level.capitalize())}".casefold()
+    stripped = label.strip()
+    if len(stripped) > len(suffix) and stripped.casefold().endswith(suffix):
+        return stripped[: -len(suffix)].rstrip()
+    return label
+
+
+def entry_display_label(entry: BenchEntry) -> str:
+    """:func:`display_label` for a stored entry."""
+    return display_label(entry.model_label, (entry.metrics or {}).get("effort_requested"))
+
+
+def entry_label_key(label: str, source_kind: str, effort: str | None) -> tuple[str, str]:
+    """What makes two entries of a challenge the same: label (case and outer
+    spaces ignored) AND effort. The effort is its own field since round-2
+    Q2 — "DeepSeek" Off and "DeepSeek" Max are two different entries, the
+    label is not rewritten to tell them apart. Agent rows have no chosen
+    effort. The label is compared as shown (:func:`display_label`), so an
+    old "DeepSeek · Max" and a new "DeepSeek", both Max, are the same."""
+    level = (effort or "default") if source_kind == "spark" else "default"
+    return (display_label(label, level).strip().casefold(), level)
+
+
+def video_effort_words(entries: list[BenchEntry]) -> dict[uuid.UUID, str]:
+    """English effort word per entry for the video, "" for none.
+
+    Only when at least one direct-API entry chose a level: then every
+    direct-API entry names its level, a default one as "Default" — "Off"
+    next to nothing would leave the viewer guessing what the other one ran
+    at. No chosen level anywhere: no effort in the video at all (the
+    pre-effort look). Agent entries never carry one: their level is
+    recorded from the session, not chosen."""
+    chosen = any(entry_effort_level(e) for e in entries)
+    words: dict[uuid.UUID, str] = {}
+    for e in entries:
+        if not chosen or e.source_kind != "spark":
+            words[e.id] = ""
+            continue
+        level = entry_effort_level(e) or "default"
+        words[e.id] = EFFORT_WORDS.get(level, level.capitalize())
+    return words
+
+
+def video_label(entry: BenchEntry, effort_word: str = "") -> str:
+    """The entry's name on the plain grid video (3+ entries, speed-label
+    variant): the label plus " · Max" when the entry has an effort word."""
+    label = entry_display_label(entry)
+    return f"{label} · {effort_word}" if effort_word else label
+
+
+def _legacy_video_label(entry: BenchEntry) -> str:
+    """Outro name for a renderer without ``branding_effort``: the text form
+    of PR #955 ("DeepSeek · effort max") so an older image still shows the
+    effort. Not repeated when the label already ends with that word as a
+    separate word (labels of runs from before round-2 Q2 carry it, "DeepSeek
+    · Max", cut by :func:`display_label`; "Qwen max" by the check below).
+    Drop once every renderer image announces the feature."""
+    label = entry_display_label(entry)
     level = entry_effort_level(entry)
     if not level:
         return label
     word = EFFORT_WORDS.get(level, level).lower()
     # Only a separate trailing word counts ("DeepSeek · Max", "Qwen max") —
     # not letters at the end of a name ("Qwen-Python" with effort On).
-    last_word = re.split(r"[\s·]+", label.strip().lower())[-1]
-    if last_word == word:
+    if re.split(r"[\s·]+", label.strip().lower())[-1] == word:
         return label
     return f"{label} · effort {level}"
+
+
+async def renderer_features() -> set[str]:
+    """Features the mc-playwright renderer announces on GET /health.
+    Fails closed: unreachable, an error or an older image without the list
+    -> empty set, and the caller sends the old payload form."""
+    try:
+        async with httpx.AsyncClient(timeout=_RENDERER_HEALTH_TIMEOUT_S) as cli:
+            resp = await cli.get(f"{PLAYWRIGHT_BASE}/health")
+            resp.raise_for_status()
+            features = resp.json().get("features") or []
+        return {str(f) for f in features}
+    except Exception as exc:  # noqa: BLE001 — never blocks a compose
+        logger.info("bench renderer features unknown (%s) — old branding form", exc)
+        return set()
 
 
 def _versioned_output_name(prefix: str = "grid") -> str:
@@ -656,7 +741,7 @@ async def dispatch_agent_entry(
     task = Task(
         id=uuid.uuid4(),
         board_id=agent.board_id,
-        title=f"[Bench] {challenge.title} — {entry.model_label}"[:200],
+        title=f"[Bench] {challenge.title} — {entry_display_label(entry)}"[:200],
         description=AGENT_BRIEF_TEMPLATE.format(prompt=challenge.prompt_text),
         status="inbox",
         priority="medium",
@@ -1058,9 +1143,19 @@ def _first_prompt_line(prompt_text: str, max_len: int = 110) -> str:
 
 
 def _format_outro_time(duration_ms: int | None) -> str:
+    """'45 s' / '1 min 35 s' / '1 h 4 min' — the same form as the MC page
+    (round-2 t2 NICE-3: "1.6 min" in the video, "1 min" in the UI for one
+    95-second run)."""
     if not duration_ms:
         return "—"
-    return f"{duration_ms / 60000:.1f} min"
+    total = round(duration_ms / 1000)
+    hours, rest = divmod(total, 3600)
+    minutes, seconds = divmod(rest, 60)
+    if hours:
+        return f"{hours} h {minutes} min" if minutes else f"{hours} h"
+    if minutes:
+        return f"{minutes} min {seconds} s" if seconds else f"{minutes} min"
+    return f"{seconds} s"
 
 
 def _format_outro_cost(
@@ -1174,7 +1269,11 @@ async def snapshot_entry_usage(session: AsyncSession, entry: BenchEntry) -> dict
 
 
 async def _build_branding_payload(
-    session: AsyncSession, challenge: BenchChallenge, ordered: list[BenchEntry]
+    session: AsyncSession,
+    challenge: BenchChallenge,
+    ordered: list[BenchEntry],
+    *,
+    effort_field: bool = False,
 ) -> dict:
     """Video-branding payload (spec: bench-video-branding, 2026-07-12; single-
     video-branding 2026-07-13) for the mc-playwright /compose branded path —
@@ -1182,8 +1281,17 @@ async def _build_branding_payload(
     mode, or a side_by_side run degraded to 1 survivor) or 2 entries
     (side_by_side). `models`/`outro_rows` are built generically off `ordered`
     so the length just flows through — mc-playwright picks frame.html vs
-    frame_single.html based on len(models)."""
+    frame_single.html based on len(models).
+
+    ``effort_field`` (the renderer announced ``branding_effort``): the
+    effort goes as its own English word per model and outro row, the label
+    and tag stay clean, and the templates draw it as a pill that never
+    wraps (round-2 Q2). Without it the old text form is sent — "· EFFORT
+    MAX" in the tag, "· effort max" in the outro name — which an older
+    image still shows."""
     from app.models.agent import Agent
+
+    effort_words = video_effort_words(ordered)
 
     # date_label: the run's date (+ "episode N" once published) — replaces the
     # old RUN 0xx row counter (concept W0.5, 2026-10-22).
@@ -1220,12 +1328,16 @@ async def _build_branding_payload(
                         tag = agent.harness.upper()
                     elif agent.name:
                         tag = agent.name.upper()
-        effort = entry_effort_level(entry)
-        if effort and not entry.display_tag:
-            # Two rows of the same model (Off vs Max) looked identical in the
-            # video (round-1 user test). An operator tag stays verbatim.
-            tag = f"{tag} · EFFORT {effort.upper()}"
-        models.append({"label": entry.model_label, "tag": tag})
+        model: dict = {"label": entry_display_label(entry), "tag": tag}
+        if effort_field:
+            model["effort"] = effort_words[entry.id]
+        else:
+            effort = entry_effort_level(entry)
+            if effort and not entry.display_tag:
+                # Two rows of the same model (Off vs Max) looked identical in
+                # the video (round-1 user test). An operator tag stays verbatim.
+                model["tag"] = f"{tag} · EFFORT {effort.upper()}"
+        models.append(model)
 
         # Fresh snapshot of the attributed usage (agent entries; the
         # harvester may have attributed more turns since task-done — a
@@ -1247,13 +1359,16 @@ async def _build_branding_payload(
         if tokens_in is not None and tokens_out is not None:
             token_usage = (int(tokens_in), int(tokens_out))
 
-        outro_rows.append({
-            "name": video_label(entry),
+        row = {
+            "name": entry_display_label(entry) if effort_field else _legacy_video_label(entry),
             "time": _format_outro_time(duration_ms),
             "size": _format_outro_size(entry.artifact_path),
             "cost": _format_outro_cost(cost_usd, entry.source_kind, metrics.get("locality")),
             "tokens": _format_outro_tokens(token_usage),
-        })
+        }
+        if effort_field:
+            row["effort"] = effort_words[entry.id]
+        outro_rows.append(row)
 
     return {
         "title": challenge.title,
@@ -1284,6 +1399,7 @@ async def compose_challenge(
     if output_name is None:
         output_name = _versioned_output_name()
     ordered = sorted(rendered, key=entry_order_key)
+    effort_words = video_effort_words(ordered)
     duration_s = (
         challenge.record_duration_s
         if challenge.record_duration_s is not None
@@ -1291,7 +1407,7 @@ async def compose_challenge(
     )
     payload: dict = {
         "inputs": [e.video_path for e in ordered],
-        "labels": [video_label(e) for e in ordered],
+        "labels": [video_label(e, effort_words[e.id]) for e in ordered],
         "layout": "grid",
         "output_path": str(challenge_dir(challenge.id) / output_name),
         # Bench #18: scales the sidecar's branded-compose ffmpeg timeout
@@ -1308,7 +1424,10 @@ async def compose_challenge(
     # models list beyond the branded pair) fall through to the plain grid
     # path unchanged (pre-existing behaviour, regression-safe).
     if not speed_labels and len(ordered) in (1, 2):
-        payload["branding"] = await _build_branding_payload(session, challenge, ordered)
+        effort_field = RENDERER_FEATURE_BRANDING_EFFORT in await renderer_features()
+        payload["branding"] = await _build_branding_payload(
+            session, challenge, ordered, effort_field=effort_field
+        )
     async with httpx.AsyncClient(timeout=COMPOSE_TIMEOUT_S) as cli:
         resp = await cli.post(f"{PLAYWRIGHT_BASE}/compose", json=payload)
         resp.raise_for_status()

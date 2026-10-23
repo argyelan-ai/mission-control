@@ -1540,8 +1540,8 @@ describe("ChatView", () => {
     // beweisen das, ohne die Bedienung nachzubauen (die testet Composer selbst).
     const slider = screen.getByTestId("effort-slider");
     expect(slider).toHaveAttribute("max", "2");
-    expect(screen.getByTestId("effort-menu")).toHaveTextContent("low");
-    expect(screen.getByTestId("effort-menu")).toHaveTextContent("max");
+    expect(screen.getByTestId("effort-menu")).toHaveTextContent("Low");
+    expect(screen.getByTestId("effort-menu")).toHaveTextContent("Max");
   });
 
   // ── Queued / starting echoes ──────────────────────────────────────────────

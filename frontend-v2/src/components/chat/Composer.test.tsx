@@ -9,6 +9,12 @@ import type { ChatAttachment, StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
+import en from "../../../messages/en.json";
+
+// Round-2 Q2: the effort menu says the same word per level as the bench —
+// common.effortLevel ("High", not the raw "high").
+const word = (level: string) =>
+  (en.common.effortLevel as Record<string, string>)[level] ?? level;
 
 // Tokens are CSS variables (ADR-087): jsdom keeps the specified inline value,
 // so assertions compare against the token from lib/colors.ts directly.
@@ -658,12 +664,12 @@ describe("Composer", () => {
     const { rerender } = render(
       <Composer agentId="a1" usage={mkUsage({ effort: null })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.queryByText("high")).not.toBeInTheDocument();
+    expect(screen.queryByText("High")).not.toBeInTheDocument();
 
     rerender(
       <Composer agentId="a1" usage={mkUsage({ effort: "high" })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.getByText("high")).toBeInTheDocument();
+    expect(screen.getByText("High")).toBeInTheDocument();
   });
 
   // ── Effort switching ──────────────────────────────────────────────────────
@@ -1178,7 +1184,7 @@ describe("Composer", () => {
       );
       // No capability block at all (older backend, or still loading): a picker
       // with nothing in it would be worse than an honest read-only value.
-      expect(screen.getByTestId("effort-chip-static")).toHaveTextContent("high");
+      expect(screen.getByTestId("effort-chip-static")).toHaveTextContent("High");
       expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
     });
 
@@ -1204,8 +1210,8 @@ describe("Composer", () => {
       // The real Claude Code 2.1.233 set — six levels, not three, und der
       // Regler faehrt sie in genau dieser Reihenfolge ab.
       expect(slider()).toHaveAttribute("max", "5");
-      expect(shownLevel()).toBe("high"); // steht auf dem aktuellen Wert
-      expect(levelsInOrder(CAPS.effortLevels)).toEqual(CAPS.effortLevels);
+      expect(shownLevel()).toBe("High"); // steht auf dem aktuellen Wert
+      expect(levelsInOrder(CAPS.effortLevels)).toEqual(CAPS.effortLevels.map(word));
     });
 
     it("marks which levels outlive the session and which do not", async () => {
@@ -1289,8 +1295,8 @@ describe("Composer", () => {
         renderHermes("medium");
         await user.click(screen.getByTestId("effort-chip"));
         expect(slider()).toHaveAttribute("max", String(RANKED.length - 1));
-        expect(shownLevel()).toBe("medium");
-        expect(levelsInOrder(RANKED)).toEqual(RANKED);
+        expect(shownLevel()).toBe("Medium");
+        expect(levelsInOrder(RANKED)).toEqual(RANKED.map(word));
       });
 
       it("fills the gauge over the ranked levels only", () => {
@@ -1309,12 +1315,12 @@ describe("Composer", () => {
         const user = userEvent.setup();
         renderHermes("default");
         await user.click(screen.getByTestId("effort-chip"));
-        expect(shownLevel()).toBe("default");
-        expect(slider()).toHaveAttribute("aria-valuetext", "default");
+        expect(shownLevel()).toBe("Default");
+        expect(slider()).toHaveAttribute("aria-valuetext", "Default");
         expect(screen.getByTestId("effort-default")).toHaveAttribute("aria-pressed", "true");
         // Dragging previews a real level again.
         fireEvent.change(slider(), { target: { value: String(RANKED.indexOf("low")) } });
-        expect(shownLevel()).toBe("low");
+        expect(shownLevel()).toBe("Low");
       });
 
       it("offers 'default' as its own button that sends the value", async () => {
@@ -1350,9 +1356,9 @@ describe("Composer", () => {
       renderWithEffort("high");
       await user.click(screen.getByTestId("effort-chip"));
 
-      expect(shownLevel()).toBe("high");
+      expect(shownLevel()).toBe("High");
       expect(slider().value).toBe(String(CAPS.effortLevels.indexOf("high")));
-      expect(slider()).toHaveAttribute("aria-valuetext", "high");
+      expect(slider()).toHaveAttribute("aria-valuetext", "High");
     });
 
     it("sends the chosen level to the backend", async () => {

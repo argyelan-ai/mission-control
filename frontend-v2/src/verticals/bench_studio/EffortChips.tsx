@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
+import { useEffortWord } from "@/lib/effortWord";
 import { benchApi } from "@/verticals/bench_studio/api";
 import type { EffortLevel } from "./types";
 
@@ -33,6 +34,7 @@ export function EffortChips({
   onChange: (level: EffortLevel | null) => void;
 }) {
   const t = useTranslations("bench.effort");
+  const word = useEffortWord();
   const locale = useLocale();
   const isSpark = sourceKind === "spark";
   const modelKey = (model ?? "").trim();
@@ -89,7 +91,7 @@ export function EffortChips({
   // The hint describes the chosen level, not Default (round-1 t2 SOLL-5).
   else if (selected === "off") hint = t("offHint");
   else if (selected === "on") hint = t("onHint");
-  else if (selected !== "default") hint = t("levelHint", { level: t(`level.${selected}`) });
+  else if (selected !== "default") hint = t("levelHint", { level: word(selected) });
   else if (data?.default_observed === "on") hint = t("serverDefaultOn");
   else if (data?.default_observed === "off") hint = t("serverDefaultOff");
   else hint = t("serverDefaultUnknown");
@@ -118,7 +120,7 @@ export function EffortChips({
           border: `1px solid ${active ? C.borderAccent : C.border}`,
         }}
       >
-        {t(`level.${level}`)}
+        {word(level)}
       </button>
     );
   };

@@ -38,6 +38,7 @@ from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from pydantic import BaseModel, Field
 from media import (
     CHROMIUM_LAUNCH_KWARGS,
+    RENDERER_FEATURES,
     VIEWPORTS,
     BrandingSpec,
     ComposeRequest,
@@ -373,7 +374,12 @@ async def _prepare_page(
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "service": "mc-playwright", "version": "1.1.0"}
+    return {
+        "ok": True,
+        "service": "mc-playwright",
+        "version": "1.2.0",
+        "features": list(RENDERER_FEATURES),
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────

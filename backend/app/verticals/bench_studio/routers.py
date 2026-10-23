@@ -29,7 +29,7 @@ logger = logging.getLogger("mc.bench_studio")
 
 router = APIRouter(prefix="/api/v1/bench", tags=["bench-studio"])
 
-# Longest entry label create and PATCH accept (appended effort words included).
+# Longest entry label create and PATCH accept.
 LABEL_MAX_LEN = 80
 
 BENCH_CHALLENGE_RUN_CLAIM_TTL_S = 1800  # self-heal net if the bg task dies without releasing
@@ -145,10 +145,17 @@ def _serialize(
     return {
         **challenge.model_dump(),
         "entries": [
-            {**e.model_dump(), "task_state": states.get(e.id)}
+            {**_entry_dict(e), "task_state": states.get(e.id)}
             for e in sorted(entries, key=orchestrator.entry_order_key)
         ],
     }
+
+
+def _entry_dict(entry: BenchEntry) -> dict:
+    """An entry as the UI gets it: ``model_label`` as shown — an effort word
+    that create appended before round-2 Q2 ("DeepSeek · Off") is cut, the
+    level is the pill next to it (orchestrator.display_label)."""
+    return {**entry.model_dump(), "model_label": orchestrator.entry_display_label(entry)}
 
 
 async def _entries_for(session: AsyncSession, challenge_id: uuid.UUID) -> list[BenchEntry]:
@@ -234,39 +241,26 @@ async def check_effort_levels(
 
 
 def _unique_labels(specs: list[BenchModelSpec], efforts: list[str]) -> None:
-    """Every entry of a challenge needs its own label (round-1 user test:
+    """Every entry of a challenge needs to be told apart (round-1 user test:
     "DeepSeek" Off vs Max became two identical rows in the UI and video).
 
-    Rows whose labels collide (case and outer spaces ignored) but asked for
-    different efforts get the effort word appended — "DeepSeek · Max". Rows
-    that collide with the SAME effort are a real duplicate: 422."""
-    groups: dict[str, list[int]] = {}
-    for i, spec in enumerate(specs):
-        groups.setdefault(spec.label.strip().casefold(), []).append(i)
-    for idxs in groups.values():
-        if len(idxs) < 2:
-            continue
-        levels = [efforts[i] for i in idxs]
-        if len(set(levels)) != len(levels):
-            raise HTTPException(
-                422,
-                f"Labels must be unique per challenge: {specs[idxs[0]].label.strip()!r} "
-                "appears twice with the same effort — give one row a different label.",
-            )
-        for i in idxs:
-            word = orchestrator.EFFORT_WORDS.get(efforts[i], efforts[i])
-            suffix = f" · {word}"
-            # Stay within the label limit (80) — PATCH refuses longer ones.
-            base = specs[i].label.strip()[: LABEL_MAX_LEN - len(suffix)].rstrip()
-            specs[i].label = f"{base}{suffix}"
-    seen: set[str] = set()
-    for spec in specs:
-        key = spec.label.strip().casefold()
+    Since round-2 Q2 the effort is its own field and the label is never
+    rewritten: two rows of the same model with different efforts are two
+    different entries (the UI and the video show the effort next to the
+    name). The same label AND the same effort is refused — the box answers
+    deterministically, so the second row would repeat the first, and nobody
+    could tell the two apart in the video."""
+    seen: dict[tuple[str, str], int] = {}
+    for row, (spec, effort) in enumerate(zip(specs, efforts), start=1):
+        key = orchestrator.entry_label_key(spec.label, spec.source_kind, effort)
         if key in seen:
             raise HTTPException(
-                422, f"Labels must be unique per challenge: {spec.label.strip()!r} appears twice."
+                422,
+                f"Model row {row} has the same label and the same effort as row "
+                f"{seen[key]} ({spec.label.strip()!r}) — choose another effort or "
+                "give this row its own label.",
             )
-        seen.add(key)
+        seen[key] = row
 
 
 async def _validate_effort(session: AsyncSession, spec: BenchModelSpec) -> str:
@@ -629,12 +623,21 @@ async def update_entry(
     if "model_label" in fields and fields["model_label"]:
         new_label = fields["model_label"].strip() or entry.model_label
         siblings = await _entries_for(session, entry.challenge_id)
+
+        def key(e: BenchEntry, label: str) -> tuple[str, str]:
+            return orchestrator.entry_label_key(
+                label, e.source_kind, (e.metrics or {}).get("effort_requested")
+            )
+
+        # Same rule as create: the label may repeat when the effort differs.
         if any(
-            e.id != entry.id and e.model_label.strip().casefold() == new_label.casefold()
+            e.id != entry.id and key(e, e.model_label) == key(entry, new_label)
             for e in siblings
         ):
             raise HTTPException(
-                409, f"Another entry of this challenge is already called {new_label!r}."
+                409,
+                f"Another entry of this challenge is already called {new_label!r} "
+                "with the same effort.",
             )
         entry.model_label = new_label
     if "display_tag" in fields:
@@ -642,7 +645,7 @@ async def update_entry(
     session.add(entry)
     await session.commit()
     await session.refresh(entry)
-    return entry.model_dump()
+    return _entry_dict(entry)
 
 
 @router.post("/challenges/{challenge_id}/recompose")

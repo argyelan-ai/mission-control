@@ -25,6 +25,14 @@ h1 { font-family:'Clash Display',sans-serif; font-weight:600; font-size:96px;
    wrap onto a second line instead of overflowing the 530px column. */
 .row .name { font-size:27px; color:var(--text); overflow-wrap:anywhere; }
 .row .val { font-size:25px; color:var(--text2); }
+/* Effort pill (round-2 Q2): the thinking level as its own value next to the
+   name — it never wraps and an empty one leaves nothing behind. */
+.effort { display:inline-block; vertical-align:3px; margin-left:14px; font-family:'JetBrains Mono',monospace;
+  font-size:20px; line-height:1; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--text); border:1px solid rgba(0,229,255,.5); border-radius:999px;
+  padding:6px 12px 5px; white-space:nowrap; }
+.effort::before { content:"effort "; color:var(--text2); }
+.effort:empty { display:none; }
 .cta { position:absolute; right:120px; bottom:96px; text-align:right; }
 .cta .follow { font-family:'Clash Display',sans-serif; font-weight:500; font-size:40px;
   letter-spacing:-0.01em; margin-bottom:18px; }

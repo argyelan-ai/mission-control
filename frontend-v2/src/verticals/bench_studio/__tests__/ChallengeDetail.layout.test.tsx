@@ -90,21 +90,21 @@ function renderDetail() {
 describe("ChallengeDetail — header on a phone (P4, t2 MUSS-2 / r2 M2)", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("gives the title its own row: only back and ⋯ share it, no shrink-0 button bar", async () => {
+  it("gives the title its own row: only back and ⋯ share the context row above it, no button bar", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(challenge());
     renderDetail();
-    const heading = await screen.findByRole("heading", { level: 2 });
-    const titleRow = heading.closest("[data-region='bench-detail-title']") as HTMLElement;
-    expect(titleRow).not.toBeNull();
-    const names = within(titleRow)
+    const heading = await screen.findByRole("heading", { level: 1 });
+    const context = screen.getByTestId("bench-detail-context");
+    const names = within(context)
       .getAllByRole("button")
-      .map((b) => b.getAttribute("aria-label"));
-    expect(names).toEqual(["Back", "More actions"]);
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent);
+    expect(names).toEqual(["Challenges", "More actions"]);
     // The title may wrap (K1: cut after 3 lines), it is never squeezed to 0.
     expect(heading.className).toContain("line-clamp-3");
     expect(heading.className).not.toContain("truncate");
-    // The status pill is NOT in the title row any more (it slid under the buttons).
-    expect(within(titleRow).queryByText("Done")).toBeNull();
+    // The status pill is NOT next to the title (it slid under the buttons once).
+    expect(within(context).queryByText("Done")).toBeNull();
+    expect(heading.textContent).not.toContain("Done");
     expect(screen.getByText("Done")).toBeTruthy();
   });
 
@@ -193,7 +193,7 @@ describe("ChallengeDetail — entry words and numbers (P4, t2 SOLL-3 / KANN-1, r
       ] }),
     );
     renderDetail();
-    expect(await screen.findByText("8 min · 74 tok/s · 111 → 39,200 tok · local")).toBeTruthy();
+    expect(await screen.findByText("8 min 52 s · 74 tok/s · 111 → 39,200 tok · local")).toBeTruthy();
     expect(screen.getByText("1 h 32 min · local")).toBeTruthy();
   });
 });
