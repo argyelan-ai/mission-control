@@ -19,7 +19,7 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import func, or_, update
 from sqlmodel import select
@@ -31,7 +31,7 @@ from app.models.agent import Agent
 from app.models.deliverable import TaskDeliverable
 from app.models.file_index import FileIndexEntry
 from app.models.task import Task
-from app.services import file_indexer, fs_service, trash_service
+from app.services import file_indexer, fs_service, host_open, trash_service
 from app.services.fs_roots import (
     RootBlocked,
     RootNotFound,
@@ -61,7 +61,7 @@ async def _native_open_reachable() -> bool:
     if now - _probe_cache["at"] < 60:
         return bool(_probe_cache["ok"])
 
-    in_docker = os.path.exists("/.dockerenv") or sys.platform.startswith("linux")
+    in_docker = host_open.in_docker()
     if not in_docker:
         ok = sys.platform == "darwin"
     else:
@@ -75,23 +75,6 @@ async def _native_open_reachable() -> bool:
             ok = False
     _probe_cache.update(at=now, ok=ok)
     return ok
-
-
-async def _reveal_on_host(host_path: str, *, reveal: bool) -> None:
-    in_docker = os.path.exists("/.dockerenv") or sys.platform.startswith("linux")
-    if in_docker:
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                "http://host.docker.internal:8765/open",
-                json={"path": host_path, "reveal": reveal},
-                timeout=3.0,
-            )
-    else:
-        import subprocess
-
-        subprocess.Popen(["open", "-R", host_path] if reveal else ["open", host_path])
 
 
 def _entry_dict(e) -> dict:
@@ -365,8 +348,12 @@ class _OpenBody(BaseModel):
 @router.post("/open")
 async def open_native(
     body: _OpenBody,
+    request: Request,
     current_user=Depends(require_user),
 ):
+    # Only for a viewer at the MC host; a failing open is a 502, never an
+    # "ok" for nothing (services/host_open.py, round-2 user test t3 S1).
+    host_open.require_host_viewer(request)
     try:
         root_obj = get_browsable_root(body.root)
         target = fs_service.safe_join(root_obj, body.subpath)  # containment check
@@ -383,7 +370,7 @@ async def open_native(
         raise HTTPException(status_code=501, detail="Native open not available on this host (use download)")
 
     host_target = str(root_obj.host_path / body.subpath) if body.subpath else str(root_obj.host_path)
-    await _reveal_on_host(host_target, reveal=body.reveal)
+    await host_open.open_on_host_or_502(host_target, reveal=body.reveal)
     return {"ok": True, "available": True}
 
 

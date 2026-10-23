@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Loader2, FileX, Download } from "lucide-react";
 import SyntaxHighlighter from "react-syntax-highlighter";
@@ -339,8 +339,16 @@ function PreviewLoader() {
   );
 }
 
+/** Tells the caller once that the file could not be shown (FilePreview's
+ *  `onLoadError`). Per FilePreview: a nested preview has its own. */
+const LoadErrorReport = createContext<(() => void) | undefined>(undefined);
+
 function PreviewError() {
   const t = useTranslations("filePreview");
+  const report = useContext(LoadErrorReport);
+  useEffect(() => {
+    report?.();
+  }, [report]);
   return (
     <div className="flex flex-col items-center justify-center py-6 gap-1.5">
       <FileX size={16} style={{ color: C.textMuted }} />
@@ -363,10 +371,20 @@ interface FilePreviewProps {
    *  it links its own CSS/images/scripts (HtmlPreview). Other callers leave it
    *  out and HTML stays a single-file srcdoc preview. */
   htmlFolderUrl?: FolderUrl;
+  /** Called when the file cannot be loaded or shown (the error state is on
+   *  screen) — the deliverable card then drops its Mac buttons (round-2
+   *  user test t3 N2: a 404 file kept "Open on the Mac"). */
+  onLoadError?: () => void;
 }
 
-export function FilePreview({ fileUrl, path, showDownload = true, htmlFolderUrl }: FilePreviewProps) {
+export function FilePreview({ fileUrl, path, showDownload = true, htmlFolderUrl, onLoadError }: FilePreviewProps) {
   const t = useTranslations("filePreview");
+  // One stable function for the error state, always calling the latest prop.
+  const onLoadErrorRef = useRef(onLoadError);
+  useLayoutEffect(() => {
+    onLoadErrorRef.current = onLoadError;
+  });
+  const reportLoadError = useCallback(() => onLoadErrorRef.current?.(), []);
   const kind = classifyPath(path);
   const { blobUrl, loading, error } = useAuthBlob(
     kind === "image" || kind === "video" || kind === "audio" || kind === "pdf" ? fileUrl : null,
@@ -429,9 +447,11 @@ export function FilePreview({ fileUrl, path, showDownload = true, htmlFolderUrl 
   }
 
   return (
-    <div>
-      {download}
-      {body}
-    </div>
+    <LoadErrorReport.Provider value={reportLoadError}>
+      <div>
+        {download}
+        {body}
+      </div>
+    </LoadErrorReport.Provider>
   );
 }

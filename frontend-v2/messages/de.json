@@ -1827,7 +1827,7 @@
       "frameTitle": "Gerenderte Seite {name}",
       "loading": "Seite wird geladen…",
       "run": "Seite starten",
-      "runHint": "Die Seite läuft erst, wenn du sie startest.",
+      "runHint": "Die Seite läuft erst, wenn du sie startest. Was sie speichert (z. B. einen Highscore), gilt nur bis zum Neuladen.",
       "isolationLabel": "Agenten-Seite · isolierte Vorschau – hier nie Passwörter eingeben",
       "pageError": "Die Seite hat einen Fehler gemeldet – manches darin läuft vielleicht nicht. Zum Prüfen herunterladen und im Browser öffnen.",
       "dismissPageError": "Hinweis schliessen"
@@ -1852,6 +1852,7 @@
     "openedOnMac": "Auf dem Mac geöffnet.",
     "shownInFinder": "Im Finder auf dem Mac gezeigt.",
     "hostUnavailable": "Hier nicht möglich – lade die Datei stattdessen herunter.",
+    "hostFailed": "Auf dem Mac nicht geöffnet – der Mac konnte die Datei nicht öffnen. Nochmal versuchen oder die Datei herunterladen.",
     "showFileInFinder": "Im Finder zeigen",
     "showFolderInFinder": "Ordner im Finder zeigen",
     "folderEmpty": "Der Ordner ist leer.",

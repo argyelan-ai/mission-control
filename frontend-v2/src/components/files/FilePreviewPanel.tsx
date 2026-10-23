@@ -8,7 +8,7 @@ import { FolderSearch, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { FsRoot } from "@/lib/types";
 import { C } from "@/lib/colors";
-import { HOST_ONLY_CLASS } from "@/lib/hostOnly";
+import { HOST_ONLY_CLASS, useIsHostViewer } from "@/lib/hostOnly";
 import { timeAgo } from "@/lib/utils";
 import { SlideOverPanel } from "@/components/shared/SlideOverPanel";
 import { FilePreview } from "@/components/task/FilePreview";
@@ -73,15 +73,18 @@ export function FilePreviewPanel({ root, subpath, onClose }: FilePreviewPanelPro
   );
 }
 
-/** Reveals the file in Finder on the Mac MC runs on — so it shows only at a
- *  desktop with a mouse (HOST_ONLY_CLASS), never on a phone, where it would
- *  act on a screen the operator cannot see (round-1 user test t4 S7). */
+/** Reveals the file in Finder on the Mac MC runs on — so it shows only for a
+ *  viewer at that Mac (useIsHostViewer: MC opened via localhost) with a
+ *  mouse (HOST_ONLY_CLASS). Never on a phone or a second computer, where it
+ *  would act on a screen the operator cannot see (round-1 t4 S7, round-2
+ *  t3 S1). */
 export function FinderButton({ root, subpath }: { root: FsRoot; subpath: string }) {
   const tr = useTranslations("files");
   const [busy, setBusy] = useState(false);
   const [hidden, setHidden] = useState(false);
+  const atHost = useIsHostViewer();
 
-  if (hidden) return null;
+  if (hidden || !atHost) return null;
 
   async function revealInFinder() {
     if (busy) return;
@@ -89,7 +92,7 @@ export function FinderButton({ root, subpath }: { root: FsRoot; subpath: string 
     try {
       await api.files.open(root.key, subpath, true);
     } catch {
-      // 409 / 501 → not available here after all. Hide gracefully.
+      // 403 / 409 / 501 / 502 → not available here after all. Hide gracefully.
       setHidden(true);
     } finally {
       setBusy(false);

@@ -135,14 +135,18 @@ def _make_httpx_mock():
 
 
 def _force_docker_env():
-    """Patch context manager: forces in_docker=True in the open_deliverable handler.
+    """Patch context manager: forces the Docker path in services/host_open.py.
 
-    The handler checks `os.path.exists('/.dockerenv') or sys.platform.startswith('linux')`.
-    In the pytest run (macOS) both are False → code takes the subprocess.Popen path
-    and httpx is never called. For the tests we force the Docker path
-    by patching sys.platform to 'linux'.
+    On a Mac test run `in_docker()` is False → `open` would run via
+    subprocess.Popen and httpx is never called. The tests force the Docker
+    path (the host helper).
     """
-    return patch("app.routers.tasks.sys.platform", "linux")
+    return patch("app.services.host_open.in_docker", return_value=True)
+
+
+# "Open on the Mac" is for a viewer at the MC host only (round-2 user test
+# t3 S1): the browser's Origin must be a loopback name. See test_host_open.py.
+AT_THE_MAC = {"Origin": "http://localhost:3000"}
 
 
 @pytest.mark.asyncio
@@ -157,6 +161,7 @@ async def test_open_endpoint_reveal(auth_client: AsyncClient, session, tmp_path)
     with _force_docker_env(), patch("httpx.AsyncClient", return_value=mock_client):
         resp = await auth_client.post(
             f"/api/v1/boards/{board_id}/tasks/{task_id}/deliverables/{del_id}/open",
+            headers=AT_THE_MAC,
             json={"reveal": True},
         )
 
@@ -181,6 +186,7 @@ async def test_open_endpoint_default_app(auth_client: AsyncClient, session, tmp_
     with _force_docker_env(), patch("httpx.AsyncClient", return_value=mock_client):
         resp = await auth_client.post(
             f"/api/v1/boards/{board_id}/tasks/{task_id}/deliverables/{del_id}/open",
+            headers=AT_THE_MAC,
             json={"reveal": False},
         )
 
@@ -205,6 +211,7 @@ async def test_open_endpoint_with_subpath(auth_client: AsyncClient, session, tmp
     with _force_docker_env(), patch("httpx.AsyncClient", return_value=mock_client):
         resp = await auth_client.post(
             f"/api/v1/boards/{board_id}/tasks/{task_id}/deliverables/{del_id}/open",
+            headers=AT_THE_MAC,
             json={"reveal": True, "subpath": "main.py"},
         )
 
@@ -227,6 +234,7 @@ async def test_open_endpoint_subpath_traversal_rejected(auth_client: AsyncClient
 
     resp = await auth_client.post(
         f"/api/v1/boards/{board_id}/tasks/{task_id}/deliverables/{del_id}/open",
+        headers=AT_THE_MAC,
         json={"reveal": True, "subpath": "../../etc/passwd"},
     )
     assert resp.status_code == 400

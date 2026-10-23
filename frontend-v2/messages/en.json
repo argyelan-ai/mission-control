@@ -1827,7 +1827,7 @@
       "frameTitle": "Rendered page {name}",
       "loading": "Loading page…",
       "run": "Run page",
-      "runHint": "The page runs only when you start it.",
+      "runHint": "The page runs only when you start it. What it saves (a high score, say) lasts only until you reload.",
       "isolationLabel": "Agent page · isolated preview – never enter passwords here",
       "pageError": "The page reported an error – parts of it may not work. Download it to check it in a browser.",
       "dismissPageError": "Dismiss hint"
@@ -1852,6 +1852,7 @@
     "openedOnMac": "Opened on the Mac.",
     "shownInFinder": "Shown in Finder on the Mac.",
     "hostUnavailable": "Not possible here – download the file instead.",
+    "hostFailed": "Did not open on the Mac – the Mac could not open the file. Try again, or download the file.",
     "showFileInFinder": "Show in Finder",
     "showFolderInFinder": "Show folder in Finder",
     "folderEmpty": "The folder is empty.",
