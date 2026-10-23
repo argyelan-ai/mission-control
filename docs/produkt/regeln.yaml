@@ -13,6 +13,18 @@ rules:
     status: active
     checked: 2026-09-26
 
+  - id: R-change-class-total
+    says: "Every tracked file maps to exactly one known change class; a path on no list is unknown and L3; a change is as strict as its strictest file."
+    source: "ADR-089 section 2 (change-class gate)"
+    owner: backend/app/services/change_classes.py
+    applies_to: ["**"]
+    enforced_by:
+      - {test: "backend/tests/test_change_classes.py::test_every_tracked_file_maps_to_exactly_one_known_class"}
+      - {test: "backend/tests/test_change_classes.py::test_a_path_on_no_list_is_unknown_and_l3"}
+      - {test: "backend/tests/test_change_classes.py::test_a_change_is_as_strict_as_its_strictest_file"}
+    status: active
+    checked: 2026-10-07
+
   - id: R-privacy-scan
     says: "No new private names in the public tree; the scan runs green against its baseline."
     source: "AGENTS.md (public repository); CI leak gate"
