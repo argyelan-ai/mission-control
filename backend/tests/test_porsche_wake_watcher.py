@@ -17,10 +17,12 @@ RFC 5737 IPs + documentation MACs only — public repo.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
 import plistlib
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -191,3 +193,70 @@ def test_watcher_is_stdlib_only():
         if line.startswith(("import ", "from ")):
             mod = line.split()[1].split(".")[0]
             assert mod in sys.stdlib_module_names, line
+
+
+# ── the Mac's Python: launchd runs /usr/bin/python3 (3.9.6) ─────────────────
+#
+# Round-7 L5 re-check: ``-> float | None`` loaded fine under the container's
+# 3.12 but crashed under 3.9 while the module loaded — no heartbeat, every
+# wake a 503 for good. The tests above load the module under the container's
+# Python, so they could not see it.
+SYSTEM_PYTHON = Path("/usr/bin/python3")
+MAC_PYTHON = (3, 9)
+
+
+def _annotations(tree: ast.AST):
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = node.args
+            for a in [*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg]:
+                if a is not None and a.annotation is not None:
+                    yield a.annotation
+            if node.returns is not None:
+                yield node.returns
+        elif isinstance(node, ast.AnnAssign):
+            yield node.annotation
+
+
+def test_watcher_source_is_python_39():
+    """Parses with 3.9 grammar, and no ``X | Y`` type unions (3.10+ at run time)."""
+    src = WATCHER_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(src, feature_version=MAC_PYTHON)
+    unions = [
+        ast.get_source_segment(src, ann)
+        for ann in _annotations(tree)
+        for sub in ast.walk(ann)
+        if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.BitOr)
+    ]
+    assert unions == [], f"use Optional[...] / Union[...] — 3.9 crashes on: {unions}"
+
+
+@pytest.mark.skipif(not SYSTEM_PYTHON.exists(), reason="no /usr/bin/python3 here")
+def test_watcher_runs_under_the_system_python(tmp_path):
+    """The real thing, where it exists: the plist's interpreter, a real run."""
+    wake_dir = tmp_path / "wake-requests"
+    calls = tmp_path / "calls.jsonl"
+    stub = tmp_path / "wake_stub.py"
+    stub.write_text(
+        "import json, sys\n"
+        f"open({str(calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n",
+        encoding="utf-8",
+    )
+    old = _request(wake_dir, slug="leftover", age_s=15 * 24 * 3600)
+    fresh = _request(wake_dir, slug="box", age_s=5)
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "MC_WAKE_REQUEST_DIR": str(wake_dir),
+        "MC_WAKE_SCRIPT": str(stub),
+    }
+    proc = subprocess.run(
+        [str(SYSTEM_PYTHON), str(WATCHER_PATH)],
+        env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert time.time() - (wake_dir / "watcher.alive").stat().st_mtime < 30
+    assert not old.exists() and not fresh.exists()
+    assert "expired" in json.loads((wake_dir / "leftover.status.json").read_text())["detail"]
+    woken = [json.loads(line) for line in calls.read_text().splitlines() if line]
+    assert len(woken) == 1 and "192.0.2.20" in woken[0]

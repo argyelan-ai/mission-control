@@ -115,6 +115,10 @@ launchctl list | grep 'com.mc\.'
   `docker/shared/ensure-checkout.sh`, nie zum Entwickeln benutzt). **Nie** auf
   einen Git-Worktree (wird nach dem PR gelöscht) oder den eigenen
   Arbeits-Checkout (beliebiger Branch) zeigen lassen.
+- **Python:** `/usr/bin/python3` — die Mac-eigene Version (3.9.6). Das Script
+  bleibt darum nur-Standardbibliothek und 3.9-tauglich (kein `X | None` in
+  Typangaben). Sonst stürzt es schon beim Laden ab und schreibt nie ein
+  Lebenszeichen. Ein Test prüft das (`test_watcher_source_is_python_39`).
 - **Auslöser:** `WatchPaths` auf `~/.mc/wake-requests` + alle 30 s.
 - **Zweck:** Das Backend im Docker kann kein Magic-Packet senden. Es legt
   `<slug>.request.json` ab, der Watcher ruft das Weck-Skript auf und räumt die

@@ -24,7 +24,7 @@ from app.models.runtime import Runtime
 from app.models.runtime_host import RuntimeHost, RUNTIME_HOST_ROLES
 from app.redis_client import RedisKeys, get_redis
 from app.services import (
-    host_liveness, recipe_switcher, runtime_manager, runtime_multinode, runtime_readiness,
+    box_wake, recipe_switcher, runtime_manager, runtime_multinode, runtime_readiness,
     runtime_naming, runtime_stop, slot_runtimes,
 )
 from app.services.agent_runtime_switch import (
@@ -1067,20 +1067,12 @@ async def wake_runtime(
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
     result = await runtime_manager.wake_runtime(rt, host=host)
-    if not result["ok"]:
-        # 503: the request is fine, the host-side wake helper is not there.
-        status = 503 if result.get("helper_down") else 400
-        raise HTTPException(status_code=status, detail=result["message"])
-    # Box is waking → drop any stale "asleep" so the next poll asks the box again.
-    slugs = {rt.get("slug") or runtime_id}
-    if host is not None and host.host_id is not None:
-        await host_liveness.forget(host.host_id)
-        slugs.update(
-            (await session.exec(select(Runtime.slug).where(Runtime.host_id == host.host_id))).all()
-        )
-    for slug in slugs:
-        if slug:
-            await runtime_readiness.invalidate_readiness(slug)
+    box_wake.raise_unless_sent(result)
+    await box_wake.forget_box_after_wake(
+        session,
+        host.host_id if host is not None else None,
+        slugs=[rt.get("slug") or runtime_id],
+    )
     return result
 
 

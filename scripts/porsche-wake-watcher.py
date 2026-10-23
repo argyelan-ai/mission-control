@@ -26,7 +26,10 @@ Old requests are not woken: a request older than MAX_REQUEST_AGE_S (default
 was down (or is installed fresh while an old request still lies there) must
 not wake the box minutes or weeks after the click.
 
-stdlib only. Logs to stdout (launchd redirects to ~/.mc/logs/).
+stdlib only, and Python 3.9: launchd runs it with the Mac's /usr/bin/python3
+(3.9.6). No ``X | None`` annotations, no ``match`` — the script would crash
+while loading and never beat (round-7 L5 re-check). A test runs it there.
+Logs to stdout (launchd redirects to ~/.mc/logs/).
 """
 import datetime as dt
 import json
@@ -35,6 +38,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 # --- Config (overridable via env for testing) ---
 HOME_HOST = os.environ.get("HOME_HOST", str(Path.home()))
@@ -116,7 +120,7 @@ def beat() -> None:
         log(f"  ! could not write heartbeat {HEARTBEAT}: {exc}")
 
 
-def _request_age_s(req_path: Path) -> float | None:
+def _request_age_s(req_path: Path) -> Optional[float]:
     try:
         return time.time() - req_path.stat().st_mtime
     except OSError:

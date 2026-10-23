@@ -52,19 +52,22 @@ describe("RuntimeDetailPanel — Wake", () => {
 
   it("503: says the wake helper on the Mac is not running", async () => {
     vi.spyOn(api.runtimes, "wake").mockRejectedValue(
-      new Error("API 503: Weck-Helfer auf dem Mac läuft nicht (kein Lebenszeichen). Wake RT wurde nicht geweckt."),
+      // The real body: the 503 detail carries the message and the reason.
+      new Error('API 503: {"detail":{"message":"Weck-Helfer auf dem Mac läuft nicht (kein Lebenszeichen). Wake RT wurde nicht geweckt.","reason":"no_heartbeat"}}'),
     );
     renderWithQuery(<RuntimeDetailPanel open runtime={sleepingRuntime} onClose={() => {}} />);
     screen.getByTitle("Wake").click();
-    expect(await screen.findByText("Not woken: the wake helper on the Mac is not running.")).toBeInTheDocument();
+    const line = await screen.findByText("Not woken: the wake helper on the Mac is not running.");
     expect(screen.queryByText("Wake failed.")).not.toBeInTheDocument();
+    // An error, like the box card's line — not the neutral note.
+    expect(line).toHaveAttribute("role", "alert");
   });
 
   it("another failure: the plain failure line", async () => {
     vi.spyOn(api.runtimes, "wake").mockRejectedValue(new Error("API 400: Keine wol_mac_address konfiguriert."));
     renderWithQuery(<RuntimeDetailPanel open runtime={sleepingRuntime} onClose={() => {}} />);
     screen.getByTitle("Wake").click();
-    expect(await screen.findByText("Wake failed.")).toBeInTheDocument();
+    expect(await screen.findByText("Wake failed.")).toHaveAttribute("role", "alert");
   });
 
   it("sent: the translated line, not the backend's raw German message", async () => {
@@ -74,7 +77,8 @@ describe("RuntimeDetailPanel — Wake", () => {
     renderWithQuery(<RuntimeDetailPanel open runtime={sleepingRuntime} onClose={() => {}} />);
     screen.getByTitle("Wake").click();
     await waitFor(() => expect(wake).toHaveBeenCalledWith("wake-rt"));
-    expect(await screen.findByText("The box needs 1–2 min.")).toBeInTheDocument();
+    const line = await screen.findByText("The box needs 1–2 min.");
+    expect(line).toHaveAttribute("role", "status");
     expect(screen.queryByText(/ausgelöst/)).not.toBeInTheDocument();
   });
 

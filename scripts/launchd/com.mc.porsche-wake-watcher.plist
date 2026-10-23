@@ -13,6 +13,10 @@
   it at a git worktree (deleted after a PR) or the operator's own checkout (any
   branch may be checked out there) — the helper would die or change silently.
 
+  PYTHON: /usr/bin/python3 is the Mac's own Python (3.9.6). The script stays
+  stdlib-only and 3.9-compatible (no "X | None" annotations); a 3.10+ feature
+  would crash it while loading, so it would never beat.
+
   Install (replace YOUR_USER; see scripts/launchd/README.md):
     1. docker/shared/ensure-checkout.sh        (creates/updates the checkout)
     2. ls ~/.mc/wake-requests/                  (old *.request.json files are

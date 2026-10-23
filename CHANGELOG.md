@@ -15,6 +15,8 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   `~/.mc/checkouts/mission-control`. Waking from the runtime detail is
   operator-only now, like the box card. **Update the helper together with the
   backend** — an old helper writes no heartbeat, so waking reports it as down.
+  The 503 says why (`detail.reason`: `no_heartbeat`, `heartbeat_stale`,
+  `request_waiting`), and the helper runs on the Mac's own Python 3.9.
 - Release gate: `release.yml` now waits for a maintainer's approval
   (environment `release` with a required reviewer) after the images are
   verified, signs every image by digest with cosign keyless, promotes exactly

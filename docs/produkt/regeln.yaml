@@ -466,16 +466,18 @@ rules:
     checked: 2026-10-23
 
   - id: R-wake-needs-helper-heartbeat
-    says: "Wake (box card and runtime detail) queues a Wake-on-LAN request only while the host-side wake helper shows a heartbeat (watcher.alive younger than 90 s) and no request waits longer than 120 s; otherwise both wake routes answer 503 and nothing is queued. The helper never wakes a request older than 5 minutes. Both wake routes are operator-only."
+    says: "Wake (box card and runtime detail) queues a Wake-on-LAN request only while the host-side wake helper shows a heartbeat (watcher.alive younger than 90 s) and no request waits longer than 120 s; otherwise both wake routes answer 503 and nothing is queued. The helper never wakes a request older than 5 minutes and runs on the Mac's Python 3.9. Both wake routes are operator-only."
     source: "Round-7 re-check L5 (r1 S1, N1, N2); PR #976 review MUST 1"
     owner: backend/app/services/runtime_manager.py
-    applies_to: ["backend/app/services/runtime_manager.py", "backend/app/routers/hosts.py", "backend/app/routers/runtimes.py", "scripts/porsche-wake-watcher.py", "scripts/launchd/com.mc.porsche-wake-watcher.plist"]
+    applies_to: ["backend/app/services/runtime_manager.py", "backend/app/services/box_wake.py", "backend/app/routers/hosts.py", "backend/app/routers/runtimes.py", "scripts/porsche-wake-watcher.py", "scripts/launchd/com.mc.porsche-wake-watcher.plist"]
     enforced_by:
       - {test: "backend/tests/test_host_wake.py::test_an_empty_folder_without_heartbeat_is_a_missing_helper"}
       - {test: "backend/tests/test_host_wake.py::test_runtime_route_answers_503_without_heartbeat"}
       - {test: "backend/tests/test_host_wake.py::test_runtime_route_viewer_may_not_wake"}
       - {test: "backend/tests/test_porsche_wake_watcher.py::test_a_run_without_requests_still_beats"}
       - {test: "backend/tests/test_porsche_wake_watcher.py::test_an_old_request_is_retired_without_waking"}
+      - {test: "backend/tests/test_porsche_wake_watcher.py::test_watcher_source_is_python_39"}
+      - {test: "backend/tests/test_host_wake.py::test_both_wake_routes_share_one_answer_and_one_clean_up"}
     status: active
     checked: 2026-10-23
 

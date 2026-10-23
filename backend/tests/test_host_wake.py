@@ -312,11 +312,16 @@ async def test_a_second_wake_keeps_the_first_request_and_its_age(tmp_path):
 async def test_route_answers_503_when_the_helper_is_down(auth_client, tmp_path):
     """503, not 400: the request is fine, the host-side helper is missing."""
     created = (await auth_client.post("/api/v1/hosts", json=_wol_host_body("helperless"))).json()
+    # It beats but leaves a request unread — the second of the two signals.
+    _watcher_alive(tmp_path)
     _leave_a_stale_request(tmp_path)
     with patch.object(runtime_manager.settings, "wake_request_dir", tmp_path):
         resp = await auth_client.post(f"/api/v1/hosts/{created['id']}/wake")
     assert resp.status_code == 503, resp.text
-    assert "läuft nicht" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert "läuft nicht" in detail["message"]
+    # The caller learns why, not only that (round-7 L5 re-check, SHOULD 1).
+    assert detail["reason"] == "request_waiting"
     # Nothing was queued for a helper that is not there.
     assert not (tmp_path / "helperless.request.json").exists()
 
@@ -420,7 +425,9 @@ async def test_runtime_route_answers_503_without_heartbeat(async_session, auth_c
     with patch.object(runtime_manager.settings, "wake_request_dir", tmp_path):
         resp = await auth_client.post("/api/v1/runtimes/wake-rt/wake")
     assert resp.status_code == 503, resp.text
-    assert "Weck-Helfer" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert "Weck-Helfer" in detail["message"]
+    assert detail["reason"] == "no_heartbeat"
     assert not (tmp_path / "wake-rt.request.json").exists()
 
 
@@ -469,3 +476,52 @@ async def test_runtime_route_keeps_a_remembered_asleep_when_nothing_was_woken(
     with patch.object(runtime_manager.settings, "wake_request_dir", tmp_path):
         assert (await auth_client.post("/api/v1/runtimes/wake-rt/wake")).status_code == 503
     assert await host_liveness.recall(host.id) is False
+
+
+@pytest.mark.asyncio
+async def test_a_stale_heartbeat_is_named_in_the_503(async_session, auth_client, tmp_path):
+    import os
+    import time
+
+    await _wol_runtime(async_session)
+    _watcher_alive(tmp_path)
+    old = time.time() - 10 * 60
+    os.utime(tmp_path / runtime_manager.WAKE_HELPER_HEARTBEAT_NAME, (old, old))
+    with patch.object(runtime_manager.settings, "wake_request_dir", tmp_path):
+        resp = await auth_client.post("/api/v1/runtimes/wake-rt/wake")
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["detail"]["reason"] == "heartbeat_stale"
+
+
+@pytest.mark.asyncio
+async def test_a_wake_that_is_not_possible_stays_a_400_with_a_plain_message(
+    async_session, auth_client, tmp_path,
+):
+    """Only the helper-down answer changed shape; a box without WoL stays a 400."""
+    from app.models.runtime import Runtime
+
+    rt = Runtime(
+        slug="no-wol-rt", display_name="No WoL", runtime_type="openai_compatible",
+        endpoint="http://192.0.2.30:8000/v1", power_managed=False, enabled=True, ui_order=2,
+    )
+    async_session.add(rt)
+    await async_session.commit()
+    _watcher_alive(tmp_path)
+    with patch.object(runtime_manager.settings, "wake_request_dir", tmp_path):
+        resp = await auth_client.post("/api/v1/runtimes/no-wol-rt/wake")
+    assert resp.status_code == 400, resp.text
+    assert isinstance(resp.json()["detail"], str)
+
+
+def test_both_wake_routes_share_one_answer_and_one_clean_up():
+    """They drifted once (r1 N1) — both go through services/box_wake."""
+    import inspect
+
+    from app.routers import hosts as hosts_router
+    from app.routers import runtimes as runtimes_router
+
+    for route in (hosts_router.wake_host, runtimes_router.wake_runtime):
+        src = inspect.getsource(route)
+        assert "box_wake.raise_unless_sent(result)" in src, route.__name__
+        assert "box_wake.forget_box_after_wake(" in src, route.__name__
+        assert "host_liveness.forget" not in src and "invalidate_readiness" not in src
