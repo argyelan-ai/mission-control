@@ -245,7 +245,10 @@ function CodeView({ text, path, highlight = true }: { text: string; path: string
         style={atomOneDark}
         // Code stays on a dark ground in both modes: atomOneDark's syntax
         // colours are built for it (ADR-087).
-        customStyle={{ margin: 0, fontSize: 12, background: C.codeBg, padding: "12px 16px" }}
+        // No ligatures: a code font would draw "<!--" or "=>" as one arrow
+        // glyph, and code must show exactly what is typed (round-1 t4 N1).
+        customStyle={{ margin: 0, fontSize: 12, background: C.codeBg, padding: "12px 16px", fontVariantLigatures: "none" }}
+        codeTagProps={{ style: { fontVariantLigatures: "none" } }}
         showLineNumbers
         lineNumberStyle={{ color: C.codeDim, minWidth: "2.5em" }}
       >
