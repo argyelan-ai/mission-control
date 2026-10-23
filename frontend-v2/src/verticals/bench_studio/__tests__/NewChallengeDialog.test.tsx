@@ -943,6 +943,15 @@ describe("NewChallengeDialog — round-4 K1 (R6 rest)", () => {
     expect(screen.queryByText(/same effort as model/i)).toBeNull();
   });
 
+  it("the next level follows the last row's level, not the first free one (review SHOULD-2)", async () => {
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce(ACTIVE);
+    renderDialog();
+    await userEvent.click(await screen.findByRole("radio", { name: "Low" }));
+    await userEvent.click(screen.getByRole("button", { name: /add model/i }));
+    // "First free from Default" would give Default here.
+    expect(checkedIn(2)).toBe("Medium");
+  });
+
   it("after Max the next free level wraps round to Default", async () => {
     vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce(ACTIVE);
     renderDialog();
@@ -1060,6 +1069,69 @@ describe("NewChallengeDialog — round-4 K1 (R6 rest)", () => {
     await waitFor(() => expect(label).toHaveAttribute("aria-invalid", "true"));
     expect(screen.getByText("At most 80 characters.")).toBeInTheDocument();
     expect(notify.error).not.toHaveBeenCalled();
+  });
+
+  it("a 422 on the online model select is said under the select, not only as a red frame (review SHOULD-1)", async () => {
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify.error).mockClear();
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce(ACTIVE);
+    vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(
+      new Error(
+        'API 422: {"detail":[{"type":"string_too_long","loc":["body","models",0,"spark_model"],' +
+          '"msg":"String should have at most 80 characters","ctx":{"max_length":80}}]}',
+      ),
+    );
+    renderDialog();
+    await screen.findByRole("radio", { name: "Max" });
+    await fillTitleAndPrompt();
+    await userEvent.type(screen.getByRole("textbox", { name: "Label 1" }), "DeepSeek");
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    const select = screen.getByRole("combobox", { name: "vLLM model 1" });
+    await waitFor(() => expect(select).toHaveAttribute("aria-invalid", "true"));
+    const message = document.getElementById(select.getAttribute("aria-describedby") ?? "");
+    expect(message?.textContent).toBe("At most 80 characters.");
+    expect(notify.error).not.toHaveBeenCalled();
+  });
+
+  it("a 422 on the agent select is said under the agent select", async () => {
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify.error).mockClear();
+    vi.mocked(api.agents.list).mockResolvedValueOnce([
+      { id: "a-1", name: "Sparky", model: "glm", harness: "omp" } as never,
+    ]);
+    vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(
+      new Error(
+        'API 422: {"detail":[{"type":"missing","loc":["body","models",0,"agent_id"],"msg":"Field required"}]}',
+      ),
+    );
+    renderDialog();
+    await fillTitleAndPrompt();
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Source 1" }), "agent");
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Agent 1" }), "a-1");
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    const select = screen.getByRole("combobox", { name: "Agent 1" });
+    await waitFor(() => expect(select).toHaveAttribute("aria-invalid", "true"));
+    const message = document.getElementById(select.getAttribute("aria-describedby") ?? "");
+    expect(message?.textContent?.trim()).toBeTruthy();
+    expect(notify.error).not.toHaveBeenCalled();
+  });
+
+  it("a mixed 422 toasts only the problem no field shows (review NICE-1)", async () => {
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify.error).mockClear();
+    vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(
+      new Error(
+        'API 422: {"detail":[{"type":"string_too_long","loc":["body","title"],' +
+          '"msg":"String should have at most 200 characters","ctx":{"max_length":200}},' +
+          '{"type":"literal_error","loc":["body","mode"],"msg":"Input should be single"}]}',
+      ),
+    );
+    renderDialog();
+    await fillTitleAndPrompt();
+    await userEvent.type(screen.getByRole("textbox", { name: "Label 1" }), "DeepSeek");
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    await waitFor(() => expect(notify.error).toHaveBeenCalledWith("mode: Input should be single"));
+    expect(screen.getByPlaceholderText(/title/i)).toHaveAttribute("aria-invalid", "true");
   });
 
   it("a 422 the dialog has no field for still goes to the toast", async () => {

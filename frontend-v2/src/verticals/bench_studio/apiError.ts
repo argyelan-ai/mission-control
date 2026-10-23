@@ -80,3 +80,16 @@ export function apiFieldErrors(err: unknown): ApiFieldError[] {
   }
   return out;
 }
+
+/** The toast text for validation problems a form has no field for: the
+ *  first one as `field: message`, `(+N)` when there are more — the same
+ *  shape :func:`apiErrorDetail` gives a whole list. Null when the first has
+ *  no message. */
+export function apiFieldErrorsText(items: ApiFieldError[]): string | null {
+  const first = items[0];
+  const msg = first?.msg.trim();
+  if (!msg) return null;
+  const field = first.path.filter((part): part is string => typeof part === "string").at(-1);
+  const text = field ? `${field}: ${msg}` : msg;
+  return items.length > 1 ? `${text} (+${items.length - 1})` : text;
+}

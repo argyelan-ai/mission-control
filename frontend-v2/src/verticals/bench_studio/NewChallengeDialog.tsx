@@ -10,7 +10,7 @@ import { notify } from "@/lib/notify";
 import { NativeSelect } from "@/components/shared/NativeSelect";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { benchApi } from "@/verticals/bench_studio/api";
-import { apiErrorDetail, apiFieldErrors, type ApiFieldError } from "./apiError";
+import { apiErrorDetail, apiFieldErrors, apiFieldErrorsText, type ApiFieldError } from "./apiError";
 import { EffortChips } from "./EffortChips";
 import { displayLabel } from "./format";
 import type { BenchModelSpec, EffortLevel, EffortLevels, PromptTemplate } from "./types";
@@ -153,17 +153,19 @@ export function NewChallengeDialog({
     onError: (err) => {
       const items = apiFieldErrors(err);
       const mapped: Record<string, string> = {};
-      let unmapped = items.length === 0;
+      const unmapped: ApiFieldError[] = [];
       for (const item of items) {
         const key = fieldKeyOf(item.path);
         if (key) mapped[key] ??= fieldMessage(item);
-        else unmapped = true;
+        else unmapped.push(item);
       }
       setFieldErrors(mapped);
       const first = Object.keys(mapped)[0];
       if (first) setFocusField(first);
-      // The toast is the fallback for what has no field (or is no list).
-      if (unmapped) notify.error(apiErrorDetail(err, t("notifyStartFailed")));
+      // The toast is the fallback for what has no field (or is no list). It
+      // names only the problems no field shows already (review NICE-1).
+      if (items.length === 0) notify.error(apiErrorDetail(err, t("notifyStartFailed")));
+      else if (unmapped.length > 0) notify.error(apiFieldErrorsText(unmapped) ?? t("notifyStartFailed"));
     },
   });
 
@@ -659,38 +661,45 @@ export function NewChallengeDialog({
                     </span>
                   </div>
                 ) : (
+                  // Every field that can turn red also says why (review SHOULD-1).
+                  <div className="flex flex-col gap-1 min-w-0">
+                    <NativeSelect
+                      {...fieldA11y(`model-${i}`)}
+                      value={m.spark_model ?? ""}
+                      onChange={(e) => setModelWithAutofill(i, { spark_model: e.target.value || null })}
+                      className={fieldClass}
+                      style={borderFor(`model-${i}`)}
+                      aria-label={t("vllmModelAria", { index: i + 1 })}
+                    >
+                      <option value="">{t("activeModelAuto")}</option>
+                      {(sparkModels?.models ?? []).map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                    {fieldError(`model-${i}`)}
+                  </div>
+                )
+              ) : (
+                <div className="flex flex-col gap-1 min-w-0">
                   <NativeSelect
                     {...fieldA11y(`model-${i}`)}
-                    value={m.spark_model ?? ""}
-                    onChange={(e) => setModelWithAutofill(i, { spark_model: e.target.value || null })}
+                    value={m.agent_id ?? ""}
+                    onChange={(e) => setModelWithAutofill(i, { agent_id: e.target.value || null })}
                     className={fieldClass}
                     style={borderFor(`model-${i}`)}
-                    aria-label={t("vllmModelAria", { index: i + 1 })}
+                    aria-label={t("agentAria", { index: i + 1 })}
                   >
-                    <option value="">{t("activeModelAuto")}</option>
-                    {(sparkModels?.models ?? []).map((model) => (
-                      <option key={model} value={model}>
-                        {model}
+                    <option value="">{t("agentSelectPlaceholder")}</option>
+                    {(agents ?? []).map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
                       </option>
                     ))}
                   </NativeSelect>
-                )
-              ) : (
-                <NativeSelect
-                  {...fieldA11y(`model-${i}`)}
-                  value={m.agent_id ?? ""}
-                  onChange={(e) => setModelWithAutofill(i, { agent_id: e.target.value || null })}
-                  className={fieldClass}
-                  style={borderFor(`model-${i}`)}
-                  aria-label={t("agentAria", { index: i + 1 })}
-                >
-                  <option value="">{t("agentSelectPlaceholder")}</option>
-                  {(agents ?? []).map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </NativeSelect>
+                  {fieldError(`model-${i}`)}
+                </div>
               )}
               <div className="flex flex-col gap-1 min-w-0">
                 <input

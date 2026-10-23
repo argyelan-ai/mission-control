@@ -790,6 +790,12 @@ export function ChallengeDetail({
  *  Same Leitstand pattern as NewChallengeDialog (ResponsiveModal + dark
  *  inputs). Saves only changed fields; recompose stays a separate,
  *  deliberate action in the header ("Video neu erstellen"). */
+// The backend's limits (routers.BenchChallengeUpdate / BenchEntryUpdate) —
+// the edit fields stop there, like the create dialog (review NICE-2).
+const EDIT_TITLE_MAX = 200;
+const EDIT_LABEL_MAX = 80;
+const EDIT_TAG_MAX = 80;
+
 function EditChallengeDialog({
   challenge,
   open,
@@ -865,6 +871,7 @@ function EditChallengeDialog({
 
         <input
           value={title}
+          maxLength={EDIT_TITLE_MAX}
           onChange={(e) => setTitle(e.target.value)}
           placeholder={t("titlePlaceholder")}
           aria-label={t("titleAria")}
@@ -880,6 +887,7 @@ function EditChallengeDialog({
             <div key={entry.id} className="flex gap-2 items-center">
               <input
                 value={entryEdits[entry.id]?.model_label ?? ""}
+                maxLength={EDIT_LABEL_MAX}
                 onChange={(e) => setEdit(entry.id, { model_label: e.target.value })}
                 placeholder={t("modelNamePlaceholder")}
                 aria-label={t("modelNameAria", { index: i + 1 })}
@@ -888,6 +896,7 @@ function EditChallengeDialog({
               />
               <input
                 value={entryEdits[entry.id]?.display_tag ?? ""}
+                maxLength={EDIT_TAG_MAX}
                 onChange={(e) => setEdit(entry.id, { display_tag: e.target.value })}
                 placeholder={t("tagPlaceholder")}
                 aria-label={t("tagAria", { index: i + 1 })}
