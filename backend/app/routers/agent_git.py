@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -96,7 +95,7 @@ async def handle_review_pr_creation(
     if task.project_id:
         try:
             from app.services.git_service import git_service, slugify_project
-            from app.services.pr_marker import pr_created_note
+            from app.services.pr_marker import pr_created_note, pr_number_in
             project = await session.get(Project, task.project_id)
             if project and project.github_repo_url and agent.workspace_path:
                 project_slug = slugify_project(project.name)
@@ -132,9 +131,9 @@ async def handle_review_pr_creation(
                 # Reliable field alongside the comment marker (Task dd4bf92c,
                 # 2026-09-13) — review-dispatch workspace prep reads this
                 # instead of scraping the comment above.
-                pr_match = re.search(r"/pull/(\d+)", pr_url)
-                if pr_match:
-                    task.pr_number = int(pr_match.group(1))
+                pr_number = pr_number_in(pr_url)
+                if pr_number is not None:
+                    task.pr_number = pr_number
                 task.pr_url = pr_url
                 session.add(task)
                 await session.commit()

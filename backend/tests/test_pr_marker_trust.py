@@ -97,6 +97,11 @@ def _imposters(task_id, base) -> list[TaskComment]:
                     comment_type="progress",
                     content=f"Hinweis: der Agent schrieb **PR erstellt:** {URL}/6",
                     created_at=base + timedelta(minutes=5)),
+        # system, exact wording at the start, but not a progress note
+        TaskComment(id=uuid.uuid4(), task_id=task_id, author_type="system",
+                    comment_type="message",
+                    content=f"**PR erstellt:** {URL}/6",
+                    created_at=base + timedelta(minutes=6)),
     ]
 
 
@@ -236,3 +241,31 @@ async def test_review_brief_falls_back_to_the_card_field(fake_redis):
     section = msg.split("## Pull Request", 1)[1].split("##", 1)[0]
     assert f"{URL}/11" in section
     assert f"{URL}/2" not in section
+
+
+# ── Proof gate: where it finds the card's PR ─────────────────────────────
+
+@pytest.mark.asyncio
+async def test_proof_gate_ignores_a_quoted_pr_note(fake_redis):
+    """MC's task-done summary (system / reflection) quoting an agent's
+    "PR erstellt:" line is not the card's PR for the proof gate either."""
+    from app.services.proof_gate import _pr_tied_to_card, discover_pr
+
+    base = utcnow() - timedelta(hours=1)
+    quoted = await _card(pr_number=None)
+    await _mk(_imposters(quoted.id, base))
+    real = await _card(pr_number=1)
+    await _mk([_system_marker(real.id, 1, base), *_imposters(real.id, base)])
+    pr = {"title": "unrelated", "body": "no card id here"}
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        q = await s.get(Task, quoted.id)
+        url, where = await discover_pr(s, q, "")
+        assert where != "marker" and url is None
+        for n in (2, 3, 4, 5, 6):
+            assert await _pr_tied_to_card(s, q, pr, f"{URL}/{n}") is False
+
+        r = await s.get(Task, real.id)
+        assert await discover_pr(s, r, "") == (f"{URL}/1", "marker")
+        assert await _pr_tied_to_card(s, r, pr, f"{URL}/1") is True
+        assert await _pr_tied_to_card(s, r, pr, f"{URL}/5") is False

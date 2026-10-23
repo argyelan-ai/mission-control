@@ -367,6 +367,7 @@ rules:
       - {test: "backend/tests/test_pr_marker_trust.py::test_note_and_card_field_disagree_merges_nothing"}
       - {test: "backend/tests/test_pr_marker_trust.py::test_adr_gate_reads_the_same_trusted_note"}
       - {test: "backend/tests/test_pr_marker_trust.py::test_review_brief_shows_mcs_pr_not_a_quoted_one"}
+      - {test: "backend/tests/test_pr_marker_trust.py::test_proof_gate_ignores_a_quoted_pr_note"}
     status: active
     checked: 2026-10-23
 
