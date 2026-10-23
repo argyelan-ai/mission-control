@@ -36,7 +36,7 @@ describe("effort level words — one source (common.effortLevel)", () => {
   });
 
   it("no bench text appends an English effort word to a label any more", () => {
-    const dialog = de.bench.newChallengeDialog as Record<string, string>;
+    const dialog = de.bench.newChallengeDialog as Record<string, unknown>;
     expect(dialog.labelEffortSuffix).toBeUndefined();
   });
 });
