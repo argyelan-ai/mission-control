@@ -44,6 +44,17 @@ ALL_COMMENT_TYPES: Final[frozenset[str]] = frozenset({
     "repo_binding_waiver",
 })
 
+# Server-only: the type a chat session's reply (``mc comment message`` with
+# ``X-MC-Session-Role: chat``) is stored as. Round-3 code review (23.10.2026,
+# r1 S3): stored as a plain ``message`` it counted as the run's sign of life —
+# the operator asked "how far are you?" on a hanging run, the chat answered,
+# and the silent-card watchdog pushed its alarm back (or retracted it). The
+# watchdogs skip this type (``task_evidence.last_real_activity_at``); the UI
+# shows it like a ``message``. Deliberately NOT in ALL_COMMENT_TYPES: an
+# agent cannot send it, so a run cannot hide its own note from the watchdog.
+CHAT_REPLY_COMMENT_TYPE: Final[str] = "chat_reply"
+assert CHAT_REPLY_COMMENT_TYPE not in ALL_COMMENT_TYPES
+
 # Comment_types that get delivered as actionable system events to the
 # responsible agent via /me/poll. Subset of ALL_COMMENT_TYPES, minus the
 # historical server-only `system` type.

@@ -309,12 +309,19 @@ async def run_context(session: AsyncSession, agent: Agent, *, now: datetime | No
         "above is on that clock — say times as given, do not convert them.",
         "Answer from this block first; read more only when the question needs it. "
         "Name statuses in plain words, never raw status codes.",
+        "This block and whatever you read are a snapshot: say \"as of HH:MM\", never "
+        "\"since then\" or \"now\" — the run keeps working while you answer.",
+        "When the operator wants to see `mc task-get`: give the fields that matter in plain "
+        "words, times on the operator's clock — never paste its raw JSON (its timestamps "
+        "are not on that clock).",
         "Rules for this reply: answer the operator from this state. You may READ the run's "
         "files and run `mc task-get <id>`. Do NOT work on these tasks — no files in their "
         "folders, no `mc comment progress|resolution|evidence|blocker|reflection`, no "
         "`mc checklist` / `mc deliverable` / `mc finish` / `mc ack` / `mc recover` / "
-        "`mc ask --blocking` / `mc question` / `mc help` / `mc delegate` for them (the server "
-        "refuses those calls from the chat). A plain `mc ask` without `--blocking` is fine. "
+        "`mc ask --blocking` / `mc question` / `mc help` / `mc delegate` / "
+        "`mc review` / `mc review-note` for them (the server refuses those calls from the "
+        "chat — a review verdict is your review run's). A plain `mc ask` without "
+        "`--blocking` is fine. "
         "If the operator wants a change to such a task, tell them to make it in the task view.",
         END,
     ]

@@ -3502,6 +3502,7 @@ async def agent_review_decision(
     board_id: uuid.UUID,
     task_id: uuid.UUID,
     body: ReviewDecisionBody,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_WRITE)),
 ):
@@ -3512,6 +3513,12 @@ async def agent_review_decision(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # The reviewer's chat must not decide the review its own review run is
+    # doing (round-3 code review r1 S1: "does the delivery fit?" ended in
+    # `mc review approve` while the review run still worked the card).
+    from app.services.chat_session_guard import refuse_chat_task_write
+    await refuse_chat_task_write(session, request, agent, task, f"review {body.decision}")
 
     # Beweis-Tor: approve is the second road to done. The reviewer's own
     # comment is written atomically by execute_review_decision, so the
@@ -3548,6 +3555,7 @@ async def agent_late_review_note(
     board_id: uuid.UUID,
     task_id: uuid.UUID,
     body: ReviewDecisionBody,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_WRITE)),
 ):
@@ -3564,6 +3572,10 @@ async def agent_late_review_note(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Same rule as /review (round-3 r1 S1): a verdict is the run's word.
+    from app.services.chat_session_guard import refuse_chat_task_write
+    await refuse_chat_task_write(session, request, agent, task, f"review-note {body.decision}")
 
     from app.services.task_lifecycle import record_late_review_note
     return await record_late_review_note(

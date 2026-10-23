@@ -19,6 +19,7 @@ from app.utils import utcnow
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -134,6 +135,13 @@ class Message(SQLModel, table=True):
     # {"awaiting": bool, "to": str, "priority": str, "options": list[str]|None,
     #  "default": str|None, "deadline": iso|None}
     question_meta: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    # Written by an agent's chat session (session-role header), set by the
+    # server only. The run's clocks leave it out: the chat answering the
+    # operator is no sign of life of the run (round-3 re-review M1, 0222).
+    from_chat: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, server_default=text("false"), nullable=False),
+    )
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),

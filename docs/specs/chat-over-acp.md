@@ -534,7 +534,12 @@ a run ended got "0 % — no task is running". Two layers:
   reviewing it"), never the raw code. The block tells the
   model to answer from it first and to read more only when needed; its read
   hint `mc task-get <id>` works in the chat: without `BOARD_ID` in the env
-  the CLI takes the board from the agent's own `/agent/me`.
+  the CLI takes the board from the agent's own `/agent/me`. Round 3 (t1
+  NICE-4/5): when the operator wants to see `mc task-get`, the block asks for
+  the fields that matter in plain words and times on the operator's clock,
+  never its raw JSON (UTC timestamps next to local ones); and it calls the
+  block and every read a snapshot — "as of HH:MM", never "since then" or
+  "now", because the run keeps working while the chat answers.
 - **Guard (enforce):** the daemon starts its `omp acp` child with
   `MC_SESSION_ROLE=chat` and its own `MC_CONTEXT_ENV_PATH`
   (`/tmp/mc-chat-context.env`, without the boot env's `TASK_ID` /
@@ -555,12 +560,24 @@ a run ended got "0 % — no task is running". Two layers:
   calls that set the run's task to `blocked`: `mc question`
   (`/clarification`), `mc help` (`/help-request`) and `mc delegate`
   (`/delegate`, which also hangs a subtask and a progress note on it) — the
-  answer or callback would start a second run. Reading, a plain question and
-  a `message` comment (a reply in the task thread — it never ACKs a
-  delivered task and does not count as run activity) stay open — the reply
+  answer or callback would start a second run — and the review verdicts
+  `mc review` (`/review`) and `mc review-note` (`/review-note`): on the card
+  its review run works the chat would decide the review that run is still
+  doing (round-3 code review r1 S1). Reading, a plain question and
+  a `message` comment (a reply in the task thread) stay open — the reply
   not on the card the agent's review run works, where any reviewer comment
   ends the review wait (`review_park`) and counts as the reviewer having
-  spoken (`proof_gate`). Not covered
+  spoken (`proof_gate`). A chat reply never ACKs a delivered task and is
+  stored as `chat_reply` (server-only type, shown like a `message`): no
+  watchdog counts it as the run's sign of life (`task_evidence.last_real_activity_at`,
+  the silent-mailbox clock, the stale check's `messaging.last_task_activity`
+  and the stuck check's Guard 14 in `task_runner`) and it is no reviewer
+  verdict (`proof_gate`) — "how far are you?" on a hanging run must not push
+  the silent-card alarm, the nudge or the block back (round-3 r1 S3, re-review
+  M1). The chat's thread messages (`mc msg`, `mc msg --thread`, a plain
+  `mc ask`) carry `Message.from_chat` (set by the server from the role header,
+  migration 0222), and the stale check's clock leaves them out for comm_v2
+  agents as well. Not covered
   (round-2 review, "not too wide"): a task whose run ended more than 30
   minutes ago, and a task no run holds yet — e.g. the one the chat just
   created for itself (inbox, not delivered). Each refusal is a
@@ -568,12 +585,15 @@ a run ended got "0 % — no task is running". Two layers:
   `action`/`status` dict stays in `meta.detail`), at most one per task and
   action every 10 minutes however often the model retries. The marker guards
   against an honest mistake of the model; it is not authentication.
-- **Deliberately left open from the chat:** `POST /agent/tasks/current/messages`
-  and a non-blocking `ask` (they never change the task status); the PDF
-  endpoints (`/agent/me/pdf`, `.../tasks/{id}/pdf`), `visual-verify`,
-  `/review` and `/review-note` on the agent's own task (low risk, not a
-  run-state write the incident showed); the MCP path (`mc-mcp.py`) sets no
-  role, but omp does not use it.
+- **Deliberately left open from the chat:** `mc msg`
+  (`POST /agent/tasks/current/messages`, `/agent/threads/{id}/messages`) and
+  a non-blocking `ask`. From the chat they never change the task status:
+  both message routes skip the ACK handshake for the chat role, the same
+  rule as the chat's `message` comment (round-3 code review r1 S2 — before,
+  `mc msg` from the chat flipped a delivered task to `in_progress` behind
+  the run's back). Also open: the PDF endpoints (`/agent/me/pdf`,
+  `.../tasks/{id}/pdf`) and `visual-verify` (no run state); the MCP path
+  (`mc-mcp.py`) sets no role, but omp does not use it.
 
 - **Resume through a run:** an `acp-docker` agent holds no paused run session
   once its task turn ended on a blocking question. So an answer

@@ -31,6 +31,16 @@ Round-2 review (23.10.2026, r1 S2/S3/NICE-5) — no gaps, not too wide:
   its review run for as long as it stays there — no 30-minute limit, and no
   reply exception (a reviewer's ``message`` ends the review wait).
 
+Round-3 code review (23.10.2026, r1 S1–S3) — the last three gaps:
+
+* ``mc review`` / ``mc review-note`` from the reviewer's chat would decide the
+  review its own review run is working — refused like every run-state write;
+* ``mc msg`` from the chat never ACKs a delivered task (both message routes),
+  exactly like a chat ``message`` comment;
+* a chat reply is stored as ``chat_reply`` and is no sign of life of the run:
+  the silent-card watchdog's clock (``last_real_activity_at``) ignores it, so
+  "how far are you?" cannot hide a hanging run.
+
 All ids are made up.
 """
 from __future__ import annotations
@@ -74,7 +84,7 @@ async def _setup(
         s.add(Agent(
             id=agent_id, name="Probe", role="developer", board_id=board_id,
             agent_token_hash=token_hash,
-            scopes=["tasks:read", "tasks:write", "tasks:help", "tasks:create"],
+            scopes=["tasks:read", "tasks:write", "tasks:help", "tasks:create", "chat:write"],
             provision_status="provisioned", agent_runtime="cli-bridge", harness="omp",
             current_task_id=task_id if assigned else None,
         ))
@@ -414,7 +424,8 @@ async def test_chat_reply_comment_on_running_task_is_allowed(client):
         headers=_auth(token, chat=True),
     )
     assert resp.status_code == 201, resp.text
-    assert [c.comment_type for c in await _comments(task_id)] == ["message"]
+    # Stored as the chat's reply, not as the run's note (round-3 r1 S3).
+    assert [c.comment_type for c in await _comments(task_id)] == ["chat_reply"]
     assert (await _task(task_id)).status == "in_progress"
 
 
@@ -548,3 +559,316 @@ async def test_chat_may_not_write_a_live_unassigned_task_it_worked(client):
     assert resp.status_code == 409, resp.text
     assert "chat_session_task_write" in resp.text
 
+
+
+# ── Round 3 (r1 S1–S3): review decision, mc msg ACK, chat reply ≠ run activity ──
+
+
+async def test_chat_review_decision_on_the_card_its_review_run_works_is_refused(client):
+    """r1 S1: "does the delivery fit?" in the reviewer's chat must not end in
+    `mc review approve` on the card its own review run is reviewing."""
+    board_id, _agent, task_id, token = await _setup(
+        status="review", assigned=True, dispatched=True, worked=False,
+        intent="review_handoff",
+    )
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review",
+        json={"decision": "approve", "comment": "Looks good to me, all files there."},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 409, resp.text
+    assert "chat_session_task_write" in resp.json()["detail"]
+    assert "review approve" in resp.json()["detail"]
+    task = await _task(task_id)
+    assert task.status == "review" and task.review_decision is None
+    assert await _comments(task_id) == []
+
+
+async def test_chat_late_review_note_on_its_runs_card_is_refused(client):
+    """r1 S1, second route: `mc review-note` records a verdict without a status
+    change — still the run's word, not the chat's."""
+    board_id, _agent, task_id, token = await _setup(
+        status="done", assigned=True, worked=False, left_run_ago=timedelta(minutes=5),
+    )
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review-note",
+        json={"decision": "request_changes", "comment": "Colours are off, please redo."},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 409, resp.text
+    assert "review-note request_changes" in resp.json()["detail"]
+    assert (await _task(task_id)).review_decision is None
+    assert await _comments(task_id) == []
+
+
+async def test_run_session_late_review_note_still_works(client):
+    """Counter-probe: the run (no role header) files its late verdict as before."""
+    board_id, _agent, task_id, token = await _setup(
+        status="done", assigned=True, worked=False, left_run_ago=timedelta(minutes=5),
+    )
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review-note",
+        json={"decision": "request_changes", "comment": "Colours are off, please redo."},
+        headers=_auth(token, chat=False, attempt=False),
+    )
+    assert resp.status_code == 200, resp.text
+    assert (await _task(task_id)).status == "done"
+
+
+async def test_chat_review_decision_on_another_agents_card_stays_allowed(client):
+    """Not too wide: a lead's chat may still decide a card no run of its own
+    holds (the guard only protects the agent's own run)."""
+    board_id, _agent, task_id, token = await _setup(
+        status="review", assigned=False, worked=False,
+    )
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review",
+        json={"decision": "hold", "comment": "Parking this until Monday, waiting on Mark."},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    # A real success, not just "some other error" (round-3 re-review S1).
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"status": "ok", "decision": "hold"}
+    assert (await _task(task_id)).review_decision == "hold"
+
+
+async def _task_thread(task_id):
+    from app.models.task import Task
+    from app.services.messaging import ensure_task_thread
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        task = await s.get(Task, task_id)
+        thread = await ensure_task_thread(s, task)
+        await s.commit()
+        return thread.id
+
+
+async def test_chat_msg_never_claims_a_dispatched_task(client):
+    """r1 S2: `mc msg` from the chat answered the operator — and flipped the
+    delivered task to in_progress behind the run's back."""
+    _board, _agent, task_id, token = await _setup(
+        status="inbox", dispatched=True, worked=False,
+    )
+    resp = await client.post(
+        "/api/v1/agent/tasks/current/messages",
+        json={"body": "It starts in a moment."},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 201, resp.text
+    task = await _task(task_id)
+    assert task.status == "inbox" and task.ack_at is None and task.started_at is None
+
+
+async def test_chat_thread_msg_never_claims_a_dispatched_task(client):
+    """r1 S2, second route: `mc msg --thread <id>`."""
+    _board, _agent, task_id, token = await _setup(
+        status="inbox", dispatched=True, worked=False,
+    )
+    thread_id = await _task_thread(task_id)
+    resp = await client.post(
+        f"/api/v1/agent/threads/{thread_id}/messages",
+        json={"body": "It starts in a moment."},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 201, resp.text
+    task = await _task(task_id)
+    assert task.status == "inbox" and task.ack_at is None
+
+
+async def test_run_session_msg_still_claims_a_dispatched_task(client):
+    """Counter-probe: the run's first message is its ACK, unchanged."""
+    _board, _agent, task_id, token = await _setup(
+        status="inbox", dispatched=True, worked=False,
+    )
+    thread_id = await _task_thread(task_id)
+    resp = await client.post(
+        f"/api/v1/agent/threads/{thread_id}/messages",
+        json={"body": "On it."},
+        headers=_auth(token, chat=False, attempt=False),
+    )
+    assert resp.status_code == 201, resp.text
+    task = await _task(task_id)
+    assert task.status == "in_progress" and task.ack_at is not None
+
+
+async def _last_activity(task_id):
+    from app.models.task import Task
+    from app.services.task_evidence import last_real_activity_at
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        return await last_real_activity_at(s, await s.get(Task, task_id))
+
+
+async def test_chat_reply_is_no_sign_of_life_of_the_run(client):
+    """r1 S3: the operator asks "how far are you?" on a hanging run, the chat
+    answers in the task thread — the silent-card watchdog must not see the
+    run as alive."""
+    board_id, _agent, task_id, token = await _setup()
+    before = await _last_activity(task_id)
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        json={"comment_type": "message", "content": "Still on step 2 as of 05:42."},
+        headers=_auth(token, chat=True),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["comment_type"] == "chat_reply"
+    assert await _last_activity(task_id) == before
+
+
+async def test_run_session_message_still_counts_as_activity(client):
+    """Counter-probe: a comment of the run moves the clock as before."""
+    board_id, _agent, task_id, token = await _setup()
+    before = await _last_activity(task_id)
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        json={"comment_type": "message", "content": "Step 2 done."},
+        headers=_auth(token, chat=False),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["comment_type"] == "message"
+    after = await _last_activity(task_id)
+    assert after is not None and (before is None or after > before)
+
+
+async def test_an_agent_cannot_send_chat_reply_as_its_type(client):
+    """The type is the server's mark — a run must not hide its own note from
+    the watchdog by choosing it."""
+    board_id, _agent, task_id, token = await _setup()
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        json={"comment_type": "chat_reply", "content": "x"},
+        headers=_auth(token, chat=False),
+    )
+    assert resp.status_code == 422, resp.text
+
+
+# ── Round-3 re-review M1: the stale check's clock ignores the chat too ──
+
+
+async def _stale_clock(task_id, *, comm_v2: bool = False):
+    """``messaging.last_task_activity`` — the clock of
+    ``task_runner._check_stale_in_progress`` (comments; thread messages for
+    comm_v2 agents)."""
+    from app.models.task import Task
+    from app.services.messaging import last_task_activity
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        return await last_task_activity(s, await s.get(Task, task_id), comm_v2=comm_v2)
+
+
+async def _thread_rows(thread_id) -> list:
+    from app.models.thread import Message
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        return list((await s.exec(
+            select(Message).where(Message.thread_id == thread_id).order_by(Message.seq)
+        )).all())
+
+
+async def test_chat_reply_does_not_move_the_stale_check_clock(client):
+    """M1: "how far are you?" on a dead run — the chat's reply comment must not
+    reset the stale check's clock (it read every comment type)."""
+    board_id, _agent, task_id, token = await _setup()
+    assert await _stale_clock(task_id) is None
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        json={"comment_type": "message", "content": "Still on step 2 as of 05:42."},
+        headers=_auth(token, chat=True),
+    )
+    assert resp.status_code == 201, resp.text
+    assert await _stale_clock(task_id) is None
+    assert await _stale_clock(task_id, comm_v2=True) is None
+
+
+async def test_run_comment_still_moves_the_stale_check_clock(client):
+    """Counter-probe: the run's own comment moves it as before."""
+    board_id, _agent, task_id, token = await _setup()
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        json={"comment_type": "message", "content": "Step 2 done."},
+        headers=_auth(token, chat=False),
+    )
+    assert resp.status_code == 201, resp.text
+    assert await _stale_clock(task_id) is not None
+
+
+async def test_chat_msg_does_not_move_the_stale_check_clock_for_comm_v2(client):
+    """M1, comm_v2 half: the chat's `mc msg` lands on the task thread, and for a
+    comm_v2 agent thread messages are the run's activity. The server marks the
+    chat's message, and the clock leaves it out."""
+    _board, _agent, task_id, token = await _setup()
+    thread_id = await _task_thread(task_id)
+    before = await _stale_clock(task_id, comm_v2=True)
+    resp = await client.post(
+        "/api/v1/agent/tasks/current/messages",
+        json={"body": "Still on step 2 as of 05:42."},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 201, resp.text
+    rows = await _thread_rows(thread_id)
+    assert rows and rows[-1].body == "Still on step 2 as of 05:42."
+    assert rows[-1].from_chat is True
+    assert await _stale_clock(task_id, comm_v2=True) == before
+
+
+async def test_chat_thread_msg_does_not_move_the_stale_check_clock_for_comm_v2(client):
+    """M1, second route: `mc msg --thread <id>` from the chat."""
+    _board, _agent, task_id, token = await _setup()
+    thread_id = await _task_thread(task_id)
+    before = await _stale_clock(task_id, comm_v2=True)
+    resp = await client.post(
+        f"/api/v1/agent/threads/{thread_id}/messages",
+        json={"body": "Still on step 2 as of 05:42."},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 201, resp.text
+    assert (await _thread_rows(thread_id))[-1].from_chat is True
+    assert await _stale_clock(task_id, comm_v2=True) == before
+
+
+async def test_run_msg_still_moves_the_stale_check_clock_for_comm_v2(client):
+    """Counter-probe: the run's `mc msg` (no role header) is its activity."""
+    _board, _agent, task_id, token = await _setup()
+    thread_id = await _task_thread(task_id)
+    before = await _stale_clock(task_id, comm_v2=True)
+    resp = await client.post(
+        f"/api/v1/agent/threads/{thread_id}/messages",
+        json={"body": "Step 2 done."},
+        headers=_auth(token, chat=False, attempt=False),
+    )
+    assert resp.status_code == 201, resp.text
+    assert (await _thread_rows(thread_id))[-1].from_chat is False
+    after = await _stale_clock(task_id, comm_v2=True)
+    assert after is not None and (before is None or after > before)
+
+
+async def test_chat_plain_ask_does_not_move_the_stale_check_clock_for_comm_v2(client):
+    """M1, third route: a plain `mc ask` from the chat is allowed, but the
+    chat's question is no sign of life of the run either."""
+    _board, agent_id, task_id, token = await _setup()
+    await _enable_comm_v2(agent_id)
+    thread_id = await _task_thread(task_id)
+    before = await _stale_clock(task_id, comm_v2=True)
+    resp = await client.post(
+        "/api/v1/agent/tasks/current/ask",
+        json={"question": "Shall I tell you more?", "blocking": False},
+        headers=_auth(token, chat=True),
+    )
+    assert resp.status_code == 201, resp.text
+    assert (await _thread_rows(thread_id))[-1].from_chat is True
+    assert await _stale_clock(task_id, comm_v2=True) == before
+
+
+async def test_run_plain_ask_still_moves_the_stale_check_clock_for_comm_v2(client):
+    """Counter-probe: the run's own question is its activity."""
+    _board, agent_id, task_id, token = await _setup()
+    await _enable_comm_v2(agent_id)
+    thread_id = await _task_thread(task_id)
+    resp = await client.post(
+        "/api/v1/agent/tasks/current/ask",
+        json={"question": "Which colour do you want?", "blocking": False},
+        headers=_auth(token, chat=False),
+    )
+    assert resp.status_code == 201, resp.text
+    assert (await _thread_rows(thread_id))[-1].from_chat is False
+    assert await _stale_clock(task_id, comm_v2=True) is not None

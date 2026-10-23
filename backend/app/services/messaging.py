@@ -189,6 +189,7 @@ async def post_message(
     question_meta: dict | None = None,
     mirror_to_telegram: bool = True,
     attachment=None,
+    from_chat: bool = False,
 ) -> Message:
     """Post a message onto a thread, allocating its seq atomically.
 
@@ -205,6 +206,10 @@ async def post_message(
     ``attachment`` (a ``chat_adapter.ChatAttachment``) rides the mirror only —
     it is NOT stored on the Message row; the caller puts a visible 📎 line
     into ``body`` so the thread log names the file for every reader.
+
+    ``from_chat`` marks a message an agent's chat session wrote (the caller
+    reads the session-role header) — the run clock in
+    ``last_task_activity`` leaves it out.
     """
     if message_type not in MESSAGE_TYPES:
         raise ValueError(
@@ -225,6 +230,7 @@ async def post_message(
         reply_to=reply_to,
         mentions=mentions if mentions is not None else [],
         question_meta=question_meta,
+        from_chat=from_chat,
     )
     session.add(message)
     await session.commit()
@@ -345,16 +351,29 @@ async def last_task_activity(session: AsyncSession, task: Task, *, comm_v2: bool
     for them does Message.created_at count as real activity. Defaults to
     False (comment-only, byte-identical to the pre-dual-read behavior) —
     callers must explicitly pass `comm_v2=True` for pilot agents.
+
+    An agent's chat session is not the run: its reply comment
+    (``chat_reply``) and its thread messages (``Message.from_chat``) are left
+    out of both halves — "how far are you?" on a dead run must not push the
+    stale check back (round-3 re-review M1).
     """
+    from app.comment_types import CHAT_REPLY_COMMENT_TYPE
+
     comment_result = await session.exec(
-        select(func.max(TaskComment.created_at)).where(TaskComment.task_id == task.id)
+        select(func.max(TaskComment.created_at)).where(
+            TaskComment.task_id == task.id,
+            TaskComment.comment_type != CHAT_REPLY_COMMENT_TYPE,
+        )
     )
     latest_comment = comment_result.one()
 
     latest_message = None
     if comm_v2 and task.thread_id is not None:
         message_result = await session.exec(
-            select(func.max(Message.created_at)).where(Message.thread_id == task.thread_id)
+            select(func.max(Message.created_at)).where(
+                Message.thread_id == task.thread_id,
+                Message.from_chat.is_(False),  # type: ignore[attr-defined]
+            )
         )
         latest_message = message_result.one()
 

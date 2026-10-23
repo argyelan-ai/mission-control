@@ -37,10 +37,14 @@ round-1 had no time limit), and a task nobody runs yet — the one the chat just
 created for itself (inbox, not delivered). Tasks of other agents are not this
 guard's business; the existing board and scope rules apply to them unchanged.
 
-What: every write to the run state. A plain reply (``message`` comment,
-``CHAT_REPLY_COMMENT_TYPES``) is not run state — the chat may answer in the
-task thread; the comment route lets it through and skips the ACK handshake
-for it. Not on a card its review run works: there any reviewer comment, a
+What: every write to the run state — also ``mc review`` / ``mc review-note``
+on the card its review run works (round-3 r1 S1: the chat could approve the
+review its own review run was still doing). A plain reply (``message``
+comment, ``CHAT_REPLY_COMMENT_TYPES``) is not run state — the chat may answer
+in the task thread; the comment route lets it through, skips the ACK
+handshake for it and stores it as ``chat_reply`` (``comment_types``), which no
+watchdog counts as the run's sign of life (round-3 r1 S3). ``mc msg`` (both
+message routes) never ACKs from the chat either (round-3 r1 S2). Not on a card its review run works: there any reviewer comment, a
 ``message`` too, ends the review wait (``review_park``) and passes the
 "reviewer said nothing" check (``proof_gate``), so a chat reply would speak
 for the review run. Each refusal leaves one timeline row per task and action per
@@ -198,7 +202,7 @@ async def refuse_chat_task_write(
     own agent. No-op for every other caller. ``action`` names the write in the
     refusal and the activity event (``comment progress``, ``status review``,
     ``deliverable``, ``checklist``, ``recover``, ``question``, ``help``,
-    ``delegate``)."""
+    ``delegate``, ``review approve``, ``review-note hold``, …)."""
     # rule: R-chat-never-works-own-run - a chat question once ran a task a second time
     if not is_chat_session(request):
         return

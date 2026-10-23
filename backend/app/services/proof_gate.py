@@ -108,7 +108,9 @@ DEDUP_WINDOW = timedelta(minutes=30)
 #: finish`` writes one right before its PATCH) and status chatter ("schaue
 #: mir das an …") — a verdict is review / feedback / message / handoff / …
 _NOT_A_VERDICT = {"reflection", "system", "progress", "subtask_completed", "checkpoint",
-                  "blocker"}
+                  "blocker",
+                  # a chat session's reply speaks for the chat, not the review run
+                  "chat_reply"}
 
 #: Commits walked one by one when no diff fingerprint is on record.
 MAX_COMMITS_WALKED = 5
