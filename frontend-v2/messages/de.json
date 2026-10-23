@@ -4039,14 +4039,22 @@
       "activeModelAuto": "Aktives Modell (auto)",
       "agentAria": "Agent {index}",
       "agentSelectPlaceholder": "Agent wählen …",
-      "tagPlaceholder": "Tag ({tag})",
+      "tagPlaceholder": "Tag (leer: {tag})",
+      "tagPlaceholderSpark": "Tag (leer: lokal · direkte API)",
+      "tagPlaceholderAgent": "Tag (leer: Harness des Agenten)",
       "tagAria": "Tag {index}",
       "removeModelAria": "Modell {index} entfernen",
       "addModel": "Modell hinzufügen",
       "startChallenge": "Challenge starten",
       "notifyStarted": "Challenge gestartet",
       "notifyStartFailed": "Challenge konnte nicht gestartet werden",
-      "labelDuplicate": "Gleiches Label und gleiche Effort-Stufe wie Modell {index} — wähle eine andere Stufe oder gib dieser Zeile ein eigenes Label."
+      "labelDuplicate": "Gleiches Label und gleiche Effort-Stufe wie Modell {index} — wähle eine andere Stufe oder gib dieser Zeile ein eigenes Label.",
+      "fieldError": {
+        "tooLong": "Höchstens {max} Zeichen.",
+        "required": "Bitte ausfüllen.",
+        "range": "Ausserhalb des erlaubten Bereichs.",
+        "invalid": "Dieser Wert wird nicht angenommen."
+      }
     },
     "editChallengeDialog": {
       "ariaLabel": "Challenge bearbeiten",

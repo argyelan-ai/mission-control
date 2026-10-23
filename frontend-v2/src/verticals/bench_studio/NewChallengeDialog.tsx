@@ -7,13 +7,46 @@ import { Plus, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { notify } from "@/lib/notify";
+import { NativeSelect } from "@/components/shared/NativeSelect";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { benchApi } from "@/verticals/bench_studio/api";
-import { apiErrorDetail } from "./apiError";
+import { apiErrorDetail, apiFieldErrors, type ApiFieldError } from "./apiError";
 import { EffortChips } from "./EffortChips";
-import type { BenchModelSpec, EffortLevel, PromptTemplate } from "./types";
+import { displayLabel } from "./format";
+import type { BenchModelSpec, EffortLevel, EffortLevels, PromptTemplate } from "./types";
 
 const EMPTY_MODEL: BenchModelSpec = { label: "", source_kind: "spark", spark_model: "", display_tag: "" };
+
+// The backend's limits (routers.BenchChallengeCreate / BenchModelSpec) — the
+// fields stop there instead of a 422 after "Start" (round-4 t2 SOLL-1).
+const TITLE_MAX = 200;
+const TITLE_COUNT_FROM = 180;
+const LABEL_MAX = 80;
+const TAG_MAX = 80;
+const SERIES_MAX = 80;
+
+/** A label cut to the backend's limit — create does the same for an auto row. */
+const capLabel = (value: string) => value.trim().slice(0, LABEL_MAX).trimEnd();
+
+/** Which dialog field a 422 item belongs to (its `loc` without "body"), or
+ *  null when the dialog has no field for it (then the toast says it). */
+function fieldKeyOf(path: (string | number)[]): string | null {
+  const [head, index, leaf] = path;
+  if (path.length === 1) {
+    return (
+      { title: "title", prompt_text: "prompt", series_label: "series", record_duration_s: "duration" } as Record<
+        string,
+        string
+      >
+    )[String(head)] ?? null;
+  }
+  if (head === "models" && typeof index === "number" && typeof leaf === "string") {
+    if (leaf === "label") return `label-${index}`;
+    if (leaf === "display_tag") return `tag-${index}`;
+    if (leaf === "spark_model" || leaf === "agent_id") return `model-${index}`;
+  }
+  return null;
+}
 
 const RECORD_DURATION_MIN = 5;
 const RECORD_DURATION_MAX = 60;
@@ -57,6 +90,9 @@ export function NewChallengeDialog({
   const [models, setModels] = useState<BenchModelSpec[]>([{ ...EMPTY_MODEL }]);
   // Row indices where the label was edited by hand — autofill must not overwrite those.
   const [labelTouched, setLabelTouched] = useState<Set<number>>(new Set());
+  // A 422 said at its field (round-4 t2 SOLL-2): field key -> message.
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [focusField, setFocusField] = useState<string | null>(null);
 
   const { data: agents } = useQuery({
     queryKey: ["agents-for-bench"],
@@ -114,8 +150,74 @@ export function NewChallengeDialog({
       reset();
       onClose();
     },
-    onError: (err) => notify.error(apiErrorDetail(err, t("notifyStartFailed"))),
+    onError: (err) => {
+      const items = apiFieldErrors(err);
+      const mapped: Record<string, string> = {};
+      let unmapped = items.length === 0;
+      for (const item of items) {
+        const key = fieldKeyOf(item.path);
+        if (key) mapped[key] ??= fieldMessage(item);
+        else unmapped = true;
+      }
+      setFieldErrors(mapped);
+      const first = Object.keys(mapped)[0];
+      if (first) setFocusField(first);
+      // The toast is the fallback for what has no field (or is no list).
+      if (unmapped) notify.error(apiErrorDetail(err, t("notifyStartFailed")));
+    },
   });
+
+  // Move to the first field a 422 named — on a phone it can sit far above.
+  useEffect(() => {
+    if (!focusField) return;
+    document.getElementById(fieldId(focusField))?.focus();
+    setFocusField(null);
+  }, [focusField]);
+
+  function fieldMessage(item: ApiFieldError): string {
+    const max = item.ctx?.max_length;
+    if (item.type === "string_too_long" && typeof max === "number") return t("fieldError.tooLong", { max });
+    if (item.type === "string_too_short" || item.type === "missing") return t("fieldError.required");
+    if (/^(greater|less)_than(_equal)?$/.test(item.type)) return t("fieldError.range");
+    return t("fieldError.invalid");
+  }
+
+  const fieldId = (key: string) => `bench-field-${key}`;
+  /** id + aria-invalid + aria-describedby of a field; the message sits under it. */
+  function fieldA11y(key: string) {
+    const invalid = key in fieldErrors;
+    return {
+      id: fieldId(key),
+      "aria-invalid": invalid || undefined,
+      "aria-describedby": invalid ? `${fieldId(key)}-error` : undefined,
+    };
+  }
+  function fieldError(key: string) {
+    if (!(key in fieldErrors)) return null;
+    return (
+      <span id={`${fieldId(key)}-error`} className="text-xs" style={{ color: STATUS_TEXT.error }}>
+        {fieldErrors[key]}
+      </span>
+    );
+  }
+  function clearFieldErrors(...keys: string[]) {
+    setFieldErrors((prev) => {
+      if (!keys.some((k) => k in prev)) return prev;
+      const next = { ...prev };
+      for (const k of keys) delete next[k];
+      return next;
+    });
+  }
+  // Rows shift when one is added or removed — their messages would point at
+  // the wrong row, so they go (the next Start says them again).
+  function clearRowErrors() {
+    setFieldErrors((prev) => {
+      const kept = Object.entries(prev).filter(([k]) => !/-\d+$/.test(k));
+      return kept.length === Object.keys(prev).length ? prev : Object.fromEntries(kept);
+    });
+  }
+  const borderFor = (key: string) =>
+    key in fieldErrors ? { ...inputStyle, border: `1px solid ${STATUS_TEXT.error}` } : inputStyle;
 
   function reset() {
     setTitle("");
@@ -126,6 +228,7 @@ export function NewChallengeDialog({
     setRecordDurationRaw(String(RECORD_DURATION_DEFAULT));
     setModels([{ ...EMPTY_MODEL }]);
     setLabelTouched(new Set());
+    setFieldErrors({});
   }
 
   function handleTemplateSelect(id: string) {
@@ -141,13 +244,23 @@ export function NewChallengeDialog({
     }
   }
 
+  function clearRowFieldErrors(i: number, patch: Partial<BenchModelSpec>) {
+    const keys: string[] = [];
+    if ("label" in patch) keys.push(`label-${i}`);
+    if ("display_tag" in patch) keys.push(`tag-${i}`);
+    if ("spark_model" in patch || "agent_id" in patch || "source_kind" in patch) keys.push(`model-${i}`, `label-${i}`);
+    if (keys.length) clearFieldErrors(...keys);
+  }
+
   function setModel(i: number, patch: Partial<BenchModelSpec>) {
+    clearRowFieldErrors(i, patch);
     setModels((prev) => prev.map((m, idx) => (idx === i ? { ...m, ...patch } : m)));
   }
 
   // Autofill: übernimmt den gewählten Modell-/Agentennamen ins Label,
   // solange Mark das Label der Zeile nicht selbst angefasst hat.
   function setModelWithAutofill(i: number, patch: Partial<BenchModelSpec>) {
+    clearRowFieldErrors(i, patch);
     setModels((prev) =>
       prev.map((m, idx) => {
         if (idx !== i) return m;
@@ -162,10 +275,10 @@ export function NewChallengeDialog({
             // model changes between dialog-open and create (review finding
             // MINOR 1). The backend fills the label from the model it
             // actually resolves at create time when left blank.
-            next.label = (next.spark_model ?? "").trim();
+            next.label = capLabel(next.spark_model ?? "");
           } else if (next.agent_id) {
             const agent = (agents ?? []).find((a) => a.id === next.agent_id);
-            next.label = (agent?.model ?? agent?.name ?? "").trim();
+            next.label = capLabel(agent?.model ?? agent?.name ?? "");
           } else {
             next.label = "";
           }
@@ -185,14 +298,16 @@ export function NewChallengeDialog({
     });
   }
 
-  // Derived chip-tag default — mirrors the backend fallback
+  // The chip tag an empty field gets — mirrors the backend fallback
   // (bench_studio/orchestrator._build_branding_payload): spark -> the local
-  // direct-API path (no engine/hardware guess), agent -> harness uppercased,
-  // agent name as last resort.
-  function derivedTag(m: BenchModelSpec): string {
-    if (m.source_kind === "spark") return "LOCAL · DIRECT API";
+  // direct-API path (the video writes it "LOCAL · DIRECT API"; the dialog
+  // says it in the UI language, r2 N7), agent -> harness uppercased, agent
+  // name as last resort.
+  function tagPlaceholder(m: BenchModelSpec): string {
+    if (m.source_kind === "spark") return t("tagPlaceholderSpark");
     const agent = (agents ?? []).find((a) => a.id === m.agent_id);
-    return (agent?.harness ?? agent?.name ?? "AGENT").toUpperCase();
+    const tag = agent?.harness ?? agent?.name;
+    return tag ? t("tagPlaceholder", { tag: tag.toUpperCase() }) : t("tagPlaceholderAgent");
   }
 
   // A spark row still on "Aktives Modell (auto)" (spark_model empty/null) —
@@ -223,21 +338,80 @@ export function NewChallengeDialog({
   function effectiveLabel(m: BenchModelSpec): string {
     const typed = m.label.trim();
     if (typed) return typed;
-    return isAutoSparkRow(m) ? (sparkModels?.active ?? "").trim() : "";
+    return isAutoSparkRow(m) ? capLabel(sparkModels?.active ?? "") : "";
   }
   const rowEffort = (m: BenchModelSpec): EffortLevel => (m.source_kind === "spark" ? m.effort ?? "default" : "default");
+
+  // The model a direct-API row really runs: the chosen one, or the box's
+  // active model for an auto row (both are the same run).
+  const sparkRunModel = (m: BenchModelSpec) => (m.spark_model ?? "").trim() || (sparkModels?.active ?? "").trim();
+
+  /** The row "Add model" appends (round-4 t2 SOLL-3: it used to be a fresh
+   *  auto + Default row, a twin of row 1, so the red duplicate hint came up
+   *  at once and Start was off). A direct-API row keeps the last row's model
+   *  with the next effort level the probe offers that no row of that model
+   *  uses yet (after the last row's level, round the ladder). Nothing free:
+   *  Default, and the duplicate hint says why. An agent row is followed by
+   *  an agent row without an agent — an agent has one level only. */
+  function nextModelRow(prev: BenchModelSpec[]): BenchModelSpec {
+    const last = prev.at(-1);
+    if (!last) return { ...EMPTY_MODEL };
+    if (last.source_kind === "agent") return { ...EMPTY_MODEL, source_kind: "agent", spark_model: "", agent_id: null };
+    const sparkModel = (last.spark_model ?? "").trim();
+    const probe = qc.getQueryData<EffortLevels>(["bench-effort-levels", sparkModel || "active"]);
+    const ladder: EffortLevel[] = ["default", ...(probe?.status === "ok" ? probe.levels : [])];
+    const used = new Set(
+      prev.filter((r) => r.source_kind === "spark" && sparkRunModel(r) === sparkRunModel(last)).map(rowEffort),
+    );
+    const start = ladder.indexOf(rowEffort(last));
+    let effort: EffortLevel = "default";
+    for (let step = 1; step <= ladder.length; step++) {
+      const level = ladder[(start + step) % ladder.length];
+      if (!used.has(level)) {
+        effort = level;
+        break;
+      }
+    }
+    return {
+      ...EMPTY_MODEL,
+      spark_model: sparkModel,
+      // An explicit model fills the label like a pick would (autofill); an
+      // auto row stays empty and shows the active model as placeholder.
+      label: capLabel(sparkModel),
+      effort: effort === "default" ? null : effort,
+    };
+  }
+
+  function addModelRow() {
+    clearRowErrors();
+    setLabelTouched((prev) => {
+      // A removed row's "edited by hand" mark must not stick to the new row.
+      if (!prev.has(models.length)) return prev;
+      const next = new Set(prev);
+      next.delete(models.length);
+      return next;
+    });
+    setModels((prev) => [...prev, nextModelRow(prev)]);
+  }
+
+  function removeModelRow(i: number) {
+    clearRowErrors();
+    setLabelTouched((prev) => new Set([...prev].filter((idx) => idx !== i).map((idx) => (idx > i ? idx - 1 : idx))));
+    setModels((prev) => prev.filter((_, idx) => idx !== i));
+  }
   // Since round-2 Q2 the effort is its own field: the same model twice with
   // different efforts is two entries (the UI and the video show the effort
   // next to the name) and needs no hint. Only the same label AND the same
   // effort as an earlier row is a duplicate — the backend refuses it
   // (routers._unique_labels): the box answers deterministically, the second
   // row would repeat the first and nobody could tell them apart.
+  // The label is compared as the backend shows it (display_label: an old
+  // "DeepSeek · Max" on a Max row is "DeepSeek", t2 KANN-1).
+  const labelKey = (m: BenchModelSpec) => displayLabel(effectiveLabel(m), rowEffort(m)).trim().toLowerCase();
   const duplicateOf = models.map((m, i): number | null => {
-    const key = effectiveLabel(m).toLowerCase();
+    const key = labelKey(m);
     if (!key) return null;
-    const twin = models.findIndex(
-      (o, j) => j < i && effectiveLabel(o).toLowerCase() === key && rowEffort(o) === rowEffort(m),
-    );
+    const twin = models.findIndex((o, j) => j < i && labelKey(o) === key && rowEffort(o) === rowEffort(m));
     return twin >= 0 ? twin + 1 : null;
   });
   const hasDuplicateLabel = duplicateOf.some((index) => index !== null);
@@ -278,16 +452,33 @@ export function NewChallengeDialog({
           {t("title")}
         </h3>
 
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder={t("titlePlaceholder")}
-          className={fieldClass}
-          style={inputStyle}
-        />
+        <div className="flex flex-col gap-1">
+          <input
+            {...fieldA11y("title")}
+            value={title}
+            maxLength={TITLE_MAX}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              clearFieldErrors("title");
+            }}
+            placeholder={t("titlePlaceholder")}
+            className={fieldClass}
+            style={borderFor("title")}
+          />
+          {(fieldErrors.title || title.length >= TITLE_COUNT_FROM) && (
+            <div className="flex items-start justify-between gap-2">
+              {fieldError("title") ?? <span />}
+              {title.length >= TITLE_COUNT_FROM && (
+                <span className="text-xs tabular-nums shrink-0" style={{ color: C.textMuted }}>
+                  {title.length}/{TITLE_MAX}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Template picker: "Freitext" default + one option per template */}
-        <select
+        <NativeSelect
           value={templateId ?? ""}
           onChange={(e) => handleTemplateSelect(e.target.value)}
           className={fieldClass}
@@ -300,19 +491,22 @@ export function NewChallengeDialog({
               {tpl.title}
             </option>
           ))}
-        </select>
+        </NativeSelect>
 
         <textarea
+          {...fieldA11y("prompt")}
           value={promptText}
           onChange={(e) => {
             setPromptText(e.target.value);
+            clearFieldErrors("prompt");
             // Don't clear templateId — edited text + template ID both win (backend uses text if provided)
           }}
           rows={5}
           placeholder={t("promptPlaceholder")}
           className="rounded-lg p-3 text-sm resize-none outline-none w-full"
-          style={inputStyle}
+          style={borderFor("prompt")}
         />
+        {fieldError("prompt")}
         {templateId && (
           <span className="text-xs" style={{ color: C.textMuted }}>
             {t("fromTemplateHint")}
@@ -322,39 +516,54 @@ export function NewChallengeDialog({
         {/* Phone: one field per line (the video length sat at x=383 on a
             390 px screen). From sm up: one row. */}
         <div data-testid="bench-options-row" className="flex flex-col sm:flex-row gap-3 sm:items-end">
-          <select
+          <NativeSelect
             value={mode}
             onChange={(e) => setMode(e.target.value as "single" | "side_by_side")}
-            className={`${fieldClass} sm:flex-1`}
+            wrapperClassName="sm:flex-1"
+            className={fieldClass}
             style={inputStyle}
             aria-label={t("modeAria")}
           >
             <option value="side_by_side">{t("modeSideBySide")}</option>
             <option value="single">{t("modeSingle")}</option>
-          </select>
-          <input
-            value={seriesLabel}
-            onChange={(e) => setSeriesLabel(e.target.value)}
-            placeholder={t("seriesLabelPlaceholder")}
-            className={`${fieldClass} sm:flex-1`}
-            style={inputStyle}
-          />
+          </NativeSelect>
+          <div className="flex flex-col gap-1 sm:flex-1 min-w-0">
+            <input
+              {...fieldA11y("series")}
+              value={seriesLabel}
+              maxLength={SERIES_MAX}
+              onChange={(e) => {
+                setSeriesLabel(e.target.value);
+                clearFieldErrors("series");
+              }}
+              placeholder={t("seriesLabelPlaceholder")}
+              className={fieldClass}
+              style={borderFor("series")}
+            />
+            {fieldError("series")}
+          </div>
           <div className="flex flex-col gap-1 sm:w-32">
             <label htmlFor="bench-record-duration" className="text-xs" style={{ color: C.textMuted }}>
               {t("videoLengthLabel")}
             </label>
             <input
               id="bench-record-duration"
+              aria-invalid={"duration" in fieldErrors || undefined}
+              aria-describedby={"duration" in fieldErrors ? `${fieldId("duration")}-error` : undefined}
               type="number"
               min={RECORD_DURATION_MIN}
               max={RECORD_DURATION_MAX}
               step={1}
               value={recordDurationRaw}
-              onChange={(e) => setRecordDurationRaw(e.target.value)}
+              onChange={(e) => {
+                setRecordDurationRaw(e.target.value);
+                clearFieldErrors("duration");
+              }}
               onBlur={() => setRecordDurationRaw(String(clampRecordDuration(recordDurationRaw)))}
               className={fieldClass}
-              style={inputStyle}
+              style={borderFor("duration")}
             />
+            {fieldError("duration")}
           </div>
         </div>
 
@@ -377,7 +586,7 @@ export function NewChallengeDialog({
                 {t("modelHeading", { index: i + 1 })}
               </span>
               <button
-                onClick={() => setModels((prev) => prev.filter((_, idx) => idx !== i))}
+                onClick={() => removeModelRow(i)}
                 disabled={models.length <= 1}
                 aria-label={t("removeModelAria", { index: i + 1 })}
                 className="flex items-center justify-center min-h-11 min-w-11 -mr-3 rounded-md disabled:opacity-30"
@@ -387,8 +596,11 @@ export function NewChallengeDialog({
               </button>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="flex flex-col gap-1 min-w-0">
               <input
+                {...fieldA11y(`label-${i}`)}
                 value={m.label}
+                maxLength={LABEL_MAX}
                 onChange={(e) => {
                   markLabelTouched(i, e.target.value);
                   setModel(i, { label: e.target.value });
@@ -403,9 +615,11 @@ export function NewChallengeDialog({
                 }
                 aria-label={t("labelAria", { index: i + 1 })}
                 className={fieldClass}
-                style={inputStyle}
+                style={borderFor(`label-${i}`)}
               />
-              <select
+              {fieldError(`label-${i}`)}
+              </div>
+              <NativeSelect
                 value={m.source_kind}
                 onChange={(e) =>
                   setModelWithAutofill(i, {
@@ -421,7 +635,7 @@ export function NewChallengeDialog({
               >
                 <option value="spark">{t("sourceSpark")}</option>
                 <option value="agent">{t("sourceAgent")}</option>
-              </select>
+              </NativeSelect>
               {m.source_kind === "spark" ? (
                 sparkOffline ? (
                   // Spark unreachable (or the status probe itself failed,
@@ -431,23 +645,26 @@ export function NewChallengeDialog({
                   // the operator types a model manually.
                   <div className="flex flex-col gap-1 min-w-0">
                     <input
+                      {...fieldA11y(`model-${i}`)}
                       value={m.spark_model ?? ""}
                       onChange={(e) => setModelWithAutofill(i, { spark_model: e.target.value || null })}
                       placeholder={t("vllmModelPlaceholderOffline")}
                       aria-label={t("vllmModelAria", { index: i + 1 })}
                       className={fieldClass}
-                      style={inputStyle}
+                      style={borderFor(`model-${i}`)}
                     />
+                    {fieldError(`model-${i}`)}
                     <span className="text-xs" style={{ color: STATUS_TEXT.warning }}>
                       {t("sparkOfflineWarning")}
                     </span>
                   </div>
                 ) : (
-                  <select
+                  <NativeSelect
+                    {...fieldA11y(`model-${i}`)}
                     value={m.spark_model ?? ""}
                     onChange={(e) => setModelWithAutofill(i, { spark_model: e.target.value || null })}
                     className={fieldClass}
-                    style={inputStyle}
+                    style={borderFor(`model-${i}`)}
                     aria-label={t("vllmModelAria", { index: i + 1 })}
                   >
                     <option value="">{t("activeModelAuto")}</option>
@@ -456,14 +673,15 @@ export function NewChallengeDialog({
                         {model}
                       </option>
                     ))}
-                  </select>
+                  </NativeSelect>
                 )
               ) : (
-                <select
+                <NativeSelect
+                  {...fieldA11y(`model-${i}`)}
                   value={m.agent_id ?? ""}
                   onChange={(e) => setModelWithAutofill(i, { agent_id: e.target.value || null })}
                   className={fieldClass}
-                  style={inputStyle}
+                  style={borderFor(`model-${i}`)}
                   aria-label={t("agentAria", { index: i + 1 })}
                 >
                   <option value="">{t("agentSelectPlaceholder")}</option>
@@ -472,16 +690,21 @@ export function NewChallengeDialog({
                       {a.name}
                     </option>
                   ))}
-                </select>
+                </NativeSelect>
               )}
-              <input
-                value={m.display_tag ?? ""}
-                onChange={(e) => setModel(i, { display_tag: e.target.value })}
-                placeholder={t("tagPlaceholder", { tag: derivedTag(m) })}
-                aria-label={t("tagAria", { index: i + 1 })}
-                className={fieldClass}
-                style={inputStyle}
-              />
+              <div className="flex flex-col gap-1 min-w-0">
+                <input
+                  {...fieldA11y(`tag-${i}`)}
+                  value={m.display_tag ?? ""}
+                  maxLength={TAG_MAX}
+                  onChange={(e) => setModel(i, { display_tag: e.target.value })}
+                  placeholder={tagPlaceholder(m)}
+                  aria-label={t("tagAria", { index: i + 1 })}
+                  className={fieldClass}
+                  style={borderFor(`tag-${i}`)}
+                />
+                {fieldError(`tag-${i}`)}
+              </div>
             </div>
             <EffortChips
               index={i}
@@ -501,7 +724,7 @@ export function NewChallengeDialog({
             </div>
           ))}
           <button
-            onClick={() => setModels((prev) => [...prev, { ...EMPTY_MODEL }])}
+            onClick={addModelRow}
             disabled={models.length >= 6}
             className="self-start flex items-center gap-2 min-h-11 text-sm disabled:opacity-40"
             style={{ color: C.accent }}

@@ -181,9 +181,10 @@ describe("NewChallengeDialog — template picker", () => {
     await userEvent.type(textarea, "Some prompt");
     await userEvent.type(screen.getByPlaceholderText(/Label \(e\.g\./i), "Qwen");
 
-    // Tag input shows the derived default as placeholder (spark row)
+    // Tag input names the derived default as placeholder (spark row), in
+    // the UI language (round-4 r2 N7 — it read "LOCAL · DIRECT API").
     const tagInput = screen.getByRole("textbox", { name: /tag 1/i });
-    expect((tagInput as HTMLInputElement).placeholder).toContain("LOCAL · DIRECT API");
+    expect((tagInput as HTMLInputElement).placeholder).toContain("local · direct API");
 
     // Type a custom tag
     await userEvent.type(tagInput, "OMP · DGX SPARK");
@@ -607,7 +608,7 @@ describe("NewChallengeDialog — vanilla (direct-API) spark row (Bench #21)", ()
     });
   });
 
-  it("names the field of a validation-list 422 in the toast (round-2 t2 MUSS-1)", async () => {
+  it("a validation-list 422 is said at its field, not as a raw toast (round-2 t2 MUSS-1, round-4 SOLL-2)", async () => {
     const { notify } = await import("@/lib/notify");
     vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(
       new Error(
@@ -623,9 +624,10 @@ describe("NewChallengeDialog — vanilla (direct-API) spark row (Bench #21)", ()
     await userEvent.type(screen.getByPlaceholderText(/Label \(e\.g\./), "DeepSeek");
     await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
 
-    await waitFor(() => {
-      expect(notify.error).toHaveBeenCalledWith("label: String should have at least 1 character");
-    });
+    const label = screen.getByRole("textbox", { name: "Label 1" });
+    await waitFor(() => expect(label).toHaveAttribute("aria-invalid", "true"));
+    expect(screen.getByText("Please fill this in.")).toBeInTheDocument();
+    expect(notify.error).not.toHaveBeenCalledWith("label: String should have at least 1 character");
   });
 
   it("falls back to a generic message when the error body isn't the API detail shape", async () => {
@@ -851,6 +853,12 @@ describe("NewChallengeDialog — labels stay apart (round-1 P3)", () => {
     await userEvent.click(screen.getByRole("button", { name: /add model/i }));
     await userEvent.type(screen.getByRole("textbox", { name: "Label 2" }), labelB);
     await screen.findAllByRole("radio", { name: "Max" });
+    // "Add model" picks the next free level (round-4 K1); these cases are
+    // about the same level, so row 2 goes back to Default by hand.
+    const defaultOf2 = Array.from(
+      screen.getByRole("radiogroup", { name: /effort for model 2/i }).querySelectorAll('[role="radio"]'),
+    ).find((c) => c.textContent === "Default") as HTMLElement;
+    await userEvent.click(defaultOf2);
   }
 
   it("same label and same effort: error, Start stays off", async () => {
@@ -887,5 +895,189 @@ describe("NewChallengeDialog — labels stay apart (round-1 P3)", () => {
   it("same label and same effort names both ways out: another effort or an own label", async () => {
     await twoRows("DeepSeek", "DeepSeek");
     expect(screen.getByText(/same label and the same effort as model 1/i)).toBeInTheDocument();
+  });
+});
+
+describe("NewChallengeDialog — round-4 K1 (R6 rest)", () => {
+  const ACTIVE = { reachable: true, models: ["DeepSeek-V4"], active: "DeepSeek-V4" };
+
+  async function fillTitleAndPrompt() {
+    await screen.findByRole("option", { name: /bouncing balls/i });
+    await userEvent.type(screen.getByPlaceholderText(/title/i), "Off vs Max");
+    await userEvent.type(screen.getByPlaceholderText(/prompt/i), "Some prompt");
+  }
+  const checkedIn = (index: number) =>
+    screen
+      .getByRole("radiogroup", { name: new RegExp(`effort for model ${index}`, "i") })
+      .querySelector('[role="radio"][aria-checked="true"]')?.textContent;
+
+  it("'Add model' takes the next free effort of the same model — no red hint, Start works (t2 SOLL-3)", async () => {
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce(ACTIVE);
+    vi.mocked(benchApi.challenges.create).mockClear();
+    renderDialog();
+    await screen.findByRole("radio", { name: "Max" });
+    await fillTitleAndPrompt();
+    await userEvent.click(screen.getByRole("button", { name: /add model/i }));
+    expect(checkedIn(2)).toBe("Off");
+    expect(screen.queryByText(/same effort as model 1/i)).toBeNull();
+    const start = screen.getByRole("button", { name: /Start Challenge/i });
+    expect(start).toBeEnabled();
+    await userEvent.click(start);
+    await waitFor(() => expect(benchApi.challenges.create).toHaveBeenCalled());
+    const body = vi.mocked(benchApi.challenges.create).mock.calls[0][0];
+    expect(body.models.map((m) => m.effort ?? "default")).toEqual(["default", "off"]);
+    expect(body.models.map((m) => m.spark_model)).toEqual(["", ""]);
+  });
+
+  it("the new row keeps the last row's model and skips every level already used for it", async () => {
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce(ACTIVE);
+    renderDialog();
+    await screen.findByRole("radio", { name: "Max" });
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "vLLM model 1" }), "DeepSeek-V4");
+    await screen.findByRole("radio", { name: "Max" });
+    await userEvent.click(screen.getByRole("button", { name: /add model/i }));
+    await userEvent.click(screen.getByRole("button", { name: /add model/i }));
+    expect((screen.getByRole("combobox", { name: "vLLM model 3" }) as HTMLSelectElement).value).toBe("DeepSeek-V4");
+    expect((screen.getByRole("textbox", { name: "Label 3" }) as HTMLInputElement).value).toBe("DeepSeek-V4");
+    expect([checkedIn(1), checkedIn(2), checkedIn(3)]).toEqual(["Default", "Off", "Low"]);
+    expect(screen.queryByText(/same effort as model/i)).toBeNull();
+  });
+
+  it("after Max the next free level wraps round to Default", async () => {
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce(ACTIVE);
+    renderDialog();
+    await userEvent.click(await screen.findByRole("radio", { name: "Max" }));
+    await userEvent.click(screen.getByRole("button", { name: /add model/i }));
+    expect(checkedIn(2)).toBe("Default");
+  });
+
+  it("an agent row is followed by an agent row without an agent (an agent has only one level)", async () => {
+    vi.mocked(api.agents.list).mockResolvedValueOnce([
+      { id: "a-1", name: "Sparky", model: "glm", harness: "omp" } as never,
+    ]);
+    renderDialog();
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Source 1" }), "agent");
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Agent 1" }), "a-1");
+    await userEvent.click(screen.getByRole("button", { name: /add model/i }));
+    expect((screen.getByRole("combobox", { name: "Source 2" }) as HTMLSelectElement).value).toBe("agent");
+    expect((screen.getByRole("combobox", { name: "Agent 2" }) as HTMLSelectElement).value).toBe("");
+    expect(screen.queryByText(/same effort as model 1/i)).toBeNull();
+  });
+
+  it("a trailing ' · Max' on a Max row is the same label, like the backend's display_label (t2 KANN-1)", async () => {
+    renderDialog();
+    await screen.findAllByRole("radio", { name: "Max" });
+    await userEvent.type(screen.getByRole("textbox", { name: "Label 1" }), "DeepSeek");
+    await userEvent.click(screen.getAllByRole("radio", { name: "Max" })[0]);
+    await userEvent.click(screen.getByRole("button", { name: /add model/i }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Label 2" }), "DeepSeek · Max");
+    const maxOf2 = Array.from(
+      screen.getByRole("radiogroup", { name: /effort for model 2/i }).querySelectorAll('[role="radio"]'),
+    ).find((c) => c.textContent === "Max") as HTMLElement;
+    await userEvent.click(maxOf2);
+    expect(screen.getByText(/same effort as model 1/i)).toBeInTheDocument();
+  });
+
+  it("'Qwen Max' is a model name, not the effort word — no duplicate", async () => {
+    renderDialog();
+    await screen.findAllByRole("radio", { name: "Max" });
+    await userEvent.type(screen.getByRole("textbox", { name: "Label 1" }), "Qwen");
+    await userEvent.click(screen.getAllByRole("radio", { name: "Max" })[0]);
+    await userEvent.click(screen.getByRole("button", { name: /add model/i }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Label 2" }), "Qwen Max");
+    const maxOf2 = Array.from(
+      screen.getByRole("radiogroup", { name: /effort for model 2/i }).querySelectorAll('[role="radio"]'),
+    ).find((c) => c.textContent === "Max") as HTMLElement;
+    await userEvent.click(maxOf2);
+    expect(screen.queryByText(/same effort as model 1/i)).toBeNull();
+  });
+
+  it("text fields stop at the backend's limits; the title counts down from 180 (t2 SOLL-1)", async () => {
+    renderDialog();
+    const title = (await screen.findByPlaceholderText(/title/i)) as HTMLInputElement;
+    expect(title.maxLength).toBe(200);
+    expect((screen.getByRole("textbox", { name: "Label 1" }) as HTMLInputElement).maxLength).toBe(80);
+    expect((screen.getByRole("textbox", { name: "Tag 1" }) as HTMLInputElement).maxLength).toBe(80);
+    expect((screen.getByPlaceholderText(/series label/i) as HTMLInputElement).maxLength).toBe(80);
+    await userEvent.click(title);
+    await userEvent.paste("x".repeat(179));
+    expect(screen.queryByText("179/200")).toBeNull();
+    await userEvent.type(title, "yy");
+    expect(screen.getByText("181/200")).toBeInTheDocument();
+  });
+
+  it("a 422 on the title is said at the title field, in words, not as a raw toast (t2 SOLL-2)", async () => {
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify.error).mockClear();
+    vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(
+      new Error(
+        'API 422: {"detail":[{"type":"string_too_long","loc":["body","title"],' +
+          '"msg":"String should have at most 200 characters","input":"x","ctx":{"max_length":200}}]}',
+      ),
+    );
+    renderDialog();
+    await fillTitleAndPrompt();
+    await userEvent.type(screen.getByRole("textbox", { name: "Label 1" }), "DeepSeek");
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    const title = screen.getByPlaceholderText(/title/i);
+    await waitFor(() => expect(title).toHaveAttribute("aria-invalid", "true"));
+    const message = document.getElementById(title.getAttribute("aria-describedby") ?? "");
+    expect(message?.textContent).toBe("At most 200 characters.");
+    expect(document.activeElement).toBe(title);
+    expect(notify.error).not.toHaveBeenCalled();
+    // Editing the field takes the message away.
+    await userEvent.type(title, "!");
+    expect(title).not.toHaveAttribute("aria-invalid");
+    expect(screen.queryByText("At most 200 characters.")).toBeNull();
+  });
+
+  it("a 422 on a model row's label lands at that row's label", async () => {
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify.error).mockClear();
+    vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(
+      new Error(
+        'API 422: {"detail":[{"type":"string_too_long","loc":["body","models",0,"label"],' +
+          '"msg":"String should have at most 80 characters","ctx":{"max_length":80}}]}',
+      ),
+    );
+    renderDialog();
+    await fillTitleAndPrompt();
+    await userEvent.type(screen.getByRole("textbox", { name: "Label 1" }), "DeepSeek");
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    const label = screen.getByRole("textbox", { name: "Label 1" });
+    await waitFor(() => expect(label).toHaveAttribute("aria-invalid", "true"));
+    expect(screen.getByText("At most 80 characters.")).toBeInTheDocument();
+    expect(notify.error).not.toHaveBeenCalled();
+  });
+
+  it("a 422 the dialog has no field for still goes to the toast", async () => {
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify.error).mockClear();
+    vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(
+      new Error('API 422: {"detail":[{"type":"literal_error","loc":["body","mode"],"msg":"Input should be single"}]}'),
+    );
+    renderDialog();
+    await fillTitleAndPrompt();
+    await userEvent.type(screen.getByRole("textbox", { name: "Label 1" }), "DeepSeek");
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    await waitFor(() => expect(notify.error).toHaveBeenCalledWith("mode: Input should be single"));
+  });
+
+  it("every select draws its own box: appearance none and 44 px, also in WebKit (t2 SOLL-5)", async () => {
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce(ACTIVE);
+    renderDialog();
+    await screen.findByRole("combobox", { name: "vLLM model 1" });
+    const selects = screen.getAllByRole("combobox");
+    expect(selects.length).toBeGreaterThanOrEqual(4);
+    for (const s of selects) {
+      expect(s.className, s.getAttribute("aria-label") ?? "").toContain("appearance-none");
+      expect(s.className).toContain("min-h-11");
+    }
+  });
+
+  it("the tag placeholder says the default in the UI language, not 'LOCAL · DIRECT API' (r2 N7)", async () => {
+    renderDialog();
+    const tag = await screen.findByRole("textbox", { name: "Tag 1" });
+    expect(tag.getAttribute("placeholder")).toBe("Tag (empty: local · direct API)");
   });
 });

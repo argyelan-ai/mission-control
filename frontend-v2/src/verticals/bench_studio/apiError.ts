@@ -39,3 +39,44 @@ function validationListText(items: ValidationItem[]): string | null {
   const text = field ? `${field}: ${first.msg.trim()}` : first.msg.trim();
   return items.length > 1 ? `${text} (+${items.length - 1})` : text;
 }
+
+/** One Pydantic validation problem, with the request path inside the body
+ *  (`["title"]`, `["models", 1, "label"]`). */
+export type ApiFieldError = {
+  path: (string | number)[];
+  type: string;
+  msg: string;
+  ctx?: Record<string, unknown>;
+};
+
+/** The validation list of a FastAPI 422, so a form can say each problem at
+ *  its own field (round-4 K1, t2 SOLL-2: the 422 only reached a raw English
+ *  toast). Empty for any other error — the caller then falls back to
+ *  :func:`apiErrorDetail`. */
+export function apiFieldErrors(err: unknown): ApiFieldError[] {
+  if (!(err instanceof Error)) return [];
+  const match = err.message.match(/^API 422: ([\s\S]*)$/);
+  if (!match) return [];
+  let detail: unknown;
+  try {
+    detail = (JSON.parse(match[1]) as { detail?: unknown })?.detail;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(detail)) return [];
+  const out: ApiFieldError[] = [];
+  for (const item of detail as (ValidationItem & { type?: unknown; ctx?: unknown })[]) {
+    if (!Array.isArray(item?.loc)) continue;
+    const path = item.loc
+      .filter((part): part is string | number => typeof part === "string" || typeof part === "number")
+      .filter((part, i) => !(i === 0 && part === "body"));
+    const entry: ApiFieldError = {
+      path,
+      type: typeof item.type === "string" ? item.type : "",
+      msg: typeof item.msg === "string" ? item.msg : "",
+    };
+    if (item.ctx && typeof item.ctx === "object") entry.ctx = item.ctx as Record<string, unknown>;
+    out.push(entry);
+  }
+  return out;
+}

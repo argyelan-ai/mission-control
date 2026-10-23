@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { apiErrorDetail } from "../apiError";
+import { apiErrorDetail, apiFieldErrors } from "../apiError";
 
 const err = (status: number, body: unknown) =>
   new Error(`API ${status}: ${typeof body === "string" ? body : JSON.stringify(body)}`);
@@ -48,5 +48,28 @@ describe("apiErrorDetail", () => {
     expect(apiErrorDetail(err(422, { detail: [{ loc: ["body"] }] }), "fallback")).toBe("fallback");
     expect(apiErrorDetail(err(422, { detail: "" }), "fallback")).toBe("fallback");
     expect(apiErrorDetail("not an error", "fallback")).toBe("fallback");
+  });
+});
+
+describe("apiFieldErrors (round-4 K1, t2 SOLL-2)", () => {
+  it("returns each Pydantic item with its path, type and limit", () => {
+    const body = {
+      detail: [
+        { type: "string_too_long", loc: ["body", "title"], msg: "String should have at most 200 characters",
+          input: "x", ctx: { max_length: 200 } },
+        { type: "string_too_long", loc: ["body", "models", 1, "display_tag"], msg: "…", ctx: { max_length: 80 } },
+      ],
+    };
+    expect(apiFieldErrors(err(422, body))).toEqual([
+      { path: ["title"], type: "string_too_long", msg: "String should have at most 200 characters", ctx: { max_length: 200 } },
+      { path: ["models", 1, "display_tag"], type: "string_too_long", msg: "…", ctx: { max_length: 80 } },
+    ]);
+  });
+
+  it("is empty for everything that is not a validation list", () => {
+    expect(apiFieldErrors(err(422, { detail: "Spark offline" }))).toEqual([]);
+    expect(apiFieldErrors(err(500, "<html>"))).toEqual([]);
+    expect(apiFieldErrors(new Error("network down"))).toEqual([]);
+    expect(apiFieldErrors(err(422, { detail: [{ msg: "no loc" }] }))).toEqual([]);
   });
 });

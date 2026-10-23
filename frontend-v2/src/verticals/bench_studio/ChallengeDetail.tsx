@@ -497,8 +497,10 @@ export function ChallengeDetail({
                 endpoint that isn't a safe same-origin path (F3) is dropped
                 above — never rendered, so there's no button to click
                 through. While the challenge still runs there is nothing to
-                publish yet: the action waits (t2 KANN-4). */}
-            {overlayActions.map((action) => {
+                publish yet: the action is not shown at all, Stop is the one
+                next step (round-4 t2 SOLL-4 — a greyed button without a
+                reason sat next to Stop). It appears once the run is over. */}
+            {!isRunning && overlayActions.map((action) => {
               const isPendingThisAction =
                 (challengeActionMutation.isPending && pendingActionId === action.id) ||
                 action.busy;
@@ -506,7 +508,7 @@ export function ChallengeDetail({
                 <button
                   key={action.id}
                   onClick={() => runChallengeAction(action)}
-                  disabled={action.disabled || isPendingThisAction || isRunning}
+                  disabled={action.disabled || isPendingThisAction}
                   title={action.disabled ? action.disabled_reason ?? undefined : undefined}
                   className="flex items-center gap-2 px-3 min-h-11 rounded-lg text-sm font-medium disabled:opacity-40"
                   style={CHALLENGE_ACTION_STYLE[action.style]}
