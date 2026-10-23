@@ -3074,6 +3074,9 @@ export interface VaultSearchResponse {
 export interface VaultNotesListResponse {
   count: number;
   notes: VaultNote[];
+  /** Every agent with notes in the whole filtered set (the agent filter
+   *  itself left out), sorted by slug — not just the agents of this page. */
+  agents?: { agent: string; count: number }[];
 }
 
 /** Response from GET /api/v1/vault/note/{path} */

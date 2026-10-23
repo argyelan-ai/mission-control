@@ -67,3 +67,57 @@ export function formatChartDay(day: string, dateLocale: string): string {
   const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12));
   return d.toLocaleDateString(dateLocale, { day: "2-digit", month: "2-digit", timeZone: "UTC" });
 }
+
+const ACTION_TYPES = new Set(["create_task", "chat_send", "api_call"]);
+
+/** A job's action in the UI language ("create_task" → "Create task"). */
+export function actionTypeLabel(action: string | null | undefined, t: Translate): string {
+  if (!action) return "—";
+  return ACTION_TYPES.has(action) ? t(`actionType.${action}`) : action;
+}
+
+/**
+ * A run duration in the UI's number form, with a space before the unit:
+ * "23 ms", "1,2 s", "1,5 min" (round-4 r2 N5: "23ms"). Zero or invalid → "—".
+ */
+export function formatDuration(ms: number, locale: string): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "—";
+  const one = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  if (ms < 60_000) return `${one.format(ms / 1000)} s`;
+  return `${one.format(ms / 60_000)} min`;
+}
+
+export type JobStateTone = "active" | "paused" | "snoozed";
+
+/**
+ * The detail page's state sentence under the title (K12): one state word and
+ * the one time that belongs to it (K10). "Paused · last run 26 days ago",
+ * "Active · next run in about 3 hours", "Snoozed until Fri 02.01., 15:00".
+ * `ago` renders a relative time in the UI language (the shared `timeAgo`).
+ */
+export function jobStateSentence(
+  job: ScheduledJob,
+  t: Translate,
+  ago: (iso: string) => string,
+  dateLocale: string,
+  now: number = Date.now(),
+): { tone: JobStateTone; text: string } {
+  if (!job.enabled) {
+    const when = job.last_run_at ? t("stateLastRun", { ago: ago(job.last_run_at) }) : t("stateNeverRun");
+    return { tone: "paused", text: `${t("paused")} · ${when}` };
+  }
+  const snoozed = job.snoozed_until ? new Date(job.snoozed_until).getTime() : NaN;
+  if (Number.isFinite(snoozed) && snoozed > now) {
+    const until = new Date(snoozed).toLocaleString(dateLocale, {
+      weekday: "short",
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return { tone: "snoozed", text: t("snoozedUntil", { until }) };
+  }
+  if (!job.next_run_at) return { tone: "active", text: t("stateActive") };
+  return { tone: "active", text: `${t("stateActive")} · ${t("stateNextRun", { when: ago(job.next_run_at) })}` };
+}
