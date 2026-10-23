@@ -48,7 +48,7 @@ describe("CredentialsTab — ssh_key protection (review finding #2, 30.08.2026)"
 
   it("still shows Edit for ordinary credential types", async () => {
     vi.spyOn(api.credentials, "list").mockResolvedValue([
-      { ...makeCredential(), credential_type: "login", data_masked: { username: "mark", password: "****abcd" } },
+      { ...makeCredential(), credential_type: "login", data_masked: { username: "mark", password: "••••••••" } },
     ]);
 
     renderWithQuery(<CredentialsTab />);
@@ -63,5 +63,16 @@ describe("CredentialsTab — ssh_key protection (review finding #2, 30.08.2026)"
 
     expect(await screen.findByText(/mcfleet/)).toBeInTheDocument();
     expect(screen.queryByText(/\[hidden\]/)).toBeNull();
+  });
+
+  it("summarises free text without a character count (the mask has a fixed length)", async () => {
+    vi.spyOn(api.credentials, "list").mockResolvedValue([
+      { ...makeCredential(), name: "notes", credential_type: "custom", data_masked: { content: "••••••••" } },
+    ]);
+
+    renderWithQuery(<CredentialsTab />);
+
+    expect(await screen.findByText(/\(Free text\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/characters/)).toBeNull();
   });
 });

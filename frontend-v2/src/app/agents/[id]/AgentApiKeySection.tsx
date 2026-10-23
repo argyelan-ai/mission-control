@@ -9,6 +9,7 @@ import { useRuntimeRows } from "@/lib/runtimeRows";
 import { notify } from "@/lib/notify";
 import { C } from "@/lib/colors";
 import { cn } from "@/lib/utils";
+import { useAppStore } from "@/lib/store";
 import type { Agent } from "@/lib/types";
 
 /**
@@ -44,9 +45,16 @@ export function AgentApiKeySection({ agent, agentId }: { agent: Agent; agentId: 
   const t = useTranslations("agents.detail");
   const qc = useQueryClient();
 
+  // GET /secrets needs operator or higher (ADR-098). A viewer would only
+  // collect a 403 and then see an empty picker with a misleading "Saved key
+  // (not found)" — so the query is skipped and the section says why.
+  const canReadKeys = useAppStore(
+    (s) => s.currentUser?.role === "admin" || s.currentUser?.role === "operator",
+  );
   const { data: secrets } = useQuery({
     queryKey: ["secrets"],
     queryFn: () => api.secrets.list(),
+    enabled: canReadKeys,
   });
   // Which key fits is a property of the row, not of its live state — the
   // unprobed rows answer in milliseconds instead of waiting for every box.
@@ -78,7 +86,7 @@ export function AgentApiKeySection({ agent, agentId }: { agent: Agent; agentId: 
     keyProvider ? s.provider === keyProvider : anyLlmKey ? isLlmProviderKey(s) : false,
   );
 
-  const hint = !runtimesData
+  const runtimeHint = !runtimesData
     ? runtimesError
       ? t("apiKeyHintNoRuntime")
       : null
@@ -89,6 +97,7 @@ export function AgentApiKeySection({ agent, agentId }: { agent: Agent; agentId: 
         : keyProvider
           ? t("apiKeyHintProvider", { provider: keyProvider })
           : t("apiKeyHintAnyLlmKey");
+  const hint = canReadKeys ? runtimeHint : t("apiKeyNeedsOperator");
 
   // Options that must exist so the select can never display a value that is
   // not the stored/selected one.
@@ -138,69 +147,73 @@ export function AgentApiKeySection({ agent, agentId }: { agent: Agent; agentId: 
               {t("apiKeyLabel")}
             </span>
           </div>
-          <select
-            aria-labelledby={labelId}
-            value={selectedSecretId ?? ""}
-            onChange={(e) => setSelectedSecretId(e.target.value === "" ? null : e.target.value)}
-            className="w-full text-sm rounded-lg px-3 py-2 outline-none cursor-pointer"
-            style={{
-              backgroundColor: "var(--color-bg-elevated)",
-              border: `1px solid ${secretDirty ? C.borderAccent : "var(--color-border)"}`,
-              color: "var(--color-text-primary)",
-            }}
-          >
-            <option value="">{t("apiKeyNone")}</option>
-            {fitting.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label ?? s.key}
-              </option>
-            ))}
-            {extraIds.map((id) => {
-              const s = secrets?.find((x) => x.id === id);
-              const name = s ? s.label ?? s.key : t("apiKeyUnknownSaved");
-              return (
-                <option key={id} value={id}>
-                  {id === savedId ? t("apiKeySavedNotFitting", { name }) : name}
+          {canReadKeys && (
+            <select
+              aria-labelledby={labelId}
+              value={selectedSecretId ?? ""}
+              onChange={(e) => setSelectedSecretId(e.target.value === "" ? null : e.target.value)}
+              className="w-full text-sm rounded-lg px-3 py-2 outline-none cursor-pointer"
+              style={{
+                backgroundColor: "var(--color-bg-elevated)",
+                border: `1px solid ${secretDirty ? C.borderAccent : "var(--color-border)"}`,
+                color: "var(--color-text-primary)",
+              }}
+            >
+              <option value="">{t("apiKeyNone")}</option>
+              {fitting.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label ?? s.key}
                 </option>
-              );
-            })}
-          </select>
+              ))}
+              {extraIds.map((id) => {
+                const s = secrets?.find((x) => x.id === id);
+                const name = s ? s.label ?? s.key : t("apiKeyUnknownSaved");
+                return (
+                  <option key={id} value={id}>
+                    {id === savedId ? t("apiKeySavedNotFitting", { name }) : name}
+                  </option>
+                );
+              })}
+            </select>
+          )}
           {hint && (
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">{hint}</div>
           )}
         </div>
-        <div className="flex flex-col gap-2 pt-[22px]">
-          <button
-            onClick={() => updateSecretMutation.mutate(selectedSecretId)}
-            disabled={!secretDirty || updateSecretMutation.isPending}
-            className={cn(
-              "text-xs px-3 py-2 rounded-lg whitespace-nowrap transition-all",
-              !secretDirty || updateSecretMutation.isPending
-                ? "cursor-not-allowed opacity-40"
-                : "cursor-pointer",
-            )}
-            style={{
-              backgroundColor: "var(--color-bg-elevated)",
-              border: "1px solid var(--color-border)",
-              color: "var(--color-text-secondary)",
-            }}
-          >
-            {updateSecretMutation.isPending ? t("savingEllipsis") : t("save")}
-          </button>
-          <button
-            onClick={handleSaveAndApply}
-            disabled={applyRestartMutation.isPending || updateSecretMutation.isPending}
-            className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg whitespace-nowrap cursor-pointer"
-            style={{ backgroundColor: C.accent, color: C.onAccent }}
-          >
-            {applyRestartMutation.isPending ? (
-              <Loader2 size={12} className="animate-spin" />
-            ) : (
-              <RotateCcw size={12} />
-            )}
-            {t("applyRestart")}
-          </button>
-        </div>
+        {canReadKeys && (
+          <div className="flex flex-col gap-2 pt-[22px]">
+            <button
+              onClick={() => updateSecretMutation.mutate(selectedSecretId)}
+              disabled={!secretDirty || updateSecretMutation.isPending}
+              className={cn(
+                "text-xs px-3 py-2 rounded-lg whitespace-nowrap transition-all",
+                !secretDirty || updateSecretMutation.isPending
+                  ? "cursor-not-allowed opacity-40"
+                  : "cursor-pointer",
+              )}
+              style={{
+                backgroundColor: "var(--color-bg-elevated)",
+                border: "1px solid var(--color-border)",
+                color: "var(--color-text-secondary)",
+              }}
+            >
+              {updateSecretMutation.isPending ? t("savingEllipsis") : t("save")}
+            </button>
+            <button
+              onClick={handleSaveAndApply}
+              disabled={applyRestartMutation.isPending || updateSecretMutation.isPending}
+              className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg whitespace-nowrap cursor-pointer"
+              style={{ backgroundColor: C.accent, color: C.onAccent }}
+            >
+              {applyRestartMutation.isPending ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                <RotateCcw size={12} />
+              )}
+              {t("applyRestart")}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

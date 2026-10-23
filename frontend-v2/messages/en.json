@@ -621,6 +621,7 @@
       "apiKeyNone": "— None (the runtime's own key is used, if set) —",
       "apiKeySavedNotFitting": "{name} · saved, does not fit this runtime",
       "apiKeyUnknownSaved": "Saved key (not found)",
+      "apiKeyNeedsOperator": "Only operators and admins can see or change the API key.",
       "apiKeyHintProvider": "Keys from Settings → API Keys for provider “{provider}”. Written to the agent on Apply & Restart.",
       "apiKeyHintOwnSignIn": "This runtime signs in on its own (OAuth / CLI login) — an agent API key is not used.",
       "apiKeyHintAnyLlmKey": "Any LLM provider key from Settings → API Keys. The agent's key is sent to this runtime and takes precedence over the runtime's own key.",
@@ -2186,7 +2187,7 @@
         "token": "Token",
         "custom": "Free text"
       },
-      "customSummary": "(Free text, {count} characters)",
+      "customSummary": "(Free text)",
       "sshKeySummary": "SSH key ({username}, managed by host onboarding)",
       "sshKeyNotEditable": "SSH key credentials are managed by device onboarding and can't be edited here.",
       "editAria": "Edit credential",

@@ -188,7 +188,7 @@ export function CredentialsTab() {
                   <div className="text-[10px] mt-0.5 truncate" style={{ color: C.textMuted }}>
                     {c.credential_type === "login" && c.data_masked.username ? `${c.data_masked.username} · ${c.data_masked.password}` : ""}
                     {c.credential_type === "token" ? c.data_masked.token : ""}
-                    {c.credential_type === "custom" ? t("customSummary", { count: c.data_masked.content?.length ?? 0 }) : ""}
+                    {c.credential_type === "custom" ? t("customSummary") : ""}
                     {c.credential_type === "ssh_key" ? t("sshKeySummary", { username: c.data_masked.username ?? "" }) : ""}
                     {c.url ? ` · ${c.url}` : ""}
                   </div>

@@ -82,11 +82,52 @@ def safe_decrypt(ciphertext: str) -> str | None:
         return None
 
 
-def mask(value: str, visible_chars: int = 4) -> str:
-    """Mask a secret for the frontend: only the last N characters are visible."""
-    if len(value) <= visible_chars:
-        return "*" * len(value)
-    return "*" * (len(value) - visible_chars) + value[-visible_chars:]
+# Every masked value starts with this fixed run, whatever the real length —
+# the length of a secret is information too (round-3 user tests R1,
+# 23.10.2026: a 5-character password used to come back as "*" + its last
+# 4 characters, i.e. 4 of 5 characters and the exact length in clear).
+# rule: R-mask-no-length-no-password - a 5-char password showed 4 of 5 chars
+MASK = "••••••••"
+
+# A tail (last 4 characters) is only shown for values at least this long.
+# Long random tokens (API keys, OAuth tokens) stay recognisable that way
+# ("which key is this?"), while 4 characters of a 20+ character random
+# string give nothing away. Anything shorter is a password-sized value.
+TAIL_MIN_LENGTH = 20
+
+
+def mask(value: str, visible_chars: int = 4, *, reveal_tail: bool = True) -> str:
+    """Mask a secret for the frontend.
+
+    Always the fixed ``MASK`` — never the real length. Only a value of at
+    least ``TAIL_MIN_LENGTH`` characters keeps its last ``visible_chars``
+    characters, and only when ``reveal_tail`` is set. Callers masking a
+    password-like field pass ``reveal_tail=False`` (see
+    ``mask_credential_field``)."""
+    if reveal_tail and len(value) >= TAIL_MIN_LENGTH:
+        return MASK + value[-visible_chars:]
+    return MASK
+
+
+# Credential fields that never show a tail, however long the value: login
+# secrets (a long passphrase is still a password) and free text, whose last
+# characters may be a secret too. Matched on the lower-cased field name, as
+# a whole word or a "_"/"-" suffix ("db_password", "client-secret").
+_NO_TAIL_FIELD_WORDS = ("password", "passwd", "passphrase", "pin", "secret", "content")
+
+
+def _is_no_tail_field(field: str) -> bool:
+    name = field.strip().lower()
+    for word in _NO_TAIL_FIELD_WORDS:
+        if name == word or name.endswith("_" + word) or name.endswith("-" + word):
+            return True
+    return False
+
+
+def mask_credential_field(field: str, value: str) -> str:
+    """Mask one field of a credential's data for the Vault UI: password-like
+    fields and free text are fully hidden, tokens follow ``mask``."""
+    return mask(value, reveal_tail=not _is_no_tail_field(field))
 
 
 # Fields whose value must NEVER leave the backend, in ANY credential

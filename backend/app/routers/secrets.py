@@ -2,7 +2,8 @@
 API key and secrets management.
 
 Secrets are Fernet-encrypted and stored in the DB.
-The frontend only ever displays masked values (e.g. "****abcd").
+The frontend only ever displays masked values (e.g. "••••••••abcd" for a
+long token, "••••••••" for anything shorter — see encryption.mask).
 """
 
 from datetime import datetime, timezone
@@ -15,7 +16,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import require_user, require_role, Role
 from app.database import get_session
 from app.models.secret import Secret
-from app.services.encryption import encrypt, decrypt, safe_decrypt, mask
+from app.services.encryption import MASK, encrypt, decrypt, safe_decrypt, mask
 
 router = APIRouter(prefix="/api/v1", tags=["secrets"])
 
@@ -257,7 +258,10 @@ async def list_provider_templates(current_user=Depends(require_user)):
 @router.get("/secrets")
 async def list_secrets(
     session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
+    # Operator or higher (round-3 user tests R1, 23.10.2026): viewers used
+    # to get the key list. Operators keep it — they pick an existing key
+    # when binding an agent or adding a runtime. Writes stay admin-only.
+    current_user=Depends(require_role(Role.OPERATOR)),
 ):
     """List all secrets (values masked)."""
     result = await session.exec(select(Secret).order_by(Secret.key))
@@ -268,7 +272,7 @@ async def list_secrets(
         items.append({
             "id": str(s.id),
             "key": s.key,
-            "value_masked": mask(decrypted) if decrypted else "****[decrypt error]",
+            "value_masked": mask(decrypted) if decrypted else MASK + " [decrypt error]",
             "provider": s.provider,
             "label": s.label,
             "description": s.description,
@@ -342,7 +346,7 @@ async def update_secret(
     return {
         "id": str(secret.id),
         "key": secret.key,
-        "value_masked": mask(decrypted) if decrypted else "****[decrypt error]",
+        "value_masked": mask(decrypted) if decrypted else MASK + " [decrypt error]",
         "provider": secret.provider,
         "label": secret.label,
     }

@@ -1649,6 +1649,12 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-23** — **Credentials Vault admin-only, masks without length (ADR-098):** all five
+  `/api/v1/credentials` routes need the admin role (viewers could list, change and delete
+  logins); `GET /api/v1/secrets` needs operator+. `encryption.mask()` returns a fixed
+  `••••••••` (no length), keeps the last 4 characters only for values of 20+ characters, and
+  `mask_credential_field` never shows a tail for password-like fields or free text. The task
+  form skips the credentials query for non-admins. Amends ADR-033 (write-auth row).
 - **2026-10-23** — **"Open on the Mac" only at the Mac, with an honest answer.** Both host-open
   endpoints (`POST …/deliverables/{id}/open`, `POST /files/open`) go through
   `services/host_open.py`: 403 unless the caller opened MC via a loopback name (the browser's
