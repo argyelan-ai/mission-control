@@ -17,6 +17,7 @@ import { KpiRow, type KpiCell } from "./KpiRow";
 import { MemberRow } from "./MemberRow";
 import { HostRecipeSwitcher } from "@/components/shared/HostRecipeSwitcher";
 import { useAppStore } from "@/lib/store";
+import { WakeBoxButton } from "./WakeBoxButton";
 
 export function FreeBox({
   host,
@@ -63,10 +64,12 @@ export function FreeBox({
     retry: false,
   });
 
+  // "Recipes fit" is about THIS box: a two-box recipe needs a second box and
+  // is no capacity of this one (round-5 re-check L1, t2 NICE-3).
   const recipesFit = useMemo(() => {
     const list = recipes ?? [];
     if (list.length === 0) return null;
-    const fitCount = list.filter((r) => r.capacity?.ok === true).length;
+    const fitCount = list.filter((r) => r.topology?.nodes !== 2 && r.capacity?.ok === true).length;
     const anyCapacity = list.some((r) => r.capacity != null);
     return anyCapacity ? fitCount : null;
   }, [recipes]);
@@ -173,9 +176,15 @@ export function FreeBox({
       <div className="flex items-center gap-2 px-4 py-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
         {/* No armed "Start model" while the box is still being checked: on
             the first paint a running duo would offer to start a second
-            model onto its own boxes (PR #960 review, SHOULD 1). */}
-        {!probePending && (
-          <HostRecipeSwitcher hostId={host.id} hostName={host.slug} servingName={null} compact primary label={t("startModel")} />
+            model onto its own boxes (PR #960 review, SHOULD 1). Nor while
+            the box's own check is out or says it sleeps: a sleeping box
+            starts nothing — it is woken first (round-5 re-check L1). */}
+        {asleep ? (
+          <WakeBoxButton host={host} />
+        ) : (
+          !checking && (
+            <HostRecipeSwitcher hostId={host.id} hostName={host.slug} servingName={null} compact primary label={t("startModel")} />
+          )
         )}
         <button
           type="button"

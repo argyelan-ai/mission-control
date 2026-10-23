@@ -3807,6 +3807,11 @@
       "adminOnly": "Nur Admins dürfen den Autostart schalten.",
       "loading": "Autostart wird geladen …"
     },
+    "wakeBox": {
+      "waking": "Wird geweckt…",
+      "sent": "die Box braucht 1–2 min",
+      "cockpitAsleep": "Schläft — keine Messwerte, bis die Box wach ist."
+    },
     "stage": {
       "stopFailed": "Stop fehlgeschlagen: {message}",
       "restartFailed": "Neustart fehlgeschlagen: {message}",

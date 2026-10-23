@@ -3807,6 +3807,11 @@
       "adminOnly": "Only admins may switch autostart.",
       "loading": "Loading autostart …"
     },
+    "wakeBox": {
+      "waking": "Waking…",
+      "sent": "the box needs 1–2 min",
+      "cockpitAsleep": "Asleep — no readings until the box is awake."
+    },
     "stage": {
       "stopFailed": "Stop failed: {message}",
       "restartFailed": "Restart failed: {message}",
