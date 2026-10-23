@@ -429,6 +429,11 @@ export interface ChatTaskStub {
   /** Where the task stands in the chat: started_at → first in_progress
    *  event → dispatched_at (survives park/requeue). */
   startKey: string | null;
+  /** The current run's start: the newest step into in_progress (a rework
+   *  is run 2). Absent on an older backend = the first start. */
+  runStartedAt?: string | null;
+  /** How many runs the task had (steps into in_progress). */
+  runs?: number;
   endedAt: string | null;
   /** A task this agent worked on that now sits with another agent. */
   assignee: string | null;

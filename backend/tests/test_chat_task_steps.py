@@ -1129,3 +1129,41 @@ async def test_task_stubs_name_the_card_a_review_run_works(
     assert tasks["Own done"]["reviewRun"] is False
     assert tasks["Own review"]["reviewRun"] is False
     assert str(reviewing.id) == tasks["Reviewing"]["taskId"]
+
+
+@pytest.mark.asyncio
+async def test_task_stubs_name_the_current_run_after_a_rework(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
+):
+    """Round-7 re-check t1 NICE-3: after "Request changes" the end line said
+    "took 9 min" — from the first start to the end of the second run, the
+    wait for the review included. The stub names the current run
+    (``runStartedAt`` = the newest step into ``in_progress``, ``runs`` = how
+    many there were); ``startKey`` keeps the first start, it places the task
+    in the chat."""
+    board, agent, _root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    first = now - timedelta(minutes=10)
+    second = now - timedelta(minutes=2)
+    task = await make_task(board.id, title="Reworked", status="review", assigned_agent_id=agent.id,
+                           started_at=_utc(first))
+    await _add(
+        _event(task.id, "in_progress", agent_id=agent.id, at=first),
+        _event(task.id, "review", agent_id=agent.id, from_status="in_progress", at=first + timedelta(seconds=88)),
+        _event(task.id, "inbox", from_status="review", at=second - timedelta(seconds=2)),
+        _event(task.id, "in_progress", agent_id=agent.id, at=second),
+        _event(task.id, "review", agent_id=agent.id, from_status="in_progress", at=second + timedelta(seconds=48)),
+    )
+    single = await make_task(board.id, title="One run", status="done", assigned_agent_id=agent.id,
+                             started_at=_utc(now - timedelta(hours=1)),
+                             completed_at=_utc(now - timedelta(minutes=50)))
+    await _add(_event(single.id, "in_progress", agent_id=agent.id, at=now - timedelta(hours=1)))
+
+    body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/tasks")).json()
+    tasks = {t["title"]: t for t in body["tasks"]}
+    reworked = tasks["Reworked"]
+    assert reworked["runs"] == 2
+    assert datetime.fromisoformat(reworked["runStartedAt"]) == second
+    assert datetime.fromisoformat(reworked["startKey"]) == first
+    assert datetime.fromisoformat(reworked["endedAt"]) == second + timedelta(seconds=48)
+    assert tasks["One run"]["runs"] == 1

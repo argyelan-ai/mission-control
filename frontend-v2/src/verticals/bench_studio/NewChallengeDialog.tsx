@@ -186,6 +186,11 @@ export function NewChallengeDialog({
     if (item.type === "bench_agent_label_required") return t("fieldError.agentLabelRequired");
     if (item.type === "bench_effort_agent_path") return t("fieldError.effortAgentPath");
     if (item.type === "bench_spark_unreachable") return t("fieldError.sparkUnreachable");
+    // Round-7 re-check r1 N3/N4: a failed check is no "not offered", and the
+    // last two bare English 400s now come as field refusals too.
+    if (item.type === "bench_effort_probe_failed") return t("fieldError.effortProbeFailed");
+    if (item.type === "bench_prompt_required") return t("fieldError.promptRequired");
+    if (item.type === "bench_agent_required") return t("fieldError.agentRequired");
     // bench_effort_not_offered, and Pydantic's own refusal of an unknown level.
     if (key.startsWith("effort-")) return t("fieldError.effortNotOffered");
     const max = item.ctx?.max_length;

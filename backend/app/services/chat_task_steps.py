@@ -924,6 +924,22 @@ async def task_stubs(session: AsyncSession, agent: Agent, limit: int = 20) -> di
         ).all():
             left_ip[task_id] = at
 
+    # The current run (round-7 re-check t1 NICE-3): after "Request changes"
+    # the end line said "took 9 min" — first start to the end of run 2, the
+    # wait for the review included. The newest step into in_progress starts
+    # the run the line names; ``startKey`` keeps the first start (it places
+    # the task in the chat).
+    run_of: dict[Any, tuple[Any, int]] = {}
+    if ids:
+        for task_id, newest, count in (
+            await session.exec(
+                select(TaskEvent.task_id, func.max(TaskEvent.created_at), func.count())
+                .where(TaskEvent.task_id.in_(ids), TaskEvent.to_status == "in_progress")
+                .group_by(TaskEvent.task_id)
+            )
+        ).all():
+            run_of[task_id] = (newest, int(count or 0))
+
     deliverables: dict[Any, int] = {}
     if ids:
         for task_id, count in (
@@ -971,6 +987,8 @@ async def task_stubs(session: AsyncSession, agent: Agent, limit: int = 20) -> di
             "deliveredAt": _iso(task.dispatched_at),
             "startedAt": _iso(task.started_at),
             "startKey": _iso(start),
+            "runStartedAt": _iso(run_of.get(task.id, (None, 0))[0]),
+            "runs": run_of.get(task.id, (None, 0))[1],
             "endedAt": _iso(ended),
             "assignee": assignee,
             "outcome": outcomes.get(task.id),

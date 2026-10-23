@@ -55,6 +55,24 @@ describe("deriveChatTaskLine — the task section's state line (spec A §2.5, S4
     expect(deriveChatTaskLine(stub({ status: "inbox" }), "en", NOW).detail).toEqual({ key: "notStarted", values: {} });
   });
 
+  // Round-7 re-check t1 NICE-3: after a rework the line named the time from
+  // the FIRST start ("took 9 min", the wait for the review included).
+  it("after a rework the line names the current run, and which run it is", () => {
+    const review = deriveChatTaskLine(
+      stub({ status: "review", live: false, startedAt: ago(9), startKey: ago(9), runStartedAt: ago(1), runs: 2,
+        endedAt: new Date(NOW.getTime() - 60_000 + 48_000).toISOString() }),
+      "en", NOW,
+    );
+    expect(review.detail).toEqual({ key: "tookRun", values: { duration: "48 s", n: "2" } });
+    const running = deriveChatTaskLine(stub({ startedAt: ago(30), runStartedAt: ago(3), runs: 3 }), "en", NOW);
+    expect(running.detail).toEqual({ key: "forRun", values: { span: "3 min", n: "3" } });
+  });
+
+  it("one run (or an older backend without the fields) keeps the plain line", () => {
+    const one = deriveChatTaskLine(stub({ status: "done", live: false, startedAt: ago(70), runStartedAt: ago(70), runs: 1, endedAt: ago(6) }), "en", NOW);
+    expect(one.detail).toEqual({ key: "took", values: { duration: "1 h 4 min" } });
+  });
+
   it("a handed-over task names its holder", () => {
     const l = deriveChatTaskLine(stub({ status: "in_progress", live: false, assignee: "agent-b" }), "en", NOW);
     expect(l.detail).toEqual({ key: "with", values: { name: "agent-b" } });

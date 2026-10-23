@@ -240,6 +240,15 @@ async def check_effort_levels(
     return effort_probe.serialize(row, served, reachable=effort_probe.reached(row))
 
 
+def _field_422(loc: list[object], code: str, msg: str, **ctx: object) -> HTTPException:
+    """A refusal at one field, in FastAPI's own validation shape
+    ``[{loc, msg, type, ctx}]`` — see :func:`_row_422`."""
+    item: dict[str, object] = {"loc": loc, "msg": msg, "type": code}
+    if ctx:
+        item["ctx"] = ctx
+    return HTTPException(422, [item])
+
+
 def _row_422(index: int, field: str, code: str, msg: str, **ctx: object) -> HTTPException:
     """A refusal that belongs to one field of one model row (round-5 r1 N2).
 
@@ -249,10 +258,7 @@ def _row_422(index: int, field: str, code: str, msg: str, **ctx: object) -> HTTP
     English toast, also in the German UI. ``msg`` keeps the English reason for
     every other reader (logs, curl). ``index`` is 0-based like Pydantic's
     ``loc``; ``ctx`` row numbers are 1-based like the dialog's "Model 2"."""
-    item: dict[str, object] = {"loc": ["body", "models", index, field], "msg": msg, "type": code}
-    if ctx:
-        item["ctx"] = ctx
-    return HTTPException(422, [item])
+    return _field_422(["body", "models", index, field], code, msg, **ctx)
 
 
 def _unique_labels(specs: list[BenchModelSpec], efforts: list[str]) -> None:
@@ -303,6 +309,11 @@ async def _validate_effort(session: AsyncSession, spec: BenchModelSpec, index: i
     probe = await effort_probe.get_or_probe(session, spec.spark_model or "")
     try:
         effort_probe.level_fields(probe, level)
+    except effort_probe.EffortProbeFailedError as exc:
+        # The check failed, not the model (round-7 re-check r1 N3).
+        raise _row_422(
+            index, "effort", "bench_effort_probe_failed", f"model {spec.label!r}: {exc}", level=level
+        ) from exc
     except UnsupportedEffortError as exc:
         raise _row_422(
             index, "effort", "bench_effort_not_offered", f"model {spec.label!r}: {exc}", level=level
@@ -328,7 +339,11 @@ async def create_challenge(
         if not prompt_text or not prompt_text.strip():
             prompt_text = template.body
     if not prompt_text or not prompt_text.strip():
-        raise HTTPException(400, "prompt_text or prompt_template_id required")
+        # At the prompt field, in the UI language (round-7 re-check r1 N4: a
+        # bare English 400 reached the operator as a toast).
+        raise _field_422(
+            ["body", "prompt_text"], "bench_prompt_required", "prompt_text or prompt_template_id required"
+        )
 
     # Bench #21 vanilla "auto" option: empty spark_model -> freeze the live
     # active model now, so the entry/outro never end up pointing at nothing
@@ -340,7 +355,7 @@ async def create_challenge(
     resolved_spark_model: str | None = None
     for row, spec in enumerate(body.models, start=1):
         if spec.source_kind == "agent" and spec.agent_id is None:
-            raise HTTPException(400, f"model {spec.label!r}: agent_id required")
+            raise _row_422(row - 1, "agent_id", "bench_agent_required", f"model {spec.label!r}: agent_id required")
         if spec.source_kind == "spark" and not (spec.spark_model or "").strip():
             if resolved_spark_model is None:
                 try:

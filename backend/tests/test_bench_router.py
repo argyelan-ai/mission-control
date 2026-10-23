@@ -102,15 +102,18 @@ async def test_create_challenge_requires_prompt(auth_client):
     resp = await auth_client.post(
         "/api/v1/bench/challenges", json=_create_body(prompt_text=None)
     )
-    assert resp.status_code == 400
+    # A field refusal in FastAPI's own shape (round-7 r1 N4), was a bare 400.
+    assert resp.status_code == 422
+    assert resp.json()["detail"][0]["type"] == "bench_prompt_required"
 
 
 @pytest.mark.asyncio
-async def test_create_challenge_agent_without_id_400(auth_client):
+async def test_create_challenge_agent_without_id_422(auth_client):
     body = _create_body()
     body["models"][1].pop("agent_id")
     resp = await auth_client.post("/api/v1/bench/challenges", json=body)
-    assert resp.status_code == 400
+    assert resp.status_code == 422
+    assert resp.json()["detail"][0]["type"] == "bench_agent_required"
 
 
 # ── Bench #21: vanilla (direct-API) spark model resolution ────────────────

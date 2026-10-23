@@ -81,6 +81,7 @@ _SELF_DELIVERING_REASONS: frozenset[str] = frozenset({
     "review_rejection_no_developer",
     "review_rejection_queued",
     "review_rejection_dispatch_blocked",
+    "review_rejection_agent_paused",
     "unblock_requeue_agent_busy",
     # Actor-tracking follow-up (Pruefbericht N3/N4, 21.09.2026): both paths
     # already write their own TaskComment right before this event fires
@@ -1213,6 +1214,7 @@ async def execute_review_decision(
         await handle_review_rejection(
             session, task, board_id, rejecting_agent=actor_agent,
             stopped_reviewer_id=stopped_reviewer_id,
+            from_status=old_status,
         )
 
     elif decision == "hold":
@@ -1911,8 +1913,16 @@ async def handle_review_rejection(
     board_id: uuid.UUID,
     rejecting_agent: Agent | None = None,
     stopped_reviewer_id: uuid.UUID | None = None,
+    from_status: str | None = None,
 ) -> ReviewRejectionResult:
     """Review rejection: send the task back to the original developer.
+
+    from_status: the card's status before the caller's provisional
+    ``in_progress`` (execute_review_decision sets it without an event). The
+    status event then names the real step, ``review → inbox`` — it read
+    ``in_progress → inbox`` although the card stood in review (round-7
+    re-check t1 NICE-2). Callers that already recorded their own step into
+    in_progress leave it out.
 
     stopped_reviewer_id: the reviewer whose running turn the operator
     override just stop-flagged (stop_running_reviewer_turn). That
@@ -2028,7 +2038,7 @@ async def handle_review_rejection(
             ),
         ))
         await record_task_event(
-            session, task.id, _old_status, "inbox",
+            session, task.id, from_status or _old_status, "inbox",
             changed_by="system",
             agent_id=rejecting_agent.id if rejecting_agent else None,
             reason="review_rejection_no_developer",
@@ -2076,30 +2086,55 @@ async def handle_review_rejection(
         task.dispatched_at = None
         task.ack_at = None
         session.add(task)
+        # A paused builder is no dead end: no push, but its own poll takes a
+        # card assigned to it by name (rule R-paused-poll-takes-assigned,
+        # tests/test_paused_agent_poll_claim.py). Live on 23.10. it took the
+        # rework 2 s later while the note said "blocked, waits" (round-7
+        # re-check t1 NICE-2). The note says what happens, in words.
+        # The refusal text of operations.check_dispatch_allowed step 3 — the
+        # test drives the real check, so a reworded refusal goes red there.
+        paused_pull = reason == f"Agent {original_dev.name} PAUSED"
+        if paused_pull:
+            note = (
+                f"Änderungen angefordert — zurück an {original_dev.name}. "
+                f"{original_dev.name} ist pausiert und holt die Karte bei der "
+                "nächsten Abfrage selbst ab (MC stellt sie nicht von selbst zu)."
+            )
+            event_reason = "review_rejection_agent_paused"
+            activity = (
+                f"Review abgelehnt: '{task.title}' — zurück an {original_dev.name} "
+                "(pausiert, holt die Karte selbst ab)"
+            )
+        else:
+            note = (
+                f"Rework fuer {original_dev.name} angefordert, Dispatch aktuell "
+                f"nicht erlaubt ({reason}). Task wartet in der Inbox — wird "
+                "automatisch zugestellt, sobald Dispatch wieder erlaubt ist."
+            )
+            event_reason = "review_rejection_dispatch_blocked"
+            activity = (
+                f"Review abgelehnt: '{task.title}' — Dispatch fuer {original_dev.name} "
+                f"blockiert ({reason}), wartet in Inbox"
+            )
         session.add(TaskComment(
             task_id=task.id,
             author_type="system",
             comment_type="system",
-            content=(
-                f"Rework fuer {original_dev.name} angefordert, Dispatch aktuell "
-                f"nicht erlaubt ({reason}). Task wartet in der Inbox — wird "
-                "automatisch zugestellt, sobald Dispatch wieder erlaubt ist."
-            ),
+            content=note,
         ))
         await record_task_event(
-            session, task.id, _old_status, "inbox",
+            session, task.id, from_status or _old_status, "inbox",
             changed_by="system",
             agent_id=rejecting_agent.id if rejecting_agent else None,
-            reason="review_rejection_dispatch_blocked",
+            reason=event_reason,
         )
         await session.commit()
         await emit_event(
             session, "task.review_rejected",
-            f"Review abgelehnt: '{task.title}' — Dispatch fuer {original_dev.name} "
-            f"blockiert ({reason}), wartet in Inbox",
+            activity,
             board_id=board_id, task_id=task.id, agent_id=original_dev.id,
             detail={"gefangen_von": caught_by_for_actor(rejecting_agent)},
-            severity="warning",
+            severity="info" if paused_pull else "warning",
         )
         return ReviewRejectionResult(original_dev, "dispatch_blocked")
 
@@ -2131,7 +2166,7 @@ async def handle_review_rejection(
             )
         )).first()
 
-    old_status = task.status  # review or in_progress
+    old_status = from_status or task.status  # review or in_progress
 
     if dev_active:
         await record_task_event(

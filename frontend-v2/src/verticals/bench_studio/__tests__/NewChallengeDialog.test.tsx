@@ -1198,6 +1198,8 @@ describe("NewChallengeDialog — round-4 K1 (R6 rest)", () => {
     ["bench_effort_not_offered", /does not offer this effort/i],
     ["bench_effort_agent_path", /cannot be set for an agent row/i],
     ["literal_error", /does not offer this effort/i],
+    // Round-7 re-check r1 N3: a failed check is no "not offered".
+    ["bench_effort_probe_failed", /effort check failed/i],
   ])("an effort refusal (%s) is said under the row's effort chips and focuses them", async (type, words) => {
     const { notify } = await import("@/lib/notify");
     vi.mocked(notify.error).mockClear();
@@ -1237,6 +1239,42 @@ describe("NewChallengeDialog — round-4 K1 (R6 rest)", () => {
     await waitFor(() => expect(select).toHaveAttribute("aria-invalid", "true"));
     const message = document.getElementById(select.getAttribute("aria-describedby") ?? "");
     expect(message?.textContent).toMatch(/Spark is not reachable/i);
+    expect(notify.error).not.toHaveBeenCalled();
+  });
+
+  // Round-7 re-check r1 N4: the last two English 400s now come as field
+  // refusals like the others.
+  it("the server's 'prompt required' is said under the prompt, no toast", async () => {
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify.error).mockClear();
+    vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(
+      new Error("API 422: " + JSON.stringify({
+        detail: [{ loc: ["body", "prompt_text"], msg: "English server sentence", type: "bench_prompt_required" }],
+      })),
+    );
+    renderDialog();
+    await fillTitleAndPrompt();
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    const prompt = document.getElementById("bench-field-prompt") as HTMLElement;
+    await waitFor(() => expect(prompt).toHaveAttribute("aria-invalid", "true"));
+    const message = document.getElementById(prompt.getAttribute("aria-describedby") ?? "");
+    expect(message?.textContent).toMatch(/write a prompt or pick a template/i);
+    expect(notify.error).not.toHaveBeenCalled();
+  });
+
+  it("the server's 'agent required' is said at that row's model field, no toast", async () => {
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify.error).mockClear();
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce(ACTIVE);
+    vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(ownRefusal(0, "agent_id", "bench_agent_required"));
+    renderDialog();
+    await screen.findByRole("radio", { name: "Max" });
+    await fillTitleAndPrompt();
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+    const field = document.getElementById("bench-field-model-0") as HTMLElement;
+    await waitFor(() => expect(field).toHaveAttribute("aria-invalid", "true"));
+    const message = document.getElementById(field.getAttribute("aria-describedby") ?? "");
+    expect(message?.textContent).toMatch(/pick an agent for this row/i);
     expect(notify.error).not.toHaveBeenCalled();
   });
 

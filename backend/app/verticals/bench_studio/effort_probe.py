@@ -321,12 +321,25 @@ def reached(row: BenchProbe) -> bool:
     return not attempts or attempts[0].get("http") is not None
 
 
+class EffortProbeFailedError(rp.UnsupportedEffortError):
+    """The probe itself failed (box gone, error answer): it knows nothing
+    about the levels, so "the model does not offer it" would be a wrong
+    claim (round-7 re-check r1 N3). A subclass, so every caller that only
+    asks "can this level run?" keeps working unchanged."""
+
+
 def level_fields(row: BenchProbe, level: str) -> dict[str, Any]:
     """Request fields for ``level`` under this probe — raises
-    ``UnsupportedEffortError`` when the probe did not offer it."""
+    ``UnsupportedEffortError`` when the probe did not offer it, and its
+    subclass ``EffortProbeFailedError`` when the probe failed."""
     if level in (None, "", "default"):
         return {}
-    if row.status != "ok" or level not in (row.levels or []):
+    if row.status != "ok":
+        raise EffortProbeFailedError(
+            f"effort {level!r} cannot be checked for {row.served_model_id}: "
+            f"the effort probe failed (probe: {row.status})"
+        )
+    if level not in (row.levels or []):
         raise rp.UnsupportedEffortError(
             f"effort {level!r} is not available for {row.served_model_id} "
             f"(probe: {row.status}, levels: {', '.join(row.levels or []) or 'none'})"

@@ -368,6 +368,17 @@
       "sourceStatus": "Status",
       "sourceActivity": "Aktivität",
       "sourceComment": "Kommentar",
+      "statusReason": {
+        "review_rejection_redispatch": "Änderungen angefordert — zurück an den Bauenden",
+        "review_rejection_queued": "Änderungen angefordert — wartet beim Bauenden (beschäftigt)",
+        "review_rejection_no_developer": "Änderungen angefordert — Bauender unbekannt, an den Lead",
+        "review_rejection_dispatch_blocked": "Änderungen angefordert — Zustellen gerade nicht erlaubt, wartet in der Inbox",
+        "review_rejection_agent_paused": "Änderungen angefordert — der Bauende ist pausiert und holt die Karte selbst ab",
+        "review_approved": "Prüfung angenommen",
+        "pull_dispatch": "Agent hat die Karte selbst geholt",
+        "orphan_recovery": "Zurück in die Inbox — niemand hat daran gearbeitet",
+        "pr_merged": "Pull Request gemergt"
+      },
       "event": {
         "blocked_reminder": "Blockiert-Erinnerung",
         "review_nudge": "Review-Erinnerung",
@@ -424,9 +435,11 @@
         "askedAgo": "fragt seit {span}",
         "askedAgoNamed": "{name} fragt seit {span}",
         "for": "seit {span}",
+        "forRun": "seit {span} (Lauf {n})",
         "forNamed": "{name} seit {span}",
         "silentFor": "still seit {span}",
         "took": "Dauer {duration}",
+        "tookRun": "Dauer {duration} (Lauf {n})",
         "tookNamed": "{name} brauchte {duration}",
         "endedAgo": "endete vor {span}",
         "finishedAgo": "fertig vor {span}",
@@ -3855,8 +3868,8 @@
       "cornerUnknown": "unbekannt",
       "freeLine": "kein Modell · bereit",
       "cornerAsleep": "schläft",
-      "poweredOff": "ausgeschaltet",
-      "poweredOffLastSeen": "ausgeschaltet · zuletzt gesehen {time}",
+      "asleepLine": "schläft · über das Netzwerk weckbar",
+      "asleepLastSeen": "schläft · zuletzt gesehen {time}",
       "wake": "Wecken",
       "tpsValue": "{tps} tok/s",
       "topologyDuo": "duo",
@@ -4108,7 +4121,10 @@
         "agentLabelRequired": "Gib dieser Agent-Zeile einen Namen.",
         "effortNotOffered": "Diese Effort-Stufe bietet das Modell nicht an — wähle eine andere oder „Standard“.",
         "effortAgentPath": "Bei einer Agent-Zeile lässt sich Effort noch nicht einstellen — die Stufe der Sitzung wird aufgezeichnet.",
-        "sparkUnreachable": "Spark nicht erreichbar — das aktive Modell lässt sich gerade nicht bestimmen. Wähle ein Modell oder versuche es gleich nochmal."
+        "sparkUnreachable": "Spark nicht erreichbar — das aktive Modell lässt sich gerade nicht bestimmen. Wähle ein Modell oder versuche es gleich nochmal.",
+        "effortProbeFailed": "Die Effort-Prüfung ist fehlgeschlagen (Spark weg oder Fehler) — ob das Modell diese Stufe kann, ist offen. Versuche es gleich nochmal oder wähle „Standard“.",
+        "promptRequired": "Schreib einen Prompt oder wähle eine Vorlage.",
+        "agentRequired": "Wähle einen Agenten für diese Zeile."
       }
     },
     "editChallengeDialog": {

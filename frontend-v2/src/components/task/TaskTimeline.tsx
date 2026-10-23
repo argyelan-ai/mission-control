@@ -40,7 +40,7 @@ import {
   isAgentReminder,
   type TimelineItem,
 } from "@/lib/taskDetail/timelineGroups";
-import { eventLabel } from "@/lib/taskDetail/eventLabel";
+import { eventLabel, statusReasonText } from "@/lib/taskDetail/eventLabel";
 import { C } from "@/lib/colors";
 import type { TaskTimelineEntry } from "@/lib/types";
 
@@ -125,7 +125,11 @@ function TimelineRow({ entry, isLast }: { entry: TaskTimelineEntry; isLast: bool
     : ownTitle
       ? t(`${ownTitle}.label`)
       : entry.title;
-  const detail = agentReminder ? null : entry.detail;
+  const detail = agentReminder
+    ? null
+    : entry.source === "task_event" && entry.detail
+      ? statusReasonText(t, entry.detail)
+      : entry.detail;
 
   return (
     <div className="relative pl-5" style={{ paddingBottom: isLast ? 0 : 14 }}>

@@ -368,6 +368,17 @@
       "sourceStatus": "Status",
       "sourceActivity": "Activity",
       "sourceComment": "Comment",
+      "statusReason": {
+        "review_rejection_redispatch": "Changes requested — back to the builder",
+        "review_rejection_queued": "Changes requested — queued for the builder (busy)",
+        "review_rejection_no_developer": "Changes requested — builder unknown, handed to the lead",
+        "review_rejection_dispatch_blocked": "Changes requested — delivery not allowed right now, waits in the inbox",
+        "review_rejection_agent_paused": "Changes requested — the builder is paused and takes the card itself",
+        "review_approved": "Review approved",
+        "pull_dispatch": "Agent took the card itself",
+        "orphan_recovery": "Back to the inbox — nobody was working on it",
+        "pr_merged": "Pull request merged"
+      },
       "event": {
         "blocked_reminder": "Blocked reminder",
         "review_nudge": "Review reminder",
@@ -424,9 +435,11 @@
         "askedAgo": "asked {span} ago",
         "askedAgoNamed": "{name} asked {span} ago",
         "for": "for {span}",
+        "forRun": "for {span} (run {n})",
         "forNamed": "{name} for {span}",
         "silentFor": "silent for {span}",
         "took": "took {duration}",
+        "tookRun": "took {duration} (run {n})",
         "tookNamed": "{name} took {duration}",
         "endedAgo": "ended {span} ago",
         "finishedAgo": "finished {span} ago",
@@ -3855,8 +3868,8 @@
       "cornerUnknown": "unknown",
       "freeLine": "no model · ready",
       "cornerAsleep": "asleep",
-      "poweredOff": "powered off",
-      "poweredOffLastSeen": "powered off · last seen {time}",
+      "asleepLine": "asleep · can be woken over the network",
+      "asleepLastSeen": "asleep · last seen {time}",
       "wake": "Wake",
       "tpsValue": "{tps} tok/s",
       "topologyDuo": "duo",
@@ -4108,7 +4121,10 @@
         "agentLabelRequired": "Give this agent row a name.",
         "effortNotOffered": "This model does not offer this effort — choose another one or “Default”.",
         "effortAgentPath": "Effort cannot be set for an agent row yet — the session's own level is recorded.",
-        "sparkUnreachable": "Spark is not reachable — the active model cannot be determined right now. Pick a model or try again in a moment."
+        "sparkUnreachable": "Spark is not reachable — the active model cannot be determined right now. Pick a model or try again in a moment.",
+        "effortProbeFailed": "The effort check failed (Spark gone or an error) — whether the model offers this level is unknown. Try again in a moment or choose “Default”.",
+        "promptRequired": "Write a prompt or pick a template.",
+        "agentRequired": "Pick an agent for this row."
       }
     },
     "editChallengeDialog": {
