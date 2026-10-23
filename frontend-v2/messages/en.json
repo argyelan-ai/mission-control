@@ -1852,7 +1852,7 @@
     "openedOnMac": "Opened on the Mac.",
     "shownInFinder": "Shown in Finder on the Mac.",
     "hostUnavailable": "Not possible here – download the file instead.",
-    "hostFailed": "Did not open on the Mac – the Mac helper did not answer. Try again, or download the file.",
+    "hostFailed": "Did not open on the Mac – the Mac could not open the file. Try again, or download the file.",
     "showFileInFinder": "Show in Finder",
     "showFolderInFinder": "Show folder in Finder",
     "folderEmpty": "The folder is empty.",

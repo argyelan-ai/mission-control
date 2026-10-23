@@ -27,7 +27,7 @@ from app.services import host_open
 from tests.conftest import test_engine  # noqa: F401 — shared SQLite engine for auth_client
 
 LOCAL = {"Origin": "http://localhost:3000"}
-REMOTE = {"Origin": "https://mc.example.ts.net"}
+REMOTE = {"Origin": "https://mc-remote.test"}
 
 
 def _request(headers: dict[str, str]) -> Request:
@@ -48,7 +48,7 @@ def test_loopback_names(host):
 
 @pytest.mark.parametrize(
     "host",
-    ["mc.example.ts.net", "203.0.113.20", "198.51.100.7", "mac-mini.local", "localhost.example.com",
+    ["mc-remote.test", "203.0.113.20", "198.51.100.7", "mac-mini.local", "localhost.example.com",
      "127.0.0.1.example.com", "", None],
 )
 def test_other_names(host):
@@ -63,15 +63,15 @@ def test_other_names(host):
         ({"Origin": "http://127.0.0.1", "Host": "localhost"}, True),
         ({"Origin": "http://[::1]:3000"}, True),
         # Over Tailscale / LAN: the proxies hand over a local Host — Origin tells.
-        ({"Origin": "https://mc.example.ts.net", "Host": "localhost"}, False),
+        ({"Origin": "https://mc-remote.test", "Host": "localhost"}, False),
         ({"Origin": "http://203.0.113.20", "Host": "127.0.0.1:8000", "X-Forwarded-Host": "localhost"}, False),
         # A sandboxed page (opaque origin) is never the operator at the Mac.
         ({"Origin": "null", "Host": "localhost"}, False),
         # No Origin (a script, curl): the forwarded host first, then Host.
         ({"Host": "localhost:8000"}, True),
-        ({"Host": "localhost:8000", "X-Forwarded-Host": "mc.example.ts.net"}, False),
+        ({"Host": "localhost:8000", "X-Forwarded-Host": "mc-remote.test"}, False),
         ({"Host": "127.0.0.1:8000", "X-Forwarded-Host": "localhost:3000, proxy.example"}, True),
-        ({"Host": "mc.example.ts.net"}, False),
+        ({"Host": "mc-remote.test"}, False),
         ({}, False),
     ],
 )

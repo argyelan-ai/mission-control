@@ -43,7 +43,7 @@ HOST_ONLY_DETAIL = (
     "Opens on the computer MC runs on only - open MC there (via localhost) "
     "to use it, or download the file."
 )
-HELPER_FAILED_DETAIL = "The file could not be opened on the MC host (the open helper did not answer)."
+HELPER_FAILED_DETAIL = "The file could not be opened on the MC host (the open helper failed or did not answer)."
 
 
 class HostOpenFailed(Exception):

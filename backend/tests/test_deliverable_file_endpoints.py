@@ -235,7 +235,7 @@ async def test_open_endpoint_subpath_traversal_rejected(auth_client: AsyncClient
     resp = await auth_client.post(
         f"/api/v1/boards/{board_id}/tasks/{task_id}/deliverables/{del_id}/open",
         headers=AT_THE_MAC,
-            json={"reveal": True, "subpath": "../../etc/passwd"},
+        json={"reveal": True, "subpath": "../../etc/passwd"},
     )
     assert resp.status_code == 400
 

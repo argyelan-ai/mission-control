@@ -39,7 +39,7 @@ import de from "../../../../messages/de.json";
 //   r1 NICE-11 — the page-error hint outlived a change of the frame's page.
 //   t3 N3  — say before the start that the page keeps nothing past a reload.
 
-const REMOTE_URL = "https://mc.example.ts.net/tasks";
+const REMOTE_URL = "https://mc-remote.test/tasks";
 const LOCAL_URL = "http://localhost:3000/";
 
 /** vitest's jsdom environment exposes its JSDOM instance. */
@@ -90,7 +90,7 @@ describe("isLoopbackHostname — the same rule as the backend", () => {
     (h) => expect(isLoopbackHostname(h)).toBe(true),
   );
   it.each([
-    "mc.example.ts.net",
+    "mc-remote.test",
     "203.0.113.20",
     "198.51.100.7",
     "mac-mini.local",
@@ -106,7 +106,7 @@ describe("Mac buttons from another computer (Tailscale / LAN) — t3 S1", () => 
   it("the deliverable card offers no Mac action at all", async () => {
     render(<DeliverableCard deliverable={mkDeliverable()} boardId="b" taskId="t" />);
     expand();
-    expect(window.location.hostname).toBe("mc.example.ts.net");
+    expect(window.location.hostname).toBe("mc-remote.test");
     expect(screen.queryByTestId("deliverable-host-actions")).toBeNull();
     expect(screen.queryByRole("button", { name: "Open on the Mac" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Show in Finder" })).toBeNull();
