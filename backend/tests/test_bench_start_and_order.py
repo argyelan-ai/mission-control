@@ -319,6 +319,9 @@ class _RealOp:
     def __init__(self, conn):
         self.conn = conn
 
+    def get_bind(self):
+        return self.conn
+
     def add_column(self, table, column):
         from sqlalchemy.schema import CreateColumn
 
@@ -337,7 +340,8 @@ def test_revision_wiring():
 
 @pytest.mark.asyncio
 async def test_upgrade_adds_position_and_backfills_label_order(tmp_path):
-    """Existing challenges keep the order they show today (A-Z by label),
+    """Existing challenges keep the order they show today (A-Z by label,
+    compared like Python's ``sorted``: upper case before lower case),
     per challenge, starting at 0."""
     module = _load_revision()
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'm.db'}")
@@ -348,7 +352,8 @@ async def test_upgrade_adds_position_and_backfills_label_order(tmp_path):
         ))
         await conn.execute(text(
             "INSERT INTO bench_entries VALUES "
-            "('e1','c1','Zeta'),('e2','c1','Alpha'),('e3','c2','Only'),('e4','c1','Mid')"
+            "('e1','c1','Zeta'),('e2','c1','Alpha'),('e3','c2','Only'),('e4','c1','Mid'),"
+            "('e6','c4','alpha'),('e7','c4','Beta')"
         ))
 
     def _upgrade(sync_conn):
@@ -362,7 +367,8 @@ async def test_upgrade_adds_position_and_backfills_label_order(tmp_path):
         rows = (await conn.execute(text(
             "SELECT id, position FROM bench_entries ORDER BY id"
         ))).all()
-    assert dict(rows) == {"e1": 2, "e2": 0, "e3": 0, "e4": 1}
+    assert dict(rows) == {"e1": 2, "e2": 0, "e3": 0, "e4": 1, "e6": 1, "e7": 0}
+    assert sorted(["alpha", "Beta"]) == ["Beta", "alpha"]  # the order shown before
 
     # New rows without an explicit value get the server default.
     async with engine.begin() as conn:

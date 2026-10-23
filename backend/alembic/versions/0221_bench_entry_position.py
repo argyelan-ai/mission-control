@@ -6,7 +6,11 @@ operator added the rows in. ``position`` stores the row index from the
 create request; every reader sorts by it (label only breaks ties).
 
 Existing rows are backfilled per challenge in label order — exactly the
-order they are shown in today, so nothing visibly moves. Additive only;
+order they are shown in today, so nothing visibly moves. On Postgres the
+sort uses ``COLLATE "C"`` (byte order = code-point order for UTF-8), the
+same comparison the old Python ``sorted`` by label made; the database's
+locale collation would ignore case and could swap mixed-case labels.
+SQLite's default BINARY collation already compares that way. Additive only;
 downgrade drops the column and the readers' label tie-break takes over.
 
 Revision ID: 0221_bench_entry_position
@@ -26,10 +30,11 @@ def upgrade() -> None:
         "bench_entries",
         sa.Column("position", sa.Integer(), nullable=False, server_default="0"),
     )
+    collate = ' COLLATE "C"' if op.get_bind().dialect.name == "postgresql" else ""
     op.execute(
         "UPDATE bench_entries SET position = ranked.pos "
         "FROM (SELECT id, ROW_NUMBER() OVER "
-        "(PARTITION BY challenge_id ORDER BY model_label, id) - 1 AS pos "
+        f"(PARTITION BY challenge_id ORDER BY model_label{collate}, id) - 1 AS pos "
         "FROM bench_entries) AS ranked "
         "WHERE bench_entries.id = ranked.id"
     )
