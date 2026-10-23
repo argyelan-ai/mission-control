@@ -22,23 +22,49 @@ How the server knows: the chat daemon starts its ``omp acp`` child with
 session never carries it. It is a marker against an honest mistake of the
 model, not an authentication: the token is the same agent's token either way.
 
-Which tasks: every task assigned to this agent or worked by it before (an
-``→ in_progress`` event with its id — a task handed to human review loses its
-assignee, the 22:22:22 comment of the incident landed on exactly such one).
-Tasks of other agents are not this guard's business; the existing board and
-scope rules apply to them unchanged.
+Which tasks (round-2 review, 23.10.2026 — "no gaps, not too wide"): the
+tasks a run of this agent holds right now, or let go of within
+``chat_run_context.RECENT_WINDOW`` — the same set the chat's context block
+names. A run holds a task while it is assigned to the agent and live
+(``in_progress`` / ``waiting`` / ``blocked`` / ``user_test``, or delivered to
+it in the inbox) — and a reviewer's run holds the ``review`` card a review
+handoff gave it, for as long as it stays there (``review_run_holds``). A finished task stays covered for 30 minutes after the run
+let go when this agent worked it (an ``→ in_progress`` event with its id) — a
+task handed to human review loses its assignee, and the 22:22:22 comment of
+the incident landed on exactly such one, 36 s after the handoff. Not covered:
+a task whose run ended long ago (the operator asks about it in its thread;
+round-1 had no time limit), and a task nobody runs yet — the one the chat just
+created for itself (inbox, not delivered). Tasks of other agents are not this
+guard's business; the existing board and scope rules apply to them unchanged.
+
+What: every write to the run state. A plain reply (``message`` comment,
+``CHAT_REPLY_COMMENT_TYPES``) is not run state — the chat may answer in the
+task thread; the comment route lets it through and skips the ACK handshake
+for it. Not on a card its review run works: there any reviewer comment, a
+``message`` too, ends the review wait (``review_park``) and passes the
+"reviewer said nothing" check (``proof_gate``), so a chat reply would speak
+for the review run. Each refusal leaves one timeline row per task and action per
+``REFUSAL_EVENT_EVERY`` however often the model retries.
 """
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException, Request
+from sqlalchemy import func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.task import Task, TaskEvent
+from app.services.chat_run_context import (
+    FINISHED_STATUSES,
+    LIVE_STATUSES,
+    RECENT_WINDOW,
+    review_run_holds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +78,13 @@ ROLE_CHAT = "chat"
 REFUSAL_CODE = "chat_session_task_write"
 #: The activity event of a refusal (task timeline, kind "stuck").
 REFUSAL_EVENT = "task.chat_write_rejected"
+#: At most one timeline row per task and action in this span (a model that
+#: retries the refused call must not fill the operator's timeline).
+REFUSAL_EVENT_EVERY = timedelta(minutes=10)
+#: Comment types the chat may write on a task of its own run: an answer, not
+#: run state. Everything else (progress, resolution, evidence, blocker,
+#: reflection, handoff, …) moves the run and stays the run's.
+CHAT_REPLY_COMMENT_TYPES = frozenset({"message"})
 
 
 def is_chat_session(request: Request | None) -> bool:
@@ -61,12 +94,15 @@ def is_chat_session(request: Request | None) -> bool:
     return (request.headers.get(SESSION_ROLE_HEADER) or "").strip().lower() == ROLE_CHAT
 
 
-async def task_is_agents_run(session: AsyncSession, task: Task, agent: Agent) -> bool:
-    """The task belongs to a run of ``agent``: assigned to it, or worked by
-    it before (it has an ``→ in_progress`` event with ``agent.id``)."""
-    if task.assigned_agent_id == agent.id:
-        return True
-    worked = (
+def _aware(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+async def _worked_by(session: AsyncSession, task: Task, agent: Agent) -> bool:
+    """``agent`` ran this task once (an ``→ in_progress`` event with its id)."""
+    row = (
         await session.exec(
             select(TaskEvent.id).where(
                 TaskEvent.task_id == task.id,
@@ -75,7 +111,67 @@ async def task_is_agents_run(session: AsyncSession, task: Task, agent: Agent) ->
             ).limit(1)
         )
     ).first()
-    return worked is not None
+    return row is not None
+
+
+async def _run_let_go_at(session: AsyncSession, task: Task) -> datetime | None:
+    """When the last run let go of the task: its last ``in_progress → …``
+    event; without one (a status set around the lifecycle) the task's own
+    ``completed_at`` / ``updated_at``."""
+    left = (
+        await session.exec(
+            select(func.max(TaskEvent.created_at)).where(
+                TaskEvent.task_id == task.id, TaskEvent.from_status == "in_progress",
+            )
+        )
+    ).first()
+    return _aware(left or task.completed_at or task.updated_at)
+
+
+async def task_is_agents_run(
+    session: AsyncSession, task: Task, agent: Agent, *, now: datetime | None = None,
+) -> bool:
+    """A run of ``agent`` holds the task now, or let go of it within
+    ``RECENT_WINDOW`` (see the module docstring for why exactly these)."""
+    status = task.status
+    if review_run_holds(task, agent):
+        # The card its review run works: live for the reviewer, no time limit.
+        return True
+    delivered = status == "inbox" and task.dispatched_at is not None
+    if status in LIVE_STATUSES or delivered:
+        if task.assigned_agent_id == agent.id:
+            return True
+        return task.assigned_agent_id is None and await _worked_by(session, task, agent)
+    if status not in FINISHED_STATUSES:
+        # inbox, not delivered: no run holds it — e.g. the task the chat just
+        # created for itself (round-2 r1 NICE-5).
+        return False
+    if task.assigned_agent_id != agent.id and not await _worked_by(session, task, agent):
+        return False
+    let_go = await _run_let_go_at(session, task)
+    now = _aware(now) or datetime.now(timezone.utc)
+    return let_go is not None and let_go >= now - RECENT_WINDOW
+
+
+async def _refusal_already_shown(
+    session: AsyncSession, task: Task, agent: Agent, action: str,
+) -> bool:
+    """A refusal row for this task, agent and action is younger than
+    ``REFUSAL_EVENT_EVERY``."""
+    from app.models.activity import ActivityEvent
+
+    since = datetime.now(timezone.utc) - REFUSAL_EVENT_EVERY
+    details = (
+        await session.exec(
+            select(ActivityEvent.detail).where(
+                ActivityEvent.event_type == REFUSAL_EVENT,
+                ActivityEvent.task_id == task.id,
+                ActivityEvent.agent_id == agent.id,
+                ActivityEvent.created_at >= since,
+            ).limit(50)
+        )
+    ).all()
+    return any(isinstance(d, dict) and d.get("action") == action for d in details)
 
 
 def refusal_detail(task: Task, action: str) -> str:
@@ -101,7 +197,8 @@ async def refuse_chat_task_write(
     """Raise 409 when a chat session writes the run state of a task of its
     own agent. No-op for every other caller. ``action`` names the write in the
     refusal and the activity event (``comment progress``, ``status review``,
-    ``deliverable``, ``checklist``, ``recover``)."""
+    ``deliverable``, ``checklist``, ``recover``, ``question``, ``help``,
+    ``delegate``)."""
     # rule: R-chat-never-works-own-run - a chat question once ran a task a second time
     if not is_chat_session(request):
         return
@@ -113,17 +210,18 @@ async def refuse_chat_task_write(
         agent.name, task.id, action, task.status,
     )
     try:
-        from app.services.activity import emit_event
+        if not await _refusal_already_shown(session, task, agent, action):
+            from app.services.activity import emit_event
 
-        await emit_event(
-            session, REFUSAL_EVENT,
-            # Short: the row sits in this task's own timeline, the agent is
-            # its actor chip — a long title truncates on a phone.
-            f"Change from the chat refused: {action}",
-            severity="warning",
-            board_id=task.board_id, task_id=task.id, agent_id=agent.id,
-            detail=detail,
-        )
+            await emit_event(
+                session, REFUSAL_EVENT,
+                # Short: the row sits in this task's own timeline, the agent is
+                # its actor chip — a long title truncates on a phone.
+                f"Change from the chat refused: {action}",
+                severity="warning",
+                board_id=task.board_id, task_id=task.id, agent_id=agent.id,
+                detail=detail,
+            )
     except Exception:  # noqa: BLE001 — the audit line must never turn the 409 into a 500
         logger.warning("chat_write_rejected event failed", exc_info=True)
     raise HTTPException(status_code=409, detail=refusal_detail(task, action))

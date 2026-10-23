@@ -1018,6 +1018,7 @@ async def agent_create_project(
 async def agent_help_request(
     board_id: uuid.UUID,
     payload: HelpRequestCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_HELP)),
 ):
@@ -1037,6 +1038,9 @@ async def agent_help_request(
             status_code=status.HTTP_409_CONFLICT,
             detail="Task ist nicht in_progress — Help Request nur waehrend aktiver Arbeit moeglich.",
         )
+    # From the chat session this would block the RUN's task; the helper's
+    # result would then start a second run (round-2 review r1 S2).
+    await refuse_chat_task_write(session, request, agent, current_task, "help")
 
     # 2. Tiefenlimit
     if current_task.help_request_from is not None:
@@ -1123,6 +1127,7 @@ async def agent_help_request(
 async def agent_delegate_task(
     board_id: uuid.UUID,
     payload: DelegateCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_CREATE)),
 ):
@@ -1251,6 +1256,14 @@ async def agent_delegate_task(
                 "moeglich (oder --parent <task-id> explizit setzen)."
             )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+    # From the chat session a delegation hangs a subtask and a progress note
+    # on the RUN's task and (callback, the default) blocks it — the callback
+    # would then start a second run (round-2 review r1 S2). A parent no run
+    # of this agent holds is not the guard's business.
+    await refuse_chat_task_write(
+        session, request, agent, current_task or explicit_parent, "delegate",
+    )
 
     target_agent = await session.get(Agent, payload.assigned_agent_id)
     if not target_agent:
@@ -1529,6 +1542,7 @@ async def agent_delegate_task(
 async def agent_clarification(
     board_id: uuid.UUID,
     payload: ClarificationCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_HELP)),
 ):
@@ -1547,6 +1561,10 @@ async def agent_clarification(
             status_code=status.HTTP_409_CONFLICT,
             detail="Task ist nicht in_progress — Klaerungsfrage nur waehrend aktiver Arbeit moeglich.",
         )
+    # From the chat session this would block the RUN's task; the operator's
+    # answer would then start a second run (round-2 review r1 S2). The chat
+    # asks with a plain `mc ask` (no status change) instead.
+    await refuse_chat_task_write(session, request, agent, current_task, "question")
 
     # 2. Load project name for context
     project_name = None

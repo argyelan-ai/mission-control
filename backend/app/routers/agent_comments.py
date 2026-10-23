@@ -31,7 +31,12 @@ from app.models.memory import BoardMemory
 from app.models.task import Task, TaskComment
 from app.services.activity import emit_event
 from app.services.blocker_triage import is_lead_agent
-from app.services.chat_session_guard import refuse_chat_task_write
+from app.services.chat_session_guard import (
+    CHAT_REPLY_COMMENT_TYPES,
+    is_chat_session,
+    refuse_chat_task_write,
+)
+from app.services.chat_run_context import review_run_holds
 from app.services.task_state import lock_and_set
 from app.utils import utcnow
 
@@ -259,9 +264,10 @@ async def agent_add_comment(
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # A chat session never writes into its own agent's task (t1 MUST-1).
-    await refuse_chat_task_write(session, request, agent, task, f"comment {payload.comment_type}")
-    return await _create_comment(session, task, agent, payload)
+    # A chat session never writes the run state of its own agent's task
+    # (t1 MUST-1); a plain reply is not run state (round-2 r1 S3).
+    await _refuse_chat_run_comment(session, request, agent, task, payload)
+    return await _create_comment(session, task, agent, payload, from_chat=is_chat_session(request))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -293,8 +299,27 @@ async def agent_add_comment_by_task_id(
     if agent.board_id != task.board_id:
         raise HTTPException(status_code=403, detail="Agent not assigned to this board")
 
+    await _refuse_chat_run_comment(session, request, agent, task, payload)
+    return await _create_comment(session, task, agent, payload, from_chat=is_chat_session(request))
+
+
+async def _refuse_chat_run_comment(
+    session: AsyncSession, request: Request, agent: Agent, task: Task,
+    payload: AgentCommentCreate,
+) -> None:
+    """409 for a chat-session comment that moves its own run (progress,
+    resolution, blocker, …). A reply (``CHAT_REPLY_COMMENT_TYPES``) passes:
+    the operator asked in the task thread, the answer belongs there
+    (round-2 review r1 S3). Not on the card this agent's review run works:
+    there a reviewer's ``message`` ends the review wait and counts as the
+    reviewer having spoken (``review_park``, ``proof_gate``)."""
+    if (
+        is_chat_session(request)
+        and payload.comment_type in CHAT_REPLY_COMMENT_TYPES
+        and not review_run_holds(task, agent)
+    ):
+        return
     await refuse_chat_task_write(session, request, agent, task, f"comment {payload.comment_type}")
-    return await _create_comment(session, task, agent, payload)
 
 
 async def _create_comment(
@@ -302,6 +327,8 @@ async def _create_comment(
     task: Task,
     agent: Agent,
     payload: AgentCommentCreate,
+    *,
+    from_chat: bool = False,
 ):
     """Shared comment-write path for both comment endpoints above.
 
@@ -356,8 +383,12 @@ async def _create_comment(
 
     # ── Auto-ACK: first comment from the assigned agent → set ack_at ──
     # Shared handshake (§3.3) — same implementation as the Message channel.
-    from app.services.task_lifecycle import apply_ack_handshake
-    apply_ack_handshake(session, task, agent)
+    # Never from the chat session (``from_chat``): its reply is not the run
+    # taking the task — the ACK would flip a delivered task to in_progress
+    # behind the run's back (round-2 review r1 S3).
+    if not from_chat:
+        from app.services.task_lifecycle import apply_ack_handshake
+        apply_ack_handshake(session, task, agent)
 
     comment = TaskComment(
         task_id=task_id,
@@ -367,8 +398,10 @@ async def _create_comment(
         content=payload.content,
     )
     session.add(comment)
-    agent.last_task_activity_at = utcnow()
-    session.add(agent)
+    if not from_chat:
+        # Run liveness (watchdogs read it); a chat reply is no sign of the run.
+        agent.last_task_activity_at = utcnow()
+        session.add(agent)
 
     # ── Resolution Auto-Promote ──────────────────────────────────────────
     # When an agent writes a "resolution" comment but the task is still

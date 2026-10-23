@@ -26,13 +26,15 @@ The caller decides that (``agent_chat.post_chat_input``).
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, or_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.config import settings
 from app.models.agent import Agent
 from app.models.deliverable import TaskDeliverable
 from app.models.task import Task, TaskComment, TaskEvent
@@ -44,6 +46,9 @@ RECENT_WINDOW = timedelta(minutes=30)
 #: ``chat_task_steps.LIVE_STATUSES``; inbox counts once it was delivered).
 LIVE_STATUSES = ("in_progress", "waiting", "blocked", "user_test")
 FINISHED_STATUSES = ("review", "done", "failed", "aborted")
+#: ``dispatch_intent`` of a card a review handoff gave to a reviewer agent
+#: (``task_lifecycle`` review handoff).
+REVIEW_HANDOFF = "review_handoff"
 #: Comment types that say where a run stands, newest first.
 _NOTE_TYPES = ("progress", "resolution", "reflection", "blocker", "evidence")
 _MAX_TASKS = 3
@@ -60,9 +65,68 @@ def _aware(dt: datetime | None) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _hhmm(dt: datetime | None) -> str | None:
+def operator_zone() -> tuple[tzinfo, str]:
+    """The operator's clock (``settings.usage_timezone``, an IANA name)
+    and its name; UTC when unset or unknown. Round-2 user test t1 SHOULD-1:
+    the block said "01:04 UTC", the chat repeated it, the UI said 03:03 — to
+    the operator the agent looked two hours behind."""
+    name = (settings.usage_timezone or "").strip() or "UTC"
+    try:
+        return ZoneInfo(name), name
+    except Exception:  # noqa: BLE001 — a typo in the env must not break a chat turn
+        return timezone.utc, "UTC"
+
+
+def _hhmm(dt: datetime | None, *, now: datetime | None = None) -> str | None:
+    """``HH:MM`` on the operator's clock, with ``DD.MM.`` in front when it is
+    not the same local day as ``now``."""
     aware = _aware(dt)
-    return aware.astimezone(timezone.utc).strftime("%H:%M UTC") if aware else None
+    if aware is None:
+        return None
+    zone, _name = operator_zone()
+    local = aware.astimezone(zone)
+    ref = _aware(now)
+    if ref is not None and ref.astimezone(zone).date() != local.date():
+        return local.strftime("%d.%m. %H:%M")
+    return local.strftime("%H:%M")
+
+
+#: The status as a word the operator reads (round-2 t1 NICE-3: the chat
+#: quoted "`in_progress`" / "Status `review`"). Same meaning as the chat's
+#: task lines in the UI (frontend messages tasks.detail.line.task.*), in the
+#: agent's ``operator_language``; unknown languages fall back to English.
+_STATUS_WORDS: dict[str, dict[str, str]] = {
+    "en": {
+        "inbox": "delivered, not started yet",
+        "in_progress": "in progress",
+        "waiting": "waits for the operator",
+        "blocked": "waits for the operator",
+        "user_test": "waits for the operator's test",
+        "review": "awaits review",
+        "reviewing": "your review run is reviewing it",
+        "done": "done",
+        "failed": "failed",
+        "aborted": "aborted",
+    },
+    "de": {
+        "inbox": "zugestellt, noch nicht begonnen",
+        "in_progress": "in Arbeit",
+        "waiting": "wartet auf den Operator",
+        "blocked": "wartet auf den Operator",
+        "user_test": "wartet auf den Test des Operators",
+        "review": "wartet auf Prüfung",
+        "reviewing": "dein Prüflauf prüft sie gerade",
+        "done": "erledigt",
+        "failed": "fehlgeschlagen",
+        "aborted": "abgebrochen",
+    },
+}
+
+
+def status_word(status: str, language: str | None) -> str:
+    """``status`` as a plain word in ``language`` (``en`` fallback)."""
+    words = _STATUS_WORDS.get((language or "en").strip().lower()[:2], _STATUS_WORDS["en"])
+    return words.get(status) or _STATUS_WORDS["en"].get(status) or status.replace("_", " ")
 
 
 def _one_line(text: str | None, limit: int = _NOTE_MAX) -> str | None:
@@ -81,6 +145,20 @@ def run_folder(agent: Agent, task_id: Any) -> str:
     return f"/deliverables/{task_id}/"
 
 
+def review_run_holds(task: Task, agent: Agent) -> bool:
+    """A review run of ``agent`` holds this card: a review handoff gave it to
+    ``agent`` as the reviewer. The card stays in ``review`` the whole time
+    that run works it, so for its reviewer it is live — not "finished", and
+    not only for ``RECENT_WINDOW`` after the developer's run let go
+    (round-2 review SHOULD-1: after 30 minutes the reviewer's chat could
+    write on the card its own review run was working)."""
+    return (
+        task.status == "review"
+        and task.dispatch_intent == REVIEW_HANDOFF
+        and task.assigned_agent_id == agent.id
+    )
+
+
 async def _live_tasks(session: AsyncSession, agent: Agent) -> list[Task]:
     stmt = (
         select(Task)
@@ -89,6 +167,8 @@ async def _live_tasks(session: AsyncSession, agent: Agent) -> list[Task]:
             or_(
                 Task.status.in_(LIVE_STATUSES),
                 and_(Task.status == "inbox", Task.dispatched_at.is_not(None)),
+                # The card this agent's review run works (``review_run_holds``).
+                and_(Task.status == "review", Task.dispatch_intent == REVIEW_HANDOFF),
             ),
         )
         .order_by(func.coalesce(Task.started_at, Task.dispatched_at).desc())
@@ -161,10 +241,14 @@ async def _last_notes(session: AsyncSession, ids: list[Any]) -> dict[Any, TaskCo
 
 
 def _task_lines(
-    agent: Agent, task: Task, *, when: str | None,
+    agent: Agent, task: Task, *, when: str | None, now: datetime,
     deliverables: list[TaskDeliverable], note: TaskComment | None,
 ) -> list[str]:
-    head = f'- "{task.title}" (id {task.id}) — status {task.status}'
+    word = status_word(
+        "reviewing" if review_run_holds(task, agent) else task.status,
+        getattr(agent, "operator_language", None),
+    )
+    head = f'- "{task.title}" (id {task.id}) — status: {word}'
     if task.checklist_total:
         head += f", checklist {task.checklist_done}/{task.checklist_total}"
     if when:
@@ -180,7 +264,7 @@ def _task_lines(
     if note is not None:
         text = _one_line(note.content)
         if text:
-            stamp = _hhmm(note.created_at)
+            stamp = _hhmm(note.created_at, now=now)
             lines.append(f"  Last {note.comment_type} note" + (f" ({stamp})" if stamp else "") + f": {text}")
     return lines
 
@@ -202,27 +286,36 @@ async def run_context(session: AsyncSession, agent: Agent, *, now: datetime | No
     if live:
         lines.append("A task of yours is being worked RIGHT NOW in its own run session — not in this chat:")
         for task in live:
-            started = _hhmm(task.started_at or task.dispatched_at)
+            # A review card's started_at is the developer's start; the review
+            # run began when the card was dispatched to this reviewer.
+            started_at = (task.dispatched_at or task.started_at) if review_run_holds(task, agent) \
+                else (task.started_at or task.dispatched_at)
+            started = _hhmm(started_at, now=now)
             lines += _task_lines(
-                agent, task, when=f"started {started}" if started else None,
+                agent, task, when=f"started {started}" if started else None, now=now,
                 deliverables=deliverables.get(task.id, []), note=notes.get(task.id),
             )
     if recent:
         lines.append("A run of yours finished recently (its own session, not this chat):")
         for task, left_at in recent:
-            ended = _hhmm(left_at)
+            ended = _hhmm(left_at, now=now)
             lines += _task_lines(
-                agent, task, when=f"run ended {ended}" if ended else None,
+                agent, task, when=f"run ended {ended}" if ended else None, now=now,
                 deliverables=deliverables.get(task.id, []), note=notes.get(task.id),
             )
+    _zone, zone_name = operator_zone()
     lines += [
-        f"State as of {_hhmm(now)}.",
+        f"State as of {_hhmm(now)} (the operator's local time, {zone_name}); every time "
+        "above is on that clock — say times as given, do not convert them.",
+        "Answer from this block first; read more only when the question needs it. "
+        "Name statuses in plain words, never raw status codes.",
         "Rules for this reply: answer the operator from this state. You may READ the run's "
-        "files and `mc task-get <id>`. Do NOT work on these tasks — no files in their folders, "
-        "no `mc comment` / `mc checklist` / `mc deliverable` / `mc finish` / `mc ack` / "
-        "`mc recover` / `mc ask --blocking` for them (the server refuses those calls from the "
-        "chat; a plain `mc ask` without `--blocking` is fine). If the operator "
-        "wants a change to such a task, tell them to make it in the task view.",
+        "files and run `mc task-get <id>`. Do NOT work on these tasks — no files in their "
+        "folders, no `mc comment progress|resolution|evidence|blocker|reflection`, no "
+        "`mc checklist` / `mc deliverable` / `mc finish` / `mc ack` / `mc recover` / "
+        "`mc ask --blocking` / `mc question` / `mc help` / `mc delegate` for them (the server "
+        "refuses those calls from the chat). A plain `mc ask` without `--blocking` is fine. "
+        "If the operator wants a change to such a task, tell them to make it in the task view.",
         END,
     ]
     return "\n".join(lines)

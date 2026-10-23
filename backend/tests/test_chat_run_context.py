@@ -18,6 +18,16 @@ running" seconds after a run ended. Contract:
   (``acp-http``) runs tasks inside its chat session — no block there;
 * both transports put ``context`` on the wire only when set.
 
+Round 2 (23.10.2026, t1 SHOULD-1 / NICE-3, r1 S1):
+
+* times are the operator's local time (``settings.usage_timezone``), never
+  "UTC" — the chat answered "01:04:35 UTC" while the UI said 03:03;
+* the status is a word in the agent's ``operator_language`` ("in Arbeit"),
+  never the raw code ("in_progress");
+* the reading hint ``mc task-get <id>`` is one the chat can run (the CLI
+  resolves the board itself, scripts/mc-cli), and the block says to answer
+  from it first.
+
 Ids, names and slugs are made up.
 """
 from __future__ import annotations
@@ -112,7 +122,8 @@ async def test_running_task_is_named_with_folder_deliverables_and_rule():
     text = await _context(agent)
     assert text is not None
     assert str(task.id) in text and "[Probe] Mini page" in text
-    assert "in_progress" in text and "checklist 1/4" in text
+    assert "status: in progress" in text and "checklist 1/4" in text
+    assert "in_progress" not in text
     # The folder the chat session could not find on 22.10.
     assert f"/deliverables/{task.id}/" in text
     assert f"/deliverables/{task.id}/index.html" in text
@@ -130,7 +141,63 @@ async def test_just_finished_run_is_named_after_review_handoff():
     text = await _context(agent)
     assert text is not None
     assert str(task.id) in text and "finished recently" in text
-    assert "status review" in text
+    assert "status: awaits review" in text
+
+
+@pytest.fixture
+def local_zone(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "usage_timezone", "Europe/Berlin")
+
+
+async def test_times_are_the_operators_local_time(local_zone):
+    """22:19 UTC on 22.10. is 00:19 in Berlin (CEST, +2) — the operator's
+    screen shows that, so the chat must say that."""
+    agent = await _agent()
+    await _running_task(agent)
+    text = await _context(agent)
+    assert "started 00:19" in text
+    assert "UTC" not in text
+    assert "State as of 00:21 (the operator's local time, Europe/Berlin)" in text
+
+
+async def test_a_start_on_another_day_carries_the_date(local_zone):
+    agent = await _agent()
+    task = await _running_task(agent)
+    from app.models.task import Task
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        row = await s.get(Task, task.id)
+        row.started_at = NOW - timedelta(days=1, hours=1)
+        s.add(row)
+        await s.commit()
+    text = await _context(agent)
+    assert "started 21.10. 23:21" in text
+
+
+async def test_status_is_a_word_in_the_operators_language():
+    agent = await _agent(operator_language="de")
+    await _running_task(agent)
+    await _handed_off_task(agent, left_at=NOW - timedelta(minutes=5))
+    text = await _context(agent)
+    assert "status: in Arbeit" in text
+    assert "status: wartet auf Prüfung" in text
+    assert "in_progress" not in text and "status review" not in text
+
+
+async def test_the_block_says_answer_from_here_and_names_a_runnable_read():
+    agent = await _agent()
+    task = await _running_task(agent)
+    text = await _context(agent)
+    assert "Answer from this block first" in text
+    assert "`mc task-get <id>`" in text
+    assert "never raw status codes" in text
+    # The three ways that set the run's task to blocked (round-2 r1 S2).
+    assert "`mc question`" in text and "`mc help`" in text and "`mc delegate`" in text
+    # Run-state comments are named, a plain reply is not forbidden (r1 S3).
+    assert "`mc comment progress|resolution|evidence|blocker|reflection`" in text
+    assert str(task.id) in text
 
 
 async def test_an_old_run_is_not_named():
@@ -233,3 +300,33 @@ async def test_http_transport_puts_context_on_the_wire_only_when_set():
     await transport.prompt("hi", mode="queue")
     assert json.loads(seen[0].content) == {"text": "hi", "mode": "queue", "context": "CTX"}
     assert json.loads(seen[1].content) == {"text": "hi", "mode": "queue"}
+
+
+async def test_reviewers_review_card_is_named_as_live():
+    """A review handoff gives the `review` card to the reviewer; its review
+    run works it however long ago the developer's run let go (round-2 review
+    SHOULD-1). The reviewer's chat hears about it as live work, with the
+    review run's start — not the developer's — and not as "awaits review"."""
+    from app.models.task import Task, TaskEvent
+
+    developer = await _agent()
+    reviewer = await _agent(role="reviewer")
+    task = Task(id=uuid.uuid4(), board_id=reviewer.board_id, title="[Probe] Review me",
+                status="review", assigned_agent_id=reviewer.id, dispatch_intent="review_handoff",
+                started_at=NOW - timedelta(hours=3), dispatched_at=NOW - timedelta(minutes=4))
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(task)
+        await s.commit()
+        s.add(TaskEvent(task_id=task.id, from_status="inbox", to_status="in_progress",
+                        changed_by="agent", agent_id=developer.id,
+                        created_at=NOW - timedelta(hours=3)))
+        s.add(TaskEvent(task_id=task.id, from_status="in_progress", to_status="review",
+                        changed_by="agent", agent_id=developer.id,
+                        created_at=NOW - timedelta(hours=2)))
+        await s.commit()
+    text = await _context(reviewer)
+    assert text is not None
+    assert str(task.id) in text and "RIGHT NOW" in text
+    assert "status: your review run is reviewing it" in text
+    assert "started 22:17" in text
+    assert "awaits review" not in text
