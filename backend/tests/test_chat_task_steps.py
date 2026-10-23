@@ -161,11 +161,12 @@ async def _add(*rows) -> None:
         await s.commit()
 
 
-def _event(task_id, to_status: str, *, agent_id=None, from_status="inbox", at: datetime | None = None):
+def _event(task_id, to_status: str, *, agent_id=None, from_status="inbox", at: datetime | None = None,
+           reason: str | None = None):
     from app.models.task import TaskEvent
 
     return TaskEvent(task_id=task_id, from_status=from_status, to_status=to_status,
-                     changed_by="agent", agent_id=agent_id,
+                     changed_by="agent", agent_id=agent_id, reason=reason,
                      created_at=(at or datetime.now(timezone.utc)).astimezone(timezone.utc))
 
 
@@ -1167,3 +1168,64 @@ async def test_task_stubs_name_the_current_run_after_a_rework(
     assert datetime.fromisoformat(reworked["startKey"]) == first
     assert datetime.fromisoformat(reworked["endedAt"]) == second + timedelta(seconds=48)
     assert tasks["One run"]["runs"] == 1
+
+
+@pytest.mark.asyncio
+async def test_task_stubs_count_only_real_run_starts(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
+):
+    """Round-8 review MUST-2: every step into ``in_progress`` counted as a
+    run. 20 min of work, a question, 1 min more → "Dauer 1 min (Lauf 2)".
+    Only ``inbox → in_progress`` (or a phase rewrite) starts a run; an answered
+    question, a Telegram resume and the provisional ``review → in_progress``
+    of a drag rejection (which then goes via inbox) do not."""
+    board, agent, _root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+
+    # Work, a question, the answer, more work, review: ONE run.
+    start = now - timedelta(minutes=30)
+    asked = start + timedelta(minutes=20)
+    answered = asked + timedelta(minutes=8)
+    asked_task = await make_task(board.id, title="Asked", status="review", assigned_agent_id=agent.id,
+                                 started_at=_utc(start))
+    await _add(
+        _event(asked_task.id, "in_progress", agent_id=agent.id, at=start),
+        _event(asked_task.id, "blocked", from_status="in_progress", at=asked, reason="clarification_question"),
+        _event(asked_task.id, "in_progress", from_status="blocked", at=answered, reason="clarification_answered"),
+        _event(asked_task.id, "review", agent_id=agent.id, from_status="in_progress",
+               at=answered + timedelta(minutes=1)),
+    )
+
+    # A drag rejection: review → in_progress (provisional) → inbox → in_progress = run 2, not 3.
+    first = now - timedelta(minutes=12)
+    reject = now - timedelta(minutes=4)
+    dragged = await make_task(board.id, title="Dragged", status="in_progress", assigned_agent_id=agent.id,
+                              started_at=_utc(first))
+    await _add(
+        _event(dragged.id, "in_progress", agent_id=agent.id, at=first),
+        _event(dragged.id, "review", agent_id=agent.id, from_status="in_progress", at=first + timedelta(minutes=3)),
+        _event(dragged.id, "in_progress", from_status="review", at=reject),
+        _event(dragged.id, "inbox", from_status="in_progress", at=reject + timedelta(seconds=1)),
+        _event(dragged.id, "in_progress", agent_id=agent.id, at=reject + timedelta(seconds=5)),
+    )
+
+    # A done phase sent back for a rewrite starts a run without an inbox step.
+    p_first = now - timedelta(minutes=40)
+    rewrite = now - timedelta(minutes=6)
+    rewritten = await make_task(board.id, title="Rewritten", status="in_progress", assigned_agent_id=agent.id,
+                                started_at=_utc(p_first))
+    await _add(
+        _event(rewritten.id, "in_progress", agent_id=agent.id, at=p_first),
+        _event(rewritten.id, "done", agent_id=agent.id, from_status="in_progress", at=p_first + timedelta(minutes=5)),
+        _event(rewritten.id, "in_progress", agent_id=agent.id, from_status="done", at=rewrite,
+               reason="phase_rewrite_request"),
+    )
+
+    body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/tasks")).json()
+    tasks = {t["title"]: t for t in body["tasks"]}
+    assert tasks["Asked"]["runs"] == 1
+    assert datetime.fromisoformat(tasks["Asked"]["runStartedAt"]) == start
+    assert tasks["Dragged"]["runs"] == 2
+    assert datetime.fromisoformat(tasks["Dragged"]["runStartedAt"]) == reject + timedelta(seconds=5)
+    assert tasks["Rewritten"]["runs"] == 2
+    assert datetime.fromisoformat(tasks["Rewritten"]["runStartedAt"]) == rewrite

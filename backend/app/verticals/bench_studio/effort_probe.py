@@ -334,7 +334,10 @@ def level_fields(row: BenchProbe, level: str) -> dict[str, Any]:
     subclass ``EffortProbeFailedError`` when the probe failed."""
     if level in (None, "", "default"):
         return {}
-    if row.status != "ok":
+    # Only a probe that FAILED knows nothing. "no_effect" is a probe that ran
+    # fine and found the model ignores effort — "not offered" is the true
+    # answer there (round-8 review MUST-1).
+    if row.status == "failed":
         raise EffortProbeFailedError(
             f"effort {level!r} cannot be checked for {row.served_model_id}: "
             f"the effort probe failed (probe: {row.status})"

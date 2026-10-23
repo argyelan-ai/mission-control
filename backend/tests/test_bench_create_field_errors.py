@@ -149,3 +149,17 @@ async def test_agent_row_without_agent_names_its_model_field(auth_client, _no_ba
     item = _only_item(resp)
     assert item["loc"] == ["body", "models", 1, "agent_id"]
     assert item["type"] == "bench_agent_required"
+
+
+@pytest.mark.asyncio
+async def test_no_effect_probe_says_not_offered_not_check_failed(auth_client, monkeypatch, _no_background):
+    """Round-8 review MUST-1: ``no_effect`` is a probe that RAN — the model
+    ignores effort, so the true answer is "not offered", not "check failed"."""
+    no_effect = BenchProbe(served_model_id="deepseek-x", status="no_effect", levels=[], default_observed="unknown")
+    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=no_effect))
+    resp = await _create(auth_client, _spark("max"))
+    item = _only_item(resp)
+    assert item["loc"] == ["body", "models", 0, "effort"]
+    assert item["type"] == "bench_effort_not_offered"
+    assert item["ctx"]["level"] == "max"
+    assert "failed" not in item["msg"]

@@ -68,6 +68,9 @@ NOT_APPLICABLE: dict[str, Any] = {"applies": False}
 #: A task is LIVE in a chat only while it is assigned to that agent and in
 #: one of these states (or delivered: ``inbox`` with ``dispatched_at``).
 LIVE_STATUSES = ("in_progress", "waiting", "blocked", "user_test")
+#: The one step into ``in_progress`` that starts a new run without an inbox
+#: step: a done phase sent back for a rewrite (``task_lifecycle``).
+RUN_START_REWRITE_REASON = "phase_rewrite_request"
 #: Defensive cap of the live query (normally 0–1 live tasks per agent).
 _LIVE_CAP = 10
 #: Task session files written this long before the task was created are not its.
@@ -926,15 +929,28 @@ async def task_stubs(session: AsyncSession, agent: Agent, limit: int = 20) -> di
 
     # The current run (round-7 re-check t1 NICE-3): after "Request changes"
     # the end line said "took 9 min" — first start to the end of run 2, the
-    # wait for the review included. The newest step into in_progress starts
-    # the run the line names; ``startKey`` keeps the first start (it places
-    # the task in the chat).
+    # wait for the review included. The newest START of a run begins the run
+    # the line names; ``startKey`` keeps the first start (it places the task
+    # in the chat). A start is a step ``inbox → in_progress`` (first start,
+    # rework start, pull claim, orphan recovery, phase advance) or a phase
+    # rewrite (``done → in_progress``, no inbox step). NOT a start: an
+    # answered question / Telegram resume (``blocked → in_progress``), a
+    # reviewer taking the card, or the provisional ``review → in_progress``
+    # of a drag/PATCH rejection that then goes via inbox (round-8 review
+    # MUST-2: "Dauer 1 min (Lauf 2)" after 20 min of work and one question).
     run_of: dict[Any, tuple[Any, int]] = {}
     if ids:
         for task_id, newest, count in (
             await session.exec(
                 select(TaskEvent.task_id, func.max(TaskEvent.created_at), func.count())
-                .where(TaskEvent.task_id.in_(ids), TaskEvent.to_status == "in_progress")
+                .where(
+                    TaskEvent.task_id.in_(ids),
+                    TaskEvent.to_status == "in_progress",
+                    or_(
+                        TaskEvent.from_status == "inbox",
+                        TaskEvent.reason == RUN_START_REWRITE_REASON,
+                    ),
+                )
                 .group_by(TaskEvent.task_id)
             )
         ).all():
