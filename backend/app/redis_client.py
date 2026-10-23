@@ -623,6 +623,14 @@ class RedisKeys:
         return "mc:runtime-pulse:lock"
 
     @staticmethod
+    def host_awake(host_id: str) -> str:
+        """"1"/"0" — the box's own host check (control server /health), kept a
+        few seconds (services/host_liveness.AWAKE_TTL_S). Written by the 5 s
+        metrics poll, read by the model catalog so "model port dark" is never
+        mistaken for "box asleep" (round-4 t3 S1)."""
+        return f"mc:host:{host_id}:awake"
+
+    @staticmethod
     def host_pulse(host_id: str) -> str:
         """Redis LIST of JSON {t, tps} points, LTRIM'd to 180 (15 min @ 5s)."""
         return f"mc:host:{host_id}:pulse"

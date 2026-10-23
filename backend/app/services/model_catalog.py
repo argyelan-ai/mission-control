@@ -110,6 +110,7 @@ import asyncio
 import json
 import logging
 import tomllib
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -119,9 +120,10 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
+from app.models.host import Host
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys, get_redis
-from app.services import runtime_naming
+from app.services import host_liveness, runtime_naming
 from app.services.harness_compat import (
     resolve_provider_credentials,
     runtime_protocol,
@@ -189,6 +191,17 @@ STATUS_CLI_CONFIG = "cli_config"
 # (force) still probes. Distinct from `unreachable`: that one is OUR probe's
 # finding, this one is the watcher's.
 STATUS_ASLEEP = "asleep"
+# Round-4 user test (t3 S1, r2 S1): the dark MODEL port is not the state of
+# the BOX. "asleep" needs the box's own host check to fail
+# (services/host_liveness); a box that answers while its model port is dark
+# runs no model — this state, also not probed and not cached. A dark port on
+# a box nobody can cheaply ask (always-on SSH box, no heartbeat) stays
+# `unreachable`: the port does not answer, and no sleep is claimed.
+STATUS_NO_MODEL = "no_model"
+#: States the catalog answers from what it already knows, without asking the
+#: provider — they carry no check time (r2 S1: "checked < 1 min ago" stood
+#: next to "not queried").
+_UNPROBED = frozenset({STATUS_ASLEEP, STATUS_NO_MODEL})
 
 # Protocols whose MANIFEST outranks a successful probe and is therefore MERGED
 # into it (union, deduplicated) instead of only standing in when the probe dies.
@@ -227,6 +240,15 @@ class ProviderTarget:
     endpoint: str | None = None
     # Representative row — supplies credentials and (for openai) the endpoint.
     runtime: Runtime | None = None
+    #: Boxes behind the runtime rows (``runtime.host_id``) and whether any row
+    #: is power-managed itself (legacy flag) — what "is the box asleep?" asks.
+    host_ids: list[uuid.UUID] = field(default_factory=list)
+    power_managed: bool = False
+
+    def add_row(self, rt: Runtime) -> None:
+        if rt.host_id is not None and rt.host_id not in self.host_ids:
+            self.host_ids.append(rt.host_id)
+        self.power_managed = self.power_managed or bool(rt.power_managed)
 
 
 @dataclass
@@ -724,6 +746,7 @@ async def build_provider_targets(session: AsyncSession) -> list[ProviderTarget]:
             if existing_openai is not None:
                 if _openai_fingerprints.get(key) == fingerprint:
                     existing_openai.runtime_slugs.append(rt.slug)
+                    existing_openai.add_row(rt)
                     continue
                 key = f"openai:{rt.slug}"
             targets[key] = ProviderTarget(
@@ -734,6 +757,7 @@ async def build_provider_targets(session: AsyncSession) -> list[ProviderTarget]:
                 endpoint=rt.endpoint,
                 runtime=rt,
             )
+            targets[key].add_row(rt)
             _openai_fingerprints[key] = fingerprint
             continue
         # Single-endpoint protocols collapse into one provider; several runtime
@@ -853,12 +877,29 @@ def _entry(target: ProviderTarget, discovery: Discovery) -> dict:
         "reason": discovery.reason,
         "error": discovery.error,
         "models": discovery.models,
-        "cached_at": _utcnow_iso(),
+        "cached_at": None if discovery.status in _UNPROBED else _utcnow_iso(),
     }
 
 
-async def _store(target: ProviderTarget, discovery: Discovery) -> dict:
+def _watcher_reachable(target: ProviderTarget, live: dict[str, dict] | None) -> bool | None:
+    """Did the watcher see this provider's box answer when we probed it?
+    ``None`` when nothing was asked (no live snapshots at hand)."""
+    if live is None:
+        return None
+    return any((live.get(slug) or {}).get("reachable") is True for slug in target.runtime_slugs)
+
+
+async def _store(
+    target: ProviderTarget, discovery: Discovery, *, live: dict[str, dict] | None = None
+) -> dict:
     payload = _entry(target, discovery)
+    # r1 N4: a failure recorded while the watcher already saw the box answer
+    # is about /models itself (401, 500, a hang) — not about a sleeping box.
+    # ``_woke_up`` must not drop it on the next page, or every visit probes
+    # again for up to 2 × 15 s.
+    reachable = _watcher_reachable(target, live)
+    if reachable is not None:
+        payload["watcher_reachable"] = reachable
     # cli_config caches long like a success: it is a stable answer read from a
     # local file, not a transient outage that a retry could heal. The shorter
     # negative TTL is reserved for states that really might fix themselves
@@ -929,11 +970,54 @@ def _dark_failures(target: ProviderTarget, live: dict[str, dict]) -> int | None:
 
 
 def _woke_up(target: ProviderTarget, cached: dict, live: dict[str, dict]) -> bool:
-    """A remembered failure whose box the watcher now sees answering."""
+    """A remembered failure whose box the watcher now sees answering — and
+    did not see answering when the failure was recorded (r1 N4: then the box
+    was up all along and only /models failed; that stays remembered)."""
     if cached.get("status") in (STATUS_OK, STATUS_CLI_CONFIG):
+        return False
+    if cached.get("watcher_reachable") is True:
         return False
     return any(
         (live.get(slug) or {}).get("reachable") is True for slug in target.runtime_slugs
+    )
+
+
+async def _hosts_of(session: AsyncSession, target: ProviderTarget) -> list[Host]:
+    hosts: list[Host] = []
+    for host_id in target.host_ids:
+        host = await session.get(Host, host_id)
+        if host is not None:
+            hosts.append(host)
+    return hosts
+
+
+async def _dark_box_state(target: ProviderTarget, hosts: list[Host], dark: int) -> Discovery:
+    """What a dark model port means for the BOX (round-4 t3 S1).
+
+    The box answers its own check → it runs no model (``no_model``). It does
+    not, and it is power-managed → ``asleep``. Nobody can ask it cheaply →
+    the port does not answer (``unreachable``), no sleep claimed. None of
+    them probes the dark port."""
+    states = await asyncio.gather(*(host_liveness.host_awake(h) for h in hosts))
+    if any(state is True for state in states):
+        return Discovery(
+            status=STATUS_NO_MODEL,
+            models=[],
+            reason=STATUS_NO_MODEL,
+            error=f"box answers; model endpoint dark for {dark} watcher probes — not probed",
+        )
+    if target.power_managed or any(h.power_managed for h in hosts):
+        return Discovery(
+            status=STATUS_ASLEEP,
+            models=[],
+            reason=STATUS_ASLEEP,
+            error=f"box does not answer its own check; {dark} failed watcher probes — not probed",
+        )
+    return Discovery(
+        status=STATUS_UNREACHABLE,
+        models=[],
+        reason=STATUS_UNREACHABLE,
+        error=f"{dark} failed watcher probes in a row — not probed",
     )
 
 
@@ -987,10 +1071,13 @@ async def build_catalog(session: AsyncSession, *, force: bool = False) -> list[d
     )
     entries: dict[str, dict] = {}
     to_probe: list[tuple[ProviderTarget, dict[str, str]]] = []
+    #: Dark providers and their boxes, asked after the transaction ends.
+    to_classify: list[tuple[ProviderTarget, list[Host], int]] = []
+    dark_hosts: dict[str, tuple[list[Host], int]] = {}
     for target in targets:
+        dark = _dark_failures(target, live)
         if not force:
             cached = await _cache_get(target.key)
-            dark = _dark_failures(target, live)
             # A remembered SUCCESS still wins (its model list is real). A
             # remembered FAILURE does not: the hourly checker and "Neu
             # abfragen" really probe a sleeping box, and their `unreachable`
@@ -1005,19 +1092,12 @@ async def build_catalog(session: AsyncSession, *, force: bool = False) -> list[d
             ):
                 entries[target.key] = {**cached, "cached": True}
                 continue
-            if dark is not None:
-                entries[target.key] = {
-                    **_entry(
-                        target,
-                        Discovery(
-                            status=STATUS_ASLEEP,
-                            models=[],
-                            reason=STATUS_ASLEEP,
-                            error=f"{dark} failed watcher probes in a row — not probed",
-                        ),
-                    ),
-                    "cached": False,
-                }
+        if dark is not None:
+            # Only now its boxes are needed — a cached success above never
+            # asks them (PR #971 review, NICE).
+            dark_hosts[target.key] = (await _hosts_of(session, target), dark)
+            if not force:
+                to_classify.append((target, *dark_hosts[target.key]))
                 continue
         if target.protocol not in ADAPTERS:
             entries[target.key] = await _store(
@@ -1029,10 +1109,27 @@ async def build_catalog(session: AsyncSession, *, force: bool = False) -> list[d
 
     await _end_transaction(session)
 
-    async def _probe_one(target: ProviderTarget, creds: dict[str, str]) -> None:
-        entries[target.key] = await _store(target, await _probe(target, creds))
+    async def _classify_one(target: ProviderTarget, hosts: list[Host], dark: int) -> None:
+        # Not cached: read from the watcher and the box on every call, so a
+        # woken box (or a started model) is probed on the very next one.
+        entries[target.key] = {**_entry(target, await _dark_box_state(target, hosts, dark)), "cached": False}
 
-    await asyncio.gather(*(_probe_one(t, c) for t, c in to_probe))
+    async def _probe_one(target: ProviderTarget, creds: dict[str, str]) -> None:
+        discovery = await _probe(target, creds)
+        stored = await _store(target, discovery, live=live if target.protocol == "openai" else None)
+        if discovery.status not in (STATUS_OK, STATUS_CLI_CONFIG) and target.key in dark_hosts:
+            # "Neu abfragen" asks the dark port anyway — when it still does
+            # not answer, the page says what the plain GET says (t3 NICE-4:
+            # `unreachable` after the click, `asleep` after a reload). The
+            # probe's failure stays cached; a dark watcher sets it aside.
+            hosts, dark = dark_hosts[target.key]
+            stored = {**_entry(target, await _dark_box_state(target, hosts, dark)), "cached": False}
+        entries[target.key] = stored
+
+    await asyncio.gather(
+        *(_classify_one(t, h, d) for t, h, d in to_classify),
+        *(_probe_one(t, c) for t, c in to_probe),
+    )
 
     providers = []
     for target in targets:

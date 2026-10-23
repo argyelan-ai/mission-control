@@ -2048,7 +2048,9 @@ export type ModelCatalogStatus =
   | "unreachable"
   | "manifest_fallback"
   | "cli_config"
-  | "asleep";
+  | "asleep"
+  /** The box answers its own check, its model port is dark (round-4). */
+  | "no_model";
 
 export interface ModelCatalogModel {
   id: string;
