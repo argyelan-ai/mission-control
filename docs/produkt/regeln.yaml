@@ -356,6 +356,21 @@ rules:
     status: active
     checked: 2026-10-16
 
+  - id: R-merge-only-mc-pr-note
+    says: "MC squash-merges a card's PR only from its own \"PR erstellt:\" note (system author, progress type, content starting with the note). A chat reply, an agent note or MC's task-done summary that names another PR never picks the merge target. Note and card field disagree, or only a foreign note exists: no merge, a warning in the log. The ADR gate, the reviewer brief and the proof gate read the same note through one query (pr_marker.py)."
+    source: "round-7 re-check (r1 N5, raised to SHOULD): a newer comment quoting another PR made MC merge that PR"
+    owner: backend/app/services/pr_marker.py
+    applies_to: ["backend/app/services/pr_marker.py", "backend/app/services/task_lifecycle.py", "backend/app/routers/agent_git.py", "backend/app/services/adr_gate.py", "backend/app/services/dispatch_message_builder.py", "backend/app/services/proof_gate.py"]
+    enforced_by:
+      - {test: "backend/tests/test_pr_marker_trust.py::test_newer_foreign_note_does_not_steer_the_merge"}
+      - {test: "backend/tests/test_pr_marker_trust.py::test_only_agent_written_note_merges_nothing"}
+      - {test: "backend/tests/test_pr_marker_trust.py::test_note_and_card_field_disagree_merges_nothing"}
+      - {test: "backend/tests/test_pr_marker_trust.py::test_adr_gate_reads_the_same_trusted_note"}
+      - {test: "backend/tests/test_pr_marker_trust.py::test_review_brief_shows_mcs_pr_not_a_quoted_one"}
+      - {test: "backend/tests/test_pr_marker_trust.py::test_proof_gate_ignores_a_quoted_pr_note"}
+    status: active
+    checked: 2026-10-23
+
   - id: R-proof-gate-finish
     says: "An agent's move to review/done on a card with a PR is checked on the server with evidence it fetches itself: the PR exists, is open (done: open or merged), is this card's PR, a reported SHA is the pushed head, the required CI checks are green, the PR really changed after the last change request (against the head the server recorded), review->done is closed by someone other than the developer with his own verdict, PR URLs quoted in the agent's comments exist. warn = card comment + task.proof_gate warning event, enforce = 422; no request field skips it; the date flip waits for PROOF_GATE_ENFORCE_MIN_CHECKS checked moves."
     source: "Beweis-Tor (team measure 2026-10-19: false finish reports were found by hand)"

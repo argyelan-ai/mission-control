@@ -255,7 +255,9 @@ def _unscoped_latest_comment_queries() -> set[tuple[str, str]]:
     hits: set[tuple[str, str]] = set()
     newest = ("TaskComment.created_at.desc()", "max(TaskComment.created_at)",
               "col(TaskComment.created_at).desc()")
-    scoped = ("content.like", "content ==")
+    # ``trusted_pr_note_filter(`` = system + ``progress`` + the "PR erstellt:"
+    # note prefix, built in services/pr_marker.py (round 8 / L6).
+    scoped = ("content.like", "content ==", "trusted_pr_note_filter(")
     # Only a POSITIVE type scope counts (``comment_type == "x"`` /
     # ``comment_type.in_(...)``). A negative one (``!= "system"``,
     # ``not_in({...})``) still lets a chat reply through (round-6 review NICE 3).

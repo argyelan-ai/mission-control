@@ -634,24 +634,13 @@ async def _merge_pr_if_exists(
         if not project or not project.github_repo_url:
             return
 
-        pr_result = await session.exec(
-            select(TaskComment)
-            .where(
-                TaskComment.task_id == task.id,
-                TaskComment.content.like("%PR erstellt:%"),
-            )
-            .order_by(TaskComment.created_at.desc())
-            .limit(1)
-        )
-        pr_comment = pr_result.first()
-        if not pr_comment:
+        # Only MC's own "PR erstellt:" note counts — never a chat reply or an
+        # agent note quoting another PR (round 8 / L6, see pr_marker.py).
+        from app.services.pr_marker import pr_number_to_merge
+        pr_number = await pr_number_to_merge(session, task)
+        if pr_number is None:
             return
 
-        pr_match = re.search(r"/pull/(\d+)", pr_comment.content)
-        if not pr_match:
-            return
-
-        pr_number = int(pr_match.group(1))
         project_slug = slugify_project(project.name)
 
         # Find workspace (reviewer or fallback)
