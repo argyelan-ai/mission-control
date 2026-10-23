@@ -2123,6 +2123,9 @@ export const api = {
       old_model_identifier: string | null;
       new_model_identifier: string | null;
       changed: boolean;
+      /** The stored check of this probe; `fail` when no chat model answered
+       *  (the ids above then keep the last known model). */
+      check?: import("@/lib/types").ConfigCheckItem;
     }> =>
       request(`/api/v1/runtimes/${runtimeId}/probe-model`, { method: "POST" }),
     liveStatus: () =>

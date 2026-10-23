@@ -1113,8 +1113,10 @@ async def probe_model_endpoint(
     try:
         run = await config_checks.run_check(session, "runtime", str(rt.id))
         probed = run.outcome.detail.get("model_id")
-    except config_checks.CheckNotRunnable:
+        check = run.item
+    except config_checks.CheckNotRunnable as e:
         probed = None  # no endpoint set — nothing to probe
+        check = e.item
     new_model = probed if probed else old_model
     changed = bool(probed) and probed != old_model
 
@@ -1130,6 +1132,10 @@ async def probe_model_endpoint(
         "old_model_identifier": old_model,
         "new_model_identifier": new_model,
         "changed": changed,
+        # The stored check of this probe (state, reason code, age). A gone
+        # model keeps the last known id above, so "unchanged" alone would
+        # read as healthy — the UI words the failure from this instead.
+        "check": check,
     }
 
 

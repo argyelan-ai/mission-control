@@ -134,6 +134,7 @@
       "ago": "{age} ago",
       "names": {
         "J-job-to-merge": "Job to merge",
+        "J-first-run": "First run",
         "J-phone-needs-you": "Answer from phone",
         "J-runtime-switch": "Switch runtime",
         "J-setup": "Setup",

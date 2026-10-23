@@ -20,7 +20,7 @@ export const PROJECT = "mc-journeys";
 // The operator account exists only in the throw-away stack; run-journeys.sh
 // generates its password per run (also written to the stack env file, so a
 // stack kept up with --keep can be reused: `set -a; . <stack.env>; set +a`).
-function operator() {
+export function operator() {
   const password = process.env.MC_JOURNEYS_OPERATOR_PASSWORD;
   if (!password) throw new Error("MC_JOURNEYS_OPERATOR_PASSWORD is not set — run through e2e/run-journeys.sh");
   return { email: "operator@journeys.test", password, name: "Operator" };
@@ -53,19 +53,37 @@ export async function api<T = any>(
   return (text ? JSON.parse(text) : null) as T;
 }
 
-/** Operator token: registers the first admin on a fresh stack, logs in after. */
+/** Operator token: registers the first admin on a fresh stack, logs in after.
+ *  A registration here stands in for the whole first run, so it also closes
+ *  the setup wizard — otherwise the app sends every page to /setup and a
+ *  journey run on its own (--grep, or before J-first-run) fails on Home.
+ *  J-first-run creates the admin through the login page instead. */
 export async function operatorToken(): Promise<string> {
-  const post = (path: string, body: unknown) =>
+  const post = (path: string, body: unknown, token?: string) =>
     fetch(`${BASE}/api/v1${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(body),
     });
   const account = operator();
-  let res = await post("/auth/register", account);
-  if (!res.ok) res = await post("/auth/login", { email: account.email, password: account.password });
+  const registered = await post("/auth/register", account);
+  if (registered.ok) {
+    const token = ((await registered.json()) as { access_token: string }).access_token;
+    const done = await post("/auth/first-run/complete", {}, token);
+    if (!done.ok) throw new ApiError(done.status, await done.text(), "POST /auth/first-run/complete");
+    return token;
+  }
+  const res = await post("/auth/login", { email: account.email, password: account.password });
   if (!res.ok) throw new ApiError(res.status, await res.text(), "operator login");
   return ((await res.json()) as { access_token: string }).access_token;
+}
+
+/** True on a stack where nobody has registered yet (the login page then
+ *  shows "create the first admin"). */
+export async function setupRequired(): Promise<boolean> {
+  const res = await fetch(`${BASE}/api/v1/auth/setup-required`);
+  if (!res.ok) throw new ApiError(res.status, await res.text(), "GET /auth/setup-required");
+  return ((await res.json()) as { setup_required: boolean }).setup_required;
 }
 
 /** Runs SQL inside the test stack's database container (fixtures only).

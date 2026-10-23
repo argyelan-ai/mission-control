@@ -1,0 +1,103 @@
+name: Journeys
+
+# The operator's journeys as click tests on a fresh, throw-away stack
+# (docs/journeys.md): the first run S0–S10 on a stub model with a fake
+# agent, the phone "needs you" path, usage numbers. A stack build plus the
+# run takes ~10–15 min, so this is NOT part of the per-PR CI: nightly on
+# main, on demand, and on pull requests that change the journey harness or
+# the installer it checks.
+#
+# GitHub-hosted runners only: no secrets, read-only token, nothing of the
+# operator's machine — fork code never runs anywhere private.
+
+on:
+  schedule:
+    - cron: "40 2 * * *"
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "e2e/**"
+      - ".github/workflows/journeys.yml"
+      - "install.sh"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: journeys-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install-preflight:
+    # S0 sabotage "port busy": the installer must stop before it pulls or
+    # builds anything, and say which port and how to find the program —
+    # not Docker's raw "address already in use" minutes later.
+    name: S0 install — a busy port gets its own line
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Another program listens on port 8000
+        run: |
+          python3 -m http.server 8000 --bind 127.0.0.1 >/dev/null 2>&1 &
+          for _ in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:8000/ && exit 0; sleep 0.25; done
+          echo "the blocker did not start" >&2; exit 1
+      - name: install.sh stops with the port line, before any build
+        run: |
+          rc=0
+          ./install.sh --here > install.log 2>&1 || rc=$?
+          cat install.log
+          test "$rc" -ne 0
+          grep -q "Port 8000 is already in use on this machine" install.log
+          grep -q "re-run the installer" install.log
+          if grep -q "building images locally" install.log; then echo "the build started anyway" >&2; exit 1; fi
+          test -z "$(docker compose ps -q)"
+
+  journeys:
+    name: Journeys — fresh stack, stub model, fake agent
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - name: Playwright browser with its system packages
+        working-directory: e2e
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Run the journeys (build → start → test → tear down)
+        # Hosted runners have ~14 GB free; the runner's 20 GB guard is for
+        # a machine that also runs a live install.
+        run: |
+          echo "MC_HOME=$RUNNER_TEMP/mc" >> "$GITHUB_ENV"
+          MC_HOME="$RUNNER_TEMP/mc" MC_JOURNEYS_MIN_FREE_GB=5 MC_JOURNEYS_TIME_LIMIT_S=2700 \
+            e2e/run-journeys.sh --src .
+      - name: Result (green only — skipped or error count as failed here)
+        if: always()
+        run: |
+          python3 - "$MC_HOME/journeys/last.json" <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json, sys
+          try:
+              d = json.load(open(sys.argv[1]))
+          except OSError:
+              print("no result: the runner did not get to write last.json"); sys.exit(1)
+          print(f"**Journeys: {d['status']}** — {d['summary']}\n")
+          for j in d.get("journeys", []):
+              print(f"- {j['status']}: {j['file']} › {j['title']} ({(j.get('duration_ms') or 0) / 1000:.1f} s)")
+              for st in j.get("steps", []):
+                  print(f"  - {'✗' if st.get('failed') else '·'} {st['title']} ({(st.get('duration_ms') or 0) / 1000:.1f} s)")
+          sys.exit(0 if d["status"] == "green" else 1)
+          PY
+      - name: Report, traces and log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: journeys-${{ github.run_id }}
+          path: ${{ runner.temp }}/mc/journeys/runs/
+          retention-days: 14
+          if-no-files-found: warn

@@ -7,9 +7,13 @@ not on the click: "the agent received the instruction", "Insights shows
 exactly the recorded cost". Unit tests prove the parts; journey tests prove
 that the parts still reach each other.
 
-They run **nightly on the operator's machine** against a throw-away stack —
-not in GitHub CI and not on a self-hosted runner (the repository is public,
-fork code must never run on that machine).
+They run against a throw-away stack in two places: **nightly on the
+operator's machine** (launchd, below) and **nightly on GitHub-hosted runners**
+(`.github/workflows/journeys.yml`, also on demand and on PRs that change
+`e2e/`, the workflow or `install.sh`). Never on a self-hosted runner — the
+repository is public, fork code must never run on the operator's machine.
+They are not part of the per-PR CI: a stack build plus the run takes
+10–15 minutes.
 
 ## What is there
 
@@ -18,7 +22,10 @@ fork code must never run on that machine).
 | `e2e/journeys/J-<id>.spec.ts` | One file per journey, named as in `landkarte.yaml` (`test:`). `kz check` counts a missing file as a gap. |
 | `e2e/journeys/lib/mc.ts` | Operator API calls, fixture SQL, sign-in. Refuses the ports a normal install uses. |
 | `e2e/journeys/lib/fakeHarness.ts` | The fake harness (below). |
+| `e2e/journeys/lib/stack.ts` | Stop/start one stack service for a sabotage step (`withServiceDown`). |
+| `e2e/stub-model/server.py` | The stub model (below). |
 | `e2e/stack/` | The test stack: `docker-compose.journeys.yml` + a small `Caddyfile`. |
+| `.github/workflows/journeys.yml` | Nightly/on-demand run on GitHub-hosted runners, plus the installer's "port busy" check (S0). |
 | `e2e/run-journeys.sh` | Build → start → test → tear down, with preflight and time box. |
 | `e2e/install-journeys.sh` + `com.mc.journeys.plist.template` | Nightly launchd job (installed copy, never a file in a checkout). |
 
@@ -26,6 +33,7 @@ fork code must never run on that machine).
 |---|---|---|
 | `J-phone-needs-you` | Home → Inbox (tab bar) → task, at 390 px | A blocked task is unblocked from the phone and the agent receives the instruction and the task again; afterwards nothing is blocked. A waiting question (`mc ask --blocking`) is answered in the task card: the agent receives the answer once and the task runs again. |
 | `J-usage` | Insights, at 390 px | Recorded usage rows show up as exactly that cost, local share (this week, last week), day and source. |
+| `J-first-run` | Login → setup → Runtimes → Home → Inbox, at 390 px | The onboarding flow S0–S10 on a fresh stack: the first admin is created in the browser, the operator's own model (the stub) is added by address and answers the probe, the first agent asks before it commits, the answer from the phone reaches it once and it carries on to review. Sabotage "model gone": the add dialog and the runtime check say so in words, and it recovers. |
 | `J-vault`, `J-setup`, `J-runtime-switch`, `J-job-to-merge` | — | Not written yet; listed in `docs/produkt/luecken-basis.json`. One per round, cheapest first. |
 
 ## The test stack
@@ -45,6 +53,8 @@ started only by `run-journeys.sh`:
   requests; agent delivery is the poll path, which lives in the API.
 - **One port**, `127.0.0.1:18080` (`MC_JOURNEYS_PORT`), behind a small Caddy
   with the same `/api` routing as the product `Caddyfile`.
+- **The only AI is the stub model** (`stub-model` service), reachable inside
+  the stack as `http://stub-model:8080/v1`; no provider keys, no network.
 - About 0.8 GB of RAM while it runs; a cached build plus the run takes about
   a minute.
 
@@ -57,6 +67,36 @@ agent-scoped endpoints — so it needs no container, tmux or model. The agent
 row is created through `POST /agents` with `agent_runtime: "manual"` (no
 provisioning); the `comm_v2` pilot flag has no API setter, so the fixture
 sets it in the test database.
+
+## The stub model
+
+`e2e/stub-model/server.py` stands in for a local model server (Ollama, LM
+Studio, vLLM): `GET /v1/models` lists one model, `stub-model`, and
+`POST /v1/chat/completions` answers one fixed sentence, plain or streamed.
+Standard library only, so it runs in a bare `python:3.12-alpine`
+(`backend/tests/test_e2e_stub_model.py` tests it, including that MC's probe
+picks its model). A journey stops its container for "the model is gone"
+(`withServiceDown("stub-model", …)`) and always starts it again.
+
+## First run (S0–S10)
+
+`J-first-run` follows the onboarding plan's screens on today's product and
+names the PR that replaces a step, so that PR swaps one step instead of
+writing a second journey:
+
+| Step | Today | Replaced by |
+|---|---|---|
+| S0 install | the stack itself; the installer's port line is the workflow's `install-preflight` job (another program on 8000 → `Port 8000 is already in use…`, before any build) and `backend/tests/test_install_port_preflight.py` | — |
+| S1 account | the login page creates the first admin, lands in `/setup` | wizard rebuild (3-2) |
+| S2 AI | cloud key skipped; the stub is added under Runtimes → "Connect by address", then "Re-probe model" (the stored check turns `ok`) | wizard AI step (3-2) |
+| S3–S4 first agent and job | API fixture: a lead on the fake harness, bound to the stub runtime | first-run call with lead template and practice repo as a registered repo row (3-1) |
+| S5 the agent works | the job in the running lane on Home | the chat hand-over (3-2) |
+| S6–S8 phone pairing | not built; the test already runs at 390 px | device pairing (Welle 4) |
+| S9 the question | `mc question` with options → Inbox card, option + Reply | chat question card, one tap (3-3) |
+| S10 effect | the agent receives "Commit" once, carries on, posts the commit as progress, moves to review; only the review waits | — |
+
+Each step is a `test.step`; `result.json` keeps every step's wall-clock time
+(`journeys[].steps`), so a slower step shows up run over run.
 
 ## Running it
 
@@ -73,7 +113,7 @@ holds that run's operator password):
 (base `http://localhost:18080`).
 
 Result: `~/.mc/journeys/last.json` (`status` green / red / skipped / error,
-one entry per test, `known_gaps`) and `~/.mc/journeys/runs/<stamp>/` with the
+one entry per test with its step times, `known_gaps`) and `~/.mc/journeys/runs/<stamp>/` with the
 log and the Playwright HTML report (traces and screenshots on failure). The
 last 14 runs are kept. Exit code 0 green or skipped, 1 red, 2 error.
 
@@ -126,6 +166,8 @@ None open. Closed so far:
 | Test | Gap | Closed by |
 |---|---|---|
 | `J-phone-needs-you` › a waiting question is answered from the phone | "Reply" on a `waiting` task posted a plain comment, which is not delivered while the task waits; the task stayed parked. | #712 — the card shows the open question with an answer field; Reply is a thread reply to it (`reply_to`) and resumes the task. |
+| `J-first-run` › model gone | With the model server down, "Re-probe model" kept the last model id and said "Model unchanged: stub-model"; the add dialog showed the HTTP client's raw English error as the only line. | The PR that added this journey — the probe answer carries its stored check and the panel words a failure from its reason ("No chat model answers at this endpoint."); the dialog says "Endpoint unreachable." with the raw text as a detail. |
+| install-preflight (S0) | With another program on port 8000, the installer failed only at `docker compose up` with Docker's raw error — on the prebuilt path as "did not come up in time". | Same PR — `mc_port_preflight` checks every published port before pull or build and names the busy one. |
 
 ## Writing a new journey
 

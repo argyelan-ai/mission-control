@@ -143,6 +143,42 @@ describe("RuntimeDetailPanel", () => {
     expect(screen.queryByText("Started ok")).not.toBeInTheDocument();
   });
 
+  // Found by the first-run journey (sabotage "model gone"): with the
+  // endpoint down the probe kept the last model id and the panel said
+  // "Model unchanged: stub-model" — as if all was well.
+  describe("Re-probe model", () => {
+    const check = (state: "ok" | "fail", reason: string) => ({
+      kind: "runtime", subject_id: "rt", label: "RT", secret_key: null,
+      configured: true, testable: true, cost: "free" as const, state,
+      reason, reason_params: {}, message: null, duration_ms: 12,
+      checked_at: new Date().toISOString(), age_seconds: 0, value_changed: false,
+    });
+
+    it("model gone: says no chat model answers, not 'unchanged'", async () => {
+      vi.spyOn(api.runtimes, "probeModel").mockResolvedValue({
+        slug: "rt", old_model_identifier: "stub-model", new_model_identifier: "stub-model",
+        changed: false, check: check("fail", "no_model"),
+      });
+      renderWithQuery(<RuntimeDetailPanel open runtime={makeRuntime({ runtime_type: "openai_compatible", model_identifier: "stub-model" })} onClose={() => {}} />);
+      screen.getByTitle("Re-probe model").click();
+      const line = await screen.findByTestId("runtime-probe-reason");
+      expect(line).toHaveTextContent("No chat model answers at this endpoint.");
+      expect(line).toHaveAttribute("data-reason", "no_model");
+      expect(screen.queryByText(/Model unchanged/)).not.toBeInTheDocument();
+    });
+
+    it("model answers: keeps the unchanged line", async () => {
+      vi.spyOn(api.runtimes, "probeModel").mockResolvedValue({
+        slug: "rt", old_model_identifier: "stub-model", new_model_identifier: "stub-model",
+        changed: false, check: check("ok", "ok"),
+      });
+      renderWithQuery(<RuntimeDetailPanel open runtime={makeRuntime({ runtime_type: "openai_compatible", model_identifier: "stub-model" })} onClose={() => {}} />);
+      screen.getByTitle("Re-probe model").click();
+      expect(await screen.findByText("Model unchanged: stub-model")).toBeInTheDocument();
+      expect(screen.queryByTestId("runtime-probe-reason")).not.toBeInTheDocument();
+    });
+  });
+
   it("shows a Name-drift chip when display_name_drift is non-empty, even without a live prop", async () => {
     renderWithQuery(
       <RuntimeDetailPanel
