@@ -115,6 +115,9 @@ describe("sleeping card from the host flag", () => {
     const card = await screen.findByTestId("asleep-box");
     await waitFor(() => expect(card).toHaveTextContent("asleep"));
     expect(card).not.toHaveTextContent("Start model");
+    // Round-7 re-check t2 NICE-3: one word per state — the corner says
+    // "asleep", so the line under it does not say "powered off".
+    expect(card).not.toHaveTextContent(/powered off/i);
     fireEvent.click(within(card).getByTestId("wake-box"));
     await waitFor(() => expect(wake).toHaveBeenCalledWith("wol"));
     expect(runtimeWake).not.toHaveBeenCalled();
@@ -233,6 +236,8 @@ describe("BoxCockpit of a sleeping box", () => {
     await waitFor(() => expect(telemetry).toHaveTextContent(/asleep/i));
     expect(telemetry).not.toHaveTextContent("collecting");
     expect(screen.queryByTestId("cockpit-restart")).not.toBeInTheDocument();
+    // Round-7 re-check t2 NICE-2: nothing runs on a sleeping box — no Stop.
+    expect(screen.queryByTestId("cockpit-stop")).not.toBeInTheDocument();
     fireEvent.click(within(screen.getByTestId("box-cockpit")).getByTestId("wake-box"));
     await waitFor(() => expect(api.hosts.wake).toHaveBeenCalledWith("wol"));
   });
@@ -262,6 +267,7 @@ describe("BoxCockpit of a sleeping box", () => {
     const telemetry = await screen.findByTestId("cockpit-group-telemetry");
     await waitFor(() => expect(telemetry).toHaveTextContent("collecting"));
     expect(screen.getByTestId("cockpit-restart")).toBeInTheDocument();
+    expect(screen.getByTestId("cockpit-stop")).toBeInTheDocument();
     expect(screen.queryByTestId("wake-box")).not.toBeInTheDocument();
   });
 });

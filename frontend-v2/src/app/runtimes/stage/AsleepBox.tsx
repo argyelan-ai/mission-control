@@ -68,8 +68,8 @@ export function AsleepBox({
             : noReadings
               ? t("noReadingsLine")
               : lastSeen
-              ? t("poweredOffLastSeen", { time: lastSeen })
-              : t("poweredOff")}
+              ? t("asleepLastSeen", { time: lastSeen })
+              : t("asleepLine")}
         </div>
       </div>
       <div style={{ opacity: 0.6 }}>

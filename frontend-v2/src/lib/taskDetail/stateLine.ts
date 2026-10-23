@@ -211,17 +211,23 @@ export function deriveStateLine({
 export function deriveChatTaskLine(stub: ChatTaskStub, locale: string = "en", now: Date = new Date()): StateLine {
   const tone = STATUS_TONE[stub.status] ?? "muted";
   const word = { ns: "tasks" as const, key: `detail.line.task.${stub.status}` };
-  const start = stub.startedAt ?? stub.startKey;
+  // The CURRENT run (round-7 re-check t1 NICE-3): after a rework the line
+  // counted from the first start — "took 9 min" for 88 s + 48 s of work, the
+  // wait for the review included. A second run says which run it is.
+  const start = stub.runStartedAt ?? stub.startedAt ?? stub.startKey;
+  const run = (stub.runs ?? 0) > 1 ? String(stub.runs) : null;
   if (stub.assignee) return { tone, word, detail: { key: "with", values: { name: stub.assignee } } };
   switch (stub.status) {
     case "in_progress": {
       const span = spanSince(start, locale, now);
-      return { tone, word, detail: span ? { key: "for", values: { span } } : null };
+      if (!span) return { tone, word, detail: null };
+      return { tone, word, detail: run ? { key: "forRun", values: { span, n: run } } : { key: "for", values: { span } } };
     }
     case "done":
     case "review": {
       const duration = stub.endedAt ? formatDuration(secondsBetween(start, stub.endedAt, now), locale) : null;
-      return { tone, word, detail: duration ? { key: "took", values: { duration } } : null };
+      if (!duration) return { tone, word, detail: null };
+      return { tone, word, detail: run ? { key: "tookRun", values: { duration, n: run } } : { key: "took", values: { duration } } };
     }
     case "failed":
     case "aborted": {

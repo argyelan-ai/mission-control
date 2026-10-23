@@ -110,3 +110,56 @@ async def test_spark_unreachable_names_the_auto_rows_model(auth_client, monkeypa
     assert item["loc"] == ["body", "models", 1, "spark_model"]
     assert item["type"] == "bench_spark_unreachable"
     assert item["msg"].startswith("Spark is not reachable")
+
+
+# ── round-7 re-check r1 N3 / N4 ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_failed_effort_probe_says_the_check_failed_not_not_offered(auth_client, monkeypatch, _no_background):
+    """A probe that failed (box gone, error answer) knows nothing about the
+    levels — "the model does not offer it" would be a wrong claim (r1 N3)."""
+    failed = BenchProbe(served_model_id="deepseek-x", status="failed", levels=[], default_observed="unknown")
+    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=failed))
+    resp = await _create(auth_client, _spark("max"))
+    item = _only_item(resp)
+    assert item["loc"] == ["body", "models", 0, "effort"]
+    assert item["type"] == "bench_effort_probe_failed"
+    assert item["ctx"]["level"] == "max"
+
+
+@pytest.mark.asyncio
+async def test_missing_prompt_names_the_prompt_field(auth_client, _no_background):
+    """r1 N4: was a bare English 400 toast."""
+    resp = await auth_client.post(
+        "/api/v1/bench/challenges",
+        json={"title": "No prompt", "prompt_text": "  ", "models": [_spark()]},
+    )
+    item = _only_item(resp)
+    assert item["loc"] == ["body", "prompt_text"]
+    assert item["type"] == "bench_prompt_required"
+
+
+@pytest.mark.asyncio
+async def test_agent_row_without_agent_names_its_model_field(auth_client, _no_background):
+    """r1 N4: was a bare English 400 toast."""
+    agent = _agent(label="Worker")
+    agent.pop("agent_id")
+    resp = await _create(auth_client, _spark(), agent)
+    item = _only_item(resp)
+    assert item["loc"] == ["body", "models", 1, "agent_id"]
+    assert item["type"] == "bench_agent_required"
+
+
+@pytest.mark.asyncio
+async def test_no_effect_probe_says_not_offered_not_check_failed(auth_client, monkeypatch, _no_background):
+    """Round-8 review MUST-1: ``no_effect`` is a probe that RAN — the model
+    ignores effort, so the true answer is "not offered", not "check failed"."""
+    no_effect = BenchProbe(served_model_id="deepseek-x", status="no_effect", levels=[], default_observed="unknown")
+    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=no_effect))
+    resp = await _create(auth_client, _spark("max"))
+    item = _only_item(resp)
+    assert item["loc"] == ["body", "models", 0, "effort"]
+    assert item["type"] == "bench_effort_not_offered"
+    assert item["ctx"]["level"] == "max"
+    assert "failed" not in item["msg"]

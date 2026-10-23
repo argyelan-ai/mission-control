@@ -1,6 +1,7 @@
 "use client";
 
-import { useLocale } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
+import { statusReasonText } from "@/lib/taskDetail/eventLabel";
 import { timeAgo } from "@/lib/utils";
 import { Pill } from "@/components/shared/Pill";
 import type { TaskEvent } from "@/lib/types";
@@ -36,6 +37,7 @@ interface TaskHistoryProps {
 
 export function TaskHistory({ events, isLoading }: TaskHistoryProps) {
   const locale = useLocale();
+  const t = useTranslations("tasks");
   if (isLoading) {
     return (
       <div className="text-xs" style={{ color: C.textMuted }}>
@@ -91,7 +93,7 @@ export function TaskHistory({ events, isLoading }: TaskHistoryProps) {
             {event.reason && (
               <>
                 <span style={{ color: C.textMuted }}>·</span>
-                <span style={{ color: C.textMuted }}>{event.reason}</span>
+                <span style={{ color: C.textMuted }}>{statusReasonText(t, event.reason)}</span>
               </>
             )}
           </div>

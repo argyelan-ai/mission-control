@@ -360,17 +360,23 @@ export function BoxCockpit({
               </button>
             </>
           )}
-          <span className="cockpit-ft-spacer" />
-          <button
-            type="button"
-            onClick={() => stopMutation.mutate(false)}
-            disabled={!runtime || stopMutation.isPending}
-            data-testid="cockpit-stop"
-            className="cockpit-ft-stop text-xs px-3 rounded-md cursor-pointer disabled:opacity-40 min-h-touch sm:min-h-9"
-            style={{ color: C.error, border: `1px solid ${C.borderSubtle}` }}
-          >
-            {t("stopAutostartOff")}
-          </button>
+          {/* Nothing runs on a sleeping box, so there is nothing to stop —
+              "Wake" is its only action (round-7 re-check t2 NICE-2). */}
+          {!activeAsleep && (
+            <>
+              <span className="cockpit-ft-spacer" />
+              <button
+                type="button"
+                onClick={() => stopMutation.mutate(false)}
+                disabled={!runtime || stopMutation.isPending}
+                data-testid="cockpit-stop"
+                className="cockpit-ft-stop text-xs px-3 rounded-md cursor-pointer disabled:opacity-40 min-h-touch sm:min-h-9"
+                style={{ color: C.error, border: `1px solid ${C.borderSubtle}` }}
+              >
+                {t("stopAutostartOff")}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </SlideOverPanel>

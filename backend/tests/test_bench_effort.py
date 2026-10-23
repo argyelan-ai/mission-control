@@ -813,3 +813,13 @@ async def test_effort_levels_endpoint_box_offline_for_a_named_model(auth_client,
     resp = await auth_client.get("/api/v1/bench/effort-levels?model=deepseek-x")
     assert resp.json()["status"] == "failed"
     assert resp.json()["reachable"] is True
+
+
+def test_level_fields_no_effect_is_not_offered_failed_is_check_failed():
+    """Round-8 review MUST-1: only a failed probe raises the probe-failed
+    error; a ``no_effect`` probe raises the plain not-offered one."""
+    with pytest.raises(rp.UnsupportedEffortError) as no_eff:
+        effort_probe.level_fields(_probe_row([], key=None, status="no_effect"), "max")
+    assert not isinstance(no_eff.value, effort_probe.EffortProbeFailedError)
+    with pytest.raises(effort_probe.EffortProbeFailedError):
+        effort_probe.level_fields(_probe_row([], key=None, status="failed"), "max")
