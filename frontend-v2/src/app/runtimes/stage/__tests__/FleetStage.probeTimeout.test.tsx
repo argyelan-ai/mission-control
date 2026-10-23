@@ -159,6 +159,8 @@ describe("FleetStage — probe timed out", () => {
     expect(card).toHaveTextContent("checking");
     expect(card).not.toHaveTextContent(/asleep/i);
     expect(card).not.toHaveTextContent("unreachable");
+    // Nor "Endpoint · idle" while the box's own check is still out.
+    expect(card).not.toHaveTextContent("Endpoint · idle");
 
     answer({ kind: "flask_wol", reachable: true, awake: true, status: "awake" });
     await waitFor(() => expect(card).toHaveTextContent("no model · ready"));

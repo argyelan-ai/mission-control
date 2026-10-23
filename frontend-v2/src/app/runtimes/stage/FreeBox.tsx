@@ -119,10 +119,10 @@ export function FreeBox({
     { value: String(agentsData?.count ?? 0), label: t("kpiAgents") },
     {
       value: endpointPort != null ? `:${endpointPort}` : "–",
-      // "· idle" is a claim about the engine — not made while unchecked,
-      // nor for a box that does not answer (round-3: "asleep" over
-      // "Endpoint · idle").
-      label: probePending || unreachable ? t("kpiEndpoint") : t("kpiEndpointIdle"),
+      // "· idle" is a claim about the engine — not made while unchecked
+      // (rows or the box's own check still out), nor for a box that does
+      // not answer (round-3: "asleep" over "Endpoint · idle").
+      label: checking || unreachable ? t("kpiEndpoint") : t("kpiEndpointIdle"),
       copyValue: endpointPort != null ? slot?.endpoint ?? `:${endpointPort}` : undefined,
     },
   ];
