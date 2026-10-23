@@ -33,7 +33,7 @@ from app.database import get_session
 from app.models.host import Host, normalise_role
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys, get_redis
-from app.services import host_bootstrap, host_liveness, host_metrics_history, host_onboarding, host_probe, launch_template, runtime_manager, runtime_readiness, ssh_host_keys
+from app.services import box_wake, host_bootstrap, host_liveness, host_metrics_history, host_onboarding, host_probe, launch_template, runtime_manager, ssh_host_keys
 from app.services.host_resolver import ResolvedHost, resolved_host_from_row, ssh_capable
 
 router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
@@ -736,24 +736,16 @@ async def wake_host(
     Round-5 re-check (L1): the box's ``power_managed`` flag lives on the host
     row; a box whose runtime rows lack it (or that has none) still sleeps and
     must still be wakeable. Same trigger-file path as
-    ``POST /runtimes/{id}/wake`` (runtime_manager), keyed by the host.
-    A viewer only looks — waking a box is an operator action.
+    ``POST /runtimes/{id}/wake`` (runtime_manager), keyed by the host, and the
+    same rules (round-7 L5): a viewer only looks — waking a box is an operator
+    action; 503 when the wake helper on the Mac sends no heartbeat.
     """
     host = await _get_host(session, host_id)
     if not host:
         raise HTTPException(status_code=404, detail=f"Host '{host_id}' not found")
     result = await runtime_manager.wake_host(resolved_host_from_row(host))
-    if not result["ok"]:
-        # 503: the request is fine, the host-side wake helper is not there.
-        status = 503 if result.get("helper_down") else 400
-        raise HTTPException(status_code=status, detail=result["message"])
-    # The box is waking: the remembered "asleep" and the readiness of the
-    # runtimes on it are stale — the next poll asks again.
-    await host_liveness.forget(host.id)
-    slugs = (await session.exec(select(Runtime.slug).where(Runtime.host_id == host.id))).all()
-    for slug in slugs:
-        if slug:
-            await runtime_readiness.invalidate_readiness(slug)
+    box_wake.raise_unless_sent(result)
+    await box_wake.forget_box_after_wake(session, host.id)
     return result
 
 

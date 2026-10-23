@@ -32,6 +32,8 @@ import { ContextSettingsPanel, loadStoredCtx } from "./ContextSettings";
 import { AutostartToggle } from "./AutostartToggle";
 import { useHeadConflictText } from "@/components/heads/HeadOccupancy";
 import { fmtCtx } from "@/lib/utils";
+import { useAppStore } from "@/lib/store";
+import { isWakeHelperDown } from "./wakeHelper";
 
 // typeLabel inlined from RuntimeListCard.tsx (that component doesn't exist on
 // this branch yet — Task 1/5 own its reintroduction). Copied verbatim from
@@ -108,7 +110,7 @@ function RuntimeModelEditor({
   onMessage,
 }: {
   runtime: Runtime;
-  onMessage?: (msg: string) => void;
+  onMessage?: (msg: string, error?: boolean) => void;
 }) {
   const t = useTranslations("runtimes.modelEditor");
   const queryClient = useQueryClient();
@@ -124,7 +126,7 @@ function RuntimeModelEditor({
       queryClient.invalidateQueries({ queryKey: ["agents"] });
       onMessage?.(t("modelSet", { model: data.model_identifier ?? "—" }));
     },
-    onError: () => onMessage?.(t("updateFailed")),
+    onError: () => onMessage?.(t("updateFailed"), true),
   });
 
   const save = () => {
@@ -370,7 +372,12 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
   const t = useTranslations("runtimes");
   const tSlot = useTranslations("runtimes.slot");
   const queryClient = useQueryClient();
-  const [actionMsg, setActionMsg] = useState<string | null>(null);
+  // A failed action reads as an error (error colour, role="alert") — the
+  // same look as the box card's Wake (round-7 L5 re-check).
+  const [action, setAction] = useState<{ text: string; error: boolean } | null>(null);
+  const setActionMsg = (text: string | null, error = false) =>
+    setAction(text === null ? null : { text, error });
+  const setActionError = (text: string) => setAction({ text, error: true });
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const caps = panelCapabilities(runtime);
@@ -408,26 +415,32 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
   const startMutation = useMutation({
     mutationFn: () => api.runtimes.start(runtime.id, storedCtx ?? undefined),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: (err: Error) => setActionMsg(headConflictText(err) ?? t("startFailed")),
+    onError: (err: Error) => setActionError(headConflictText(err) ?? t("startFailed")),
   });
 
   const stopMutation = useMutation({
     mutationFn: () => api.runtimes.stop(runtime.id),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg(t("stopFailed")),
+    onError: () => setActionError(t("stopFailed")),
   });
 
   const restartMutation = useMutation({
     mutationFn: () => api.runtimes.restart(runtime.id),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg(t("restartFailed")),
+    onError: () => setActionError(t("restartFailed")),
   });
 
+  // Same words as the box card's Wake (round-7 L5, r1 N1): the backend's
+  // message is German only, and a 503 means the wake helper on the Mac is
+  // not running — "Wake failed." alone would hide why.
   const wakeMutation = useMutation({
     mutationFn: () => api.runtimes.wake(runtime.id),
-    onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg(t("wakeFailed")),
+    onSuccess: () => { setActionMsg(t("wakeBox.sent")); invalidate(); },
+    onError: (err: Error) =>
+      setActionError(isWakeHelperDown(err) ? t("wakeBox.helperDown") : t("wakeFailed")),
   });
+  // Waking a box is an operator action (403 for a viewer, like the host route).
+  const canWake = useAppStore((s) => s.currentUser?.role) !== "viewer";
 
   const probeMutation = useMutation({
     mutationFn: () => api.runtimes.probeModel(runtime.id),
@@ -439,7 +452,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
       queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
-    onError: () => setActionMsg(t("probeFailed")),
+    onError: () => setActionError(t("probeFailed")),
   });
 
   const isMutating =
@@ -505,7 +518,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
         <>
           <SectionDivider label={t("sectionControl")} />
           <div className="px-4 pb-2 flex items-center gap-1.5">
-            {caps.wake && (
+            {caps.wake && canWake && (
               <ActionButton
                 icon={Power}
                 label={t("wake")}
@@ -697,16 +710,26 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
       )}
 
       {/* Mutation feedback */}
-      {actionMsg && (
+      {action && (
         <div
           className="text-xs mx-4 mb-3 px-3 py-2 rounded-lg"
-          style={{
-            background: C.accentSubtle,
-            border: `1px solid ${C.borderAccent}`,
-            color: C.textSecondary,
-          }}
+          data-testid="runtime-action-msg"
+          role={action.error ? "alert" : "status"}
+          style={
+            action.error
+              ? {
+                  background: alpha(C.error, 0.08),
+                  border: `1px solid ${alpha(C.error, 0.2)}`,
+                  color: STATUS_TEXT.error,
+                }
+              : {
+                  background: C.accentSubtle,
+                  border: `1px solid ${C.borderAccent}`,
+                  color: C.textSecondary,
+                }
+          }
         >
-          {actionMsg}
+          {action.text}
         </div>
       )}
 

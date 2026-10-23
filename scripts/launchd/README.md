@@ -10,8 +10,12 @@ Einmalig nach Clone des Repos:
 
 ```bash
 # 1. launchd plists nach ~/Library/LaunchAgents/ kopieren (nicht symlinken —
-#    launchd akzeptiert keine Symlinks in diesem Pfad)
-cp scripts/launchd/*.plist ~/Library/LaunchAgents/
+#    launchd akzeptiert keine Symlinks in diesem Pfad). Der Weck-Helfer
+#    (com.mc.porsche-wake-watcher) ist optional und hat einen eigenen Ablauf,
+#    siehe unten — nicht blind mitkopieren.
+cp scripts/launchd/com.mc.memory-sampler.plist \
+   scripts/launchd/com.mc.poll-health.plist \
+   scripts/launchd/com.mc.docker-health-restart.plist ~/Library/LaunchAgents/
 
 # 2. Host-Pfad fuer Helper-Scripts via Symlink an Repo binden
 mkdir -p ~/.mc
@@ -105,6 +109,40 @@ launchctl list | grep 'com.mc\.'
   bei einem Healthcheck-Fail. Dieser Job schliesst genau diese Luecke fuer
   die beiden gelisteten Services.
 
+### `com.mc.porsche-wake-watcher` (optional — nur mit power-managed Box)
+- **Script:** `scripts/porsche-wake-watcher.py` — läuft aus dem **stabilen
+  Host-Checkout** `~/.mc/checkouts/mission-control` (auf `main` gepinnt von
+  `docker/shared/ensure-checkout.sh`, nie zum Entwickeln benutzt). **Nie** auf
+  einen Git-Worktree (wird nach dem PR gelöscht) oder den eigenen
+  Arbeits-Checkout (beliebiger Branch) zeigen lassen.
+- **Python:** `/usr/bin/python3` — die Mac-eigene Version (3.9.6). Das Script
+  bleibt darum nur-Standardbibliothek und 3.9-tauglich (kein `X | None` in
+  Typangaben). Sonst stürzt es schon beim Laden ab und schreibt nie ein
+  Lebenszeichen. Ein Test prüft das (`test_watcher_source_is_python_39`).
+- **Auslöser:** `WatchPaths` auf `~/.mc/wake-requests` + alle 30 s.
+- **Zweck:** Das Backend im Docker kann kein Magic-Packet senden. Es legt
+  `<slug>.request.json` ab, der Watcher ruft das Weck-Skript auf und räumt die
+  Anfrage weg (`<slug>.done.json` + `<slug>.status.json`).
+- **Lebenszeichen:** Jeder Lauf aktualisiert `~/.mc/wake-requests/watcher.alive`.
+  Ist die Datei älter als ~90 s oder fehlt sie, antwortet das Backend auf
+  „Wecken“ mit 503 „Weck-Helfer läuft nicht“ statt „Wird geweckt…“.
+- **Alte Anfragen:** Eine Anfrage älter als 5 min (`MC_WAKE_REQUEST_MAX_AGE_S`)
+  wird **ohne Wecken** weggeräumt (`status.json`: `expired`). Eine liegen
+  gebliebene Anfrage weckt die Box also beim ersten Start nicht.
+- **Installieren** (ersetzt `YOUR_USER` im plist durch den macOS-Benutzer):
+
+```bash
+docker/shared/ensure-checkout.sh                       # stabiler Checkout da + aktuell
+ls -la ~/.mc/wake-requests/                            # alte *.request.json ansehen
+sed "s#/Users/YOUR_USER#$HOME#g" scripts/launchd/com.mc.porsche-wake-watcher.plist \
+  > ~/Library/LaunchAgents/com.mc.porsche-wake-watcher.plist
+launchctl load ~/Library/LaunchAgents/com.mc.porsche-wake-watcher.plist
+# Beweis: Lebenszeichen jünger als 30 s, alte Anfragen als expired weggeräumt
+stat -f '%Sm' ~/.mc/wake-requests/watcher.alive; cat ~/.mc/wake-requests/*.status.json
+```
+
+- **Log:** `~/.mc/logs/porsche-wake-watcher.out.log`
+
 ## Stoppen / Deinstallieren
 
 ```bash
@@ -114,6 +152,10 @@ launchctl unload ~/Library/LaunchAgents/com.mc.docker-health-restart.plist
 rm ~/Library/LaunchAgents/com.mc.memory-sampler.plist
 rm ~/Library/LaunchAgents/com.mc.poll-health.plist
 rm ~/Library/LaunchAgents/com.mc.docker-health-restart.plist
+# Weck-Helfer (falls installiert); danach meldet „Wecken“ 503, sobald das
+# Lebenszeichen älter als ~90 s ist
+launchctl unload ~/Library/LaunchAgents/com.mc.porsche-wake-watcher.plist
+rm ~/Library/LaunchAgents/com.mc.porsche-wake-watcher.plist
 ```
 
 Die Scripts selbst (`scripts/memory-sampler.sh`, `scripts/poll-health-check.sh`,

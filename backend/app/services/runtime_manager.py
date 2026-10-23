@@ -2971,6 +2971,15 @@ async def _restart_runtime_impl(
 # installed or not running (round-5 re-check L1 review, MUST 1).
 WAKE_HELPER_STALE_S = 120
 
+# The watcher's positive sign of life (round-7 re-check, L5): it touches this
+# file in the request folder on every run, also when nothing waits. The stale
+# request above is only a trace a dead helper MAY leave — an empty folder said
+# "Waking…" although nothing read it. Must match HEARTBEAT_NAME in the
+# wake watcher script under scripts/ (pinned by its watcher test).
+WAKE_HELPER_HEARTBEAT_NAME = "watcher.alive"
+# Three missed 30 s runs. Beyond that the helper stopped (or never ran).
+WAKE_HELPER_HEARTBEAT_S = 90
+
 
 def _stale_wake_request_age(wake_dir: Path) -> float | None:
     """Age in seconds of the oldest request the watcher left waiting, if any."""
@@ -2991,6 +3000,36 @@ def _stale_wake_request_age(wake_dir: Path) -> float | None:
     return oldest
 
 
+def _wake_helper_heartbeat_age(wake_dir: Path) -> float | None:
+    """Seconds since the watcher's last run — ``None`` when it never left one."""
+    import time as _time
+
+    try:
+        mtime = (wake_dir / WAKE_HELPER_HEARTBEAT_NAME).stat().st_mtime
+    except OSError:
+        return None
+    # A clock a little ahead of the host's (Docker VM) must not read as "old".
+    return max(0.0, _time.time() - mtime)
+
+
+# rule: R-wake-needs-helper-heartbeat - an empty folder said "Waking…" with no helper installed
+def _wake_helper_down(wake_dir: Path) -> tuple[str, str] | None:
+    """Why no helper reads ``wake_dir`` — ``(reason, German detail)`` — or None.
+
+    Two signals: no fresh heartbeat (the watcher does not run), else a request
+    nobody retired (it runs but cannot work the folder, e.g. no write access).
+    """
+    beat_age = _wake_helper_heartbeat_age(wake_dir)
+    if beat_age is None:
+        return "no_heartbeat", "kein Lebenszeichen"
+    if beat_age > WAKE_HELPER_HEARTBEAT_S:
+        return "heartbeat_stale", f"letztes Lebenszeichen vor {int(beat_age // 60)} min"
+    stale_age = _stale_wake_request_age(wake_dir)
+    if stale_age is not None:
+        return "request_waiting", f"eine Weck-Anfrage wartet seit {int(stale_age // 60)} min"
+    return None
+
+
 def _write_wake_request(*, slug: str, label: str, mac: str, ip: str | None) -> dict:
     """Drop the Wake-on-LAN trigger file — the ONE wake path (runtime or host).
 
@@ -2999,10 +3038,12 @@ def _write_wake_request(*, slug: str, label: str, mac: str, ip: str | None) -> d
     bind-mount). A launchd watcher on the Mac host picks it up and runs the wake
     script configured for the watcher. See the WoL host-helper docs.
 
-    The backend cannot see the watcher itself, but it sees its trace: a request
-    that is still waiting after ``WAKE_HELPER_STALE_S`` was never read. Then no
-    new request is written and the answer is ``ok: False, helper_down: True`` —
-    "Waking…" for a box nobody wakes would be false (round-5 L1 review).
+    The backend cannot see the watcher process, but it sees what the watcher
+    writes: its heartbeat ``WAKE_HELPER_HEARTBEAT_NAME`` (every run), and no
+    request left waiting longer than ``WAKE_HELPER_STALE_S``. If either is
+    missing, no request is written and the answer is ``ok: False,
+    helper_down: True`` plus a ``reason`` — "Waking…" for a box nobody wakes
+    would be false (round-5 L1 review, round-7 L5).
     A request for the same box that is still fresh is left as it is: the wake
     is already on its way, and rewriting it would hide its real age.
     """
@@ -3010,18 +3051,19 @@ def _write_wake_request(*, slug: str, label: str, mac: str, ip: str | None) -> d
 
     safe_slug = re.sub(r"[^A-Za-z0-9._-]", "_", str(slug))
     wake_dir = Path(settings.wake_request_dir)
-    stale_age = _stale_wake_request_age(wake_dir)
-    if stale_age is not None:
-        minutes = int(stale_age // 60)
+    down = _wake_helper_down(wake_dir)
+    if down is not None:
+        reason, why = down
         logger.warning(
-            "Wake-Helfer läuft nicht: Anfrage in %s wartet seit %d min — kein Wake für %s",
-            wake_dir, minutes, slug,
+            "Weck-Helfer läuft nicht (%s, %s in %s) — kein Wake für %s",
+            reason, why, wake_dir, slug,
         )
         return {
             "ok": False,
             "helper_down": True,
-            "message": "Wake helper on the Mac is not running — a wake request "
-            f"has been waiting for {minutes} min. {label} was not woken.",
+            "reason": reason,
+            "message": f"Weck-Helfer auf dem Mac läuft nicht ({why}). "
+            f"{label} wurde nicht geweckt.",
         }
     pending = wake_dir / f"{safe_slug}.request.json"
     if pending.exists():

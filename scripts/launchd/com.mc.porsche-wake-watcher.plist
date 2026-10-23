@@ -1,5 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Wake helper for power-managed boxes (Wake-on-LAN). The backend in Docker
+  cannot send a magic packet; it drops ~/.mc/wake-requests/<slug>.request.json
+  and this job sends the packet. Every run touches watcher.alive in that folder
+  (the heartbeat). Without a fresh heartbeat (~90 s) the backend answers 503
+  "wake helper not running" instead of "Waking…".
+
+  STABLE PATH (round-7 L5): the script runs from the dedicated host checkout
+  ~/.mc/checkouts/mission-control, pinned to main by
+  docker/shared/ensure-checkout.sh and never used for development. NEVER point
+  it at a git worktree (deleted after a PR) or the operator's own checkout (any
+  branch may be checked out there) — the helper would die or change silently.
+
+  PYTHON: /usr/bin/python3 is the Mac's own Python (3.9.6). The script stays
+  stdlib-only and 3.9-compatible (no "X | None" annotations); a 3.10+ feature
+  would crash it while loading, so it would never beat.
+
+  Install (replace YOUR_USER; see scripts/launchd/README.md):
+    1. docker/shared/ensure-checkout.sh        (creates/updates the checkout)
+    2. ls ~/.mc/wake-requests/                  (old *.request.json files are
+       retired WITHOUT waking when older than 5 min; delete them anyway if
+       you want a clean start)
+    3. cp this file to ~/Library/LaunchAgents/ and launchctl load it
+    4. proof: ~/.mc/wake-requests/watcher.alive is younger than 30 s
+-->
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -8,7 +33,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
-        <string>/Users/YOUR_USER/Workspace/Projects/mission-control/scripts/porsche-wake-watcher.py</string>
+        <string>/Users/YOUR_USER/.mc/checkouts/mission-control/scripts/porsche-wake-watcher.py</string>
     </array>
 
     <!-- Fire whenever the wake-requests dir changes (file dropped/removed). -->
@@ -17,7 +42,7 @@
         <string>/Users/YOUR_USER/.mc/wake-requests</string>
     </array>
 
-    <!-- Safety net: also scan every 30s in case a WatchPaths event is missed. -->
+    <!-- Safety net + heartbeat: scan every 30s even when nothing changed. -->
     <key>StartInterval</key>
     <integer>30</integer>
 

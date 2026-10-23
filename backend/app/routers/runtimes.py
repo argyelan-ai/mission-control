@@ -24,7 +24,7 @@ from app.models.runtime import Runtime
 from app.models.runtime_host import RuntimeHost, RUNTIME_HOST_ROLES
 from app.redis_client import RedisKeys, get_redis
 from app.services import (
-    recipe_switcher, runtime_manager, runtime_multinode, runtime_readiness,
+    box_wake, recipe_switcher, runtime_manager, runtime_multinode, runtime_readiness,
     runtime_naming, runtime_stop, slot_runtimes,
 )
 from app.services.agent_runtime_switch import (
@@ -1052,23 +1052,27 @@ async def restart_runtime(
 async def wake_runtime(
     runtime_id: str,
     session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
+    current_user=Depends(require_role(Role.OPERATOR)),
 ):
     """Wake a power_managed runtime's host via Wake-on-LAN.
 
     Drops a trigger file for the host-side launchd watcher (the Docker backend
     cannot send an L2 broadcast). Only valid for runtimes with power_managed=true.
+    Same rules as ``POST /hosts/{id}/wake`` (round-7 re-check, L5): waking a
+    box is an operator action, 503 when the wake helper on the Mac is down, and
+    a sent wake drops the box's remembered "asleep" and the readiness of every
+    runtime on it.
     """
     rt, host = await _resolve_runtime_and_host(session, runtime_id)
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
     result = await runtime_manager.wake_runtime(rt, host=host)
-    if not result["ok"]:
-        # 503: the request is fine, the host-side wake helper is not there.
-        status = 503 if result.get("helper_down") else 400
-        raise HTTPException(status_code=status, detail=result["message"])
-    # Box is waking → drop any stale "asleep" readiness cache so the next poll re-probes.
-    await runtime_readiness.invalidate_readiness(rt.get("slug") or runtime_id)
+    box_wake.raise_unless_sent(result)
+    await box_wake.forget_box_after_wake(
+        session,
+        host.host_id if host is not None else None,
+        slugs=[rt.get("slug") or runtime_id],
+    )
     return result
 
 

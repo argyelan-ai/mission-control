@@ -9,6 +9,10 @@
  *   3. its cockpit: "asleep" instead of telemetry, "Wake" instead of Restart
  *   4. Wake while the Mac's wake helper is not running (503): "not woken",
  *      no "Waking…" (PR #976 review, MUST 1)
+ *   5. the runtime detail's Wake with the helper down: the same sentence,
+ *      not a bare "Wake failed." (round-7 L5, r1 N1)
+ *   6. the runtime detail's Wake sent: the translated "1–2 min" line, not
+ *      the backend's raw German message
  *
  * Checks what jsdom cannot: no sideways scroll, Wake tap target >= 44 px (K11).
  *
@@ -160,6 +164,36 @@ for (const vp of VIEWPORTS) {
     if (h4 > 0) failures.push(`${label}: helper-down card scrolls sideways by ${h4}px`);
     await page.waitForTimeout(150);
     await shoot("4-helper-down");
+
+    // 5./6. the second wake path: the runtime detail panel.
+    for (const [n, down, want] of [
+      ["5-detail-helper-down", true, locale === "de" ? "Weck-Helfer auf dem Mac läuft nicht" : "wake helper on the Mac is not running"],
+      ["6-detail-sent", false, locale === "de" ? "Die Box braucht 1–2 Min." : "The box needs 1–2 min."],
+    ]) {
+      await page.evaluate(([locale, down]) => {
+        window.__wakeHelperDown = down;
+        window.__mountRuntimeDetail({ locale, helperDown: down });
+      }, [locale, down]);
+      const wakeBtn = page.getByRole("dialog").getByTitle(locale === "de" ? "Aufwecken" : "Wake");
+      await wakeBtn.waitFor({ timeout: 30000 });
+      await page.waitForTimeout(400);
+      await wakeBtn.click();
+      await page.getByText(want).first().waitFor({ timeout: 5000 });
+      // A failure reads as an error (role="alert"), like the box card's line.
+      if (down && !(await page.getByRole("alert").filter({ hasText: want }).count())) {
+        failures.push(`${label}: ${n} helper line is not shown as an error`);
+      }
+      if (await page.getByText(/ausgelöst|Wake failed|Aufwecken fehlgeschlagen/).count()) {
+        failures.push(`${label}: ${n} shows a raw or bare wake message`);
+      }
+      const h = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      if (h > 0) failures.push(`${label}: ${n} scrolls sideways by ${h}px`);
+      await page.waitForTimeout(200);
+      const f = path.join(OUT, `${vp.name}-${locale}-${n}.png`);
+      await page.screenshot({ path: f });
+      shots += 1;
+      console.log(`${label}: ${n} -> ${f}`);
+    }
     if (errors.length) failures.push(`${label}: page errors: ${errors.join(" | ")}`);
     await page.close();
   }
