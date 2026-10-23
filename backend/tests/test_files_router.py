@@ -380,6 +380,8 @@ async def test_search_unknown_type_falls_back_to_mime_substring(
 async def test_open_container_only_root_409(auth_client: AsyncClient):
     # shared-deliverables (Docker named volume) has no host path → can't reveal
     resp = await auth_client.post(
-        "/api/v1/files/open", json={"root": "shared-deliverables", "subpath": "x", "reveal": True}
+        "/api/v1/files/open",
+        json={"root": "shared-deliverables", "subpath": "x", "reveal": True},
+        headers={"Origin": "http://localhost:3000"},  # at the MC host (test_host_open.py)
     )
     assert resp.status_code in (404, 409)  # 404 if path missing, 409 container-only

@@ -12,8 +12,8 @@ import { api } from "@/lib/api";
 import type { TaskDeliverable } from "@/lib/types";
 import { FilePreview } from "./FilePreview";
 import { DirectoryBrowser } from "./DirectoryBrowser";
-import { C } from "@/lib/colors";
-import { HOST_ONLY_CLASS } from "@/lib/hostOnly";
+import { C, STATUS_TEXT } from "@/lib/colors";
+import { HOST_ONLY_CLASS, useIsHostViewer } from "@/lib/hostOnly";
 
 function DeliverableIcon({ type }: { type: string }) {
   const map: Record<string, React.ReactNode> = {
@@ -46,12 +46,19 @@ function useKindLabel(d: TaskDeliverable): string {
 }
 
 /** What the last Mac action did, shown next to the buttons. */
-type HostNote = "opened" | "shown" | "unavailable";
+type HostNote = "opened" | "shown" | "failed" | "unavailable";
 const HOST_NOTE_KEY: Record<HostNote, string> = {
   opened: "openedOnMac",
   shown: "shownInFinder",
+  failed: "hostFailed",
   unavailable: "hostUnavailable",
 };
+
+/** The HTTP status in an `api` error ("API 502: …"), or null. */
+function apiStatus(err: unknown): number | null {
+  const m = err instanceof Error ? /^API (\d{3})\b/.exec(err.message) : null;
+  return m ? Number(m[1]) : null;
+}
 
 interface DeliverableCardProps {
   deliverable: TaskDeliverable;
@@ -64,11 +71,16 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
   const [expanded, setExpanded] = useState(false);
   // "Open on the Mac" / "Show in Finder" act on the Mac MC runs on, not on
   // the device in hand. So they sit in the expanded card, away from the
-  // arrow, in words, at a desktop with a mouse only (HOST_ONLY_CLASS), and
-  // say what happened. They disappear once the backend reports that it
-  // cannot open files here (409 container-only / 501 not a Mac).
+  // arrow, in words, only for a viewer AT that Mac (useIsHostViewer: MC
+  // opened via localhost) with a mouse (HOST_ONLY_CLASS), and say what
+  // really happened: a failing Mac helper (502) is an error, never
+  // "opened". They disappear once the backend says it cannot open files
+  // here (403 not at the Mac / 409 container-only / 501 not a Mac / 404),
+  // and when the file itself cannot be loaded (fileMissing).
+  const atHost = useIsHostViewer();
   const [hostAvailable, setHostAvailable] = useState(true);
   const [hostNote, setHostNote] = useState<HostNote | null>(null);
+  const [fileMissing, setFileMissing] = useState(false);
   const kind = useKindLabel(d);
 
   const isUrl = d.deliverable_type === "url";
@@ -83,7 +95,8 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
     : null;
 
   const canExpand = hasContent || (!!d.path && !isUrl);
-  const hasHostFile = !!d.path && !isUrl;
+  const hasHostFile = !!d.path && !isUrl && atHost && !fileMissing;
+  const canOpenOnHost = hasHostFile && hostAvailable;
 
   // A success note fades after a few seconds; "not possible here" stays.
   useEffect(() => {
@@ -96,13 +109,24 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
     try {
       await api.tasks.deliverables.open(boardId, taskId, d.id, reveal ? { reveal: true, subpath } : { reveal: false });
       setHostNote(reveal ? "shown" : "opened");
-    } catch {
+    } catch (err) {
+      if (apiStatus(err) === 502) {
+        // The Mac helper did not do it: say so, keep the buttons to retry.
+        setHostNote("failed");
+        return;
+      }
       setHostAvailable(false);
       setHostNote("unavailable");
     }
   }
 
-  const toggle = () => canExpand && setExpanded((v) => !v);
+  const toggle = () => {
+    if (!canExpand) return;
+    // Opening asks for the file again: a load error from before (a network
+    // hiccup) does not hide the Mac buttons for good.
+    if (!expanded) setFileMissing(false);
+    setExpanded((v) => !v);
+  };
 
   return (
     <motion.div
@@ -215,8 +239,8 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
               style={{ borderTop: `1px solid ${C.borderSubtle}` }}
             >
               <div className="pt-2">
-                {/* The Mac actions: desktop with a mouse only, in words, with
-                    what happened next to them. */}
+                {/* The Mac actions: at the Mac itself with a mouse only, in
+                    words, with what happened next to them. */}
                 {hasHostFile && (hostAvailable || hostNote) && (
                   <div
                     data-testid="deliverable-host-actions"
@@ -232,7 +256,12 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
                         </HostButton>
                       </>
                     )}
-                    <span role="status" className="text-xs" style={{ color: C.textMuted }}>
+                    {/* A failed open is an error in words and colour, never "opened". */}
+                    <span
+                      role="status"
+                      className="text-xs"
+                      style={{ color: hostNote === "failed" ? STATUS_TEXT.error : C.textMuted }}
+                    >
                       {hostNote ? t(HOST_NOTE_KEY[hostNote]) : null}
                     </span>
                   </div>
@@ -250,13 +279,15 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
                     boardId={boardId}
                     taskId={taskId}
                     deliverableId={d.id}
-                    onOpenInFinder={hostAvailable ? (subpath) => onHost(true, subpath) : undefined}
+                    onOpenInFinder={canOpenOnHost ? (subpath) => onHost(true, subpath) : undefined}
+                    onLoadError={() => setFileMissing(true)}
                   />
                 ) : fileUrl && d.path ? (
                   <FilePreview
                     fileUrl={fileUrl}
                     path={d.path}
                     htmlFolderUrl={() => api.tasks.deliverables.viewUrl(boardId, taskId, d.id)}
+                    onLoadError={() => setFileMissing(true)}
                   />
                 ) : null}
               </div>

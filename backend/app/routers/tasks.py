@@ -1,5 +1,4 @@
 import logging
-import sys
 import uuid
 from datetime import datetime, timedelta
 
@@ -1174,13 +1173,19 @@ async def open_deliverable(
     task_id: uuid.UUID,
     deliverable_id: uuid.UUID,
     body: _OpenDeliverableBody,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Open a file or directory with the native macOS app (open -R = Finder reveal)."""
+    """Open a file or directory with the native macOS app (open -R = Finder reveal).
+
+    Only for a viewer at the MC host (403 otherwise), and a failing open is a
+    502 — never ``{"ok": true}`` for nothing (``services/host_open.py``)."""
     import os
-    import subprocess
     from app.models.deliverable import TaskDeliverable
+    from app.services.host_open import open_on_host_or_502, require_host_viewer
+
+    require_host_viewer(request)
 
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
@@ -1223,24 +1228,9 @@ async def open_deliverable(
     else:
         host_target = host_root_real
 
-    # macOS `open` doesn't run inside the Docker container — call the host helper via host.docker.internal.
-    # sys is imported at the end of the module (for test monkeypatching via patch("app.routers.tasks.sys.platform")).
-    # IMPORTANT: send the host helper the HOST path, not the container mount path.
-    in_docker = os.path.exists("/.dockerenv") or sys.platform.startswith("linux")
-    if in_docker:
-        import httpx
-        try:
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    "http://host.docker.internal:8765/open",
-                    json={"path": host_target, "reveal": body.reveal},
-                    timeout=3.0,
-                )
-        except Exception:
-            pass  # Helper unreachable — open silently fails
-    else:
-        cmd = ["open", "-R", host_target] if body.reveal else ["open", host_target]
-        subprocess.Popen(cmd)
+    # The HOST path goes to `open` (directly on a Mac, via the host helper
+    # from Docker) — never the container mount path.
+    await open_on_host_or_502(host_target, reveal=body.reveal)
     return {"ok": True}
 
 

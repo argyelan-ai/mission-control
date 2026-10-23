@@ -415,6 +415,19 @@ rules:
     status: active
     checked: 2026-10-23
 
+  - id: R-host-open-at-host-only
+    says: "Open on the Mac / Show in Finder act on the MC host's screen: the UI offers them only when MC was opened via a loopback name (location.hostname), and both open endpoints refuse any other Origin/Host with 403. A failing open (helper down or erroring) is a 502, never ok."
+    source: "Round-2 user tests (t3 S1, r1 S4, t4, r2 N6); backend/app/services/host_open.py module comment"
+    owner: backend/app/services/host_open.py
+    applies_to: ["backend/app/services/host_open.py", "backend/app/routers/tasks.py", "backend/app/routers/files.py", "frontend-v2/src/lib/hostOnly.ts", "frontend-v2/src/components/task/DeliverableCard.tsx", "frontend-v2/src/components/files/FilePreviewPanel.tsx"]
+    enforced_by:
+      - {test: "backend/tests/test_host_open.py::test_deliverable_open_from_another_computer_is_refused"}
+      - {test: "backend/tests/test_host_open.py::test_files_open_from_another_computer_is_refused"}
+      - {test: "backend/tests/test_host_open.py::test_deliverable_open_reports_a_failing_helper"}
+      - {test: "backend/tests/test_host_open.py::test_request_is_from_host"}
+    status: active
+    checked: 2026-10-23
+
 rejected:
   - id: X-own-control-room
     idea: "An own control-room UI, job page or coordinator for heads"

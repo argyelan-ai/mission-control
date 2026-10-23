@@ -53,25 +53,24 @@ export const PREVIEW_GUARD_SCRIPT = String.raw`(function (w, d) {
     try { var s = w[name]; if (s && typeof s.getItem === "function") return; } catch (e) { /* opaque origin */ }
     try { Object.defineProperty(w, name, { value: memoryStorage(), configurable: true, enumerable: true }); } catch (e) { /* keep the original */ }
   });
-  var cookieReadable = true;
-  try { void d.cookie; } catch (e) { cookieReadable = false; }
-  if (!cookieReadable) {
-    var jar = Object.create(null);
-    try {
-      Object.defineProperty(d, "cookie", {
-        configurable: true,
-        get: function () { return Object.keys(jar).map(function (k) { return k + "=" + jar[k]; }).join("; "); },
-        set: function (v) {
-          var text = String(v);
-          var pair = text.split(";")[0];
-          var at = pair.indexOf("=");
-          var key = at < 0 ? "" : pair.slice(0, at).trim();
-          if (/;\s*max-age\s*=\s*(0|-\d+)\s*(;|$)/i.test(text)) delete jar[key];
-          else jar[key] = (at < 0 ? pair : pair.slice(at + 1)).trim();
-        }
-      });
-    } catch (e) { /* keep the original */ }
-  }
+  /* The cookie always gets the jar: Chromium throws on reading it here,
+     WebKit gives "" and silently drops every write - a page that keeps its
+     state in a cookie lost it on an iPhone without any error. */
+  var jar = Object.create(null);
+  try {
+    Object.defineProperty(d, "cookie", {
+      configurable: true,
+      get: function () { return Object.keys(jar).map(function (k) { return k + "=" + jar[k]; }).join("; "); },
+      set: function (v) {
+        var text = String(v);
+        var pair = text.split(";")[0];
+        var at = pair.indexOf("=");
+        var key = at < 0 ? "" : pair.slice(0, at).trim();
+        if (/;\s*max-age\s*=\s*(0|-\d+)\s*(;|$)/i.test(text)) delete jar[key];
+        else jar[key] = (at < 0 ? pair : pair.slice(at + 1)).trim();
+      }
+    });
+  } catch (e) { /* keep the original */ }
   /* A page that still breaks: tell MC once, so it can show a hint outside
      the frame. A fixed word, never the page's text. Only thrown errors
      count - a rejected promise is no broken page: a start sound before the

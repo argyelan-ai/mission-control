@@ -271,6 +271,8 @@ export type FolderUrl = () => Promise<string>;
 /** Where the frame's page comes from: still asking for the folder URL,
  *  the folder URL, or the srcdoc. */
 type FrameSource = { kind: "minting" } | { kind: "url"; url: string } | { kind: "srcdoc" };
+/** The page a frame shows: its source and document (both kept by identity). */
+type FramePage = { source: FrameSource; doc: string };
 
 function SandboxedFrame({ doc, title, folderUrl }: { doc: string; title: string; folderUrl?: FolderUrl }) {
   const t = useTranslations("filePreview.html");
@@ -320,15 +322,22 @@ function SandboxedFrame({ doc, title, folderUrl }: { doc: string; title: string;
   }, [doc, source]);
 
   // The guard's "page-error" — only from THIS frame's window, only the one
-  // fixed word (file comment). Stays until dismissed or the frame goes.
+  // fixed word (file comment). It belongs to the page that sent it: stays
+  // until dismissed, and goes when the frame loads another page (another
+  // source or document — round-2 r1 NICE-11).
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const [pageError, setPageError] = useState(false);
+  const framePageRef = useRef<FramePage>({ source, doc });
+  useLayoutEffect(() => {
+    framePageRef.current = { source, doc };
+  });
+  const [pageErrorOf, setPageErrorOf] = useState<FramePage | null>(null);
+  const pageError = pageErrorOf !== null && pageErrorOf.source === source && pageErrorOf.doc === doc;
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       const own = frameRef.current?.contentWindow;
       if (!own || e.source !== own) return;
       const data = e.data as { mcPreview?: unknown } | null;
-      if (data && typeof data === "object" && data.mcPreview === PAGE_ERROR) setPageError(true);
+      if (data && typeof data === "object" && data.mcPreview === PAGE_ERROR) setPageErrorOf(framePageRef.current);
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -369,7 +378,7 @@ function SandboxedFrame({ doc, title, folderUrl }: { doc: string; title: string;
           </div>
         )}
       </div>
-      {pageError && <PageErrorHint onDismiss={() => setPageError(false)} />}
+      {pageError && <PageErrorHint onDismiss={() => setPageErrorOf(null)} />}
     </div>
   );
 }

@@ -1649,6 +1649,16 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-23** — **"Open on the Mac" only at the Mac, with an honest answer.** Both host-open
+  endpoints (`POST …/deliverables/{id}/open`, `POST /files/open`) go through
+  `services/host_open.py`: 403 unless the caller opened MC via a loopback name (the browser's
+  `Origin`, else `X-Forwarded-Host`/`Host` — the client IP is always local behind Tailscale Serve,
+  Caddy and the Next proxy), and a helper that is down or answers an error is a 502 instead of
+  `{"ok": true}`. The frontend applies the same rule to `location.hostname`
+  (`lib/hostOnly.ts` `useIsHostViewer`) next to the phone/mouse CSS, and the deliverable card drops
+  the buttons when its file or folder cannot be loaded. Not a security boundary (headers can be
+  set by any logged-in client). Rule `R-host-open-at-host-only`. No migration.
+
 - **2026-10-22** — **Token harvester: lead cost only from the lead's own session dir.** The host's
   `~/.claude/projects` is shared by the lead agent and the operator's interactive Claude Code; the
   harvester booked every MC-looking line there on the lead (cwd/branch heuristic), inflating its

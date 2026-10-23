@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Folder, FileText, ChevronRight, Loader2, AlertCircle } from "lucide-react";
@@ -13,11 +13,15 @@ interface DirectoryBrowserProps {
   boardId: string;
   taskId: string;
   deliverableId: string;
-  /** Optional — only provided while revealing in Finder may work here
-   *  (the card drops it once the backend says no). The links show only at a
-   *  desktop with a mouse (HOST_ONLY_CLASS): Finder opens on the Mac MC
-   *  runs on, never on the phone in hand. */
+  /** Optional — only provided while revealing in Finder may work here:
+   *  the card passes it only for a viewer at the Mac MC runs on (MC opened
+   *  via localhost) and drops it once the backend says no. The links also
+   *  need a mouse (HOST_ONLY_CLASS): Finder opens on that Mac, never on the
+   *  phone or laptop in hand. */
   onOpenInFinder?: (subpath?: string) => void;
+  /** Called when the folder cannot be listed (gone, 404) — the deliverable
+   *  card then drops its Mac buttons too (round-2 user test t3 N2). */
+  onLoadError?: () => void;
 }
 
 export function DirectoryBrowser({
@@ -25,6 +29,7 @@ export function DirectoryBrowser({
   taskId,
   deliverableId,
   onOpenInFinder,
+  onLoadError,
 }: DirectoryBrowserProps) {
   const t = useTranslations("deliverableCard");
   const [currentSubpath, setCurrentSubpath] = useState("");
@@ -34,6 +39,17 @@ export function DirectoryBrowser({
     queryKey: ["deliverable-dir", deliverableId, currentSubpath],
     queryFn: () => api.tasks.deliverables.directory(boardId, taskId, deliverableId, currentSubpath || undefined),
   });
+
+  // Only the folder itself failing counts — not a sub-folder the reader
+  // opened later.
+  const rootFailed = isError && currentSubpath === "";
+  const onLoadErrorRef = useRef(onLoadError);
+  useLayoutEffect(() => {
+    onLoadErrorRef.current = onLoadError;
+  });
+  useEffect(() => {
+    if (rootFailed) onLoadErrorRef.current?.();
+  }, [rootFailed]);
 
   // Breadcrumb parts from currentSubpath
   const parts = currentSubpath ? currentSubpath.split("/") : [];

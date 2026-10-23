@@ -43,7 +43,7 @@ const scriptFrames = () =>
   });
 
 /** The hint next to the Run button, before the tap. */
-const RUN_HINT = "The page runs only when you start it.";
+const RUN_HINT = "The page runs only when you start it. What it saves (a high score, say) lasts only until you reload.";
 
 /** Opens an HTML file: it arrives as a Run button, with no frame yet. */
 async function renderGate(path = "site/index.html") {
@@ -513,7 +513,9 @@ describe("filePreview i18n", () => {
     expect(deNs.html.preview).toBe("Vorschau");
     expect(deNs.html.fullscreen).toBe("Vollbild");
     expect(deNs.html.run).toBe("Seite starten");
-    expect(deNs.html.runHint).toBe("Die Seite läuft erst, wenn du sie startest.");
+    expect(deNs.html.runHint).toBe(
+      "Die Seite läuft erst, wenn du sie startest. Was sie speichert (z. B. einen Highscore), gilt nur bis zum Neuladen.",
+    );
     expect(deNs.html.isolationLabel).toBe("Agenten-Seite · isolierte Vorschau – hier nie Passwörter eingeben");
     expect(deNs.download).toBe("Herunterladen");
   });
