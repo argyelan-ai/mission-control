@@ -39,10 +39,10 @@ from sqlmodel import select, or_, and_
 from app.auth import require_agent
 from app.scopes import Scope, require_scope
 from app.database import get_session
+from app.comment_types import activity_comment_filter
 from app.models.agent import Agent
 from app.models.approval import Approval
 from app.models.board import Board, Project
-from app.comment_types import activity_comment_filter
 from app.models.task import Task, TaskComment, TaskDependency
 from app.services.activity import emit_event
 from app.services.task_state import lock_and_set

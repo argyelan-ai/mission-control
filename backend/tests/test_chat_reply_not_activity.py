@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 import textwrap
 import uuid
 from datetime import timedelta
@@ -183,6 +184,16 @@ def _source(obj) -> str:
     return textwrap.dedent(inspect.getsource(obj))
 
 
+def _filter_calls(node: ast.AST) -> int:
+    """Real ``activity_comment_filter()`` calls under ``node`` — a code
+    comment or docstring that only mentions it does not count."""
+    return sum(
+        1 for n in ast.walk(node)
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "id", getattr(n.func, "attr", None)) == "activity_comment_filter"
+    )
+
+
 @pytest.mark.parametrize("target, min_uses", [
     ("app.routers.tasks:list_tasks", 1),
     ("app.services.daily_metrics_digest:_stale_cards", 1),
@@ -216,7 +227,9 @@ def test_activity_reader_uses_the_shared_rule(target, min_uses):
     for part in qual.split("."):
         obj = getattr(obj, part)
     src = _source(obj)
-    assert src.count("activity_comment_filter()") >= min_uses, (
+    # Count real calls, not the text: a code comment or docstring that
+    # mentions the helper must not satisfy the guard (round-6 review NICE 3).
+    assert _filter_calls(ast.parse(src)) >= min_uses, (
         f"{target} reads comments as the run's activity without "
         "comment_types.activity_comment_filter()"
     )
@@ -237,12 +250,16 @@ _DISPLAY_OR_MARKER_READERS = {
 def _unscoped_latest_comment_queries() -> set[tuple[str, str]]:
     """(file, function) of every statement that selects TaskComment ordered
     newest-first (or takes its max created_at) without ANY comment-type
-    scoping: no ``comment_type`` filter, no ``activity_comment_filter()``,
+    scoping: no positive ``comment_type`` filter, no ``activity_comment_filter()``,
     no marker-text search."""
     hits: set[tuple[str, str]] = set()
     newest = ("TaskComment.created_at.desc()", "max(TaskComment.created_at)",
               "col(TaskComment.created_at).desc()")
-    scoped = ("comment_type", "activity_comment_filter()", "content.like", "content ==")
+    scoped = ("content.like", "content ==")
+    # Only a POSITIVE type scope counts (``comment_type == "x"`` /
+    # ``comment_type.in_(...)``). A negative one (``!= "system"``,
+    # ``not_in({...})``) still lets a chat reply through (round-6 review NICE 3).
+    positive_type_scope = re.compile(r"comment_type\)?\s*(==|\.in_\()")
     compound = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.If, ast.For,
                 ast.AsyncFor, ast.While, ast.With, ast.AsyncWith, ast.Try)
     for path in APP.rglob("*.py"):
@@ -259,7 +276,8 @@ def _unscoped_latest_comment_queries() -> set[tuple[str, str]]:
                 seg = ast.get_source_segment(text, stmt) or ""
                 if "select(" not in seg or not any(n in seg for n in newest):
                     continue
-                if any(s in seg for s in scoped):
+                if (_filter_calls(stmt) or any(s in seg for s in scoped)
+                        or positive_type_scope.search(seg)):
                     continue
                 hits.add((str(path.relative_to(APP)), fn.name))
     return hits
