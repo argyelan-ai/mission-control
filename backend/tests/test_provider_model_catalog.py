@@ -1339,14 +1339,16 @@ async def _mark_live(fake_redis, slug: str, **doc) -> None:
 
 @pytest.mark.asyncio
 async def test_dark_box_is_not_probed_and_answers_at_once(session, monkeypatch, fake_redis):
-    """A box the watcher has seen dark for 3+ probes in a row is shown as
-    asleep without a single HTTP request."""
+    """A power-managed box the watcher has seen dark for 3+ probes in a row
+    (and that nobody can ask otherwise) is shown as asleep without a single
+    HTTP request. Round-4: "asleep" needs a power-managed box — see
+    test_model_catalog_box_state.py for the box's own check."""
     seen = mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": [{"id": "m"}]}))
     use_fake_redis(monkeypatch, fake_redis)
     patch_creds(monkeypatch, {})
     await add_runtime(
         session, slug="sleepy-box", runtime_type="vllm_docker",
-        endpoint="http://192.0.2.77:5559/v1",
+        endpoint="http://192.0.2.77:5559/v1", power_managed=True,
     )
     await _mark_live(fake_redis, "sleepy-box", reachable=False, consecutive_failures=3167)
 
@@ -1459,12 +1461,14 @@ async def test_cached_failure_does_not_hide_that_the_box_is_asleep(session, monk
     patch_creds(monkeypatch, {})
     await add_runtime(
         session, slug="sleepy-box", runtime_type="vllm_docker",
-        endpoint="http://192.0.2.77:5559/v1",
+        endpoint="http://192.0.2.77:5559/v1", power_managed=True,
     )
     await _mark_live(fake_redis, "sleepy-box", reachable=False, consecutive_failures=12)
 
+    # Round-4 (t3 NICE-4): the forced probe still fails, and the page then says
+    # what the plain GET says — not `unreachable` until the next reload.
     forced = await model_catalog.build_catalog(session, force=True)
-    assert forced[0]["status"] == model_catalog.STATUS_UNREACHABLE
+    assert forced[0]["status"] == model_catalog.STATUS_ASLEEP
     probes_after_force = len(seen)
 
     providers = await model_catalog.build_catalog(session)

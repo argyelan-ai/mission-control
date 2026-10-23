@@ -33,7 +33,7 @@ from app.database import get_session
 from app.models.host import Host, normalise_role
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys, get_redis
-from app.services import host_bootstrap, host_metrics_history, host_onboarding, host_probe, launch_template, runtime_manager, ssh_host_keys
+from app.services import host_bootstrap, host_liveness, host_metrics_history, host_onboarding, host_probe, launch_template, runtime_manager, ssh_host_keys
 from app.services.host_resolver import ResolvedHost, resolved_host_from_row, ssh_capable
 
 router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
@@ -687,6 +687,9 @@ async def host_metrics(
         # reachable == box awake + logged in (work-ready), otherwise it's asleep.
         m = await runtime_manager.get_host_metrics(resolved)
         awake = bool(m.get("reachable"))
+        # The model catalog reads this answer instead of asking the box a
+        # second time (round-4 t3 S1: "model port dark" is not "asleep").
+        await host_liveness.remember(host.id, awake)
         return {
             "kind": "flask_wol",
             "slug": host.slug,

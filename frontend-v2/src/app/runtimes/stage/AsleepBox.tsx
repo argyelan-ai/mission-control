@@ -19,12 +19,16 @@ export function AsleepBox({
   host,
   runtime,
   lastSeen,
+  checking = false,
   onOpenCockpit,
 }: {
   host: Host;
   /** Die power_managed-Runtime dieser Box — trägt den Wake-Aufruf. */
   runtime: Runtime;
   lastSeen?: string | null;
+  /** The box's own check has not answered yet: nothing proves it sleeps
+   *  (round-4 t3 S1) — the card says it is being checked, not "asleep". */
+  checking?: boolean;
   onOpenCockpit: () => void;
 }) {
   const t = useTranslations("runtimes.stage");
@@ -39,7 +43,7 @@ export function AsleepBox({
     { value: "–", label: t("kpiMemoryFree") },
     { value: "–", label: t("kpiRecipesFit") },
     { value: "–", label: t("kpiAgents") },
-    { value: "–", label: t("kpiEndpointOff") },
+    { value: "–", label: checking ? t("kpiEndpoint") : t("kpiEndpointOff") },
   ];
 
   return (
@@ -56,14 +60,18 @@ export function AsleepBox({
             {host.display_name}
           </span>
           <span className="font-mono uppercase shrink-0" style={{ fontSize: "10px", letterSpacing: "0.1em", color: C.textMuted }}>
-            {t("cornerAsleep")}
+            {checking ? t("cornerChecking") : t("cornerAsleep")}
           </span>
         </div>
         <div style={{ opacity: 0.6 }}>
           <HeatStrip empty />
         </div>
         <div className="text-xs mt-2 pb-4" style={{ color: C.textMuted }}>
-          {lastSeen ? t("poweredOffLastSeen", { time: lastSeen }) : t("poweredOff")}
+          {checking
+            ? t("checkingLine")
+            : lastSeen
+              ? t("poweredOffLastSeen", { time: lastSeen })
+              : t("poweredOff")}
         </div>
       </div>
       <div style={{ opacity: 0.6 }}>

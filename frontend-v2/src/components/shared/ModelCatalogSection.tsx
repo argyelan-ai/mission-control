@@ -34,6 +34,7 @@ import {
   ChevronRight,
   Plus,
   CheckCircle2,
+  CircleDashed,
   FileCode2,
   Moon,
   Terminal,
@@ -99,12 +100,34 @@ const STATUS_CHROME: Record<ModelCatalogStatus, StatusChrome> = {
     tone: "idle",
     Icon: Moon,
   },
+  // Round-4 user test (t3 S1, r2 S1): the box answers its own check, only
+  // the model port is dark — it runs no model. Not "asleep", not an error.
+  no_model: {
+    labelKey: "statusNoModelLabel",
+    headlineKey: "statusNoModelHeadline",
+    tone: "idle",
+    Icon: CircleDashed,
+  },
   unreachable: {
     labelKey: "statusUnreachableLabel",
     headlineKey: "statusUnreachableHeadline",
     tone: "err",
     Icon: PlugZap,
   },
+};
+
+/** States the backend answers without asking the provider — no check time,
+ *  nothing to unfold. */
+const UNPROBED: ReadonlySet<ModelCatalogStatus> = new Set<ModelCatalogStatus>(["asleep", "no_model"]);
+
+/** The backend's `reason` is a status code ("credential_missing") or, from
+ *  older entries, free text. A code is said in words — and not at all when it
+ *  only repeats the status (t3 NICE-3: raw "asleep" under the sentence). */
+const REASON_KEYS: Record<string, string> = {
+  credential_missing: "reasonCredentialMissing",
+  unreachable: "reasonUnreachable",
+  asleep: "reasonAsleep",
+  no_model: "reasonNoModel",
 };
 
 const TONE_TEXT: Record<StatusChrome["tone"], string> = {
@@ -238,9 +261,16 @@ function ProviderGroup({
   // Standard: aufgeklappt, wenn es etwas Neues gibt ODER etwas nicht stimmt —
   // sonst bleibt die Seite ruhig (Anthropic allein liefert 11 Modelle).
   // A sleeping box has nothing to unfold — its banner says everything.
-  const [open, setOpen] = useState(
-    newCount > 0 || (!probeSucceeded && provider.status !== "asleep"),
-  );
+  const notAsked = UNPROBED.has(provider.status);
+  const [open, setOpen] = useState(newCount > 0 || (!probeSucceeded && !notAsked));
+  const reasonText =
+    provider.reason == null || provider.reason === provider.status
+      ? null
+      : REASON_KEYS[provider.reason]
+        ? t(REASON_KEYS[provider.reason])
+        : /^[a-z_]+$/.test(provider.reason)
+          ? null // an unknown code: no raw machine word on the page
+          : provider.reason;
 
   return (
     <div
@@ -284,9 +314,12 @@ function ProviderGroup({
         }
         meta={
           <>
-            <MetaText className="hidden sm:inline shrink-0" title={t(chrome.labelKey)}>
-              {t("checked", { time: timeAgo(provider.cached_at, locale) })}
-            </MetaText>
+            {/* Not asked is not "checked a moment ago" (r2 S1). */}
+            {!notAsked && provider.cached_at && (
+              <MetaText className="hidden sm:inline shrink-0" title={t(chrome.labelKey)}>
+                {t("checked", { time: timeAgo(provider.cached_at, locale) })}
+              </MetaText>
+            )}
             {provider.endpoint && (
               <MetaText mono className="hidden sm:inline max-w-[220px]" title={provider.endpoint}>
                 {provider.endpoint}
@@ -305,12 +338,9 @@ function ProviderGroup({
           <chrome.Icon size={12} className={`mt-px shrink-0 ${TONE_TEXT[chrome.tone]}`} />
           <div className="min-w-0">
             <div>{t(chrome.headlineKey)}</div>
-            {provider.reason && (
-              <div
-                data-testid="catalog-status-reason"
-                className="mt-1 font-mono text-[10px] text-muted break-words"
-              >
-                {provider.reason}
+            {reasonText && (
+              <div data-testid="catalog-status-reason" className="mt-1 text-[11px] text-muted break-words">
+                {reasonText}
               </div>
             )}
           </div>

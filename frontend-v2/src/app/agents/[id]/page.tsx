@@ -1213,7 +1213,9 @@ function OverviewTab({
                 <div className="flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: seenColor }} />
                   <span className="text-[12px] font-mono" style={{ color: seenColor }}>
-                    {seenMins !== null ? t("minsAgo", { mins: seenMins }) : t("never")}
+                    {/* Same words as the header ("vor 20 Tagen"), not raw minutes
+                        ("vor 28462m", round-4 t3 NICE-5). */}
+                    {seenMins !== null ? timeAgo(agent.last_seen_at, locale) : t("never")}
                   </span>
                 </div>
               </div>

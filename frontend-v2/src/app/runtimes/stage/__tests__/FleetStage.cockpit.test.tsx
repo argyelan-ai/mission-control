@@ -51,7 +51,9 @@ function makeRuntime(over: Partial<Runtime> = {}): Runtime {
   };
 }
 
-const metrics: HostMetrics = { reachable: true, gpu_util_pct: 1, vram_used_mb: 100, vram_total_mb: 1000, gpu_temp_c: 40 };
+// The box under test is the SLEEPING card — its own check says so. (Round-4:
+// a power-managed box that answers its check is shown free instead.)
+const metrics: HostMetrics = { reachable: false, gpu_util_pct: null, vram_used_mb: null, vram_total_mb: null, gpu_temp_c: null };
 
 beforeEach(() => {
   vi.restoreAllMocks();
