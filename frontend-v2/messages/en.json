@@ -1666,6 +1666,7 @@
     "headerStats": "{notes} {notesCount, plural, one {note} other {notes}} · {agents, plural, one {# agent} other {# agents}}",
     "taskBannerLabel": "Task",
     "taskLink": "Open task {id}",
+    "wikilinkOpen": "Search for “{target}”",
     "voiceHighlightLabel": "Voice highlight",
     "attachment": "Attachment",
     "noteType": {
@@ -1675,7 +1676,7 @@
       "journal": "Journal",
       "weekly_review": "Weekly review",
       "note": "Note",
-      "deliverable": "Deliverable"
+      "deliverable": "File"
     },
     "graph": {
       "building": "Building graph…",

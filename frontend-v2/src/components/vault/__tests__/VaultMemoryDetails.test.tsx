@@ -4,8 +4,8 @@
  * no doubled title, no empty image for an HTML attachment, task links that
  * open the task, and dates/labels that follow the UI language.
  */
-import { describe, it, expect } from "vitest";
-import { render as rtlRender, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { render as rtlRender, screen, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import en from "../../../../messages/en.json";
@@ -90,6 +90,20 @@ describe("VaultMarkdown", () => {
     expect(screen.getByRole("button", { name: /rate-limits/ })).toBeInTheDocument();
   });
 
+  it("[[name|alias]] shows the alias and links to the name", () => {
+    const onClick = vi.fn();
+    render(<VaultMarkdown content="See [[rate-limits|Rate limits]]." onWikilinkClick={onClick} />);
+    const chip = screen.getByRole("button", { name: "Search for “Rate limits”" });
+    expect(chip).toHaveTextContent("[Rate limits]");
+    fireEvent.click(chip);
+    expect(onClick).toHaveBeenCalledWith("rate-limits");
+  });
+
+  it("an embed's |size part is not part of the file name", () => {
+    render(<VaultMarkdown content={"![[../../attachments/files/shot.png|300]]"} />);
+    expect(screen.getByText("shot.png")).toBeInTheDocument();
+  });
+
   it("links [[task-<uuid>]] to the task, not to the note itself", () => {
     const id = "2379cb9f-5fde-4bd8-8f02-801a4afb17cc";
     render(<VaultMarkdown content={`> From task [[task-${id}]].`} />);
@@ -138,5 +152,11 @@ describe("i18n catalog", () => {
       expect(typeof (v.noteType as Record<string, string>).deliverable).toBe("string");
     }
     expect(de.vault.graph.building).not.toBe(en.vault.graph.building);
+  });
+
+  it("calls a deliverable note the same as the rest of the app (Datei / File)", () => {
+    expect(de.vault.noteType.deliverable).toBe("Datei");
+    expect(en.vault.noteType.deliverable).toBe("File");
+    expect(de.vault.showAllNotes).not.toMatch(/Notes/);
   });
 });

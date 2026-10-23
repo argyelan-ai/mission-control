@@ -58,7 +58,11 @@ vi.mock("@/hooks/useVaultList", () => ({
 }));
 vi.mock("@/hooks/useVaultNote", () => ({
   useVaultNote: (path: string) => ({
-    data: { path, content: "body of " + path, frontmatter: {} },
+    data: {
+      path,
+      content: path.endsWith("a.md") ? "see [[beta-topic|Beta topic]] here" : "body of " + path,
+      frontmatter: {},
+    },
     isLoading: false,
     isError: false,
   }),
@@ -170,5 +174,32 @@ describe("VaultMemoryPage — note navigation", () => {
       { scroll: false },
     );
     expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("phone: a wikilink tap closes the note and shows its search as a new history step", () => {
+    setViewport(true);
+    renderPage();
+    fireEvent.click(screen.getByText("Alpha note"));
+    nav.push.mockClear();
+    // The chip shows the alias, the link target is the name.
+    fireEvent.click(screen.getByRole("button", { name: /Beta topic/ }));
+    expect(nav.push).toHaveBeenCalledWith("/memory?q=beta-topic", { scroll: false });
+    expect(nav.back).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toHaveValue("beta-topic");
+  });
+
+  it("history back after a wikilink search brings the earlier query back", () => {
+    setViewport(true);
+    renderPage();
+    fireEvent.click(screen.getByText("Alpha note"));
+    fireEvent.click(screen.getByRole("button", { name: /Beta topic/ }));
+    expect(screen.getByRole("textbox")).toHaveValue("beta-topic");
+
+    // The browser steps back to the note entry, which had no query.
+    act(() => {
+      window.history.replaceState(null, "", "/memory?path=agents%2Fx%2Fa.md");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(screen.getByRole("textbox")).toHaveValue("");
   });
 });

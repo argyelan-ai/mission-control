@@ -1580,7 +1580,7 @@
     "tabTrash": "Papierkorb",
     "knowledgeMemory": "Wissen · Memory",
     "taskBanner": "{count} Notizen und Dateien zu dieser Aufgabe",
-    "showAllNotes": "Alle Notes anzeigen",
+    "showAllNotes": "Alle Notizen anzeigen",
     "clearVoiceHighlight": "Voice-Highlight entfernen",
     "dismiss": "ausblenden",
     "undated": "Ohne Datum",
@@ -1666,6 +1666,7 @@
     "headerStats": "{notes} {notesCount, plural, one {Notiz} other {Notizen}} · {agents, plural, one {# Agent} other {# Agenten}}",
     "taskBannerLabel": "Aufgabe",
     "taskLink": "Aufgabe {id} öffnen",
+    "wikilinkOpen": "Nach «{target}» suchen",
     "voiceHighlightLabel": "Sprach-Hervorhebung",
     "attachment": "Anhang",
     "noteType": {
@@ -1675,7 +1676,7 @@
       "journal": "Journal",
       "weekly_review": "Wochenrückblick",
       "note": "Notiz",
-      "deliverable": "Lieferung"
+      "deliverable": "Datei"
     },
     "graph": {
       "building": "Graph wird aufgebaut…",

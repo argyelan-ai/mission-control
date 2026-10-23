@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { motion, AnimatePresence } from "framer-motion";
@@ -22,6 +22,13 @@ const EMBED = "vault-embed:";
 // link early ("Seite (index.html)").
 function encodeTarget(target: string): string {
   return encodeURIComponent(target).replace(/\(/g, "%28").replace(/\)/g, "%29");
+}
+
+/** Plain text of a link's rendered children (the alias / name). */
+function textOf(children: ReactNode): string {
+  if (typeof children === "string" || typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map(textOf).join("");
+  return "";
 }
 
 function urlTransform(url: string): string {
@@ -87,11 +94,15 @@ function TaskLink({ taskId }: { taskId: string }) {
  */
 function WikilinkChip({
   target,
+  label,
   onWikilinkClick,
 }: {
   target: string;
+  /** Shown text — the alias of `[[name|alias]]`, else the target. */
+  label: string;
   onWikilinkClick?: (target: string) => void;
 }) {
+  const t = useTranslations("vault");
   const [hovered, setHovered] = useState(false);
   const [fetchPath, setFetchPath] = useState<string | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -124,9 +135,9 @@ function WikilinkChip({
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         type="button"
-        aria-label={`Navigate to ${target}`}
+        aria-label={t("wikilinkOpen", { target: label })}
       >
-        [<span>{target}</span>]
+        [<span>{label}</span>]
       </button>
 
       <AnimatePresence>
@@ -190,13 +201,16 @@ export function VaultMarkdown({ content, onWikilinkClick, hideEmbeds = false }: 
   // We inject a fake markdown link [name](wikilink:name) which we intercept
   // in the `a` component renderer. `![[path]]` embeds are handled first —
   // left alone they became `![…](wikilink:…)`, an empty image box.
+  // `[[name|alias]]` (Obsidian) links to `name` and shows `alias`; an embed's
+  // `|…` part is a display size and is dropped.
   const processed = content
-    .replace(/!\[\[([^\]]+)\]\]/g, (_, target: string) =>
+    .replace(/!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g, (_, target: string) =>
       hideEmbeds ? "" : `[${target}](${EMBED}${encodeTarget(target)})`
     )
     .replace(
-      /\[\[([^\]]+)\]\]/g,
-      (_, name: string) => `[${name}](${WIKILINK}${encodeTarget(name)})`
+      /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g,
+      (_, name: string, alias?: string) =>
+        `[${alias ?? name}](${WIKILINK}${encodeTarget(name)})`
     );
 
   return (
@@ -288,7 +302,11 @@ export function VaultMarkdown({ content, onWikilinkClick, hideEmbeds = false }: 
             const task = target.match(TASK_WIKILINK_RE);
             if (task) return <TaskLink taskId={task[1]} />;
             return (
-              <WikilinkChip target={target} onWikilinkClick={onWikilinkClick} />
+              <WikilinkChip
+                target={target}
+                label={textOf(children) || target}
+                onWikilinkClick={onWikilinkClick}
+              />
             );
           }
           return (

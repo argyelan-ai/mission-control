@@ -37,6 +37,9 @@ import { C } from "@/lib/colors";
 
 type VaultView = "list" | "graph" | "trash";
 
+// Below this width the note is a full-screen page over the list (phone).
+const PHONE_QUERY = "(max-width: 767px)";
+
 // Message keys in the vault.* namespace — t() at the render site.
 const TAB_LABEL_KEYS: Record<VaultView, string> = {
   list: "tabList",
@@ -155,7 +158,7 @@ export default function VaultMemoryPage() {
   // Detect mobile viewport
   const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)");
+    const mq = window.matchMedia(PHONE_QUERY);
     setIsMobile(mq.matches);
     const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
     mq.addEventListener("change", handler);
@@ -250,8 +253,32 @@ export default function VaultMemoryPage() {
   function handleWikilinkClick(target: string) {
     // Navigate to the target by setting it as the search query.
     // T8 limitation: stem-only resolution. M.4 will add proper path lookup.
+    if (isMobile) {
+      // Phone: the note covers the list, so a search behind it would change
+      // nothing visible. Close the note and show the search as a new history
+      // step — swipe back returns to the note, like a link in a browser.
+      // openedFromListRef is left alone: it still describes the entry behind
+      // the note for when the user comes back to it.
+      setSelectedPath(null);
+      setQuery(target);
+      pushUrl({ q: target, path: null }, "push");
+      return;
+    }
     handleQueryChange(target);
   }
+
+  // The search box follows the URL on history moves (back / forward): after
+  // a wikilink search, stepping back must also bring back the earlier query,
+  // or the list shows a search the URL no longer has. Only popstate — typing
+  // writes the URL itself, and syncing on every URL change would race with
+  // fast typing.
+  useEffect(() => {
+    const onPop = () => {
+      setQuery(new URLSearchParams(window.location.search).get("q") ?? "");
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   // ── Voice → Graph/List Bridge ──────────────────────────────────────────────
   // Single source of truth for voice-driven highlights. The bridge mounts
@@ -357,7 +384,7 @@ export default function VaultMemoryPage() {
     // Read the viewport directly: on the first commit `isMobile` is still its
     // initial false (its effect has not re-rendered yet), and a list that is
     // already in the query cache would auto-open a note over the phone list.
-    if (isMobile || window.matchMedia("(max-width: 767px)").matches) return;
+    if (isMobile || window.matchMedia(PHONE_QUERY).matches) return;
     if (notes.length === 0) return; // wait for the list to load
     didAutoSelectRef.current = true;
     if (selectedPath) return; // deeplink / restored state — respect it
