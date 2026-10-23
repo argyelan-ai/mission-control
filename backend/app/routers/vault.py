@@ -109,17 +109,33 @@ async def list_notes(
 
     `count` reflects the full filtered set so the client can decide when to
     stop fetching the next page. `notes` is the requested slice.
+
+    `agents` names every agent with notes in the set filtered by everything
+    except `agent` (a facet), with its note count, sorted by slug. The memory
+    header counted agents and the agent filter offered choices from the first
+    page only — "4 agents" in a vault with 19 (round-4 user test t4 SHOULD-1).
+    Leaving the agent filter out keeps the other agents choosable while one
+    is selected.
     """
     index = request.app.state.vault_index
     notes = list(index.list_all())
-    if agent:
-        notes = [n for n in notes if n["agent"] == agent]
     if type:
         notes = [n for n in notes if n["type"] == type]
     # Phase 2: optional status filter
     if status:
         notes = [n for n in notes if n.get("status", "published") == status]
-    return {"count": len(notes), "notes": notes[offset : offset + limit]}
+    agent_counts: dict[str, int] = {}
+    for n in notes:
+        slug = n.get("agent") or ""
+        if slug:
+            agent_counts[slug] = agent_counts.get(slug, 0) + 1
+    if agent:
+        notes = [n for n in notes if n["agent"] == agent]
+    return {
+        "count": len(notes),
+        "notes": notes[offset : offset + limit],
+        "agents": [{"agent": slug, "count": agent_counts[slug]} for slug in sorted(agent_counts)],
+    }
 
 
 @router.get("/search", dependencies=[Depends(require_role(Role.ADMIN))])

@@ -27,7 +27,8 @@ import type { ScheduledJob } from "@/lib/types";
 import cronstrue from "cronstrue/i18n";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
-import { nextRunRelative, relativeJobTime } from "./jobDisplay";
+import { nextRunRelative } from "./jobDisplay";
+import { timeAgo } from "@/lib/utils";
 
 /**
  * Column template shared by the table header (JobsTable) and every row. They
@@ -242,14 +243,20 @@ export function JobRow({
 
       <div className="text-xs" style={{ color: C.textSecondary }}>{nextRunRelative(job, t)}</div>
 
-      <div className="flex items-center gap-1.5 text-xs" style={{ color: C.textSecondary }}>
+      <div className="flex min-w-0 items-center gap-1.5 text-xs" style={{ color: C.textSecondary }}>
         {job.last_run_status === "success" && (
-          <CheckCircle2 size={12} style={{ color: C.online }} />
+          <CheckCircle2 size={12} className="shrink-0" style={{ color: C.online }} />
         )}
         {job.last_run_status === "failed" && (
-          <XCircle size={12} style={{ color: C.error }} />
+          <XCircle size={12} className="shrink-0" style={{ color: C.error }} />
         )}
-        <span>{relativeJobTime(job.last_run_at, t)}</span>
+        {/* Same words as the phone card ("26 days ago", not "26d ago"). */}
+        <span
+          className="truncate whitespace-nowrap"
+          title={job.last_run_at ? new Date(job.last_run_at).toLocaleString(locale) : undefined}
+        >
+          {job.last_run_at ? timeAgo(job.last_run_at, locale) : "—"}
+        </span>
       </div>
 
       <div className="min-w-0 truncate text-xs" style={{ color: C.textSecondary }}>

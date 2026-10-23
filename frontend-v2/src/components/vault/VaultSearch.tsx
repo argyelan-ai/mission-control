@@ -15,9 +15,12 @@ export function VaultSearch({ value, onChange }: VaultSearchProps) {
 
   return (
     <div className="relative">
-      {/* Slash icon */}
+      {/* Keyboard hints ("/" to focus, ⏎ / ESC) are desktop-only: a phone has
+          no such keys, and their padding cut the placeholder short
+          (round-4 user test t4 NICE-1). */}
       <span
-        className="absolute left-4 top-1/2 -translate-y-1/2 font-mono text-sm pointer-events-none select-none"
+        aria-hidden="true"
+        className="hidden md:block absolute left-4 top-1/2 -translate-y-1/2 font-mono text-sm pointer-events-none select-none"
         style={{ color: "var(--color-text-muted)" }}
       >
         /
@@ -29,7 +32,7 @@ export function VaultSearch({ value, onChange }: VaultSearchProps) {
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={t("searchPlaceholder")}
-        className="w-full pl-9 pr-16 py-3.5 text-[15px] rounded-xl outline-none transition-colors"
+        className="w-full px-4 md:pl-9 md:pr-16 py-3.5 text-[15px] rounded-xl outline-none transition-colors"
         style={{
           background: "var(--color-bg-deep)",
           border: "1px solid var(--color-border)",
@@ -52,9 +55,9 @@ export function VaultSearch({ value, onChange }: VaultSearchProps) {
         aria-label={t("searchVaultNotes")}
       />
 
-      {/* Return hint */}
       <span
-        className="absolute right-4 top-1/2 -translate-y-1/2 font-mono text-[11px] pointer-events-none"
+        aria-hidden="true"
+        className="hidden md:block absolute right-4 top-1/2 -translate-y-1/2 font-mono text-[11px] pointer-events-none"
         style={{ color: "var(--color-text-muted)" }}
       >
         {value ? "ESC" : "⏎"}

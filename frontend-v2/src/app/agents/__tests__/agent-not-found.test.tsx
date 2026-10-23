@@ -54,6 +54,8 @@ describe("Agent detail — a missing agent", () => {
     renderPage();
     expect(await screen.findByText("Agent not found")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Back to agents/ })).toHaveAttribute("href", "/agents");
+    // Round-4 r2 N4: the title is the page's h1 (screen readers found none).
+    expect(screen.getByRole("heading", { level: 1, name: "Agent not found" })).toBeInTheDocument();
     // No retry for a record that does not exist.
     expect(get).toHaveBeenCalledTimes(1);
   });
