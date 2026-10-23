@@ -1783,7 +1783,7 @@ export function ChatView({
                 activity={activity}
                 aliveness={aliveness}
                 sending={stream.awaitingResponse}
-                task={liveTask ? { taskId: liveTask.stub.taskId, title: liveTask.stub.title } : null}
+                task={liveTask ? { taskId: liveTask.stub.taskId, title: liveTask.stub.title, deliveredAt: liveTask.stub.deliveredAt } : null}
                 taskHeadVisible={taskHeadVisible}
                 loading={firstStatePending}
                 hasTerminal={!headlessChat}

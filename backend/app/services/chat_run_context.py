@@ -373,6 +373,11 @@ async def run_context(session: AsyncSession, agent: Agent, *, now: datetime | No
            if any(review_run_holds(t, agent) for t in live) else "")
         + ". Never say the server refuses a call you have not made; if a call fails, "
         "quote its error.",
+        # Round-5 t1 NICE-3: the chat's thread reply promised "the next entry
+        # follows here" — the chat writes only when asked, the run wrote it.
+        "Announce nothing you will not do yourself: you write in the task thread only "
+        "when the operator asks, so never promise a later entry, update or notice there "
+        "or here — the run writes its own notes, and the task view shows them.",
         END,
     ]
     return "\n".join(lines)

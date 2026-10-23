@@ -398,3 +398,65 @@ describe("mergeTimeline — a band never stands empty (round-3 t1 NICE-1)", () =
     expect(again.entries[2]).toBe(first.entries[2]);
   });
 });
+
+/*
+ * Round-5 t1 SHOULD-1 (live 23.10.2026): with the chat open, a task ran,
+ * the operator asked Q1 during the run (its answer lines were held below the
+ * band), the task ended (review) with its reflection, and 25 s later he asked
+ * Q2. Right after Q2 a THIRD band of the same task appeared at the bottom:
+ * title + "waits for review" + the reflection — cutting Q2's turn in two.
+ * After a reload it was gone (the task was a card then).
+ *
+ * Cause: the end line belongs to the last band when the task ended before the
+ * entry that FOLLOWS the band. Once Q2 closed the band, the entry right after
+ * it was the held Q1 answer — older than the end by design (it lies inside the
+ * band's time span) — so the end line fell to a trailing `seg:tail`. The entry
+ * that counts is the one that closed the band (Q2), not a held chat line.
+ */
+describe("mergeTimeline — a finished task does not come back after a new question (round-5 t1 SHOULD-1)", () => {
+  const segs = (entries: MergedEntry[]) => entries.filter((e) => e.kind === "segment");
+  const q1 = chatMsg(at(1, 40), "[test] Status?");
+  const q1Answer = [chatTool(at(1, 45), "mc task-get"), chatMsg(at(1, 54), "Comment written. Status: in progress.", "assistant")];
+  const workRows = [think(at(1, 41), "Write index.html"), tool(at(2, 31), "Edit index.html"), tool(at(2, 56), "render preview")];
+  const reflection = text(at(3, 23), "Reflection: done in ~2 min.");
+  const review = stub({ status: "review", live: false, endedAt: new Date(Date.parse(at(3, 24)) + 847).toISOString(), outcome: "Page built" });
+  const q2 = chatMsg(at(3, 49), "[test] Who decides the review?");
+  const q2Thinking = chatTool(at(3, 50), "mc review");
+
+  it("the live sequence: the end line stays in the second band, no third band after Q2", () => {
+    const rows = [think(at(0, 10), "Start"), ...workRows, reflection];
+    const before = merge([q1, ...q1Answer], [task(rows, { stub: review, endLine: true })]);
+    expect(segs(before.entries)).toHaveLength(2);
+    const after = merge([q1, ...q1Answer, q2, q2Thinking], [task(rows, { stub: review, endLine: true })], { prev: before });
+    expect(segs(after.entries)).toHaveLength(2);
+    expect(after.entries.some((e) => e.key.endsWith(":seg:tail"))).toBe(false);
+    // The end line sits at the end of the second band, above Q2.
+    const band = segs(after.entries)[1];
+    expect(units(band).at(-1)?.u).toBe("end");
+    const order = after.entries.map((e) => e.key);
+    expect(order.indexOf(band.key)).toBeLessThan(order.findIndex((k) => k.includes(q2.uuid)));
+    // Nothing of the task below Q2: the last entries are Q2's own lines.
+    expect(after.entries.at(-1)?.kind).toBe("chat");
+  });
+
+  it("the reflection row that arrives with the steps poll only after Q2 still lands in the second band", () => {
+    const early = [think(at(0, 10), "Start"), ...workRows];
+    const before = merge([q1, ...q1Answer], [task(early, { stub: review, endLine: true })]);
+    const after = merge(
+      [q1, ...q1Answer, q2, q2Thinking],
+      [task([...early, reflection], { stub: review, endLine: true })],
+      { prev: before },
+    );
+    expect(segs(after.entries)).toHaveLength(2);
+    expect(units(segs(after.entries)[1]).map((u) => u.u).slice(-2)).toEqual(["text", "end"]);
+  });
+
+  it("a task that really ends after Q2 still gets its end line below Q2 (title only)", () => {
+    const late = stub({ status: "review", live: false, endedAt: at(4) });
+    const rows = [think(at(0, 10), "Start"), ...workRows];
+    const r = merge([q1, ...q1Answer, q2], [task(rows, { stub: late, endLine: true })]);
+    const tail = r.entries.at(-1)!;
+    expect(tail.key.endsWith(":seg:tail")).toBe(true);
+    expect(tail.kind === "segment" && tail.head).toBe("title");
+  });
+});
