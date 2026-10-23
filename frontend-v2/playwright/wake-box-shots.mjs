@@ -179,6 +179,10 @@ for (const vp of VIEWPORTS) {
       await page.waitForTimeout(400);
       await wakeBtn.click();
       await page.getByText(want).first().waitFor({ timeout: 5000 });
+      // A failure reads as an error (role="alert"), like the box card's line.
+      if (down && !(await page.getByRole("alert").filter({ hasText: want }).count())) {
+        failures.push(`${label}: ${n} helper line is not shown as an error`);
+      }
       if (await page.getByText(/ausgelöst|Wake failed|Aufwecken fehlgeschlagen/).count()) {
         failures.push(`${label}: ${n} shows a raw or bare wake message`);
       }

@@ -90,7 +90,7 @@ const fakeWake = () =>
     setTimeout(
       () =>
         window.__wakeHelperDown
-          ? reject(new Error('API 503: {"detail":"Weck-Helfer auf dem Mac läuft nicht (kein Lebenszeichen). Workstation wurde nicht geweckt."}'))
+          ? reject(new Error('API 503: {"detail":{"message":"Weck-Helfer auf dem Mac läuft nicht (kein Lebenszeichen). Workstation wurde nicht geweckt.","reason":"no_heartbeat"}}'))
           : resolve({ ok: true, message: "Wake-on-LAN ausgelöst für Workstation. Box braucht ~1-2 Min bis erreichbar." }),
       400,
     ),
