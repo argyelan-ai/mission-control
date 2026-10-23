@@ -52,4 +52,32 @@ describe("Agents roster status", () => {
     expect(within(idler).queryByTestId("agent-row-paused")).not.toBeInTheDocument();
     expect(within(idler).getByText("2%")).toBeInTheDocument();
   });
+
+  // Round-4 K5 (t5 NICE-1): a long role ("Workhorse Developer — local coding
+  // tasks, …") cut "· Paused" off on the phone (100 px of 409). The state
+  // stands on its own and never truncates; only the role shortens.
+  it("keeps the paused state readable behind a long role", async () => {
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      agent({
+        id: "s", name: "Speedy", operational_mode: "paused",
+        role: "Workhorse Developer — local coding tasks, quick turnaround, no overhead",
+      }),
+    ]);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><AgentsPage /></QueryClientProvider>);
+
+    const row = (await screen.findByRole("link", { name: "Open agent: Speedy" })).closest("div") as HTMLElement;
+    const marker = within(row).getByTestId("agent-row-paused");
+    expect(marker).toHaveTextContent("Paused");
+    // Not inside the part that truncates, and never shrinks itself.
+    expect(marker.className).toMatch(/\bshrink-0\b/);
+    let el: HTMLElement | null = marker;
+    while (el && el !== row) {
+      expect(el.className, el.outerHTML.slice(0, 120)).not.toMatch(/\btruncate\b/);
+      el = el.parentElement;
+    }
+    const role = within(row).getByText(/Workhorse Developer/);
+    expect(role.className).toMatch(/\btruncate\b/);
+    expect(role).not.toContainElement(marker);
+  });
 });

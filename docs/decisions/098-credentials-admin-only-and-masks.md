@@ -42,6 +42,18 @@ Round-3 user tests (package R1) found two holes in the credentials Vault
    (`content`) never show a tail. The free-text summary in the Vault no
    longer shows a character count.
 
+   **Amended 23.10.2026 (round-4 user tests K5, r1 N1):** the whole-word /
+   suffix match let `dbPassword`, `clientSecret`, `secret_key` and
+   `totp_seed` show 4 characters, a nested value leaked the end of its
+   text form, and `GET /api/v1/secrets` masked without any field rule. Now
+   one rule serves both stores (`encryption.mask_credential_field`): the
+   field name is normalised (lower case, separators and camelCase folded)
+   and matched as a substring. `password`, `passwd`, `pwd`, `passphrase`,
+   `pin`, `secret`, `seed`, `private`, `otp`/`totp` and `content` → always
+   the fixed run. Only `token`/`key`-like names may keep the 4-character
+   tail (20+ characters); every other name — known or not — gets the fixed
+   run. A nested value (dict, list) is hidden in full, as one string.
+
 ## Alternativen
 
 - **Operator may read credentials, admin writes.** Would keep the

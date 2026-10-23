@@ -409,6 +409,7 @@ async def list_agents(
         {
             **a.model_dump(),
             **_shown_context_fields(a, windows.get(a.runtime_id)),
+            **_run_fields(a),
             "role_canonical": normalize_agent_role(a.role),
         }
         for a in agents
@@ -443,6 +444,21 @@ def _shown_context_fields(agent: Agent, window: int | None) -> dict:
 
     tokens, ctx_max = shown_context(agent.context_tokens, agent.context_max, window)
     return {"context_tokens": tokens, "context_max": ctx_max}
+
+
+# rule: R-stop-only-own-run - Stop on review card B stopped run A
+def _run_fields(agent: Agent) -> dict:
+    """``run_task_id``: the task the agent's live run works on, when the
+    bridge records it (ACP task-state file), else None. The task card offers
+    "Stop run" only for its own run (round-4 K5, r1 N2). A read failure only
+    costs the button."""
+    try:
+        from app.services.acp_chat_transport import read_acp_task_run_id
+
+        return {"run_task_id": read_acp_task_run_id(agent)}
+    except Exception:  # noqa: BLE001 — a display field never breaks the list
+        logger.warning("agents: run record of %s not readable", agent.id, exc_info=True)
+        return {"run_task_id": None}
 
 
 @router.get("/agents/stream")
@@ -882,7 +898,11 @@ async def get_agent(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     windows = await _shown_windows(session, [agent])
-    return {**agent.model_dump(), **_shown_context_fields(agent, windows.get(agent.runtime_id))}
+    return {
+        **agent.model_dump(),
+        **_shown_context_fields(agent, windows.get(agent.runtime_id)),
+        **_run_fields(agent),
+    }
 
 
 @router.patch("/agents/{agent_id}")

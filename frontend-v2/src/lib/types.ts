@@ -743,6 +743,10 @@ export interface Agent {
   last_seen_at: string | null;
   last_task_activity_at: string | null;
   current_task_id: string | null;
+  /** The task the agent's live run works on, from the bridge's run record
+   *  (ACP agents only); null without a live run or a record. Unlike
+   *  current_task_id it also names a review card. */
+  run_task_id?: string | null;
   /** null = unbekannt (Agent meldet seit >= 3 Heartbeats keinen Kontextwert) */
   context_tokens: number | null;
   context_max: number;

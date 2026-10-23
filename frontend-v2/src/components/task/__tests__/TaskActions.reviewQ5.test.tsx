@@ -81,13 +81,30 @@ describe("review: Stop run only while an agent reviews", () => {
 
   // PR #963 review MUST 1: the shape the backend really produces. A worker's
   // current_task_id is never set for a review card (in_progress only, the
-  // heartbeat clears it otherwise); the live run shows as status "working".
-  it("a reviewer agent working on the card can still be stopped (pointer empty, as the backend leaves it)", async () => {
+  // heartbeat clears it otherwise). The bridge's run record names the card
+  // the run works on (run_task_id) — that is what makes it this card's run.
+  it("a reviewer whose run record names this card can still be stopped (pointer empty, as the backend leaves it)", async () => {
     apiMock.agentsList.mockResolvedValue([
-      { id: "rev", name: "Checker", role_canonical: "reviewer", status: "working", run_state: "running", current_task_id: null },
+      { id: "rev", name: "Checker", role_canonical: "reviewer", status: "working", run_state: "running", current_task_id: null, run_task_id: "t1" },
     ]);
     renderActions(mkTask({ status: "review", assigned_agent_id: "rev", dispatch_intent: "review_handoff" } as Partial<Task>));
     expect(await screen.findByRole("button", { name: "Stop run" })).toBeInTheDocument();
+  });
+
+  // Round-4 K5 (r1 N2): two review cards delivered to the same reviewer.
+  // It works on card A with the pointer empty; card B offered "Stop run",
+  // and stopping B ends the session — run A.
+  it.each([
+    ["the run record names another card", { run_task_id: "card-a" }],
+    ["there is no run record (busy, pointer empty)", { run_task_id: null }],
+    ["the agent list has no run field at all", {}],
+  ])("a busy reviewer gives card B no Stop run when %s", async (_label, shape) => {
+    apiMock.agentsList.mockResolvedValue([
+      { id: "rev", name: "Checker", role_canonical: "reviewer", status: "working", run_state: "running", current_task_id: null, ...shape },
+    ]);
+    renderActions(mkTask({ status: "review", assigned_agent_id: "rev", dispatch_intent: "review_handoff" } as Partial<Task>));
+    await screen.findByText(/is reviewing/);
+    expect(screen.queryByRole("button", { name: "Stop run" })).toBeNull();
   });
 
   it("a reviewer whose pointer names this card keeps Stop run too", async () => {
@@ -100,7 +117,7 @@ describe("review: Stop run only while an agent reviews", () => {
 
   it("a self-review stall while the builder still works on its card keeps Stop run", async () => {
     apiMock.agentsList.mockResolvedValue([
-      { id: "dev", name: "Builder", role_canonical: "reviewer", status: "working", run_state: "running", current_task_id: null },
+      { id: "dev", name: "Builder", role_canonical: "reviewer", status: "working", run_state: "running", current_task_id: null, run_task_id: "t1" },
     ]);
     renderActions(mkTask({ status: "review", assigned_agent_id: "dev", dispatch_intent: "root" } as Partial<Task>));
     expect(await screen.findByRole("button", { name: "Stop run" })).toBeInTheDocument();
@@ -112,6 +129,7 @@ describe("review: Stop run only while an agent reviews", () => {
     ["idle, pointer empty", { status: "idle", run_state: "idle", current_task_id: null }],
     ["idle, pointer still on the card", { status: "idle", run_state: "idle", current_task_id: "t1" }],
     ["working on another task", { status: "working", run_state: "running", current_task_id: "other" }],
+    ["working on another task by its run record", { status: "working", run_state: "running", current_task_id: null, run_task_id: "other" }],
   ])("an agent that holds the card but is %s has no run to stop", async (_label, shape) => {
     apiMock.agentsList.mockResolvedValue([{ id: "rev", name: "Checker", role_canonical: "reviewer", ...shape }]);
     renderActions(mkTask({ status: "review", assigned_agent_id: "rev", dispatch_intent: "review_handoff" } as Partial<Task>));
@@ -131,7 +149,7 @@ describe("review: Stop run only while an agent reviews", () => {
 
   it("a review card never dispatched to its agent has no run, even with the agent busy", async () => {
     apiMock.agentsList.mockResolvedValue([
-      { id: "rev", name: "Checker", role_canonical: "reviewer", status: "working", run_state: "running", current_task_id: null },
+      { id: "rev", name: "Checker", role_canonical: "reviewer", status: "working", run_state: "running", current_task_id: null, run_task_id: "t1" },
     ]);
     renderActions(
       mkTask({ status: "review", assigned_agent_id: "rev", dispatch_intent: "review_handoff", dispatched_at: null } as Partial<Task>),

@@ -227,12 +227,14 @@ export function TaskActions({ task, boardId, primaryTaken = false, mirroredOnPho
   // A waiting review is quieted with Hold in the decision panel instead
   // (review_decision=hold stops the reminders like run_control does).
   //
-  // The run is read from the agent itself, not from its current_task_id: a
-  // worker's backend never points that at a review card (it is set only for
-  // in_progress, the heartbeat clears it for anything else), so a reviewer
-  // that really works on the card reports status "working" with the pointer
-  // empty (PR #963 review MUST 1). Pointer empty or on this card = this run;
-  // pointer on another task = the agent works elsewhere.
+  // rule: R-stop-only-own-run - Stop on review card B stopped run A
+  // The run must be THIS card's run, by name. A worker's backend never points
+  // current_task_id at a review card (it is set only for in_progress, the
+  // heartbeat clears it for anything else), so "working, pointer empty" says
+  // nothing about which card: with two review cards delivered to the same
+  // reviewer, card B offered Stop and stopping it ended run A (round-4 K5,
+  // r1 N2). Proof is the pointer on this card, or the bridge's run record
+  // (run_task_id) naming it. Anything else — no button.
   const reviewByAgent =
     task.status === "review" && !!task.assigned_agent_id && !task.human_review_required && task.dispatched_at != null;
   const { data: agents } = useQuery({
@@ -249,7 +251,7 @@ export function TaskActions({ task, boardId, primaryTaken = false, mirroredOnPho
   const agentHoldsReview =
     !!reviewer &&
     (isAgentWorking(reviewer.status) || reviewer.run_state === "running") &&
-    (reviewer.current_task_id == null || reviewer.current_task_id === task.id);
+    (reviewer.current_task_id === task.id || reviewer.run_task_id === task.id);
   const hasActiveRun =
     task.status === "in_progress" ||
     (task.status === "inbox" && task.dispatched_at != null) ||
