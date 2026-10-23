@@ -13,14 +13,14 @@ messages, and a pre-deploy chat message is older than any stale window anyway.
 Additive only; downgrade drops the column and the clock counts every message
 again (the behaviour before this revision).
 
-Revision ID: 0222_message_from_chat
-Revises: 0221_bench_entry_position
+Revision ID: 0223_message_from_chat
+Revises: 0222_runtime_endpoint_trim
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0222_message_from_chat"
-down_revision = "0221_bench_entry_position"
+revision = "0223_message_from_chat"
+down_revision = "0222_runtime_endpoint_trim"
 branch_labels = None
 depends_on = None
 
