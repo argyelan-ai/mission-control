@@ -611,9 +611,10 @@ function RunRow({ run }: { run: ScheduledJobRun }) {
       </span>
       {duration !== null && (
         <span
-          className="font-mono text-[11px] flex-shrink-0"
+          className="tabular-nums text-[11px] flex-shrink-0"
           style={{ color: C.textMuted }}
         >
+          {/* K7: a duration is not a machine value — no mono. */}
           {formatDuration(duration, locale)}
         </span>
       )}

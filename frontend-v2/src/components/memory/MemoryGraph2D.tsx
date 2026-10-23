@@ -291,6 +291,10 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
     // operator pans, zooms, drags or taps, the camera is theirs: no
     // checkpoint moves it again.
     const userMovedRef = useRef(false);
+    const sizeRef = useRef(size);
+    useEffect(() => {
+      sizeRef.current = size;
+    }, [size]);
     const markUserMoved = useCallback(() => {
       userMovedRef.current = true;
     }, []);
@@ -299,29 +303,29 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
       if (userMovedRef.current || !fgRef.current) return;
       const fg = fgRef.current as unknown as {
         zoomToFit: (ms: number, padding: number) => void;
-        centerAt: (x: number, y: number, ms?: number) => void;
       };
       // Two-step framing:
-      //   1. zoomToFit picks the correct zoom level so all nodes fit.
-      //      Padding 220 = the operator wanted "~25% mehr zoom out" room around
-      //      the bbox vs the previous 140.
-      //   2. centerAt(0, +Y) re-centres camera slightly below origin
-      //      AFTER zoom completes. Positive Y in world coords pulls the
-      //      brain upward in the viewport — the operator wanted it "ein bischen
-      //      nach oben". forceX/Y already keeps the dense mass at (0,0)
-      //      so this offset is purely framing.
-      // On a narrow (mobile) canvas a 220px padding is wider than the canvas
-      // itself, so the bbox collapses to a dot. Scale padding + vertical
-      // framing offset down for small viewports.
-      const isMobileViewport =
-        typeof window !== "undefined" && window.innerWidth < 768;
-      fg.zoomToFit(500, isMobileViewport ? 40 : 220);
+      //   1. zoomToFit picks the zoom level so all nodes fit, with room
+      //      around them. The room scales with the canvas: a fixed 220 px
+      //      (the operator's "~25% mehr zoom out" on a large screen) left a
+      //      740 px laptop canvas only 300 px for the graph (round-4 review
+      //      r2 N1). 15 % of the shorter side, never more than 220 px.
+      //   2. centerAt(0, +Y) re-centres the camera slightly below the origin
+      //      AFTER the zoom — the graph sits a little higher in the view
+      //      (operator: "ein bischen nach oben"). The shift is 5 % of the
+      //      canvas height in screen pixels, converted at the zoom just set,
+      //      so it reads the same at every zoom level.
+      const { width = 0, height = 0 } = sizeRef.current ?? {};
+      const padding = Math.max(24, Math.min(220, Math.round(Math.min(width, height) * 0.15)));
+      fg.zoomToFit(500, padding);
       setTimeout(() => {
-        if (fgRef.current && !userMovedRef.current) {
-          (fgRef.current as unknown as {
-            centerAt: (x: number, y: number, ms?: number) => void;
-          }).centerAt(0, isMobileViewport ? 40 : 150, 500);
-        }
+        const cam = fgRef.current as unknown as
+          | { centerAt: (x: number, y: number, ms?: number) => void; zoom?: () => number }
+          | undefined;
+        if (!cam || userMovedRef.current) return;
+        const k = typeof cam.zoom === "function" ? cam.zoom() : 1;
+        const shift = (height * 0.05) / (Number.isFinite(k) && k > 0 ? k : 1);
+        cam.centerAt(0, shift, 500);
       }, 520);
     }, []);
 

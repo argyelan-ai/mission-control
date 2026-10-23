@@ -245,10 +245,10 @@ export function JobRow({
 
       <div className="flex items-center gap-1.5 text-xs" style={{ color: C.textSecondary }}>
         {job.last_run_status === "success" && (
-          <CheckCircle2 size={12} style={{ color: C.online }} />
+          <CheckCircle2 size={12} className="shrink-0" style={{ color: C.online }} />
         )}
         {job.last_run_status === "failed" && (
-          <XCircle size={12} style={{ color: C.error }} />
+          <XCircle size={12} className="shrink-0" style={{ color: C.error }} />
         )}
         {/* Same words as the phone card ("26 days ago", not "26d ago"). */}
         <span>{job.last_run_at ? timeAgo(job.last_run_at, locale) : "—"}</span>

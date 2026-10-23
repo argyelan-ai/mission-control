@@ -31,9 +31,9 @@ vi.mock("@/lib/api", () => ({
 
 const PAGE: VaultNote[] = [
   { path: "agents/head/a.md", agent: "head", type: "note", tags: "", project: "", title: "A", date: "", content: "" } as VaultNote,
-  { path: "agents/sparky/b.md", agent: "sparky", type: "note", tags: "", project: "", title: "B", date: "", content: "" } as VaultNote,
+  { path: "agents/beta/b.md", agent: "beta", type: "note", tags: "", project: "", title: "B", date: "", content: "" } as VaultNote,
 ];
-const ALL_AGENTS = ["boss", "head", "jarvis", "researcher", "rex", "sparky", "system"];
+const ALL_AGENTS = ["beta", "boss", "head", "jarvis", "researcher", "rex", "system"];
 
 vi.mock("@/hooks/useVaultSearch", () => ({
   VAULT_SEARCH_LIMIT: 100,

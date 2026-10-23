@@ -32,4 +32,21 @@ describe("useVaultList — agents", () => {
     await waitFor(() => expect(result.current.notes).toHaveLength(1));
     expect(result.current.agents).toEqual(["cody", "researcher", "rex"]);
   });
+
+  it("an older backend without the facet: falls back to the loaded notes", async () => {
+    vi.spyOn(api.vault, "list").mockResolvedValue({
+      count: 2,
+      notes: [
+        { id: "a", path: "a.md", agent: "beta", type: "note", tags: "", project: "", title: "a", date: "", content: "" },
+        { id: "b", path: "b.md", agent: "boss", type: "note", tags: "", project: "", title: "b", date: "", content: "" },
+      ],
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useVaultList({}), { wrapper });
+    await waitFor(() => expect(result.current.notes).toHaveLength(2));
+    expect(result.current.agents).toEqual(["beta", "boss"]);
+  });
 });
