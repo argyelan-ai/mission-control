@@ -1323,3 +1323,190 @@ async def test_bind_still_creates_a_row_for_the_same_model_on_another_endpoint(
     assert resp.status_code == 201
     assert resp.json()["created"] is True
     assert resp.json()["slug"] == "ollama-cloud-glm-5-2"
+
+
+# ── Sleeping boxes are not waited for (round-3 user test t4 S3) ──────────────
+#
+# The Models tab took 30.7 s: two providers on a sleeping box were probed with a
+# 15 s limit and 2 attempts each, one after the other, while the request held
+# its DB transaction open; a failure was remembered for only 60 s. The runtime
+# watcher already knows such a box is dark — the catalog now asks it first.
+
+
+async def _mark_live(fake_redis, slug: str, **doc) -> None:
+    await fake_redis.set(model_catalog.RedisKeys.runtime_live(slug), json.dumps(doc))
+
+
+@pytest.mark.asyncio
+async def test_dark_box_is_not_probed_and_answers_at_once(session, monkeypatch, fake_redis):
+    """A box the watcher has seen dark for 3+ probes in a row is shown as
+    asleep without a single HTTP request."""
+    seen = mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": [{"id": "m"}]}))
+    use_fake_redis(monkeypatch, fake_redis)
+    patch_creds(monkeypatch, {})
+    await add_runtime(
+        session, slug="sleepy-box", runtime_type="vllm_docker",
+        endpoint="http://192.0.2.77:5559/v1",
+    )
+    await _mark_live(fake_redis, "sleepy-box", reachable=False, consecutive_failures=3167)
+
+    providers = await model_catalog.build_catalog(session)
+
+    entry = next(p for p in providers if p["key"] == "openai:sleepy-box")
+    assert entry["status"] == model_catalog.STATUS_ASLEEP
+    assert entry["models"] == []
+    assert seen == [], "a box the watcher knows is dark must not be probed"
+
+
+@pytest.mark.asyncio
+async def test_dark_answer_is_not_cached_so_a_woken_box_shows_at_once(session, monkeypatch, fake_redis):
+    """The asleep answer is read from the watcher on every call — once the box
+    answers again, the very next call probes it (no 5-minute stale 'asleep')."""
+    seen = mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": [{"id": "m"}]}))
+    use_fake_redis(monkeypatch, fake_redis)
+    patch_creds(monkeypatch, {})
+    await add_runtime(
+        session, slug="sleepy-box", runtime_type="vllm_docker",
+        endpoint="http://192.0.2.77:5559/v1",
+    )
+    await _mark_live(fake_redis, "sleepy-box", reachable=False, consecutive_failures=5)
+    await model_catalog.build_catalog(session)
+
+    await _mark_live(fake_redis, "sleepy-box", reachable=True, consecutive_failures=0)
+    providers = await model_catalog.build_catalog(session)
+
+    entry = next(p for p in providers if p["key"] == "openai:sleepy-box")
+    assert entry["status"] == model_catalog.STATUS_OK
+    assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_one_failed_probe_is_not_called_asleep(session, monkeypatch, fake_redis):
+    """A single blip (1-2 failed probes) is not "asleep" — the catalog still
+    asks the box itself, same threshold as the watcher's own alarm."""
+    seen = mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": [{"id": "m"}]}))
+    use_fake_redis(monkeypatch, fake_redis)
+    patch_creds(monkeypatch, {})
+    await add_runtime(
+        session, slug="blip-box", runtime_type="vllm_docker",
+        endpoint="http://192.0.2.78:8000/v1",
+    )
+    await _mark_live(fake_redis, "blip-box", reachable=False, consecutive_failures=1)
+
+    providers = await model_catalog.build_catalog(session)
+
+    entry = next(p for p in providers if p["key"] == "openai:blip-box")
+    assert entry["status"] == model_catalog.STATUS_OK
+    assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_check_now_still_probes_a_dark_box(session, monkeypatch, fake_redis):
+    """"Check now" (force) is the operator asking explicitly — it probes even
+    a box the watcher calls dark."""
+    seen = mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": [{"id": "m"}]}))
+    use_fake_redis(monkeypatch, fake_redis)
+    patch_creds(monkeypatch, {})
+    await add_runtime(
+        session, slug="sleepy-box", runtime_type="vllm_docker",
+        endpoint="http://192.0.2.77:5559/v1",
+    )
+    await _mark_live(fake_redis, "sleepy-box", reachable=False, consecutive_failures=9)
+
+    await model_catalog.build_catalog(session, force=True)
+
+    assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_cached_failure_is_dropped_once_the_box_answers_again(session, monkeypatch, fake_redis):
+    """A remembered 'unreachable' (now kept 5 minutes) must not outlive the
+    box waking up: the watcher's reachable:true wins over the cache."""
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] <= 2:  # first build: both attempts fail
+            raise httpx.ConnectTimeout("dark", request=request)
+        return httpx.Response(200, json={"data": [{"id": "m"}]})
+
+    mock_httpx(monkeypatch, handler)
+    use_fake_redis(monkeypatch, fake_redis)
+    patch_creds(monkeypatch, {})
+    await add_runtime(
+        session, slug="wake-box", runtime_type="vllm_docker",
+        endpoint="http://192.0.2.79:8000/v1",
+    )
+    first = await model_catalog.build_catalog(session)
+    assert first[0]["status"] == model_catalog.STATUS_UNREACHABLE
+
+    await _mark_live(fake_redis, "wake-box", reachable=True, consecutive_failures=0)
+    second = await model_catalog.build_catalog(session)
+
+    assert second[0]["status"] == model_catalog.STATUS_OK
+
+
+def test_failure_is_remembered_at_least_five_minutes():
+    assert model_catalog.NEGATIVE_CACHE_TTL >= 300
+
+
+def test_connect_limit_matches_the_runtime_probe():
+    """A box that drops packets never refuses the connect — the catalog uses
+    the same 2 s connect limit as runtime_manager's probe, not 15 s."""
+    timeout = model_catalog._HTTP_TIMEOUT
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.connect is not None and timeout.connect <= 2.0
+    assert timeout.read is not None and timeout.read >= 10.0
+
+
+@pytest.mark.asyncio
+async def test_providers_are_probed_in_parallel_without_an_open_transaction(
+    session, monkeypatch, fake_redis
+):
+    """Two slow providers cost one wait, not two, and no DB transaction is
+    held while MC waits on the network ("OPEN transaction after 30.5s")."""
+    import asyncio
+    import time
+
+    in_txn: list[bool] = []
+
+    async def handler(request):
+        in_txn.append(session.in_transaction())
+        await asyncio.sleep(0.4)
+        return httpx.Response(200, json={"data": [{"id": "m"}]})
+
+    mock_httpx(monkeypatch, handler)
+    use_fake_redis(monkeypatch, fake_redis)
+    patch_creds(monkeypatch, {})
+    await add_runtime(
+        session, slug="box-a", runtime_type="vllm_docker", endpoint="http://192.0.2.1:8000/v1",
+    )
+    await add_runtime(
+        session, slug="box-b", runtime_type="vllm_docker", endpoint="http://192.0.2.2:8000/v1",
+    )
+
+    t0 = time.monotonic()
+    providers = await model_catalog.build_catalog(session)
+    elapsed = time.monotonic() - t0
+
+    assert {p["status"] for p in providers} == {model_catalog.STATUS_OK}
+    assert elapsed < 0.7, f"providers were probed one after the other ({elapsed:.2f}s)"
+    assert in_txn and not any(in_txn), "a DB transaction was held across the HTTP probe"
+
+
+@pytest.mark.asyncio
+async def test_endpoint_with_stray_whitespace_is_still_probed(session, monkeypatch, fake_redis):
+    """A row saved before the input was trimmed (" http://…") failed with
+    UnsupportedProtocol — the probe trims it."""
+    seen = mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": [{"id": "m"}]}))
+    use_fake_redis(monkeypatch, fake_redis)
+    patch_creds(monkeypatch, {})
+    await add_runtime(
+        session, slug="space-box", runtime_type="vllm_docker",
+        endpoint=" http://192.0.2.80:5559/v1 ",
+    )
+
+    providers = await model_catalog.build_catalog(session)
+
+    assert providers[0]["status"] == model_catalog.STATUS_OK
+    assert str(seen[0].url) == "http://192.0.2.80:5559/v1/models"

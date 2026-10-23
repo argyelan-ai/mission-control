@@ -24,6 +24,7 @@ export function FreeBox({
   device,
   probeTimedOut = false,
   probePending = false,
+  knownDark = false,
   onOpenCockpit,
 }: {
   host: Host;
@@ -37,6 +38,10 @@ export function FreeBox({
   /** The page painted from the unprobed rows (round-2 Q6) and the live
    *  probe has not answered yet — "being checked", not "free". */
   probePending?: boolean;
+  /** The runtime watcher already knows the box does not answer
+   *  (`hostKnownDark`). Shown at once; the box's own metrics still win as
+   *  soon as they arrive (a woken box answers reachable:true). */
+  knownDark?: boolean;
   onOpenCockpit: () => void;
 }) {
   const t = useTranslations("runtimes.stage");
@@ -83,7 +88,10 @@ export function FreeBox({
   // "free · no model · ready" while its own metrics said reachable:false).
   // "ready" needs the box to answer; until its metrics are in, or while the
   // page still paints from the unprobed rows, it is being checked.
-  const unreachable = metrics?.reachable === false;
+  // Before the box's own metrics are in, the watcher's verdict stands in —
+  // a sleeping box no longer reads "checking" until its metrics time out
+  // (round-3 user test t3 NICE-2). Once metrics arrive they decide.
+  const unreachable = metrics != null ? metrics.reachable === false : knownDark;
   const asleep = unreachable && (host.power_managed || metrics?.status === "asleep");
   // A failed metrics call says nothing about the box — the runtime probe
   // already called it free (no model), so the corner keeps "free" instead of
@@ -98,8 +106,10 @@ export function FreeBox({
       : checking
         ? t("cornerChecking")
         : t("cornerFree");
+  // The corner names the state; the line never repeats it (round-3 r2 N1:
+  // "ASLEEP" over "asleep · not reachable"). It says what that leaves.
   const line = unreachable
-    ? asleep ? t("asleepLine") : t("unreachableLine")
+    ? t("freeLineNoReadings")
     : checking
       ? t("checkingLine")
       : noReadings
@@ -112,8 +122,10 @@ export function FreeBox({
     { value: String(agentsData?.count ?? 0), label: t("kpiAgents") },
     {
       value: endpointPort != null ? `:${endpointPort}` : "–",
-      // "· idle" is a claim about the engine — not made while unchecked.
-      label: probePending ? t("kpiEndpoint") : t("kpiEndpointIdle"),
+      // "· idle" is a claim about the engine — not made while unchecked,
+      // nor for a box that does not answer (round-3: "asleep" over
+      // "Endpoint · idle").
+      label: probePending || unreachable ? t("kpiEndpoint") : t("kpiEndpointIdle"),
       copyValue: endpointPort != null ? slot?.endpoint ?? `:${endpointPort}` : undefined,
     },
   ];

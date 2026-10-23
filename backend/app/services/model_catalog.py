@@ -131,14 +131,31 @@ logger = logging.getLogger(__name__)
 
 # ── Tuning ───────────────────────────────────────────────────────────────────
 # Same rhythm as the CLI update check: a warm cache for the cockpit, plus a
-# SHORT negative TTL so a provider that was briefly down doesn't stay "broken"
-# in the UI for a quarter of an hour.
+# shorter negative TTL so a provider that was briefly down doesn't stay
+# "broken" in the UI for a quarter of an hour.
+#
+# The negative TTL was 60 s until the round-3 user test (23.10.2026, t4 S3):
+# a sleeping box was probed again on almost every visit and the Models tab
+# waited 30.7 s. Five minutes now; a box that wakes up does not have to wait
+# them out — ``build_catalog`` drops a remembered failure as soon as the
+# runtime watcher sees the box answer again (``_woke_up``).
 CACHE_TTL = 15 * 60
-NEGATIVE_CACHE_TTL = 60
+NEGATIVE_CACHE_TTL = 5 * 60
 
-_HTTP_TIMEOUT = 15.0
+#: Connect limit 2 s, the same as ``runtime_manager._PROBE_CONNECT_TIMEOUT_S``:
+#: a box that drops packets (asleep, off) never refuses the connect, so a flat
+#: 15 s limit made every attempt on it wait the full 15 s. A connected
+#: provider keeps 15 s to answer — a cold cloud API answers late, not never.
+_HTTP_TIMEOUT = httpx.Timeout(15.0, connect=2.0)
 _RETRIES = 2  # total attempts on 5xx/timeout
 _RETRY_BACKOFF = 0.5
+
+#: A runtime the watcher has found dark this many probes in a row is not
+#: asked by the catalog at all — the same count at which the watcher raises
+#: ``runtime.unreachable`` and the stage card turns "failed"
+#: (``runtime_watcher.UNREACHABLE_EVENT_THRESHOLD``). One or two failed probes
+#: are a blip and still get a real probe.
+DARK_AFTER_FAILURES = 3
 
 ANTHROPIC_VERSION = "2023-06-01"
 ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
@@ -163,6 +180,13 @@ STATUS_MANIFEST_FALLBACK = "manifest_fallback"
 # `manifest_fallback` would slander a source that is more current than our
 # manifest and is maintained by the vendor's own updater, not by us.
 STATUS_CLI_CONFIG = "cli_config"
+# The box behind this provider is dark — the runtime watcher has seen it fail
+# DARK_AFTER_FAILURES probes in a row (asleep, switched off, engine down).
+# Not probed, so the page does not wait on a box that cannot answer; NOT
+# cached, so the first call after the box wakes up probes it. "Check now"
+# (force) still probes. Distinct from `unreachable`: that one is OUR probe's
+# finding, this one is the watcher's.
+STATUS_ASLEEP = "asleep"
 
 # Protocols whose MANIFEST outranks a successful probe and is therefore MERGED
 # into it (union, deduplicated) instead of only standing in when the probe dies.
@@ -532,8 +556,7 @@ def read_grok_token() -> str:
 # ── Adapters ─────────────────────────────────────────────────────────────────
 
 
-async def _discover_anthropic(session: AsyncSession, target: ProviderTarget) -> Discovery:
-    creds = await resolve_provider_credentials(session, None, target.runtime)
+async def _discover_anthropic(target: ProviderTarget, creds: dict[str, str]) -> Discovery:
     token = creds.get("CLAUDE_CODE_OAUTH_TOKEN")
     if not token:
         raise _CredentialUnavailable(
@@ -551,7 +574,7 @@ async def _discover_anthropic(session: AsyncSession, target: ProviderTarget) -> 
     return Discovery(STATUS_OK, _normalize_openai_list(data, "anthropic"))
 
 
-async def _discover_grok(session: AsyncSession, target: ProviderTarget) -> Discovery:
+async def _discover_grok(target: ProviderTarget, creds: dict[str, str]) -> Discovery:
     # CLI proxy, not api.x.ai: the grok harness can only drive what its own CLI
     # sees, and the two catalogs differ (10 vs 1 model).
     token = read_grok_token()
@@ -564,7 +587,7 @@ async def _discover_grok(session: AsyncSession, target: ProviderTarget) -> Disco
     )
 
 
-async def _discover_kimi(session: AsyncSession, target: ProviderTarget) -> Discovery:
+async def _discover_kimi(target: ProviderTarget, creds: dict[str, str]) -> Discovery:
     """CLI config first, HTTP second.
 
     Inverted on purpose (2026-07-28): the config file is always readable, the
@@ -613,12 +636,13 @@ async def _discover_kimi(session: AsyncSession, target: ProviderTarget) -> Disco
     return Discovery(STATUS_OK, enriched)
 
 
-async def _discover_openai(session: AsyncSession, target: ProviderTarget) -> Discovery:
-    endpoint = (target.endpoint or "").rstrip("/")
+async def _discover_openai(target: ProviderTarget, creds: dict[str, str]) -> Discovery:
+    # strip(): a row saved before the runtime form trimmed its input
+    # (" http://…", round-3 user test t4 S3) failed with UnsupportedProtocol.
+    endpoint = (target.endpoint or "").strip().rstrip("/")
     if not endpoint:
         raise _CredentialUnavailable("Runtime hat keinen Endpoint.")
     url = f"{endpoint}/models" if endpoint.endswith("/v1") else f"{endpoint}/v1/models"
-    creds = await resolve_provider_credentials(session, None, target.runtime)
     headers = {}
     key = creds.get("OPENAI_API_KEY")
     if key:
@@ -634,6 +658,23 @@ ADAPTERS = {
     "kimi": _discover_kimi,
     "openai": _discover_openai,
 }
+
+
+#: Protocols whose adapter reads its credential from the vault (DB). The
+#: others (grok, kimi) read files on disk and need no session at all.
+_VAULT_CREDENTIAL_PROTOCOLS = frozenset({"anthropic", "openai"})
+
+
+async def _resolve_creds(session: AsyncSession, target: ProviderTarget) -> dict[str, str]:
+    """All DB work a probe needs, done BEFORE any network wait.
+
+    Split from the adapters so ``build_catalog`` can end its transaction
+    before probing: the request used to hold it across every HTTP attempt
+    ("DB connection returned with OPEN transaction after 30.5s", t4 S3).
+    """
+    if target.protocol not in _VAULT_CREDENTIAL_PROTOCOLS:
+        return {}
+    return await resolve_provider_credentials(session, None, target.runtime)
 
 
 # ── Provider targets ─────────────────────────────────────────────────────────
@@ -756,12 +797,20 @@ async def discover_provider(session: AsyncSession, target: ProviderTarget) -> Di
     Nothing escapes: a broken provider yields a status, never a 500 on an
     endpoint whose job is to describe broken providers.
     """
+    if target.protocol not in ADAPTERS:
+        return Discovery(STATUS_UNREACHABLE, [], f"Kein Adapter für '{target.protocol}'.")
+    return await _probe(target, await _resolve_creds(session, target))
+
+
+async def _probe(target: ProviderTarget, creds: dict[str, str]) -> Discovery:
+    """The network half of ``discover_provider`` — touches no DB session, so
+    several of them can run at once."""
     adapter = ADAPTERS.get(target.protocol)
     if adapter is None:
         return Discovery(STATUS_UNREACHABLE, [], f"Kein Adapter für '{target.protocol}'.")
 
     try:
-        return await adapter(session, target)
+        return await adapter(target, creds)
     except _CredentialUnavailable as exc:
         return _fallback(target.protocol, STATUS_CREDENTIAL_MISSING, str(exc))
     except httpx.HTTPStatusError as exc:
@@ -790,8 +839,11 @@ async def get_provider_catalog(
         if cached is not None:
             return {**cached, "cached": True}
 
-    discovery = await discover_provider(session, target)
-    payload = {
+    return await _store(target, await discover_provider(session, target))
+
+
+def _entry(target: ProviderTarget, discovery: Discovery) -> dict:
+    return {
         "key": target.key,
         "protocol": target.protocol,
         "label": target.label,
@@ -803,9 +855,13 @@ async def get_provider_catalog(
         "models": discovery.models,
         "cached_at": _utcnow_iso(),
     }
+
+
+async def _store(target: ProviderTarget, discovery: Discovery) -> dict:
+    payload = _entry(target, discovery)
     # cli_config caches long like a success: it is a stable answer read from a
-    # local file, not a transient outage that a 60-second retry could heal. The
-    # short negative TTL is reserved for states that really might fix themselves
+    # local file, not a transient outage that a retry could heal. The shorter
+    # negative TTL is reserved for states that really might fix themselves
     # (provider 5xx, runtime just booting).
     ttl = (
         CACHE_TTL
@@ -816,6 +872,76 @@ async def get_provider_catalog(
     return {**payload, "cached": False}
 
 
+# ── What the runtime watcher already knows ───────────────────────────────────
+
+
+async def _live_snapshots(slugs: list[str]) -> dict[str, dict]:
+    """The watcher's live snapshot per runtime slug (``GET /runtimes/live-status``
+    reads the same keys). Missing, unreadable or Redis down → simply absent:
+    the catalog then probes as it always did."""
+    if not slugs:
+        return {}
+    try:
+        redis = await get_redis()
+    except Exception as exc:  # noqa: BLE001 — Redis down must not break the page
+        logger.warning("model catalog: live snapshots unreadable (%s)", exc)
+        return {}
+    out: dict[str, dict] = {}
+    for slug in slugs:
+        try:
+            raw = await redis.get(RedisKeys.runtime_live(slug))
+            doc = json.loads(raw) if raw else None
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(doc, dict):
+            out[slug] = doc
+    return out
+
+
+def _is_dark(doc: dict | None) -> bool:
+    if not doc or doc.get("reachable") is not False:
+        return False
+    if doc.get("status") == "switching":
+        # Planned downtime (recipe switch, cold load) — not asleep.
+        return False
+    try:
+        return int(doc.get("consecutive_failures") or 0) >= DARK_AFTER_FAILURES
+    except (TypeError, ValueError):
+        return False
+
+
+def _dark_failures(target: ProviderTarget, live: dict[str, dict]) -> int | None:
+    """Failed probes in a row when EVERY runtime behind this provider is dark,
+    else ``None``. Only local openai providers are watched; cloud providers
+    have no live snapshot and are never called asleep."""
+    if target.protocol != "openai" or not target.runtime_slugs:
+        return None
+    docs = [live.get(slug) for slug in target.runtime_slugs]
+    if not all(_is_dark(doc) for doc in docs):
+        return None
+    return min(int(doc.get("consecutive_failures") or 0) for doc in docs if doc)
+
+
+def _woke_up(target: ProviderTarget, cached: dict, live: dict[str, dict]) -> bool:
+    """A remembered failure whose box the watcher now sees answering."""
+    if cached.get("status") in (STATUS_OK, STATUS_CLI_CONFIG):
+        return False
+    return any(
+        (live.get(slug) or {}).get("reachable") is True for slug in target.runtime_slugs
+    )
+
+
+async def _end_transaction(session: AsyncSession) -> None:
+    """Return the pooled connection before the network wait.
+
+    A commit, not a close (same reasoning as ``recipe_switcher._end_transaction``):
+    nothing is pending on this read-only path, ``expire_on_commit=False``
+    keeps the loaded rows readable, and a later query simply checks a
+    connection out again."""
+    if session.in_transaction():
+        await session.commit()
+
+
 async def build_catalog(session: AsyncSession, *, force: bool = False) -> list[dict]:
     """Full catalog with the derived ``bound`` flag per model.
 
@@ -823,11 +949,16 @@ async def build_catalog(session: AsyncSession, *, force: bool = False) -> list[d
     is the whole "is this model new?" mechanism — derived at read time, so no
     schema and no second model store are introduced.
 
-    Providers are probed SEQUENTIALLY, not via gather: the adapters resolve
-    credentials through the shared AsyncSession, and SQLAlchemy sessions are not
-    safe for concurrent use. Worst case on a fully cold cache is
-    n_providers x (_HTTP_TIMEOUT x _RETRIES) — same first-boot tradeoff the CLI
-    cockpit already makes; the 15-minute cache keeps it off the hot path.
+    Three phases, so the page never waits longer than its slowest provider
+    and never holds a DB transaction across the network (round-3 user test,
+    t4 S3: 30.7 s, "OPEN transaction after 30.5s"):
+
+    1. DB + Redis only: targets, bound ids, cache hits, the watcher's live
+       snapshots and the vault credentials of every provider still to probe.
+       A provider whose box the watcher has seen dark for
+       ``DARK_AFTER_FAILURES`` probes is answered ``asleep`` right here.
+    2. End the transaction.
+    3. Probe the rest concurrently — the adapters touch no session.
     """
     targets = await build_provider_targets(session)
     # Runtime rows carry the model id in BOTH spellings: bare ("k3",
@@ -845,9 +976,50 @@ async def build_catalog(session: AsyncSession, *, force: bool = False) -> list[d
         if "/" in mid:
             bound_ids.add(mid.rsplit("/", 1)[-1])
 
+    live = await _live_snapshots(
+        [slug for t in targets if t.protocol == "openai" for slug in t.runtime_slugs]
+    )
+    entries: dict[str, dict] = {}
+    to_probe: list[tuple[ProviderTarget, dict[str, str]]] = []
+    for target in targets:
+        if not force:
+            cached = await _cache_get(target.key)
+            if cached is not None and not _woke_up(target, cached, live):
+                entries[target.key] = {**cached, "cached": True}
+                continue
+            dark = _dark_failures(target, live)
+            if dark is not None:
+                entries[target.key] = {
+                    **_entry(
+                        target,
+                        Discovery(
+                            status=STATUS_ASLEEP,
+                            models=[],
+                            reason=STATUS_ASLEEP,
+                            error=f"{dark} failed watcher probes in a row — not probed",
+                        ),
+                    ),
+                    "cached": False,
+                }
+                continue
+        if target.protocol not in ADAPTERS:
+            entries[target.key] = await _store(
+                target,
+                Discovery(STATUS_UNREACHABLE, [], f"Kein Adapter für '{target.protocol}'."),
+            )
+            continue
+        to_probe.append((target, await _resolve_creds(session, target)))
+
+    await _end_transaction(session)
+
+    async def _probe_one(target: ProviderTarget, creds: dict[str, str]) -> None:
+        entries[target.key] = await _store(target, await _probe(target, creds))
+
+    await asyncio.gather(*(_probe_one(t, c) for t, c in to_probe))
+
     providers = []
     for target in targets:
-        entry = await get_provider_catalog(session, target, force=force)
+        entry = entries[target.key]
         entry = {
             **entry,
             "models": [{**m, "bound": m["id"] in bound_ids} for m in entry["models"]],

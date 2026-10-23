@@ -36,6 +36,17 @@ export const RUNTIME_TYPE_COLOR: Record<string, string> = {
   hermes: C.accentDeep, // #C1BEB2 — gedimmte Akzentstufe
 };
 
+/** A slot row's name already carries the model ("BOX-A :8000 (aktuell:
+ *  <model>)", written by the backend). Where the pill leads with the model
+ *  itself, that suffix said it a second time (round-3 t3 NICE-5b) — only the
+ *  box part is shown next to it. The full name stays in the tooltip. */
+const SERVED_SUFFIX = /\s*\((?:aktuell|current):[^()]*\)\s*$/i;
+
+export function boxLabel(displayName: string, modelShown: boolean): string {
+  if (!modelShown) return displayName;
+  return displayName.replace(SERVED_SUFFIX, "").trim() || displayName;
+}
+
 interface Props {
   agent: Agent;
   variant?: "default" | "compact";
@@ -125,7 +136,7 @@ export function RuntimePill({ agent, variant = "default" }: Props) {
         <span
           className={rt.model_identifier ? "text-[var(--color-text-muted)]" : "max-sm:break-words"}
         >
-          {rt.model_identifier ? "· " : ""}{rt.display_name}
+          {rt.model_identifier ? "· " : ""}{boxLabel(rt.display_name, !!rt.model_identifier)}
         </span>
         {ctxLabel ? (
           <span className="text-[var(--color-text-muted)] tabular-nums">· {ctxLabel}</span>
