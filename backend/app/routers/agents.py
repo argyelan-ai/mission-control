@@ -7,7 +7,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
@@ -3800,6 +3800,7 @@ async def agent_poll(
 
 @router.get("/agent/me/active-task-recovery")
 async def agent_active_task_recovery(
+    request: Request,
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
@@ -3830,6 +3831,10 @@ async def agent_active_task_recovery(
     active = active_result.first()
     if active is None:
         return {"active": False, "reason": "no_active_task"}
+    # A chat session must never take over the run (it would get the run's
+    # attempt id, or a fresh one that locks the run out) — t1 MUST-1.
+    from app.services.chat_session_guard import refuse_chat_task_write
+    await refuse_chat_task_write(session, request, agent, active, "recover")
 
     # Rate limit: max 1 recovery per task every 30s (Redis TTL key).
     # Protection against poll.sh crash loops + an agent calling `mc recover`
@@ -4048,6 +4053,7 @@ async def agent_inbox_ack(
 
 @router.post("/agent/me/recover-task")
 async def agent_recover_task(
+    request: Request,
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
@@ -4080,6 +4086,8 @@ async def agent_recover_task(
 
     if active is None:
         return {"recovered": False, "reason": "no_active_task"}
+    from app.services.chat_session_guard import refuse_chat_task_write
+    await refuse_chat_task_write(session, request, agent, active, "recover")
 
     # Rate limit: recovery may be triggered no more than 1x/60s per task.
     # Protection against poll.sh crash loops (FIRST_POLL=true on every restart).

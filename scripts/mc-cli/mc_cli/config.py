@@ -26,6 +26,17 @@ def context_env_path() -> str:
     return os.environ.get("MC_CONTEXT_ENV_PATH") or DEFAULT_CONTEXT_ENV_PATH
 
 
+#: The only session role the server knows (backend chat_session_guard).
+SESSION_ROLE_CHAT = "chat"
+
+
+def _session_role(raw: str | None) -> str | None:
+    """MC_SESSION_ROLE as the CLI sends it: only the known role, else None
+    (a typo must never become a header the server reads differently)."""
+    value = (raw or "").strip().lower()
+    return value if value == SESSION_ROLE_CHAT else None
+
+
 @dataclass(frozen=True)
 class Config:
     api_url: str
@@ -34,6 +45,11 @@ class Config:
     board_id: str | None
     dispatch_attempt_id: str | None
     context_task_id: str | None = None
+    # "chat" when this CLI runs inside an agent's chat session (the ACP chat
+    # daemon sets MC_SESSION_ROLE for its omp child). Sent as
+    # X-MC-Session-Role; the server then refuses writes to the run state of
+    # the agent's own task (round-1 user test t1, MUST-1). None = run session.
+    session_role: str | None = None
 
     def __post_init__(self) -> None:
         # Attempt-Header und Task-Kontext gehoeren zusammen: der Header in
@@ -78,6 +94,7 @@ class Config:
             task_id=_resolve("TASK_ID"),
             board_id=_resolve("BOARD_ID"),
             dispatch_attempt_id=_resolve("X_DISPATCH_ATTEMPT_ID"),
+            session_role=_session_role(os.environ.get("MC_SESSION_ROLE")),
         )
 
     def require_task_context(self) -> tuple[str, str]:

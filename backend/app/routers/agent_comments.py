@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, field_validator
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -31,6 +31,7 @@ from app.models.memory import BoardMemory
 from app.models.task import Task, TaskComment
 from app.services.activity import emit_event
 from app.services.blocker_triage import is_lead_agent
+from app.services.chat_session_guard import refuse_chat_task_write
 from app.services.task_state import lock_and_set
 from app.utils import utcnow
 
@@ -247,6 +248,7 @@ async def agent_add_comment(
     board_id: uuid.UUID,
     task_id: uuid.UUID,
     payload: AgentCommentCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_WRITE)),
 ):
@@ -257,6 +259,8 @@ async def agent_add_comment(
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # A chat session never writes into its own agent's task (t1 MUST-1).
+    await refuse_chat_task_write(session, request, agent, task, f"comment {payload.comment_type}")
     return await _create_comment(session, task, agent, payload)
 
 
@@ -279,6 +283,7 @@ async def agent_add_comment(
 async def agent_add_comment_by_task_id(
     task_id: uuid.UUID,
     payload: AgentCommentCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_MANAGE)),
 ):
@@ -288,6 +293,7 @@ async def agent_add_comment_by_task_id(
     if agent.board_id != task.board_id:
         raise HTTPException(status_code=403, detail="Agent not assigned to this board")
 
+    await refuse_chat_task_write(session, request, agent, task, f"comment {payload.comment_type}")
     return await _create_comment(session, task, agent, payload)
 
 

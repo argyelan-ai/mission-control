@@ -2473,7 +2473,14 @@ async def apply_unblock_notify_reset(
     gap by folding the twin's liveness check into this criterion too.
     """
     if old_status == "waiting" and assigned_agent_lock_before_transition == task.id:
-        return
+        # An omp agent with the ACP chat daemon holds no paused run session:
+        # its task turn ended on the question, and only its chat would get a
+        # wake-up — which must not work the task (chat_session_guard, round-1
+        # user test t1 MUST-1). Reset, so the poll starts a new run.
+        from app.services.acp_chat_transport import headless_chat_kind
+        assigned = await session.get(Agent, task.assigned_agent_id) if task.assigned_agent_id else None
+        if assigned is None or headless_chat_kind(assigned) != "acp-docker":
+            return
     task.ack_at = None
     session.add(task)
     await session.commit()

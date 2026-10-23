@@ -152,6 +152,25 @@ _MC_ORIGINS = ("task", "nudge")
 #: caller sends it to the chat daemon today, and one that did without a
 #: retry would lose the prompt without a trace — so it gets the card.
 _QUIET_BUSY_ORIGINS = ("nudge",)
+#: Run context (round-1 user test t1, MUST-1, 22.10.2026): the backend may
+#: send a block saying what this agent's own task RUN is doing — the run is
+#: another session; asked "how far are you?" the chat once did the whole task
+#: a second time. The model gets the block in front of the operator's text;
+#: the chat transcript (the operator's bubble) never does. Capped so a broken
+#: caller cannot blow up a turn.
+CONTEXT_MAX_CHARS = 8000
+
+#: The chat's `omp acp` child is marked as the chat (backend
+#: app/services/chat_session_guard.py): the `mc` CLI sends MC_SESSION_ROLE as
+#: `X-MC-Session-Role`, and the server refuses every write to the run state
+#: of the agent's own task from it. It also gets its OWN task-context file:
+#: the bridge writes the run's TASK_ID / attempt id to /tmp/mc-context.env,
+#: and the CLI lets that file win over the env — the chat would otherwise
+#: act with the run's identity. The run ids of the boot env go too.
+CHAT_SESSION_ROLE = "chat"
+CHAT_CONTEXT_ENV_PATH = "/tmp/mc-chat-context.env"
+_RUN_CONTEXT_KEYS = ("TASK_ID", "BOARD_ID", "X_DISPATCH_ATTEMPT_ID")
+
 _STATE_FILENAME = "acp-chat-state.json"
 _PERSIST_FILENAME = "acp-chat.json"
 _DEFAULT_SOCKET_NAME = "acp-chat.sock"
@@ -827,7 +846,8 @@ class ChatSession:
     # control ops (the socket protocol)
     # ------------------------------------------------------------------
 
-    def prompt(self, text: str, mode: str = MODE_NOW, origin: Any = None) -> dict:
+    def prompt(self, text: str, mode: str = MODE_NOW, origin: Any = None,
+               context: Any = None) -> dict:
         """Start ONE turn — or, with `mode="queue"` while a turn runs, hold
         the message and run it when that turn ends. Returns immediately; turns
         run in the worker.
@@ -835,16 +855,21 @@ class ChatSession:
         `origin`: who wrote it — ORIGIN_OPERATOR, "task"/"nudge", or nothing
         (unknown). Only the operator's text is ever offered to send again
         (`_origin_of`). A busy refusal of a wake-up ("nudge") is quiet — its
-        caller retries; everyone else (also "task") gets one `busy` card."""
+        caller retries; everyone else (also "task") gets one `busy` card.
+
+        `context`: MC's run-context block (see CONTEXT_MAX_CHARS) — the model
+        reads it in front of `text`, the chat shows `text` alone. Anything
+        that is not a non-empty string is no context."""
         text = str(text or "")
         mode = mode or MODE_NOW
         origin = _origin_of(origin)
+        context = _context_of(context)
         if mode not in _MODES:
             return {"ok": False, "error": "bad_mode", "detail": str(mode)}
         with self._lock:
             if self._busy:
                 if mode == MODE_QUEUE and not self._closed:
-                    return self._enqueue_locked("prompt", text, origin)
+                    return self._enqueue_locked("prompt", text, origin, context=context)
                 if origin in _QUIET_BUSY_ORIGINS:
                     # Mission Control's wake-up: its caller (the omp
                     # bridge's poll) keeps it pending and tries again on its
@@ -862,7 +887,7 @@ class ChatSession:
                 return {"ok": False, "error": "busy"}
             if self._closed or self._client is None:
                 return {"ok": False, "error": "not_started"}
-            job = self._claim_locked(_job("prompt", text, origin))
+            job = self._claim_locked(_job("prompt", text, origin, context=context))
         self._write_state()
         self._spawn(job)
         return {"ok": True, "turn": job["turn"]}
@@ -1079,7 +1104,8 @@ class ChatSession:
                 "configOptions": json.loads(json.dumps(self._config_options)),
                 "commands": json.loads(json.dumps(self._commands)),
                 "queue": [
-                    {**job, "text": job["text"][:_QUEUE_PREVIEW_CHARS]}
+                    {**{k: v for k, v in job.items() if k != "context"},
+                     "text": job["text"][:_QUEUE_PREVIEW_CHARS]}
                     for job in self._queue
                 ],
                 "current": dict(self._current) if self._current else None,
@@ -1125,7 +1151,8 @@ class ChatSession:
     # ------------------------------------------------------------------
 
     def _enqueue_locked(self, kind: str, text: str, origin: Optional[str] = None,
-                        request_id: Optional[str] = None) -> dict:
+                        request_id: Optional[str] = None,
+                        context: Optional[str] = None) -> dict:
         """Hold one job behind the running turn. Caller holds `_lock`."""
         if len(self._queue) >= MAX_QUEUE:
             self._emit_error(
@@ -1134,7 +1161,7 @@ class ChatSession:
                      "Wait for the reply or take some back.",
             )
             return {"ok": False, "error": "queue_full"}
-        job = {"id": uuid.uuid4().hex[:12], **_job(kind, text, origin, request_id),
+        job = {"id": uuid.uuid4().hex[:12], **_job(kind, text, origin, request_id, context),
                "at": _now_iso()}
         self._queue.append(job)
         position = len(self._queue)
@@ -1175,7 +1202,8 @@ class ChatSession:
                 if job["kind"] == "new_session":
                     self._renew_session(job)
                 else:
-                    self._run_turn(job["text"], job["turn"], job.get("origin"))
+                    self._run_turn(job["text"], job["turn"], job.get("origin"),
+                                   job.get("context"))
             except Exception:  # noqa: BLE001 — one broken job must not strand the queue busy
                 logger.exception("chat job %s failed", job.get("kind"))
             with self._lock:
@@ -1287,7 +1315,8 @@ class ChatSession:
     # the turn
     # ------------------------------------------------------------------
 
-    def _run_turn(self, text: str, turn: int, origin: Optional[str] = None) -> None:
+    def _run_turn(self, text: str, turn: int, origin: Optional[str] = None,
+                  context: Optional[str] = None) -> None:
         result = None
         error_text = ""
         self._mapper.begin_turn()
@@ -1304,7 +1333,10 @@ class ChatSession:
             # an operator bubble — the same line the task path writes.
             self._emit_transcript(self._mapper.map_user_prompt(
                 text, origin=origin if origin in _MC_ORIGINS else None))
-            result = client.prompt(sid, text, timeout=self._prompt_timeout)
+            # The run context goes to the model only; the line above wrote
+            # the operator's own text (t1 MUST-1).
+            result = client.prompt(sid, _model_text(text, context),
+                                   timeout=self._prompt_timeout)
         except Exception as exc:  # noqa: BLE001 — a dead turn must still report
             error_text = f"{exc}"
         finally:
@@ -1862,15 +1894,42 @@ def _origin_of(value: Any) -> Optional[str]:
 
 
 def _job(kind: str, text: str, origin: Optional[str] = None,
-         request_id: Optional[str] = None) -> dict:
-    """A job for the worker; `origin` and `requestId` only when known, so a
-    job of an unknown author looks exactly as it did before."""
+         request_id: Optional[str] = None, context: Optional[str] = None) -> dict:
+    """A job for the worker; `origin`, `requestId` and `context` only when
+    known, so a job of an unknown author looks exactly as it did before."""
     job = {"kind": kind, "text": text}
     if origin is not None:
         job["origin"] = origin
     if request_id is not None:
         job["requestId"] = request_id
+    if context:
+        job["context"] = context
     return job
+
+
+def _context_of(value: Any) -> Optional[str]:
+    """A prompt's run context as the session keeps it: a non-empty string,
+    at most CONTEXT_MAX_CHARS, or None (missing, empty, wrong type)."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:CONTEXT_MAX_CHARS]
+
+
+def _model_text(text: str, context: Optional[str]) -> str:
+    """What the model reads for one turn: the run context first, then the
+    operator's text — or the text unchanged when there is no context."""
+    return f"{context}\n\n{text}" if context else text
+
+
+def chat_child_env(base: "Mapping[str, str]") -> dict:
+    """The environment of the chat's `omp acp` child: ``base`` marked as the
+    chat (MC_SESSION_ROLE), with its own task-context file and without the
+    run ids of the boot env (see CHAT_SESSION_ROLE). ``base`` is not
+    changed."""
+    env = {k: v for k, v in base.items() if k not in _RUN_CONTEXT_KEYS}
+    env["MC_SESSION_ROLE"] = CHAT_SESSION_ROLE
+    env["MC_CONTEXT_ENV_PATH"] = CHAT_CONTEXT_ENV_PATH
+    return env
 
 
 def _request_id_of(value: Any) -> Optional[str]:
@@ -2208,8 +2267,11 @@ def dispatch(session: ChatSession, request: dict) -> dict:
     op = request.get("op")
     if op == "prompt":
         # `origin` (optional): who wrote the text — see ORIGIN_OPERATOR.
+        # `context` (optional): MC's run-context block — model only. Passed
+        # only when sent, so the call stays as before without it.
+        extra = {"context": request["context"]} if request.get("context") is not None else {}
         return session.prompt(request.get("text") or "", request.get("mode") or MODE_NOW,
-                              origin=request.get("origin"))
+                              origin=request.get("origin"), **extra)
     if op == "new_session":
         # `requestId` (optional): which request of MC's backend asked.
         return session.new_session(request.get("mode") or MODE_NOW,
@@ -2358,7 +2420,8 @@ def build_session() -> ChatSession:
     # is not mounted: every new image used to start the chat over (S1-R4).
     state_dir = sessions_dir
     return ChatSession(
-        client_factory=lambda: acp_client.ACPClient(cwd=cwd),
+        # Marked as the chat, with its own task-context file (t1 MUST-1).
+        client_factory=lambda: acp_client.ACPClient(cwd=cwd, env=chat_child_env(os.environ)),
         cwd=cwd,
         state_dir=state_dir,
         sessions_dir=sessions_dir,

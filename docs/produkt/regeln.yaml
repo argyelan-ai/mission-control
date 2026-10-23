@@ -401,6 +401,20 @@ rules:
     status: active
     checked: 2026-10-22
 
+  - id: R-chat-never-works-own-run
+    says: "A call from an agent's chat session (X-MC-Session-Role: chat) never writes the run state of a task assigned to or worked by that agent: comments, status, deliverables, checklist, recover and a blocking ask are refused with 409; reading and a plain question stay open. The omp chat turn is told what the run is doing instead."
+    source: "docs/specs/chat-over-acp.md (The chat never works its agent's own task)"
+    owner: backend/app/services/chat_session_guard.py
+    applies_to: ["backend/app/services/chat_session_guard.py", "backend/app/routers/agent_comments.py", "backend/app/routers/agent_task_status.py", "backend/app/routers/agent_scoped.py", "backend/app/routers/agents.py", "docker/omp-bridge/acp_chat.py", "scripts/mc-cli/mc_cli/client.py"]
+    enforced_by:
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_progress_comment_on_running_task_is_refused"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_finish_on_running_task_is_refused"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_comment_after_review_handoff_is_refused"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_run_session_progress_comment_still_accepted"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_blocking_ask_on_running_task_is_refused"}
+    status: active
+    checked: 2026-10-23
+
 rejected:
   - id: X-own-control-room
     idea: "An own control-room UI, job page or coordinator for heads"

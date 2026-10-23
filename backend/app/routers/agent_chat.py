@@ -25,7 +25,11 @@ from app.database import get_session, release_session
 from app.models.agent import Agent
 from app.models.task import Task
 from app.redis_client import RedisKeys
-from app.services.acp_chat_transport import ORIGIN_OPERATOR, AcpChatUnreachableError
+from app.services.acp_chat_transport import (
+    ORIGIN_OPERATOR,
+    AcpChatUnreachableError,
+    headless_chat_kind,
+)
 from app.services.agent_chat_input import (
     AcpChatRefusedError,
     AgentBusyError,
@@ -58,7 +62,7 @@ from app.services.reference_ingest import (
     store_reference,
 )
 from app.models.activity import ActivityEvent
-from app.services import chat_actions, chat_media, chat_task_steps, commit_llm
+from app.services import chat_actions, chat_media, chat_run_context, chat_task_steps, commit_llm
 from app.services.activity import emit_event
 from app.services.chat_changes import aggregate_changes
 from app.services.chat_diff import capture_texts
@@ -1243,6 +1247,22 @@ async def _open_pr_for_branch(git_service: Any, cwd: str, branch: str) -> str | 
     return out.strip() or None
 
 
+async def _run_context_for(agent: Agent, session: AsyncSession) -> str | None:
+    """The run-context block for this chat turn (``chat_run_context``), only
+    where chat and task run are different sessions: the omp container's ACP
+    chat (``acp-docker``). Hermes runs its tasks inside its chat; a TUI
+    agent's chat types into the run's own pane. Best effort — a failing
+    lookup costs the hint, never the operator's message (the server-side
+    guard ``chat_session_guard`` holds without it)."""
+    if headless_chat_kind(agent) != "acp-docker":
+        return None
+    try:
+        return await chat_run_context.run_context(session, agent)
+    except Exception:  # noqa: BLE001 — the message must still go out
+        logger.warning("chat run context failed for %s", agent.slug, exc_info=True)
+        return None
+
+
 @router.post("/agents/{agent_id}/chat/input", status_code=204)
 async def post_chat_input(
     agent_id: uuid.UUID,
@@ -1285,7 +1305,10 @@ async def post_chat_input(
     try:
         # The composer: the operator's own text — the only one a chat card
         # may offer to send again (headless agents; ignored elsewhere).
-        reset = await send_text(agent, body.text, origin=ORIGIN_OPERATOR)
+        reset = await send_text(
+            agent, body.text, origin=ORIGIN_OPERATOR,
+            context=await _run_context_for(agent, session),
+        )
     except InstallCommandBlockedError as e:
         return JSONResponse(
             status_code=409,

@@ -87,6 +87,7 @@ from app.models.memory import BoardMemory
 from app.models.task import Task, TaskComment
 from app.services.harness_compat import is_voice_harness
 from app.services.activity import emit_event
+from app.services.chat_session_guard import refuse_chat_task_write
 from app.services.task_state import lock_and_set
 from app.services.thread_scope import thread_agent_may_write_to
 from app.utils import utcnow
@@ -1683,6 +1684,7 @@ class AskResponse(BaseModel):
 @router.post("/tasks/current/ask", status_code=status.HTTP_201_CREATED)
 async def agent_ask(
     payload: AskCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.CHAT_WRITE)),
 ):
@@ -1729,6 +1731,14 @@ async def agent_ask(
             session, agent, create_dm_if_missing=True
         )
     else:
+        if payload.blocking:
+            # A blocking ask parks the RUN's task in `waiting`; from the chat
+            # session the answer would then start a second run next to the
+            # first (round-1 user test t1 MUST-1, review SHOULD 1). A plain
+            # question leaves the status alone and stays open to the chat.
+            await refuse_chat_task_write(
+                session, request, agent, current_task, "ask --blocking"
+            )
         # Task 12 (final-review A2, defense-in-depth): a blocking ask parks
         # the task in `waiting` until an answer is delivered — but answer
         # delivery is gated on the comm_v2 pilot. A non-pilot agent parking
@@ -2797,6 +2807,7 @@ async def agent_create_deliverable(
     task_id: uuid.UUID,
     payload: DeliverableCreate,
     background_tasks: BackgroundTasks,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_WRITE)),
 ):
@@ -2807,6 +2818,7 @@ async def agent_create_deliverable(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
+    await refuse_chat_task_write(session, request, agent, task, "deliverable")
 
     if payload.deliverable_type in ("document", "data") and not (payload.content and payload.content.strip()):
         raise HTTPException(
@@ -3952,6 +3964,7 @@ async def agent_create_checklist(
     task_id: uuid.UUID,
     payload: ChecklistBulkCreate,
     response: Response,
+    request: Request,
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
@@ -3978,6 +3991,7 @@ async def agent_create_checklist(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task nicht gefunden")
+    await refuse_chat_task_write(session, request, agent, task, "checklist add")
 
     # Dedup only against NON-TERMINAL items (pending/in_progress). An already
     # done/skipped item with the same title must NOT swallow a genuinely new
@@ -4040,6 +4054,7 @@ async def agent_update_checklist_item(
     task_id: uuid.UUID,
     item_id: uuid.UUID,
     payload: ChecklistItemUpdate,
+    request: Request,
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
@@ -4053,6 +4068,7 @@ async def agent_update_checklist_item(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task nicht gefunden")
+    await refuse_chat_task_write(session, request, agent, task, f"checklist {payload.status}")
 
     item = await session.get(TaskChecklistItem, item_id)
     if not item or item.task_id != task_id:
@@ -4093,6 +4109,7 @@ async def agent_delete_checklist_item(
     board_id: uuid.UUID,
     task_id: uuid.UUID,
     item_id: uuid.UUID,
+    request: Request,
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
@@ -4112,6 +4129,7 @@ async def agent_delete_checklist_item(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task nicht gefunden")
+    await refuse_chat_task_write(session, request, agent, task, "checklist delete")
 
     if not agent.is_board_lead:
         raise HTTPException(
@@ -4984,6 +5002,7 @@ async def agent_me_generate_pdf(
 async def agent_me_create_deliverable(
     payload: MeDeliverableCreate,
     background_tasks: BackgroundTasks,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_WRITE)),
 ):
@@ -4999,6 +5018,7 @@ async def agent_me_create_deliverable(
         task_id=task.id,
         payload=payload,
         background_tasks=background_tasks,
+        request=request,
         session=session,
         agent=agent,
     )

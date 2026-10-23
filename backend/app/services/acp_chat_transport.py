@@ -100,15 +100,23 @@ def _with_mode(payload: dict[str, Any], mode: str | None) -> dict[str, Any]:
 ORIGIN_OPERATOR = "operator"
 
 
-def _prompt_payload(text: str, mode: str | None, origin: str | None) -> dict[str, Any]:
+def _prompt_payload(text: str, mode: str | None, origin: str | None,
+                    context: str | None = None) -> dict[str, Any]:
     """``prompt``: ``origin`` says who wrote the text — ``"operator"`` for the
     composer. The chat daemon offers "Send again" on a card only for the
     operator's own text (fail-closed: no origin = unknown = no button). Only
     when set — without it the request stays byte-identical (an older daemon
-    ignores the field anyway)."""
+    ignores the field anyway).
+
+    ``context`` (``chat_run_context``): a block the daemon puts in front of
+    ``text`` on the way to the model only — the chat bubble stays ``text``
+    (round-1 user test t1, MUST-1). Only when set; an older daemon ignores
+    it, the server-side guard holds either way."""
     payload: dict[str, Any] = {"text": text}
     if origin:
         payload["origin"] = origin
+    if context:
+        payload["context"] = context
     return _with_mode(payload, mode)
 
 
@@ -132,7 +140,7 @@ class ChatTransport(Protocol):
     ``AcpChatUnreachableError``."""
 
     async def prompt(self, text: str, mode: str | None = None,
-                     origin: str | None = None) -> dict: ...
+                     origin: str | None = None, context: str | None = None) -> dict: ...
 
     async def new_session(self, mode: str | None = None,
                           request_id: str | None = None) -> dict: ...
@@ -261,8 +269,8 @@ class DockerCtlTransport:
         return answer
 
     async def prompt(self, text: str, mode: str | None = None,
-                     origin: str | None = None) -> dict:
-        return await self._call("prompt", _prompt_payload(text, mode, origin))
+                     origin: str | None = None, context: str | None = None) -> dict:
+        return await self._call("prompt", _prompt_payload(text, mode, origin, context))
 
     async def new_session(self, mode: str | None = None,
                           request_id: str | None = None) -> dict:
@@ -319,8 +327,8 @@ class HttpCtlTransport:
         return answer
 
     async def prompt(self, text: str, mode: str | None = None,
-                     origin: str | None = None) -> dict:
-        return await self._call("prompt", _prompt_payload(text, mode, origin))
+                     origin: str | None = None, context: str | None = None) -> dict:
+        return await self._call("prompt", _prompt_payload(text, mode, origin, context))
 
     async def new_session(self, mode: str | None = None,
                           request_id: str | None = None) -> dict:

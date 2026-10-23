@@ -373,6 +373,7 @@
         "review_reviewer_turn_stopped": "Review-Durchgang gestoppt",
         "stale_update_rejected": "Veraltetes Update abgelehnt",
         "late_update_rejected": "Verspätetes Update abgelehnt",
+        "chat_write_rejected": "Änderung aus dem Chat abgelehnt",
         "review_stuck": "Review hängt",
         "review_escalated": "Review eskaliert",
         "review_rejected": "Review abgelehnt",

@@ -1928,6 +1928,15 @@ async def agent_update_task(
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # ── Chat-Session Guard (round-1 user test t1, MUST-1) ─────────
+    # ack / finish / patch of the agent's OWN task belong to its run session;
+    # a chat turn that tries it would run the task a second time.
+    from app.services.chat_session_guard import refuse_chat_task_write
+    _status = getattr(payload, "status", None)
+    await refuse_chat_task_write(
+        session, request, agent, task, f"status {_status}" if _status else "update",
+    )
+
     # ── Run-Control Guard ──────────────────────────────────────────
     # Stopped/held tasks no longer accept agent updates.
     # In-flight Claude calls may still arrive after sessions.reset().

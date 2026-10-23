@@ -506,11 +506,71 @@ when a restart cannot resume the old one.
 - Not here: Hermes' own `/reset` (advertised by `hermes acp`) passes through
   as a prompt — not recorded, not verified whether it changes the session.
 
+### The chat never works its agent's own task (round-1 user test, 23.10.2026)
+
+The omp container runs the chat in this daemon and every task in a separate
+session the bridge opens. On 22.10.2026 the operator asked "how far are you?"
+in the chat during a run. The chat session found the task with `mc me`,
+looked for the run's files in its own workspace (`deliverables/<id>/`, not
+`/deliverables/<id>/`), took the task for "not started" and did it again: a
+second `index.html` with other colours, a progress comment after the review
+handoff, a second `mc finish`. The day before, the same question right after
+a run ended got "0 % — no task is running". Two layers:
+
+- **Context (tell):** for an `acp-docker` agent the composer path
+  (`POST /agents/{id}/chat/input`) asks `chat_run_context.run_context` for a
+  block naming each task a run of this agent works on now or finished in the
+  last 30 minutes (title, id, status, checklist, the run folder
+  `/deliverables/<id>/`, registered deliverables, last note) plus the rule
+  "answer from this, do not touch". It goes to the daemon as `context`; the
+  daemon puts it in front of the operator's text for the model only — the
+  transcript line stays the operator's text, the state mirror never shows it.
+  Hermes (`acp-http`) gets none: its tasks run inside its chat session.
+- **Guard (enforce):** the daemon starts its `omp acp` child with
+  `MC_SESSION_ROLE=chat` and its own `MC_CONTEXT_ENV_PATH`
+  (`/tmp/mc-chat-context.env`, without the boot env's `TASK_ID` /
+  `BOARD_ID` / `X_DISPATCH_ATTEMPT_ID`), so the chat never holds the run's
+  attempt id. The `mc` CLI sends the role as `X-MC-Session-Role: chat`.
+  `chat_session_guard.refuse_chat_task_write` answers 409
+  `chat_session_task_write: …` to every run-state write from it on a task
+  assigned to or worked by this agent (also after a human-review handoff
+  cleared the assignee): comments, status (`ack`/`finish`/`patch`),
+  deliverables, checklist, `recover`, and a blocking ask
+  (`POST /agent/tasks/current/ask` with `blocking: true` would park the run's
+  task in `waiting`, and the answer would then start a second run). Reading
+  and a plain question stay open. Each refusal is a
+  `task.chat_write_rejected` event in the task timeline (title only; the
+  `action`/`status` dict stays in `meta.detail`). The marker guards against an
+  honest mistake of the model; it is not authentication.
+- **Deliberately left open from the chat:** `POST /agent/tasks/current/messages`
+  and a non-blocking `ask` (they never change the task status); the PDF
+  endpoints (`/agent/me/pdf`, `.../tasks/{id}/pdf`), `visual-verify`,
+  `/review` and `/review-note` on the agent's own task (low risk, not a
+  run-state write the incident showed); the MCP path (`mc-mcp.py`) sets no
+  role, but omp does not use it.
+
+- **Resume through a run:** an `acp-docker` agent holds no paused run session
+  once its task turn ended on a blocking question. So an answer
+  (`messaging.resume_task_after_answer`) re-dispatches like a parked card, and
+  an operator `waiting → in_progress` unblock resets the dispatch handshake
+  (`apply_unblock_notify_reset`) — the task continues in a new run, never in
+  the chat. The bridge's comment wake-up into the chat says "read, tell the
+  operator, change nothing" instead of "keep working"
+  (`build_comment_nudge_text(chat=True)`).
+  Known window: if the answer arrives while the run's own turn is still
+  going (a continue-nudge in the same run session), the re-dispatch rotates
+  the attempt id under it — from then on that run's status writes get 409
+  (`stale_dispatch_attempt_id`) and the new run takes over. Accepted: the old
+  run cannot finish the task a second time.
+
+Rolling out needs both images: an old daemon ignores `context` and sets no
+role (the guard then never fires); an old backend sends no `context`.
+
 ### Control protocol (socket and HTTP share the schema)
 
 | op | request | response |
 |----|---------|----------|
-| `prompt` | `{"op":"prompt","text":"...","mode"?:"now"\|"queue","origin"?:"operator"\|"task"\|"nudge"}` — `origin`: who wrote the text (see "Interrupted turns"); only `"operator"` makes it offerable again | `{"ok":true,"turn":n}` immediately (turn runs async) · busy + `mode:"queue"`: `{"ok":true,"queued":true,"queueId":"…","position":n,"at":"…"}` · busy otherwise: `{"ok":false,"error":"busy"}` (plus one `busy` card, except for `origin: "nudge"`: quiet, the caller must retry) · `{"ok":false,"error":"queue_full"}` |
+| `prompt` | `{"op":"prompt","text":"...","mode"?:"now"\|"queue","origin"?:"operator"\|"task"\|"nudge","context"?:"..."}` — `origin`: who wrote the text (see "Interrupted turns"); only `"operator"` makes it offerable again. `context`: MC's run-context block, read by the model in front of `text`, never written to the chat (see "The chat never works its agent's own task") | `{"ok":true,"turn":n}` immediately (turn runs async) · busy + `mode:"queue"`: `{"ok":true,"queued":true,"queueId":"…","position":n,"at":"…"}` · busy otherwise: `{"ok":false,"error":"busy"}` (plus one `busy` card, except for `origin: "nudge"`: quiet, the caller must retry) · `{"ok":false,"error":"queue_full"}` |
 | `new_session` | `{"op":"new_session","mode"?:"now"\|"queue","requestId"?:"…"}` — `requestId`: which request of MC's backend asked (see "A new conversation says so") | `{"ok":true,"previousSessionId":"…"}` — `session/new` runs in the worker; a new transcript file starts (the chat view follows it as a rollover), the old file stays, model + thinking carry over, the old ACP session gets `session/close`, the new transcript starts with a `new_conversation` card, `resets` gets a row. Busy: `{"ok":false,"error":"busy"}`, or held in the queue with `mode:"queue"` |
 | `queue_clear` | `{"op":"queue_clear"}` | `{"ok":true,"dropped":[{"id","kind":"prompt"\|"new_session","text","origin"?,"at"}, …]}` oldest first |
 

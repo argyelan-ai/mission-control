@@ -878,8 +878,15 @@ async def _wait_for_send_readiness(agent) -> None:
     raise AgentStartingError()
 
 
-async def send_text(agent, text: str, *, origin: str | None = None) -> ChatReset | None:
+async def send_text(agent, text: str, *, origin: str | None = None,
+                    context: str | None = None) -> ChatReset | None:
     """Types ``text`` into the agent's live session.
+
+    ``context`` (headless/ACP agents only, ``chat_run_context``): a block the
+    chat daemon puts in front of ``text`` for the model only — what the
+    agent's own task run is doing, so the chat answers instead of doing the
+    task a second time (round-1 user test t1, MUST-1). Ignored on every other
+    path and for ``/new``/``/clear``.
 
     ``origin`` (headless/ACP agents only): who wrote the text —
     ``ORIGIN_OPERATOR`` for the composer (the router). The chat daemon
@@ -964,7 +971,10 @@ async def send_text(agent, text: str, *, origin: str | None = None) -> ChatReset
                         "request=%s)", reset.command, slug, reset.previous_session_id,
                         reset.queued, request_id)
             return reset
-        answer = await transport.prompt(text, mode="queue", origin=origin)
+        # ``context`` only when set: a transport (or test double) without the
+        # parameter keeps working, and the wire stays byte-identical.
+        extra = {"context": context} if context else {}
+        answer = await transport.prompt(text, mode="queue", origin=origin, **extra)
         if not answer.get("ok"):
             # Zurueck kommt hier nur eine Absage, die der Daemon schon als
             # Karte zeigt (``queue_full``); jede andere wird zur Ausnahme.
