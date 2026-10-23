@@ -530,7 +530,8 @@ a run ended got "0 % — no task is running". Two layers:
   the "State as of" line, `DD.MM.` added for another day) — never UTC: the
   chat repeated "01:04 UTC" while the UI said 03:03 (round-2 user test). The
   status is a plain word in the agent's `operator_language` ("in Arbeit",
-  "awaits the operator's review"), never the raw code. The block tells the
+  "awaits review"; a reviewer's own review card: "your review run is
+  reviewing it"), never the raw code. The block tells the
   model to answer from it first and to read more only when needed; its read
   hint `mc task-get <id>` works in the chat: without `BOARD_ID` in the env
   the CLI takes the board from the agent's own `/agent/me`.
@@ -542,8 +543,10 @@ a run ended got "0 % — no task is running". Two layers:
   `chat_session_guard.refuse_chat_task_write` answers 409
   `chat_session_task_write: …` to every run-state write from it on a task a
   run of this agent holds — assigned to it and live (`in_progress`,
-  `waiting`, `blocked`, `user_test`, or delivered in the inbox) — or let go
-  of within the last 30 minutes (the same window as the context block; it
+  `waiting`, `blocked`, `user_test`, or delivered in the inbox; for a
+  reviewer also the `review` card a review handoff gave it — dispatch intent
+  `review_handoff` — for as long as it stays there, with no time limit:
+  its review run works it) — or let go of within the last 30 minutes (the same window as the context block; it
   covers a human-review handoff that cleared the assignee — the incident's
   comment came 36 s after it): run-state comments (every type but
   `message`), status (`ack`/`finish`/`patch`), deliverables, checklist,
@@ -554,7 +557,10 @@ a run ended got "0 % — no task is running". Two layers:
   (`/delegate`, which also hangs a subtask and a progress note on it) — the
   answer or callback would start a second run. Reading, a plain question and
   a `message` comment (a reply in the task thread — it never ACKs a
-  delivered task and does not count as run activity) stay open. Not covered
+  delivered task and does not count as run activity) stay open — the reply
+  not on the card the agent's review run works, where any reviewer comment
+  ends the review wait (`review_park`) and counts as the reviewer having
+  spoken (`proof_gate`). Not covered
   (round-2 review, "not too wide"): a task whose run ended more than 30
   minutes ago, and a task no run holds yet — e.g. the one the chat just
   created for itself (inbox, not delivered). Each refusal is a
