@@ -11,7 +11,10 @@ is a question for the box — this module asks it, cheaply:
 - a fresh node-agent beat  → awake (the box pushed a heartbeat < 60 s ago).
 - ``flask_wol``            → its control server's ``/health``; the answer is
   remembered for a few seconds, and the host card's 5 s metrics poll
-  (``GET /hosts/<id>/metrics``) keeps that memory warm.
+  (``GET /hosts/<id>/metrics``) keeps that memory warm. A remembered
+  "asleep" also answers that poll itself (round-5 re-check, L1): a sleeping
+  box drops the packets, so each fresh check costs the page ~3 s of
+  "checking" — once per memory window is enough. Waking the box forgets it.
 - anything else            → unknown (``None``) — an SSH round trip is too
   slow for a page that must not wait.
 """
@@ -48,6 +51,15 @@ async def remember(host_id: uuid.UUID | str, awake: bool) -> None:
         await redis.set(RedisKeys.host_awake(str(host_id)), "1" if awake else "0", ex=AWAKE_TTL_S)
     except Exception as exc:  # noqa: BLE001 — Redis down must not break the caller
         logger.debug("host liveness: remember %s failed (%s)", host_id, exc)
+
+
+async def forget(host_id: uuid.UUID | str) -> None:
+    """Drop the memory — the box was just woken, the next check must ask it."""
+    try:
+        redis = await get_redis()
+        await redis.delete(RedisKeys.host_awake(str(host_id)))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("host liveness: forget %s failed (%s)", host_id, exc)
 
 
 async def recall(host_id: uuid.UUID | str) -> bool | None:

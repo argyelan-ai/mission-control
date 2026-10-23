@@ -31,6 +31,7 @@ import uuid
 from pathlib import Path
 import asyncio
 from shlex import quote as shlex_quote
+from urllib.parse import urlparse
 
 import asyncssh
 import httpx
@@ -2964,42 +2965,21 @@ async def _restart_runtime_impl(
     return {"ok": False, "message": f"Unbekannter runtime_type: {runtime_type}"}
 
 
-async def wake_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
-    """Wake a power_managed runtime's host via Wake-on-LAN.
+def _write_wake_request(*, slug: str, label: str, mac: str, ip: str | None) -> dict:
+    """Drop the Wake-on-LAN trigger file — the ONE wake path (runtime or host).
 
     The backend runs in Docker and cannot send an L2 broadcast magic packet, so
     it drops a trigger file into settings.wake_request_dir (under the ~/.mc host
     bind-mount). A launchd watcher on the Mac host picks it up and runs the wake
     script configured for the watcher. See the WoL host-helper docs.
-
-    host: resolved host (ADR-048) — registry values (power_managed, MAC, IP)
-    take precedence, legacy runtime fields + settings remain as fallback.
-
-    Returns {"ok": bool, "message": str}.
     """
     import datetime as _dt
 
-    if not (runtime.get("power_managed") or (host is not None and host.power_managed)):
-        return {"ok": False, "message": "Runtime ist nicht power_managed — kein Wake-on-LAN."}
-    mac = (
-        (host.wol_mac_address if host else None)
-        or runtime.get("wol_mac_address")
-        or settings.wol_mac
-    )
-    if not mac:
-        return {"ok": False, "message": "Keine wol_mac_address konfiguriert."}
-
-    slug = runtime.get("slug") or runtime.get("id") or "runtime"
     safe_slug = re.sub(r"[^A-Za-z0-9._-]", "_", str(slug))
     payload = {
         "slug": slug,
         "mac": mac,
-        # Registry-first like mac above — the legacy runtime.host field is
-        # still set for bound runtimes and must not override a host-row edit
-        # (box moved, IP maintained in the hosts UI).
-        "ip": (host.ssh_host if host else None)
-        or runtime.get("host")
-        or settings.wol_lan_ip,
+        "ip": ip or settings.wol_lan_ip,
         "broadcast": settings.wol_broadcast,
         "requested_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
     }
@@ -3011,12 +2991,64 @@ async def wake_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
         logger.info("Wake-on-LAN Trigger geschrieben: %s (mac=%s)", target, mac)
         return {
             "ok": True,
-            "message": f"Wake-on-LAN ausgelöst für {runtime.get('display_name', slug)}. "
+            "message": f"Wake-on-LAN ausgelöst für {label}. "
             "Box braucht ~1-2 Min bis erreichbar.",
         }
     except Exception as e:
         logger.error("Wake-Trigger schreiben fehlgeschlagen für %s: %s", slug, e)
         return {"ok": False, "message": f"Konnte Wake-Trigger nicht schreiben: {e}"}
+
+
+async def wake_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
+    """Wake a power_managed runtime's host via Wake-on-LAN.
+
+    host: resolved host (ADR-048) — registry values (power_managed, MAC, IP)
+    take precedence, legacy runtime fields + settings remain as fallback.
+
+    Returns {"ok": bool, "message": str}.
+    """
+    if not (runtime.get("power_managed") or (host is not None and host.power_managed)):
+        return {"ok": False, "message": "Runtime ist nicht power_managed — kein Wake-on-LAN."}
+    mac = (
+        (host.wol_mac_address if host else None)
+        or runtime.get("wol_mac_address")
+        or settings.wol_mac
+    )
+    if not mac:
+        return {"ok": False, "message": "Keine wol_mac_address konfiguriert."}
+
+    slug = runtime.get("slug") or runtime.get("id") or "runtime"
+    return _write_wake_request(
+        slug=str(slug),
+        label=str(runtime.get("display_name", slug)),
+        mac=mac,
+        # Registry-first like mac above — the legacy runtime.host field is
+        # still set for bound runtimes and must not override a host-row edit
+        # (box moved, IP maintained in the hosts UI).
+        ip=(host.ssh_host if host else None) or runtime.get("host"),
+    )
+
+
+async def wake_host(host: ResolvedHost) -> dict:
+    """Wake a power-managed BOX via Wake-on-LAN — from its host row alone.
+
+    Round-5 re-check (L1): a box can carry ``power_managed`` on its host row
+    while none of its runtime rows does; waking must not need a runtime. Same
+    trigger file and watcher as ``wake_runtime`` (one wake path), keyed by the
+    host slug. The address is the box's SSH address, else its control server's.
+
+    Returns {"ok": bool, "message": str}.
+    """
+    if not host.power_managed:
+        return {"ok": False, "message": "Host ist nicht power_managed — kein Wake-on-LAN."}
+    mac = host.wol_mac_address or settings.wol_mac
+    if not mac:
+        return {"ok": False, "message": "Keine wol_mac_address konfiguriert."}
+    ip = host.ssh_host
+    if not ip and host.control_url:
+        ip = urlparse(host.control_url).hostname
+    slug = host.slug or (str(host.host_id) if host.host_id else "host")
+    return _write_wake_request(slug=slug, label=host.display_name or slug, mac=mac, ip=ip)
 
 
 # ── LM Studio Dynamic Model Discovery ────────────────────────────────────────
