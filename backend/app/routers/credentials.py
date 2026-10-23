@@ -12,12 +12,21 @@ from pydantic import BaseModel, model_validator
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.auth import require_user
+from app.auth import Role, require_role
 from app.database import get_session
 from app.models.credential import Credential
-from app.services.encryption import encrypt, safe_decrypt, mask, NEVER_EXPOSE_CREDENTIAL_FIELDS
+from app.services.encryption import encrypt, safe_decrypt, mask_credential_field, NEVER_EXPOSE_CREDENTIAL_FIELDS
 
 router = APIRouter(prefix="/api/v1", tags=["credentials"])
+
+# Admin only, every route (round-3 user tests R1, 23.10.2026; ADR-098 amends
+# ADR-033's "every logged-in user may write"). Before, a viewer account
+# could list, read, create, change and delete the logins and tokens agents
+# use — the Settings UI hid the tab from non-admins, the API did not.
+# Agents read credentials through their own scope-checked routes in
+# routers/agent_scoped.py, not through these.
+# rule: R-credentials-admin-only - viewers could read and change every login
+_ADMIN = Depends(require_role(Role.ADMIN))
 
 
 _LOGIN_NEEDS_URL_MSG = (
@@ -67,7 +76,7 @@ def _mask_data(data: dict, credential_type: str) -> dict:
         elif k in _NON_SENSITIVE_FIELDS:
             masked[k] = v
         else:
-            masked[k] = mask(str(v)) if v else ""
+            masked[k] = mask_credential_field(k, str(v)) if v else ""
     return masked
 
 
@@ -87,7 +96,7 @@ def _serialize(credential: Credential, decrypted_data: dict | None) -> dict:
 @router.get("/credentials")
 async def list_credentials(
     session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
+    current_user=_ADMIN,
 ):
     result = await session.exec(select(Credential).order_by(Credential.name))
     credentials = result.all()
@@ -103,7 +112,7 @@ async def list_credentials(
 async def create_credential(
     payload: CredentialCreate,
     session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
+    current_user=_ADMIN,
 ):
     encrypted = encrypt(json.dumps(payload.data))
     credential = Credential(
@@ -123,7 +132,7 @@ async def create_credential(
 async def get_credential(
     credential_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
+    current_user=_ADMIN,
 ):
     credential = await session.get(Credential, credential_id)
     if not credential:
@@ -138,7 +147,7 @@ async def update_credential(
     credential_id: uuid.UUID,
     payload: CredentialUpdate,
     session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
+    current_user=_ADMIN,
 ):
     credential = await session.get(Credential, credential_id)
     if not credential:
@@ -198,7 +207,7 @@ async def update_credential(
 async def delete_credential(
     credential_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
+    current_user=_ADMIN,
 ):
     credential = await session.get(Credential, credential_id)
     if not credential:

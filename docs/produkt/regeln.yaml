@@ -440,6 +440,30 @@ rules:
     status: active
     checked: 2026-10-23
 
+  - id: R-credentials-admin-only
+    says: "The credentials Vault API (list, get, create, update, delete) is admin-only; the masked secret list is operator or higher. Agents read credentials only through their own scope-checked routes."
+    source: "ADR-098 (amends ADR-033); round-3 user tests (R1)"
+    owner: backend/app/routers/credentials.py
+    applies_to: ["backend/app/routers/credentials.py", "backend/app/routers/secrets.py"]
+    enforced_by:
+      - {test: "backend/tests/test_credentials_admin_only.py::test_credentials_refuse_non_admin"}
+      - {test: "backend/tests/test_credentials_admin_only.py::test_viewer_cannot_see_existing_credential"}
+      - {test: "backend/tests/test_credentials_admin_only.py::test_secret_list_refuses_viewer"}
+    status: active
+    checked: 2026-10-23
+
+  - id: R-mask-no-length-no-password
+    says: "A masked secret never shows its length: always a fixed run of dots. Only a value of 20 or more characters keeps its last 4 characters, and password-like credential fields and free text never do."
+    source: "ADR-098; round-3 user tests (t4 S4)"
+    owner: backend/app/services/encryption.py
+    applies_to: ["backend/app/services/encryption.py", "backend/app/routers/credentials.py", "backend/app/routers/secrets.py"]
+    enforced_by:
+      - {test: "backend/tests/test_credentials_admin_only.py::test_password_mask_shows_no_character_and_no_length"}
+      - {test: "backend/tests/test_credentials_admin_only.py::test_password_like_fields_never_show_a_tail"}
+      - {test: "backend/tests/test_credentials_admin_only.py::test_short_values_are_fully_hidden_with_fixed_length"}
+    status: active
+    checked: 2026-10-23
+
 rejected:
   - id: X-own-control-room
     idea: "An own control-room UI, job page or coordinator for heads"

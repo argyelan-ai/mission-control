@@ -1,6 +1,6 @@
 # ADR-033 — Secrets vs Credentials: Boundary kodifizieren statt unifizieren
 
-**Status:** Accepted
+**Status:** Accepted — amended by ADR-098 (2026-10-23): the credentials API is admin-only, the masked secret list operator+
 **Datum:** 2026-05-13 (accepted 2026-05-14)
 **Scope:** Backend/DB · Backend/Auth · Agent Protocol · UX/Settings
 
@@ -16,7 +16,7 @@ Mission Control hat heute zwei separate Tabellen + Router fuer geheime Werte. Be
 | **Identifier** | unique `key: str` (z.B. `openai_api_key`) | `id: UUID` + nicht-eindeutiger `name: str` |
 | **Value-Shape** | einzelner String (Fernet-encrypted) | JSON-Blob `{username, password}` / `{token}` / `{content}` |
 | **Type-System** | flach | typed: `login` \| `token` \| `custom` |
-| **Write-Auth** | `Role.ADMIN` (POST/PATCH/DELETE) | `require_user` — jeder eingeloggte User |
+| **Write-Auth** | `Role.ADMIN` (POST/PATCH/DELETE) | `require_user` — jeder eingeloggte User (seit ADR-098: `Role.ADMIN` für alle Routen) |
 | **Agent-scoped Endpoints** | keine — agents koennen weder lesen noch schreiben | `GET /api/v1/agent/boards/{board_id}/credentials[/{id}]` mit Scope `credentials:read` |
 | **UI** | Settings → Secrets / API-Keys (admin-only) | Settings → Credentials Tab (user-managed) |
 | **Konsumenten** | `gateway_secrets_sync` (LLM-Provider-Keys → OpenClaw global), `secrets_helper` (per-agent `.env` Provider-Key), `deploy.py`, `publish_adapters.py`, `newsletter_service.py`, `workflow_renderer.py`, `workflow_validator.py` | `agent_scoped.py` (visual-verify login, agent vault list/get), `linkedin_poster.py`, `task_context_builder.py` |

@@ -2129,7 +2129,7 @@
         "token": "Token",
         "custom": "Freitext"
       },
-      "customSummary": "(Freitext, {count} Zeichen)",
+      "customSummary": "(Freitext)",
       "sshKeySummary": "SSH-Key ({username}, von Host-Onboarding verwaltet)",
       "sshKeyNotEditable": "SSH-Key-Zugangsdaten werden von der Geräte-Einrichtung verwaltet und können hier nicht bearbeitet werden.",
       "editAria": "Zugangsdaten bearbeiten",

@@ -2,7 +2,8 @@
 API key and secrets management.
 
 Secrets are Fernet-encrypted and stored in the DB.
-The frontend only ever displays masked values (e.g. "****abcd").
+The frontend only ever displays masked values (e.g. "••••••••abcd" for a
+long token, "••••••••" for anything shorter — see encryption.mask).
 """
 
 from datetime import datetime, timezone
@@ -257,7 +258,10 @@ async def list_provider_templates(current_user=Depends(require_user)):
 @router.get("/secrets")
 async def list_secrets(
     session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
+    # Operator or higher (round-3 user tests R1, 23.10.2026): viewers used
+    # to get the key list. Operators keep it — they pick an existing key
+    # when binding an agent or adding a runtime. Writes stay admin-only.
+    current_user=Depends(require_role(Role.OPERATOR)),
 ):
     """List all secrets (values masked)."""
     result = await session.exec(select(Secret).order_by(Secret.key))
