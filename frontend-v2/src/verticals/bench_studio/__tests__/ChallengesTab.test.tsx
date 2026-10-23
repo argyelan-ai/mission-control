@@ -141,3 +141,43 @@ describe("ChallengesTab", () => {
     expect(screen.getByText("fan-out crashed — see backend logs")).toBeTruthy();
   });
 });
+
+describe("ChallengesTab — list on a phone (P4, t2 SOLL-4)", () => {
+  beforeEach(() => {
+    vi.mocked(benchApi.challenges.list).mockResolvedValue([CHALLENGE]);
+  });
+
+  it("every row names when it was started, so seven equal titles can be told apart", async () => {
+    renderTab();
+    await screen.findByText("Bouncing balls");
+    const when = screen.getByTestId("bench-row-started");
+    expect(when.tagName).toBe("TIME");
+    expect(when.getAttribute("datetime")).toBe("2026-07-11T10:00:00Z");
+    expect(when.textContent).toMatch(/Jul/);
+  });
+
+  it("opening a row reports the id, so the page can put it in the URL", async () => {
+    const user = (await import("@testing-library/user-event")).default;
+    const onSelect = vi.fn();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ChallengesTab
+          prefillTemplate={null}
+          onPrefillConsumed={() => {}}
+          selectedId={null}
+          onSelectedChange={onSelect}
+        />
+      </QueryClientProvider>
+    );
+    await user.click(await screen.findByText("Bouncing balls"));
+    expect(onSelect).toHaveBeenCalledWith("ch-1");
+  });
+
+  it("the toolbar buttons keep their words on one line and are 44 px tall", async () => {
+    renderTab();
+    const btn = await screen.findByRole("button", { name: /New Challenge/ });
+    expect(btn.className).toContain("whitespace-nowrap");
+    expect(btn.className).toContain("min-h-11");
+  });
+});

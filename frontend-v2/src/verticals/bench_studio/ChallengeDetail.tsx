@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import {
   Archive,
   ArchiveRestore,
@@ -19,15 +19,17 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, getToken, request } from "@/lib/api";
-import { C, alpha } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { Pill } from "@/components/shared/Pill";
+import { OverflowMenu, type OverflowAction } from "@/components/shared/OverflowMenu";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { FilePreview } from "@/components/task/FilePreview";
 import { benchApi } from "@/verticals/bench_studio/api";
-import { ChallengeStatusPill, ENTRY_STATUS_COLOR, challengeErrorLine } from "./ChallengesTab";
-import { abortReason } from "./status";
+import { ChallengeStatusPill, ENTRY_STATUS_COLOR, challengeErrorLine, useEntryStatusWord } from "./ChallengesTab";
+import { abortReason, entryAbortReason } from "./status";
+import { runDuration, tokenCount } from "./format";
 import { DraftDialog } from "./DraftDialog";
 import { EntryEffort, failedAtMaxTokens } from "./EntryEffort";
 import { EntryTaskState } from "./EntryTaskState";
@@ -99,18 +101,18 @@ function apiErrorDetail(err: unknown, fallback: string): string {
   return fallback;
 }
 
+/** True when the API said the challenge does not exist: 404, or 422 for an
+ *  id that is not even a UUID (a mangled `?challenge=` link). request()
+ *  throws `Error("API <status>: <body>")`. */
+function isNotFoundError(err: unknown): boolean {
+  return err instanceof Error && /^API (404|422):/.test(err.message);
+}
+
 /** Mirrors the backend guard in routers.rerender_entry: needs a recorded
  *  artifact and a settled per-entry status. */
 function canRerenderEntry(entry: BenchEntry): boolean {
   return Boolean(entry.artifact_path) &&
     ["generated", "rendered", "failed"].includes(entry.status);
-}
-
-/** Same compact form as the video outro (backend _format_tok_count). */
-function tokCount(n: number): string {
-  if (n < 1_000) return String(n);
-  if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}k`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
 /** Same rule as the video outro (backend _format_outro_cost): a Spark entry
@@ -123,15 +125,21 @@ function costLabel(entry: BenchEntry, localLabel: string): string | null {
   return m.cost_usd < 0.01 ? "<$0.01" : `~$${m.cost_usd.toFixed(2)}`;
 }
 
-function metricsLine(entry: BenchEntry, localLabel: string): string {
+/** "8 min · 74 tok/s · 111 → 39,200 tok · local": the duration in the app's
+ *  duration form and token counts in the locale's grouping, so the line
+ *  matches the effort line next to it ("33,328 reasoning tok") — round-1
+ *  t2 KANN-1 / r2 S5 found "532 s" and "39.2k" beside "33.328". The video
+ *  outro keeps its own compact form; it is a picture, not this page. */
+function metricsLine(entry: BenchEntry, localLabel: string, locale: string): string {
   const m = entry.metrics;
   const parts: string[] = [];
-  if (m.duration_ms) parts.push(`${(m.duration_ms / 1000).toFixed(0)} s`);
+  const duration = runDuration(m.duration_ms, locale);
+  if (duration) parts.push(duration);
   if (m.tok_per_s) parts.push(`${m.tok_per_s.toFixed(0)} tok/s`);
   if (m.tokens_in != null && m.tokens_out != null) {
-    parts.push(`${tokCount(m.tokens_in)} → ${tokCount(m.tokens_out)} tok`);
+    parts.push(`${tokenCount(m.tokens_in, locale)} → ${tokenCount(m.tokens_out, locale)} tok`);
   } else if (m.tokens_out) {
-    parts.push(`${m.tokens_out} tok`);
+    parts.push(`${tokenCount(m.tokens_out, locale)} tok`);
   }
   const cost = costLabel(entry, localLabel);
   if (cost) parts.push(cost);
@@ -167,6 +175,9 @@ export function ChallengeDetail({
 }) {
   const t = useTranslations("bench.challengeDetail");
   const tCommon = useTranslations("bench.common");
+  const tStatus = useTranslations("bench.status");
+  const entryStatusWord = useEntryStatusWord();
+  const locale = useLocale();
   const qc = useQueryClient();
   const [draftOpen, setDraftOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -177,11 +188,19 @@ export function ChallengeDetail({
   // immediately once the task is scheduled).
   const [rerenderEntryId, setRerenderEntryId] = useState<string | null>(null);
 
-  const { data: challenge } = useQuery({
+  const { data: queried, error: loadError } = useQuery({
     queryKey: ["bench-challenge", challengeId],
     queryFn: () => benchApi.challenges.get(challengeId),
-    refetchInterval: 5000, // polling — no generic SSE hook for bench
+    // polling — no generic SSE hook for bench. A challenge that does not
+    // exist (deleted, or a stale `?challenge=` link) will not come back:
+    // stop asking instead of polling a 404 every 5 s.
+    refetchInterval: (query) => (isNotFoundError(query.state.error) ? false : 5000),
+    retry: (failureCount, err) => !isNotFoundError(err) && failureCount < 3,
   });
+  // Deleted elsewhere while open: react-query keeps the last data on a
+  // failed refetch — the page must not keep showing a challenge that is gone.
+  const notFound = isNotFoundError(loadError);
+  const challenge = notFound ? undefined : queried;
 
   // Once the run this entry kicked off settles (review/failed/etc.), release
   // the spinner — isRunning below already re-enables the other buttons.
@@ -315,7 +334,44 @@ export function ChallengeDetail({
     danger: { background: C.error, color: C.onStatus },
   };
 
-  if (!challenge) return null;
+  if (!challenge) {
+    // Still loading: nothing yet (the poll lands within a moment).
+    if (!loadError) return null;
+    // The open challenge lives in the URL since P4, so a shared/bookmarked
+    // link can point at one that is gone — never leave an empty page
+    // without a way back (review finding SOLL-1).
+    return (
+      <div data-region="bench-detail-missing" className="flex flex-col gap-3">
+        <div className="flex items-start gap-2">
+          <button
+            onClick={onBack}
+            aria-label={t("backAria")}
+            className="flex items-center justify-center w-11 h-11 -ml-3 shrink-0 rounded-md cursor-pointer"
+            style={{ color: C.textSecondary }}
+          >
+            <ArrowLeft size={18} />
+          </button>
+          <div className="flex-1 min-w-0 pt-2">
+            <h2 className="text-lg font-semibold" style={{ color: C.textPrimary }}>
+              {notFound ? t("notFoundTitle") : t("loadFailedTitle")}
+            </h2>
+            <p className="text-sm mt-1" style={{ color: C.textSecondary }}>
+              {notFound ? t("notFoundHint") : t("loadFailedHint")}
+            </p>
+          </div>
+        </div>
+        <div>
+          <button
+            onClick={onBack}
+            className="flex items-center gap-2 px-3 min-h-11 rounded-lg text-sm"
+            style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+          >
+            {t("backToList")}
+          </button>
+        </div>
+      </div>
+    );
+  }
   const canDraft = challenge.status === "review" || challenge.status === "drafted";
   const canRerender = ["review", "drafted", "failed"].includes(challenge.status);
   // Mirrors the backend gates (routers.RUNNING_STATUSES / ARCHIVABLE_STATUSES):
@@ -332,136 +388,126 @@ export function ChallengeDetail({
   const canRecompose =
     !isRunning && challenge.entries.filter((e) => e.video_path).length >= 1;
 
+  // Secondary actions live behind ⋯ (DESIGN K4/K11): the phone header used
+  // to hold up to eight buttons in one shrink-0 row, which squeezed the title
+  // to 0 px and slid the status pill under "Archive" (round-1 t2 MUSS-2 / r2
+  // M2). Only what can run right now is offered (K3: nothing empty).
+  const moreActions: OverflowAction[] = [];
+  if (canArchive) {
+    moreActions.push(
+      challenge.archived_at
+        ? { id: "unarchive", label: t("unarchive"), icon: ArchiveRestore,
+            onClick: () => archiveMutation.mutate(true), loading: archiveMutation.isPending }
+        : { id: "archive", label: t("archive"), icon: Archive,
+            onClick: () => archiveMutation.mutate(false), loading: archiveMutation.isPending },
+    );
+  }
+  if (!isRunning) {
+    moreActions.push({ id: "edit", label: t("edit"), icon: Pencil, onClick: () => setEditOpen(true) });
+  }
+  if (canRecompose) {
+    moreActions.push({ id: "recompose", label: t("recompose"), icon: Film,
+      onClick: () => recomposeMutation.mutate(), loading: recomposeMutation.isPending });
+  }
+  if (canRerender) {
+    moreActions.push({ id: "rerender", label: t("rerender"), icon: RefreshCw,
+      onClick: () => rerenderMutation.mutate(), loading: rerenderMutation.isPending });
+  }
+  if (!isRunning) {
+    moreActions.push({ id: "delete", label: tCommon("delete"), icon: Trash2,
+      onClick: () => setDeleteOpen(true), destructive: true });
+  }
+  const overlayActions = (challenge.actions ?? []).filter((action) =>
+    isSafeChallengeActionEndpoint(action.endpoint),
+  );
+  const hasNextStep = isRunning || canDraft || overlayActions.length > 0;
+
   return (
-    <div className="flex flex-col gap-5">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <button onClick={onBack} aria-label={t("backAria")} style={{ color: C.textSecondary }}>
+    <div className="flex flex-col gap-6">
+      {/* Header (K12): context + title row, state line, next step. */}
+      <div className="flex flex-col gap-3">
+        <div data-region="bench-detail-title" className="flex items-start gap-2">
+          <button
+            onClick={onBack}
+            aria-label={t("backAria")}
+            className="flex items-center justify-center w-11 h-11 -ml-3 shrink-0 rounded-md cursor-pointer"
+            style={{ color: C.textSecondary }}
+          >
             <ArrowLeft size={18} />
           </button>
-          <h2 className="text-lg font-semibold truncate" style={{ color: C.textPrimary }}>
+          {/* K1: the title wraps and is cut after 3 lines at most — never 0 px. */}
+          <h2
+            className="flex-1 min-w-0 pt-2 text-lg font-semibold line-clamp-3 break-words"
+            style={{ color: C.textPrimary }}
+          >
             {challenge.title}
           </h2>
-          {abortReason(challenge) === null && <ChallengeStatusPill challenge={challenge} />}
+          <div className="shrink-0">
+            <OverflowMenu actions={moreActions} label={t("moreAria")} testId="bench-detail-more" />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <ChallengeStatusPill challenge={challenge} />
           {challenge.archived_at && (
             <Pill color={C.textMuted} variant="outline">
               {tCommon("archivedPill")}
             </Pill>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {isRunning && (
-            <button
-              onClick={() => stopMutation.mutate()}
-              disabled={stopMutation.isPending}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-40"
-              style={{ color: C.error, border: `1px solid ${alpha(C.error, 0.33)}` }}
-            >
-              <Square size={13} /> {t("stop")}
-            </button>
-          )}
-          {canArchive && (
-            <button
-              onClick={() => archiveMutation.mutate(challenge.archived_at !== null)}
-              disabled={archiveMutation.isPending}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-40"
-              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
-            >
-              {challenge.archived_at ? (
-                <>
-                  <ArchiveRestore size={13} /> {t("unarchive")}
-                </>
-              ) : (
-                <>
-                  <Archive size={13} /> {t("archive")}
-                </>
-              )}
-            </button>
-          )}
-          {!isRunning && (
-            <button
-              onClick={() => setEditOpen(true)}
-              aria-label={t("editChallengeAria")}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm"
-              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
-            >
-              <Pencil size={13} /> {t("edit")}
-            </button>
-          )}
-          {canRecompose && (
-            <button
-              onClick={() => recomposeMutation.mutate()}
-              disabled={recomposeMutation.isPending}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-40"
-              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
-            >
-              <Film size={13} /> {t("recompose")}
-            </button>
-          )}
-          {!isRunning && (
-            <button
-              onClick={() => setDeleteOpen(true)}
-              aria-label={t("deleteChallengeAria")}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm"
-              style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
-            >
-              <Trash2 size={13} />
-            </button>
-          )}
-          <button
-            onClick={() => rerenderMutation.mutate()}
-            disabled={!canRerender}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-40"
-            style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
-          >
-            <RefreshCw size={13} /> {t("rerender")}
-          </button>
-          <button
-            onClick={() => setDraftOpen(true)}
-            disabled={!canDraft}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
-            style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
-          >
-            <Send size={13} /> {t("draft")}
-          </button>
-          {/* Extension point (ADR-044): overlay-vertical action buttons
-              (e.g. a private catalog_publisher "Publish"). Empty/absent
-              on the public build — nothing renders. A provider-supplied
-              endpoint that isn't a safe same-origin path (F3) is dropped
-              here — never rendered, so there's no button to click through. */}
-          {challenge.actions
-            ?.filter((action) => isSafeChallengeActionEndpoint(action.endpoint))
-            .map((action) => {
-            const isPendingThisAction =
-              (challengeActionMutation.isPending && pendingActionId === action.id) ||
-              action.busy;
-            return (
+
+        {hasNextStep && (
+          <div className="flex flex-wrap items-center gap-2">
+            {isRunning && (
               <button
-                key={action.id}
-                onClick={() => runChallengeAction(action)}
-                disabled={action.disabled || isPendingThisAction}
-                title={action.disabled ? action.disabled_reason ?? undefined : undefined}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
-                style={CHALLENGE_ACTION_STYLE[action.style]}
+                onClick={() => stopMutation.mutate()}
+                disabled={stopMutation.isPending}
+                className="flex items-center gap-2 px-3 min-h-11 rounded-lg text-sm disabled:opacity-40"
+                style={{ color: STATUS_TEXT.error, border: `1px solid ${alpha(C.error, 0.33)}` }}
               >
-                {isPendingThisAction ? (
-                  <Loader2 size={13} className="animate-spin" />
-                ) : null}
-                {action.label}
+                <Square size={13} /> {t("stop")}
               </button>
-            );
-          })}
-        </div>
+            )}
+            {canDraft && (
+              <button
+                onClick={() => setDraftOpen(true)}
+                className="flex items-center gap-2 px-3 min-h-11 rounded-lg text-sm font-medium"
+                style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
+              >
+                <Send size={13} /> {t("draft")}
+              </button>
+            )}
+            {/* Extension point (ADR-044): overlay-vertical action buttons
+                (e.g. a private catalog_publisher "Publish"). Empty/absent
+                on the public build — nothing renders. A provider-supplied
+                endpoint that isn't a safe same-origin path (F3) is dropped
+                above — never rendered, so there's no button to click
+                through. While the challenge still runs there is nothing to
+                publish yet: the action waits (t2 KANN-4). */}
+            {overlayActions.map((action) => {
+              const isPendingThisAction =
+                (challengeActionMutation.isPending && pendingActionId === action.id) ||
+                action.busy;
+              return (
+                <button
+                  key={action.id}
+                  onClick={() => runChallengeAction(action)}
+                  disabled={action.disabled || isPendingThisAction || isRunning}
+                  title={action.disabled ? action.disabled_reason ?? undefined : undefined}
+                  className="flex items-center gap-2 px-3 min-h-11 rounded-lg text-sm font-medium disabled:opacity-40"
+                  style={CHALLENGE_ACTION_STYLE[action.style]}
+                >
+                  {isPendingThisAction ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : null}
+                  {action.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {/* A named end reason is a long pill: own line under the header (the
-          phone header row is already full, see W1.6), like in the list. */}
-      {abortReason(challenge) !== null && (
-        <div>
-          <ChallengeStatusPill challenge={challenge} />
-        </div>
-      )}
       {challengeErrorLine(challenge) && (
         <div
           className="rounded-lg px-3 py-2 text-sm"
@@ -507,27 +553,29 @@ export function ChallengeDetail({
         {challenge.entries.map((entry) => (
           <div
             key={entry.id}
-            className="rounded-xl p-3 flex flex-col gap-2"
+            className="min-w-0 rounded-xl p-3 flex flex-col gap-2"
             style={{ backgroundColor: C.bgSurface, border: `1px solid ${C.borderSubtle}` }}
           >
+            {/* min-w-0 on card and label: a long model name is cut with "…"
+                instead of pushing the status pill out of the card on a phone. */}
             <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium truncate" style={{ color: C.textPrimary }}>
+              <span className="min-w-0 text-sm font-medium truncate" style={{ color: C.textPrimary }}>
                 {entry.model_label}
               </span>
               <div className="flex items-center gap-1.5 shrink-0">
                 {entry.source_kind === "spark" && (
                   <Pill color={C.textMuted} variant="outline">
-                    {t("vanillaPill")}
+                    {t("directApiPill")}
                   </Pill>
                 )}
                 <Pill color={ENTRY_STATUS_COLOR[entry.status] ?? C.textMuted}>
-                  {entry.status}
+                  {entryStatusWord(entry.status)}
                 </Pill>
               </div>
             </div>
-            {metricsLine(entry, t("costLocal")) && (
+            {metricsLine(entry, t("costLocal"), locale) && (
               <span className="text-xs font-mono" style={{ color: C.textMuted }}>
-                {metricsLine(entry, t("costLocal"))}
+                {metricsLine(entry, t("costLocal"), locale)}
               </span>
             )}
             {usageMissing(entry) && (
@@ -546,16 +594,26 @@ export function ChallengeDetail({
               />
             ) : null}
             <EntryEffort entry={entry} />
-            {entry.error && !failedAtMaxTokens(entry) && (
-              <span className="text-xs" style={{ color: C.error }}>{entry.error}</span>
-            )}
+            {entry.error && !failedAtMaxTokens(entry) && (() => {
+              const reason = entryAbortReason(entry);
+              // The header pill already says it ("Aborted – task deleted"):
+              // the same fact is not repeated on the entry (K3).
+              if (reason && reason === abortReason(challenge)) return null;
+              return (
+                <span className="text-xs" style={{ color: STATUS_TEXT.error }}>
+                  {reason
+                    ? tStatus("abortedWithReason", { reason: tStatus(`reason.${reason}`) })
+                    : entry.error}
+                </span>
+              );
+            })()}
             <RecordingNetworkNote metrics={entry.metrics} />
-            <div className="flex items-center gap-2 mt-auto">
+            <div className="flex flex-wrap items-center gap-x-4 mt-auto">
               {entry.artifact_path && (
                 <>
                   <button
                     onClick={() => openEntryView(challengeId, entry.id, t("notifyOpenFailed"))}
-                    className="flex items-center gap-1 text-xs"
+                    className="flex items-center gap-1 min-h-11 text-xs"
                     style={{ color: C.accent }}
                   >
                     <ExternalLink size={12} /> {t("openLink")}
@@ -564,7 +622,7 @@ export function ChallengeDetail({
                     onClick={() =>
                       downloadFile(entry.artifact_path!, `${entry.model_label}-index.html`, t("notifyDownloadFailed"))
                     }
-                    className="flex items-center gap-1 text-xs"
+                    className="flex items-center gap-1 min-h-11 text-xs"
                     style={{ color: C.textSecondary }}
                   >
                     <Download size={12} /> {t("htmlDownload")}
@@ -574,7 +632,7 @@ export function ChallengeDetail({
               {entry.status === "failed" && (
                 <button
                   onClick={() => retryMutation.mutate(entry.id)}
-                  className="flex items-center gap-1 text-xs"
+                  className="flex items-center gap-1 min-h-11 text-xs"
                   style={{ color: C.accent }}
                 >
                   <RotateCcw size={12} /> {t("retry")}
@@ -590,7 +648,7 @@ export function ChallengeDetail({
                     onClick={() => entryRerenderMutation.mutate(entry.id)}
                     disabled={isRunning || entryRerenderMutation.isPending}
                     aria-label={t("rerenderEntryAria", { label: entry.model_label })}
-                    className="flex items-center gap-1 text-xs disabled:opacity-40"
+                    className="flex items-center gap-1 min-h-11 text-xs disabled:opacity-40"
                     style={{ color: C.textSecondary }}
                   >
                     {isRerenderingThisEntry ? (

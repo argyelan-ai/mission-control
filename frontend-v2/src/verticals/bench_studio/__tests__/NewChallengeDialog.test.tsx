@@ -500,10 +500,11 @@ describe("NewChallengeDialog — label autofill", () => {
 });
 
 describe("NewChallengeDialog — vanilla (direct-API) spark row (Bench #21)", () => {
-  it("labels the source option 'Direkt-API (vanilla)' instead of 'Spark'", async () => {
+  it("labels the source option 'Direkt-API' (same word as the entry pill) instead of 'Spark'", async () => {
     renderDialog();
     await screen.findByRole("option", { name: /bouncing balls/i });
-    expect(screen.getByRole("option", { name: /direct api \(vanilla\)/i })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /^direct api$/i })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /vanilla/i })).toBeNull();
     expect(screen.queryByRole("option", { name: /^spark$/i })).toBeNull();
   });
 
@@ -714,6 +715,46 @@ describe("NewChallengeDialog — effort chip (bench W0.6)", () => {
   });
 });
 
+describe("NewChallengeDialog — phone layout (P4, t2 MUSS-4 / SOLL-5, r2 M1)", () => {
+  it("the fields do not live in the height-limited scroll box's flex column (they shrank to 18 px)", async () => {
+    renderDialog();
+    const prompt = await screen.findByPlaceholderText(/prompt/i);
+    const scroller = prompt.closest(".overflow-y-auto") as HTMLElement;
+    expect(scroller).not.toBeNull();
+    // The scroll box is a plain block; the column inside it has no height cap.
+    expect(scroller.className).not.toMatch(/\bflex\b/);
+  });
+
+  it("mode, series and video length stack on a phone instead of running off-screen", async () => {
+    renderDialog();
+    const length = await screen.findByLabelText(/Video length/i);
+    const row = length.closest("[data-testid='bench-options-row']") as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.className).toContain("flex-col");
+    expect(row.className).toContain("sm:flex-row");
+  });
+
+  it("each model gets a heading and a divider; remove and add are 44 px targets", async () => {
+    renderDialog();
+    await userEvent.click(await screen.findByRole("button", { name: /Add model/ }));
+    expect(screen.getByText("Model 1")).toBeTruthy();
+    expect(screen.getByText("Model 2")).toBeTruthy();
+    const second = screen.getByText("Model 2").closest("[data-testid='bench-model-row']") as HTMLElement;
+    expect(second.className).toContain("border-t");
+    const remove = screen.getByRole("button", { name: "Remove model 1" });
+    expect(remove.className).toContain("min-h-11");
+    expect(remove.className).toContain("min-w-11");
+    expect(screen.getByRole("button", { name: /Add model/ }).className).toContain("min-h-11");
+  });
+
+  it("the effort hint describes the chosen level, not Default", async () => {
+    renderDialog();
+    await userEvent.click(await screen.findByRole("radio", { name: "Off" }));
+    expect(screen.queryByText(/Default sends nothing/i)).toBeNull();
+    expect(screen.getByText(/Off asks the model not to think/i)).toBeTruthy();
+  });
+});
+
 describe("NewChallengeDialog — effort check is explicit (round-1 P3)", () => {
   const UNCHECKED = {
     served_model_id: "m", reachable: true, status: "unchecked" as const, thinking_key: null,
@@ -795,6 +836,14 @@ describe("NewChallengeDialog — labels stay apart (round-1 P3)", () => {
     await twoRows("DeepSeek", "deepseek ");
     expect(screen.getByText(/same label as model 1/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Start Challenge/i })).toBeDisabled();
+  });
+
+  it("the hint sits inside the model's own block, under its heading (phone layout P4)", async () => {
+    await twoRows("DeepSeek", "DeepSeek");
+    const hint = screen.getByText(/same label as model 1/i);
+    const block = hint.closest("[data-testid='bench-model-row']") as HTMLElement;
+    expect(block).not.toBeNull();
+    expect(block.textContent).toContain("Model 2");
   });
 
   it("same label, different effort: says the effort gets appended, Start allowed", async () => {

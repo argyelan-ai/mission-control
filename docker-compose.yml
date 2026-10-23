@@ -119,6 +119,10 @@ services:
       # Genau EIN Prozess traegt den Flag true (Worker); config.py-Default
       # bleibt True (Rueckweg fuer compose-freie Installs).
       ENABLE_BACKGROUND_SERVICES: "false"
+      # Operator's IANA time zone for day-counting (bench video date, Insights
+      # default, engine-death report) — config.usage_timezone. Default UTC;
+      # set USAGE_TIMEZONE in .env (e.g. Europe/Zurich).
+      USAGE_TIMEZONE: ${USAGE_TIMEZONE:-UTC}
       # Head launcher switch (docs/specs/head-launcher.md) — off unless set in .env
       HEADS_ENABLED: ${HEADS_ENABLED:-false}
       # Head watchdog: stop after N min without progress; hard limit = emergency brake
@@ -480,6 +484,10 @@ services:
         condition: service_started
     environment:
       ENABLE_BACKGROUND_SERVICES: "true"
+      # Operator's IANA time zone for day-counting (bench video date, Insights
+      # default, engine-death report) — config.usage_timezone. Default UTC;
+      # set USAGE_TIMEZONE in .env (e.g. Europe/Zurich).
+      USAGE_TIMEZONE: ${USAGE_TIMEZONE:-UTC}
       # Head launcher switch (docs/specs/head-launcher.md) — off unless set in .env
       HEADS_ENABLED: ${HEADS_ENABLED:-false}
       # Head watchdog: stop after N min without progress; hard limit = emergency brake

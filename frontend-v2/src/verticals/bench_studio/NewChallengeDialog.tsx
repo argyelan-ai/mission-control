@@ -1,11 +1,11 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Plus, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, STATUS_TEXT } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { benchApi } from "@/verticals/bench_studio/api";
@@ -287,12 +287,20 @@ export function NewChallengeDialog({
     border: `1px solid ${C.border}`,
   } as const;
 
+  // Every field is at least 44 px tall (K11 finger targets).
+  const fieldClass = "rounded-lg px-3 min-h-11 text-sm outline-none w-full min-w-0";
+
   return (
     <ResponsiveModal dismissOnOutside={false} open={open} onClose={onClose} aria-label={t("ariaLabel")}>
+      {/* Plain scroll box with an uncapped column inside. The fields used to
+          be children of the height-capped flex column itself, so on a phone
+          they shrank (template 18 px, prompt 26 px — round-1 t2 MUSS-4 /
+          r2 M1). */}
       <div
-        className="flex flex-col gap-4 p-5 rounded-xl w-full max-h-[85vh] overflow-y-auto"
+        className="rounded-xl w-full max-h-[85vh] overflow-y-auto"
         style={{ backgroundColor: C.bgElevated, border: `1px solid ${C.border}` }}
       >
+      <div className="flex flex-col gap-4 p-4 sm:p-6">
         <h3 className="text-base font-semibold" style={{ color: C.textPrimary }}>
           {t("title")}
         </h3>
@@ -301,7 +309,7 @@ export function NewChallengeDialog({
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder={t("titlePlaceholder")}
-          className="rounded-lg p-2.5 text-sm outline-none"
+          className={fieldClass}
           style={inputStyle}
         />
 
@@ -309,7 +317,7 @@ export function NewChallengeDialog({
         <select
           value={templateId ?? ""}
           onChange={(e) => handleTemplateSelect(e.target.value)}
-          className="rounded-lg p-2.5 text-sm outline-none"
+          className={fieldClass}
           style={inputStyle}
           aria-label={t("templateSelectAria")}
         >
@@ -329,7 +337,7 @@ export function NewChallengeDialog({
           }}
           rows={5}
           placeholder={t("promptPlaceholder")}
-          className="rounded-lg p-3 text-sm resize-none outline-none"
+          className="rounded-lg p-3 text-sm resize-none outline-none w-full"
           style={inputStyle}
         />
         {templateId && (
@@ -338,11 +346,13 @@ export function NewChallengeDialog({
           </span>
         )}
 
-        <div className="flex gap-3 items-end">
+        {/* Phone: one field per line (the video length sat at x=383 on a
+            390 px screen). From sm up: one row. */}
+        <div data-testid="bench-options-row" className="flex flex-col sm:flex-row gap-3 sm:items-end">
           <select
             value={mode}
             onChange={(e) => setMode(e.target.value as "single" | "side_by_side")}
-            className="rounded-lg p-2.5 text-sm outline-none flex-1"
+            className={`${fieldClass} sm:flex-1`}
             style={inputStyle}
             aria-label={t("modeAria")}
           >
@@ -353,10 +363,10 @@ export function NewChallengeDialog({
             value={seriesLabel}
             onChange={(e) => setSeriesLabel(e.target.value)}
             placeholder={t("seriesLabelPlaceholder")}
-            className="rounded-lg p-2.5 text-sm outline-none flex-1"
+            className={`${fieldClass} sm:flex-1`}
             style={inputStyle}
           />
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1 sm:w-32">
             <label htmlFor="bench-record-duration" className="text-xs" style={{ color: C.textMuted }}>
               {t("videoLengthLabel")}
             </label>
@@ -369,19 +379,41 @@ export function NewChallengeDialog({
               value={recordDurationRaw}
               onChange={(e) => setRecordDurationRaw(e.target.value)}
               onBlur={() => setRecordDurationRaw(String(clampRecordDuration(recordDurationRaw)))}
-              className="rounded-lg p-2.5 text-sm outline-none w-24"
+              className={fieldClass}
               style={inputStyle}
             />
           </div>
         </div>
 
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col">
           <span className="text-sm font-medium" style={{ color: C.textSecondary }}>
             {t("modelsLabel")}
           </span>
           {models.map((m, i) => (
-            <Fragment key={i}>
-            <div className="flex flex-wrap gap-2 items-center">
+            // One block per model with its own heading; a hairline between
+            // models so model 1's effort chips do not run into model 2's
+            // fields (t2 SOLL-5).
+            <div
+              key={i}
+              data-testid="bench-model-row"
+              className={`flex flex-col gap-2 py-3${i > 0 ? " border-t" : ""}`}
+              style={i > 0 ? { borderColor: C.borderSubtle } : undefined}
+            >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium" style={{ color: C.textMuted }}>
+                {t("modelHeading", { index: i + 1 })}
+              </span>
+              <button
+                onClick={() => setModels((prev) => prev.filter((_, idx) => idx !== i))}
+                disabled={models.length <= 1}
+                aria-label={t("removeModelAria", { index: i + 1 })}
+                className="flex items-center justify-center min-h-11 min-w-11 -mr-3 rounded-md disabled:opacity-30"
+                style={{ color: C.textMuted }}
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <input
                 value={m.label}
                 onChange={(e) => {
@@ -397,7 +429,7 @@ export function NewChallengeDialog({
                     : t("labelPlaceholderDefault")
                 }
                 aria-label={t("labelAria", { index: i + 1 })}
-                className="rounded-lg p-2 text-sm outline-none flex-1"
+                className={fieldClass}
                 style={inputStyle}
               />
               <select
@@ -410,7 +442,7 @@ export function NewChallengeDialog({
                     effort: null,
                   })
                 }
-                className="rounded-lg p-2 text-sm outline-none"
+                className={fieldClass}
                 style={inputStyle}
                 aria-label={t("sourceAria", { index: i + 1 })}
               >
@@ -424,16 +456,16 @@ export function NewChallengeDialog({
                   // blank model here would 422 at create (backend can't
                   // resolve "auto" either), so `valid` blocks submit until
                   // the operator types a model manually.
-                  <div className="flex flex-col gap-1 flex-1">
+                  <div className="flex flex-col gap-1 min-w-0">
                     <input
                       value={m.spark_model ?? ""}
                       onChange={(e) => setModelWithAutofill(i, { spark_model: e.target.value || null })}
                       placeholder={t("vllmModelPlaceholderOffline")}
                       aria-label={t("vllmModelAria", { index: i + 1 })}
-                      className="rounded-lg p-2 text-sm outline-none"
+                      className={fieldClass}
                       style={inputStyle}
                     />
-                    <span className="text-[11px]" style={{ color: C.warning }}>
+                    <span className="text-xs" style={{ color: STATUS_TEXT.warning }}>
                       {t("sparkOfflineWarning")}
                     </span>
                   </div>
@@ -441,7 +473,7 @@ export function NewChallengeDialog({
                   <select
                     value={m.spark_model ?? ""}
                     onChange={(e) => setModelWithAutofill(i, { spark_model: e.target.value || null })}
-                    className="rounded-lg p-2 text-sm outline-none flex-1"
+                    className={fieldClass}
                     style={inputStyle}
                     aria-label={t("vllmModelAria", { index: i + 1 })}
                   >
@@ -457,7 +489,7 @@ export function NewChallengeDialog({
                 <select
                   value={m.agent_id ?? ""}
                   onChange={(e) => setModelWithAutofill(i, { agent_id: e.target.value || null })}
-                  className="rounded-lg p-2 text-sm outline-none flex-1"
+                  className={fieldClass}
                   style={inputStyle}
                   aria-label={t("agentAria", { index: i + 1 })}
                 >
@@ -474,18 +506,9 @@ export function NewChallengeDialog({
                 onChange={(e) => setModel(i, { display_tag: e.target.value })}
                 placeholder={t("tagPlaceholder", { tag: derivedTag(m) })}
                 aria-label={t("tagAria", { index: i + 1 })}
-                className="rounded-lg p-2 text-sm outline-none flex-1"
+                className={fieldClass}
                 style={inputStyle}
               />
-              <button
-                onClick={() => setModels((prev) => prev.filter((_, idx) => idx !== i))}
-                disabled={models.length <= 1}
-                aria-label={t("removeModelAria", { index: i + 1 })}
-                className="disabled:opacity-30"
-                style={{ color: C.textMuted }}
-              >
-                <Trash2 size={14} />
-              </button>
             </div>
             <EffortChips
               index={i}
@@ -495,8 +518,10 @@ export function NewChallengeDialog({
               value={m.effort}
               onChange={(effort) => setModel(i, { effort })}
             />
+            {/* Label clash hints close the model's own block (above the
+                divider to the next model); error text tone via STATUS_TEXT. */}
             {labelClash[i]?.kind === "duplicate" && (
-              <span className="text-xs" role="alert" style={{ color: C.error }}>
+              <span className="text-xs" role="alert" style={{ color: STATUS_TEXT.error }}>
                 {t("labelDuplicate", { index: labelClash[i]?.index ?? 0 })}
               </span>
             )}
@@ -505,22 +530,22 @@ export function NewChallengeDialog({
                 {t("labelEffortSuffix", { label: labelClash[i]?.label ?? "" })}
               </span>
             )}
-            </Fragment>
+            </div>
           ))}
           <button
             onClick={() => setModels((prev) => [...prev, { ...EMPTY_MODEL }])}
             disabled={models.length >= 6}
-            className="self-start flex items-center gap-1 text-xs disabled:opacity-40"
+            className="self-start flex items-center gap-2 min-h-11 text-sm disabled:opacity-40"
             style={{ color: C.accent }}
           >
-            <Plus size={12} /> {t("addModel")}
+            <Plus size={14} /> {t("addModel")}
           </button>
         </div>
 
         <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="px-3 py-1.5 rounded-lg text-sm"
+            className="px-4 min-h-11 rounded-lg text-sm"
             style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
           >
             {tCommon("cancel")}
@@ -528,12 +553,13 @@ export function NewChallengeDialog({
           <button
             onClick={() => mutation.mutate()}
             disabled={!valid || mutation.isPending}
-            className="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
+            className="px-4 min-h-11 rounded-lg text-sm font-medium disabled:opacity-40"
             style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
           >
             {t("startChallenge")}
           </button>
         </div>
+      </div>
       </div>
     </ResponsiveModal>
   );
