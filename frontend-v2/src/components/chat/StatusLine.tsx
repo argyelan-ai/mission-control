@@ -17,6 +17,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { ChatAliveness, StateEvent } from "@/lib/chatTypes";
 import { capitalize } from "@/lib/taskDetail/stateLine";
+import { parseTs } from "@/lib/taskDetail/format";
 
 interface StatusLineProps {
   state: StateEvent | null;
@@ -40,7 +41,7 @@ interface StatusLineProps {
    *  `task_working` says nothing while a task head is on screen (the head
    *  says it, K3) and otherwise names the task as a link; `waiting_model`
    *  names it too. Absent = the chat as before (other harnesses). */
-  task?: { taskId: string; title: string } | null;
+  task?: { taskId: string; title: string; deliveredAt?: string | null } | null;
   /** A head of the live task's section is in the viewport. */
   taskHeadVisible?: boolean;
   /** The chat just opened and no state has arrived yet (round-4 t1 NICE-2).
@@ -114,6 +115,35 @@ function useWorkingWord(active: boolean): string {
   return WORKING_WORDS[(seed + tick) % WORKING_WORDS.length];
 }
 
+/** How long "waiting for the model" stays neutral (round-5 t1 NICE-2). A
+ *  model takes a few seconds for its first turn on every start (live ~6 s):
+ *  that is the normal way of a start, not a warning. Ocker only once the
+ *  task has waited this long since its delivery (box off, model loading). */
+export const WAITING_MODEL_GRACE_MS = 20_000;
+
+/** True once `waiting` has lasted past the grace — counted from `sinceIso`
+ *  (the task's delivery) when known, else from when the state came. The
+ *  clock is read in the effect, never in the render (cf. useWorkingWord). */
+function useWaitedTooLong(waiting: boolean, sinceIso: string | null | undefined): boolean {
+  const [late, setLate] = useState(false);
+  const sinceMs = parseTs(sinceIso)?.getTime() ?? null;
+  useEffect(() => {
+    if (!waiting) {
+      setLate(false);
+      return;
+    }
+    const left = (sinceMs ?? Date.now()) + WAITING_MODEL_GRACE_MS - Date.now();
+    if (left <= 0) {
+      setLate(true);
+      return;
+    }
+    setLate(false);
+    const id = setTimeout(() => setLate(true), left);
+    return () => clearTimeout(id);
+  }, [waiting, sinceMs]);
+  return late;
+}
+
 type Labels = (key: string) => string;
 
 const unknownDisplay = (t: Labels, hasTerminal: boolean): StatusDisplay => ({
@@ -163,6 +193,7 @@ function resolveDisplay(
   t: Labels,
   loading = false,
   hasTerminal = true,
+  modelLate = true,
 ): StatusDisplay {
   // Outranks the pane probe on purpose: right after a send the probe still
   // reports the PREVIOUS state (idle), and showing "Bereit" one frame after the
@@ -196,8 +227,11 @@ function resolveDisplay(
       return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: t("taskWorking"), pulse: true };
     case "waiting_model":
       // A task is delivered, the agent's model has not answered yet (box off,
-      // still loading) — honest, and not the agent's fault.
-      return { dotColor: C.warning, textColor: STATUS_TEXT.warning, label: t("waitingForModel"), pulse: false };
+      // still loading) — honest, and not the agent's fault. Neutral during a
+      // normal start; ocker once it lasts (round-5 t1 NICE-2).
+      return modelLate
+        ? { dotColor: C.warning, textColor: STATUS_TEXT.warning, label: t("waitingForModel"), pulse: false }
+        : { dotColor: C.textDim, textColor: C.textMuted, label: t("waitingForModel"), pulse: false };
     case "waiting_input":
       // An open question (ACP card, P3) or a CLI menu waits on the operator,
       // not on the model — say so instead of "Thinking…" (live 13.10.2026).
@@ -255,7 +289,8 @@ export function StatusLine({
   // Der Hook muss VOR jedem fruehen Return laufen (Regeln der Hooks); er ist nur
   // aktiv, wenn wirklich gearbeitet wird, und laesst sonst keinen Timer laufen.
   const workingWord = useWorkingWord(connected && state?.status === "working" && !sending);
-  const display = resolveDisplay(state, connected, aliveness, sending, workingWord, activity, t, loading, hasTerminal);
+  const modelLate = useWaitedTooLong(connected && state?.status === "waiting_model", task?.deliveredAt);
+  const display = resolveDisplay(state, connected, aliveness, sending, workingWord, activity, t, loading, hasTerminal, modelLate);
   const working = !sending && aliveness !== "ended" && connected && state?.status === "working";
   // Only a running CHAT turn shows its tool title (mono, one line).
   const toolRuns = !sending && aliveness !== "ended" && connected && !!activity
@@ -270,6 +305,8 @@ export function StatusLine({
   if (task && live && status === "task_working" && taskHeadVisible) return null;
   if (task && live && (status === "task_working" || status === "waiting_model")) {
     const waiting = status === "waiting_model";
+    // Ocker only once the model keeps the task waiting (NICE-2).
+    const warn = waiting && modelLate;
     const word = waiting
       ? null
       : capitalize(tAll("tasks.detail.line.task.in_progress"), locale);
@@ -281,7 +318,7 @@ export function StatusLine({
     return (
       <div
         className={LINE_CLASS}
-        style={{ color: waiting ? STATUS_TEXT.warning : C.textMuted }}
+        style={{ color: warn ? STATUS_TEXT.warning : C.textMuted }}
         // "Task in progress" comes and goes as the task head scrolls across
         // the screen edge — announcing that would talk on every scroll. Only
         // the waiting sentence (a real state change) is announced.
@@ -291,7 +328,7 @@ export function StatusLine({
           data-testid="status-dot"
           data-live="false"
           className="status-dot relative inline-flex h-1.5 w-1.5 shrink-0 rounded-full"
-          style={{ backgroundColor: waiting ? C.warning : C.textDim, ["--status-dot" as string]: waiting ? C.warning : C.textDim }}
+          style={{ backgroundColor: warn ? C.warning : C.textDim, ["--status-dot" as string]: warn ? C.warning : C.textDim }}
         />
         <span data-testid="status-label" className="min-w-0 flex items-center">
           <span className="shrink-0 whitespace-pre">{before}</span>

@@ -19,8 +19,10 @@
  * the "waiting" lines and the end line belong to the task's last segment
  * while that segment is still open (only held chat lines below it) or the
  * newest entry; otherwise they form a trailing continuation segment at the
- * bottom. The end line keeps its time: a task that ended before the next
- * chat entry ends its last segment there.
+ * bottom. The end line keeps its time: a task that ended before the entry
+ * that closed its last segment (the operator's next message, another task)
+ * ends that segment — the chat lines held below the segment do not count,
+ * they lie inside its time (round-5 t1 SHOULD-1).
  *
  * A later segment's head follows the task's state NOW (`head`): a task that
  * works (in progress, or delivered and its agent already writing) →
@@ -244,6 +246,11 @@ export function mergeTimeline(input: MergeInput): MergeResult {
   const ctxOf = new Map<string, UnitCtx>();
   const segCount = new Map<string, number>();
   const lastSegIndex = new Map<string, number>();
+  /** Per task: the time of the entry that closed its last band — the
+   *  operator's message, another task's row or a card. Held chat lines stand
+   *  right below a band but lie INSIDE its time span, so they are never "the
+   *  next entry" (round-5 t1 SHOULD-1). */
+  const closedAtMs = new Map<string, number>();
 
   let chatRun: TimelineChatEvent[] = [];
   let seg: { task: MergeTask; rows: TaskStepRow[] } | null = null;
@@ -300,8 +307,10 @@ export function mergeTimeline(input: MergeInput): MergeResult {
     pushSegment(task, units, rows[0]?.id ?? "head");
   };
 
-  /** Close the open band, then put the chat lines it held below it. */
-  const closeBand = () => {
+  /** Close the open band (at the time of the entry that closes it), then put
+   *  the chat lines it held below it. */
+  const closeBand = (closerMs: number | null) => {
+    if (seg && closerMs != null) closedAtMs.set(seg.task.stub.taskId, closerMs);
     flushSeg();
     if (held.length > 0) {
       chatRun.push(...held);
@@ -315,12 +324,12 @@ export function mergeTimeline(input: MergeInput): MergeResult {
         held.push(e.ev);
         continue;
       }
-      closeBand();
+      closeBand(e.ms);
       chatRun.push(e.ev);
       continue;
     }
     // Another task's row or a card closes the open band.
-    if (seg && (seg.task !== e.task || e.type === "card")) closeBand();
+    if (seg && (seg.task !== e.task || e.type === "card")) closeBand(e.ms);
     flushChat();
     if (e.type === "card") {
       const key = `task:${e.task.stub.taskId}:card`;
@@ -337,7 +346,7 @@ export function mergeTimeline(input: MergeInput): MergeResult {
   // The band still open at the end takes its task's tail (only held chat
   // lines below it — no empty head under them, round-1 r2 M3).
   const openAtEnd = seg?.task ?? null;
-  closeBand();
+  closeBand(null);
   flushChat();
 
   // Tails (§6.2 step 5): live row / pending / detached / queued / end line.
@@ -366,8 +375,12 @@ export function mergeTimeline(input: MergeInput): MergeResult {
     const at = lastSegIndex.get(id);
     // Only while the task's last segment is the newest entry of all (M2) —
     // or, for the end line alone, while the task ended before the entry that
-    // follows its last segment (the end is not newer than that entry; ties:
-    // the chat first, as in the merge). Note: `endedAt` is the database's
+    // closed its last segment (the end is not newer than that entry; ties:
+    // the chat first, as in the merge). The closing entry, not the entry right
+    // below: held chat lines stand there and are older than the end by design
+    // — comparing with them sent a task that had ended before the operator's
+    // next question into a third band at the bottom (round-5 t1 SHOULD-1).
+    // Note: `endedAt` is the database's
     // clock, chat times come from the agent's transcript — a few seconds of
     // clock skew can put an end line on the other side of a message written
     // in the same moment (the step rows share this; review NICE-2 on #948).
@@ -378,7 +391,7 @@ export function mergeTimeline(input: MergeInput): MergeResult {
       tail.length === 1 &&
       tail[0].u === "end" &&
       endedMs != null &&
-      (entryMs(out[at + 1]) ?? Number.NEGATIVE_INFINITY) > endedMs;
+      (closedAtMs.get(id) ?? entryMs(out[at + 1]) ?? Number.NEGATIVE_INFINITY) > endedMs;
     if (at != null && (at === out.length - 1 || task === openAtEnd || endsBeforeNext)) {
       const segEntry = out[at] as Extract<MergedEntry, { kind: "segment" }>;
       const own = segEntry.units.every((u) => TAIL_KINDS.has(u.u)) ? markAlone(task, tail) : tail;

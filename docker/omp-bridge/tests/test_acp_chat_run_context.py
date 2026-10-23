@@ -228,3 +228,17 @@ def test_comment_wakeup_in_the_chat_allows_a_reply_but_no_run_state():
     assert "kein mc comment progress/resolution/evidence/blocker/reflection" in chat
     assert 'mc comment message "<Antwort>" --task-id t-1' in chat
     assert "um eine Antwort" in chat
+
+
+def test_comment_wakeup_in_the_chat_promises_no_later_entry():
+    """Round-5 user test t1 NICE-3: the chat's reply in the task thread ended
+    with "the next entry follows here" — the chat writes only when asked, the
+    next entry came from the run. Same rule as the backend's run-context
+    block: announce nothing the chat will not do itself."""
+    import bridge
+
+    chat = bridge.build_comment_nudge_text({"t-1": 2}, chat=True)
+    assert "Kündige nichts an, was du nicht selbst tust" in chat
+    assert "Eintrag" in chat
+    native = bridge.build_comment_nudge_text({"t-1": 2})
+    assert "Kündige" not in native

@@ -2516,6 +2516,10 @@ def build_comment_nudge_text(pending: dict, *, chat: bool = False) -> str:
             "blocker/reflection, kein mc checklist/deliverable/finish). Bittet der Operator "
             "im Kommentar um eine Antwort, darfst du sie dort geben: "
             f'mc comment message "<Antwort>" --task-id {reply_id}'
+            # Round-5 t1 NICE-3: "der nächste Eintrag folgt hier" — the chat
+            # writes only when asked; the run writes its own notes.
+            + ". Kündige nichts an, was du nicht selbst tust: kein \"nächster Eintrag "
+            "folgt\", kein Update-Versprechen — Notizen schreibt der Lauf selbst."
         )
     return (
         "📬 Neue Kommentare auf deinem aktiven Task (Operator/Lead/System). "

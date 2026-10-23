@@ -367,6 +367,20 @@ async def test_the_block_names_the_reply_the_chat_may_write():
     assert str(task.id) in text
 
 
+async def test_the_block_forbids_announcing_entries_the_chat_will_not_write():
+    """Round-5 t1 NICE-3: the chat's reply in the task thread ended with
+    "the next entry follows here as soon as index.html exists". The chat
+    writes only when asked; the next entry came from the run, in English.
+    The block now says: no promise of a later entry, update or notice —
+    the run writes its own notes."""
+    agent = await _agent()
+    await _running_task(agent)
+    text = await _context(agent)
+    assert "Announce nothing you will not do yourself" in text
+    assert "never promise a later entry, update or notice" in text
+    assert "the run writes its own notes" in text
+
+
 async def test_a_human_review_card_names_the_operator_and_the_button():
     """t1 NICE-3: on a card with human review the refusal said "the verdict
     is your review run's … press 'Genehmigen'". There was no review run, and
