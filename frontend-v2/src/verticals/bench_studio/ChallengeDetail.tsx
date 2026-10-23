@@ -28,6 +28,7 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { FilePreview } from "@/components/task/FilePreview";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { ChallengeStatusPill, ENTRY_STATUS_COLOR, challengeErrorLine, useEntryStatusWord } from "./ChallengesTab";
+import { apiErrorDetail } from "./apiError";
 import { abortReason, entryAbortReason } from "./status";
 import { runDuration, tokenCount } from "./format";
 import { DraftDialog } from "./DraftDialog";
@@ -81,24 +82,6 @@ async function openEntryView(challengeId: string, entryId: string, errorMessage:
     tab?.close();
     notify.error(errorMessage);
   }
-}
-
-/** request() throws `Error("API <status>: <raw body>")` — pull the backend's
- *  `detail` string back out (e.g. the 429 cooldown message with seconds
- *  remaining) so the toast shows the real reason instead of a generic one. */
-function apiErrorDetail(err: unknown, fallback: string): string {
-  if (err instanceof Error) {
-    const match = err.message.match(/^API \d+: ([\s\S]*)$/);
-    if (match) {
-      try {
-        const body = JSON.parse(match[1]);
-        if (typeof body?.detail === "string" && body.detail) return body.detail;
-      } catch {
-        // body wasn't JSON — fall through to fallback
-      }
-    }
-  }
-  return fallback;
 }
 
 /** True when the API said the challenge does not exist: 404, or 422 for an
@@ -804,7 +787,8 @@ function EditChallengeDialog({
       onSaved();
       onClose();
     },
-    onError: () => notify.error(t("notifySaveFailed")),
+    // A rename onto a sibling's label is a 409 with the reason in `detail`.
+    onError: (err) => notify.error(apiErrorDetail(err, t("notifySaveFailed"))),
   });
 
   const inputStyle = {

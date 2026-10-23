@@ -607,6 +607,27 @@ describe("NewChallengeDialog — vanilla (direct-API) spark row (Bench #21)", ()
     });
   });
 
+  it("names the field of a validation-list 422 in the toast (round-2 t2 MUSS-1)", async () => {
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(
+      new Error(
+        'API 422: {"detail":[{"type":"string_too_short","loc":["body","models",0,"label"],' +
+          '"msg":"String should have at least 1 character","input":""}]}'
+      )
+    );
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    await userEvent.type(screen.getByPlaceholderText(/title/i), "Validation Toast Test");
+    await userEvent.type(screen.getByPlaceholderText(/prompt/i), "Some prompt");
+    await userEvent.type(screen.getByPlaceholderText(/Label \(e\.g\./), "DeepSeek");
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/i }));
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalledWith("label: String should have at least 1 character");
+    });
+  });
+
   it("falls back to a generic message when the error body isn't the API detail shape", async () => {
     const { notify } = await import("@/lib/notify");
     vi.mocked(benchApi.challenges.create).mockRejectedValueOnce(new Error("network exploded"));
