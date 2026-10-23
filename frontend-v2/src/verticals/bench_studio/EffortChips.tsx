@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
@@ -10,7 +10,10 @@ import type { EffortLevel } from "./types";
 
 /** Effort chip row under one model row of the New-Challenge dialog (bench
  *  W0.6). Direct-API rows offer only what the backend's effort probe found
- *  for the served model ("Default" always: nothing is sent then). Agent rows
+ *  for the served model ("Default" always: nothing is sent then). Opening
+ *  the dialog only READS the stored probe; probing the box (2-4 real
+ *  requests) is the operator's explicit "Check now" / "Check again", and the
+ *  backend refuses it while the Spark is busy (round-1 review). Agent rows
  *  show a note: their session's own level is recorded after the run, it
  *  cannot be set from here yet (operator decision D5). */
 export function EffortChips({
@@ -34,13 +37,27 @@ export function EffortChips({
   const isSpark = sourceKind === "spark";
   const modelKey = (model ?? "").trim();
 
+  const qc = useQueryClient();
+  const queryKey = ["bench-effort-levels", modelKey || "active"];
   const query = useQuery({
-    queryKey: ["bench-effort-levels", modelKey || "active"],
+    queryKey,
     queryFn: () => benchApi.effortLevels.get(modelKey || null),
     enabled: isSpark && !sparkOffline,
     staleTime: 60_000,
     retry: false,
   });
+  const check = useMutation({
+    mutationFn: () => benchApi.effortLevels.check(modelKey || null),
+    onSuccess: (fresh) => qc.setQueryData(queryKey, fresh),
+  });
+  // A check result (e.g. "Spark busy") belongs to the model it ran for —
+  // forget it when the row switches to another model.
+  const resetCheck = check.reset;
+  useEffect(() => {
+    resetCheck();
+  }, [modelKey, resetCheck]);
+  // The backend answers 409 while a bench run or an agent works on the Spark.
+  const checkBusy = check.isError && /^API 409\b/.test((check.error as Error)?.message ?? "");
   const data = query.data;
   const offered: EffortLevel[] = data?.status === "ok" ? data.levels : [];
   const selected: EffortLevel = value ?? "default";
@@ -62,7 +79,10 @@ export function EffortChips({
 
   let hint: string;
   if (sparkOffline || data?.reachable === false) hint = t("offline");
-  else if (query.isPending) hint = t("checking");
+  else if (query.isPending || check.isPending) hint = t("checking");
+  else if (checkBusy) hint = t("busy");
+  else if (check.isError) hint = t("failed");
+  else if (data?.status === "unchecked") hint = t("unchecked");
   else if (query.isError || data?.status === "failed") hint = t("failed");
   else if (data?.status === "no_effect") hint = t("noEffect");
   else if (selected === "high" || selected === "max") hint = t("deepHint");
@@ -75,7 +95,12 @@ export function EffortChips({
   else hint = t("serverDefaultUnknown");
   const checked =
     data?.status === "ok" && data.probed_at ? t("checkedAt", { when: timeAgo(data.probed_at, locale) }) : null;
-  const canRetry = !sparkOffline && !query.isFetching && (query.isError || data?.status === "failed");
+  const unchecked = data?.status === "unchecked";
+  const canCheck =
+    !sparkOffline &&
+    !query.isFetching &&
+    !check.isPending &&
+    (unchecked || check.isError || query.isError || data?.status === "failed");
 
   const chip = (level: EffortLevel) => {
     const active = selected === level;
@@ -110,14 +135,14 @@ export function EffortChips({
         </span>
         {chip("default")}
         {offered.map(chip)}
-        {canRetry && (
+        {canCheck && (
           <button
             type="button"
-            onClick={() => query.refetch()}
+            onClick={() => check.mutate()}
             className="min-h-11 px-3 text-sm"
             style={{ color: C.accent }}
           >
-            {t("retry")}
+            {t(unchecked && !check.isError ? "checkNow" : "retry")}
           </button>
         )}
       </div>

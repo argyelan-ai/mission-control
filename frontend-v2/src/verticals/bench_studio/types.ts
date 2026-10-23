@@ -136,7 +136,8 @@ export interface EffortLevels {
   served_model_id: string | null;
   reachable: boolean;
   // ok: levels found · no_effect: no key changed thinking · failed: the probe could not run
-  status: "ok" | "no_effect" | "failed";
+  // · unchecked: never probed for this engine run (GET reads only; POST …/check probes)
+  status: "ok" | "no_effect" | "failed" | "unchecked";
   thinking_key: string | null;
   effort_param: string | null;
   levels: EffortLevel[];

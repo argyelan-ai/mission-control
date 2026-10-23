@@ -77,6 +77,15 @@ token is readable by it (it is in the page's own URL):
   per mint). MC's per-IP limit counts per path, so the flood never reaches
   the UI's routes.
 * **No cookies:** this endpoint never reads one and never sets one.
+* **Every HTML page starts with MC's preview guard** (``preview_guard.js``,
+  the same script the srcdoc preview puts in its guard head): in-memory
+  stand-ins for ``localStorage``, ``sessionStorage`` and ``document.cookie``
+  (reading them throws a SecurityError in the opaque origin, which killed
+  pages that keep a high score), and one fixed "page-error" message to MC
+  when the page still throws. It goes after a leading doctype, so the page
+  keeps standards mode; the sandbox and CSP stay as they are. A page asked
+  for in byte ranges gets the whole guarded page; a page larger than
+  ``HTML_GUARD_MAX_BYTES`` is served unchanged.
 """
 
 from __future__ import annotations
@@ -103,7 +112,7 @@ from urllib.parse import quote
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -468,6 +477,78 @@ def _checked_folder(token: str) -> _Folder | None:
     return folder
 
 
+# ── The preview guard ──────────────────────────────────────────────────────
+
+# One script for both ways a page is previewed: the frontend keeps a copy in
+# components/task/previewGuard.ts, and a vitest test keeps the two equal.
+PREVIEW_GUARD_SCRIPT = Path(__file__).with_name("preview_guard.js").read_text(encoding="utf-8")
+_GUARD_TAG = ("<script>" + PREVIEW_GUARD_SCRIPT + "</script>").encode()
+
+# Pages up to this size get the guard (read whole into memory); larger ones
+# are served unchanged, streamed. An agent's page is a few KB.
+HTML_GUARD_MAX_BYTES = 4 * 1024 * 1024
+
+_BOM = b"\xef\xbb\xbf"
+_SPACE = b" \t\n\r\f"
+
+
+def guard_insert_at(page: bytes) -> int:
+    """Where the guard goes into a served page: right after a doctype that
+    only a BOM, whitespace and comments come before (a script in front of
+    the doctype would put the page into quirks mode), otherwise at the start
+    (after a BOM) — a page without a leading doctype is in quirks mode
+    anyway. A forward-only scan: each step moves on, so it stays linear on
+    any input."""
+    start = len(_BOM) if page.startswith(_BOM) else 0
+    i, n = start, len(page)
+    while True:
+        while i < n and page[i] in _SPACE:
+            i += 1
+        if page.startswith(b"<!--", i):
+            if page.startswith(b">", i + 4):  # <!--> : an abrupt empty comment
+                i += 5
+                continue
+            if page.startswith(b"->", i + 4):  # <!--->
+                i += 6
+                continue
+            end = page.find(b"-->", i + 4)
+            if end == -1:
+                return start
+            i = end + 3
+            continue
+        if page[i:i + 9].lower() == b"<!doctype":
+            end = page.find(b">", i + 9)
+            return start if end == -1 else end + 1
+        if page.startswith(b"<?", i) or page.startswith(b"<!", i):  # a bogus comment up to ">"
+            end = page.find(b">", i + 2)
+            if end == -1:
+                return start
+            i = end + 1
+            continue
+        return start
+
+
+def _guarded_page(page: bytes) -> bytes:
+    at = guard_insert_at(page)
+    return page[:at] + _GUARD_TAG + page[at:]
+
+
+def _read_all(handle: BinaryIO, size: int) -> bytes:
+    """The whole OPEN file (``os.pread`` on its descriptor, like
+    ``_read_from``); closes the handle."""
+    try:
+        fd, parts, offset = handle.fileno(), [], 0
+        while offset < size:
+            chunk = os.pread(fd, min(_CHUNK, size - offset), offset)
+            if not chunk:
+                break
+            parts.append(chunk)
+            offset += len(chunk)
+        return b"".join(parts)
+    finally:
+        handle.close()
+
+
 # ── Response headers ───────────────────────────────────────────────────────
 
 _HOST_RE = re.compile(r"^(?:[A-Za-z0-9.\-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$")
@@ -790,7 +871,13 @@ async def serve_deliverable_view(
     rel = _clean_relpath(file_path)
     handle, size = await _open_file(folder, rel)
     media_type = mimetypes.guess_type(rel.rsplit("/", 1)[-1])[0] or "application/octet-stream"
-    return _file_response(request, handle, size, media_type, _view_headers(request, token, claims))
+    headers = _view_headers(request, token, claims)
+    if media_type == "text/html" and size <= HTML_GUARD_MAX_BYTES:
+        # The page with the preview guard in front (module docstring). The
+        # guard shifts every byte, so a range request gets the whole page.
+        page = await anyio.to_thread.run_sync(_read_all, handle, size)
+        return Response(_guarded_page(page), media_type=media_type, headers=headers)
+    return _file_response(request, handle, size, media_type, headers)
 
 
 # Anything else under the view prefix is answered here, with the strict

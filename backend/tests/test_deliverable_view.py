@@ -769,7 +769,9 @@ async def test_urls_with_spaces_and_unicode_round_trip(auth_client, zone):
 
     page = await _anon_get(auth_client, url)
     assert page.status_code == 200
-    assert page.content == "<p>hallo</p>".encode()
+    # The page itself, behind MC's preview guard (no doctype: it goes first).
+    assert page.content.endswith("<p>hallo</p>".encode())
+    assert page.content.startswith(b"<script>")
 
 
 # ── hardening (security review 2026-10-21) ─────────────────────────────────
@@ -1183,3 +1185,117 @@ async def test_an_unexpected_error_is_a_500_with_the_strict_headers_and_no_token
     # traceback (which no log filter ever sees).
     assert "boom for" in caplog.text, caplog.text  # the traceback is logged ...
     assert token not in caplog.text  # ... without the token
+
+
+# ── storage stand-ins for the page (round-1 user test t4 M1, 2026-10-23) ───
+#
+# The page lives in an opaque origin (sandbox without allow-same-origin), so
+# reading localStorage / sessionStorage / document.cookie throws a
+# SecurityError. A game that reads its high score on the first line of its
+# script then never binds its START button: "Run page" showed a dead page.
+# Every HTML page this route serves starts with MC's preview guard (the same
+# script the srcdoc preview puts in its guard head) — after a leading
+# doctype, so the page keeps standards mode.
+
+
+def _guard_tag() -> bytes:
+    from app.routers import deliverable_view
+
+    return ("<script>" + deliverable_view.PREVIEW_GUARD_SCRIPT + "</script>").encode()
+
+
+def test_the_guard_script_defines_storage_stand_ins_and_reports_errors():
+    from app.routers import deliverable_view
+
+    script = deliverable_view.PREVIEW_GUARD_SCRIPT
+    assert "localStorage" in script and "sessionStorage" in script
+    assert '"cookie"' in script
+    assert 'mcPreview: "page-error"' in script
+    # Only thrown errors count. A rejected promise is no broken page: a start
+    # sound before the first tap or a fetch (connect-src 'none') reject in
+    # pages that run fine (review of #953).
+    assert "unhandledrejection" not in script
+    # It sits inside a <script> element: it must never close it early.
+    assert "</script" not in script.lower()
+
+
+@pytest.mark.asyncio
+async def test_an_html_page_starts_with_the_guard_after_its_doctype(auth_client, zone):
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    token = _token_of(url)
+    page = (zone / str(task_id) / "index.html").read_bytes()
+
+    resp = await _anon_get(auth_client, folder + "index.html")
+
+    assert resp.status_code == 200
+    doctype = b"<!doctype html>"
+    assert resp.content == doctype + _guard_tag() + page[len(doctype):]
+    assert resp.headers["content-length"] == str(len(resp.content))
+    assert "text/html" in resp.headers["content-type"]
+    _assert_file_headers(resp, token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("page", "at"),
+    [
+        (b"<p>no doctype</p>", 0),
+        (b"\xef\xbb\xbf<!DOCTYPE html><p>x", len(b"\xef\xbb\xbf<!DOCTYPE html>")),
+        (b"  \n<!-- made by an agent -->\n<!DocType html>\n<p>x", len(b"  \n<!-- made by an agent -->\n<!DocType html>")),
+        (b'<?xml version="1.0"?><!doctype html><p>x', len(b'<?xml version="1.0"?><!doctype html>')),
+        (b"<!--><!doctype html><p>x", len(b"<!--><!doctype html>")),
+        (b"<!-- never closed <!doctype html>", 0),
+        (b"<script>run()</script><!doctype html>", 0),
+        (b"<!doctype html", 0),
+    ],
+)
+async def test_where_the_guard_goes(auth_client, zone, page, at):
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    (zone / str(task_id) / "page.html").write_bytes(page)
+
+    resp = await _anon_get(auth_client, folder + "page.html")
+
+    assert resp.status_code == 200
+    assert resp.content == page[:at] + _guard_tag() + page[at:]
+
+
+@pytest.mark.asyncio
+async def test_the_guard_scan_is_linear_on_a_hostile_prologue(auth_client, zone):
+    import time as _time
+
+    from app.routers import deliverable_view
+
+    evil = b"<!---->" * 20_000 + b" " * 200_000 + b"<!-- x" * 2_000 + b"y"
+    t0 = _time.perf_counter()
+    assert deliverable_view.guard_insert_at(evil) == 0
+    assert _time.perf_counter() - t0 < 0.5
+
+
+@pytest.mark.asyncio
+async def test_other_files_and_ranges_of_a_page_are_left_alone(auth_client, zone):
+    """CSS, scripts and images come back byte for byte; a page asked for in
+    parts gets the whole guarded page (the guard shifts every byte)."""
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+
+    css = await _anon_get(auth_client, folder + "style.css")
+    assert css.content == b"body{color:green}"
+    js = await _anon_get(auth_client, folder + "app.js")
+    assert js.content == b"document.title='ok'"
+
+    ranged = await _anon_get(auth_client, folder + "index.html", headers={"Range": "bytes=0-3"})
+    assert ranged.status_code == 200
+    assert _guard_tag() in ranged.content
+
+
+@pytest.mark.asyncio
+async def test_a_very_large_page_is_served_unchanged(auth_client, zone, monkeypatch):
+    from app.routers import deliverable_view
+
+    monkeypatch.setattr(deliverable_view, "HTML_GUARD_MAX_BYTES", 10)
+    url, folder, (_, task_id, _) = await _site(auth_client, zone)
+    page = (zone / str(task_id) / "index.html").read_bytes()
+
+    resp = await _anon_get(auth_client, folder + "index.html")
+
+    assert resp.status_code == 200
+    assert resp.content == page

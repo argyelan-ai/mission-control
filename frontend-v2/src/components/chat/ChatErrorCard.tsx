@@ -22,10 +22,17 @@
  * wenn ChatView sie dafuer freigibt (`chatResend.tsx`), nie von selbst — und
  * zeigt genau diesen Text als Zitat darueber: nach einem Modellwechsel landet
  * die Karte in einem NEUEN Gespraech, in dem die Blase des Operators fehlt.
+ *
+ * Ausnahme `busy` (Usertest Runde 1, 22.10.2026): „der Agent antwortete noch"
+ * ist laut DESIGN.md ein Info-Zustand, kein Fehler (K6). Die Karte steht
+ * darum ruhig da — neutraler Rahmen und Chip, das Info-Blau nur am Symbol —
+ * mit einem Satz in der Sprache der Oberflaeche statt omps englischer Zeile
+ * „a turn is already running" (K10). Alte Karten bleiben im Verlauf stehen,
+ * deshalb sitzt das hier und nicht nur beim Erzeuger.
  */
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Check, ChevronRight, RotateCcw } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, Info, RotateCcw } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 import { C, STATUS_TEXT } from "@/lib/colors";
@@ -46,6 +53,13 @@ const DETAIL_CASE = /^[a-z][a-z_]*$/;
  *  tells the operator nothing the sentence does not (K3), and it is English
  *  jargon under a sentence in the UI language (K10). */
 const TURN_COUNTER = /^(?:child exited during )?turn \d+$/;
+
+/** omp's own refusal line on a `busy` card: the sentence says it in the UI
+ *  language, the English original adds nothing (K3/K10). */
+const BUSY_LINE = /^a turn is already running\.?$/i;
+
+/** Codes that report a state, not a failure: drawn neutral (K6). */
+const INFO_CODES = new Set(["busy"]);
 
 /** `process_exit` after a failed respawn of the agent process — its own
  *  case: the chat is NOT reconnecting. The exception after it is the cause. */
@@ -80,7 +94,7 @@ function cardText(
   if (!bodyKey) return { bodyKey: null, small: "" };
   // A case word that chose no sentence of its own is still information.
   const small = bodyKey === caseKey ? rest : rawDetail;
-  return { bodyKey, small: TURN_COUNTER.test(small) ? "" : small };
+  return { bodyKey, small: TURN_COUNTER.test(small) || BUSY_LINE.test(small) ? "" : small };
 }
 
 /** ready → sent (tapped, waiting for ChatView to see the echo) → seen (the
@@ -129,22 +143,27 @@ export function ChatErrorCard({ ev }: ChatErrorCardProps) {
   }
 
   const showLink = code === "model_unreachable";
+  // Info (busy): neutral frame and chip, the one status colour at the icon.
+  const info = INFO_CODES.has(code);
+  const frame = info ? C.border : C.error;
+  const Icon = info ? Info : AlertTriangle;
 
   return (
     <div className={TIMELINE_CARD_GUTTER}>
       <div
         data-testid="chat-error-card"
         data-code={code}
+        data-tone={info ? "info" : "error"}
         className="rounded-lg px-2.5 py-2"
-        style={{ border: `1px solid ${C.error}`, background: C.bgElevated }}
+        style={{ border: `1px solid ${frame}`, background: C.bgElevated }}
       >
         <div className="flex items-center gap-2">
-          <AlertTriangle size={14} style={{ color: STATUS_TEXT.error }} aria-hidden="true" />
+          <Icon size={14} style={{ color: info ? STATUS_TEXT.info : STATUS_TEXT.error }} aria-hidden="true" />
           <span
             data-testid="chat-error-code"
             data-code={code}
             className="rounded px-1.5 py-0.5 text-[11px] font-medium"
-            style={{ color: STATUS_TEXT.error, border: `1px solid ${C.error}` }}
+            style={{ color: info ? C.textSecondary : STATUS_TEXT.error, border: `1px solid ${frame}` }}
           >
             {label}
           </span>

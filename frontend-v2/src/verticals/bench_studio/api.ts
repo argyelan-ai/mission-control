@@ -17,16 +17,19 @@ export const benchApi = {
     get: () => request<SparkModelsStatus>("/api/v1/bench/spark-models"),
   },
   /** Bench W0.6: effort levels the effort probe found for a served model
-   *  (empty model = the Spark's active one). Always resolves; a probe that
-   *  could not run is status "failed". */
+   *  (empty model = the Spark's active one). `get` only reads the stored
+   *  probe — no request to the box ("unchecked" when there is none);
+   *  `check` runs the probe now (409 while the Spark is busy). */
   effortLevels: {
-    get: (model?: string | null, refresh = false) => {
-      const q = new URLSearchParams();
-      if (model) q.set("model", model);
-      if (refresh) q.set("refresh", "true");
-      const qs = q.toString();
-      return request<EffortLevels>(`/api/v1/bench/effort-levels${qs ? `?${qs}` : ""}`);
+    get: (model?: string | null) => {
+      const qs = model ? `?${new URLSearchParams({ model }).toString()}` : "";
+      return request<EffortLevels>(`/api/v1/bench/effort-levels${qs}`);
     },
+    check: (model?: string | null) =>
+      request<EffortLevels>("/api/v1/bench/effort-levels/check", {
+        method: "POST",
+        body: JSON.stringify({ model: model || null }),
+      }),
   },
   challenges: {
     list: (includeArchived = false) =>

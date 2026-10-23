@@ -10,9 +10,16 @@ import { notify } from "@/lib/notify";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { EffortChips } from "./EffortChips";
-import type { BenchModelSpec, PromptTemplate } from "./types";
+import type { BenchModelSpec, EffortLevel, PromptTemplate } from "./types";
 
 const EMPTY_MODEL: BenchModelSpec = { label: "", source_kind: "spark", spark_model: "", display_tag: "" };
+
+// Mirrors backend orchestrator.EFFORT_WORDS: the word create appends to
+// labels that only differ by effort ("DeepSeek · Max"). English on purpose —
+// labels are data that ends up in the (English) video, not UI copy.
+const EFFORT_WORDS: Record<EffortLevel, string> = {
+  default: "Default", off: "Off", on: "On", low: "Low", medium: "Medium", high: "High", max: "Max",
+};
 
 /** request() throws `Error("API <status>: <raw body>")` — pull the backend's
  *  `detail` string back out (e.g. the 422 "Spark nicht erreichbar…") so the
@@ -235,7 +242,35 @@ export function NewChallengeDialog({
     return m.label.trim().length > 0;
   }
 
+  // Every entry needs its own label (round-1 user test: two "DeepSeek" rows,
+  // Off vs Max, overwrote each other). The label a row will really get:
+  // typed, or for an untouched auto row the model the backend resolves.
+  function effectiveLabel(m: BenchModelSpec): string {
+    const typed = m.label.trim();
+    if (typed) return typed;
+    return isAutoSparkRow(m) ? (sparkModels?.active ?? "").trim() : "";
+  }
+  const rowEffort = (m: BenchModelSpec): EffortLevel => (m.source_kind === "spark" ? m.effort ?? "default" : "default");
+  // Per row: a real duplicate (same label AND same effort as an earlier row —
+  // the backend refuses it) or a clash the backend resolves by appending the
+  // effort word (same as backend routers._unique_labels).
+  type LabelClash = { kind: "duplicate" | "suffix"; index: number; label: string };
+  const labelClash = models.map((m, i): LabelClash | null => {
+    const key = effectiveLabel(m).toLowerCase();
+    if (!key) return null;
+    const same = models
+      .map((o, j) => ({ o, j }))
+      .filter(({ o, j }) => j !== i && effectiveLabel(o).toLowerCase() === key);
+    if (same.length === 0) return null;
+    const twin = same.find(({ o, j }) => j < i && rowEffort(o) === rowEffort(m));
+    if (twin) return { kind: "duplicate", index: twin.j + 1, label: effectiveLabel(m) };
+    if (same.some(({ o }) => rowEffort(o) === rowEffort(m))) return null; // the later twin carries the error
+    return { kind: "suffix", index: i + 1, label: `${effectiveLabel(m)} · ${EFFORT_WORDS[rowEffort(m)]}` };
+  });
+  const hasDuplicateLabel = labelClash.some((c) => c?.kind === "duplicate");
+
   const valid =
+    !hasDuplicateLabel &&
     title.trim().length > 0 &&
     (templateId !== null || promptText.trim().length > 0) &&
     models.length > 0 &&
@@ -483,6 +518,18 @@ export function NewChallengeDialog({
               value={m.effort}
               onChange={(effort) => setModel(i, { effort })}
             />
+            {/* Label clash hints close the model's own block (above the
+                divider to the next model); error text tone via STATUS_TEXT. */}
+            {labelClash[i]?.kind === "duplicate" && (
+              <span className="text-xs" role="alert" style={{ color: STATUS_TEXT.error }}>
+                {t("labelDuplicate", { index: labelClash[i]?.index ?? 0 })}
+              </span>
+            )}
+            {labelClash[i]?.kind === "suffix" && (
+              <span className="text-xs" style={{ color: C.textMuted }}>
+                {t("labelEffortSuffix", { label: labelClash[i]?.label ?? "" })}
+              </span>
+            )}
             </div>
           ))}
           <button

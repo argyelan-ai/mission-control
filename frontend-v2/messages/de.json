@@ -1827,13 +1827,35 @@
       "loading": "Seite wird geladen…",
       "run": "Seite starten",
       "runHint": "Die Seite läuft erst, wenn du sie startest.",
-      "isolationLabel": "Agenten-Seite · isolierte Vorschau – hier nie Passwörter eingeben"
+      "isolationLabel": "Agenten-Seite · isolierte Vorschau – hier nie Passwörter eingeben",
+      "pageError": "Die Seite hat einen Fehler gemeldet – manches darin läuft vielleicht nicht. Zum Prüfen herunterladen und im Browser öffnen.",
+      "dismissPageError": "Hinweis schliessen"
     },
     "svg": {
       "codeOnly": "MC zeigt SVG-Bilder nur als Code – eine SVG-Datei kann die App einfrieren.",
       "downloadToView": "Zum Ansehen herunterladen.",
       "shortened": "Lange Datei – nur der Anfang wird gezeigt."
     }
+  },
+  "deliverableCard": {
+    "kind": {
+      "folder": "Ordner",
+      "link": "Link",
+      "text": "Text",
+      "other": "Eintrag",
+      "file": "Datei"
+    },
+    "fromSubtask": "Aus Teilaufgabe: {title}",
+    "openOnMac": "Auf dem Mac öffnen",
+    "showInFinder": "Im Finder zeigen",
+    "openedOnMac": "Auf dem Mac geöffnet.",
+    "shownInFinder": "Im Finder auf dem Mac gezeigt.",
+    "hostUnavailable": "Hier nicht möglich – lade die Datei stattdessen herunter.",
+    "showFileInFinder": "Im Finder zeigen",
+    "showFolderInFinder": "Ordner im Finder zeigen",
+    "folderEmpty": "Der Ordner ist leer.",
+    "folderFailed": "Der Ordner konnte nicht geladen werden.",
+    "folderRoot": "Ordner"
   },
   "settings": {
     "title": "Einstellungen",
@@ -3830,7 +3852,11 @@
       "ompSession": "omp-Sitzung: {level}",
       "agentUnknown": "Effort: für diesen Agenten nicht lesbar",
       "truncated": "Bei max_tokens ({max}) gestoppt — das Denken hat das Budget aufgebraucht.",
-      "truncatedFailed": "Keine Seite: bei max_tokens ({max}) gestoppt, bevor das HTML kam — das Denken hat das Budget aufgebraucht."
+      "truncatedFailed": "Keine Seite: bei max_tokens ({max}) gestoppt, bevor das HTML kam — das Denken hat das Budget aufgebraucht.",
+      "unchecked": "Noch nicht geprüft, welche Stufen dieses Modell befolgt — bis zur Prüfung nur Standard.",
+      "checkNow": "Jetzt prüfen",
+      "busy": "Die Spark arbeitet gerade — nochmal prüfen, wenn die laufende Arbeit fertig ist.",
+      "sending": "wird gesendet …"
     },
     "common": {
       "cancel": "Abbrechen",
@@ -3934,7 +3960,9 @@
       "addModel": "Modell hinzufügen",
       "startChallenge": "Challenge starten",
       "notifyStarted": "Challenge gestartet",
-      "notifyStartFailed": "Challenge konnte nicht gestartet werden"
+      "notifyStartFailed": "Challenge konnte nicht gestartet werden",
+      "labelDuplicate": "Gleiches Label wie Modell {index} — bitte dieser Zeile ein anderes Label geben.",
+      "labelEffortSuffix": "Label doppelt — die Effort-Stufe wird angehängt: „{label}“."
     },
     "editChallengeDialog": {
       "ariaLabel": "Challenge bearbeiten",
@@ -4077,6 +4105,7 @@
       "turn_interrupted": "Unterbrochen",
       "model_unreachable": "Modell antwortet nicht",
       "turn_interruptedBody": "Der Chat wurde neu gestartet, während eine Antwort lief. Nichts wurde automatisch neu gesendet.",
+      "busyBody": "Der Agent war noch mit einer Antwort beschäftigt und hat diese Nachricht nicht angenommen.",
       "process_exitBody": "Der Agent-Prozess wurde unerwartet beendet. Der Chat verbindet sich neu.",
       "process_exit_restart_failedBody": "Der Agent-Prozess wurde beendet und liess sich nicht neu starten.",
       "session_resetBody": "Das vorherige Gespräch liess sich nicht laden.",

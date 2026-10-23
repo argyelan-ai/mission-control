@@ -1827,13 +1827,35 @@
       "loading": "Loading page…",
       "run": "Run page",
       "runHint": "The page runs only when you start it.",
-      "isolationLabel": "Agent page · isolated preview – never enter passwords here"
+      "isolationLabel": "Agent page · isolated preview – never enter passwords here",
+      "pageError": "The page reported an error – parts of it may not work. Download it to check it in a browser.",
+      "dismissPageError": "Dismiss hint"
     },
     "svg": {
       "codeOnly": "MC shows SVG images as code only – an SVG file can freeze the app.",
       "downloadToView": "Download it to see the image.",
       "shortened": "Long file – only the beginning is shown."
     }
+  },
+  "deliverableCard": {
+    "kind": {
+      "folder": "Folder",
+      "link": "Link",
+      "text": "Text",
+      "other": "Item",
+      "file": "File"
+    },
+    "fromSubtask": "From subtask: {title}",
+    "openOnMac": "Open on the Mac",
+    "showInFinder": "Show in Finder",
+    "openedOnMac": "Opened on the Mac.",
+    "shownInFinder": "Shown in Finder on the Mac.",
+    "hostUnavailable": "Not possible here – download the file instead.",
+    "showFileInFinder": "Show in Finder",
+    "showFolderInFinder": "Show folder in Finder",
+    "folderEmpty": "The folder is empty.",
+    "folderFailed": "The folder could not be loaded.",
+    "folderRoot": "Folder"
   },
   "settings": {
     "title": "Settings",
@@ -3830,7 +3852,11 @@
       "ompSession": "omp session: {level}",
       "agentUnknown": "Effort: not readable for this agent",
       "truncated": "Stopped at max_tokens ({max}) — thinking used up the budget.",
-      "truncatedFailed": "No page: stopped at max_tokens ({max}) before the HTML — thinking used up the budget."
+      "truncatedFailed": "No page: stopped at max_tokens ({max}) before the HTML — thinking used up the budget.",
+      "unchecked": "Not checked yet which levels this model follows — Default only until you check.",
+      "checkNow": "Check now",
+      "busy": "The Spark is busy right now — check again once the running work is done.",
+      "sending": "sending …"
     },
     "common": {
       "cancel": "Cancel",
@@ -3934,7 +3960,9 @@
       "addModel": "Add model",
       "startChallenge": "Start Challenge",
       "notifyStarted": "Challenge started",
-      "notifyStartFailed": "Challenge could not be started"
+      "notifyStartFailed": "Challenge could not be started",
+      "labelDuplicate": "Same label as model {index} — give this row a different label.",
+      "labelEffortSuffix": "Label repeats — the effort is added to the label: “{label}”."
     },
     "editChallengeDialog": {
       "ariaLabel": "Edit Challenge",
@@ -4077,6 +4105,7 @@
       "turn_interrupted": "Interrupted",
       "model_unreachable": "Model not responding",
       "turn_interruptedBody": "The chat restarted while a reply was running. Nothing was resent automatically.",
+      "busyBody": "The agent was still busy with a reply and did not take this message.",
       "process_exitBody": "The agent process ended unexpectedly. The chat is reconnecting.",
       "process_exit_restart_failedBody": "The agent process ended and could not be restarted.",
       "session_resetBody": "The previous conversation could not be loaded.",

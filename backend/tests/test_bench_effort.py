@@ -532,9 +532,12 @@ async def test_create_agent_row_with_effort_422(auth_client, _no_background):
 
 @pytest.mark.asyncio
 async def test_effort_levels_endpoint(auth_client, monkeypatch):
+    """GET reads the stored probe only (round-1 P3: it used to probe)."""
     row = _probe_row(["off", "low", "medium", "high", "max"])
     row.probed_at = datetime(2026, 10, 21, 22, 14, tzinfo=timezone.utc)
-    probe = AsyncMock(return_value=row)
+    stored = AsyncMock(return_value=row)
+    probe = AsyncMock()
+    monkeypatch.setattr(effort_probe, "stored_probe", stored)
     monkeypatch.setattr(effort_probe, "get_or_probe", probe)
     resp = await auth_client.get("/api/v1/bench/effort-levels?model=deepseek-x")
     assert resp.status_code == 200
@@ -543,8 +546,8 @@ async def test_effort_levels_endpoint(auth_client, monkeypatch):
     assert data["levels"] == ["off", "low", "medium", "high", "max"]
     assert data["default_observed"] == "on"
     assert "raw" not in data
-    probe.assert_awaited_once()
-    assert probe.await_args.kwargs == {"refresh": False}
+    stored.assert_awaited_once()
+    probe.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -794,11 +797,19 @@ async def test_effort_levels_endpoint_box_offline_for_a_named_model(auth_client,
         raw={"attempts": [{"key": None, "value": None, "http": None, "error": "ConnectError"}]},
     )
     monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=row))
-    resp = await auth_client.get("/api/v1/bench/effort-levels?model=deepseek-x")
+    monkeypatch.setattr(effort_probe, "spark_busy_reason", AsyncMock(return_value=None))
+    check = {"model": "deepseek-x"}
+    resp = await auth_client.post("/api/v1/bench/effort-levels/check", json=check)
     assert resp.json()["reachable"] is False
     assert resp.json()["status"] == "failed"
 
     # The box answered, just not with 200 -> reached, the check failed.
     row.raw = {"attempts": [{"key": None, "value": None, "http": 500, "error": "boom"}]}
+    resp = await auth_client.post("/api/v1/bench/effort-levels/check", json=check)
+    assert resp.json()["reachable"] is True
+
+    # A stored failed probe: the read-only GET says the same (no new probe).
+    monkeypatch.setattr(effort_probe, "stored_probe", AsyncMock(return_value=row))
     resp = await auth_client.get("/api/v1/bench/effort-levels?model=deepseek-x")
+    assert resp.json()["status"] == "failed"
     assert resp.json()["reachable"] is True

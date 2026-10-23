@@ -62,6 +62,18 @@
  *        (`connect-src`) and forms are off, and plain http: (LAN, MC itself)
  *        is never a source. This is defence in depth, not the boundary — the
  *        sandbox is.
+ *      · the preview guard script (`previewGuard.ts`, the same file the
+ *        backend puts in front of every folder page): in the opaque origin
+ *        reading `localStorage`, `sessionStorage` or `document.cookie` throws
+ *        a SecurityError, and a game that reads its high score on its first
+ *        line never binds a click (round-1 user test, snake.html). The guard
+ *        gives the page stand-ins that live in memory only — nothing is
+ *        stored, nothing reaches MC, the sandbox stays as it is. It also
+ *        posts one fixed message (`{ mcPreview: "page-error" }`) when the
+ *        page still throws; MC then shows a hint in its own chrome below the
+ *        frame. The message carries no text of the page, and MC only takes
+ *        it from this frame's window — a page sending it on purpose can do
+ *        no more than show that hint.
  *
  * Known limits — what the sandbox does NOT take away (checked in Chromium
  * and WebKit, the Safari engine; not on a real iPhone):
@@ -115,9 +127,10 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useTranslations } from "next-intl";
-import { Code2, Eye, Loader2, Maximize2, Play, ShieldAlert, X, type LucideIcon } from "lucide-react";
+import { AlertTriangle, Code2, Eye, Loader2, Maximize2, Play, ShieldAlert, X, type LucideIcon } from "lucide-react";
 import { C } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { PREVIEW_GUARD_SCRIPT } from "./previewGuard";
 
 /** The ONLY sandbox token the running frame gets. Tests pin it exactly. */
 export const HTML_PREVIEW_SANDBOX = "allow-scripts";
@@ -138,7 +151,11 @@ export const HTML_PREVIEW_CSP = [
 const GUARD_HEAD =
   '<base href="about:srcdoc">' +
   '<meta name="referrer" content="no-referrer">' +
-  `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">`;
+  `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">` +
+  `<script>${PREVIEW_GUARD_SCRIPT}</script>`;
+
+/** What the preview guard posts when the page throws (see the file comment). */
+const PAGE_ERROR = "page-error";
 
 /**
  * The page with the guard head in FRONT of everything it brings (doctype,
@@ -302,36 +319,90 @@ function SandboxedFrame({ doc, title, folderUrl }: { doc: string; title: string;
     return () => window.clearTimeout(cap);
   }, [doc, source]);
 
+  // The guard's "page-error" — only from THIS frame's window, only the one
+  // fixed word (file comment). Stays until dismissed or the frame goes.
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const [pageError, setPageError] = useState(false);
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const own = frameRef.current?.contentWindow;
+      if (!own || e.source !== own) return;
+      const data = e.data as { mcPreview?: unknown } | null;
+      if (data && typeof data === "object" && data.mcPreview === PAGE_ERROR) setPageError(true);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
+  // The frame's own box, then MC's hint row under it: the hint takes its
+  // height from the frame and never lies over the page's bottom edge, where
+  // games put their touch controls.
   return (
-    <>
-      {source.kind !== "minting" && (
-        <iframe
-          // A new element when the source changes: an iframe with both src
-          // and srcdoc would show the srcdoc.
-          key={source.kind === "url" ? source.url : "srcdoc"}
-          title={title}
-          sandbox={HTML_PREVIEW_SANDBOX}
-          {...(source.kind === "url" ? { src: source.url } : { srcDoc: doc })}
-          referrerPolicy="no-referrer"
-          onLoad={() => setLoaded(true)}
-          className="absolute inset-0 block w-full h-full border-0"
-          // The page's own ground, as in a browser tab: a page without a
-          // background is white (the system colour Canvas), a page that asks
-          // for a dark scheme gets a dark canvas from the browser.
-          style={{ colorScheme: "light", background: "Canvas" }}
-        />
-      )}
-      {!loaded && (
-        <div
-          role="status"
-          className="absolute inset-0 flex items-center justify-center gap-2 text-xs"
-          style={{ background: C.bgDeep, color: C.textMuted }}
-        >
-          <Loader2 size={16} className="animate-spin" aria-hidden="true" />
-          {t("loading")}
-        </div>
-      )}
-    </>
+    <div className="absolute inset-0 flex flex-col">
+      <div className="relative flex-1 min-h-0">
+        {source.kind !== "minting" && (
+          <iframe
+            // A new element when the source changes: an iframe with both src
+            // and srcdoc would show the srcdoc.
+            key={source.kind === "url" ? source.url : "srcdoc"}
+            ref={frameRef}
+            title={title}
+            sandbox={HTML_PREVIEW_SANDBOX}
+            {...(source.kind === "url" ? { src: source.url } : { srcDoc: doc })}
+            referrerPolicy="no-referrer"
+            onLoad={() => setLoaded(true)}
+            className="absolute inset-0 block w-full h-full border-0"
+            // The page's own ground, as in a browser tab: a page without a
+            // background is white (the system colour Canvas), a page that asks
+            // for a dark scheme gets a dark canvas from the browser.
+            style={{ colorScheme: "light", background: "Canvas" }}
+          />
+        )}
+        {!loaded && (
+          <div
+            role="status"
+            className="absolute inset-0 flex items-center justify-center gap-2 text-xs"
+            style={{ background: C.bgDeep, color: C.textMuted }}
+          >
+            <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+            {t("loading")}
+          </div>
+        )}
+      </div>
+      {pageError && <PageErrorHint onDismiss={() => setPageError(false)} />}
+    </div>
+  );
+}
+
+/**
+ * MC's own row below the frame when the page reported an error: the
+ * operator sees that the page broke, not a page that silently does nothing.
+ * The frame gives up the row's height; nothing of the page is covered. Fixed text — the page's own error text never shows here.
+ */
+function PageErrorHint({ onDismiss }: { onDismiss: () => void }) {
+  const t = useTranslations("filePreview.html");
+  return (
+    <div
+      role="status"
+      data-testid="html-preview-page-error"
+      className="shrink-0 flex items-start gap-2 pl-3 pr-1 py-1 text-xs"
+      style={{ background: C.bgSurface, borderTop: `1px solid ${C.border}`, color: C.textSecondary }}
+    >
+      <AlertTriangle size={14} className="shrink-0 mt-3" style={{ color: C.warning }} aria-hidden="true" />
+      <p className="flex-1 min-w-0 py-2">{t("pageError")}</p>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label={t("dismissPageError")}
+        title={t("dismissPageError")}
+        className="inline-flex items-center justify-center shrink-0 min-h-11 min-w-11 rounded-md cursor-pointer transition-colors"
+        style={{ color: C.textSecondary }}
+        onMouseEnter={(e) => (e.currentTarget.style.color = C.textPrimary)}
+        onMouseLeave={(e) => (e.currentTarget.style.color = C.textSecondary)}
+      >
+        <X size={16} aria-hidden="true" />
+      </button>
+    </div>
   );
 }
 

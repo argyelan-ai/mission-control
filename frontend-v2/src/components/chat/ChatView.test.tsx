@@ -1939,6 +1939,32 @@ describe("ChatView", () => {
     expect(screen.queryByText("beendet")).not.toBeInTheDocument();
   });
 
+  it('says "live" only while the chat works — "Bereit" in the status line means the quiet dot (r1 NICE-2)', () => {
+    // Round-1 user test: right after a reply the header said "live" (transcript
+    // written < 60 s ago) while the status line already said "Bereit"; seconds
+    // later the same state showed the grey dot. One state, one sign.
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        session: { sessionId: "s1", live: true, startedAt: null, aliveness: "active" },
+        state: { kind: "state", status: "idle", prompt: null, aliveness: "active" },
+      })
+    );
+    const { unmount } = renderChatView();
+    expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "idle");
+    expect(screen.getByTestId("session-badge")).not.toHaveTextContent("live");
+    unmount();
+
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        session: { sessionId: "s1", live: true, startedAt: null, aliveness: "active" },
+        state: { kind: "state", status: "working", prompt: null, aliveness: "active" },
+      })
+    );
+    renderChatView();
+    expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "active");
+    expect(screen.getByTestId("session-badge")).toHaveTextContent("live");
+  });
+
   it("follows the LIVE state frame over a stale history session (badge must not freeze)", () => {
     // Die Historien-Abfrage laedt bei Fokuswechsel nicht mehr neu (siehe
     // useChatStream), die Sonde im Backend laeuft aber weiter und schickt
