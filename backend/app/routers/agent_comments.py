@@ -36,6 +36,7 @@ from app.services.chat_session_guard import (
     is_chat_session,
     refuse_chat_task_write,
 )
+from app.services.chat_run_context import review_run_holds
 from app.services.task_state import lock_and_set
 from app.utils import utcnow
 
@@ -309,8 +310,14 @@ async def _refuse_chat_run_comment(
     """409 for a chat-session comment that moves its own run (progress,
     resolution, blocker, …). A reply (``CHAT_REPLY_COMMENT_TYPES``) passes:
     the operator asked in the task thread, the answer belongs there
-    (round-2 review r1 S3)."""
-    if is_chat_session(request) and payload.comment_type in CHAT_REPLY_COMMENT_TYPES:
+    (round-2 review r1 S3). Not on the card this agent's review run works:
+    there a reviewer's ``message`` ends the review wait and counts as the
+    reviewer having spoken (``review_park``, ``proof_gate``)."""
+    if (
+        is_chat_session(request)
+        and payload.comment_type in CHAT_REPLY_COMMENT_TYPES
+        and not review_run_holds(task, agent)
+    ):
         return
     await refuse_chat_task_write(session, request, agent, task, f"comment {payload.comment_type}")
 

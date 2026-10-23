@@ -26,7 +26,10 @@ Round-2 review (23.10.2026, r1 S2/S3/NICE-5) — no gaps, not too wide:
   task finished weeks ago, not a task the chat just created for itself
   (inbox, not dispatched);
 * one timeline row per task and action per 10 minutes, however often the
-  model retries.
+  model retries;
+* a reviewer's review card (``review_handoff``, status ``review``) is held by
+  its review run for as long as it stays there — no 30-minute limit, and no
+  reply exception (a reviewer's ``message`` ends the review wait).
 
 All ids are made up.
 """
@@ -50,6 +53,7 @@ ATTEMPT = "11111111-2222-3333-4444-555555555555"
 async def _setup(
     *, status: str = "in_progress", assigned: bool = True, worked: bool = True,
     dispatched: bool = False, left_run_ago: timedelta | None = None,
+    intent: str = "root",
 ):
     """One board, one omp agent, one task.
 
@@ -80,6 +84,7 @@ async def _setup(
             assigned_agent_id=agent_id if assigned else None,
             dispatch_attempt_id=ATTEMPT if status == "in_progress" else None,
             dispatched_at=datetime.now(timezone.utc) if dispatched else None,
+            dispatch_intent=intent,
         ))
         await s.commit()
         if worked:
@@ -495,3 +500,51 @@ async def test_repeated_refusals_leave_one_timeline_row(client):
             ActivityEvent.event_type == "task.chat_write_rejected",
         ))).all()
     assert sorted(e.detail["action"] for e in events) == ["comment progress", "status review"]
+
+
+async def test_chat_may_not_write_the_card_its_review_run_works(client):
+    """A review handoff leaves the card in `review` and gives it to the
+    reviewer. Its review run works it — also two hours after the developer's
+    run let go (round-2 review SHOULD-1: the 30-minute window freed it)."""
+    board_id, _agent, task_id, token = await _setup(
+        status="review", assigned=True, dispatched=True,
+        left_run_ago=timedelta(hours=2), intent="review_handoff",
+    )
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        json={"comment_type": "feedback", "content": "looks fine"},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 409, resp.text
+    assert "chat_session_task_write" in resp.text
+    assert await _comments(task_id) == []
+
+
+async def test_chat_reply_on_the_card_its_review_run_works_is_refused(client):
+    """On a review card a reviewer's `message` ends the review wait
+    (review_park) and counts as "the reviewer has spoken" (proof_gate) — so
+    the chat's reply exception does not hold there (round-2 review NICE-1)."""
+    board_id, _agent, task_id, token = await _setup(
+        status="review", assigned=True, dispatched=True, intent="review_handoff",
+    )
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        json={"comment_type": "message", "content": "Reviewing it now."},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 409, resp.text
+    assert await _comments(task_id) == []
+
+
+async def test_chat_may_not_write_a_live_unassigned_task_it_worked(client):
+    """Live, nobody assigned (e.g. the assignee was cleared mid-run), and this
+    agent's run worked it: still the run's (round-2 review NICE-2)."""
+    board_id, _agent, task_id, token = await _setup(status="in_progress", assigned=False)
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        json={"comment_type": "progress", "content": "x"},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 409, resp.text
+    assert "chat_session_task_write" in resp.text
+

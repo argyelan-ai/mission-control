@@ -141,7 +141,7 @@ async def test_just_finished_run_is_named_after_review_handoff():
     text = await _context(agent)
     assert text is not None
     assert str(task.id) in text and "finished recently" in text
-    assert "status: awaits the operator's review" in text
+    assert "status: awaits review" in text
 
 
 @pytest.fixture
@@ -300,3 +300,33 @@ async def test_http_transport_puts_context_on_the_wire_only_when_set():
     await transport.prompt("hi", mode="queue")
     assert json.loads(seen[0].content) == {"text": "hi", "mode": "queue", "context": "CTX"}
     assert json.loads(seen[1].content) == {"text": "hi", "mode": "queue"}
+
+
+async def test_reviewers_review_card_is_named_as_live():
+    """A review handoff gives the `review` card to the reviewer; its review
+    run works it however long ago the developer's run let go (round-2 review
+    SHOULD-1). The reviewer's chat hears about it as live work, with the
+    review run's start — not the developer's — and not as "awaits review"."""
+    from app.models.task import Task, TaskEvent
+
+    developer = await _agent()
+    reviewer = await _agent(role="reviewer")
+    task = Task(id=uuid.uuid4(), board_id=reviewer.board_id, title="[Probe] Review me",
+                status="review", assigned_agent_id=reviewer.id, dispatch_intent="review_handoff",
+                started_at=NOW - timedelta(hours=3), dispatched_at=NOW - timedelta(minutes=4))
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(task)
+        await s.commit()
+        s.add(TaskEvent(task_id=task.id, from_status="inbox", to_status="in_progress",
+                        changed_by="agent", agent_id=developer.id,
+                        created_at=NOW - timedelta(hours=3)))
+        s.add(TaskEvent(task_id=task.id, from_status="in_progress", to_status="review",
+                        changed_by="agent", agent_id=developer.id,
+                        created_at=NOW - timedelta(hours=2)))
+        await s.commit()
+    text = await _context(reviewer)
+    assert text is not None
+    assert str(task.id) in text and "RIGHT NOW" in text
+    assert "status: your review run is reviewing it" in text
+    assert "started 22:17" in text
+    assert "awaits review" not in text

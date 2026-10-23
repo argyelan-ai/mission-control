@@ -27,7 +27,8 @@ tasks a run of this agent holds right now, or let go of within
 ``chat_run_context.RECENT_WINDOW`` — the same set the chat's context block
 names. A run holds a task while it is assigned to the agent and live
 (``in_progress`` / ``waiting`` / ``blocked`` / ``user_test``, or delivered to
-it in the inbox). A finished task stays covered for 30 minutes after the run
+it in the inbox) — and a reviewer's run holds the ``review`` card a review
+handoff gave it, for as long as it stays there (``review_run_holds``). A finished task stays covered for 30 minutes after the run
 let go when this agent worked it (an ``→ in_progress`` event with its id) — a
 task handed to human review loses its assignee, and the 22:22:22 comment of
 the incident landed on exactly such one, 36 s after the handoff. Not covered:
@@ -39,7 +40,10 @@ guard's business; the existing board and scope rules apply to them unchanged.
 What: every write to the run state. A plain reply (``message`` comment,
 ``CHAT_REPLY_COMMENT_TYPES``) is not run state — the chat may answer in the
 task thread; the comment route lets it through and skips the ACK handshake
-for it. Each refusal leaves one timeline row per task and action per
+for it. Not on a card its review run works: there any reviewer comment, a
+``message`` too, ends the review wait (``review_park``) and passes the
+"reviewer said nothing" check (``proof_gate``), so a chat reply would speak
+for the review run. Each refusal leaves one timeline row per task and action per
 ``REFUSAL_EVENT_EVERY`` however often the model retries.
 """
 from __future__ import annotations
@@ -55,7 +59,12 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.task import Task, TaskEvent
-from app.services.chat_run_context import FINISHED_STATUSES, LIVE_STATUSES, RECENT_WINDOW
+from app.services.chat_run_context import (
+    FINISHED_STATUSES,
+    LIVE_STATUSES,
+    RECENT_WINDOW,
+    review_run_holds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +134,9 @@ async def task_is_agents_run(
     """A run of ``agent`` holds the task now, or let go of it within
     ``RECENT_WINDOW`` (see the module docstring for why exactly these)."""
     status = task.status
+    if review_run_holds(task, agent):
+        # The card its review run works: live for the reviewer, no time limit.
+        return True
     delivered = status == "inbox" and task.dispatched_at is not None
     if status in LIVE_STATUSES or delivered:
         if task.assigned_agent_id == agent.id:

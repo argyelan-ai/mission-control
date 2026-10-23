@@ -46,6 +46,9 @@ RECENT_WINDOW = timedelta(minutes=30)
 #: ``chat_task_steps.LIVE_STATUSES``; inbox counts once it was delivered).
 LIVE_STATUSES = ("in_progress", "waiting", "blocked", "user_test")
 FINISHED_STATUSES = ("review", "done", "failed", "aborted")
+#: ``dispatch_intent`` of a card a review handoff gave to a reviewer agent
+#: (``task_lifecycle`` review handoff).
+REVIEW_HANDOFF = "review_handoff"
 #: Comment types that say where a run stands, newest first.
 _NOTE_TYPES = ("progress", "resolution", "reflection", "blocker", "evidence")
 _MAX_TASKS = 3
@@ -99,7 +102,8 @@ _STATUS_WORDS: dict[str, dict[str, str]] = {
         "waiting": "waits for the operator",
         "blocked": "waits for the operator",
         "user_test": "waits for the operator's test",
-        "review": "awaits the operator's review",
+        "review": "awaits review",
+        "reviewing": "your review run is reviewing it",
         "done": "done",
         "failed": "failed",
         "aborted": "aborted",
@@ -111,6 +115,7 @@ _STATUS_WORDS: dict[str, dict[str, str]] = {
         "blocked": "wartet auf den Operator",
         "user_test": "wartet auf den Test des Operators",
         "review": "wartet auf Prüfung",
+        "reviewing": "dein Prüflauf prüft sie gerade",
         "done": "erledigt",
         "failed": "fehlgeschlagen",
         "aborted": "abgebrochen",
@@ -140,6 +145,20 @@ def run_folder(agent: Agent, task_id: Any) -> str:
     return f"/deliverables/{task_id}/"
 
 
+def review_run_holds(task: Task, agent: Agent) -> bool:
+    """A review run of ``agent`` holds this card: a review handoff gave it to
+    ``agent`` as the reviewer. The card stays in ``review`` the whole time
+    that run works it, so for its reviewer it is live — not "finished", and
+    not only for ``RECENT_WINDOW`` after the developer's run let go
+    (round-2 review SHOULD-1: after 30 minutes the reviewer's chat could
+    write on the card its own review run was working)."""
+    return (
+        task.status == "review"
+        and task.dispatch_intent == REVIEW_HANDOFF
+        and task.assigned_agent_id == agent.id
+    )
+
+
 async def _live_tasks(session: AsyncSession, agent: Agent) -> list[Task]:
     stmt = (
         select(Task)
@@ -148,6 +167,8 @@ async def _live_tasks(session: AsyncSession, agent: Agent) -> list[Task]:
             or_(
                 Task.status.in_(LIVE_STATUSES),
                 and_(Task.status == "inbox", Task.dispatched_at.is_not(None)),
+                # The card this agent's review run works (``review_run_holds``).
+                and_(Task.status == "review", Task.dispatch_intent == REVIEW_HANDOFF),
             ),
         )
         .order_by(func.coalesce(Task.started_at, Task.dispatched_at).desc())
@@ -223,7 +244,10 @@ def _task_lines(
     agent: Agent, task: Task, *, when: str | None, now: datetime,
     deliverables: list[TaskDeliverable], note: TaskComment | None,
 ) -> list[str]:
-    word = status_word(task.status, getattr(agent, "operator_language", None))
+    word = status_word(
+        "reviewing" if review_run_holds(task, agent) else task.status,
+        getattr(agent, "operator_language", None),
+    )
     head = f'- "{task.title}" (id {task.id}) — status: {word}'
     if task.checklist_total:
         head += f", checklist {task.checklist_done}/{task.checklist_total}"
@@ -262,7 +286,11 @@ async def run_context(session: AsyncSession, agent: Agent, *, now: datetime | No
     if live:
         lines.append("A task of yours is being worked RIGHT NOW in its own run session — not in this chat:")
         for task in live:
-            started = _hhmm(task.started_at or task.dispatched_at, now=now)
+            # A review card's started_at is the developer's start; the review
+            # run began when the card was dispatched to this reviewer.
+            started_at = (task.dispatched_at or task.started_at) if review_run_holds(task, agent) \
+                else (task.started_at or task.dispatched_at)
+            started = _hhmm(started_at, now=now)
             lines += _task_lines(
                 agent, task, when=f"started {started}" if started else None, now=now,
                 deliverables=deliverables.get(task.id, []), note=notes.get(task.id),
