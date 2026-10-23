@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { mergeTimeline, type MergeTask, type MergedEntry } from "../mergeTimeline";
 import type { TaskUnit } from "../buildTaskUnits";
-import { at, chatMsg, chatTool, stub, think, tool, text, TASK_ID } from "./fixtures";
+import { at, chatMsg, chatTool, stub, think, tool, text, TASK_ID, TASK_ID_2 } from "./fixtures";
+import { buildTaskUnits } from "../buildTaskUnits";
 import type { TaskStepRow, TimelineChatEvent } from "@/lib/chatTypes";
 
 function task(rows: TaskStepRow[], over: Partial<MergeTask> = {}): MergeTask {
@@ -67,8 +68,10 @@ describe("mergeTimeline (spec A §6.2)", () => {
       [chatTool(at(1), "a"), chatTool(at(2), "b"), chatTool(at(4), "c"), chatTool(at(5), "d")],
       [task([text(at(3), "Halfway")])],
     );
-    // (the live row then trails below the newest chat item)
-    expect(shape(r.entries)).toEqual(["chat", "seg", "chat", "cont"]);
+    // The band stays open past the chat's own tools (no operator message):
+    // its live row stays IN it — no empty trailing head below (r1 SHOULD-1).
+    expect(shape(r.entries)).toEqual(["chat", "seg", "chat"]);
+    expect(units(r.entries[1]).map((u) => u.u)).toEqual(["text", "live"]);
     for (const i of [0, 2]) {
       const e = r.entries[i];
       expect(e.kind === "chat" && e.item.kind).toBe("activity");
@@ -200,11 +203,29 @@ describe("mergeTimeline — continuation head follows the task's state", () => {
     expect(units(r.entries[0]).map((u) => u.u)).toEqual(["chapter", "end"]);
   });
 
-  it("work after the message still says 'continues', also when the task has finished since", () => {
+  it("work after the message: 'continues' while the task runs, the title alone once it has finished (r1 MUST-2)", () => {
+    const rows = [think(at(1), "A"), think(at(8), "B")];
+    const running = merge([chatMsg(at(5), "x")], [task(rows)]);
+    expect(segHeads(running.entries)).toEqual(["seg:full", "chat", "cont:continues"]);
     const done = stub({ status: "done", live: false, endedAt: at(9) });
-    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A"), think(at(8), "B")], { stub: done })]);
-    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:continues"]);
+    const r = merge([chatMsg(at(5), "x")], [task(rows, { stub: done })], { prev: running });
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title"]);
     expect(units(r.entries[2]).map((u) => u.u)).toEqual(["chapter", "end"]);
+  });
+
+  it.each(["review", "done", "failed", "aborted"])(
+    "%s: no band with work rows says 'continues' any more — live, without a reload (r1 MUST-2)",
+    (status) => {
+      const rows = [think(at(1), "A"), tool(at(2), "t1"), think(at(6), "B"), tool(at(7), "t2"), think(at(9), "C")];
+      const chat = [chatMsg(at(5), "x"), chatMsg(at(8), "y")];
+      const r = merge(chat, [task(rows, { stub: stub({ status, live: false, endedAt: at(10) }) })]);
+      expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title", "chat", "cont:title"]);
+    },
+  );
+
+  it.each(["blocked", "waiting", "user_test"])("%s with work rows below the message: title only (r1 MUST-2)", (status) => {
+    const r = merge([chatMsg(at(5), "x")], [task([think(at(1), "A"), think(at(6), "B")], { stub: stub({ status }) })]);
+    expect(segHeads(r.entries)).toEqual(["seg:full", "chat", "cont:title"]);
   });
 
   it("a running task's live row below the message says 'continues'", () => {
@@ -260,7 +281,7 @@ describe("mergeTimeline — continuation head follows the task's state", () => {
       [chatMsg(at(40), "please redo"), chatMsg(at(55), "and?")],
       [task([think(at(1), "Old"), think(at(50), "Rework")], { stub: s, shape: "card", frozenAtMs: Date.parse(at(30)), endLine: true })],
     );
-    expect(segHeads(r.entries)).toEqual(["card", "chat", "cont:continues", "chat", "cont:title"]);
+    expect(segHeads(r.entries)).toEqual(["card", "chat", "cont:title", "chat", "cont:title"]);
   });
 
   it("the head is part of a segment's identity: a state flip rebuilds the entry (N5)", () => {
@@ -271,5 +292,79 @@ describe("mergeTimeline — continuation head follows the task's state", () => {
     expect(segHeads(r1.entries)[2]).toBe("cont:continues");
     expect(segHeads(r2.entries)[2]).toBe("cont:title");
     expect(r2.entries[2]).not.toBe(r1.entries[2]);
+  });
+});
+
+/*
+ * Round-1 user test 22.10.2026 (t1 SHOULD-1, r2 M3): while a task ran, the
+ * chat session's own tool lines landed between its rows, and every one of
+ * them cut the task into a new band with the same head — 6 to 10 bands, an
+ * empty head at the bottom, after a reload ONE card. Only the operator's own
+ * message splits a band; the chat's other lines wait below the band.
+ */
+describe("mergeTimeline — one band until the operator writes", () => {
+  const live = { block: "thinking" as const, startedAt: at(9), ts: at(9, 30), chars: 300, stale: false };
+  const kinds = (entries: MergedEntry[]) =>
+    entries.map((e) => (e.kind === "segment" ? `${e.first ? "seg" : "cont"}:${e.head}` : e.kind === "chat" ? `chat:${e.item.kind}` : e.kind));
+
+  it("the chat's own tool lines between task rows do not split the band; they stand below it", () => {
+    const rows = [think(at(1), "Set up"), tool(at(2), "mkdir"), tool(at(4), "Edit index.html"), tool(at(6), "ls"), think(at(8), "Check")];
+    const chat = [chatTool(at(3), "ls deliverables"), chatTool(at(5), "cat index.html"), chatTool(at(7), "mc task-get")];
+    const r = merge(chat, [task(rows, { liveRow: live })]);
+    expect(kinds(r.entries)).toEqual(["seg:full", "chat:activity"]);
+    expect(units(r.entries[0]).map((u) => u.u)).toEqual(["chapter", "chapter", "live"]);
+    const chatItem = r.entries[1];
+    expect(chatItem.kind === "chat" && chatItem.item.kind === "activity" && chatItem.item.events.length).toBe(3);
+  });
+
+  it("only an operator message splits: one band before it, at most one 'continues' band after it", () => {
+    const rows = [think(at(1), "A"), tool(at(2), "t1"), tool(at(4), "t2"), think(at(6), "B"), tool(at(8), "t3"), tool(at(10), "t4")];
+    const chat = [chatTool(at(3), "c1"), chatMsg(at(5), "How far?"), chatTool(at(7), "c2"), chatMsg(at(9), "Fast fertig.", "assistant"), chatTool(at(11), "c3")];
+    const r = merge(chat, [task(rows, { liveRow: { ...live, ts: at(12) } })]);
+    expect(kinds(r.entries)).toEqual(["seg:full", "chat:single", "chat:single", "cont:continues", "chat:single", "chat:single", "chat:single"]);
+    expect(r.entries.filter((e) => e.kind === "segment")).toHaveLength(2);
+    // The live row belongs to the open band, never to an empty band below.
+    expect(units(r.entries[3]).map((u) => u.u)).toEqual(["chapter", "live"]);
+  });
+
+  it("no empty head at the bottom: a live task's tail stays in its band when only chat tools follow", () => {
+    const r = merge([chatTool(at(5), "c1"), chatTool(at(6), "c2")], [task([think(at(1), "A")], { liveRow: live })]);
+    expect(kinds(r.entries)).toEqual(["seg:full", "chat:activity"]);
+    expect(units(r.entries[0]).map((u) => u.u)).toEqual(["chapter", "live"]);
+  });
+
+  it("a task that ends while only chat tools follow keeps its end line in its band", () => {
+    const review = stub({ status: "review", live: false, endedAt: at(8) });
+    const r = merge([chatTool(at(5), "c1"), chatTool(at(9), "c2")], [task([think(at(1), "A"), tool(at(6), "t")], { stub: review })]);
+    expect(kinds(r.entries)).toEqual(["seg:full", "chat:activity"]);
+    expect(units(r.entries[0]).map((u) => u.u)).toEqual(["chapter", "end"]);
+  });
+
+  it("live and reloaded build the same steps: the band's units equal one build over all rows (r1 NICE-3)", () => {
+    // Live, the chat's tool lines used to cut the chapter: "Edit index.html +33"
+    // became a lone tool row with its diff badge, while the card after the
+    // reload folds it into the chapter — two different pictures of one row.
+    const rows = [
+      think(at(1), "Create the dir, then write index.html"),
+      tool(at(2), "mkdir"),
+      tool(at(4), "Edit index.html", "done", { name: "edit", stats: { additions: 33, deletions: 0 } }),
+      tool(at(6), "ls -la"),
+    ];
+    const r = merge([chatTool(at(3), "c1"), chatTool(at(5), "c2")], [task(rows, { stub: stub({ status: "review", live: false, endedAt: at(7) }) })]);
+    const band = units(r.entries[0]).filter((u) => u.u !== "end");
+    const card = buildTaskUnits(rows, { lastMarkMs: Date.parse(at(0, 5)) }, { detailLevel: "normal" }).units;
+    expect(band).toEqual(card);
+    expect(band).toHaveLength(1);
+  });
+
+  it("another task's row closes the band; the held chat lines go between the two tasks", () => {
+    const other = task([think(at(4), "Other")], { stub: stub({ taskId: TASK_ID_2, title: "Other task", status: "done", live: false, endedAt: at(5) }) });
+    const r = merge([chatTool(at(3), "c1")], [task([think(at(1), "A"), think(at(6), "B")], { stub: stub({ status: "review", live: false, endedAt: at(7) }) }), other]);
+    expect(r.entries.map((e) => (e.kind === "segment" ? e.taskId.slice(-1) : e.kind))).toEqual(["1", "chat", "2", "1"]);
+  });
+
+  it("an older operator message before the task's first row changes nothing (it is no split)", () => {
+    const r = merge([chatMsg(at(0, 1), "Go"), chatTool(at(3), "c1")], [task([think(at(1), "A"), think(at(4), "B")])]);
+    expect(kinds(r.entries)).toEqual(["chat:single", "seg:full", "chat:single"]);
   });
 });

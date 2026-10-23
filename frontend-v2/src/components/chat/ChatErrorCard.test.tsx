@@ -15,7 +15,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { ChatMessage } from "./ChatMessage";
 import { ChatResendContext, type ChatResend } from "./chatResend";
-import { C } from "@/lib/colors";
+import { C, STATUS_TEXT } from "@/lib/colors";
 import type { MessageEvent } from "@/lib/chatTypes";
 import de from "../../../messages/de.json";
 import en from "../../../messages/en.json";
@@ -511,5 +511,50 @@ describe("Chat-Fehlerkarte — Nochmal senden als volle Zeile (Layout B)", () =>
     for (const el of Array.from(card.querySelectorAll<HTMLElement>("*"))) {
       expect(el.style.borderTop).toBe("");
     }
+  });
+});
+
+/* ── Round-1 user test 22.10.2026 (t1 SHOULD-6, r2 S1): the old "busy" cards
+   showed omp's raw English line "a turn is already running" under a German
+   chip, in a triple red (frame, icon, chip) — for a state DESIGN.md calls
+   info, not an error (K6/K10). Old cards stay in the history, so the card
+   itself must say it right. */
+describe("Chat-Fehlerkarte — busy is information, not an error", () => {
+  const busy = (detail: string | null = "a turn is already running") =>
+    mkError({ uuid: "e-busy", text: "a turn is already running", error: { code: "busy", detail } });
+
+  it("speaks the UI language and drops the raw English line (EN + DE)", () => {
+    render(<ChatMessage ev={busy()} />);
+
+    expect(screen.getByTestId("chat-error-code")).toHaveTextContent("Still working");
+    expect(screen.getByTestId("chat-error-body")).toHaveTextContent(tEn("error.busyBody"));
+    expect(screen.queryByTestId("chat-error-detail")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-error-card")).not.toHaveTextContent("a turn is already running");
+    expect(tDe("error.busy")).toBe("Arbeitet noch");
+    expect(tDe("error.busyBody")).toBe(
+      "Der Agent war noch mit einer Antwort beschäftigt und hat diese Nachricht nicht angenommen."
+    );
+  });
+
+  it("the same sentence without any detail, too", () => {
+    render(<ChatMessage ev={busy(null)} />);
+    expect(screen.getByTestId("chat-error-body")).toHaveTextContent(tEn("error.busyBody"));
+    expect(screen.getByTestId("chat-error-card")).not.toHaveTextContent("a turn is already running");
+  });
+
+  it("is drawn neutral: no red frame, no red chip — one info colour at the icon (K6)", () => {
+    render(<ChatMessage ev={busy()} />);
+
+    const card = screen.getByTestId("chat-error-card");
+    expect(card).toHaveAttribute("data-tone", "info");
+    expect(card.style.border).not.toContain(C.error);
+    expect(card.style.border).toContain(C.border);
+    expect(screen.getByTestId("chat-error-code").style.color).not.toBe(STATUS_TEXT.error);
+    expect(screen.getByTestId("chat-error-code").style.border).not.toContain(C.error);
+  });
+
+  it("a real error keeps its red frame", () => {
+    render(<ChatMessage ev={mkError()} />);
+    expect(screen.getByTestId("chat-error-card")).toHaveAttribute("data-tone", "error");
   });
 });
