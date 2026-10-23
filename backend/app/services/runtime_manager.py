@@ -2974,8 +2974,8 @@ WAKE_HELPER_STALE_S = 120
 # The watcher's positive sign of life (round-7 re-check, L5): it touches this
 # file in the request folder on every run, also when nothing waits. The stale
 # request above is only a trace a dead helper MAY leave — an empty folder said
-# "Waking…" although nothing read it. Must match HEARTBEAT_NAME in
-# scripts/porsche-wake-watcher.py (pinned by test_porsche_wake_watcher.py).
+# "Waking…" although nothing read it. Must match HEARTBEAT_NAME in the
+# wake watcher script under scripts/ (pinned by its watcher test).
 WAKE_HELPER_HEARTBEAT_NAME = "watcher.alive"
 # Three missed 30 s runs. Beyond that the helper stopped (or never ran).
 WAKE_HELPER_HEARTBEAT_S = 90
