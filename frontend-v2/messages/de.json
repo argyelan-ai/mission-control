@@ -621,6 +621,7 @@
       "apiKeyNone": "— Keiner (der eigene Key der Runtime wird genutzt, falls gesetzt) —",
       "apiKeySavedNotFitting": "{name} · gespeichert, passt nicht zu dieser Runtime",
       "apiKeyUnknownSaved": "Gespeicherter Key (nicht gefunden)",
+      "apiKeyNeedsOperator": "Nur die Rollen Operator und Admin können den API-Key sehen oder ändern.",
       "apiKeyHintProvider": "Keys aus Einstellungen → API-Keys für den Anbieter „{provider}“. Wird bei „Anwenden & Neustarten“ an den Agenten geschrieben.",
       "apiKeyHintOwnSignIn": "Diese Runtime meldet sich selbst an (OAuth / CLI-Login) — ein Agenten-API-Key wird nicht genutzt.",
       "apiKeyHintAnyLlmKey": "Jeder LLM-Anbieter-Key aus Einstellungen → API-Keys. Der Key des Agenten wird an diese Runtime geschickt und hat Vorrang vor dem Key der Runtime.",

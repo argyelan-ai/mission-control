@@ -16,7 +16,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import require_user, require_role, Role
 from app.database import get_session
 from app.models.secret import Secret
-from app.services.encryption import encrypt, decrypt, safe_decrypt, mask
+from app.services.encryption import MASK, encrypt, decrypt, safe_decrypt, mask
 
 router = APIRouter(prefix="/api/v1", tags=["secrets"])
 
@@ -272,7 +272,7 @@ async def list_secrets(
         items.append({
             "id": str(s.id),
             "key": s.key,
-            "value_masked": mask(decrypted) if decrypted else "****[decrypt error]",
+            "value_masked": mask(decrypted) if decrypted else MASK + " [decrypt error]",
             "provider": s.provider,
             "label": s.label,
             "description": s.description,
@@ -346,7 +346,7 @@ async def update_secret(
     return {
         "id": str(secret.id),
         "key": secret.key,
-        "value_masked": mask(decrypted) if decrypted else "****[decrypt error]",
+        "value_masked": mask(decrypted) if decrypted else MASK + " [decrypt error]",
         "provider": secret.provider,
         "label": secret.label,
     }

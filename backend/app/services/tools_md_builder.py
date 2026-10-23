@@ -655,7 +655,7 @@ curl -s "$MC_API_URL/api/v1/agent/boards/{board_id}/credentials" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 ```
 
-Response: list with id, name, credential_type, url, notes, data_masked (password/token partially hidden).
+Response: list with id, name, credential_type, url, notes, data_masked (values hidden; passwords never show any character, long tokens keep only their last 4).
 Use this endpoint to find the correct credential ID.
 
 ### Fetch a single credential (fully decrypted)

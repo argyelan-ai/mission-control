@@ -5089,7 +5089,9 @@ async def agent_list_credentials(
     """Agent lists all available credentials (masked, sorted alphabetically).
 
     Credentials are global (not board-scoped) — board_id is only for URL consistency.
-    Returns data_masked (last 4 characters visible, rest asterisks).
+    Returns data_masked: a fixed mask that hides the length; only values of
+    20+ characters keep their last 4, password fields and free text never do
+    (ADR-098).
     """
     import json
     from app.models.credential import Credential
