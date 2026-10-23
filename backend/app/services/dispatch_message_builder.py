@@ -422,24 +422,23 @@ async def _build_review_message(
             msg += "*(Subtasks are `done` once complete and no longer visible in the board context — loaded explicitly here)*\n\n"
             msg += "\n---\n".join(subtask_sections) + "\n\n"
 
-    # Load PR link (if present)
-    pr_comment = None
+    # Load PR link (if present) — MC's own "PR erstellt:" note, else the
+    # card's PR field. Never a chat reply or agent note that quotes another
+    # PR (round 8 / L6, pr_marker.py): the reviewer must check the PR that
+    # gets merged.
+    pr_line = None
     try:
-        pr_result = await session.exec(
-            select(TaskComment)
-            .where(
-                TaskComment.task_id == task.id,
-                TaskComment.content.like("%PR erstellt:%"),
-            )
-            .order_by(TaskComment.created_at.desc())
-            .limit(1)
-        )
-        pr_comment = pr_result.first()
+        from app.services.pr_marker import trusted_pr_note
+        pr_comment = await trusted_pr_note(session, task.id)
+        if pr_comment is not None:
+            pr_line = pr_comment.content
     except Exception:
         pass
+    if pr_line is None and getattr(task, "pr_url", None):
+        pr_line = f"**PR:** {task.pr_url}"
 
-    if pr_comment:
-        msg += f"## Pull Request\n{pr_comment.content}\n\n"
+    if pr_line:
+        msg += f"## Pull Request\n{pr_line}\n\n"
         msg += f"Use `gh pr diff` or the GitHub UI to check the changes.\n\n"
 
     # Reviewer's process rules (from rules_md)

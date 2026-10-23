@@ -8,9 +8,10 @@ behind a function boundary (Option A from research Pitfall 5).
 
 NOT a router file: no @router decorators. Pure handler library.
 
-Pitfall H Contract: The string "PR erstellt:" in handle_review_pr_creation
-is greppable-contract for handle_done_pr_merge (TaskComment.content.like("%PR erstellt:%")).
-DO NOT change wording.
+Pitfall H Contract: The "PR erstellt:" note handle_review_pr_creation writes
+is what handle_done_pr_merge merges. Wording + reader query live in
+app/services/pr_marker.py (round 8 / L6: only MC's own system note counts,
+never a chat reply or agent note quoting another PR). DO NOT change wording.
 """
 from __future__ import annotations
 
@@ -18,7 +19,6 @@ import logging
 import os
 import re
 
-from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
@@ -96,6 +96,7 @@ async def handle_review_pr_creation(
     if task.project_id:
         try:
             from app.services.git_service import git_service, slugify_project
+            from app.services.pr_marker import pr_created_note
             project = await session.get(Project, task.project_id)
             if project and project.github_repo_url and agent.workspace_path:
                 project_slug = slugify_project(project.name)
@@ -125,7 +126,7 @@ async def handle_review_pr_creation(
                     task_id=task.id,
                     author_type="system",
                     comment_type="progress",
-                    content=f"**PR erstellt:** {pr_url}",
+                    content=pr_created_note(pr_url),
                 )
                 session.add(pr_comment)
                 # Reliable field alongside the comment marker (Task dd4bf92c,
@@ -150,8 +151,9 @@ async def handle_done_pr_merge(
 ) -> None:
     """VERBATIM relocation of agent_scoped.py:3172-3232 (review/user_test→done PR merge).
 
-    Greps the PR URL out of TaskComment with `PR erstellt:` marker, then
-    `gh pr merge --squash --delete-branch`. Worktree cleanup is best-effort.
+    Takes the PR from MC's own `PR erstellt:` note (pr_marker.pr_number_to_merge
+    — never a chat reply or agent note), then `gh pr merge --squash
+    --delete-branch`. Worktree cleanup is best-effort.
     """
     # Merge the PR on real completion (after review or after the test gate)
     if task.project_id:
@@ -159,58 +161,47 @@ async def handle_done_pr_merge(
             from app.services.git_service import git_service, slugify_project
             project = await session.get(Project, task.project_id)
             if project and project.github_repo_url:
-                # Extract PR number from comment
-                pr_result = await session.exec(
-                    select(TaskComment)
-                    .where(
-                        TaskComment.task_id == task.id,
-                        TaskComment.content.like("%PR erstellt:%"),
+                # Only MC's own "PR erstellt:" note counts (round 8 / L6).
+                from app.services.pr_marker import pr_number_to_merge
+                pr_number = await pr_number_to_merge(session, task)
+                if pr_number is not None:
+                    project_slug = slugify_project(project.name)
+                    # Use reviewer or developer workspace
+                    reviewer_dir = os.path.join(
+                        agent.workspace_path or "", project_slug,
                     )
-                    .order_by(TaskComment.created_at.desc())
-                    .limit(1)
-                )
-                pr_comment = pr_result.first()
-                if pr_comment:
-                    pr_match = re.search(r"/pull/(\d+)", pr_comment.content)
-                    if pr_match:
-                        pr_number = int(pr_match.group(1))
-                        project_slug = slugify_project(project.name)
-                        # Use reviewer or developer workspace
-                        reviewer_dir = os.path.join(
-                            agent.workspace_path or "", project_slug,
+                    if os.path.isdir(reviewer_dir):
+                        await git_service.merge_pr(reviewer_dir, pr_number)
+                    else:
+                        # Fallback: gh CLI without cwd (uses global auth)
+                        await git_service._run_cmd(
+                            "gh", "pr", "merge", str(pr_number),
+                            "--repo", project.github_repo_name,
+                            "--squash", "--delete-branch",
                         )
-                        if os.path.isdir(reviewer_dir):
-                            await git_service.merge_pr(reviewer_dir, pr_number)
-                        else:
-                            # Fallback: gh CLI without cwd (uses global auth)
-                            await git_service._run_cmd(
-                                "gh", "pr", "merge", str(pr_number),
-                                "--repo", project.github_repo_name,
-                                "--squash", "--delete-branch",
-                            )
-                        logger.info("PR #%d gemerged fuer Task '%s'", pr_number, task.title)
-                        # Workstream B3: worktree cleanup post-merge.
-                        # Non-fatal — orphan worktrees waste disk but
-                        # don't block anything. Requires access to the
-                        # main repo dir (developer workspace), not the
-                        # reviewer's; fall back gracefully if missing.
-                        try:
-                            task_slug = slugify_project(task.title)
-                            developer_dir = reviewer_dir
-                            if task.assigned_agent_id and task.assigned_agent_id != agent.id:
-                                dev = await session.get(Agent, task.assigned_agent_id)
-                                if dev and dev.workspace_path:
-                                    developer_dir = os.path.join(
-                                        dev.workspace_path, project_slug,
-                                    )
-                            if os.path.isdir(developer_dir):
-                                await git_service.cleanup_task_worktree(
-                                    developer_dir, task_slug,
+                    logger.info("PR #%d gemerged fuer Task '%s'", pr_number, task.title)
+                    # Workstream B3: worktree cleanup post-merge.
+                    # Non-fatal — orphan worktrees waste disk but
+                    # don't block anything. Requires access to the
+                    # main repo dir (developer workspace), not the
+                    # reviewer's; fall back gracefully if missing.
+                    try:
+                        task_slug = slugify_project(task.title)
+                        developer_dir = reviewer_dir
+                        if task.assigned_agent_id and task.assigned_agent_id != agent.id:
+                            dev = await session.get(Agent, task.assigned_agent_id)
+                            if dev and dev.workspace_path:
+                                developer_dir = os.path.join(
+                                    dev.workspace_path, project_slug,
                                 )
-                        except Exception as cleanup_exc:
-                            logger.info(
-                                "Worktree cleanup skipped for '%s': %s",
-                                task.title, cleanup_exc,
+                        if os.path.isdir(developer_dir):
+                            await git_service.cleanup_task_worktree(
+                                developer_dir, task_slug,
                             )
+                    except Exception as cleanup_exc:
+                        logger.info(
+                            "Worktree cleanup skipped for '%s': %s",
+                            task.title, cleanup_exc,
+                        )
         except Exception as e:
             logger.warning("PR-Merge fehlgeschlagen: %s", e)
