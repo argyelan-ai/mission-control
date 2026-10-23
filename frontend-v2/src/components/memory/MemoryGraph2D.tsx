@@ -250,9 +250,15 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
     // screenshot — distinct hubs, leaves orbit, tight central form.
 
     const [forcesInitialized, setForcesInitialized] = useState(false);
+    // ForceGraph2D mounts only after the container has been measured (see
+    // below), so on the first commit fgRef is still empty. Without this in
+    // the deps the effect never ran again and the graph kept the library
+    // defaults: loose nodes drifted far out and the framed graph shrank to a
+    // small knot (round-4 review r2 N1).
+    const canvasReady = !!size && size.width > 0 && size.height > 0;
 
     useEffect(() => {
-      if (!fgRef.current || forcesInitialized) return;
+      if (!canvasReady || !fgRef.current || forcesInitialized) return;
       const fg = fgRef.current as unknown as {
         d3Force: (name: string, force?: unknown) => unknown;
         d3ReheatSimulation: () => void;
@@ -276,16 +282,21 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
       fg.d3Force("y", forceY(0).strength(0.4));
       fg.d3ReheatSimulation();
       setForcesInitialized(true);
-    }, [forcesInitialized]);
+    }, [forcesInitialized, canvasReady]);
 
-    // Auto-fit at multiple checkpoints so the brain is reliably framed
-    // regardless of how/when the simulation settles or how the canvas is
-    // resized. didFitOnce guard prevents subsequent reheats (filter toggles,
-    // drags) from yanking the camera away from the user's manual pan/zoom.
-    const didFitOnceRef = useRef(false);
+    // Auto-fit at several checkpoints (1.5 s, 4 s, every time the layout
+    // settles) so the graph is framed for the layout it ends up with, not
+    // for the larger one it had mid-simulation — a single early fit left it
+    // as a knot in ~10 % of the canvas (round-4 review r2 N1). Once the
+    // operator pans, zooms, drags or taps, the camera is theirs: no
+    // checkpoint moves it again.
+    const userMovedRef = useRef(false);
+    const markUserMoved = useCallback(() => {
+      userMovedRef.current = true;
+    }, []);
 
     const fitNow = useCallback(() => {
-      if (didFitOnceRef.current || !fgRef.current) return;
+      if (userMovedRef.current || !fgRef.current) return;
       const fg = fgRef.current as unknown as {
         zoomToFit: (ms: number, padding: number) => void;
         centerAt: (x: number, y: number, ms?: number) => void;
@@ -306,13 +317,12 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
         typeof window !== "undefined" && window.innerWidth < 768;
       fg.zoomToFit(500, isMobileViewport ? 40 : 220);
       setTimeout(() => {
-        if (fgRef.current) {
+        if (fgRef.current && !userMovedRef.current) {
           (fgRef.current as unknown as {
             centerAt: (x: number, y: number, ms?: number) => void;
           }).centerAt(0, isMobileViewport ? 40 : 150, 500);
         }
       }, 520);
-      didFitOnceRef.current = true;
     }, []);
 
     const handleEngineStop = useCallback(() => {
@@ -324,7 +334,8 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
     //     onEngineStop didn't fire (some library versions skip it).
     //   - 4000ms: catches forceX/Y energy injection that prevents alpha
     //     from ever hitting min.
-    // Both go through fitNow() which is idempotent via didFitOnceRef.
+    // Both go through fitNow(), which stands down once the operator moved
+    // the camera.
     useEffect(() => {
       const t1 = setTimeout(() => fitNow(), 1500);
       const t2 = setTimeout(() => fitNow(), 4000);
@@ -558,6 +569,9 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
       <div
         ref={containerRef}
         className={className ? `w-full h-full ${className}` : "w-full h-full"}
+        onWheelCapture={markUserMoved}
+        onPointerDownCapture={markUserMoved}
+        onTouchStartCapture={markUserMoved}
       >
         {/* Only mount ForceGraph2D once we have a real, container-derived
             size — never let it fall through to its own window.innerWidth/

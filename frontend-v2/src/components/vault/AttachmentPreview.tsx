@@ -14,16 +14,47 @@
  *   - audio/*          → `<audio controls>` (future-proof for voice memos)
  *   - everything else  → "Download" link (the same blob URL, downloadable)
  *
+ * Every word comes from i18n and the type reads as words ("HTML file"), not
+ * the MIME string (round-4 user test t4 NICE-2: "text/html · Download …" in
+ * a German UI).
+ *
  * The operator's Design-DNA: off-black panel, no generic borders, lazy load.
  */
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { X } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { api, getToken } from "@/lib/api";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 
 import { C, alpha } from "@/lib/colors";
+
+type Translate = (key: string, values?: Record<string, string>) => string;
+
+const SPREADSHEET = /spreadsheet|ms-excel/;
+const DOCUMENT = /wordprocessing|msword|opendocument\.text/;
+
+/** A MIME type in words for the card ("text/html" → "HTML file"). */
+export function fileKindLabel(mime: string, t: Translate): string {
+  const [family = "", sub = ""] = mime.toLowerCase().split(";")[0].trim().split("/");
+  if (!family || !sub) return t("fileKind.unknown");
+  // "svg+xml" → "SVG", "vnd.foo.bar" → "BAR"
+  const ext = (sub.split("+")[0].split(".").pop() ?? sub).toUpperCase();
+  if (sub === "html") return t("fileKind.html");
+  if (sub === "pdf") return t("fileKind.pdf");
+  if (family === "image") return t("fileKind.image", { ext });
+  if (family === "audio") return t("fileKind.audio", { ext });
+  if (family === "video") return t("fileKind.video", { ext });
+  if (sub === "markdown" || sub === "x-markdown") return t("fileKind.markdown");
+  if (sub === "csv") return t("fileKind.csv");
+  if (sub === "json") return t("fileKind.json");
+  if (SPREADSHEET.test(sub)) return t("fileKind.spreadsheet");
+  if (DOCUMENT.test(sub)) return t("fileKind.document");
+  if (family === "text") return t("fileKind.text");
+  return t("fileKind.other", { ext });
+}
+
 interface Props {
   deliverableId: string;
   mime: string;
@@ -37,6 +68,7 @@ export function AttachmentPreview({
   sizeBytes,
   title,
 }: Props) {
+  const t = useTranslations("vault");
   const prefersReduce = useReducedMotion();
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -106,7 +138,7 @@ export function AttachmentPreview({
           borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
-        <span className="font-mono tabular-nums">{mime}</span>
+        <span title={mime}>{fileKindLabel(mime, t)}</span>
         {sizeLabel && (
           <span className="tabular-nums" style={{ color: "var(--color-text-muted)" }}>{sizeLabel}</span>
         )}
@@ -117,7 +149,7 @@ export function AttachmentPreview({
           className="p-4 text-sm"
           style={{ color: alpha(C.error, 0.9) }}
         >
-          Could not load attachment: {error}
+          {t("attachmentLoadFailed", { error })}
         </div>
       )}
 
@@ -126,14 +158,14 @@ export function AttachmentPreview({
           className="p-6 text-sm opacity-60 animate-pulse"
           style={{ color: "var(--color-text-secondary)" }}
         >
-          Loading attachment…
+          {t("attachmentLoading")}
         </div>
       )}
 
       {objectUrl && mime === "application/pdf" && (
         <iframe
           src={objectUrl}
-          title={title || "PDF preview"}
+          title={title || t("attachmentPdfPreview")}
           className="w-full"
           style={{ height: "640px", border: 0 }}
         />
@@ -144,11 +176,11 @@ export function AttachmentPreview({
           type="button"
           onClick={() => setFullsizeOpen(true)}
           className="block w-full"
-          aria-label={`Enlarge image${title ? `: ${title}` : ""}`}
+          aria-label={title ? t("attachmentEnlargeNamed", { name: title }) : t("attachmentEnlarge")}
         >
           <motion.img
             src={objectUrl}
-            alt={title || "Attachment"}
+            alt={title || t("attachment")}
             loading="lazy"
             initial={prefersReduce ? false : { opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -174,7 +206,7 @@ export function AttachmentPreview({
               download
               className="underline"
             >
-              Download {title || "attachment"}
+              {t("attachmentDownload", { name: title || t("attachmentFallbackName") })}
             </a>
           </div>
         )}
@@ -194,13 +226,13 @@ export function AttachmentPreview({
               onClick={() => setFullsizeOpen(false)}
               className="absolute top-6 right-6 p-3 rounded-sm"
               style={{ background: "var(--color-bg-hover)" }}
-              aria-label="Close"
+              aria-label={t("attachmentClose")}
             >
               <X size={20} style={{ color: "var(--color-text-primary)" }} />
             </button>
             <motion.img
               src={objectUrl}
-              alt={title || "Attachment fullsize"}
+              alt={title || t("attachment")}
               initial={{ scale: 0.95 }}
               animate={{ scale: 1 }}
               exit={{ scale: 0.95 }}

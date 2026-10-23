@@ -423,11 +423,15 @@ export function GraphFilterSidebar({
       </AnimatePresence>
 
       {/* Collapse toggle button — 44px touch target on mobile (M-regeln),
-          compact 20px handle on desktop. */}
+          compact 20px handle on desktop. Open, it rides the rail's right
+          edge; collapsed the wrapper is 0 px wide, so `-right-3` hung the
+          button mostly outside the card — a clipped half circle without its
+          chevron on the phone (round-4 review r2 N1). Collapsed, it sits
+          fully inside the card's left edge. */}
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
-        className="absolute -right-3 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center rounded-full w-11 h-11 sm:w-5 sm:h-5"
+        className={`absolute ${collapsed ? "left-2" : "-right-3"} top-1/2 -translate-y-1/2 z-10 flex items-center justify-center rounded-full w-11 h-11 sm:w-5 sm:h-5`}
         style={{
           background: "var(--color-bg-elevated)",
           border: "1px solid var(--color-border)",

@@ -24,4 +24,10 @@ describe("app/not-found", () => {
     expect(screen.getByRole("link", { name: /Go to home/ })).toHaveAttribute("href", "/");
     expect(screen.queryByText(/This page could not be found/)).not.toBeInTheDocument();
   });
+
+  // Round-4 r2 N4: the 404 had no heading — a screen reader found no h1.
+  it("names the page in an h1", () => {
+    render(<NotFound />);
+    expect(screen.getByRole("heading", { level: 1, name: "Page not found" })).toBeInTheDocument();
+  });
 });

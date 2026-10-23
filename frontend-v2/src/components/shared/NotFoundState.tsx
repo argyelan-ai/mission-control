@@ -30,9 +30,11 @@ export function NotFoundState({
       data-region="not-found"
       className="flex flex-col items-center justify-center h-full gap-3 py-16 px-4 text-center"
     >
-      <p className="text-sm font-medium" style={{ color: C.textPrimary }}>
+      {/* The page's only heading: a screen reader lands on it (round-4 r2 N4).
+          Same quiet look as before — a 404 is not a loud page. */}
+      <h1 className="text-sm font-medium" style={{ color: C.textPrimary }}>
         {title}
-      </p>
+      </h1>
       {hint && (
         <p className="text-xs" style={{ color: C.textMuted }}>
           {hint}

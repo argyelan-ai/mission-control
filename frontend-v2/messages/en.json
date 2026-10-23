@@ -1436,12 +1436,11 @@
     "snoozedUntil": "Snoozed until {until}",
     "pause": "Pause",
     "enable": "Enable",
-    "enabledSwitch": "Enabled",
-    "disableJobKicker": "Disable job",
-    "disableJobTitle": "Disable {name}?",
+    "disableJobKicker": "Pause job",
+    "disableJobTitle": "Pause {name}?",
     "disableJobBodyNext": "{name} will not run on {when}, or at any later time, until you enable it again.",
     "disableJobBody": "{name} will not run again until you enable it.",
-    "disableJobConfirm": "Disable job",
+    "disableJobConfirm": "Pause job",
     "runNow": "Run now",
     "edit": "Edit",
     "duplicate": "Duplicate",
@@ -1550,6 +1549,16 @@
       "failed": "Failed",
       "running": "Running",
       "skipped": "Skipped"
+    },
+    "runOnSchedule": "Run on schedule",
+    "stateActive": "Active",
+    "stateLastRun": "last run {ago}",
+    "stateNextRun": "next run {when}",
+    "stateNeverRun": "never run",
+    "actionType": {
+      "create_task": "Create task",
+      "chat_send": "Send chat message",
+      "api_call": "API call"
     }
   },
   "office": {
@@ -1720,7 +1729,30 @@
       "colorByType": "By type",
       "unknownError": "Unknown error"
     },
-    "closeNote": "Close note"
+    "closeNote": "Close note",
+    "attachmentDownload": "Download {name}",
+    "attachmentFallbackName": "attachment",
+    "attachmentLoading": "Loading attachment…",
+    "attachmentLoadFailed": "Could not load the attachment ({error}).",
+    "attachmentEnlarge": "Enlarge image",
+    "attachmentEnlargeNamed": "Enlarge image: {name}",
+    "attachmentClose": "Close",
+    "attachmentPdfPreview": "PDF preview",
+    "fileKind": {
+      "html": "HTML file",
+      "pdf": "PDF document",
+      "image": "Image ({ext})",
+      "audio": "Audio ({ext})",
+      "video": "Video ({ext})",
+      "markdown": "Markdown file",
+      "text": "Text file",
+      "csv": "CSV file",
+      "json": "JSON file",
+      "spreadsheet": "Spreadsheet",
+      "document": "Document",
+      "other": "File ({ext})",
+      "unknown": "File"
+    }
   },
   "insights": {
     "title": "Insights",

@@ -43,15 +43,17 @@ import type {
 } from "@/lib/types";
 import { C, LANE, STATUS_TEXT, alpha } from "@/lib/colors";
 import { NotFoundState } from "@/components/shared/NotFoundState";
-import { formatChartDay, nextRunAbsolute, runStatusLabel } from "@/components/schedule/jobDisplay";
+import {
+  actionTypeLabel,
+  formatChartDay,
+  formatDuration,
+  jobStateSentence,
+  nextRunAbsolute,
+  runStatusLabel,
+  type JobStateTone,
+} from "@/components/schedule/jobDisplay";
 
 // Helpers
-function formatMs(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return "—";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${(ms / 60_000).toFixed(1)}min`;
-}
 
 function formatPercent(rate: number | null | undefined): string {
   if (rate == null || !Number.isFinite(rate)) return "—";
@@ -72,6 +74,14 @@ function scheduleLabel(job: ScheduledJob, t: Translate): string {
     return t("schedWeeklyCustom", { days: job.schedule_weekdays.join(","), time: job.schedule_time ?? "" });
   return "—";
 }
+
+// The dot before the state sentence: green runs on schedule, ochre is
+// snoozed for a while, grey is paused.
+const STATE_DOT: Record<JobStateTone, string> = {
+  active: C.online,
+  snoozed: C.warning,
+  paused: C.textMuted,
+};
 
 // Task status chips via LANE map
 const TASK_STATUS_COLOR: Record<string, string> = {
@@ -202,6 +212,11 @@ export default function ScheduleJobDetailPage() {
     );
   }
 
+  // The state in one sentence under the title (K12, round-4 r2 S3): the head
+  // read "Enabled" next to a switch set to off; "paused" stood only deep in
+  // the config card.
+  const state = jobStateSentence(job, t, (iso) => timeAgo(iso, locale), dateLocale);
+
   return (
     <AppShell>
       <div className="flex flex-col h-full overflow-y-auto">
@@ -228,10 +243,12 @@ export default function ScheduleJobDetailPage() {
             >
               {job.name}
             </h1>
+            {/* A setting, not a state word: the state is the sentence below. */}
             <button
               type="button"
               role="switch"
               aria-checked={job.enabled}
+              aria-label={t("runOnSchedule")}
               onClick={() =>
                 job.enabled
                   ? setConfirmDisable(true)
@@ -241,7 +258,7 @@ export default function ScheduleJobDetailPage() {
               className="flex items-center gap-2 px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs transition-colors cursor-pointer shrink-0 disabled:opacity-50"
               style={{ color: C.textSecondary }}
             >
-              <span>{t("enabledSwitch")}</span>
+              <span className="max-sm:hidden">{t("runOnSchedule")}</span>
               <span
                 aria-hidden
                 className="relative shrink-0 rounded-full transition-colors"
@@ -276,6 +293,18 @@ export default function ScheduleJobDetailPage() {
               <span className="max-sm:hidden">{t("edit")}</span>
             </button>
           </div>
+          <p
+            data-testid="job-state"
+            className="flex items-center gap-2 text-xs mt-1"
+            style={{ color: C.textSecondary }}
+          >
+            <span
+              aria-hidden
+              className="inline-block h-1.5 w-1.5 rounded-full shrink-0"
+              style={{ backgroundColor: STATE_DOT[state.tone] }}
+            />
+            {state.text}
+          </p>
         </div>
 
         {/* Messmarke: 1px-Linie mit Akzent-Segment — Header-Trenner */}
@@ -295,11 +324,11 @@ export default function ScheduleJobDetailPage() {
             />
             <KPICard
               label={t("avgDuration")}
-              value={formatMs(stats?.avg_duration_ms ?? 0)}
+              value={formatDuration(stats?.avg_duration_ms ?? 0, locale)}
             />
             <KPICard
               label={t("p95Duration")}
-              value={formatMs(stats?.p95_duration_ms ?? 0)}
+              value={formatDuration(stats?.p95_duration_ms ?? 0, locale)}
             />
             <KPICard
               label={t("runs30d")}
@@ -391,7 +420,7 @@ export default function ScheduleJobDetailPage() {
                   label={t("retryLabel")}
                   value={
                     job.retry_max > 0
-                      ? `${job.retry_max}× / ${job.retry_delay_minutes}min`
+                      ? `${job.retry_max}× / ${job.retry_delay_minutes} min`
                       : t("noneLower")
                   }
                 />
@@ -400,7 +429,7 @@ export default function ScheduleJobDetailPage() {
                   value={job.task_skip_review ? t("yesLower") : t("noLower")}
                 />
                 <ConfigRow label={t("boardLabel")} value={board?.name ?? "—"} />
-                <ConfigRow label={t("actionLabel")} value={job.action_type} />
+                <ConfigRow label={t("actionLabel")} value={actionTypeLabel(job.action_type, t)} />
                 {job.consecutive_failures && job.consecutive_failures > 0 ? (
                   <ConfigRow
                     label={t("consecutiveFailsLabel")}
@@ -585,7 +614,7 @@ function RunRow({ run }: { run: ScheduledJobRun }) {
           className="font-mono text-[11px] flex-shrink-0"
           style={{ color: C.textMuted }}
         >
-          {formatMs(duration)}
+          {formatDuration(duration, locale)}
         </span>
       )}
       {run.error && (

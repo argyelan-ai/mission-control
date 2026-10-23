@@ -27,7 +27,8 @@ import type { ScheduledJob } from "@/lib/types";
 import cronstrue from "cronstrue/i18n";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
-import { nextRunRelative, relativeJobTime } from "./jobDisplay";
+import { nextRunRelative } from "./jobDisplay";
+import { timeAgo } from "@/lib/utils";
 
 /**
  * Column template shared by the table header (JobsTable) and every row. They
@@ -249,7 +250,8 @@ export function JobRow({
         {job.last_run_status === "failed" && (
           <XCircle size={12} style={{ color: C.error }} />
         )}
-        <span>{relativeJobTime(job.last_run_at, t)}</span>
+        {/* Same words as the phone card ("26 days ago", not "26d ago"). */}
+        <span>{job.last_run_at ? timeAgo(job.last_run_at, locale) : "—"}</span>
       </div>
 
       <div className="min-w-0 truncate text-xs" style={{ color: C.textSecondary }}>

@@ -95,6 +95,9 @@ function VaultViewTabs({
 
 // ── VaultMemoryPage ───────────────────────────────────────────────────────────
 
+/** Stable empty facet while the list has not loaded. */
+const NO_AGENTS: string[] = [];
+
 export default function VaultMemoryPage() {
   const t = useTranslations("vault");
   const router = useRouter();
@@ -319,6 +322,7 @@ export default function VaultMemoryPage() {
   const {
     notes: listNotes,
     totalCount,
+    agents: vaultAgents = NO_AGENTS,
     isLoading: listLoading,
     isError: listError,
     fetchNextPage,
@@ -360,12 +364,15 @@ export default function VaultMemoryPage() {
     : listLoading;
   const isError = isTaskMode ? taskError : !isSearchMode && listError;
 
-  // Known agent slugs (for filter strip)
+  // Agent choices for the filter strip: every agent of the vault (the
+  // server's facet), never only the agents on the loaded page — that read
+  // "4 agents" in a vault with 19 (round-4 user test t4 SHOULD-1). An agent
+  // that is selected stays offered even before the facet has loaded.
   const knownAgents = useMemo(() => {
-    const slugs = new Set<string>();
-    listNotes.forEach((n) => { if (n.agent) slugs.add(n.agent); });
+    const slugs = new Set<string>(vaultAgents);
+    if (filters.agent) slugs.add(filters.agent);
     return Array.from(slugs).sort();
-  }, [listNotes]);
+  }, [vaultAgents, filters.agent]);
 
   // Selected note object
   const selectedNote = notes.find((n) => n.path === selectedPath) ?? null;
@@ -396,7 +403,13 @@ export default function VaultMemoryPage() {
   // full page means "at least that many" — shown as "100+", not "100".
   const noteCount = isSearchMode ? notes.length : totalCount;
   const noteCountCapped = isSearchMode && !isTaskMode && notes.length >= VAULT_SEARCH_LIMIT;
-  const agentCount = knownAgents.length;
+  // Agents behind the notes shown: a search or a task subset counts its own
+  // rows; the list counts the vault's agents (one when an agent is selected).
+  const agentCount = isTaskMode || isSearchMode
+    ? new Set(notes.map((n) => n.agent).filter(Boolean)).size
+    : effectiveAgent
+    ? 1
+    : vaultAgents.length;
 
   const isGraphView = view === "graph";
   const isTrashView = view === "trash";
