@@ -87,6 +87,9 @@ describe("FleetStage — probe timed out", () => {
     renderStage([{ host: alpha, runtimes: [{ ...recipe, state: "unknown", container_status: "not_probed" }] }]);
     expect(screen.queryByTestId("empty-stage")).not.toBeInTheDocument();
     const card = screen.getByTestId("free-box");
+    // The box itself answers (metrics in: 7 GB free) — it is the runtime
+    // probe that is still out, and that alone keeps it "being checked".
+    await waitFor(() => expect(card).toHaveTextContent("7GB"));
     expect(card).toHaveTextContent("Checking…");
     expect(card).not.toHaveTextContent("no model · ready");
   });
