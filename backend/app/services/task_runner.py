@@ -29,6 +29,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.database import engine
 from app.models.agent import Agent
 from app.models.approval import Approval
+from app.comment_types import CHAT_REPLY_COMMENT_TYPE
 from app.models.task import Task, TaskComment
 from app.utils import utcnow, ensure_aware
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
@@ -1632,10 +1633,15 @@ class TaskRunnerService:
                 last_activity = structural_activity
 
             # Still need the last comment specifically for resolution
-            # auto-promote detection below.
+            # auto-promote detection below. The run's last comment: a chat
+            # reply written after the resolution must not hide it (round-3
+            # re-review M1).
             comments_result = await session.exec(
                 select(TaskComment)
-                .where(TaskComment.task_id == task.id)
+                .where(
+                    TaskComment.task_id == task.id,
+                    TaskComment.comment_type != CHAT_REPLY_COMMENT_TYPE,
+                )
                 .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
                 .limit(1)
             )
@@ -1928,9 +1934,15 @@ class TaskRunnerService:
             # A healthy long tool call posts no comment, but if the agent DID post
             # progress inside the stale window it is not silent → skip. Also skip
             # if the last comment is a poll.sh auto-blocker (already handled).
+            # A chat session's reply (``chat_reply``) is left out: "how far
+            # are you?" on a dead run is no progress of the run, it must not
+            # hold off the nudge and the block (round-3 re-review M1).
             comment_result = await session.exec(
                 select(TaskComment)
-                .where(TaskComment.task_id == task.id)
+                .where(
+                    TaskComment.task_id == task.id,
+                    TaskComment.comment_type != CHAT_REPLY_COMMENT_TYPE,
+                )
                 .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
                 .limit(1)
             )

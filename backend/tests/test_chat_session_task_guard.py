@@ -626,7 +626,10 @@ async def test_chat_review_decision_on_another_agents_card_stays_allowed(client)
         json={"decision": "hold", "comment": "Parking this until Monday, waiting on Mark."},
         headers=_auth(token, chat=True, attempt=False),
     )
-    assert "chat_session_task_write" not in resp.text, resp.text
+    # A real success, not just "some other error" (round-3 re-review S1).
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"status": "ok", "decision": "hold"}
+    assert (await _task(task_id)).review_decision == "hold"
 
 
 async def _task_thread(task_id):
@@ -737,3 +740,135 @@ async def test_an_agent_cannot_send_chat_reply_as_its_type(client):
         headers=_auth(token, chat=False),
     )
     assert resp.status_code == 422, resp.text
+
+
+# ── Round-3 re-review M1: the stale check's clock ignores the chat too ──
+
+
+async def _stale_clock(task_id, *, comm_v2: bool = False):
+    """``messaging.last_task_activity`` — the clock of
+    ``task_runner._check_stale_in_progress`` (comments; thread messages for
+    comm_v2 agents)."""
+    from app.models.task import Task
+    from app.services.messaging import last_task_activity
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        return await last_task_activity(s, await s.get(Task, task_id), comm_v2=comm_v2)
+
+
+async def _thread_rows(thread_id) -> list:
+    from app.models.thread import Message
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        return list((await s.exec(
+            select(Message).where(Message.thread_id == thread_id).order_by(Message.seq)
+        )).all())
+
+
+async def test_chat_reply_does_not_move_the_stale_check_clock(client):
+    """M1: "how far are you?" on a dead run — the chat's reply comment must not
+    reset the stale check's clock (it read every comment type)."""
+    board_id, _agent, task_id, token = await _setup()
+    assert await _stale_clock(task_id) is None
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        json={"comment_type": "message", "content": "Still on step 2 as of 05:42."},
+        headers=_auth(token, chat=True),
+    )
+    assert resp.status_code == 201, resp.text
+    assert await _stale_clock(task_id) is None
+    assert await _stale_clock(task_id, comm_v2=True) is None
+
+
+async def test_run_comment_still_moves_the_stale_check_clock(client):
+    """Counter-probe: the run's own comment moves it as before."""
+    board_id, _agent, task_id, token = await _setup()
+    resp = await client.post(
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        json={"comment_type": "message", "content": "Step 2 done."},
+        headers=_auth(token, chat=False),
+    )
+    assert resp.status_code == 201, resp.text
+    assert await _stale_clock(task_id) is not None
+
+
+async def test_chat_msg_does_not_move_the_stale_check_clock_for_comm_v2(client):
+    """M1, comm_v2 half: the chat's `mc msg` lands on the task thread, and for a
+    comm_v2 agent thread messages are the run's activity. The server marks the
+    chat's message, and the clock leaves it out."""
+    _board, _agent, task_id, token = await _setup()
+    thread_id = await _task_thread(task_id)
+    before = await _stale_clock(task_id, comm_v2=True)
+    resp = await client.post(
+        "/api/v1/agent/tasks/current/messages",
+        json={"body": "Still on step 2 as of 05:42."},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 201, resp.text
+    rows = await _thread_rows(thread_id)
+    assert rows and rows[-1].body == "Still on step 2 as of 05:42."
+    assert rows[-1].from_chat is True
+    assert await _stale_clock(task_id, comm_v2=True) == before
+
+
+async def test_chat_thread_msg_does_not_move_the_stale_check_clock_for_comm_v2(client):
+    """M1, second route: `mc msg --thread <id>` from the chat."""
+    _board, _agent, task_id, token = await _setup()
+    thread_id = await _task_thread(task_id)
+    before = await _stale_clock(task_id, comm_v2=True)
+    resp = await client.post(
+        f"/api/v1/agent/threads/{thread_id}/messages",
+        json={"body": "Still on step 2 as of 05:42."},
+        headers=_auth(token, chat=True, attempt=False),
+    )
+    assert resp.status_code == 201, resp.text
+    assert (await _thread_rows(thread_id))[-1].from_chat is True
+    assert await _stale_clock(task_id, comm_v2=True) == before
+
+
+async def test_run_msg_still_moves_the_stale_check_clock_for_comm_v2(client):
+    """Counter-probe: the run's `mc msg` (no role header) is its activity."""
+    _board, _agent, task_id, token = await _setup()
+    thread_id = await _task_thread(task_id)
+    before = await _stale_clock(task_id, comm_v2=True)
+    resp = await client.post(
+        f"/api/v1/agent/threads/{thread_id}/messages",
+        json={"body": "Step 2 done."},
+        headers=_auth(token, chat=False, attempt=False),
+    )
+    assert resp.status_code == 201, resp.text
+    assert (await _thread_rows(thread_id))[-1].from_chat is False
+    after = await _stale_clock(task_id, comm_v2=True)
+    assert after is not None and (before is None or after > before)
+
+
+async def test_chat_plain_ask_does_not_move_the_stale_check_clock_for_comm_v2(client):
+    """M1, third route: a plain `mc ask` from the chat is allowed, but the
+    chat's question is no sign of life of the run either."""
+    _board, agent_id, task_id, token = await _setup()
+    await _enable_comm_v2(agent_id)
+    thread_id = await _task_thread(task_id)
+    before = await _stale_clock(task_id, comm_v2=True)
+    resp = await client.post(
+        "/api/v1/agent/tasks/current/ask",
+        json={"question": "Shall I tell you more?", "blocking": False},
+        headers=_auth(token, chat=True),
+    )
+    assert resp.status_code == 201, resp.text
+    assert (await _thread_rows(thread_id))[-1].from_chat is True
+    assert await _stale_clock(task_id, comm_v2=True) == before
+
+
+async def test_run_plain_ask_still_moves_the_stale_check_clock_for_comm_v2(client):
+    """Counter-probe: the run's own question is its activity."""
+    _board, agent_id, task_id, token = await _setup()
+    await _enable_comm_v2(agent_id)
+    thread_id = await _task_thread(task_id)
+    resp = await client.post(
+        "/api/v1/agent/tasks/current/ask",
+        json={"question": "Which colour do you want?", "blocking": False},
+        headers=_auth(token, chat=False),
+    )
+    assert resp.status_code == 201, resp.text
+    assert (await _thread_rows(thread_id))[-1].from_chat is False
+    assert await _stale_clock(task_id, comm_v2=True) is not None

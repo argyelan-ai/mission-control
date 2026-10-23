@@ -1796,6 +1796,9 @@ async def agent_ask(
             "default": payload.default,
             "deadline": payload.deadline,
         },
+        # A plain `mc ask` from the chat is allowed — but it is the chat's
+        # question, not the run's sign of life (round-3 re-review M1).
+        from_chat=is_chat_session(request),
     )
 
     # No task here → no task status to report (DM fallback, see above; a
@@ -2021,6 +2024,9 @@ async def agent_post_message(
         body=body_text,
         reply_to=payload.reply_to,
         attachment=attachment,
+        # The chat's `mc msg` is no sign of life of the run: the stale
+        # check's clock leaves it out (round-3 re-review M1).
+        from_chat=is_chat_session(request),
     )
 
     if task is not None:
@@ -2239,6 +2245,7 @@ async def agent_post_thread_message(
         # autonome Runde würde Slack/Telegram fluten.
         mirror_to_telegram=(thread.kind != "group"),
         attachment=attachment,
+        from_chat=is_chat_session(request),  # round-3 re-review M1, see above
     )
 
     # SSE für Marks Live-Ansicht des Gruppenraums (Kanal mc:events:group:{id}).
