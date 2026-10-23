@@ -129,7 +129,7 @@ describe("ChallengeDetail — header on a phone (P4, t2 MUSS-2 / r2 M2)", () => 
     expect(screen.queryByRole("button", { name: /Re-record all/ })).toBeNull();
   });
 
-  it("an overlay action (e.g. publish as episode) is disabled while the challenge runs (t2 KANN-4)", async () => {
+  it("an overlay action (e.g. publish as episode) is not shown while the challenge runs — only Stop (round-4 t2 SOLL-4)", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(
       challenge({
         status: "generating", composed_video_path: null,
@@ -140,7 +140,20 @@ describe("ChallengeDetail — header on a phone (P4, t2 MUSS-2 / r2 M2)", () => 
       }),
     );
     renderDetail();
-    expect(await screen.findByRole("button", { name: "Publish as episode" })).toBeDisabled();
+    await screen.findByRole("button", { name: /Stop/ });
+    expect(screen.queryByRole("button", { name: "Publish as episode" })).toBeNull();
+  });
+
+  it("the overlay action appears once the challenge is done", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      challenge({
+        actions: [{ id: "publish", label: "Publish as episode", method: "POST",
+          endpoint: "/api/v1/x/publish", style: "primary", confirm: null, disabled: false,
+          disabled_reason: null, busy: false }],
+      }),
+    );
+    renderDetail();
+    expect(await screen.findByRole("button", { name: "Publish as episode" })).toBeEnabled();
   });
 });
 
