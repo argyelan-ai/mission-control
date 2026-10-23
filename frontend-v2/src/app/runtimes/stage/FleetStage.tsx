@@ -11,12 +11,14 @@
  */
 
 import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
-import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
+import type { Device, Runtime, RuntimeLiveStatus } from "@/lib/types";
 import type { HostGroup } from "../grouping";
-import { hostKnownDark, hostProbePending, hostProbeTimedOut, pickServing, pickSlot } from "../grouping";
+import { hostProbePending, hostProbeTimedOut, pickServing, pickSlot } from "../grouping";
 import { useDevices } from "../DeviceControl";
 import { Stage, type StageMember } from "./Stage";
 import { FreeBox } from "./FreeBox";
@@ -158,6 +160,54 @@ function EmptyStage({ groups, onOpenCockpit }: { groups: HostGroup[]; onOpenCock
   );
 }
 
+/**
+ * A power-managed box with nothing serving — the "sleeping" row. Whether it
+ * sleeps is the box's own check to say (round-4 t3 S1): until that answers
+ * the card is being checked, and a box that answers is free, not asleep.
+ * Same query key as FreeBox, so switching cards costs no second request.
+ */
+function SleepingBox({
+  group,
+  runtime,
+  device,
+  onOpenCockpit,
+}: {
+  group: HostGroup;
+  runtime: Runtime;
+  device?: Device;
+  onOpenCockpit: () => void;
+}) {
+  const { data: metrics, isError: metricsFailed } = useQuery({
+    queryKey: ["hosts", group.host.id, "metrics"],
+    queryFn: () => api.hosts.metrics(group.host.id),
+    refetchInterval: 5_000,
+  });
+  if (metrics?.reachable === true) {
+    return (
+      <FreeBox
+        host={group.host}
+        slot={pickSlot(group)}
+        device={device}
+        probeTimedOut={hostProbeTimedOut(group)}
+        probePending={hostProbePending(group)}
+        onOpenCockpit={onOpenCockpit}
+      />
+    );
+  }
+  return (
+    // A failed first metrics call (backend 5xx, restart) is no answer from the
+    // box: not "checking" forever, not "asleep" either — the readings are
+    // missing (PR #971 review; FreeBox does the same since PR #960).
+    <AsleepBox
+      host={group.host}
+      runtime={runtime}
+      checking={metrics == null && !metricsFailed}
+      noReadings={metrics == null && metricsFailed}
+      onOpenCockpit={onOpenCockpit}
+    />
+  );
+}
+
 interface CockpitState {
   members: BoxCockpitMember[];
   runtime: Runtime | null;
@@ -251,7 +301,6 @@ export function FleetStage({
                   device={devices.get(g.host.id)}
                   probeTimedOut={hostProbeTimedOut(g)}
                   probePending={hostProbePending(g)}
-                  knownDark={hostKnownDark(g, live)}
                   onOpenCockpit={() =>
                     openCockpit({
                       members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id), slot }],
@@ -272,9 +321,10 @@ export function FleetStage({
           const slot = pickSlot(g);
           return (
             <motion.div key={g.host.id} {...cardMotionProps}>
-              <AsleepBox
-                host={g.host}
+              <SleepingBox
+                group={g}
                 runtime={rt}
+                device={devices.get(g.host.id)}
                 onOpenCockpit={() =>
                   openCockpit({
                     members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id), slot }],

@@ -1552,12 +1552,15 @@ async def stop_ssh_process(runtime: dict, *, host: ResolvedHost | None = None) -
 # idle. These helpers are the flask_wol analogue to _ssh_run / DGX checks.
 
 
-async def _control_server_reachable(control_url: str) -> bool:
+async def _control_server_reachable(control_url: str, timeout: float = 3.0) -> bool:
     """True if the box's :5555 control server answers — i.e. the box is awake and
-    logged in (work-ready). Fails fast (3s) when the box is asleep."""
-    url = control_url.rstrip("/") + "/health"
+    logged in (work-ready). Fails fast (3s) when the box is asleep.
+
+    The one definition of "a flask_wol box is awake": host_liveness asks the
+    same question with a shorter limit for page loads (PR #971 review)."""
+    url = control_url.strip().rstrip("/") + "/health"
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(url)
             return resp.status_code == 200
     except Exception:

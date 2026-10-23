@@ -153,7 +153,7 @@ zeigt, hat eine Definition: die SQL-Funktion `update_running_work()`
 | `/chat` | Gateway Chat, direkte Agent-Kommunikation |
 | `/memory` | 3-Layer Memory (Episodic/Semantic/Agent Tabs), Qdrant-Suche, Scope-Dropdown |
 | `/insights` | Intelligence Dashboard: KPIs, Agent-Performance, Failure Patterns, LLM Reports |
-| `/runtimes` | Fleet-Tab „Die Bühne" (v2, ADR-079, Standard seit 06.09.2026): ein laufendes Modell = eine Karte (`FleetStage`/`Stage`), Boxen als Mitglieder statt eine Kachel je Box; freie Boxen als `FreeBox`, schlafende als `AsleepBox`, Box-Details im Zahnrad-Cockpit (`BoxCockpit`). Tabs Cloud/Models/Infrastructure unverändert |
+| `/runtimes` | Fleet-Tab „Die Bühne" (v2, ADR-079, Standard seit 06.09.2026): ein laufendes Modell = eine Karte (`FleetStage`/`Stage`), Boxen als Mitglieder statt eine Kachel je Box; freie Boxen als `FreeBox`, schlafende als `AsleepBox` (ob eine Box schläft, sagt nur ihre eigene Prüfung `GET /hosts/{id}/metrics` — ein dunkler Modell-Port allein heisst „prüft", nie „schläft"; der Modelle-Tab nutzt dieselbe Regel über `services/host_liveness.py`: wach + Port dunkel = `no_model`), Box-Details im Zahnrad-Cockpit (`BoxCockpit`). Tabs Cloud/Models/Infrastructure unverändert |
 | `/schedule` | Cron Jobs + Runs |
 | `/settings` | Profile, Autonomy, Intelligence, Secrets, Admin Users, CLI Plugins (7 Tabs) |
 | `/skills` | Skill-Marketplace, Team-Zuweisungen (Matrix), Plugin Audit Trail |
