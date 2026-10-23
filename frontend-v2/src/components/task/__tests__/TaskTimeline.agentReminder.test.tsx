@@ -45,4 +45,31 @@ describe("TaskTimeline — reminders meant for the agent", () => {
     expect(screen.getByText("Review decision missing ×3")).toBeInTheDocument();
     expect(screen.queryByText(/POST \/api\/v1/)).toBeNull();
   });
+
+  it("REVIEW-REMINDER to the reviewer counts as the same agent reminder", () => {
+    const reminder = (ts: string): TaskTimelineEntry => ({
+      ...nudge(ts),
+      detail: 'REVIEW-REMINDER: Task "X" wartet seit 45 Min auf dein Review.\nPOST .../review {"decision": "approve"}',
+    });
+    render(<TaskTimeline entries={[nudge("2026-10-22T19:45:00Z"), reminder("2026-10-22T20:15:00Z")]} isLoading={false} />);
+    expect(screen.getByText("Reminder sent to the agent ×2")).toBeInTheDocument();
+    expect(screen.queryByText(/POST /)).toBeNull();
+  });
+
+  it("other watchdog notes (lead notes, completion evidence, escalation) keep their text and stay single rows", () => {
+    const note = (ts: string, detail: string): TaskTimelineEntry => ({ ...nudge(ts), detail });
+    const entries = [
+      nudge("2026-10-22T19:45:00Z"),
+      note("2026-10-22T19:50:00Z", 'REVIEW STUCK: Task "X" ist seit 301 Min im Review.\nReviewer: Quiet'),
+      nudge("2026-10-22T20:15:00Z"),
+      note("2026-10-22T20:20:00Z", "AUFTRAG ABGESCHLOSSEN: alle Subtasks fertig.\n## Evidence aus Subtasks\n- a"),
+      note("2026-10-22T20:25:00Z", "STILLE KARTE: seit 90 Min auf in_progress"),
+    ];
+    render(<TaskTimeline entries={entries} isLoading={false} />);
+    expect(screen.getByText("Reminder sent to the agent ×2")).toBeInTheDocument();
+    expect(screen.getAllByTestId("timeline-group")).toHaveLength(1);
+    expect(screen.getByText(/REVIEW STUCK: Task "X"/)).toBeInTheDocument();
+    expect(screen.getByText(/AUFTRAG ABGESCHLOSSEN/)).toBeInTheDocument();
+    expect(screen.getByText(/STILLE KARTE/)).toBeInTheDocument();
+  });
 });

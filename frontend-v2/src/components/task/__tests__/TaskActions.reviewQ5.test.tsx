@@ -85,6 +85,12 @@ describe("review: Stop run only while an agent reviews", () => {
     expect(await screen.findByRole("button", { name: "Stop run" })).toBeInTheDocument();
   });
 
+  it("a self-review stall (the builder still holds its card) keeps Stop run", () => {
+    apiMock.agentsList.mockResolvedValue([{ id: "dev", name: "Builder", role_canonical: "reviewer" }]);
+    renderActions(mkTask({ status: "review", assigned_agent_id: "dev", dispatch_intent: "root" } as Partial<Task>));
+    expect(screen.getByRole("button", { name: "Stop run" })).toBeInTheDocument();
+  });
+
   it("in progress keeps Stop run", () => {
     renderActions(mkTask());
     expect(screen.getByRole("button", { name: "Stop run" })).toBeInTheDocument();

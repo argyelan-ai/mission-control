@@ -41,8 +41,24 @@ export type TimelineItem =
  */
 export const AGENT_REMINDER_KEY = "comment.watchdog_notify";
 
-export function isAgentReminder(entry: Pick<TaskTimelineEntry, "source" | "kind">): boolean {
-  return entry.source === "comment" && entry.kind === "watchdog_notify";
+/**
+ * Only the two review reminders addressed to the agent. Other
+ * ``watchdog_notify`` comments (task_monitor.py: "AUFTRAG ABGESCHLOSSEN" with
+ * the subtask evidence, "REVIEW STUCK" / silent-card notes to the lead, the
+ * stuck escalation) carry information the operator needs and keep their text
+ * (PR #961 review SHOULD 1).
+ */
+const AGENT_REMINDER_PREFIX = /^\s*REVIEW-(?:ENTSCHEIDUNG FEHLT|REMINDER)\b/;
+
+export function isAgentReminder(
+  entry: Pick<TaskTimelineEntry, "source" | "kind" | "detail">,
+): boolean {
+  return (
+    entry.source === "comment" &&
+    entry.kind === "watchdog_notify" &&
+    typeof entry.detail === "string" &&
+    AGENT_REMINDER_PREFIX.test(entry.detail)
+  );
 }
 
 function groupKey(entry: TaskTimelineEntry): string | null {

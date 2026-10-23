@@ -209,6 +209,31 @@ async def test_new_review_round_starts_counting_again(fake_redis, make_board, ma
 
 
 @pytest.mark.asyncio
+async def test_review_round_entered_without_task_event_starts_counting_again(
+    fake_redis, make_board, make_agent, make_task,
+):
+    """Resolution auto-promote moves the card into review with only a
+    ``task.status_changed`` ActivityEvent, no TaskEvent. That still opens a
+    new round: the earlier round's escalation does not silence it
+    (PR #961 review NICE 1)."""
+    from app.models.activity import ActivityEvent
+
+    task = await _review_task_with_stale_comment(make_board, make_agent, make_task)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(ActivityEvent(event_type="task.review_escalation", title="old round",
+                            board_id=task.board_id, task_id=task.id,
+                            created_at=datetime.utcnow() - timedelta(hours=4, minutes=30)))
+        s.add(ActivityEvent(event_type="task.status_changed", title="auto-promote",
+                            board_id=task.board_id, task_id=task.id,
+                            detail={"old_status": "in_progress", "new_status": "review"},
+                            created_at=datetime.utcnow() - timedelta(hours=4, minutes=15)))
+        await s.commit()
+
+    await _tick(task.id, fake_redis)
+    assert await _nudge_count(task.id) == 1
+
+
+@pytest.mark.asyncio
 async def test_timeline_shows_the_notice_title_without_its_ascii_report_body(auth_client):
     """The operator notice's body is the report-channel text, ASCII on purpose
     ("Review fuer … haengt … noetig"). The operator's timeline shows the
@@ -231,3 +256,28 @@ async def test_timeline_shows_the_notice_title_without_its_ascii_report_body(aut
     assert notice["title"] == "Review STUCK: 'Deliver me' (Quiet)"
     assert notice["detail"] is None
     assert "haengt" not in str(notice["title"])
+
+
+@pytest.mark.asyncio
+async def test_timeline_keeps_the_detail_of_other_notice_types(auth_client):
+    """Only the review_stuck notice drops its body. A dispatch_escalation
+    notice carries the reason and minutes only in its detail, so that stays
+    (PR #961 review SHOULD 2)."""
+    from app.models.activity import ActivityEvent
+
+    board_id, task_id, _ = await _seed_status_events("review", [])
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(ActivityEvent(
+            event_type="operator.notice", title="Dispatch haengt: 'Deliver me'",
+            board_id=board_id, task_id=task_id, severity="warning",
+            detail={"action_type": "dispatch_escalation", "title": "Dispatch haengt: 'Deliver me'",
+                    "body": "Kein Ack seit 42 Min (no_ack)."},
+        ))
+        await s.commit()
+
+    resp = await auth_client.get(f"/api/v1/boards/{board_id}/tasks/{task_id}/timeline")
+    assert resp.status_code == 200, resp.text
+    notice = next(e for e in resp.json()["entries"] if (e.get("meta") or {}).get("event_type") == "operator.notice")
+    assert notice["detail"] is not None
+    assert "42 Min (no_ack)" in notice["detail"]
+

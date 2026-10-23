@@ -189,13 +189,6 @@ interface TaskActionsProps {
 export function TaskActions({ task, boardId, primaryTaken = false, mirroredOnPhone = false }: TaskActionsProps) {
   const t = useTranslations("tasks");
   const qc = useQueryClient();
-  // Same query (and cache entry) as ReviewOwnerGate: who holds a review.
-  const { data: agents } = useQuery({
-    queryKey: ["agents", boardId],
-    queryFn: () => api.agents.list(boardId),
-    staleTime: 60_000,
-    enabled: task.status === "review",
-  });
 
   const promoteMutation = useMutation({
     mutationFn: () => api.tasks.promote(boardId, task.id),
@@ -225,15 +218,17 @@ export function TaskActions({ task, boardId, primaryTaken = false, mirroredOnPho
     },
   });
 
-  // A review has a run only while a reviewer agent really holds it. The
-  // operator's own review (or a card nobody holds) has nothing to stop —
-  // "Stop run" there was a button without an effect (round-2 Q5, t4 N-neu-6).
-  const reviewAgent = task.assigned_agent_id ? agents?.find((a) => a.id === task.assigned_agent_id) : null;
-  const reviewerAtWork = task.status === "review" && !!reviewAgent && !isOperatorReview(task, reviewAgent);
+  // A review has a run only while an agent holds the card. The operator's
+  // own review (explicit request, or a card nobody holds) has nothing to
+  // stop — "Stop run" there was a button without an effect (round-2 Q5,
+  // t4 N-neu-6). A self-review stall (the builder still holds its own card)
+  // keeps it: the agent still gets watchdog reminders, and Stop run
+  // (run_control=stopped) is the UI's way to quiet them (PR #961 review NICE 2).
+  const agentHoldsReview = task.status === "review" && !!task.assigned_agent_id && !task.human_review_required;
   const hasActiveRun =
     task.status === "in_progress" ||
     (task.status === "inbox" && task.dispatched_at != null) ||
-    reviewerAtWork;
+    agentHoldsReview;
   const isStopped = task.run_control === "stopped" || task.run_control === "manual_hold";
   const mainBtn = primaryTaken ? QUIET_BTN : PRIMARY_BTN;
   const mainStyle = primaryTaken ? { color: C.textPrimary } : PRIMARY_STYLE;

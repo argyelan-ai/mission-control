@@ -1339,16 +1339,31 @@ class TaskMonitorMixin:
         The round starts with the latest status move into ``review``; nudges
         and escalations of earlier rounds do not count. No such move recorded
         → the whole history counts (the safe direction: fewer nudges).
+
+        A move into review is either a TaskEvent or — for paths that only
+        emit the ActivityEvent (resolution auto-promote in agent_comments /
+        the task_runner stale check via lock_and_set) — a
+        ``task.status_changed`` ActivityEvent with ``new_status=review``
+        (PR #961 review NICE 1).
         """
         from app.models.activity import ActivityEvent
         from sqlalchemy import func
 
-        round_start = (await session.exec(
+        task_event_start = (await session.exec(
             select(func.max(TaskEvent.created_at)).where(
                 TaskEvent.task_id == task.id,
                 TaskEvent.to_status == "review",
             )
         )).one()
+        activity_start = (await session.exec(
+            select(func.max(ActivityEvent.created_at)).where(
+                ActivityEvent.task_id == task.id,
+                ActivityEvent.event_type == "task.status_changed",
+                ActivityEvent.detail["new_status"].as_string() == "review",  # type: ignore[index]
+            )
+        )).one()
+        starts = [t for t in (task_event_start, activity_start) if t is not None]
+        round_start = max(starts) if starts else None
 
         def _in_round(stmt):
             return stmt.where(ActivityEvent.created_at >= round_start) if round_start else stmt
