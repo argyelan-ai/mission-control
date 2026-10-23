@@ -110,16 +110,17 @@ async def test_long_model_name_is_cut_to_the_label_limit(auth_client, monkeypatc
 
 @pytest.mark.asyncio
 async def test_agent_row_without_label_gets_a_readable_reason(auth_client):
-    """No model name to fall back on -> 422 with a plain-text reason (not a
-    Pydantic list the dialog toast cannot read)."""
+    """No model name to fall back on -> 422 with a readable reason at the
+    row's label (round-6 L4: FastAPI's list shape, so the dialog says it at
+    the field in the UI language; ``msg`` keeps the English reason)."""
     resp = await auth_client.post(
         "/api/v1/bench/challenges",
         json=_body([{"label": "", "source_kind": "agent", "agent_id": str(uuid.uuid4())}]),
     )
     assert resp.status_code == 422
-    detail = resp.json()["detail"]
-    assert isinstance(detail, str)
-    assert "label" in detail.lower()
+    [item] = resp.json()["detail"]
+    assert item["loc"] == ["body", "models", 0, "label"]
+    assert "label" in item["msg"].lower()
 
 
 @pytest.mark.asyncio

@@ -151,7 +151,7 @@ async def test_create_refuses_true_duplicate_labels(auth_client, monkeypatch, _n
         "models": [_spec("max"), _spec("max", label=f" {LABEL.lower()} ")],
     })
     assert resp.status_code == 422
-    assert "label" in resp.json()["detail"].lower()
+    assert "label" in resp.json()["detail"][0]["msg"].lower()
 
 
 # ── video: effort in tag and outro ─────────────────────────────────────────

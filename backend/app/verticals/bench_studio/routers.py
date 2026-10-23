@@ -240,6 +240,21 @@ async def check_effort_levels(
     return effort_probe.serialize(row, served, reachable=effort_probe.reached(row))
 
 
+def _row_422(index: int, field: str, code: str, msg: str, **ctx: object) -> HTTPException:
+    """A refusal that belongs to one field of one model row (round-5 r1 N2).
+
+    FastAPI's own validation shape — ``[{loc, msg, type, ctx}]`` — so the
+    dialog places it at the row's field and words it in the UI language from
+    the stable ``type``; a bare English sentence reached the operator as an
+    English toast, also in the German UI. ``msg`` keeps the English reason for
+    every other reader (logs, curl). ``index`` is 0-based like Pydantic's
+    ``loc``; ``ctx`` row numbers are 1-based like the dialog's "Model 2"."""
+    item: dict[str, object] = {"loc": ["body", "models", index, field], "msg": msg, "type": code}
+    if ctx:
+        item["ctx"] = ctx
+    return HTTPException(422, [item])
+
+
 def _unique_labels(specs: list[BenchModelSpec], efforts: list[str]) -> None:
     """Every entry of a challenge needs to be told apart (round-1 user test:
     "DeepSeek" Off vs Max became two identical rows in the UI and video).
@@ -254,23 +269,30 @@ def _unique_labels(specs: list[BenchModelSpec], efforts: list[str]) -> None:
     for row, (spec, effort) in enumerate(zip(specs, efforts), start=1):
         key = orchestrator.entry_label_key(spec.label, spec.source_kind, effort)
         if key in seen:
-            raise HTTPException(
-                422,
+            raise _row_422(
+                row - 1,
+                "label",
+                "bench_duplicate_entry",
                 f"Model row {row} has the same label and the same effort as row "
                 f"{seen[key]} ({spec.label.strip()!r}) — choose another effort or "
                 "give this row its own label.",
+                row=row,
+                other_row=seen[key],
             )
         seen[key] = row
 
 
-async def _validate_effort(session: AsyncSession, spec: BenchModelSpec) -> str:
-    """The effort level to store for ``spec`` — 422 when it cannot run."""
+async def _validate_effort(session: AsyncSession, spec: BenchModelSpec, index: int) -> str:
+    """The effort level to store for ``spec`` (row ``index``, 0-based) — 422
+    at the row's effort when it cannot run."""
     level = spec.effort or "default"
     if level == "default":
         return level
     if spec.source_kind == "agent":
-        raise HTTPException(
-            422,
+        raise _row_422(
+            index,
+            "effort",
+            "bench_effort_agent_path",
             f"model {spec.label!r}: effort cannot be set on the agent path yet — "
             "the agent's session level is recorded instead",
         )
@@ -282,7 +304,9 @@ async def _validate_effort(session: AsyncSession, spec: BenchModelSpec) -> str:
     try:
         effort_probe.level_fields(probe, level)
     except UnsupportedEffortError as exc:
-        raise HTTPException(422, f"model {spec.label!r}: {exc}") from exc
+        raise _row_422(
+            index, "effort", "bench_effort_not_offered", f"model {spec.label!r}: {exc}", level=level
+        ) from exc
     return level
 
 
@@ -319,7 +343,15 @@ async def create_challenge(
             raise HTTPException(400, f"model {spec.label!r}: agent_id required")
         if spec.source_kind == "spark" and not (spec.spark_model or "").strip():
             if resolved_spark_model is None:
-                resolved_spark_model = await orchestrator.resolve_spark_model_or_422()
+                try:
+                    resolved_spark_model = await orchestrator.resolve_spark_model_or_422()
+                except HTTPException as exc:
+                    if exc.status_code != 422:
+                        raise
+                    # Said at this auto row's model select, in the UI language.
+                    raise _row_422(
+                        row - 1, "spark_model", "bench_spark_unreachable", str(exc.detail)
+                    ) from exc
             spec.spark_model = resolved_spark_model
         if not spec.label.strip():
             if spec.source_kind == "spark":
@@ -328,11 +360,13 @@ async def create_challenge(
                 # the model id itself stays whole.
                 spec.label = (spec.spark_model or "").strip()[:LABEL_MAX_LEN].rstrip()
             else:
-                raise HTTPException(
-                    422,
+                raise _row_422(
+                    row - 1,
+                    "label",
+                    "bench_agent_label_required",
                     f"Model row {row}: the label is empty — give this agent row a name.",
                 )
-    efforts = [await _validate_effort(session, spec) for spec in body.models]
+    efforts = [await _validate_effort(session, spec, i) for i, spec in enumerate(body.models)]
     _unique_labels(body.models, efforts)
 
     series_no = None

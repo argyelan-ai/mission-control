@@ -512,7 +512,7 @@ async def test_create_unprobed_level_422(auth_client, monkeypatch, _no_backgroun
     monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=_probe_row(["off"], key=rp.ENABLE_THINKING)))
     resp = await auth_client.post("/api/v1/bench/challenges", json=_body(effort="max"))
     assert resp.status_code == 422
-    assert "not available" in resp.json()["detail"]
+    assert "not available" in resp.json()["detail"][0]["msg"]
 
 
 @pytest.mark.asyncio
@@ -520,14 +520,14 @@ async def test_create_effort_on_no_effect_probe_422(auth_client, monkeypatch, _n
     monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=_probe_row([], key=None, status="no_effect")))
     resp = await auth_client.post("/api/v1/bench/challenges", json=_body(effort="off"))
     assert resp.status_code == 422
-    assert "no_effect" in resp.json()["detail"]
+    assert "no_effect" in resp.json()["detail"][0]["msg"]
 
 
 @pytest.mark.asyncio
 async def test_create_agent_row_with_effort_422(auth_client, _no_background):
     resp = await auth_client.post("/api/v1/bench/challenges", json=_body(effort="high", source="agent"))
     assert resp.status_code == 422
-    assert "agent path" in resp.json()["detail"]
+    assert "agent path" in resp.json()["detail"][0]["msg"]
 
 
 @pytest.mark.asyncio

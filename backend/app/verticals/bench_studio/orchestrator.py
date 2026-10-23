@@ -494,7 +494,9 @@ async def resolve_spark_model_or_422() -> str:
     """
     status = await spark_models_status()
     if not status["reachable"] or not status["active"]:
-        raise HTTPException(422, "Spark nicht erreichbar — Modell nicht auflösbar")
+        raise HTTPException(
+            422, "Spark is not reachable, so the active model cannot be resolved right now."
+        )
     return status["active"]
 
 

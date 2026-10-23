@@ -44,6 +44,7 @@ function fieldKeyOf(path: (string | number)[]): string | null {
     if (leaf === "label") return `label-${index}`;
     if (leaf === "display_tag") return `tag-${index}`;
     if (leaf === "spark_model" || leaf === "agent_id") return `model-${index}`;
+    if (leaf === "effort") return `effort-${index}`;
   }
   return null;
 }
@@ -156,7 +157,7 @@ export function NewChallengeDialog({
       const unmapped: ApiFieldError[] = [];
       for (const item of items) {
         const key = fieldKeyOf(item.path);
-        if (key) mapped[key] ??= fieldMessage(item);
+        if (key) mapped[key] ??= fieldMessage(item, key);
         else unmapped.push(item);
       }
       setFieldErrors(mapped);
@@ -176,7 +177,17 @@ export function NewChallengeDialog({
     setFocusField(null);
   }, [focusField]);
 
-  function fieldMessage(item: ApiFieldError): string {
+  function fieldMessage(item: ApiFieldError, key: string): string {
+    // The server's own refusals (routers._row_422) carry a stable type; its
+    // English `msg` is never shown (round-5 r1 N2).
+    const otherRow = item.ctx?.other_row;
+    if (item.type === "bench_duplicate_entry" && typeof otherRow === "number")
+      return t("labelDuplicate", { index: otherRow });
+    if (item.type === "bench_agent_label_required") return t("fieldError.agentLabelRequired");
+    if (item.type === "bench_effort_agent_path") return t("fieldError.effortAgentPath");
+    if (item.type === "bench_spark_unreachable") return t("fieldError.sparkUnreachable");
+    // bench_effort_not_offered, and Pydantic's own refusal of an unknown level.
+    if (key.startsWith("effort-")) return t("fieldError.effortNotOffered");
     const max = item.ctx?.max_length;
     if (item.type === "string_too_long" && typeof max === "number") return t("fieldError.tooLong", { max });
     if (item.type === "string_too_short" || item.type === "missing") return t("fieldError.required");
@@ -251,6 +262,9 @@ export function NewChallengeDialog({
     if ("label" in patch) keys.push(`label-${i}`);
     if ("display_tag" in patch) keys.push(`tag-${i}`);
     if ("spark_model" in patch || "agent_id" in patch || "source_kind" in patch) keys.push(`model-${i}`, `label-${i}`);
+    // Another level or model answers an effort refusal; a duplicate refusal
+    // (said at the label) is about label AND effort.
+    if ("effort" in patch || "spark_model" in patch || "source_kind" in patch) keys.push(`effort-${i}`, `label-${i}`);
     if (keys.length) clearFieldErrors(...keys);
   }
 
@@ -722,7 +736,9 @@ export function NewChallengeDialog({
               sparkOffline={sparkOffline}
               value={m.effort}
               onChange={(effort) => setModel(i, { effort })}
+              {...fieldA11y(`effort-${i}`)}
             />
+            {fieldError(`effort-${i}`)}
             {/* The duplicate hint closes the model's own block (above the
                 divider to the next model); error text tone via STATUS_TEXT. */}
             {duplicateOf[i] !== null && (

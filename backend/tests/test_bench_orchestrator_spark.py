@@ -232,6 +232,9 @@ async def test_resolve_spark_model_or_422_unreachable_raises_422(monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         await orchestrator.resolve_spark_model_or_422()
     assert exc_info.value.status_code == 422
+    # The UI words it from the router's type; this text is for logs and curl
+    # readers, in English like every other server reason (round-6 L4 review).
+    assert exc_info.value.detail.startswith("Spark is not reachable")
 
 
 # ── Task 5: ModelUsageEvent for vanilla (direct-API) generations ──────────

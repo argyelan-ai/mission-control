@@ -117,7 +117,7 @@ async def test_same_label_and_same_effort_is_refused_with_a_reason(
         "models": [_spec("max"), _spec("max", label=f" {LABEL.lower()} ")],
     })
     assert resp.status_code == 422
-    detail = resp.json()["detail"].lower()
+    detail = resp.json()["detail"][0]["msg"].lower()
     assert "effort" in detail and "label" in detail
 
 

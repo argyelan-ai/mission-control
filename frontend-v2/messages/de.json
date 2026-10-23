@@ -4098,7 +4098,11 @@
         "tooLong": "Höchstens {max} Zeichen.",
         "required": "Bitte ausfüllen.",
         "range": "Ausserhalb des erlaubten Bereichs.",
-        "invalid": "Dieser Wert wird nicht angenommen."
+        "invalid": "Dieser Wert wird nicht angenommen.",
+        "agentLabelRequired": "Gib dieser Agent-Zeile einen Namen.",
+        "effortNotOffered": "Diese Effort-Stufe bietet das Modell nicht an — wähle eine andere oder „Standard“.",
+        "effortAgentPath": "Bei einer Agent-Zeile lässt sich Effort noch nicht einstellen — die Stufe der Sitzung wird aufgezeichnet.",
+        "sparkUnreachable": "Spark nicht erreichbar — das aktive Modell lässt sich gerade nicht bestimmen. Wähle ein Modell oder versuche es gleich nochmal."
       }
     },
     "editChallengeDialog": {
