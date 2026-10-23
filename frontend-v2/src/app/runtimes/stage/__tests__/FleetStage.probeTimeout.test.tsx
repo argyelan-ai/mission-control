@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { Host } from "@/lib/types";
+import type { Host, RuntimeLiveStatus } from "@/lib/types";
 import type { HostGroup } from "../../grouping";
 import { FleetStage } from "../FleetStage";
 
@@ -44,11 +44,11 @@ const recipe = {
   host: { id: "alpha", slug: "alpha", display_name: "Box Alpha" },
 } as HostGroup["runtimes"][number];
 
-function renderStage(groups: HostGroup[]) {
+function renderStage(groups: HostGroup[], live?: Record<string, RuntimeLiveStatus>) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <FleetStage stageGroups={groups} sleepingGroups={[]} onOpen={() => {}} />
+      <FleetStage stageGroups={groups} sleepingGroups={[]} live={live} onOpen={() => {}} />
     </QueryClientProvider>
   );
 }
@@ -128,9 +128,49 @@ describe("FleetStage — probe timed out", () => {
       { host: other, runtimes: [serving] },
     ]);
     const card = await screen.findByTestId("free-box");
-    await screen.findByText("asleep · not reachable");
+    await waitFor(() => expect(screen.getByTestId("free-box-line")).toHaveTextContent("no model · no readings"));
     expect(card).not.toHaveTextContent("no model · ready");
+    // Round-3 (r2 N1): the state is said ONCE — "ASLEEP" in the corner and
+    // "asleep · not reachable" right below it was the same word twice.
+    expect(card.textContent?.match(/asleep/gi) ?? []).toHaveLength(1);
+    // …and no "· idle" claim about an engine that does not answer.
+    expect(card).not.toHaveTextContent("Endpoint · idle");
+    expect(card).toHaveTextContent("Endpoint");
+  });
+
+  // Round-3 (t3 NICE-2): the live status said "reachable: false, 3167 failed
+  // probes in a row" after 0.85 s, yet the card said "Checking…" for 4–5 s
+  // while it waited for the box's own metrics to time out.
+  it("a box the watcher already knows is dark is asleep at once, not 'Checking…'", async () => {
+    vi.spyOn(api.hosts, "metrics").mockImplementation(() => new Promise(() => {}));
+    const sleeper = makeHost({ slug: "sleeper", display_name: "Sleeper", kind: "flask_wol", power_managed: true });
+    const other = makeHost({ slug: "beta", display_name: "Box Beta", ui_order: 1 });
+    const serving = { ...recipe, id: "rt-2", slug: "rt-2", state: "ready" as const, host: { id: "beta", slug: "beta", display_name: "Box Beta" } };
+    const sleeperRow = { ...recipe, id: "rt-sleep", slug: "rt-sleep", host: { id: "sleeper", slug: "sleeper", display_name: "Sleeper" }, state: "unknown" as const, container_status: "not_probed" };
+    renderStage(
+      [{ host: sleeper, runtimes: [sleeperRow] }, { host: other, runtimes: [serving] }],
+      { "rt-sleep": { reachable: false, served_model: null, latency_ms: null, last_probe_at: "", consecutive_failures: 3167, drift: false } },
+    );
+    const card = await screen.findByTestId("free-box");
     expect(card).toHaveTextContent("asleep");
+    expect(card).not.toHaveTextContent("Checking…");
+    expect(card).not.toHaveTextContent("checking");
+    expect(card).not.toHaveTextContent("Endpoint · idle");
+  });
+
+  it("one or two failed probes are a blip — the card still checks", async () => {
+    vi.spyOn(api.hosts, "metrics").mockImplementation(() => new Promise(() => {}));
+    const sleeper = makeHost({ slug: "sleeper", display_name: "Sleeper", kind: "flask_wol", power_managed: true });
+    const other = makeHost({ slug: "beta", display_name: "Box Beta", ui_order: 1 });
+    const serving = { ...recipe, id: "rt-2", slug: "rt-2", state: "ready" as const, host: { id: "beta", slug: "beta", display_name: "Box Beta" } };
+    const sleeperRow = { ...recipe, id: "rt-sleep", slug: "rt-sleep", host: { id: "sleeper", slug: "sleeper", display_name: "Sleeper" }, state: "unknown" as const, container_status: "not_probed" };
+    renderStage(
+      [{ host: sleeper, runtimes: [sleeperRow] }, { host: other, runtimes: [serving] }],
+      { "rt-sleep": { reachable: false, served_model: null, latency_ms: null, last_probe_at: "", consecutive_failures: 1, drift: false } },
+    );
+    const card = await screen.findByTestId("free-box");
+    expect(card).toHaveTextContent("Checking…");
+    expect(card).not.toHaveTextContent("asleep");
   });
 
   it("a box that answers keeps 'no model · ready'", async () => {

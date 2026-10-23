@@ -2034,13 +2034,17 @@ export interface CliUpdateProgress {
  *  - cli_config          Live-Abfrage scheiterte, aber die Liste stammt aus der
  *                        CLI-eigenen Config auf Platte (kimi: config.toml) —
  *                        also weder „live bestätigt" noch „unser Handmanifest".
+ *  - asleep              Der Laufzeit-Wächter sieht die Box seit ≥ 3 Proben
+ *                        dunkel (schläft/aus) — nicht abgefragt, nicht
+ *                        gecacht; „Neu abfragen" fragt trotzdem.
  */
 export type ModelCatalogStatus =
   | "ok"
   | "credential_missing"
   | "unreachable"
   | "manifest_fallback"
-  | "cli_config";
+  | "cli_config"
+  | "asleep";
 
 export interface ModelCatalogModel {
   id: string;
@@ -2061,6 +2065,9 @@ export interface ModelCatalogProvider {
   key: string; // "anthropic" | "grok" | "kimi" | "openai:qwen-general" | …
   protocol: string; // "anthropic" | "grok" | "kimi" | "openai"
   display_name: string;
+  /** The provider name the backend sends (`label`) — "Anthropic", or the
+   *  runtime's own display name for a local endpoint. */
+  label?: string;
   endpoint: string | null;
   status: ModelCatalogStatus;
   /** Warum die Live-Probe scheiterte — orthogonal zu `status`. */

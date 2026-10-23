@@ -279,6 +279,32 @@ export function hostProbePending(group: HostGroup): boolean {
   return group.runtimes.some((rt) => !rt.is_slot && rt.container_status === "not_probed");
 }
 
+/** Failed watcher probes in a row from which a box counts as dark — the
+ *  same count at which the watcher raises `runtime.unreachable` and a stage
+ *  turns "failed" (runtime_watcher.UNREACHABLE_EVENT_THRESHOLD, Stage.tsx). */
+export const DARK_AFTER_FAILURES = 3;
+
+/** The runtime watcher already knows this box does not answer: one of its
+ *  rows has failed DARK_AFTER_FAILURES probes in a row (and is not in a
+ *  planned switch). Round-3 user test (t3 NICE-2): the live status said so
+ *  after 0.85 s, yet the card said "Checking…" for 4–5 s while it waited for
+ *  the box's own metrics call to time out. */
+export function hostKnownDark(
+  group: HostGroup,
+  live?: Record<string, RuntimeLiveStatus>,
+): boolean {
+  if (!live) return false;
+  return group.runtimes.some((rt) => {
+    const l = live[rt.slug ?? rt.id];
+    return (
+      !!l &&
+      l.reachable === false &&
+      l.status !== "switching" &&
+      (l.consecutive_failures ?? 0) >= DARK_AFTER_FAILURES
+    );
+  });
+}
+
 /** Die Slot-Zeile dieser Box (ADR-078) — die feste „Box-URL", an der die
  *  Agenten hängen. null, solange das Backend für die Box keine angelegt hat
  *  (ältere Stände, Boxen ohne befehlsgetriebene Runtime). Gibt es mehrere,

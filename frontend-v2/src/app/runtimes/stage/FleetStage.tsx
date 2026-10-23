@@ -16,7 +16,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { C } from "@/lib/colors";
 import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
 import type { HostGroup } from "../grouping";
-import { hostProbePending, hostProbeTimedOut, pickServing, pickSlot } from "../grouping";
+import { hostKnownDark, hostProbePending, hostProbeTimedOut, pickServing, pickSlot } from "../grouping";
 import { useDevices } from "../DeviceControl";
 import { Stage, type StageMember } from "./Stage";
 import { FreeBox } from "./FreeBox";
@@ -251,6 +251,7 @@ export function FleetStage({
                   device={devices.get(g.host.id)}
                   probeTimedOut={hostProbeTimedOut(g)}
                   probePending={hostProbePending(g)}
+                  knownDark={hostKnownDark(g, live)}
                   onOpenCockpit={() =>
                     openCockpit({
                       members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id), slot }],

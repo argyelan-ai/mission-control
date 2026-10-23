@@ -35,6 +35,7 @@ import {
   Plus,
   CheckCircle2,
   FileCode2,
+  Moon,
   Terminal,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -49,6 +50,7 @@ import { SectionOrFragment } from "@/components/shared/Section";
 import { CappedList } from "@/components/shared/CappedList";
 import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { boxLabel } from "@/components/shared/RuntimePill";
 
 // ── Status-Vokabular ─────────────────────────────────────────────────────────
 // Jeder Zustand bekommt eigene Worte. „unreachable" darf NIE wie „leer"
@@ -59,7 +61,7 @@ interface StatusChrome {
   labelKey: string;
   /** Erklärender Satz im Hinweisband (null = kein Band, alles in Ordnung). */
   headlineKey: string | null;
-  tone: "ok" | "warn" | "err";
+  tone: "ok" | "warn" | "err" | "idle";
   Icon: typeof AlertTriangle;
 }
 
@@ -89,6 +91,14 @@ const STATUS_CHROME: Record<ModelCatalogStatus, StatusChrome> = {
     tone: "err",
     Icon: KeyRound,
   },
+  // Round-3 user test (t4 S3): a box the runtime watcher already knows is
+  // dark is not probed — a sleeping box is a normal state, not an error.
+  asleep: {
+    labelKey: "statusAsleepLabel",
+    headlineKey: "statusAsleepHeadline",
+    tone: "idle",
+    Icon: Moon,
+  },
   unreachable: {
     labelKey: "statusUnreachableLabel",
     headlineKey: "statusUnreachableHeadline",
@@ -101,12 +111,14 @@ const TONE_TEXT: Record<StatusChrome["tone"], string> = {
   ok: "text-ok",
   warn: "text-warn",
   err: "text-err",
+  idle: "text-muted",
 };
 
 const TONE_BANNER: Record<StatusChrome["tone"], string> = {
   ok: "bg-surface border-subtle",
   warn: "bg-warn-subtle border-warn",
   err: "bg-err-subtle border-err",
+  idle: "bg-surface border-subtle",
 };
 
 // ── Modell-Zeile ─────────────────────────────────────────────────────────────
@@ -225,7 +237,10 @@ function ProviderGroup({
 
   // Standard: aufgeklappt, wenn es etwas Neues gibt ODER etwas nicht stimmt —
   // sonst bleibt die Seite ruhig (Anthropic allein liefert 11 Modelle).
-  const [open, setOpen] = useState(newCount > 0 || !probeSucceeded);
+  // A sleeping box has nothing to unfold — its banner says everything.
+  const [open, setOpen] = useState(
+    newCount > 0 || (!probeSucceeded && provider.status !== "asleep"),
+  );
 
   return (
     <div
@@ -237,7 +252,9 @@ function ProviderGroup({
       {/* Kopfzeile — eine Zeile: Status, Name, Protokoll, Anzahl, Prüfzeit. */}
       <ListRow
         testId="catalog-provider-row"
-        tone={chrome.tone === "ok" ? "ok" : chrome.tone === "warn" ? "warn" : "error"}
+        tone={
+          chrome.tone === "ok" ? "ok" : chrome.tone === "warn" ? "warn" : chrome.tone === "idle" ? "idle" : "error"
+        }
         className="!border-transparent !bg-transparent"
         onClick={() => setOpen((v) => !v)}
         leading={
@@ -246,7 +263,11 @@ function ProviderGroup({
             className={`shrink-0 text-dim transition-transform ${open ? "rotate-90" : ""}`}
           />
         }
-        name={provider.display_name || provider.key}
+        // The backend names the provider in `label`; the internal key
+        // ("openai:<slug>") was shown as the name (round-3 t4 picture). A slot
+        // name's "(aktuell: <model>)" suffix is dropped while the models are
+        // listed right below it — same rule as RuntimePill (PR #964 review).
+        name={boxLabel(provider.display_name || provider.label || provider.key, models.length > 0)}
         summary={[provider.protocol, `${models.length}`, t(chrome.labelKey)].join(" · ")}
         chips={
           <>
@@ -500,7 +521,7 @@ export function ModelCatalogSection({ embedded = false }: { embedded?: boolean }
               <div>
                 {t("confirmBodyBefore")}{" "}
                 <span className="font-mono text-primary">{pending.model.id}</span> {t("confirmBodyAt")}{" "}
-                <span className="text-primary">{pending.provider.display_name}</span>{t("confirmBodyAfter")}
+                <span className="text-primary">{pending.provider.display_name || pending.provider.label || pending.provider.key}</span>{t("confirmBodyAfter")}
               </div>
               <div className="text-muted">
                 {t("confirmBodyHint")}

@@ -184,6 +184,18 @@ def _runtime_locality(runtime: Runtime, host: ResolvedHost | None) -> str:
 # ── DB-backed runtime CRUD ───────────────────────────────────────────────────
 
 
+#: Address-like fields that are stored trimmed. Round-3 user test (t4 S3): a
+#: row was saved as " http://<box>:5559/v1" — the wizard's probe trims its URL
+#: (``ProbeEndpointBody``) and succeeded, the save did not, and every later
+#: request to the row failed with "UnsupportedProtocol". Migration 0222
+#: trims the rows saved before this.
+_TRIMMED_FIELDS = ("endpoint", "healthcheck_path", "control_url", "model_identifier")
+
+
+def _trim(v):
+    return v.strip() if isinstance(v, str) else v
+
+
 class RuntimeCreate(BaseModel):
     """Generic runtime creation — supersedes LMS-specific AddLMStudioRuntimeBody."""
     slug: str
@@ -227,6 +239,11 @@ class RuntimeCreate(BaseModel):
     # Rezept-Umschalter (02.09.2026): {"nodes": 1|2, …} — vom Katalog kopiert,
     # wenn die Instanz über /hosts/{id}/recipes/{slug}/start entsteht.
     topology: dict | None = None
+
+    @field_validator(*_TRIMMED_FIELDS, mode="before")
+    @classmethod
+    def _trim_create(cls, v):
+        return _trim(v)
 
     @field_validator("control_url")
     @classmethod
@@ -283,6 +300,11 @@ class RuntimeUpdate(BaseModel):
     autostart_supported: bool | None = None  # ADR-057: Engine Control v0
     autostart_flag_path: str | None = None
     topology: dict | None = None
+
+    @field_validator(*_TRIMMED_FIELDS, mode="before")
+    @classmethod
+    def _trim_update(cls, v):
+        return _trim(v)
 
     @field_validator("control_url")
     @classmethod

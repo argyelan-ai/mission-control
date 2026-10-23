@@ -1730,10 +1730,13 @@ export default function AgentDetailPage() {
                   <span>{t("detail.lastSeenAgo", { ago: timeAgo(agent.last_seen_at, locale) })}</span>
                 </div>
 
-                {/* Context bar */}
-                <div className="mt-4 max-w-sm">
+                {/* Context bar — the agent's last REPORTED figure (its work
+                    session). The chat ring measures the chat's own session;
+                    both are right, so each says which one it is (round-3
+                    user test t3 NICE-1: 2 % here vs 5 % in the chat). */}
+                <div className="mt-4 max-w-sm" title={t("detail.contextReportedHint")} data-testid="agent-context-bar">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] text-[var(--color-text-muted)]">{t("contextLabel")}</span>
+                    <span className="text-[10px] text-[var(--color-text-muted)]">{t("detail.contextReportedLabel")}</span>
                     <span className="text-[10px] text-[var(--color-text-muted)]">{formatContextPct(agent.context_tokens, agent.context_max)}</span>
                   </div>
                   <div className="h-1.5 rounded-full bg-[var(--color-bg-elevated)] overflow-hidden">

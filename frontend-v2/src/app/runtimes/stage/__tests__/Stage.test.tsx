@@ -369,6 +369,7 @@ describe("Stage — who makes the load", () => {
     await vi.waitFor(() => expect(tile).toHaveTextContent(/^1working/));
     const speed = screen.getByTestId("kpi-speed");
     expect(speed).not.toHaveAttribute("title");
+    expect(screen.queryByTestId("kpi-speed-note")).not.toBeInTheDocument();
   });
 
   it("load without a working agent is labelled as such", async () => {
@@ -378,7 +379,13 @@ describe("Stage — who makes the load", () => {
     renderWithQuery(<Stage runtime={makeRuntime({ slug: "rt" })} members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]} live={live} onOpenCockpit={() => {}} />);
     const speed = await screen.findByTestId("kpi-speed");
     await vi.waitFor(() => expect(speed).toHaveTextContent("73 tok/s"));
-    await vi.waitFor(() => expect(speed).toHaveTextContent("Speed · solo · no agent"));
+    // Round-3 (r2 N2, t3 NICE-3): "SPEED · DUO · NO AGENT" wrapped on a phone
+    // in mono capitals and did not say who loads the box. The machine label
+    // stays "Speed · solo"; a calm sentence below names the likely source.
+    await vi.waitFor(() => expect(screen.getByTestId("kpi-speed-note")).toHaveTextContent(
+      "no agent — e.g. a bench run or an API call",
+    ));
+    expect(speed.querySelector(".label-sys")).toHaveTextContent(/^Speed · solo$/);
     expect(speed).toHaveAttribute(
       "title",
       "No agent on this box is working. The load comes from somewhere else — for example a bench run or a direct API call.",
@@ -392,7 +399,10 @@ describe("Stage — who makes the load", () => {
     vi.spyOn(api.agents, "list").mockImplementation(() => new Promise(() => {}));
     renderWithQuery(<Stage runtime={makeRuntime({ slug: "rt" })} members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]} live={live} onOpenCockpit={() => {}} />);
     const tile = await screen.findByTestId("kpi-in-use");
-    await vi.waitFor(() => expect(tile).toHaveTextContent(/^–– connected/));
+    // Round-3 (t3 NICE-5c): "– · – connected" was a placeholder that read
+    // like a broken figure. Unknown is one "–" over the plain label.
+    await vi.waitFor(() => expect(tile).toHaveTextContent(/^–Agents/));
+    expect(tile).not.toHaveTextContent(/– connected/);
     expect(tile).not.toHaveTextContent(/\+ 1 connected/);
     // The tap-popover must not claim "nobody on this box" either.
     expect(tile).toHaveTextContent("Checking…");
@@ -405,5 +415,34 @@ describe("Stage — who makes the load", () => {
     renderWithQuery(<Stage runtime={makeRuntime({ slug: "rt" })} members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]} live={live} onOpenCockpit={() => {}} />);
     const tile = await screen.findByTestId("kpi-in-use");
     await vi.waitFor(() => expect(tile).toHaveTextContent(/^0working\+ 1 connected/));
+  });
+});
+
+
+// Round-3 (t3 NICE-4): on a phone the model title was cut mid-version
+// ("DeepSeek V4.1 Flash 1…") — the version is what tells two recipes apart.
+// The title may wrap to a second line instead of being cut.
+describe("Stage — model title on a phone", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(api.hosts, "pulse").mockResolvedValue({ points: [], now_tps: null, idle_seconds: null, available: false });
+    vi.spyOn(api.hosts, "metrics").mockResolvedValue({ reachable: true, gpu_util_pct: 0, vram_used_mb: 0, vram_total_mb: 8192, gpu_temp_c: 40 });
+    vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({ runtime_slug: "rt", count: 0, agents: [] });
+    vi.spyOn(api.agents, "list").mockResolvedValue([] as never);
+  });
+
+  it("wraps instead of cutting the version off", () => {
+    renderWithQuery(
+      <Stage
+        runtime={makeRuntime({ slug: "rt", display_name: "DeepSeek V4.1 Flash 1017 NVFP4 — vLLM (2× Spark)" })}
+        members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]}
+        onOpenCockpit={() => {}}
+      />,
+    );
+    const title = screen.getByTestId("stage-title");
+    expect(title).toHaveTextContent("DeepSeek V4.1 Flash 1017");
+    expect(title.className).not.toMatch(/\btruncate\b/);
+    expect(title.className).toMatch(/line-clamp-2/);
   });
 });

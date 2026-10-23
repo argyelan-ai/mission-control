@@ -1657,7 +1657,9 @@ describe("Composer", () => {
     );
     expect(screen.getByTestId("context-ring")).toHaveAttribute(
       "title",
-      "≈12k/200k used. Source: CLI. The CLI status line shows what is left until auto-compaction instead — different basis, both correct."
+      // Round-3 (t3 NICE-1): the ring says it measures THIS chat — the agent
+      // page's figure is the agent's work session and may differ.
+      "This chat: ≈12k/200k used. Source: CLI. The agent page shows the last reported figure of its work session, the CLI status line what is left until auto-compaction — different session or basis, both correct."
     );
   });
 
