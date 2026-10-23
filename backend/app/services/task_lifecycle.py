@@ -1797,7 +1797,7 @@ async def handle_human_review_handoff(
         author_type="system",
         comment_type="handoff",
         content=(
-            f"Human-Review angefordert fuer '{task.title}' — wartet auf Mark "
+            f"Human-Review angefordert für '{task.title}' — wartet auf Mark "
             "(kein Agent-Reviewer dispatcht)."
         ),
     )

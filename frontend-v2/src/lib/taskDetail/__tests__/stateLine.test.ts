@@ -103,3 +103,22 @@ describe("deriveStateLine — one word, at most one '·', exactly one time", () 
     expect(line(task, {}, "de").detail).toEqual({ key: "askedAgo", values: { span: "6 Tagen" } });
   });
 });
+
+describe("deriveStateLine — the agent that delivered a card in review (round-2 Q5)", () => {
+  it("review with nobody assigned names who delivered it, not 'with'", () => {
+    const task = taskFixture({ status: "review", delivered_by_agent_id: "agent-2" });
+    expect(line(task).detail).toEqual({ key: "deliveredBy", values: { name: "beta" } });
+  });
+
+  it("a reviewer holding the card still reads 'with' the reviewer", () => {
+    const task = taskFixture({ status: "review", assigned_agent_id: "agent-1", delivered_by_agent_id: "agent-2" });
+    expect(line(task).detail).toEqual({ key: "with", values: { name: "alpha" } });
+  });
+
+  it("a finished card says who did the work, also after the operator's review cleared the assignment", () => {
+    const task = taskFixture({ status: "done", delivered_by_agent_id: "agent-2" });
+    const rr = runRecordFixture();
+    const l = line(task, { runRecord: { ...rr, zeiten: { ...rr.zeiten, dauer_sekunden: 12 * 60 } } });
+    expect(l.detail).toEqual({ key: "tookNamed", values: { name: "beta", duration: "12 min" } });
+  });
+});

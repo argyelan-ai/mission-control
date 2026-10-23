@@ -102,6 +102,11 @@ export function deriveStateLine({
   now?: Date;
 }): StateLine {
   const agentName = agents.find((a) => a.id === task.assigned_agent_id)?.name;
+  // The agent that delivered the card (round-2 Q5): the hand-off to review
+  // clears or moves the assignment, the status history keeps the builder.
+  const delivererName = task.delivered_by_agent_id
+    ? agents.find((a) => a.id === task.delivered_by_agent_id)?.name
+    : undefined;
   const statusWord = { ns: "tasks" as const, key: STATUS_LABEL_KEY[task.status] };
   const statusTone = STATUS_TONE[task.status] ?? "muted";
 
@@ -158,7 +163,13 @@ export function deriveStateLine({
     return {
       tone: statusTone,
       word: statusWord,
-      detail: duration ? withName(agentName, "took", { duration }) : agentName ? { key: "with", values: { name: agentName } } : null,
+      // Who did the work: the deliverer when known (a reviewer may hold the
+      // card now, or nobody after the operator's review).
+      detail: duration
+        ? withName(delivererName ?? agentName, "took", { duration })
+        : agentName
+          ? { key: "with", values: { name: agentName } }
+          : null,
     };
   }
 
@@ -179,7 +190,14 @@ export function deriveStateLine({
 
   // No card: inbox, review, anything else.
   if (task.status === "inbox") return { tone: statusTone, word: statusWord, detail: { key: "notStarted", values: {} } };
-  return { tone: statusTone, word: statusWord, detail: agentName ? { key: "with", values: { name: agentName } } : null };
+  if (agentName) return { tone: statusTone, word: statusWord, detail: { key: "with", values: { name: agentName } } };
+  // Nobody holds it (the operator's review): name who delivered it — "with"
+  // would claim the agent still has it.
+  return {
+    tone: statusTone,
+    word: statusWord,
+    detail: delivererName ? { key: "deliveredBy", values: { name: delivererName } } : null,
+  };
 }
 
 /**

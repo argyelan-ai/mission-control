@@ -33,7 +33,12 @@ import {
 import { useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { formatAbsolute, formatAge } from "@/lib/taskDetail/format";
-import { groupTimelineEntries, type TimelineItem } from "@/lib/taskDetail/timelineGroups";
+import {
+  AGENT_REMINDER_KEY,
+  groupTimelineEntries,
+  isAgentReminder,
+  type TimelineItem,
+} from "@/lib/taskDetail/timelineGroups";
 import { eventLabel } from "@/lib/taskDetail/eventLabel";
 import { C } from "@/lib/colors";
 import type { TaskTimelineEntry } from "@/lib/types";
@@ -106,6 +111,10 @@ function TimelineRow({ entry, isLast }: { entry: TaskTimelineEntry; isLast: bool
   const t = useTranslations("tasks");
   const locale = useLocale();
   const { icon: Icon, color } = getKindMeta(entry.kind);
+  // An instruction to the agent: one plain line, not its API commands.
+  const agentReminder = isAgentReminder(entry);
+  const title = agentReminder ? eventLabel(t, AGENT_REMINDER_KEY) : entry.title;
+  const detail = agentReminder ? null : entry.detail;
 
   return (
     <div className="relative pl-5" style={{ paddingBottom: isLast ? 0 : 14 }}>
@@ -114,13 +123,13 @@ function TimelineRow({ entry, isLast }: { entry: TaskTimelineEntry; isLast: bool
       <div className="flex items-center gap-1.5">
         <Icon size={11} style={{ color, flexShrink: 0 }} />
         <span className="text-xs font-medium truncate" style={{ color: C.textPrimary }}>
-          {entry.title}
+          {title}
         </span>
       </div>
 
-      {entry.detail && (
+      {detail && (
         <div className="mt-1 text-[11px] leading-relaxed" style={{ color: C.textSecondary }}>
-          {entry.detail}
+          {detail}
         </div>
       )}
 

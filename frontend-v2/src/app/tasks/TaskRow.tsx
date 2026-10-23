@@ -81,7 +81,8 @@ export function TaskRow({
   const t = useTranslations("tasks");
   const tHeads = useTranslations("heads");
   const locale = useLocale();
-  const agent = agents.find((a) => a.id === task.assigned_agent_id);
+  // A card in the operator's review shows who delivered it (round-2 Q5).
+  const agent = agents.find((a) => a.id === (task.assigned_agent_id ?? task.delivered_by_agent_id));
   const headLine = headRun ? headListLine(headRun, tHeads, locale) : null;
   const qc = useQueryClient();
   // Re-dispatching a finished task is rare and restarts an agent: it lives in

@@ -211,6 +211,13 @@ export interface Task {
   priority: Priority;
   task_type: "story" | "bug" | "revision" | "chore";
   assigned_agent_id: string | null;
+  /** The agent that last handed this card to review, and when — read from
+   *  the status history by the task list / single-task read (not a column).
+   *  The hand-off clears `assigned_agent_id` (operator review) or moves it to
+   *  the reviewer, so this is the only place the builder is still named.
+   *  Absent from other task payloads. See lib/taskDelivery.ts. */
+  delivered_by_agent_id?: string | null;
+  delivered_at?: string | null;
   started_at: string | null;
   completed_at: string | null;
   due_at: string | null;

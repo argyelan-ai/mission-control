@@ -76,6 +76,9 @@ export function ReviewTaskRow({
   // rule in TaskDetailBody's Agent property): an ENDED head run must not
   // keep hiding a real `assigned_agent_id` the operator picked afterward.
   const showHeadChip = headRun != null && (!agent || isHeadActive(headRun));
+  // Nobody holds the operator's review: name the agent that delivered the
+  // card (round-2 Q5) instead of showing no agent at all.
+  const deliverer = !agent && task.delivered_by_agent_id ? agentMap[task.delivered_by_agent_id] : undefined;
 
   return (
     <motion.div
@@ -140,6 +143,12 @@ export function ReviewTaskRow({
               {!showHeadChip && agent && (
                 <span className="text-[11px] text-[var(--color-text-muted)]">
                   <EntityIcon value={agent.emoji} size={14} className="inline-block align-[-2px] mr-1" />{agent.name}
+                </span>
+              )}
+              {!showHeadChip && deliverer && (
+                <span className="text-xs text-[var(--color-text-muted)]" data-testid="review-row-deliverer">
+                  <EntityIcon value={deliverer.emoji} size={14} className="inline-block align-[-2px] mr-1" />
+                  {t("deliveredBy", { agent: deliverer.name })}
                 </span>
               )}
               <span className="text-[10px] ml-auto text-[var(--color-text-muted)]">
@@ -263,7 +272,9 @@ export function ReviewTaskRow({
             </div>
           )}
 
-          <div className="flex items-center gap-2">
+          {/* Wraps on a narrow phone: three labelled buttons are wider than
+              390 px ("Hold" ran off the screen, round-2 t4 S3). */}
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={() => {
                 setShowApproveInput(!showApproveInput);

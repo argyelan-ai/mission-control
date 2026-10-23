@@ -487,9 +487,15 @@ async def list_tasks(
             tid = str(row[2])
             list_tag_map.setdefault(tid, []).append({"name": row[0], "color": row[1]})
 
+    # Who delivered a card that waits for review or is done: the hand-off
+    # clears/moves assigned_agent_id on purpose, the status history keeps it.
+    from app.services.task_delivery import delivery_fields, find_deliverers
+    deliverers = await find_deliverers(session, tasks)
+
     enriched = []
     for t in tasks:
         data = t.model_dump()
+        data.update(delivery_fields(deliverers, t.id))
         if t.status == "in_progress":
             candidates = [ts for ts in [t.started_at, t.updated_at] if ts]
             last_comment = last_comment_map.get(t.id)
@@ -1513,7 +1519,10 @@ async def get_task(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
-    return task
+    from app.services.task_delivery import delivery_fields, find_deliverers
+    data = task.model_dump()
+    data.update(delivery_fields(await find_deliverers(session, [task]), task.id))
+    return data
 
 
 @router.patch("/boards/{board_id}/tasks/{task_id}")
@@ -2036,7 +2045,27 @@ _ACTIVITY_KIND_MAP: dict[str, str] = {
 # Events whose title already says everything the operator needs: their
 # detail dict is machine context (``action: … · status: …``) and stays in
 # ``meta.detail`` only, not under the title (PR #954 review SHOULD 2).
+#
 _ACTIVITY_DETAIL_IN_TITLE = {"task.chat_write_rejected"}
+
+# operator.notice of these action types (round-2 Q5, t4 S-neu-5): the detail
+# repeats the title and carries the report-channel body, which stays ASCII on
+# purpose (test_notice_only_escalations: "Review fuer … haengt … noetig") —
+# that transliteration must not land in the operator's timeline. The matching
+# task.review_stuck row already says reviewer and minutes. Other notice types
+# (dispatch_escalation: reason + minutes, dependency_zombie: upstream status)
+# keep their detail — it is the only place that information shows
+# (PR #961 review SHOULD 2).
+_NOTICE_DETAIL_IN_TITLE = {"review_stuck"}
+
+
+def _activity_detail_in_title(event_type: str, detail: dict | None) -> bool:
+    if event_type in _ACTIVITY_DETAIL_IN_TITLE:
+        return True
+    return (
+        event_type == "operator.notice"
+        and (detail or {}).get("action_type") in _NOTICE_DETAIL_IN_TITLE
+    )
 
 # Events whose signal is ALWAYS fully represented elsewhere in the timeline
 # (task.status_changed is handled conditionally — see _has_matching_task_event).
@@ -2222,7 +2251,7 @@ async def get_task_timeline(
             # stuck reason lives here) is no longer discarded — compact
             # "key: value" string for display, full dict in meta.detail.
             "detail": (
-                None if e.event_type in _ACTIVITY_DETAIL_IN_TITLE
+                None if _activity_detail_in_title(e.event_type, e.detail)
                 else _format_detail_dict(e.detail)
             ),
             "actor": actor,

@@ -9,6 +9,7 @@ import { C, STATUS_TEXT } from "@/lib/colors";
 import { PRIMARY_BTN, PRIMARY_STYLE, QUIET_BTN, RAISED } from "./detail/nextStepStyle";
 import { isOperatorReview, isSelfReviewStall } from "@/lib/reviewRouting";
 import { useTranslations } from "next-intl";
+import { useKeyboardOpen } from "@/hooks/useKeyboardOpen";
 
 // ── Review owner gate ────────────────────────────────────────────────────────
 // Incident 11.09.2026: the operator saw Approve/Reject on every task in
@@ -17,7 +18,7 @@ import { useTranslations } from "next-intl";
 // (see lib/reviewRouting.ts); otherwise an explicit "agent is reviewing" note
 // with an opt-in override.
 
-function ReviewOwnerGate({ task, boardId }: { task: Task; boardId: string }) {
+function ReviewOwnerGate({ task, boardId, mirroredOnPhone }: { task: Task; boardId: string; mirroredOnPhone: boolean }) {
   const t = useTranslations("inbox");
   const [override, setOverride] = useState(false);
   const { data: agents, isError } = useQuery({
@@ -27,7 +28,9 @@ function ReviewOwnerGate({ task, boardId }: { task: Task; boardId: string }) {
   });
   // Explicit operator request: never gated behind the agents lookup, so a
   // broken/hanging /agents call can't hide the decision UI (Incident PR #514 B1).
-  if (task.human_review_required) return <ReviewDecisionSection task={task} boardId={boardId} />;
+  if (task.human_review_required) {
+    return <ReviewDecisionSection task={task} boardId={boardId} mirroredOnPhone={mirroredOnPhone} />;
+  }
   const agent = task.assigned_agent_id ? agents?.find((a) => a.id === task.assigned_agent_id) : null;
   // While agents are still loading, an assigned reviewer must not flash the buttons.
   // A failed lookup (isError) must not loop forever — fall through to isOperatorReview instead.
@@ -46,7 +49,7 @@ function ReviewOwnerGate({ task, boardId }: { task: Task; boardId: string }) {
             {t("selfReviewStall", { agent: agent?.name ?? "—" })}
           </p>
         )}
-        <ReviewDecisionSection task={task} boardId={boardId} />
+        <ReviewDecisionSection task={task} boardId={boardId} mirroredOnPhone={mirroredOnPhone} />
       </div>
     );
   }
@@ -74,13 +77,21 @@ const QUICK_REASONS = ["actions.reasonLooksGood", "actions.reasonTestsPassed", "
 function ReviewDecisionSection({
   task,
   boardId,
+  mirroredOnPhone,
 }: {
   task: Task;
   boardId: string;
+  /** The phone action bar mirrors Approve (TaskDetailBody's DetailActionBar):
+   *  then the bar's is the one Approve below md (K11, round-2 Q5 — two lit
+   *  "Approve" on one screen). It comes back while the keyboard is up,
+   *  because the bar steps aside then. */
+  mirroredOnPhone: boolean;
 }) {
   const t = useTranslations("tasks");
   const qc = useQueryClient();
   const [reviewComment, setReviewComment] = useState("");
+  const keyboardOpen = useKeyboardOpen();
+  const approveClass = mirroredOnPhone && !keyboardOpen ? `${PRIMARY_BTN} max-md:hidden` : PRIMARY_BTN;
 
   const reviewMutation = useMutation({
     mutationFn: (body: { decision: "approve" | "request_changes" | "hold"; comment: string }) =>
@@ -146,7 +157,7 @@ function ReviewDecisionSection({
         style={{ background: "var(--detail-bg, var(--color-bg-deep))", color: C.textPrimary, border: `1px solid ${C.border}` }}
       />
       <div className="flex items-center gap-2 flex-wrap">
-        <button type="button" onClick={() => decide("approve")} disabled={off} className={PRIMARY_BTN} style={PRIMARY_STYLE}>
+        <button type="button" onClick={() => decide("approve")} disabled={off} className={approveClass} style={PRIMARY_STYLE}>
           <CheckCircle size={16} aria-hidden />
           {t("actions.approve")}
         </button>
@@ -171,9 +182,11 @@ interface TaskActionsProps {
   /** The header already shows a primary button (Reply, Open log, an
    *  approval) — then Requeue / Release step down to quiet (K11: one primary). */
   primaryTaken?: boolean;
+  /** The phone action bar mirrors this screen's primary (detail with onBack). */
+  mirroredOnPhone?: boolean;
 }
 
-export function TaskActions({ task, boardId, primaryTaken = false }: TaskActionsProps) {
+export function TaskActions({ task, boardId, primaryTaken = false, mirroredOnPhone = false }: TaskActionsProps) {
   const t = useTranslations("tasks");
   const qc = useQueryClient();
 
@@ -205,10 +218,17 @@ export function TaskActions({ task, boardId, primaryTaken = false }: TaskActions
     },
   });
 
+  // A review has a run only while an agent holds the card. The operator's
+  // own review (explicit request, or a card nobody holds) has nothing to
+  // stop — "Stop run" there was a button without an effect (round-2 Q5,
+  // t4 N-neu-6). A self-review stall (the builder still holds its own card)
+  // keeps it: the agent still gets watchdog reminders, and Stop run
+  // (run_control=stopped) is the UI's way to quiet them (PR #961 review NICE 2).
+  const agentHoldsReview = task.status === "review" && !!task.assigned_agent_id && !task.human_review_required;
   const hasActiveRun =
     task.status === "in_progress" ||
     (task.status === "inbox" && task.dispatched_at != null) ||
-    task.status === "review";
+    agentHoldsReview;
   const isStopped = task.run_control === "stopped" || task.run_control === "manual_hold";
   const mainBtn = primaryTaken ? QUIET_BTN : PRIMARY_BTN;
   const mainStyle = primaryTaken ? { color: C.textPrimary } : PRIMARY_STYLE;
@@ -269,7 +289,7 @@ export function TaskActions({ task, boardId, primaryTaken = false }: TaskActions
       {/* Review — only the operator's own reviews get decision buttons; a
           review held by a reviewer agent is shown as such. */}
       {task.status === "review" && (
-        <ReviewOwnerGate task={task} boardId={boardId} />
+        <ReviewOwnerGate task={task} boardId={boardId} mirroredOnPhone={mirroredOnPhone} />
       )}
     </div>
   );
