@@ -394,6 +394,8 @@ describe("Stage — who makes the load", () => {
     const tile = await screen.findByTestId("kpi-in-use");
     await vi.waitFor(() => expect(tile).toHaveTextContent(/^–– connected/));
     expect(tile).not.toHaveTextContent(/\+ 1 connected/);
+    // The tap-popover must not claim "nobody on this box" either.
+    expect(tile).toHaveTextContent("Checking…");
   });
 
   it("counts once the roster has answered", async () => {

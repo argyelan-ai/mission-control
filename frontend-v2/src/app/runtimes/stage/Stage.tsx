@@ -288,7 +288,9 @@ export function Stage({
           </ul>
         </div>
       )}
-      {workingEntries.length === 0 && connectedEntries.length === 0 && <div>{t("kpiPopoverEmpty")}</div>}
+      {workingEntries.length === 0 && connectedEntries.length === 0 && (
+        <div>{agentsUnknown ? t("checkingLine") : t("kpiPopoverEmpty")}</div>
+      )}
     </>
   );
 
