@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { observedStub, statusLineState } from "../observedState";
+import { headerAliveness, observedStub, statusLineState } from "../observedState";
 import type { TaskStepsState } from "../stepsState";
 import type { StateEvent, TaskStepRow } from "@/lib/chatTypes";
 import { at, attempt, delivery, stub, think, tool, TASK_ID } from "./fixtures";
@@ -61,5 +61,40 @@ describe("statusLineState", () => {
   it("never touches another state", () => {
     const waiting: StateEvent = { kind: "state", status: "waiting_model", prompt: null };
     expect(statusLineState(waiting, { tasksShown: true, tasksKnown: true, liveTask: false })).toBe(waiting);
+  });
+});
+
+describe("statusLineState — a review run (round-4 review r1 S2)", () => {
+  const working: StateEvent = { kind: "state", status: "task_working", prompt: null };
+  it("a review run of this agent keeps the task turn, though no card is live", () => {
+    // A reviewer reviews a card: it stays in `review` (not live), the probe says a
+    // task turn runs. "Ready" here was a new untruth since #963.
+    expect(
+      statusLineState(working, { tasksShown: true, tasksKnown: true, liveTask: false, reviewRun: true }),
+    ).toBe(working);
+  });
+  it("without one, the ended task turn still reads as ready", () => {
+    expect(
+      statusLineState(working, { tasksShown: true, tasksKnown: true, liveTask: false, reviewRun: false })?.status,
+    ).toBe("idle");
+  });
+});
+
+describe("headerAliveness — the header badge says what the status line says (round-4 t1 NICE-1/4)", () => {
+  const st = (status: StateEvent["status"]): StateEvent => ({ kind: "state", status, prompt: null });
+  it("a line that reads ready gets the dot, also while the transcript is fresh", () => {
+    // t1: "Bereit" below, "live" above for 12.9 s — the badge read the raw
+    // probe, the line the corrected state.
+    expect(headerAliveness("active", st("idle"))).toBe("idle");
+  });
+  it("a running turn is live, also when the chat's own transcript is quiet", () => {
+    // t1 NICE-4: the task ran, the band said "in progress", the badge was grey.
+    expect(headerAliveness("idle", st("task_working"))).toBe("active");
+    expect(headerAliveness("idle", st("working"))).toBe("active");
+  });
+  it("an ended session stays ended, every other state keeps the transcript's word", () => {
+    expect(headerAliveness("ended", st("task_working"))).toBe("ended");
+    expect(headerAliveness("idle", st("waiting_model"))).toBe("idle");
+    expect(headerAliveness("active", null)).toBe("active");
   });
 });

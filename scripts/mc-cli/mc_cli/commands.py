@@ -1518,7 +1518,8 @@ def _add_comment_args(p):
     p.add_argument(
         "--task-id", dest="task_id", default=None,
         help="Fremde Karte kommentieren, auch ohne eigenen aktiven Task "
-             "(Board Lead/Orchestrator, Scope tasks:manage). Ohne --task-id "
+             "(Board Lead/Orchestrator, Scope tasks:manage). Aus dem Chat "
+             "geht eine Antwort (`message`) mit tasks:write. Ohne --task-id "
              "geht's wie bisher auf den aktiven Task.",
     )
 

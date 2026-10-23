@@ -123,9 +123,23 @@ _STATUS_WORDS: dict[str, dict[str, str]] = {
 }
 
 
+#: The operator's two review buttons in the task view, in the agent's
+#: ``operator_language`` (frontend messages ``tasks.actions.approve`` /
+#: ``requestChanges``). Round-4 t1 NICE-3: the chat sent the operator to a
+#: "Genehmigen" button that does not exist.
+_REVIEW_BUTTONS: dict[str, tuple[str, str]] = {
+    "en": ("Approve", "Request changes"),
+    "de": ("Annehmen", "Änderungen anfordern"),
+}
+
+
+def _language(language: str | None) -> str:
+    return (language or "en").strip().lower()[:2]
+
+
 def status_word(status: str, language: str | None) -> str:
     """``status`` as a plain word in ``language`` (``en`` fallback)."""
-    words = _STATUS_WORDS.get((language or "en").strip().lower()[:2], _STATUS_WORDS["en"])
+    words = _STATUS_WORDS.get(_language(language), _STATUS_WORDS["en"])
     return words.get(status) or _STATUS_WORDS["en"].get(status) or status.replace("_", " ")
 
 
@@ -143,6 +157,30 @@ def run_folder(agent: Agent, task_id: Any) -> str:
     if getattr(agent, "agent_runtime", None) == "host":
         return f"~/.mc/deliverables/{task_id}/"
     return f"/deliverables/{task_id}/"
+
+
+def review_decider(task: Task, agent: Agent) -> str | None:
+    """Who decides the review of a ``review`` card, as one line for the
+    block — ``None`` for any other status. Round-4 user test t1 NICE-3: one
+    general line ("a review verdict is your review run's") made the chat tell
+    the operator a review run would decide a card that waited for the
+    operator."""
+    if task.status != "review":
+        return None
+    if review_run_holds(task, agent):
+        return "your own review run decides it — not this chat."
+    if task.human_review_required or task.assigned_agent_id is None:
+        approve, changes = _REVIEW_BUTTONS.get(
+            _language(getattr(agent, "operator_language", None)), _REVIEW_BUTTONS["en"],
+        )
+        return (
+            f'the operator decides it in the task view ("{approve}" / "{changes}") '
+            "— not you, not this chat."
+        )
+    if task.assigned_agent_id == agent.id:
+        # Still with this agent, before any handoff: no reviewer is known yet.
+        return "it waits for its review — not you, not this chat, decide it."
+    return "a reviewer agent's review run decides it — not you, not this chat."
 
 
 def review_run_holds(task: Task, agent: Agent) -> bool:
@@ -254,6 +292,9 @@ def _task_lines(
     if when:
         head += f", {when}"
     lines = [head, f"  Run folder: {run_folder(agent, task.id)} (the run writes here — not your chat workspace)"]
+    decider = review_decider(task, agent)
+    if decider:
+        lines.append(f"  Review: {decider}")
     if deliverables:
         lines.append("  Deliverables registered by the run:")
         for d in deliverables:
@@ -320,9 +361,18 @@ async def run_context(session: AsyncSession, agent: Agent, *, now: datetime | No
         "`mc checklist` / `mc deliverable` / `mc finish` / `mc ack` / `mc recover` / "
         "`mc ask --blocking` / `mc question` / `mc help` / `mc delegate` / "
         "`mc review` / `mc review-note` for them (the server refuses those calls from the "
-        "chat — a review verdict is your review run's). A plain `mc ask` without "
+        "chat; who decides a review is named at the card). A plain `mc ask` without "
         "`--blocking` is fine. "
         "If the operator wants a change to such a task, tell them to make it in the task view.",
+        "A reply in the task thread IS allowed: when the operator asks you to put your "
+        'answer on the task, run `mc comment message "<text>" --task-id <id>` (it is stored '
+        "as your chat reply and does not move the run)"
+        # Only where it applies: on a human-review card the words "review
+        # run" were what the chat repeated to the operator (t1 NICE-3).
+        + (" — not on a card your review run is reviewing, there the server refuses it"
+           if any(review_run_holds(t, agent) for t in live) else "")
+        + ". Never say the server refuses a call you have not made; if a call fails, "
+        "quote its error.",
         END,
     ]
     return "\n".join(lines)

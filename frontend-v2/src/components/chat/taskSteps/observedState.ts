@@ -16,7 +16,7 @@
  *    after the latest delivery is in progress — the status just has not
  *    flipped yet (the same reading as `segmentHead`, review NICE-1 on #948).
  */
-import type { ChatTaskStub, StateEvent, TaskStepRow } from "@/lib/chatTypes";
+import type { ChatAliveness, ChatTaskStub, StateEvent, TaskStepRow } from "@/lib/chatTypes";
 import type { TaskStepsState } from "./stepsState";
 
 /** Rows the agent wrote itself — not the delivery or the attempt marks. */
@@ -71,11 +71,38 @@ export function observedStub(
  * runs; when the chat shows task sections, its stubs are known and none of
  * them is live any more, that turn has ended — the probe just has not
  * noticed yet (it lagged 8–15 s). Then the line says what is true: ready.
+ *
+ * A review run is the exception (round-4 review r1 S2): its card stays in
+ * `review`, so it is never live, yet the run is real — `reviewRun` (a stub
+ * the agent's review run works) keeps the probe's word.
  */
 export function statusLineState(
   state: StateEvent | null,
-  { tasksShown, tasksKnown, liveTask }: { tasksShown: boolean; tasksKnown: boolean; liveTask: boolean },
+  {
+    tasksShown,
+    tasksKnown,
+    liveTask,
+    reviewRun = false,
+  }: { tasksShown: boolean; tasksKnown: boolean; liveTask: boolean; reviewRun?: boolean },
 ): StateEvent | null {
-  if (!state || state.status !== "task_working" || !tasksShown || !tasksKnown || liveTask) return state;
+  if (!state || state.status !== "task_working" || !tasksShown || !tasksKnown || liveTask || reviewRun) {
+    return state;
+  }
   return { ...state, status: "idle" };
+}
+
+/**
+ * The header badge's aliveness, from the same state the status line shows
+ * (round-4 user test t1). `aliveness` alone is the chat transcript's age
+ * (written < 60 s ago = active): after a task turn it stayed "live" for
+ * 12.9 s under a line that already said "Ready" (NICE-1), and while a task
+ * ran in its own session the chat's quiet transcript gave the grey dot
+ * (NICE-4). So: a line that reads ready is idle, a running turn is active,
+ * an ended session stays ended.
+ */
+export function headerAliveness(aliveness: ChatAliveness, state: StateEvent | null): ChatAliveness {
+  if (aliveness === "ended") return aliveness;
+  if (state?.status === "idle") return aliveness === "active" ? "idle" : aliveness;
+  if (state?.status === "working" || state?.status === "task_working") return "active";
+  return aliveness;
 }

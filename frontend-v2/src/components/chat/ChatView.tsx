@@ -71,7 +71,7 @@ import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
 import type { PanelKind } from "./PanelRail";
 import { useChatTasks } from "@/hooks/useChatTasks";
-import { observedStub, statusLineState } from "./taskSteps/observedState";
+import { headerAliveness, observedStub, statusLineState } from "./taskSteps/observedState";
 import { useTaskSteps, type TaskStepsSpec } from "@/hooks/useTaskSteps";
 import { TaskStepsAgentContext } from "@/hooks/useTaskStepDetail";
 import { ScrollAnchorContext, type ScrollAnchor } from "./useScrollAnchor";
@@ -208,6 +208,10 @@ export const INITIAL_RENDER_WINDOW = 30;
 /** At most this long an omp chat waits for its task rows before it shows
  *  what it has (spec A S6). */
 export const TASK_LOAD_GATE_MS = 1500;
+/** How long a freshly opened chat may say "Loading…" before its first state
+ *  frame (round-4 t1 NICE-2: 0.23–0.38 s of ocker "check the terminal" on
+ *  every open). Past it, no state is a real unknown again. */
+export const FIRST_STATE_GRACE_MS = 4000;
 
 const EMPTY_ROWS: never[] = [];
 
@@ -717,6 +721,8 @@ export function ChatView({
   }, [merged]);
   const taskById = useMemo(() => new Map(mergeTasks.map((t) => [t.stub.taskId, t])), [mergeTasks]);
   const liveTask = useMemo(() => [...mergeTasks].reverse().find((t) => t.stub.live && !t.detached) ?? null, [mergeTasks]);
+  // A review run of this agent works a card (never live: it stays in review).
+  const reviewRun = useMemo(() => currentStubs.some((s) => s.reviewRun === true), [currentStubs]);
   // The task turn ended (no live task left) — the chat probe lags behind it.
   const statusState = useMemo(
     () =>
@@ -724,9 +730,19 @@ export function ChatView({
         tasksShown: tasksApply,
         tasksKnown: chatTasks.settled && !chatTasks.error,
         liveTask: liveTask != null,
+        reviewRun,
       }),
-    [stream.state, tasksApply, chatTasks.settled, chatTasks.error, liveTask],
+    [stream.state, tasksApply, chatTasks.settled, chatTasks.error, liveTask, reviewRun],
   );
+  // The first moments of a chat: no state frame yet is "loading", not
+  // "unknown" (round-4 t1 NICE-2) — for FIRST_STATE_GRACE_MS per agent.
+  const [firstStateGraceOver, setFirstStateGraceOver] = useState(false);
+  useEffect(() => {
+    setFirstStateGraceOver(false);
+    const id = setTimeout(() => setFirstStateGraceOver(true), FIRST_STATE_GRACE_MS);
+    return () => clearTimeout(id);
+  }, [agentId]);
+  const firstStatePending = stream.state == null && !firstStateGraceOver;
 
   // Load gate (S6): an omp chat shows its timeline once history, task stubs
   // and the first steps page of each live task are in — at most 1.5 s — so
@@ -1169,7 +1185,9 @@ export function ChatView({
   // line from the live state. Right after a reply the two disagreed — "live"
   // in the header, "Bereit" below — and seconds later the same state showed
   // the dot (round-1 NICE-2). A chat the status line calls ready gets the dot.
-  const badgeAliveness = aliveness === "active" && stream.state?.status === "idle" ? "idle" : aliveness;
+  // Round 4 (t1 NICE-1/4): from the state the status line shows, not the raw
+  // probe — that one kept "live" 12.9 s over a line that said "Ready".
+  const badgeAliveness = headerAliveness(aliveness, statusState);
   const headerBadge: HeaderBadge = !(canChat && stream.session)
     ? "none"
     : badgeAliveness === "idle"
@@ -1767,6 +1785,8 @@ export function ChatView({
                 sending={stream.awaitingResponse}
                 task={liveTask ? { taskId: liveTask.stub.taskId, title: liveTask.stub.title } : null}
                 taskHeadVisible={taskHeadVisible}
+                loading={firstStatePending}
+                hasTerminal={!headlessChat}
               />
               {!isAdmin ? (
                 <AdminOnlyNotice compact message={t("inputAdminOnly")} />

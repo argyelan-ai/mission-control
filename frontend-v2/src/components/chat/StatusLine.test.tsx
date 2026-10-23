@@ -257,6 +257,25 @@ describe("StatusLine — Arbeits-Verb (Render-Reinheit)", () => {
     expect(screen.getByTestId("status-label")).toHaveTextContent("Waiting for the model");
     expect(screen.getByTestId("status-dot")).toHaveAttribute("data-live", "false");
   });
+
+  // ── Round-4 t1 NICE-2: the first moments of a chat ────────────────────────
+  it("says it is loading until the first state arrives — no warning, no terminal", () => {
+    render(<StatusLine state={null} connected={false} loading />);
+    expect(screen.getByTestId("status-label").textContent).toBe("Loading…");
+    expect(screen.queryByText(/check the terminal/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("status-dot").style.backgroundColor).toBe(C.textDim);
+  });
+
+  it("an agent without a terminal is never sent to one", () => {
+    render(<StatusLine state={mkState("unknown")} connected hasTerminal={false} />);
+    expect(screen.getByTestId("status-label").textContent).toBe("Status unknown");
+    expect(screen.queryByText(/terminal/i)).not.toBeInTheDocument();
+  });
+
+  it("a real state outranks the loading hint", () => {
+    render(<StatusLine state={mkState("idle")} connected loading />);
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+  });
 });
 
 function workingWordOf() {
