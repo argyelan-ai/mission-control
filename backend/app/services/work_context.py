@@ -690,12 +690,16 @@ async def find_last_developer(
     # operator endpoint and was recorded without agent_id, plus a builder
     # who only wrote a plain `message`). Without these the rework went to
     # the Board Lead instead of the builder who has the context.
-    # (1) agent comment of any type (not the reviewer)
+    # (1) agent comment of any type (not the reviewer). A chat session's
+    # reply is not building: the Lead answering "how far?" in his chat must
+    # not make him the builder the rework goes to (round-5 r1 N5).
+    from app.comment_types import activity_comment_filter
     any_comment_result = await session.exec(
         select(TaskComment).where(
             TaskComment.task_id == task.id,
             TaskComment.author_type == "agent",
             TaskComment.author_agent_id.is_not(None),  # type: ignore[union-attr]
+            activity_comment_filter(),
         ).order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
     )
     for c in any_comment_result.all():

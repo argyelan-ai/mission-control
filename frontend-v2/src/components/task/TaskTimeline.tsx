@@ -23,6 +23,7 @@ import {
   LifeBuoy,
   MessageCircle,
   MessageSquare,
+  MessagesSquare,
   PlayCircle,
   RefreshCw,
   Send,
@@ -47,7 +48,9 @@ import type { TaskTimelineEntry } from "@/lib/types";
 
 const DEFAULT_META: { icon: LucideIcon; color: string } = { icon: Info, color: C.textMuted };
 
-const KIND_META: Record<string, { icon: LucideIcon; color: string; label?: string }> = {
+// `titleKey`: the row title comes from i18n (`tasks.<titleKey>.label`, with
+// `.hint` as tooltip) instead of the backend's raw type name.
+const KIND_META: Record<string, { icon: LucideIcon; color: string; label?: string; titleKey?: string }> = {
   // Milestones
   created: { icon: Sparkles, color: C.textSecondary },
   dispatched: { icon: Send, color: C.info },
@@ -76,9 +79,12 @@ const KIND_META: Record<string, { icon: LucideIcon; color: string; label?: strin
   reflection: { icon: Sparkles, color: C.accent },
   resolution: { icon: CheckCircle2, color: C.online },
   message: { icon: MessageSquare, color: C.textSecondary },
+  // The agent's chat answering on the card — shown, but no sign of the run
+  // (backend: comment_types.NOT_ACTIVITY_COMMENT_TYPES).
+  chat_reply: { icon: MessagesSquare, color: C.textSecondary, titleKey: "chatReply" },
 };
 
-function getKindMeta(kind: string): { icon: LucideIcon; color: string; label: string } {
+function getKindMeta(kind: string): { icon: LucideIcon; color: string; label: string; titleKey?: string } {
   const meta = KIND_META[kind] ?? DEFAULT_META;
   return { ...meta, label: meta.label ?? kind.replace(/_/g, " ") };
 }
@@ -110,10 +116,15 @@ function Node({ color }: { color: string }) {
 function TimelineRow({ entry, isLast }: { entry: TaskTimelineEntry; isLast: boolean }) {
   const t = useTranslations("tasks");
   const locale = useLocale();
-  const { icon: Icon, color } = getKindMeta(entry.kind);
+  const { icon: Icon, color, titleKey } = getKindMeta(entry.kind);
   // An instruction to the agent: one plain line, not its API commands.
   const agentReminder = isAgentReminder(entry);
-  const title = agentReminder ? eventLabel(t, AGENT_REMINDER_KEY) : entry.title;
+  const ownTitle = entry.source === "comment" ? titleKey : undefined;
+  const title = agentReminder
+    ? eventLabel(t, AGENT_REMINDER_KEY)
+    : ownTitle
+      ? t(`${ownTitle}.label`)
+      : entry.title;
   const detail = agentReminder ? null : entry.detail;
 
   return (
@@ -122,7 +133,12 @@ function TimelineRow({ entry, isLast }: { entry: TaskTimelineEntry; isLast: bool
       <Node color={color} />
       <div className="flex items-center gap-1.5">
         <Icon size={11} style={{ color, flexShrink: 0 }} />
-        <span className="text-xs font-medium truncate" style={{ color: C.textPrimary }}>
+        <span
+          className="text-xs font-medium truncate"
+          style={{ color: C.textPrimary }}
+          title={ownTitle ? t(`${ownTitle}.hint`) : undefined}
+          data-testid={ownTitle ? `timeline-title-${entry.kind}` : undefined}
+        >
           {title}
         </span>
       </div>

@@ -357,12 +357,12 @@ async def last_task_activity(session: AsyncSession, task: Task, *, comm_v2: bool
     out of both halves — "how far are you?" on a dead run must not push the
     stale check back (round-3 re-review M1).
     """
-    from app.comment_types import CHAT_REPLY_COMMENT_TYPE
+    from app.comment_types import activity_comment_filter
 
     comment_result = await session.exec(
         select(func.max(TaskComment.created_at)).where(
             TaskComment.task_id == task.id,
-            TaskComment.comment_type != CHAT_REPLY_COMMENT_TYPE,
+            activity_comment_filter(),
         )
     )
     latest_comment = comment_result.one()

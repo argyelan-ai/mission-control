@@ -82,6 +82,8 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import HTTPException
 from sqlmodel import select
 
+from app.comment_types import NOT_ACTIVITY_COMMENT_TYPES, activity_comment_filter
+
 logger = logging.getLogger("mc.proof_gate")
 
 PROOF_GATE_EVENT = "task.proof_gate"
@@ -110,7 +112,7 @@ DEDUP_WINDOW = timedelta(minutes=30)
 _NOT_A_VERDICT = {"reflection", "system", "progress", "subtask_completed", "checkpoint",
                   "blocker",
                   # a chat session's reply speaks for the chat, not the review run
-                  "chat_reply"}
+                  *NOT_ACTIVITY_COMMENT_TYPES}
 
 #: Commits walked one by one when no diff fingerprint is on record.
 MAX_COMMITS_WALKED = 5
@@ -1049,7 +1051,9 @@ async def _review_snapshots(session, task) -> list[tuple[datetime | None, dict]]
 
 
 async def _claimed_pr_urls(session, task, actor_agent, since: datetime | None) -> list[str]:
-    """PR URLs the acting agent quoted in his own comments in this work phase."""
+    """PR URLs the acting agent quoted in his own comments in this work phase.
+
+    His chat session's replies are not the run's claim (round-5 r1 N5)."""
     from app.models.task import TaskComment
 
     if actor_agent is None:
@@ -1058,6 +1062,7 @@ async def _claimed_pr_urls(session, task, actor_agent, since: datetime | None) -
         select(TaskComment.content, TaskComment.created_at).where(
             TaskComment.task_id == task.id,
             TaskComment.author_agent_id == actor_agent.id,
+            activity_comment_filter(),
         )
     )).all()
     urls: list[str] = []

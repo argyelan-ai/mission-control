@@ -1519,8 +1519,9 @@ def _add_comment_args(p):
         "--task-id", dest="task_id", default=None,
         help="Fremde Karte kommentieren, auch ohne eigenen aktiven Task "
              "(Board Lead/Orchestrator, Scope tasks:manage). Aus dem Chat "
-             "geht eine Antwort (`message`) mit tasks:write. Ohne --task-id "
-             "geht's wie bisher auf den aktiven Task.",
+             "geht eine Antwort (`message`) mit tasks:write; sie zaehlt nicht "
+             "als Aktivitaet des Laufs. Ohne --task-id geht's wie bisher auf "
+             "den aktiven Task.",
     )
 
 
@@ -3445,7 +3446,9 @@ REGISTRY: dict[str, CommandSpec] = {
     "comment": CommandSpec(
         name="comment",
         help="Kommentar posten (progress/blocker/feedback/resolution[terminal]/...). "
-             "--task-id fuer fremde Karten ohne aktiven Task (Board Lead, Scope tasks:manage).",
+             "--task-id fuer fremde Karten ohne aktiven Task (Board Lead, Scope tasks:manage). "
+             "Aus dem Chat: `message` mit --task-id genuegt tasks:write; gespeichert als "
+             "Chat-Antwort, keine Aktivitaet des Laufs.",
         endpoints=(
             "POST /boards/{board_id}/tasks/{task_id}/comments",
             "POST /tasks/{task_id}/comments",
