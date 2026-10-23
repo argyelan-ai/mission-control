@@ -24,10 +24,11 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { ChevronLeft, ChevronRight, RotateCcw, Search } from "lucide-react";
 
 import type { GraphFilter, VaultNoteType } from "@/lib/types";
-import { TYPE_COLORS, TYPE_LABELS_DE } from "./graphConfig";
+import { TYPE_COLORS } from "./graphConfig";
 import { colorForAgent } from "@/components/vault/agentColors";
 import { C, alpha } from "@/lib/colors";
 
@@ -63,7 +64,8 @@ interface TypeChipProps {
 
 function TypeChip({ type, selected, onToggle }: TypeChipProps) {
   const color = TYPE_COLORS[type] ?? TYPE_COLORS.note;
-  const label = TYPE_LABELS_DE[type];
+  const t = useTranslations("vault");
+  const label = t(`noteType.${type}`);
 
   return (
     <button
@@ -212,6 +214,7 @@ export function GraphFilterSidebar({
   onSearchChange,
   className,
 }: GraphFilterSidebarProps) {
+  const t = useTranslations("vault.graph");
   const [collapsed, setCollapsed] = useState(false);
 
   // On mobile the 220px rail overlays nearly the whole canvas (it sits as an
@@ -317,7 +320,7 @@ export function GraphFilterSidebar({
 
               {/* Search */}
               <div>
-                <SectionHeader>Search</SectionHeader>
+                <SectionHeader>{t("searchHeader")}</SectionHeader>
                 <div className="relative">
                   <Search
                     className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none"
@@ -327,21 +330,21 @@ export function GraphFilterSidebar({
                     type="text"
                     value={searchQuery}
                     onChange={(e) => onSearchChange?.(e.target.value)}
-                    placeholder="node label…"
+                    placeholder={t("searchPlaceholder")}
                     className="w-full rounded-sm px-2 py-1 pl-6 font-mono text-[11px] outline-none"
                     style={{
                       background: "var(--color-bg-elevated)",
                       border: "1px solid var(--color-border)",
                       color: "var(--color-text-primary)",
                     }}
-                    aria-label="Search node labels"
+                    aria-label={t("searchAria")}
                   />
                 </div>
               </div>
 
               {/* Type chips */}
               <div>
-                <SectionHeader>Type</SectionHeader>
+                <SectionHeader>{t("typeHeader")}</SectionHeader>
                 <div className="flex flex-col gap-0.5">
                   {VAULT_TYPES.map((type) => (
                     <TypeChip
@@ -357,7 +360,7 @@ export function GraphFilterSidebar({
               {/* Agent chips */}
               {agents.length > 0 && (
                 <div>
-                  <SectionHeader>Agent</SectionHeader>
+                  <SectionHeader>{t("agentHeader")}</SectionHeader>
                   <div className="flex flex-col gap-0.5">
                     {agents.map((agent) => (
                       <AgentChip
@@ -373,16 +376,16 @@ export function GraphFilterSidebar({
 
               {/* Overlay toggles */}
               <div>
-                <SectionHeader>Overlays</SectionHeader>
+                <SectionHeader>{t("overlaysHeader")}</SectionHeader>
                 <div className="flex flex-col gap-0.5">
                   <ToggleRow
-                    label="Heatmap"
+                    label={t("heatmap")}
                     enabled={showHeatmap}
                     onToggle={onHeatmapToggle}
                   />
                   {onClustersToggle && (
                     <ToggleRow
-                      label="Clusters"
+                      label={t("clusters")}
                       enabled={showClusters}
                       onToggle={onClustersToggle}
                     />
@@ -408,10 +411,10 @@ export function GraphFilterSidebar({
                     opacity: hasActiveFilters ? 1 : 0.4,
                     cursor: hasActiveFilters ? "pointer" : "default",
                   }}
-                  aria-label="Reset all filters"
+                  aria-label={t("resetAllFilters")}
                 >
                   <RotateCcw style={{ width: "10px", height: "10px" }} />
-                  Reset filters
+                  {t("resetFilters")}
                 </button>
               </div>
             </div>
@@ -432,7 +435,7 @@ export function GraphFilterSidebar({
           cursor: "pointer",
           boxShadow: `0 2px 8px ${alpha(C.shadow, 0.4)}`,
         }}
-        aria-label={collapsed ? "Expand filter sidebar" : "Collapse filter sidebar"}
+        aria-label={collapsed ? t("expandSidebar") : t("collapseSidebar")}
       >
         {collapsed ? (
           <ChevronRight style={{ width: "11px", height: "11px" }} />

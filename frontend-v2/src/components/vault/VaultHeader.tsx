@@ -7,11 +7,13 @@
  */
 
 import type { ReactNode } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
 
 interface VaultHeaderProps {
   noteCount: number;
+  /** True when noteCount is the search's result cap — shown as "100+". */
+  noteCountCapped?: boolean;
   agentCount: number;
   /** Optional action slot rendered on the right side of the header.
    *  Used by VaultMemoryPage to host the "Neuer Eintrag" button. Kept as
@@ -19,8 +21,10 @@ interface VaultHeaderProps {
   actions?: ReactNode;
 }
 
-export function VaultHeader({ noteCount, agentCount, actions }: VaultHeaderProps) {
+export function VaultHeader({ noteCount, noteCountCapped = false, agentCount, actions }: VaultHeaderProps) {
   const t = useTranslations("vault");
+  const locale = useLocale();
+  const notes = `${new Intl.NumberFormat(locale).format(noteCount)}${noteCountCapped ? "+" : ""}`;
   return (
     <div className="flex items-start justify-between mb-8">
       <div>
@@ -47,15 +51,21 @@ export function VaultHeader({ noteCount, agentCount, actions }: VaultHeaderProps
             letterSpacing: "0.08em",
           }}
         >
-          {noteCount.toLocaleString()} NOTES · {agentCount} AGENTS · VAULT@~/.MC
+          {t("headerStats", {
+            notes,
+            notesCount: noteCountCapped ? noteCount + 1 : noteCount,
+            agents: agentCount,
+          })}{" "}
+          · VAULT@~/.MC
         </p>
       </div>
 
-      {/* Action slot + keyboard shortcut hint, right-aligned. */}
+      {/* Action slot + keyboard shortcut hint, right-aligned. The hint is
+          desktop-only: phones have no ⌘ key. */}
       <div className="flex items-center gap-3 mt-1">
         {actions}
         <div
-          className="font-mono text-xs"
+          className="hidden md:block font-mono text-xs"
           style={{ color: "var(--color-text-muted)" }}
         >
           ⌘K

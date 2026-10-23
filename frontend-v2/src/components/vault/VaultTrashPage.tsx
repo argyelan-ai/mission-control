@@ -19,7 +19,7 @@
  */
 
 import { useState } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, Trash2, X, AlertTriangle, ArchiveX } from "lucide-react";
@@ -29,15 +29,17 @@ import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-const MONTHS_SHORT = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"] as const;
 
-function parseTrashDate(iso: string | null): { day: string; month: string; year: string; time: string } | null {
+function parseTrashDate(
+  iso: string | null,
+  locale: string,
+): { day: string; month: string; year: string; time: string } | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return null;
   return {
     day: String(d.getDate()),
-    month: MONTHS_SHORT[d.getMonth()] ?? "",
+    month: new Intl.DateTimeFormat(locale, { month: "short" }).format(d),
     year: String(d.getFullYear()),
     time: `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`,
   };
@@ -247,7 +249,8 @@ function TrashRow({
   restorePendingFor: string | null;
 }) {
   const t = useTranslations("vault");
-  const trashedAt = parseTrashDate(item.trashed_at);
+  const locale = useLocale();
+  const trashedAt = parseTrashDate(item.trashed_at, locale);
   const agentColor = colorForAgent(item.agent);
   const restorable = item.original_path != null;
   const isRestoring = restorePending && restorePendingFor === item.trash_filename;
