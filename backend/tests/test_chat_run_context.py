@@ -445,5 +445,5 @@ async def test_a_review_card_still_with_the_developer_names_no_reviewer():
                         changed_by="agent", agent_id=agent.id, created_at=NOW - timedelta(minutes=1)))
         await s.commit()
     text = await _context(agent)
-    assert "it waits for its review" in text
+    assert "it waits for its review — neither you nor this chat decides it." in text
     assert "reviewer agent" not in text and "review run" not in text

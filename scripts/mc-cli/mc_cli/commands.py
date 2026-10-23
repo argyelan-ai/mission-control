@@ -3450,7 +3450,7 @@ REGISTRY: dict[str, CommandSpec] = {
             "POST /boards/{board_id}/tasks/{task_id}/comments",
             "POST /tasks/{task_id}/comments",
         ),
-        scope="tasks:write",  # --task-id braucht zusaetzlich tasks:manage (backend-geprueft)
+        scope="tasks:write",  # --task-id braucht zusaetzlich tasks:manage (backend-geprueft); Ausnahme: message aus einer Chat-Session (X-MC-Session-Role=chat) reicht tasks:write
         handler=_cmd_comment,
         add_args=_add_comment_args,
     ),

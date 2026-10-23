@@ -179,7 +179,7 @@ def review_decider(task: Task, agent: Agent) -> str | None:
         )
     if task.assigned_agent_id == agent.id:
         # Still with this agent, before any handoff: no reviewer is known yet.
-        return "it waits for its review — not you, not this chat, decide it."
+        return "it waits for its review — neither you nor this chat decides it."
     return "a reviewer agent's review run decides it — not you, not this chat."
 
 
