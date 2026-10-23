@@ -964,6 +964,18 @@ describe("NewChallengeDialog — round-4 K1 (R6 rest)", () => {
     expect(screen.queryByText(/same effort as model 1/i)).toBeNull();
   });
 
+  it("a removed row's hand-edited mark does not stick to the next new row (autofill works again)", async () => {
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce(ACTIVE);
+    renderDialog();
+    await screen.findByRole("radio", { name: "Max" });
+    await userEvent.click(screen.getByRole("button", { name: /add model/i }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Label 2" }), "Mine");
+    await userEvent.click(screen.getByRole("button", { name: "Remove model 2" }));
+    await userEvent.click(screen.getByRole("button", { name: /add model/i }));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "vLLM model 2" }), "DeepSeek-V4");
+    expect((screen.getByRole("textbox", { name: "Label 2" }) as HTMLInputElement).value).toBe("DeepSeek-V4");
+  });
+
   it("a trailing ' · Max' on a Max row is the same label, like the backend's display_label (t2 KANN-1)", async () => {
     renderDialog();
     await screen.findAllByRole("radio", { name: "Max" });
