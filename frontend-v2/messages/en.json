@@ -1665,7 +1665,7 @@
     "agentLabel": "Agent",
     "headerStats": "{notes} {notesCount, plural, one {note} other {notes}} · {agents, plural, one {# agent} other {# agents}}",
     "taskBannerLabel": "Task",
-    "taskLink": "Task {id}",
+    "taskLink": "Open task {id}",
     "voiceHighlightLabel": "Voice highlight",
     "attachment": "Attachment",
     "noteType": {

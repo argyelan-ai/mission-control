@@ -65,7 +65,7 @@ describe("excerptFromContent", () => {
     ].join("\n");
     const out = excerptFromContent(content);
     expect(out).not.toMatch(/[>*`!]|\[\[|\]\]|\]\(|attachments\//);
-    expect(out).toContain("Auto-imported from task");
+    expect(out).toContain("Auto-imported from task 2379cb9f.");
     expect(out).toContain("For the operator see docs and code.");
     expect(out).toContain("item one");
   });
@@ -93,8 +93,9 @@ describe("VaultMarkdown", () => {
   it("links [[task-<uuid>]] to the task, not to the note itself", () => {
     const id = "2379cb9f-5fde-4bd8-8f02-801a4afb17cc";
     render(<VaultMarkdown content={`> From task [[task-${id}]].`} />);
-    const link = screen.getByRole("link", { name: /2379cb9f/ });
+    const link = screen.getByRole("link", { name: "Open task 2379cb9f" });
     expect(link).toHaveAttribute("href", `/tasks?task=${id}`);
+    expect(link).toHaveTextContent("2379cb9f");
   });
 
   it("never renders an attachment embed as an (empty) image", () => {

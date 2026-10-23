@@ -27,6 +27,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import type { VaultNote } from "@/lib/types";
 import { colorForAgent } from "./agentColors";
+import { TASK_WIKILINK_RE } from "./wikilinks";
 
 import { alpha, C } from "@/lib/colors";
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -148,7 +149,9 @@ export function excerptFromContent(content: string, maxChars = 200): string {
     .replace(/^#+\s+.*$/gm, "")
     .replace(/!\[\[[^\]]*\]\]/g, "")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, name: string, alias?: string) => alias ?? name)
+    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, name: string, alias?: string) =>
+      alias ?? (TASK_WIKILINK_RE.test(name) ? name.slice(5, 13) : name),
+    )
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/<((?:https?|mailto):[^>]+)>/gi, "$1")
     .replace(/^\s{0,3}>\s?/gm, "")

@@ -8,6 +8,7 @@ import { useTranslations } from "next-intl";
 import { Paperclip } from "lucide-react";
 import { useVaultNotePreview } from "@/hooks/useVaultNote";
 import { C, alpha } from "@/lib/colors";
+import { TASK_WIKILINK_RE } from "./wikilinks";
 
 // Internal link schemes the pre-processing below emits. react-markdown's
 // default URL sanitizer blanks every unknown scheme — which turned every
@@ -28,9 +29,6 @@ function urlTransform(url: string): string {
   return defaultUrlTransform(url);
 }
 
-// [[task-<uuid>]] — written by the deliverable wrapper. It names a task, not
-// a note: link it to the task page.
-const TASK_WIKILINK_RE = /^task-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 /**
  * Drop a leading `# Heading` that only repeats the title the reading panel
@@ -69,8 +67,10 @@ function TaskLink({ taskId }: { taskId: string }) {
       href={`/tasks?task=${encodeURIComponent(taskId)}`}
       className="underline font-mono"
       style={{ color: C.accent }}
+      aria-label={t("taskLink", { id: taskId.slice(0, 8) })}
+      title={t("taskLink", { id: taskId.slice(0, 8) })}
     >
-      {t("taskLink", { id: taskId.slice(0, 8) })}
+      {taskId.slice(0, 8)}
     </Link>
   );
 }
