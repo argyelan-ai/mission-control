@@ -87,7 +87,7 @@ from app.models.memory import BoardMemory
 from app.models.task import Task, TaskComment
 from app.services.harness_compat import is_voice_harness
 from app.services.activity import emit_event
-from app.services.chat_session_guard import refuse_chat_task_write
+from app.services.chat_session_guard import is_chat_session, refuse_chat_task_write
 from app.services.task_state import lock_and_set
 from app.services.thread_scope import thread_agent_may_write_to
 from app.utils import utcnow
@@ -1979,6 +1979,7 @@ async def _resolve_message_target(
 @router.post("/tasks/current/messages", status_code=status.HTTP_201_CREATED)
 async def agent_post_message(
     payload: MessageCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.CHAT_WRITE)),
 ):
@@ -2004,7 +2005,10 @@ async def agent_post_message(
 
     # First inbound agent Message ACKs the task (idempotent). Non-committing —
     # the post_message commit below persists the handshake mutations too.
-    if task is not None:
+    # Never from the chat session: its `mc msg` answers the operator, it is
+    # not the run taking the task (round-3 code review r1 S2 — same rule as
+    # the chat's `message` comment, agent_comments._create_comment).
+    if task is not None and not is_chat_session(request):
         apply_ack_handshake(session, task, agent)
 
     body_text, attachment = _message_attachment(payload)
@@ -2117,6 +2121,7 @@ async def agent_write_group_document(
 async def agent_post_thread_message(
     thread_id: uuid.UUID,
     payload: MessageCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.CHAT_WRITE)),
 ):
@@ -2152,11 +2157,12 @@ async def agent_post_thread_message(
     # A task thread reached this way must ACK its dispatch exactly like
     # /tasks/current/messages does — otherwise an agent that answers via
     # `--thread` looks unresponsive and the monitor reassigns a task it is
-    # already working on.
+    # already working on. Not from the chat session (round-3 r1 S2, see
+    # agent_post_message).
     task = (
         await session.get(Task, thread.task_id) if thread.task_id is not None else None
     )
-    if task is not None:
+    if task is not None and not is_chat_session(request):
         apply_ack_handshake(session, task, agent)
 
     body_text, attachment = _message_attachment(payload)

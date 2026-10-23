@@ -163,7 +163,11 @@ export function deriveStateCard({
   }
 
   if (task.status === "in_progress") {
-    const step = sorted.find((c) => c.author_type !== "user" && c.comment_type !== "reflection");
+    // The run's last step: not a reflection, and not the chat's answer to
+    // "how far are you?" (`chat_reply`, round-3 code review r1 S3).
+    const step = sorted.find(
+      (c) => c.author_type !== "user" && c.comment_type !== "reflection" && c.comment_type !== "chat_reply",
+    );
     const lastSchritt = runRecord?.schritte?.[runRecord.schritte.length - 1]?.text ?? null;
     return {
       kind: "running",

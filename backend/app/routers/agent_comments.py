@@ -43,7 +43,7 @@ from app.utils import utcnow
 # Single Source of Truth: app/comment_types.py (REL-01). Same alias as
 # agent_scoped.py uses — preserves the historical name for tests.
 from app.comment_types import ALL_COMMENT_TYPES as VALID_COMMENT_TYPES
-from app.comment_types import validate_comment_content
+from app.comment_types import CHAT_REPLY_COMMENT_TYPE, validate_comment_content
 
 logger = logging.getLogger("mc.agent_comments")
 
@@ -390,11 +390,20 @@ async def _create_comment(
         from app.services.task_lifecycle import apply_ack_handshake
         apply_ack_handshake(session, task, agent)
 
+    # A chat reply is stored as ``chat_reply`` (round-3 code review r1 S3):
+    # as a plain ``message`` it was the run's sign of life for the watchdogs
+    # (``task_evidence.last_real_activity_at``), so "how far are you?" on a
+    # hanging run pushed the silent-card alarm back. Shown like a message.
+    stored_type = (
+        CHAT_REPLY_COMMENT_TYPE
+        if from_chat and payload.comment_type in CHAT_REPLY_COMMENT_TYPES
+        else payload.comment_type
+    )
     comment = TaskComment(
         task_id=task_id,
         author_type="agent",
         author_agent_id=agent.id,
-        comment_type=payload.comment_type,
+        comment_type=stored_type,
         content=payload.content,
     )
     session.add(comment)

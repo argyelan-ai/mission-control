@@ -59,7 +59,10 @@ async def last_real_activity_at(session: AsyncSession, task, children=()) -> dat
 
     Counts:
     - agent/user comments on this task (system/watchdog_notify ignored —
-      counting those as activity is what restacks reminders)
+      counting those as activity is what restacks reminders; a chat
+      session's reply, ``chat_reply``, ignored too — it proves the chat
+      answered, not that the run lives: "how far are you?" on a hanging
+      run must not push the alarm back, round-3 code review r1 S3)
     - the newest harvested ModelUsageEvent.ts for this task — the one
       liveness signal the agent cannot fabricate by existing (a
       working-heartbeat is derived from mere lock-file existence, and
@@ -82,6 +85,7 @@ async def last_real_activity_at(session: AsyncSession, task, children=()) -> dat
       branch, cleared+re-set by tier-3 — a repair attempt must not
       reset a silence clock)
     """
+    from app.comment_types import CHAT_REPLY_COMMENT_TYPE
     from app.models.task import TaskComment
 
     last_real_comment = (await session.exec(
@@ -89,6 +93,7 @@ async def last_real_activity_at(session: AsyncSession, task, children=()) -> dat
         .where(
             TaskComment.task_id == task.id,
             TaskComment.author_type != "system",
+            TaskComment.comment_type != CHAT_REPLY_COMMENT_TYPE,
         )
         .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
         .limit(1)

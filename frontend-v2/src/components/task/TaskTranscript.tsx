@@ -24,8 +24,9 @@ function TranscriptMessage({ message }: { message: TranscriptMessageType }) {
   const [expanded, setExpanded] = useState(false);
   const isAgent = message.role === "agent";
   const content = message.content ?? "";
+  // `chat_reply` = a reply from the agent's chat session: shown like a message.
   const typeLabel =
-    message.comment_type && message.comment_type !== "message"
+    message.comment_type && message.comment_type !== "message" && message.comment_type !== "chat_reply"
       ? COMMENT_TYPE_LABELS[message.comment_type] ?? message.comment_type
       : null;
 

@@ -1974,6 +1974,8 @@ class TaskMonitorMixin:
           specific card proves the queue has been non-empty at least that
           long, even with no other signal
         """
+        from app.comment_types import CHAT_REPLY_COMMENT_TYPE
+
         comment_result = await session.exec(
             select(TaskComment)
             .join(Task, Task.id == TaskComment.task_id)  # type: ignore[arg-type]
@@ -1981,6 +1983,8 @@ class TaskMonitorMixin:
                 Task.assigned_agent_id == agent.id,
                 Task.board_id == board_id,
                 TaskComment.author_type != "system",
+                # A chat reply proves the chat, not the mailbox (round-3 r1 S3).
+                TaskComment.comment_type != CHAT_REPLY_COMMENT_TYPE,
             )
             .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
             .limit(1)

@@ -79,6 +79,14 @@ describe("deriveStateCard", () => {
     });
   });
 
+  it("in_progress → the last step is the run's, never the chat's reply (round-3 r1 S3)", () => {
+    const task = taskFixture({ status: "in_progress" });
+    const step = commentFixture({ comment_type: "progress", content: "Running the test suite", created_at: "2026-09-22T08:10:00Z" });
+    const reply = commentFixture({ id: "c-chat", comment_type: "chat_reply", content: "Still on step 2 as of 10:12", created_at: "2026-09-22T08:12:00Z" });
+    const card = deriveStateCard({ task, approvals: [], comments: [step, reply], runRecord: null });
+    expect(card).toMatchObject({ kind: "running", lastStep: "Running the test suite" });
+  });
+
   it("done → RESULT with resolution, PR fallback, evidence count and duration", () => {
     const task = taskFixture({ status: "done", pr_url: "https://example.test/pr/638", pr_number: 638 });
     const resolution = commentFixture({ comment_type: "resolution", content: "Fixed the scroll.\nAdded a test." });

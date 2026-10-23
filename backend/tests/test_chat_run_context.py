@@ -200,6 +200,20 @@ async def test_the_block_says_answer_from_here_and_names_a_runnable_read():
     assert str(task.id) in text
 
 
+async def test_the_block_forbids_review_decisions_and_raw_snapshots():
+    """Round 3: r1 S1 — `mc review` / `mc review-note` are the run's call;
+    t1 NICE-4 — a `task-get` excerpt came as raw JSON in UTC next to 05:42;
+    t1 NICE-5 — "since then nothing was written" read like now, while the run
+    had already written the file."""
+    agent = await _agent()
+    await _running_task(agent)
+    text = await _context(agent)
+    assert "`mc review` / `mc review-note`" in text
+    assert "never paste its raw JSON" in text
+    assert "times on the operator's clock" in text
+    assert "a snapshot" in text and "as of" in text
+
+
 async def test_an_old_run_is_not_named():
     agent = await _agent()
     await _handed_off_task(agent, left_at=NOW - timedelta(hours=2))
