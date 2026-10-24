@@ -25,6 +25,8 @@ import { humanApiError } from "@/components/shared/HostRecipeSwitcher";
 import { HostRecipeSwitcher } from "@/components/shared/HostRecipeSwitcher";
 import { HeadOnBoxNotice, useHeadConflictText } from "@/components/heads/HeadOccupancy";
 import { parseHeadOnBox, type HeadBusy } from "@/lib/heads";
+import { benchEnabled, type BenchRuntimeSummary } from "@/lib/benchLinks";
+import { BenchTestAction, BenchTestNotes } from "./BenchTest";
 
 /** Exportiert (Cockpit PR 5): dieselbe 409-Konflikt-Erkennung wie hier, damit
  *  der Stop-Knopf im Cockpit dieselbe inline Bestätigung zeigt statt eine
@@ -58,6 +60,7 @@ export function ActionBar({
   variant = "normal",
   onOpenCockpit,
   headOnBox = null,
+  bench = null,
 }: {
   hostId: string;
   hostName: string | null;
@@ -77,6 +80,12 @@ export function ActionBar({
    *  (trouble) stays recoverable — the backend allows that. The backend
    *  guard (409 head_on_box) stays the real protection. */
   headOnBox?: HeadBusy | null;
+  /** Bench W1 P1: this runtime's row from GET /bench/runtime-summary. The
+   *  most recently started live card (`primary`) leads with "Testen" and its
+   *  switch steps down to secondary (K11: one accent per card); other cards
+   *  keep the switch primary and get "Testen" in the second row. A card in
+   *  trouble offers recovery, not a test. */
+  bench?: BenchRuntimeSummary | null;
 }) {
   const t = useTranslations("runtimes.stage");
   const tHeads = useTranslations("heads.runtimes");
@@ -158,6 +167,13 @@ export function ActionBar({
     },
   });
 
+  const showBench = benchEnabled && bench != null && variant === "normal";
+  const benchLeads = showBench && bench.primary;
+  // While the switch list/confirmation is open its "Starten" is the one
+  // accent button; "Testen" steps down to a bordered button (review M4).
+  const [switching, setSwitching] = useState(false);
+  const benchShown = bench && switching ? { ...bench, primary: false } : bench;
+
   if (blockedClick && locked && headOnBox) {
     const title = headOnBox.title
       ? tHeads("onBoxTitle", { title: headOnBox.title })
@@ -227,6 +243,19 @@ export function ActionBar({
     );
   }
 
+  const stopButton = (
+    <button
+      type="button"
+      onClick={() => (locked ? setBlockedClick("stop") : stopMutation.mutate(false))}
+      disabled={stopMutation.isPending}
+      data-testid="stop-runtime"
+      className="text-xs px-3.5 py-2.5 rounded-md cursor-pointer disabled:opacity-50"
+      style={{ color: C.error, border: `1px solid ${C.borderSubtle}` }}
+    >
+      {stopMutation.isPending ? t("stopping") : t("stop")}
+    </button>
+  );
+
   return (
     <div className="flex flex-col gap-2 px-4 py-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
       {/* Only a refusal from the box guard (409 head_on_box) — i.e. after a
@@ -236,8 +265,11 @@ export function ActionBar({
       {error && (
         <div className="text-xs" style={{ color: C.error }}>{error}</div>
       )}
+      {showBench && <BenchTestNotes summary={bench} />}
       <div className="stage-actions">
-        {variant === "trouble" ? (
+        {benchLeads ? (
+          <BenchTestAction summary={benchShown ?? bench} className="w-full @min-[600px]:w-auto" />
+        ) : variant === "trouble" ? (
           <button
             type="button"
             onClick={() => restartMutation.mutate()}
@@ -266,21 +298,23 @@ export function ActionBar({
         >
           <Settings size={14} style={{ color: C.textSecondary }} />
         </button>
-        <div className="stage-actions-row2">
-          {variant === "trouble" && (
-            <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact label={t("otherModel")} />
-          )}
-          <button
-            type="button"
-            onClick={() => (locked ? setBlockedClick("stop") : stopMutation.mutate(false))}
-            disabled={stopMutation.isPending}
-            data-testid="stop-runtime"
-            className="text-xs px-3.5 py-2.5 rounded-md cursor-pointer disabled:opacity-50"
-            style={{ color: C.error, border: `1px solid ${C.borderSubtle}` }}
-          >
-            {stopMutation.isPending ? t("stopping") : t("stop")}
-          </button>
-        </div>
+        {benchLeads ? (
+          // The switch steps down next to Stop. Not the grid row2 (equal
+          // columns): its inline confirmation — with the auto-test switch —
+          // needs the full width of the card to wrap into.
+          <div className="col-span-full flex flex-wrap items-center gap-2 @min-[600px]:flex-1 @min-[600px]:justify-end">
+            <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} secondary label={t("switchModel")} blockedBy={lockedReason} onBlocked={() => setBlockedClick("switch")} onActiveChange={setSwitching} />
+            {stopButton}
+          </div>
+        ) : (
+          <div className="stage-actions-row2">
+            {variant === "trouble" && (
+              <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact label={t("otherModel")} />
+            )}
+            {showBench && <BenchTestAction summary={bench} />}
+            {stopButton}
+          </div>
+        )}
       </div>
     </div>
   );

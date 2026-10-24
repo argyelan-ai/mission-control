@@ -192,7 +192,7 @@ describe("phone tab bar", () => {
 });
 
 describe("⊕ sheet — variant B, level 1", () => {
-  it("shows exactly New job · Voice · last chat · Pages › · Settings ›", async () => {
+  it("shows exactly New job · Voice · Test a model · last chat · Pages › · Settings ›", async () => {
     localStorage.setItem(
       "mc-recent-chats",
       JSON.stringify([
@@ -218,7 +218,7 @@ describe("⊕ sheet — variant B, level 1", () => {
     const rows = [...screen.getByTestId("quick-root").querySelectorAll("a, button")].map(
       (e) => e.getAttribute("data-testid"),
     );
-    expect(rows).toEqual(["quick-new-job", "quick-voice", "quick-last-chat", "quick-pages", "quick-settings"]);
+    expect(rows).toEqual(["quick-new-job", "quick-voice", "quick-bench-test", "quick-last-chat", "quick-pages", "quick-settings"]);
     expect(screen.getByTestId("quick-settings")).toHaveAttribute("href", "/settings");
 
     // calm: no theme switch, no tile grid, no "More…", no visible title
@@ -226,6 +226,18 @@ describe("⊕ sheet — variant B, level 1", () => {
     expect(within(sheet).queryByText("More…")).toBeNull();
     expect(screen.queryByTestId("quick-areas")).toBeNull();
     expect(within(sheet).queryByRole("heading")).toBeNull();
+  });
+
+  it("Test a model opens the bench test sheet for the running model (bench W1 P2)", async () => {
+    renderNav();
+    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    const row = screen.getByTestId("quick-bench-test");
+    expect(row).toHaveTextContent("Test a model");
+    expect(row).toHaveTextContent("The running model, everything pre-filled");
+    expect(row).toHaveAttribute("href", "/bench?test=1&from=quick");
+    row.addEventListener("click", (e) => e.preventDefault());
+    await userEvent.click(row);
+    await waitFor(() => expect(screen.queryByTestId("quick-sheet")).toBeNull());
   });
 
   it("New job closes the sheet and opens the New-task modal", async () => {

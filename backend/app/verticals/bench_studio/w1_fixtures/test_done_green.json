@@ -1,0 +1,245 @@
+{
+  "id": "a0000000-0000-4000-8000-000000000002",
+  "title": "Pagoda Garden",
+  "created_at": "2026-10-22T19:40:00Z",
+  "trigger": "runtimes",
+  "preset": "standard",
+  "protocol_version": "v1",
+  "state": "done",
+  "section": "done",
+  "state_reason": null,
+  "prompt": {
+    "template_id": "66666666-6666-4666-8666-666666666666",
+    "title": "Pagoda Garden",
+    "sha256": "d6e0ea9000000000000000000000000000000000000000000000000000000000"
+  },
+  "blocks": [
+    {
+      "run_class": "A",
+      "contestants": [
+        {
+          "key": "11111111-1111-4111-8111-111111111111",
+          "runtime_id": "11111111-1111-4111-8111-111111111111",
+          "served_model_id": "DeepSeek-V4.1-Flash-1017",
+          "display_name": "DeepSeek-V4.1-Flash-1017",
+          "alias": null,
+          "locality": "local",
+          "device_name": "DGX Spark ×2",
+          "harness": "api",
+          "effort": {
+            "requested": "default",
+            "default_level": "high",
+            "sent": null,
+            "observed": {
+              "thinking": "on",
+              "reasoning_tokens": 2140
+            }
+          },
+          "runs": [
+            {
+              "entry_id": "e0000000-0000-4000-8000-000000000011",
+              "repeat_idx": 1,
+              "attempt_no": 1,
+              "state": "done",
+              "phase": "done",
+              "elapsed_ms": 66000,
+              "tokens_out": 6607,
+              "decode_tok_s": 101.0,
+              "ttft_ms": 410,
+              "finish_reason": "stop",
+              "truncated": false,
+              "wait": null,
+              "error": null,
+              "is_video_run": true
+            },
+            {
+              "entry_id": "e0000000-0000-4000-8000-000000000012",
+              "repeat_idx": 2,
+              "attempt_no": 1,
+              "state": "done",
+              "phase": "done",
+              "elapsed_ms": 62000,
+              "tokens_out": 6400,
+              "decode_tok_s": 103.0,
+              "ttft_ms": 380,
+              "finish_reason": "stop",
+              "truncated": false,
+              "wait": null,
+              "error": null,
+              "is_video_run": false
+            },
+            {
+              "entry_id": "e0000000-0000-4000-8000-000000000013",
+              "repeat_idx": 3,
+              "attempt_no": 1,
+              "state": "done",
+              "phase": "done",
+              "elapsed_ms": 71000,
+              "tokens_out": 6900,
+              "decode_tok_s": 99.5,
+              "ttft_ms": 460,
+              "finish_reason": "stop",
+              "truncated": false,
+              "wait": null,
+              "error": null,
+              "is_video_run": false
+            }
+          ],
+          "summary": {
+            "time": {
+              "measured": true,
+              "median": 66000.0,
+              "min": 62000.0,
+              "max": 71000.0,
+              "n": 3,
+              "reason": null
+            },
+            "time_kind": "gen_ms",
+            "wait_ms": null,
+            "tokens_out": {
+              "measured": true,
+              "median": 6607.0,
+              "min": 6400.0,
+              "max": 6900.0,
+              "n": 3,
+              "reason": null
+            },
+            "tokens_reasoning": {
+              "measured": true,
+              "median": 2140.0,
+              "min": 1980.0,
+              "max": 2400.0,
+              "n": 3,
+              "reason": null
+            },
+            "tokens_cache_read": null,
+            "decode_tok_s": {
+              "measured": true,
+              "median": 101.0,
+              "min": 99.5,
+              "max": 103.0,
+              "n": 3,
+              "reason": null
+            },
+            "ttft_ms": {
+              "measured": true,
+              "median": 410.0,
+              "min": 380.0,
+              "max": 460.0,
+              "n": 3,
+              "reason": null
+            },
+            "cost": {
+              "cost_kind": "local",
+              "usd": null,
+              "hypothetical_usd": 0.04,
+              "price_source": "deepseek-api",
+              "price_date": "2026-10-01",
+              "needs_confirmation": false,
+              "second_confirmation": false,
+              "reason": null
+            },
+            "page_check": "loads",
+            "tie_with": []
+          },
+          "receipt": {
+            "protocol_version": "v1",
+            "run_class": "A",
+            "served_model_id": "DeepSeek-V4.1-Flash-1017",
+            "display_name": "DeepSeek-V4.1-Flash-1017",
+            "alias": null,
+            "locality": "local",
+            "device": "DGX Spark ×2",
+            "nodes": 2,
+            "provider": null,
+            "engine": null,
+            "engine_version": null,
+            "recipe_slug": null,
+            "quant": null,
+            "gpu_mode": "eco",
+            "spec_decoding": null,
+            "harness": "api",
+            "harness_version": null,
+            "effort_requested": "default",
+            "effort_sent": null,
+            "effort_observed": {
+              "thinking": "on",
+              "reasoning_tokens": 2140
+            },
+            "thinking_key": "reasoning_effort",
+            "temperature": 0.7,
+            "max_tokens": 16384,
+            "system_prompt_sha": "4b1c0de000000000000000000000000000000000000000000000000000000000",
+            "prompt_sha256": "d6e0ea9000000000000000000000000000000000000000000000000000000000",
+            "brief_sha": null,
+            "tools_allowed": null,
+            "time_limit_min": null,
+            "n_runs": 3,
+            "video_run_index": 1,
+            "attempts": 3,
+            "failures": 0,
+            "network_blocked": true,
+            "network_attempts": 0,
+            "libraries_inlined": [],
+            "html_bytes": 17204,
+            "quiet_box": "ok",
+            "serving_age_min": 1410,
+            "recorded_at": "2026-10-22T19:44:10Z",
+            "harvested_at": null,
+            "unknown": {
+              "engine": "hand_made_runtime",
+              "spec_decoding": "no_recipe",
+              "engine_version": "hand_made_runtime"
+            }
+          },
+          "receipt_version": 1,
+          "receipt_checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      ],
+      "starts_after": null
+    }
+  ],
+  "gate": {
+    "status": "green",
+    "reasons": [],
+    "checksum": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "verdict": {
+    "served_model_id": "DeepSeek-V4.1-Flash-1017",
+    "run_class": "A",
+    "n_runs": 3,
+    "time": {
+      "measured": true,
+      "median": 66000.0,
+      "min": 62000.0,
+      "max": 71000.0,
+      "n": 3,
+      "reason": null
+    },
+    "tokens_out": {
+      "measured": true,
+      "median": 6607.0,
+      "min": 6400.0,
+      "max": 6900.0,
+      "n": 3,
+      "reason": null
+    },
+    "page_check": "loads"
+  },
+  "video": {
+    "path": "/shared-deliverables/bench-a0000000-0000-4000-8000-000000000002/grid-1.mp4",
+    "duration_s": 24.5,
+    "run_index": 1
+  },
+  "truncation": null,
+  "rerun_of": null,
+  "allowed": [
+    "kit",
+    "rerun",
+    "rerender",
+    "recompose",
+    "archive",
+    "delete"
+  ],
+  "overlay_actions": []
+}

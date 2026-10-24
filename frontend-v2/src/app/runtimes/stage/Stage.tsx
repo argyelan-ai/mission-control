@@ -46,6 +46,7 @@ import { useHeadPairsForLabels } from "@/components/heads/HeadStateCard";
 import { runPairLabel, type HeadBusy } from "@/lib/heads";
 import { fleetCount } from "@/app/agents/fleetCount";
 import { isAgentWorking } from "@/lib/agentStatus";
+import type { BenchRuntimeSummary } from "@/lib/benchLinks";
 
 export interface StageMember {
   host: Host;
@@ -84,6 +85,7 @@ export function Stage({
   members,
   live,
   onOpenCockpit,
+  benchSummary = null,
 }: {
   runtime: Runtime;
   members: StageMember[];
@@ -91,6 +93,8 @@ export function Stage({
   /** Cockpit öffnet immer für die Head-Box (Spec §4: "Head-Box bei Duo" —
    *  der Umschalter zu Worker sitzt im Cockpit-Kopf, nicht auf der Karte). */
   onOpenCockpit: (headHostId: string) => void;
+  /** Bench W1 P1: this runtime's "Testen" row (GET /bench/runtime-summary). */
+  benchSummary?: BenchRuntimeSummary | null;
 }) {
   const t = useTranslations("runtimes.stage");
   const locale = useLocale();
@@ -463,6 +467,7 @@ export function Stage({
             variant={status === "failed" ? "trouble" : "normal"}
             onOpenCockpit={() => onOpenCockpit(headHost?.host.id ?? "")}
             headOnBox={workingHead}
+            bench={benchSummary}
           />
         )}
       </div>

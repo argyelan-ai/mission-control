@@ -2,13 +2,21 @@
 (same auth dependency as the core approvals/files routers). Exception: the
 entry HTML view route uses require_bench_view, which additionally accepts a
 short-lived resource-scoped view-token (see auth.create_bench_view_token) —
-that route's URL is meant to be copied/shared/opened on a phone."""
+that route's URL is meant to be copied/shared/opened on a phone.
+
+Bench W1 kill list (24.10.2026, concept 30 W1.8): the legacy create
+(POST /challenges, the "Neue Challenge" dialog's 3-6 model grid), the
+Spark-only GET /spark-models and /effort-levels*, and the X-draft path
+(POST /challenges/{id}/draft -> Approval(x_post) -> x_publisher) are gone.
+Tests start through POST /bench/tests (w1_routes); MC posts nothing to X.
+What stays here: reading old challenges, stop/archive/delete, entry
+rename/view/rerender/retry, and the challenge-wide rerender/recompose —
+which hand W1 tests to the W1 runner (run 1 only, W1 templates)."""
 from __future__ import annotations
 
 import logging
 import uuid
 from pathlib import Path
-from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
@@ -23,7 +31,6 @@ from app.utils import create_tracked_task
 from app.verticals import hooks
 
 from . import orchestrator
-from .drafts import create_draft
 
 logger = logging.getLogger("mc.bench_studio")
 
@@ -73,48 +80,6 @@ async def _claim_challenge_run(challenge_id: uuid.UUID) -> None:
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────
-
-
-class BenchModelSpec(BaseModel):
-    # May arrive empty: the dialog's default row "Aktives Modell (auto)"
-    # sends "" on purpose and create fills it from the model it resolves.
-    # "Not empty" is checked in create_challenge AFTER that resolution — a
-    # min_length here refused the default row with a Pydantic 422 before
-    # the fill-in could run (round-2 user test t2 MUSS-1).
-    label: str = Field(default="", max_length=LABEL_MAX_LEN)
-    source_kind: Literal["spark", "agent"]
-    spark_model: str | None = None
-    agent_id: uuid.UUID | None = None
-    # Custom chip tag for the branded video (e.g. "OMP · DGX SPARK").
-    # None -> harness-derived default (orchestrator._build_branding_payload).
-    display_tag: str | None = Field(default=None, max_length=80)
-    # Effort (thinking level) for the direct-API path (bench W0.6). None /
-    # "default" = send nothing, the server default governs. Any other level
-    # must be one the effort probe found for the served model (422
-    # otherwise). Agent rows only take "default": a bench task opens a new
-    # omp session that starts on its own default and the chat switch does
-    # not reach it — the level is recorded from the session instead (W0.7,
-    # operator decision D5).
-    effort: Literal["default", "off", "on", "low", "medium", "high", "max"] | None = None
-
-
-class BenchChallengeCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=200)
-    prompt_template_id: uuid.UUID | None = None
-    prompt_text: str | None = None
-    mode: Literal["single", "side_by_side"] = "side_by_side"
-    models: list[BenchModelSpec] = Field(min_length=1, max_length=6)
-    series_label: str | None = Field(default=None, max_length=80)
-    # Video length in seconds. None -> legacy RECORD_DURATION_S fallback
-    # (orchestrator.py). 5..60 mirrors the mc-playwright /record bound
-    # (RecordRequest.duration_s) plus the timeout budget headroom noted there.
-    record_duration_s: int | None = Field(default=None, ge=5, le=60)
-
-
-class BenchDraftCreate(BaseModel):
-    tweet_text: str = Field(min_length=1, max_length=280)
-    include_speed_labels: bool = False
-    board_id: uuid.UUID | None = None
 
 
 class BenchChallengeUpdate(BaseModel):
@@ -167,272 +132,6 @@ async def _entries_for(session: AsyncSession, challenge_id: uuid.UUID) -> list[B
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────
-
-
-@router.get("/spark-models")
-async def list_spark_models(current_user=Depends(require_user)):
-    """Bench #21: live model list for the vanilla (direct-API) row in the
-    New-Challenge dialog. Always 200 — an unreachable Spark is a state the
-    dialog renders (offline warning + free-text fallback), not an error."""
-    return await orchestrator.spark_models_status()
-
-
-async def _served_model_or_none(model: str | None) -> str | None:
-    """``model`` or, when empty, the Spark's active model (None when the box
-    is unreachable). A /v1/models GET only — never a completion."""
-    served = (model or "").strip()
-    if served:
-        return served
-    status_now = await orchestrator.spark_models_status()
-    if not status_now["reachable"] or not status_now["active"]:
-        return None
-    return status_now["active"]
-
-
-@router.get("/effort-levels")
-async def get_effort_levels(
-    model: str | None = None,
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    """Bench W0.6: which effort levels the direct-API row may offer for
-    ``model`` (empty = the Spark's active model) — from the probe cache
-    ONLY (per runtime, served model and serving_since). Read-only: no DB
-    write and no completion request to the box (round-1 review: opening the
-    dialog used to probe). Never checked for this engine run =
-    ``status: "unchecked"``; the dialog then offers an explicit check
-    (``POST /effort-levels/check``). Always 200."""
-    from . import effort_probe
-
-    served = await _served_model_or_none(model)
-    if served is None:
-        return effort_probe.serialize(None, None, reachable=False)
-    row = await effort_probe.stored_probe(session, served)
-    if row is None:
-        return effort_probe.serialize(None, served, status="unchecked")
-    return effort_probe.serialize(row, served, reachable=effort_probe.reached(row))
-
-
-class EffortCheckRequest(BaseModel):
-    # Empty / None = the Spark's active model.
-    model: str | None = Field(default=None, max_length=256)
-
-
-@router.post("/effort-levels/check")
-async def check_effort_levels(
-    body: EffortCheckRequest,
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    """Run the effort probe now (2-4 tiny requests against the box) and
-    store it — the operator's explicit "check" in the dialog. 409 while the
-    Spark is busy (a bench run generating there, or an agent on a Spark
-    runtime working on a task). Box unreachable = 200 ``reachable: false``."""
-    from . import effort_probe
-
-    reason = await effort_probe.spark_busy_reason(session)
-    if reason:
-        raise HTTPException(409, reason)
-    served = await _served_model_or_none(body.model)
-    if served is None:
-        return effort_probe.serialize(None, None, reachable=False)
-    row = await effort_probe.get_or_probe(session, served, refresh=True)
-    return effort_probe.serialize(row, served, reachable=effort_probe.reached(row))
-
-
-def _field_422(loc: list[object], code: str, msg: str, **ctx: object) -> HTTPException:
-    """A refusal at one field, in FastAPI's own validation shape
-    ``[{loc, msg, type, ctx}]`` — see :func:`_row_422`."""
-    item: dict[str, object] = {"loc": loc, "msg": msg, "type": code}
-    if ctx:
-        item["ctx"] = ctx
-    return HTTPException(422, [item])
-
-
-def _row_422(index: int, field: str, code: str, msg: str, **ctx: object) -> HTTPException:
-    """A refusal that belongs to one field of one model row (round-5 r1 N2).
-
-    FastAPI's own validation shape — ``[{loc, msg, type, ctx}]`` — so the
-    dialog places it at the row's field and words it in the UI language from
-    the stable ``type``; a bare English sentence reached the operator as an
-    English toast, also in the German UI. ``msg`` keeps the English reason for
-    every other reader (logs, curl). ``index`` is 0-based like Pydantic's
-    ``loc``; ``ctx`` row numbers are 1-based like the dialog's "Model 2"."""
-    return _field_422(["body", "models", index, field], code, msg, **ctx)
-
-
-def _unique_labels(specs: list[BenchModelSpec], efforts: list[str]) -> None:
-    """Every entry of a challenge needs to be told apart (round-1 user test:
-    "DeepSeek" Off vs Max became two identical rows in the UI and video).
-
-    Since round-2 Q2 the effort is its own field and the label is never
-    rewritten: two rows of the same model with different efforts are two
-    different entries (the UI and the video show the effort next to the
-    name). The same label AND the same effort is refused — the box answers
-    deterministically, so the second row would repeat the first, and nobody
-    could tell the two apart in the video."""
-    seen: dict[tuple[str, str], int] = {}
-    for row, (spec, effort) in enumerate(zip(specs, efforts), start=1):
-        key = orchestrator.entry_label_key(spec.label, spec.source_kind, effort)
-        if key in seen:
-            raise _row_422(
-                row - 1,
-                "label",
-                "bench_duplicate_entry",
-                f"Model row {row} has the same label and the same effort as row "
-                f"{seen[key]} ({spec.label.strip()!r}) — choose another effort or "
-                "give this row its own label.",
-                row=row,
-                other_row=seen[key],
-            )
-        seen[key] = row
-
-
-async def _validate_effort(session: AsyncSession, spec: BenchModelSpec, index: int) -> str:
-    """The effort level to store for ``spec`` (row ``index``, 0-based) — 422
-    at the row's effort when it cannot run."""
-    level = spec.effort or "default"
-    if level == "default":
-        return level
-    if spec.source_kind == "agent":
-        raise _row_422(
-            index,
-            "effort",
-            "bench_effort_agent_path",
-            f"model {spec.label!r}: effort cannot be set on the agent path yet — "
-            "the agent's session level is recorded instead",
-        )
-    from app.services.reasoning_params import UnsupportedEffortError
-
-    from . import effort_probe
-
-    probe = await effort_probe.get_or_probe(session, spec.spark_model or "")
-    try:
-        effort_probe.level_fields(probe, level)
-    except effort_probe.EffortProbeFailedError as exc:
-        # The check failed, not the model (round-7 re-check r1 N3).
-        raise _row_422(
-            index, "effort", "bench_effort_probe_failed", f"model {spec.label!r}: {exc}", level=level
-        ) from exc
-    except UnsupportedEffortError as exc:
-        raise _row_422(
-            index, "effort", "bench_effort_not_offered", f"model {spec.label!r}: {exc}", level=level
-        ) from exc
-    return level
-
-
-@router.post("/challenges", status_code=status.HTTP_201_CREATED)
-async def create_challenge(
-    body: BenchChallengeCreate,
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    # Edited text wins over template body. Only use template body as fallback when prompt_text is empty.
-    prompt_text = body.prompt_text
-    if body.prompt_template_id is not None:
-        from app.models.prompt_template import PromptTemplate  # PR 2
-
-        template = await session.get(PromptTemplate, body.prompt_template_id)
-        if template is None:
-            raise HTTPException(404, "Prompt template not found")
-        # Use template body only if prompt_text is empty/None (user did not edit or left it blank)
-        if not prompt_text or not prompt_text.strip():
-            prompt_text = template.body
-    if not prompt_text or not prompt_text.strip():
-        # At the prompt field, in the UI language (round-7 re-check r1 N4: a
-        # bare English 400 reached the operator as a toast).
-        raise _field_422(
-            ["body", "prompt_text"], "bench_prompt_required", "prompt_text or prompt_template_id required"
-        )
-
-    # Bench #21 vanilla "auto" option: empty spark_model -> freeze the live
-    # active model now, so the entry/outro never end up pointing at nothing
-    # regardless of later model switches on the box (422 if Spark can't be
-    # reached to resolve it). Resolved at most ONCE per request — a
-    # multi-model side_by_side challenge with several auto specs must not
-    # fire N sequential probes against the same box for the same answer
-    # (review finding).
-    resolved_spark_model: str | None = None
-    for row, spec in enumerate(body.models, start=1):
-        if spec.source_kind == "agent" and spec.agent_id is None:
-            raise _row_422(row - 1, "agent_id", "bench_agent_required", f"model {spec.label!r}: agent_id required")
-        if spec.source_kind == "spark" and not (spec.spark_model or "").strip():
-            if resolved_spark_model is None:
-                try:
-                    resolved_spark_model = await orchestrator.resolve_spark_model_or_422()
-                except HTTPException as exc:
-                    if exc.status_code != 422:
-                        raise
-                    # Said at this auto row's model select, in the UI language.
-                    raise _row_422(
-                        row - 1, "spark_model", "bench_spark_unreachable", str(exc.detail)
-                    ) from exc
-            spec.spark_model = resolved_spark_model
-        if not spec.label.strip():
-            if spec.source_kind == "spark":
-                # The model this row will really run (resolved above for the
-                # auto row, typed for a fixed one) — cut to the label limit,
-                # the model id itself stays whole.
-                spec.label = (spec.spark_model or "").strip()[:LABEL_MAX_LEN].rstrip()
-            else:
-                raise _row_422(
-                    row - 1,
-                    "label",
-                    "bench_agent_label_required",
-                    f"Model row {row}: the label is empty — give this agent row a name.",
-                )
-    efforts = [await _validate_effort(session, spec, i) for i, spec in enumerate(body.models)]
-    _unique_labels(body.models, efforts)
-
-    series_no = None
-    if body.series_label:
-        existing = (
-            await session.exec(
-                select(BenchChallenge.series_no).where(
-                    BenchChallenge.series_label == body.series_label
-                )
-            )
-        ).all()
-        series_no = max([n for n in existing if n is not None], default=0) + 1
-
-    challenge = BenchChallenge(
-        title=body.title,
-        prompt_template_id=body.prompt_template_id,
-        prompt_text=prompt_text,
-        mode=body.mode,
-        series_label=body.series_label,
-        series_no=series_no,
-        record_duration_s=body.record_duration_s,
-    )
-    session.add(challenge)
-    await session.flush()
-    entries = [
-        BenchEntry(
-            challenge_id=challenge.id,
-            model_label=spec.label,
-            source_kind=spec.source_kind,
-            spark_model=spec.spark_model,
-            agent_id=spec.agent_id,
-            display_tag=(spec.display_tag or "").strip() or None,
-            # The requested effort lives in metrics until the W1 schema PR
-            # moves it into a column (concept §7: same field names).
-            metrics={"effort_requested": effort},
-            # The dialog's row order is the order everywhere (t2 SOLL-1).
-            position=position,
-        )
-        for position, (spec, effort) in enumerate(zip(body.models, efforts))
-    ]
-    for e in entries:
-        session.add(e)
-    await session.commit()
-    await session.refresh(challenge)
-
-    create_tracked_task(
-        orchestrator.start_challenge(challenge.id),
-        name=f"start_challenge({challenge.id})"
-    )
-    logger.info("bench challenge %s created (%d entries)", challenge.id, len(entries))
-    return _serialize(challenge, entries)
 
 
 @router.get("/challenges")
@@ -560,33 +259,6 @@ async def view_bench_entry(
     )
 
 
-@router.post("/challenges/{challenge_id}/draft", status_code=status.HTTP_201_CREATED)
-async def create_challenge_draft(
-    challenge_id: uuid.UUID,
-    body: BenchDraftCreate,
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    challenge = await session.get(BenchChallenge, challenge_id)
-    if challenge is None:
-        raise HTTPException(404, "Challenge not found")
-    from app.services.x_publisher import validate_draft
-
-    warnings = validate_draft(body.tweet_text).warnings
-    approval = await create_draft(
-        session,
-        challenge,
-        tweet_text=body.tweet_text,
-        include_speed_labels=body.include_speed_labels,
-        board_id=body.board_id,
-    )
-    return {
-        "approval_id": str(approval.id),
-        "challenge_status": challenge.status,
-        "warnings": warnings,
-    }
-
-
 @router.post("/challenges/{challenge_id}/rerender")
 async def rerender_challenge(
     challenge_id: uuid.UUID,
@@ -601,21 +273,35 @@ async def rerender_challenge(
             409,
             f"Challenge is {challenge.status!r} — rerender only from review/drafted/failed/rendering/composing.",
         )
-    # An open X-Post approval still points at the current video path
-    # (Approval.payload.media_paths, frozen at draft time) — rerender would
-    # rename AND delete that file (_cleanup_old_compose), breaking the
-    # approve-then-post flow days later (2026-07-13 incident).
-    if await orchestrator.pending_x_post_approval(session, challenge_id) is not None:
-        raise HTTPException(
-            409,
-            "Open X-Post approval references the current video — approve or reject it first.",
-        )
     await _claim_challenge_run(challenge_id)
+    if _is_w1(challenge):
+        # W1: record run 1 again (seeded Math.random -> same video) and
+        # recompose with the W1 templates — never every repetition.
+        create_tracked_task(
+            _w1_then_release(challenge.id, "rerender"), name=f"bench_w1_rerender({challenge.id})"
+        )
+        return {"ok": True}
     create_tracked_task(
         orchestrator.rerender_challenge(challenge.id),
         name=f"rerender_challenge({challenge.id})"
     )
     return {"ok": True}
+
+
+def _is_w1(challenge: BenchChallenge) -> bool:
+    return (challenge.protocol_version or "v0") == "v1"
+
+
+async def _w1_then_release(challenge_id: uuid.UUID, what: str) -> None:
+    from . import w1_runner
+
+    try:
+        if what == "rerender":
+            await w1_runner.rerender(challenge_id)
+        else:
+            await w1_runner.recompose(challenge_id)
+    finally:
+        await orchestrator._release_challenge_run_claim(challenge_id)
 
 
 # ── Operator lifecycle: stop / archive / delete (2026-07-12) ──────────────
@@ -721,14 +407,12 @@ async def recompose_challenge(
             422,
             "recompose needs 1 or 2 recorded entries — use rerender for everything else.",
         )
-    # Same guard as rerender: a pending X-Post approval's media_paths still
-    # point at the current file — recompose would rename AND delete it.
-    if await orchestrator.pending_x_post_approval(session, challenge_id) is not None:
-        raise HTTPException(
-            409,
-            "Open X-Post approval references the current video — approve or reject it first.",
-        )
     await _claim_challenge_run(challenge_id)
+    if _is_w1(challenge):
+        create_tracked_task(
+            _w1_then_release(challenge.id, "recompose"), name=f"bench_w1_recompose({challenge.id})"
+        )
+        return {"ok": True}
     create_tracked_task(
         orchestrator.recompose_challenge(challenge.id),
         name=f"recompose_challenge({challenge.id})",
@@ -754,7 +438,12 @@ async def stop_challenge(
             f"Challenge is {challenge.status!r} — stop only while running "
             f"({'/'.join(RUNNING_STATUSES)}).",
         )
-    await orchestrator.stop_challenge(session, challenge, str(current_user.id))
+    if _is_w1(challenge):
+        from . import w1_tests
+
+        await w1_tests.stop_test(session, challenge, str(current_user.id))
+    else:
+        await orchestrator.stop_challenge(session, challenge, str(current_user.id))
     entries = await _entries_for(session, challenge_id)
     return _serialize(challenge, entries)
 
@@ -868,14 +557,9 @@ async def rerender_entry(
         raise HTTPException(
             409, f"Challenge is {challenge.status!r} — wait for the run to settle."
         )
-    # Same guard as challenge-wide rerender/recompose: a pending X-Post
-    # approval's media_paths still point at the current video — this would
-    # rename AND delete that file (_cleanup_old_compose).
-    if await orchestrator.pending_x_post_approval(session, entry.challenge_id) is not None:
-        raise HTTPException(
-            409,
-            "Open X-Post approval references the current video — approve or reject it first.",
-        )
+    if challenge is not None and _is_w1(challenge):
+        # W1 records run 1 only — the challenge-wide rerender does exactly that.
+        raise HTTPException(409, "W1 test: use the test's rerender (run 1 is the only recording).")
 
     from app.redis_client import RedisKeys, get_redis
 
@@ -923,6 +607,11 @@ async def retry_entry(
         raise HTTPException(404, "Entry not found")
     if entry.status != "failed":
         raise HTTPException(409, f"Entry is {entry.status!r} — retry only from failed.")
+    challenge = await session.get(BenchChallenge, entry.challenge_id)
+    if challenge is not None and _is_w1(challenge):
+        # Attempts of a W1 run are counted by the runner; a new try of the
+        # whole plan is "Nochmal" (POST /bench/tests/{id}/rerun).
+        raise HTTPException(409, "W1 test: use Nochmal (rerun) — attempts are counted by the runner.")
     create_tracked_task(
         orchestrator.retry_entry(entry.id),
         name=f"retry_entry({entry.id})"

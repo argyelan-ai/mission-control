@@ -588,18 +588,21 @@ features:
       - agent_metrics
   - id: F-bench
     name: "Benchmark studio"
-    ui: {route: /bench}
-    status: frozen
-    source: "operator decision 2026-09-29; ADR-070 (benchmark studio as a vertical); ADR-044 (strippable vertical)"
-    # Frozen, not removed: the operator has not used it lately and it stays
-    # reversible as a strippable vertical (ADR-044).
+    ui: {route: [/bench, "/bench/r/[id]"]}
+    status: frozen  # W0+W1 unfrozen by D1 (ADR-070 amendment 2026-10-24); flips to active once journey J-model-test has its e2e spec
+    source: "operator decision 2026-09-29; operator decision D1 (W0+W1 unfrozen, 2026-10-24); ADR-070 (benchmark studio as a vertical); ADR-044 (strippable vertical)"
+    # Frozen 2026-09-29, unfrozen for W0+W1 by D1 ("Test in 2 taps"). The
+    # status stays frozen until the journey (Runtimes "Test" -> sheet ->
+    # result -> X-Kit, Inbox after a switch) has an e2e spec on the journey
+    # stack; kz rejects an active feature without a journey. Still a
+    # strippable vertical (ADR-044).
     api:
       # Benchmark studio vertical (ADR-070, backend/app/verticals/bench_studio/):
-      # challenge gallery/detail CRUD, draft via approval, rerender/recompose/
-      # stop lifecycle, entry retry/rerender/edit, spark model list and the
-      # effort probe's levels for the new-challenge dialog (GET effort-levels
-      # reads the stored probe only; POST effort-levels/check probes the box).
-      # The entry view URL carries a short-lived
+      # W1 routes (plan, contestants, tests, rerun/stop/harvest, X-Kit with
+      # download token, runtime summary, auto-tests) plus the legacy
+      # challenge rerender/recompose/archive/delete and entry routes the
+      # result page still maps. The X draft, spark-models and effort-levels
+      # routes are gone (W1 kill list). The entry view URL carries a short-lived
       # resource-scoped view-token so it can be opened on a phone without a
       # Bearer header (router docstring).
       - "* /api/v1/bench/*"
@@ -614,6 +617,7 @@ features:
       - bench_challenges
       - bench_entries
       - bench_probes
+      - bench_receipts  # W1: write-once receipt versions (0224)
       - content_pipelines
       - prompt_templates
   - id: F-files

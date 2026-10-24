@@ -8,7 +8,7 @@ vi.mock("@/verticals/bench_studio/api", () => ({
   benchApi: {
     challenges: {
       list: vi.fn().mockResolvedValue([]),
-      get: vi.fn(), create: vi.fn(), draft: vi.fn(), rerender: vi.fn(),
+      get: vi.fn(), rerender: vi.fn(),
     },
     entries: { retry: vi.fn() },
     promptTemplates: {
@@ -23,6 +23,7 @@ vi.mock("@/verticals/bench_studio/api", () => ({
 
 import { benchApi } from "@/verticals/bench_studio/api";
 import { PromptLibraryTab } from "../PromptLibraryTab";
+import { benchTestHref } from "@/lib/benchLinks";
 
 const TPL: PromptTemplate = {
   id: "tpl-1",
@@ -33,16 +34,15 @@ const TPL: PromptTemplate = {
   updated_at: "2026-07-11T09:00:00Z",
 };
 
-function renderTab(onStart = vi.fn()) {
+function renderTab() {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
     <QueryClientProvider client={qc}>
-      <PromptLibraryTab onStartChallenge={onStart} />
+      <PromptLibraryTab />
     </QueryClientProvider>
   );
-  return onStart;
 }
 
 describe("PromptLibraryTab", () => {
@@ -99,11 +99,13 @@ describe("PromptLibraryTab", () => {
     );
   });
 
-  it("fires onStartChallenge with the template", async () => {
-    const onStart = renderTab();
+  it("'Test with…' opens the test sheet with this template (bench W1 P8)", async () => {
+    renderTab();
     await screen.findByText("Bouncing balls");
-    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/ }));
-    expect(onStart).toHaveBeenCalledWith(TPL);
+    const link = screen.getByRole("link", { name: "Test with Bouncing balls" });
+    expect(link).toHaveTextContent("Test with…");
+    expect(link).toHaveAttribute("href", benchTestHref({ templateId: "tpl-1", trigger: "template" }));
+    expect(screen.queryByText(/Start Challenge/)).toBeNull();
   });
 
   it("filters templates by tag", async () => {

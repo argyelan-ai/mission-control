@@ -20,6 +20,9 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import type { Runtime, RuntimeAgentRef } from "@/lib/types";
+import type { BenchRuntimeSummary } from "@/lib/benchLinks";
+import { useBenchRuntimeSummary } from "./benchSummary";
+import { CloudTestLink } from "./stage/BenchTest";
 
 // ── Agent-bound row ────────────────────────────────────────────────────────
 
@@ -29,12 +32,15 @@ function UsageRow({
   onOpen,
   pendingLabel,
   pendingTitle,
+  bench,
 }: {
   runtime: Runtime;
   agents: RuntimeAgentRef[];
   onOpen: (rt: Runtime) => void;
   pendingLabel: string;
   pendingTitle: string;
+  /** Bench W1.12: "Testen" for a cloud model the summary calls testable. */
+  bench?: BenchRuntimeSummary;
 }) {
   const shown = agents.slice(0, 3);
   const overflow = agents.length - shown.length;
@@ -47,6 +53,8 @@ function UsageRow({
       data-testid={`cloud-usage-row-${runtime.slug ?? runtime.id}`}
       onClick={() => onOpen(runtime)}
       onKeyDown={(e) => {
+        // Keys on a link inside the row (agent chip, "Testen") belong to it.
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onOpen(runtime);
@@ -85,8 +93,11 @@ function UsageRow({
           </span>
         )}
       </span>
-      <span className="font-mono text-xs shrink-0" style={{ color: C.textSecondary }}>
-        {runtime.model_identifier ?? runtime.display_name}
+      <span className="flex items-center gap-3 shrink-0">
+        <span className="font-mono text-xs" style={{ color: C.textSecondary }}>
+          {runtime.model_identifier ?? runtime.display_name}
+        </span>
+        <CloudTestLink summary={bench} />
       </span>
     </div>
   );
@@ -94,22 +105,45 @@ function UsageRow({
 
 // ── Zero-agent row (only rendered once expanded) ──────────────────────────
 
-function UnboundRow({ runtime, onOpen, bindCta }: { runtime: Runtime; onOpen: (rt: Runtime) => void; bindCta: string }) {
+function UnboundRow({
+  runtime,
+  onOpen,
+  bindCta,
+  bench,
+}: {
+  runtime: Runtime;
+  onOpen: (rt: Runtime) => void;
+  bindCta: string;
+  bench?: BenchRuntimeSummary;
+}) {
+  // A div with button semantics (like UsageRow): the row opens the runtime,
+  // the "Testen" link inside it must not be nested in a <button>.
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       data-testid={`cloud-usage-row-${runtime.slug ?? runtime.id}`}
       onClick={() => onOpen(runtime)}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(runtime);
+        }
+      }}
       className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg text-left cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
       style={{ background: C.bgSurface, border: `1px solid ${C.borderSubtle}` }}
     >
       <span className="text-xs truncate" style={{ color: C.textMuted }}>
         {runtime.display_name}
       </span>
-      <span className="text-xs shrink-0" style={{ color: C.textDim }}>
-        {bindCta}
+      <span className="flex items-center gap-3 shrink-0">
+        <span className="text-xs" style={{ color: C.textDim }}>
+          {bindCta}
+        </span>
+        <CloudTestLink summary={bench} />
       </span>
-    </button>
+    </div>
   );
 }
 
@@ -125,6 +159,7 @@ export function CloudUsage({
   const t = useTranslations("runtimes.cloudUsage");
   const tr = useTranslations("runtimes");
   const [expanded, setExpanded] = useState(false);
+  const benchSummary = useBenchRuntimeSummary();
 
   const agentQueries = useQueries({
     queries: runtimes.map((rt) => {
@@ -185,6 +220,7 @@ export function CloudUsage({
             onOpen={onOpen}
             pendingLabel={tr("pendingSync")}
             pendingTitle={tr("pendingSyncTitle")}
+            bench={benchSummary.get(runtime.id)}
           />
         ))}
 
@@ -208,7 +244,13 @@ export function CloudUsage({
 
             {expanded &&
               unbound.map(({ runtime }) => (
-                <UnboundRow key={runtime.id} runtime={runtime} onOpen={onOpen} bindCta={t("bindCta")} />
+                <UnboundRow
+                  key={runtime.id}
+                  runtime={runtime}
+                  onOpen={onOpen}
+                  bindCta={t("bindCta")}
+                  bench={benchSummary.get(runtime.id)}
+                />
               ))}
           </>
         )}

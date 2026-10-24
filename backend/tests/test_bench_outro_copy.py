@@ -9,7 +9,6 @@
   engine or hardware ("VLLM · SPARK" was wrong for SGLang/EXL3 recipes).
 """
 import json
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
