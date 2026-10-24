@@ -135,27 +135,34 @@ export function BenchTestNotes({ summary }: { summary: BenchRuntimeSummary }) {
   );
 }
 
-/** A box with no model loaded (asleep or free): testing needs a running model. */
+/** A box with no model loaded (asleep or free): testing needs a running
+ *  model. The button sits in the card's action row, the reason on its own
+ *  line under it (`NoModelTestHint`, mockup 01 "offline"). */
 export function NoModelTestButton() {
   const t = useTranslations("benchHome.runtimes");
   if (!benchEnabled) return null;
   return (
-    <span className="inline-flex flex-col items-end gap-1">
-      <button
-        type="button"
-        aria-disabled="true"
-        aria-label={`${t("test")} — ${t("noModel")}`}
-        data-testid="bench-test-no-model"
-        onClick={(e) => e.preventDefault()}
-        className={`${BASE} px-3 font-medium cursor-not-allowed`}
-        style={{ color: C.textMuted }}
-      >
-        <FlaskConical size={16} aria-hidden />
-        {t("test")}
-      </button>
-      <span className="text-xs" style={{ color: C.textMuted }}>
-        {t("noModel")}
-      </span>
+    <button
+      type="button"
+      aria-disabled="true"
+      aria-label={`${t("test")} — ${t("noModel")}`}
+      data-testid="bench-test-no-model"
+      onClick={(e) => e.preventDefault()}
+      className={`${BASE} px-3 font-medium cursor-not-allowed`}
+      style={{ color: C.textMuted }}
+    >
+      <FlaskConical size={16} aria-hidden />
+      {t("test")}
+    </button>
+  );
+}
+
+export function NoModelTestHint() {
+  const t = useTranslations("benchHome.runtimes");
+  if (!benchEnabled) return null;
+  return (
+    <span className="basis-full text-right text-xs" style={{ color: C.textMuted }}>
+      {t("noModel")}
     </span>
   );
 }

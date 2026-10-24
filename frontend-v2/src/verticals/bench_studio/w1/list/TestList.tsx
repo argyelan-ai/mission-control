@@ -124,61 +124,63 @@ function TestRow({ item }: { item: BenchTestListItem }) {
   const harnesses = [...new Set(item.contestants.map((c) => c.harness).filter((h): h is Harness => !!h))];
   const cloud = item.contestants.some((c) => c.locality === "cloud");
   return (
-    <Link
-      href={benchResultHref(item.id)}
-      data-testid="bench-test-row"
-      className="block -mx-2 px-2 py-3 rounded-lg transition-colors hover:bg-[var(--color-bg-hover)]"
-      style={{ borderBottom: `1px solid ${C.borderSubtle}` }}
-    >
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="text-base font-medium truncate" style={{ color: C.textPrimary }}>
-          {item.title}
-        </span>
-        <span className="text-sm tabular-nums shrink-0" style={{ color: C.textMuted }}>
-          {day(item.created_at, locale)}
-        </span>
-      </div>
-      <div className="flex items-center gap-2 mt-1 min-w-0">
-        {models && (
-          <span className="text-sm truncate min-w-0" style={{ color: C.textSecondary }}>
-            {models}
+    // The hairline sits on the wrapper: on the rounded link it would curve up at the ends.
+    <div style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
+      <Link
+        href={benchResultHref(item.id)}
+        data-testid="bench-test-row"
+        className="block -mx-2 px-2 py-3 rounded-lg transition-colors hover:bg-[var(--color-bg-hover)]"
+      >
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-base font-medium truncate" style={{ color: C.textPrimary }}>
+            {item.title}
           </span>
-        )}
-        {harnesses.map((h) => (
-          <span
-            key={h}
-            className="text-xs px-2 py-1 rounded-sm shrink-0 leading-none"
-            style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
-          >
-            {t(`harnessTag.${h}`)}
+          <span className="text-sm tabular-nums shrink-0" style={{ color: C.textMuted }}>
+            {day(item.created_at, locale)}
           </span>
-        ))}
-        {cloud && (
-          <span
-            className="text-xs px-2 py-1 rounded-sm shrink-0 leading-none"
-            style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
-          >
-            {ts("locality.cloud")}
-          </span>
-        )}
-        <span className="ml-auto shrink-0 pl-2">
-          {status.pill ? (
-            <Pill color={status.pill.color} casing="sentence" data-testid="bench-row-pill">
-              {status.pill.text}
-            </Pill>
-          ) : (
-            <span className="text-sm" style={{ color: C.textMuted }}>
-              {status.quiet}
+        </div>
+        <div className="flex items-center gap-2 mt-1 min-w-0">
+          {models && (
+            <span className="text-sm truncate min-w-0" style={{ color: C.textSecondary }}>
+              {models}
             </span>
           )}
-        </span>
-      </div>
-      {status.note && (
-        <div className="text-xs mt-1 first-letter:uppercase" style={{ color: C.textMuted }} data-testid="bench-row-note">
-          {status.note}
+          {harnesses.map((h) => (
+            <span
+              key={h}
+              className="text-xs px-2 py-1 rounded-sm shrink-0 leading-none"
+              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+            >
+              {t(`harnessTag.${h}`)}
+            </span>
+          ))}
+          {cloud && (
+            <span
+              className="text-xs px-2 py-1 rounded-sm shrink-0 leading-none"
+              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+            >
+              {ts("locality.cloud")}
+            </span>
+          )}
+          <span className="ml-auto shrink-0 pl-2">
+            {status.pill ? (
+              <Pill color={status.pill.color} casing="sentence" data-testid="bench-row-pill">
+                {status.pill.text}
+              </Pill>
+            ) : (
+              <span className="text-sm" style={{ color: C.textMuted }}>
+                {status.quiet}
+              </span>
+            )}
+          </span>
         </div>
-      )}
-    </Link>
+        {status.note && (
+          <div className="text-xs mt-1 first-letter:uppercase" style={{ color: C.textMuted }} data-testid="bench-row-note">
+            {status.note}
+          </div>
+        )}
+      </Link>
+    </div>
   );
 }
 

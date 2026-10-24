@@ -13,7 +13,7 @@ import type { Host } from "@/lib/types";
 import { HeatStrip } from "./HeatStrip";
 import { KpiRow, type KpiCell } from "./KpiRow";
 import { WakeBoxButton } from "./WakeBoxButton";
-import { NoModelTestButton } from "./BenchTest";
+import { NoModelTestButton, NoModelTestHint } from "./BenchTest";
 
 export function AsleepBox({
   host,
@@ -76,7 +76,7 @@ export function AsleepBox({
       <div style={{ opacity: 0.6 }}>
         <KpiRow cells={cells} />
       </div>
-      <div className="flex items-center gap-2 px-4 py-3" style={{ borderTop: `1px dashed ${C.borderSubtle}` }}>
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3" style={{ borderTop: `1px dashed ${C.borderSubtle}` }}>
         {/* Not while the check is out: an awake box would read "checking"
             next to "Wake" and then flip to "Start model" — the contradicting
             claim round 4 reported (PR #971 review). */}
@@ -94,6 +94,7 @@ export function AsleepBox({
         >
           <Settings size={14} style={{ color: C.textSecondary }} />
         </button>
+        <NoModelTestHint />
       </div>
     </div>
   );

@@ -306,7 +306,6 @@ frontend-v2/src/components/shared/__tests__/CliToolsSection.test.tsx: sparky
 frontend-v2/src/components/shared/__tests__/RuntimePill.test.tsx: davinci
 frontend-v2/src/components/shared/__tests__/RuntimeSwitchModal.test.tsx: davinci
 frontend-v2/src/components/vault/VaultReadingPanel.tsx: sparky
-frontend-v2/src/verticals/bench_studio/__tests__/NewChallengeDialog.test.tsx: sparky
 jarvis_core/mc_client.py: sparky
 jarvis_core/persona.py: davinci, freecode, shakespeare, sparky
 jarvis_core/tools.py: sparky

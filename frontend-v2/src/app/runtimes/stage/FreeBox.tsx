@@ -18,7 +18,7 @@ import { MemberRow } from "./MemberRow";
 import { HostRecipeSwitcher } from "@/components/shared/HostRecipeSwitcher";
 import { useAppStore } from "@/lib/store";
 import { WakeBoxButton } from "./WakeBoxButton";
-import { NoModelTestButton } from "./BenchTest";
+import { NoModelTestButton, NoModelTestHint } from "./BenchTest";
 
 export function FreeBox({
   host,
@@ -179,7 +179,7 @@ export function FreeBox({
           canControlDevice={currentUser?.role === "admin"}
         />
       </div>
-      <div className="flex items-center gap-2 px-4 py-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
         {/* No armed "Start model" while the box is still being checked: on
             the first paint a running duo would offer to start a second
             model onto its own boxes (PR #960 review, SHOULD 1). Nor while
@@ -205,6 +205,7 @@ export function FreeBox({
         >
           <Settings size={14} style={{ color: C.textSecondary }} />
         </button>
+        <NoModelTestHint />
       </div>
     </div>
   );
