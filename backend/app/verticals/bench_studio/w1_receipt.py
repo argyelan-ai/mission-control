@@ -429,6 +429,9 @@ async def private_words(session: AsyncSession) -> list[str]:
     from app.models.host import Host
     from app.models.user import User
 
+    from .w1_kit import HARNESS_WORDS
+
+    harness_text = " ".join(HARNESS_WORDS.values()).casefold()
     words: list[str] = []
     for u in (await session.exec(select(User))).all():
         for part in (u.name or "").split():
@@ -436,10 +439,16 @@ async def private_words(session: AsyncSession) -> list[str]:
         if u.email:
             words.append(u.email.split("@")[0])
     for a in (await session.exec(select(Agent))).all():
-        if a.name:
+        # An agent called like a harness ("Grok") would turn every Grok
+        # Build test red — the harness word is public by design.
+        if a.name and a.name.casefold() not in harness_text:
             words.append(a.name)
     for h in (await session.exec(select(Host))).all():
+        public = (h.display_name or "").casefold().replace("-", " ")
         for v in (h.slug, h.ssh_host, h.tailscale_host):
-            if v:
+            # A slug that only repeats the operator's own display name
+            # ("dgx-spark" for "DGX Spark 1") is not a leak; addresses are
+            # always caught by the IP / host-name patterns as well.
+            if v and v.casefold().replace("-", " ") not in public:
                 words.append(v)
     return [w for w in words if w and len(w) >= 3]

@@ -131,8 +131,8 @@ async def test_v0_agent_challenge_reads_as_red_with_unknowns(auth_client, sessio
     ch = BenchChallenge(title="Shot Sequence", prompt_text="shot", status="review")
     session.add(ch)
     await session.flush()
-    session.add(BenchEntry(challenge_id=ch.id, model_label="Sparky omp", source_kind="agent",
-                           agent_id=fleet["sparky"].id, status="rendered", run_class="B",
+    session.add(BenchEntry(challenge_id=ch.id, model_label="Alpha omp", source_kind="agent",
+                           agent_id=fleet["omp_agent"].id, status="rendered", run_class="B",
                            metrics={"duration_ms": 5_551_000, "served_model_id": DS,
                                     "effort_observed": {"source": "omp_session", "level": "high"}}))
     await session.commit()
@@ -233,7 +233,7 @@ async def test_kit_texts_are_english_bounded_and_from_green_numbers(auth_client,
     # never a bare $ on a local run, never an agent name or a host address
     assert "$" not in " ".join(kit.texts.facts)
     everything = blob + kit.texts.alt_text + " ".join(kit.texts.facts)
-    assert "Sparky" not in everything and "203.0.113" not in everything and "spark-a" not in everything
+    assert "Alpha" not in everything and "203.0.113" not in everything and "spark-a" not in everything
 
 
 @pytest.mark.asyncio
@@ -341,6 +341,23 @@ async def test_auto_test_route(auth_client, session, engines):
 
 
 def test_footer_comes_from_config_never_the_repo():
-    assert "markargyelan" not in open(w1_kit.__file__, encoding="utf-8").read()
+    handle = "mark" + "argyelan"  # the operator's handle lives in his .env only
+    for path in (w1_kit.__file__,):
+        assert handle not in open(path, encoding="utf-8").read()
     os.environ.pop("MC_BENCH_FOOTER", None)
     assert w1_kit.footer() == ""
+
+
+@pytest.mark.asyncio
+async def test_private_words_skip_public_display_names_and_harness_words(session):
+    from app.models.agent import Agent
+    from app.models.host import Host
+    from app.verticals.bench_studio import w1_receipt
+
+    session.add_all([Host(slug="spark", display_name="DGX Spark 1", kind="ssh", ssh_host="10.1.2.3"),
+                     Host(slug="box-7f3", display_name="RTX 5090", kind="ssh"),
+                     Agent(name="Grok"), Agent(name="Alpha")])
+    await session.commit()
+    words = await w1_receipt.private_words(session)
+    assert "spark" not in words and "Grok" not in words
+    assert {"box-7f3", "10.1.2.3", "Alpha"} <= set(words)

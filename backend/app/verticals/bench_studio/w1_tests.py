@@ -498,7 +498,7 @@ async def _resolve_contestants(
         price = w1_plan.price_for(view.served_model, prices)
         price_d = ({"input_per_mtok": price.input_per_mtok, "output_per_mtok": price.output_per_mtok}
                    if price is not None else None)
-        if harness == "api":
+        if opt["run_class"] == "A":
             offered = w1_plan.offered_levels(d["effort"])
             for level in efforts:
                 if level not in offered:

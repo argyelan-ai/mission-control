@@ -47,6 +47,11 @@ logger = logging.getLogger("mc.bench_studio")
 #: W2.1 (heads, single runs Mark taps himself); hermes not decided.
 AGENT_HARNESSES = {"omp": "omp", "grok": "grok-build"}
 
+#: Harnesses whose task session starts on a known thinking level the bench
+#: can name before the run (doc 06: a bench omp session starts on "high");
+#: the observed level of the last run wins (W0.7).
+SESSION_EFFORT_NOTES = {"omp": ("omp_session_default", "high")}
+
 #: Known API providers by endpoint domain -> (display name, cost kind when
 #: no role tag says otherwise). Ollama Cloud runs through the operator's
 #: subscription (D4: "über dein Ollama-Abo").
@@ -719,9 +724,11 @@ def harness_options(view: EngineView, hist: History, n_runs: int, blockers: list
             "effort_settable": False, "n_runs": 1,
             "estimate": estimate_b(hist, harness),
         }
-        if harness == "omp":
-            opt["effort_note"] = {"code": "omp_session_default",
-                                  "params": {"level": hist.b_level.get("omp", "high")}}
+        note = SESSION_EFFORT_NOTES.get(harness)
+        if note is not None:
+            code, default_level = note
+            opt["effort_note"] = {"code": code,
+                                  "params": {"level": hist.b_level.get(harness, default_level)}}
         else:
             opt["effort_note"] = {"code": "harness_default", "params": {}}
         if agent.operational_mode != "active":

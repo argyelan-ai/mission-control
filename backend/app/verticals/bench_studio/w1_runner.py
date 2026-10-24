@@ -59,6 +59,8 @@ MAX_ATTEMPTS = 2
 STREAM_READ_TIMEOUT_S = 300.0
 PROBE_RETRY_AFTER = timedelta(minutes=30)
 FEATURE_CARD = "bench_card_v1"
+#: model_usage_events rows the bench writes itself (orchestrator._record_spark_usage_event).
+_BENCH_OWN_USAGE = ("vanilla",)
 
 _wake_event: asyncio.Event | None = None
 _tasks: dict[uuid.UUID, asyncio.Task] = {}
@@ -375,7 +377,8 @@ async def _fleet_usage_recent(session: AsyncSession, model: str, since: datetime
             select(ModelUsageEvent.id).where(
                 ModelUsageEvent.model == model,
                 ModelUsageEvent.ts >= since,
-                ModelUsageEvent.harness != "vanilla",
+                # the bench's own direct-API rows are not "fleet usage"
+                ModelUsageEvent.harness.notin_(_BENCH_OWN_USAGE),  # type: ignore[union-attr]
             )
         )
     ).first()

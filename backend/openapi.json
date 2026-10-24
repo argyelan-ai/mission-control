@@ -1775,13 +1775,6 @@
         "tags": [
           "bench-studio"
         ]
-      },
-      "post": {
-        "operationId": "create_challenge_api_v1_bench_challenges_post",
-        "summary": "Create Challenge",
-        "tags": [
-          "bench-studio"
-        ]
       }
     },
     "/api/v1/bench/challenges/{challenge_id}": {
@@ -1811,15 +1804,6 @@
       "post": {
         "operationId": "archive_challenge_api_v1_bench_challenges__challenge_id__archive_post",
         "summary": "Archive Challenge",
-        "tags": [
-          "bench-studio"
-        ]
-      }
-    },
-    "/api/v1/bench/challenges/{challenge_id}/draft": {
-      "post": {
-        "operationId": "create_challenge_draft_api_v1_bench_challenges__challenge_id__draft_post",
-        "summary": "Create Challenge Draft",
         "tags": [
           "bench-studio"
         ]
@@ -1888,24 +1872,6 @@
         ]
       }
     },
-    "/api/v1/bench/effort-levels": {
-      "get": {
-        "operationId": "get_effort_levels_api_v1_bench_effort_levels_get",
-        "summary": "Get Effort Levels",
-        "tags": [
-          "bench-studio"
-        ]
-      }
-    },
-    "/api/v1/bench/effort-levels/check": {
-      "post": {
-        "operationId": "check_effort_levels_api_v1_bench_effort_levels_check_post",
-        "summary": "Check Effort Levels",
-        "tags": [
-          "bench-studio"
-        ]
-      }
-    },
     "/api/v1/bench/entries/{entry_id}": {
       "patch": {
         "operationId": "update_entry_api_v1_bench_entries__entry_id__patch",
@@ -1948,15 +1914,6 @@
         "summary": "Runtime Summary",
         "tags": [
           "bench-studio-w1"
-        ]
-      }
-    },
-    "/api/v1/bench/spark-models": {
-      "get": {
-        "operationId": "list_spark_models_api_v1_bench_spark_models_get",
-        "summary": "List Spark Models",
-        "tags": [
-          "bench-studio"
         ]
       }
     },

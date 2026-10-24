@@ -4,7 +4,6 @@ tests to the W1 runner."""
 from __future__ import annotations
 
 import pathlib
-import uuid
 
 import pytest
 
@@ -32,7 +31,7 @@ def test_no_x_path_left_in_the_vertical():
     ("get", "/api/v1/bench/spark-models"),
     ("get", "/api/v1/bench/effort-levels"),
     ("post", "/api/v1/bench/effort-levels/check"),
-    ("post", f"/api/v1/bench/challenges/{uuid.uuid4()}/draft"),
+    ("post", "/api/v1/bench/challenges/00000000-0000-4000-8000-0000000000aa/draft"),
 ])
 async def test_removed_routes_are_gone(auth_client, method, path):
     resp = await getattr(auth_client, method)(path, json={}) if method == "post" else await auth_client.get(path)

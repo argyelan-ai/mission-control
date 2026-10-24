@@ -59,8 +59,8 @@ async def seed_fleet(session, *, serving_age_min: int = 120, agent_model: str | 
     board = Board(name="B", slug="b")
     session.add(board)
     await session.flush()
-    sparky = Agent(name="Sparky", board_id=board.id, harness="omp", runtime_id=slot.id, model=agent_model)
-    session.add(sparky)
+    omp_agent = Agent(name="Alpha", board_id=board.id, harness="omp", runtime_id=slot.id, model=agent_model)
+    session.add(omp_agent)
     t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
     session.add_all([
         ModelPrice(model_pattern="*", input_per_mtok=0, output_per_mtok=0, valid_from=t0, priority=0),
@@ -73,7 +73,7 @@ async def seed_fleet(session, *, serving_age_min: int = 120, agent_model: str | 
     ])
     await session.commit()
     return {"slot": slot, "glm": glm, "porsche": porsche_rt, "ollama": ollama, "paid": paid,
-            "sparky": sparky, "spark1": spark1, "board": board}
+            "omp_agent": omp_agent, "spark1": spark1, "board": board}
 
 
 @pytest.fixture

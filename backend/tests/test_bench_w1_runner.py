@@ -254,8 +254,8 @@ async def test_agent_runs_after_all_api_runs(session, engines, world, monkeypatc
     from app.verticals.bench_studio import orchestrator as orch
 
     fleet = await seed_fleet(session)
-    fleet["sparky"].operational_mode = "active"
-    session.add(fleet["sparky"])
+    fleet["omp_agent"].operational_mode = "active"
+    session.add(fleet["omp_agent"])
     await session.commit()
     dispatched = []
 
@@ -383,7 +383,7 @@ async def test_harvest_writes_a_new_receipt_version_never_updates(session, engin
     task = Task(board_id=fleet["board"].id, title="[Bench] shot", status="done")
     session.add(task)
     await session.flush()
-    e = BenchEntry(challenge_id=ch.id, model_label="Sparky omp", source_kind="agent", agent_id=fleet["sparky"].id,
+    e = BenchEntry(challenge_id=ch.id, model_label="Alpha omp", source_kind="agent", agent_id=fleet["omp_agent"].id,
                    task_id=task.id, status="rendered", run_class="B", metrics={"duration_ms": 5_551_000})
     session.add(e)
     await session.commit()
