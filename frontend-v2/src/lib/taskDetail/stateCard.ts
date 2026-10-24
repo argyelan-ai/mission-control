@@ -85,7 +85,9 @@ export function headMainAction(run: HeadRun): HeadMainAction {
 }
 
 const NEEDS_YOU = new Set(["blocked", "waiting", "user_test"]);
-const RESULT_FALLBACK_TYPES = new Set(["message", "progress", "review", "handoff", "checkpoint"]);
+// "review_approved" = an approve decision note (backend: comment_types.REVIEW_NOTE_COMMENT_TYPES);
+// it counts as a review note here exactly like "review".
+const RESULT_FALLBACK_TYPES = new Set(["message", "progress", "review", "review_approved", "handoff", "checkpoint"]);
 
 function newestFirst<T extends { created_at: string }>(list: T[]): T[] {
   return [...list].sort(

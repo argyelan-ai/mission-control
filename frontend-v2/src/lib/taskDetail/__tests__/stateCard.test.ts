@@ -126,6 +126,13 @@ describe("deriveStateCard", () => {
     expect(card).toMatchObject({ kind: "result", resolution: "Merged and verified live.", resolutionIsFallback: true });
   });
 
+  it("done without a resolution also falls back to an agent reviewer's approve note", () => {
+    const task = taskFixture({ status: "done" });
+    const approve = commentFixture({ comment_type: "review_approved", content: "Ship-ready, checked live.", created_at: "2026-09-21T09:00:00Z" });
+    const card = deriveStateCard({ task, approvals: [], comments: [approve], runRecord: null });
+    expect(card).toMatchObject({ kind: "result", resolution: "Ship-ready, checked live.", resolutionIsFallback: true });
+  });
+
   it("done with a resolution uses it and is not a fallback", () => {
     const task = taskFixture({ status: "done" });
     const res = commentFixture({ comment_type: "resolution", content: "Fixed.", created_at: "2026-09-20T09:00:00Z" });

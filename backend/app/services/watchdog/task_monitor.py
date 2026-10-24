@@ -17,7 +17,7 @@ from sqlalchemy import or_, and_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.comment_types import activity_comment_filter
+from app.comment_types import REVIEW_NOTE_COMMENT_TYPES, activity_comment_filter
 from app.models.agent import Agent
 from app.models.task import Task, TaskComment, TaskEvent
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
@@ -652,7 +652,7 @@ class TaskMonitorMixin:
                 select(TaskComment)
                 .where(
                     TaskComment.task_id == s.id,
-                    TaskComment.comment_type.in_(["resolution", "review"]),
+                    TaskComment.comment_type.in_(["resolution", *REVIEW_NOTE_COMMENT_TYPES]),
                 )
                 .order_by(TaskComment.created_at.desc())
                 .limit(1)

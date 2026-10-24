@@ -465,7 +465,8 @@ async def test_resume_clears_review_decision(make_board, make_agent, make_task):
 
 @pytest.mark.asyncio
 async def test_review_creates_comment(make_board, make_agent, make_task):
-    """execute_review_decision creates a comment with comment_type=review."""
+    """execute_review_decision creates the decision note — on approve with
+    comment_type=review_approved (record-only, never delivered to an agent)."""
     board = await make_board(name="Comment Board", slug="comment-board")
     reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
     task = await make_task(
@@ -492,7 +493,7 @@ async def test_review_creates_comment(make_board, make_agent, make_task):
             result = await s.exec(
                 select(TaskComment).where(
                     TaskComment.task_id == task.id,
-                    TaskComment.comment_type == "review",
+                    TaskComment.comment_type == "review_approved",
                 )
             )
             comments = result.all()

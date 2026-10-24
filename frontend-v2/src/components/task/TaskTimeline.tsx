@@ -64,6 +64,9 @@ const KIND_META: Record<string, { icon: LucideIcon; color: string; label?: strin
   dispatch: { icon: Send, color: C.info },
   recovery: { icon: LifeBuoy, color: C.warning, label: "Recovery" },
   review: { icon: Eye, color: C.warning },
+  // Approve decision note (backend: comment_types.REVIEW_APPROVED_COMMENT_TYPE)
+  // — kept on the card as a record, never delivered to the agent.
+  review_approved: { icon: CheckCircle2, color: C.online },
   stuck: { icon: AlertTriangle, color: C.error },
   promote: { icon: ArrowUpCircle, color: C.accent },
   phase: { icon: Flag, color: C.accent },
