@@ -647,3 +647,30 @@ async def test_failed_mirror_db_operation_does_not_turn_the_patch_into_500(
         )
     assert resp.status_code == 200, resp.text
     assert resp.json()["max_context_len"] == NEW
+
+
+# ── 11. The one write rule itself (R-runtime-window-one-writer) ─────────────
+
+
+@pytest.mark.parametrize(
+    ("max_", "preferred", "ctx", "expected", "changed"),
+    [
+        (OLD, OLD, NEW, (NEW, NEW), True),            # "whole window" follows
+        (OLD, None, NEW, (NEW, NEW), True),           # empty follows
+        (OLD, 131_072, NEW, (NEW, 131_072), True),    # deliberately smaller stays
+        (250_000, 250_000, OLD, (OLD, OLD), True),    # 01.10.: grows with the max
+        (NEW, OLD, NEW, (NEW, NEW), True),            # clamped to the max
+        (NEW, NEW, NEW, (NEW, NEW), False),           # nothing to do
+        (NEW, NEW, 0, (NEW, NEW), False),             # no invented window
+        (NEW, NEW, True, (NEW, NEW), False),          # a bool is not a window
+    ],
+)
+def test_apply_window_preferred_rule(max_, preferred, ctx, expected, changed):
+    from app.services.runtime_window import apply_window, window_would_change
+
+    row = Runtime(slug="r", display_name="r", runtime_type="openai_compatible",
+                  endpoint="http://192.0.2.20:8000/v1",
+                  max_context_len=max_, preferred_context_len=preferred)
+    assert window_would_change(row, ctx) is changed
+    assert apply_window(row, ctx) is changed
+    assert (row.max_context_len, row.preferred_context_len) == expected
