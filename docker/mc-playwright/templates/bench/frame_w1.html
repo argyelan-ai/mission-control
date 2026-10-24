@@ -31,6 +31,9 @@ body { font-size:58px; }
 .solo .chips2 .c, .duo .chips2 .c { display:block; margin-top:8px; font:500 58px/1.2 'General Sans',sans-serif;
   color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .cp { white-space:nowrap; }
+/* duo: an 840 px pane — the chip line may wrap between its parts (the
+   group grows upwards into the free top band), never cut mid-chip */
+.duo .chips2 .c { white-space:normal; overflow:visible; text-overflow:clip; }
 .solo .pane, .duo .pane { background:#090B10; border:2px solid var(--line); box-sizing:border-box; }
 </style></head><body>
 <div class="ticks-x"></div><div class="ticks-y"></div>

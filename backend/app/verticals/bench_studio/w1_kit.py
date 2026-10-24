@@ -320,7 +320,9 @@ def _effort_disclosure(r: dict[str, Any], rec: dict[str, Any]) -> str:
     requested = eff.get("requested") or "default"
     thinking = obs.get("thinking") if isinstance(obs, dict) else None
     if requested == "default":
-        return f"effort: server default (thinking observed: {thinking or 'unknown'})"
+        # Same name as on the card ("effort high (default)", K10).
+        level = f" = {eff['default_level']}" if eff.get("default_level") else ""
+        return f"effort: server default{level} (thinking observed: {thinking or 'unknown'})"
     sent = eff.get("sent") or rec.get("effort_sent") or {}
     wire = f"{sent.get('key')}={sent.get('value')}" if sent.get("key") else "nothing sent"
     return f"effort: {requested} ({wire}; thinking observed: {thinking or 'unknown'})"

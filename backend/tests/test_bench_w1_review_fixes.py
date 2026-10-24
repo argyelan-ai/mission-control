@@ -465,3 +465,13 @@ async def test_kit_files_follow_the_kit_rule_for_aborted_tests(auth_client, sess
     token = (await auth_client.post(f"{BASE}/tests/{ch.id}/kit/download-token")).json()["token"]
     resp = await auth_client.get(f"{BASE}/tests/{ch.id}/kit/files/video.mp4", params={"token": token})
     assert resp.status_code == 409
+
+
+def test_settings_text_names_the_default_level_like_the_card():
+    """K10 on the public artefacts: card "effort high (default)", settings
+    "server default = high" — never two names for one level."""
+    r = {"run_class": "A", "effort": {"requested": "default", "default_level": "high"}}
+    assert w1_kit._effort_disclosure(r, {}).startswith("effort: server default = high")
+    assert w1_kit._effort_word(r) == "effort high (default)"
+    plain = {"run_class": "A", "effort": {"requested": "default"}}
+    assert w1_kit._effort_disclosure(plain, {}).startswith("effort: server default (")

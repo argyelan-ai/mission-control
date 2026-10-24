@@ -417,7 +417,7 @@ def _kit_texts() -> dict:
             "temp 0.7 · max_tokens 16384",
             f"{MODEL} · local · DGX Spark ×2 · engine: unknown (hand-made runtime) · "
             "GPU mode eco · spec-decoding: unknown · raw API",
-            "effort: server default (thinking observed: on) · network blocked during "
+            "effort: server default = high (thinking observed: on) · network blocked during "
             "render · method v1 · 2026-10-22 · API list price would be ≈ $0.04 (comparison only)",
         ],
         # Exactly what w1_kit.alt_text builds for this record (review N7).

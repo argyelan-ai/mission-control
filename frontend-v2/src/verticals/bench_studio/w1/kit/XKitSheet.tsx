@@ -372,7 +372,11 @@ function KitBody({ testId, onClose, titleId }: { testId: string; onClose: () => 
   );
 
   const header = (
-    <div className="flex items-start justify-between gap-2 px-4 pt-3 lg:px-6 lg:pt-4">
+    // A quiet line under the head: scrolled content never runs into the lead text.
+    <div
+      className="flex items-start justify-between gap-2 px-4 pt-3 pb-3 lg:px-6 lg:pt-4"
+      style={{ borderBottom: `1px solid ${C.borderSubtle}` }}
+    >
       <div className="flex flex-col gap-1 min-w-0">
         <h2 id={titleId} className="text-base font-semibold" style={{ color: C.textPrimary }}>
           {test ? t("kit.titleFor", { title: test.title, date: formatDay(test.created_at, words.locale) }) : t("kit.title")}

@@ -52,7 +52,7 @@
     "settings": [
       "Setup · model only · same prompt (sha d6e0ea9) · n=3, video = run 1 · temp 0.7 · max_tokens 16384",
       "DeepSeek-V4.1-Flash-1017 · local · DGX Spark ×2 · engine: unknown (hand-made runtime) · GPU mode eco · spec-decoding: unknown · raw API",
-      "effort: server default (thinking observed: on) · network blocked during render · method v1 · 2026-10-22 · API list price would be ≈ $0.04 (comparison only)"
+      "effort: server default = high (thinking observed: on) · network blocked during render · method v1 · 2026-10-22 · API list price would be ≈ $0.04 (comparison only)"
     ],
     "alt_text": "Result card: Pagoda Garden · same-prompt showdown · 2026-10-22. DeepSeek-V4.1-Flash-1017, running locally on DGX Spark ×2, raw API, effort high (default): compute time 1:06 (median of 3), 6.6k output tokens, 101 tok/s decode. Median of 3 runs · same prompt.",
     "facts": [],
