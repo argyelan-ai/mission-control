@@ -104,26 +104,30 @@ def numbers(r: dict[str, Any]) -> list[dict[str, Any]]:
     n = (r.get("n_runs") or s["time"].get("n") or 1)
     if r.get("run_class") == "B":
         out = [
-            _num(s["time"], c.fmt_minutes, "work time", "no waiting" if not s.get("wait_ms") else None),
-            _num(s["tokens_out"], c.fmt_tokens, "output tokens", None),
-            {"value": "n=1", "label": "single run", "sub": None, "measured": True, "plain": True},
+            _num(s["time"], c.fmt_minutes, "work time", "no waiting" if not s.get("wait_ms") else None,
+                 alt="work time {v}"),
+            _num(s["tokens_out"], c.fmt_tokens, "output tokens", None, alt="{v} output tokens"),
+            {"value": "n=1", "label": "single run", "sub": None, "measured": True, "plain": True,
+             "alt": "single run"},
         ]
         return out
     sub = f"median of {n}" if n > 1 else "single run"
     out = [
-        _num(s["time"], c.fmt_clock, "compute time", sub),
-        _num(s["tokens_out"], c.fmt_tokens, "output tokens", sub),
+        _num(s["time"], c.fmt_clock, "compute time", sub, alt="compute time {v} (" + sub + ")"),
+        _num(s["tokens_out"], c.fmt_tokens, "output tokens", sub, alt="{v} output tokens"),
     ]
     dec = s.get("decode_tok_s")
     if dec and dec.get("measured"):
-        out.append(_num(dec, c.fmt_rate, "tok/s", "decode"))
+        out.append(_num(dec, c.fmt_rate, "tok/s decode", None, alt="{v} tok/s decode"))
     return out
 
 
-def _num(st: dict[str, Any], fmt, label: str, sub: str | None) -> dict[str, Any]:
+def _num(st: dict[str, Any], fmt, label: str, sub: str | None, *, alt: str) -> dict[str, Any]:
     if st and st.get("measured"):
-        return {"value": fmt(st["median"]), "label": label, "sub": sub, "measured": True}
-    return {"value": "not measured", "label": label, "sub": None, "measured": False}
+        value = fmt(st["median"])
+        return {"value": value, "label": label, "sub": sub, "measured": True, "alt": alt.format(v=value)}
+    return {"value": "not measured", "label": label, "sub": None, "measured": False,
+            "alt": f"{label} not measured"}
 
 
 def kind_word(run_class: str) -> str:
@@ -285,14 +289,7 @@ def alt_text(detail: dict[str, Any]) -> str:
         where = (f"running locally on {r.get('device_name')}" if r.get("locality") == "local" and r.get("device_name")
                  else ("running locally" if r.get("locality") == "local"
                        else f"in the cloud via {r.get('provider') or 'an API'}"))
-        nums = []
-        for nb in cc["numbers"]:
-            if nb.get("plain"):
-                nums.append(nb["label"])
-            elif nb["measured"]:
-                nums.append(f"{nb['label']} {nb['value']}" + (f" ({nb['sub']})" if nb.get("sub") else ""))
-            else:
-                nums.append(f"{nb['label']} not measured")
+        nums = [nb["alt"] for nb in cc["numbers"]]
         sentences.append(f"{cc['model']}, {where}, {HARNESS_WORDS.get(r.get('harness') or 'api', '')}, "
                          f"{_effort_word(r)}: " + ", ".join(nums) + ".")
     sentences.append(card["foot"].capitalize() + ".")

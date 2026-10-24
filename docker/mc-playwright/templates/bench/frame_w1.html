@@ -1,0 +1,58 @@
+<!doctype html><html class="{{MODE}}"><head><meta charset="utf-8">
+<!-- Bench W1 recording frame, 1920×1080 (24.10.2026). The recording(s) are
+     overlaid by ffmpeg into the .pane rectangles (media.W1_PANES is the one
+     source for both). Chips sit in two lines ABOVE each pane — model; where
+     · harness · effort — never as small overlays on the picture. Floor:
+     {{FLOOR}} px for every text (critic 32 N5). Solo: title line on top,
+     handle at the end of the model line. Duo: the group is centred, the
+     title line with the handle sits under the panes. -->
+<link rel="stylesheet" href="fonts/embedded-fonts.css">
+<link rel="stylesheet" href="shared.css">
+<style>
+body { font-size:58px; }
+.solo .top, .duo .top { position:absolute; left:120px; right:120px; top:44px; display:flex;
+  justify-content:space-between; align-items:baseline; gap:40px; }
+.duo .top { left:96px; right:96px; top:846px; }
+.solo .top .t, .duo .top .t { font:500 58px/1.2 'General Sans',sans-serif; color:var(--text2);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.solo .brand, .duo .brand { display:flex; align-items:center; gap:14px; flex:none;
+  font:500 58px/1.2 'JetBrains Mono',monospace; color:var(--text); white-space:nowrap; }
+.solo .brand i, .duo .brand i { width:30px; height:30px; background:var(--cyan); display:block; }
+.solo .col, .duo .col { position:absolute; }
+.solo .chips2, .duo .chips2 { position:absolute; left:0; right:0; bottom:100%; padding-bottom:26px; }
+.solo .l1, .duo .l1 { display:flex; justify-content:space-between; align-items:baseline; gap:32px; }
+.solo .l1 b { display:block; min-width:0; overflow:hidden; font:600 72px/1.1 'Clash Display','General Sans',sans-serif;
+  letter-spacing:-.02em; white-space:nowrap; }
+.duo .l1 b { display:block; min-width:0; overflow:hidden; font:600 64px/1.1 'Clash Display','General Sans',sans-serif;
+  letter-spacing:-.02em; white-space:nowrap; }
+.solo .chips2 .c, .duo .chips2 .c { display:block; margin-top:8px; font:500 58px/1.2 'General Sans',sans-serif;
+  color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.solo .pane, .duo .pane { background:#090B10; border:2px solid var(--line); box-sizing:border-box; }
+</style></head><body>
+<div class="ticks-x"></div><div class="ticks-y"></div>
+<div class="top"><span class="t">{{TOP}}</span>{{BRAND}}</div>
+{{PANES}}
+<script>
+/* Fit the model name AFTER the brand fonts are loaded: shrink from its
+   design size to at most 60 % of it (never below the floor, {{FLOOR}} px),
+   then wrap — the served id is printed whole, never cut (gate R2). The
+   renderer waits for data-fit="done" before the screenshot. */
+(function () {
+  var floor = {{FLOOR}};
+  function fit() {
+    document.querySelectorAll('[data-fit]').forEach(function (el) {
+      var design = parseFloat(getComputedStyle(el).fontSize);
+      var min = Math.max(floor, Math.round(design * 0.6));
+      var size = design;
+      while (el.scrollWidth > el.clientWidth && size > min) {
+        size = Math.max(min, size - 2);
+        el.style.fontSize = size + 'px';
+      }
+      if (el.scrollWidth > el.clientWidth) { el.style.whiteSpace = 'normal'; el.style.overflowWrap = 'anywhere'; }
+    });
+    document.documentElement.dataset.fit = 'done';
+  }
+  (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(fit);
+})();
+</script>
+</body></html>

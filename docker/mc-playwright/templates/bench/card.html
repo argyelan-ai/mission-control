@@ -1,0 +1,121 @@
+<!doctype html><html class="{{SHAPE}} {{LAYOUT}} class-{{RUN_CLASS}}"><head><meta charset="utf-8">
+<!-- Bench W1 result card — ONE template, two shapes (24.10.2026):
+     wide = the 4.5 s receipt card at the end of the 16:9 video (1920×1080),
+     tall = the card PNG for the X reply (1080×1350).
+     Type floor: 57 px wide / 32 px tall (= the same size in the phone feed,
+     critic 32 N5). The model name is the loudest element, then max three
+     numbers; detail lives in the settings text, never here. -->
+<link rel="stylesheet" href="fonts/embedded-fonts.css">
+<link rel="stylesheet" href="shared.css">
+<style>
+html.wide, html.wide body { width:1920px; height:1080px; }
+html.tall, html.tall body { width:1080px; height:1350px; }
+html, body { overflow:hidden; }
+body { background:var(--bg); color:var(--text); position:relative; }
+.num { font-family:'JetBrains Mono',monospace; font-variant-numeric:tabular-nums; }
+.brand { display:flex; align-items:center; gap:14px; font-family:'JetBrains Mono',monospace;
+  color:var(--text); white-space:nowrap; }
+.brand i { background:var(--cyan); display:block; }
+.ticks-x { top:0; }
+
+/* ── wide: 16:9 receipt card, floor 57 px ── */
+.wide body { font-size:58px; }
+.wide .wrap { position:absolute; inset:0; padding:96px 120px 0; }
+.wide .top { font:500 58px/1.1 'General Sans',sans-serif; color:var(--text2); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
+.wide .mdl { font:600 116px/1.04 'Clash Display','General Sans',sans-serif; letter-spacing:-.025em;
+  margin-top:34px; white-space:nowrap; overflow:hidden; }
+.wide .chips { font:500 58px/1.1 'General Sans',sans-serif; color:var(--text2); margin-top:22px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.wide .nums { display:grid; grid-template-columns:repeat(3,1fr); column-gap:48px; margin-top:64px;
+  border-top:2px solid var(--line); padding-top:40px; }
+.wide .big { display:flex; flex-direction:column; min-width:0; }
+.wide .v { font:500 156px/1 'JetBrains Mono',monospace; color:var(--cyan); letter-spacing:-.04em;
+  white-space:nowrap; }
+.wide .v.plain { color:var(--text); }
+.wide .v.nm { font:500 92px/1.1 'General Sans',sans-serif; color:var(--text); letter-spacing:-.01em; }
+.wide .l { font:500 58px/1.1 'General Sans',sans-serif; color:var(--text2); margin-top:18px;
+  white-space:nowrap; }
+.wide .l small { display:none; }
+.wide .foot { position:absolute; left:120px; right:120px; bottom:64px; display:flex;
+  justify-content:space-between; align-items:baseline; font:500 58px/1 'General Sans',sans-serif;
+  color:var(--text2); }
+.wide .brand { font-size:58px; }
+.wide .brand i { width:30px; height:30px; }
+/* wide duo: one row per contestant, never a winner highlight */
+.wide .hrow, .wide .row { display:grid; grid-template-columns:790px 270px 270px 270px;
+  column-gap:26px; align-items:end; }
+.wide .hrow { margin-top:48px; padding-bottom:18px; border-bottom:2px solid var(--line);
+  font:500 58px/1 'General Sans',sans-serif; color:var(--muted); }
+.wide .hrow span { text-align:right; white-space:nowrap; }
+.wide .row { padding:30px 0; border-bottom:2px solid var(--line); }
+.wide .row b { display:block; overflow:hidden; font:600 60px/1.05 'Clash Display','General Sans',sans-serif;
+  letter-spacing:-.02em; white-space:nowrap; }
+.wide .row em { display:block; font:500 58px/1.1 'General Sans',sans-serif; color:var(--text2);
+  font-style:normal; margin-top:10px; }
+.wide .row .v { font:500 100px/1 'JetBrains Mono',monospace; text-align:right; }
+.wide .row .v.nm { font:500 58px/1 'General Sans',sans-serif; white-space:normal; }
+
+/* ── tall: 4:5 card PNG, floor 32 px ── */
+.tall body { font-size:32px; }
+.tall .wrap { position:absolute; inset:0; padding:76px 80px 0; }
+.tall .top { font:500 36px/1.25 'General Sans',sans-serif; color:var(--text2); }
+.tall .mdl { font:600 96px/1.02 'Clash Display','General Sans',sans-serif; letter-spacing:-.025em;
+  margin-top:30px; white-space:nowrap; overflow:hidden; }
+.tall .chips { font:500 36px/1.3 'General Sans',sans-serif; color:var(--text2); margin-top:22px; }
+.tall .nums { margin-top:30px; border-top:2px solid var(--line); }
+.tall .big { display:grid; grid-template-columns:1fr auto; align-items:baseline; padding:22px 0 18px;
+  border-bottom:2px solid var(--line); }
+.tall .v { font:500 128px/1 'JetBrains Mono',monospace; color:var(--cyan); letter-spacing:-.04em;
+  white-space:nowrap; }
+.tall .v.plain { color:var(--text); font-size:100px; }
+.tall .v.nm { font:500 72px/1.05 'General Sans',sans-serif; color:var(--text); letter-spacing:-.01em; }
+.tall .l { font:500 40px/1.15 'General Sans',sans-serif; color:var(--text); text-align:right; }
+.tall .l small { display:block; font:400 32px/1.3 'General Sans',sans-serif; color:var(--text2);
+  margin-top:6px; }
+.tall .foot { position:absolute; left:80px; right:80px; bottom:60px; white-space:nowrap; display:flex;
+  flex-wrap:wrap; gap:8px 24px; justify-content:space-between; align-items:baseline;
+  font:500 34px/1.2 'General Sans',sans-serif; color:var(--text2); }
+.tall .foot .brand { margin-left:auto; }
+.tall .brand { font-size:36px; }
+.tall .brand i { width:20px; height:20px; }
+/* tall duo: two stacked contestants, three numbers in a row each */
+.tall .duo .ct { margin-top:56px; padding-top:44px; border-top:2px solid var(--line); }
+.tall .duo .ct:first-of-type { border-top:0; padding-top:0; }
+.tall .duo .mdl { font-size:72px; margin-top:0; }
+.tall .duo .chips { font-size:34px; margin-top:12px; }
+.tall .trio { display:grid; grid-template-columns:repeat(3,1fr); column-gap:24px; border-top:0;
+  margin-top:18px; }
+.tall .trio .big { display:flex; flex-direction:column; border:0; padding:0; }
+.tall .trio .v { font-size:104px; }
+.tall .trio .v.plain { font-size:88px; }
+.tall .trio .v.nm { font-size:40px; }
+.tall .trio .l { text-align:left; font-size:32px; color:var(--text); margin-top:10px; }
+.tall .trio .l small { display:block; font-size:32px; color:var(--text2); margin-top:2px; }
+</style></head><body>
+<div class="ticks-x"></div><div class="ticks-y"></div>
+{{BODY}}
+<script>
+/* Fit the model name AFTER the brand fonts are loaded: shrink from its
+   design size to at most 60 % of it (never below the floor, {{FLOOR}} px),
+   then wrap — the served id is printed whole, never cut (gate R2). The
+   renderer waits for data-fit="done" before the screenshot. */
+(function () {
+  var floor = {{FLOOR}};
+  function fit() {
+    document.querySelectorAll('[data-fit]').forEach(function (el) {
+      var design = parseFloat(getComputedStyle(el).fontSize);
+      var min = Math.max(floor, Math.round(design * 0.6));
+      var size = design;
+      while (el.scrollWidth > el.clientWidth && size > min) {
+        size = Math.max(min, size - 2);
+        el.style.fontSize = size + 'px';
+      }
+      if (el.scrollWidth > el.clientWidth) { el.style.whiteSpace = 'normal'; el.style.overflowWrap = 'anywhere'; }
+    });
+    document.documentElement.dataset.fit = 'done';
+  }
+  (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(fit);
+})();
+</script>
+</body></html>
