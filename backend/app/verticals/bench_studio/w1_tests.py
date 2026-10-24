@@ -154,7 +154,11 @@ def human_state(challenge: BenchChallenge, gate: dict, contestants: list[dict], 
             params = {}
             if challenge.wait_reason == "model_fresh" and (challenge.plan or {}).get("not_before"):
                 params["until"] = challenge.plan["not_before"]
-            return "running", "running", {"code": challenge.wait_reason, "params": params}
+            # The quiet-box guard holds the test before its first run: Mark
+            # sees "Wartet (Grund)", not "Läuft".
+            started = any(run["state"] != "waiting" for r in contestants for run in r["runs"])
+            return ("running" if started else "waiting"), "running", {
+                "code": challenge.wait_reason, "params": params}
         return "running", "running", None
     if challenge.status == "failed":
         code = _abort_code(challenge)

@@ -214,6 +214,8 @@ async def test_fresh_model_waits_until_fifteen_minutes(session, engines, world):
         async with factory() as s2:
             c2 = await s2.get(BenchChallenge, ch.id)
             seen.append((c2.wait_reason, (c2.plan or {}).get("not_before")))
+            live = await w1_tests.test_detail(s2, c2)
+            assert live["state"] == "waiting" and live["state_reason"]["code"] == "model_fresh"
             rt = await s2.get(Runtime, fleet["slot"].id)
             rt.serving_since = rt.serving_since - timedelta(minutes=11)
             s2.add(rt)
