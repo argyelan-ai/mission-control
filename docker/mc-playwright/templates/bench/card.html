@@ -53,6 +53,8 @@ body { background:var(--bg); color:var(--text); position:relative; }
   letter-spacing:-.02em; white-space:nowrap; }
 .wide .row em { display:block; font:500 58px/1.1 'General Sans',sans-serif; color:var(--text2);
   font-style:normal; margin-top:10px; }
+/* chips wrap only between their parts ("effort high (default)" stays whole) */
+.cp { white-space:nowrap; }
 .wide .row .v { font:500 100px/1 'JetBrains Mono',monospace; text-align:right; }
 .wide .row .v.nm { font:500 58px/1 'General Sans',sans-serif; white-space:normal; }
 
@@ -75,9 +77,9 @@ body { background:var(--bg); color:var(--text); position:relative; }
   margin-top:6px; }
 .tall .foot { position:absolute; left:80px; right:80px; bottom:60px; white-space:nowrap; display:flex;
   flex-wrap:wrap; gap:8px 24px; justify-content:space-between; align-items:baseline;
-  font:500 34px/1.2 'General Sans',sans-serif; color:var(--text2); }
+  font:500 32px/1.2 'General Sans',sans-serif; color:var(--text2); }
 .tall .foot .brand { margin-left:auto; }
-.tall .brand { font-size:36px; }
+.tall .brand { font-size:32px; }
 .tall .brand i { width:20px; height:20px; }
 /* tall duo: two stacked contestants, three numbers in a row each */
 .tall .duo .ct { margin-top:56px; padding-top:44px; border-top:2px solid var(--line); }

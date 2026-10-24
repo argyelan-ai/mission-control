@@ -194,6 +194,7 @@ def card_payload(detail: dict[str, Any]) -> dict[str, Any]:
                 # the story of a local-vs-cloud post); only the 840 px video
                 # pane gets the compact one.
                 "chips": chips(r),
+                "chips_short": chips(r, compact=True),
                 "numbers": numbers(r),
             }
             for r in video

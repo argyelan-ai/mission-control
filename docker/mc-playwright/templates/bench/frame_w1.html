@@ -4,19 +4,22 @@
      source for both). Chips sit in two lines ABOVE each pane — model; where
      · harness · effort — never as small overlays on the picture. Floor:
      {{FLOOR}} px for every text (critic 32 N5). Solo: title line on top,
-     handle at the end of the model line. Duo: the group is centred, the
-     title line with the handle sits under the panes. -->
+     handle at the end of the model line. Duo: the group is centred; under
+     the panes the title line (whole, wrapped if ever needed — never cut)
+     and the handle on its own line below it. -->
 <link rel="stylesheet" href="fonts/embedded-fonts.css">
 <link rel="stylesheet" href="shared.css">
 <style>
 body { font-size:58px; }
 .solo .top, .duo .top { position:absolute; left:120px; right:120px; top:44px; display:flex;
   justify-content:space-between; align-items:baseline; gap:40px; }
-.duo .top { left:96px; right:96px; top:846px; }
+.duo .top { left:96px; right:96px; top:840px; flex-direction:column; align-items:flex-start;
+  justify-content:flex-start; gap:6px; }
+.duo .top .t { white-space:normal; overflow:visible; text-overflow:clip; }
 .solo .top .t, .duo .top .t { font:500 58px/1.2 'General Sans',sans-serif; color:var(--text2);
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
 .solo .brand, .duo .brand { display:flex; align-items:center; gap:14px; flex:none;
-  font:500 58px/1.2 'JetBrains Mono',monospace; color:var(--text); white-space:nowrap; }
+  font:500 58px/1.2 'JetBrains Mono',monospace; color:var(--text2); white-space:nowrap; }
 .solo .brand i, .duo .brand i { width:30px; height:30px; background:var(--cyan); display:block; }
 .solo .col, .duo .col { position:absolute; }
 .solo .chips2, .duo .chips2 { position:absolute; left:0; right:0; bottom:100%; padding-bottom:26px; }
@@ -27,6 +30,7 @@ body { font-size:58px; }
   letter-spacing:-.02em; white-space:nowrap; }
 .solo .chips2 .c, .duo .chips2 .c { display:block; margin-top:8px; font:500 58px/1.2 'General Sans',sans-serif;
   color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cp { white-space:nowrap; }
 .solo .pane, .duo .pane { background:#090B10; border:2px solid var(--line); box-sizing:border-box; }
 </style></head><body>
 <div class="ticks-x"></div><div class="ticks-y"></div>

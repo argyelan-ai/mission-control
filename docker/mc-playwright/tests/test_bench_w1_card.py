@@ -205,3 +205,36 @@ def test_seeded_random_repeats_the_same_sequence():
           "console.log(JSON.stringify(a)===JSON.stringify(b) && a.every(x=>x>=0&&x<1) && a[0]!==a[1])")
     out = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=20)
     assert out.stdout.strip() == "true", out.stderr
+
+
+# ── review fixes (PR #982 design review) ─────────────────────────────────
+
+
+def test_duo_frame_title_is_never_cut():
+    """M2: the duo title line wraps instead of "showdow…", the handle has
+    its own line under it."""
+    html = media.render_frame_w1_html(FRAME, media.FrameSpec.model_validate({
+        "top": "Pagoda Garden · same-prompt showdown · 2026-10-24", "handle": "@example_handle",
+        "panes": [{"model": DS, "chips": "local · raw API · default effort"},
+                  {"model": "deepseek-v4.1-flash", "chips": "cloud · raw API · default effort"}]}))
+    css = html.split("<style>")[1].split("</style>")[0]
+    duo_top = [r for r in css.split("}") if r.strip().startswith(".duo .top .t")]
+    assert duo_top and "white-space:normal" in duo_top[0] and "ellipsis" not in duo_top[0]
+    assert "flex-direction:column" in css.split("\n.duo .top {")[1].split("}")[0]
+    assert "Pagoda Garden · same-prompt showdown · 2026-10-24" in html
+
+
+def test_chips_break_only_between_parts():
+    html = media.render_card_html(CARD, _card(), "tall")
+    assert '<span class="cp">default effort</span>' in html
+    assert '<span class="cp">DGX Spark ×2</span>' in html
+
+
+def test_wide_duo_row_uses_the_short_chips_and_the_tall_card_the_full_ones():
+    spec = _card("duo", 2)
+    for ct in spec.contestants:
+        ct.chips_short = "local · raw API · default effort"
+    wide = media.render_card_html(CARD, spec, "wide")
+    tall = media.render_card_html(CARD, spec, "tall")
+    assert "DGX Spark" not in wide.split("<body>")[1]
+    assert "DGX Spark ×2" in tall

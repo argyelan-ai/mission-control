@@ -767,6 +767,8 @@ class CardNumber(BaseModel):
 class CardContestant(BaseModel):
     model: str
     chips: str
+    # The 790 px duo row of the 16:9 receipt card: no device/provider.
+    chips_short: Optional[str] = None
     numbers: List[CardNumber] = Field(max_length=3)
 
 
@@ -826,6 +828,13 @@ def _brand(handle: str) -> str:
     return f'<span class="brand"><i></i>{_e(handle)}</span>'
 
 
+def _chips(text: str | None) -> str:
+    """Chips as nowrap parts: a line may break between "·" parts, never
+    inside one ("effort high (default)" stays together)."""
+    parts = [p for p in (text or "").split(" · ") if p]
+    return " · ".join(f'<span class="cp">{_e(p)}</span>' for p in parts)
+
+
 def _number_html(n: CardNumber) -> str:
     cls = "v num" + (" plain" if n.plain else "") + ("" if n.measured else " nm")
     sub = f"<small>{_e(n.sub)}</small>" if n.sub else ""
@@ -852,20 +861,20 @@ def render_card_body(card: CardSpec, shape: Literal["wide", "tall"]) -> str:
                     f'<span class="v num{"" if n.measured else " nm"}">{_e(n.value)}</span>' for n in ct.numbers
                 )
                 rows.append(f'<div class="row"><div><b data-fit="model">{_e(ct.model)}</b>'
-                            f'<em>{_e(ct.chips)}</em></div>{vals}</div>')
+                            f'<em>{_chips(ct.chips_short or ct.chips)}</em></div>{vals}</div>')
             return (f'<div class="wrap duo"><div class="top">{_e(card.top)}</div>'
                     f'<div class="hrow"><span></span>{head}</div>{"".join(rows)}</div>{foot}')
         blocks = []
         for ct in card.contestants:
             nums = "".join(_number_html(n) for n in ct.numbers)
             blocks.append(f'<div class="ct"><div class="mdl" data-fit="model">{_e(ct.model)}</div>'
-                          f'<div class="chips">{_e(ct.chips)}</div><div class="nums trio">{nums}</div></div>')
+                          f'<div class="chips">{_chips(ct.chips)}</div><div class="nums trio">{nums}</div></div>')
         return f'<div class="wrap duo"><div class="top">{_e(card.top)}</div>{"".join(blocks)}</div>{foot}'
     ct = card.contestants[0]
     nums = "".join(_number_html(n) for n in ct.numbers)
     return (f'<div class="wrap solo"><div class="top">{_e(card.top)}</div>'
             f'<div class="mdl" data-fit="model">{_e(ct.model)}</div>'
-            f'<div class="chips">{_e(ct.chips)}</div><div class="nums">{nums}</div></div>{foot}')
+            f'<div class="chips">{_chips(ct.chips)}</div><div class="nums">{nums}</div></div>{foot}')
 
 
 def render_card_html(template_text: str, card: CardSpec, shape: Literal["wide", "tall"]) -> str:
@@ -888,7 +897,7 @@ def render_frame_w1_html(template_text: str, frame: FrameSpec) -> str:
         cells.append(
             f'<div class="col" style="left:{x}px;width:{w}px;top:{y}px">'
             f'<div class="chips2"><div class="l1"><b data-fit="model">{_e(pane.model)}</b>{brand}</div>'
-            f'<span class="c">{_e(pane.chips)}</span></div>'
+            f'<span class="c">{_chips(pane.chips)}</span></div>'
             f'<div class="pane" style="width:{w}px;height:{h}px"></div></div>'
         )
     out = template_text.replace("{{MODE}}", "duo" if duo else "solo")
