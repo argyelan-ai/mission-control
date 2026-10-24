@@ -4243,6 +4243,117 @@
       "notifyFailed": "Entwurf konnte nicht erstellt werden"
     }
   },
+  "benchShared": {
+    "_owner": "W1 contract (lead) — shared words for B/C/D. Change only with the lead.",
+    "state": {
+      "waiting": "Wartet",
+      "running": "Läuft",
+      "done": "Fertig",
+      "done_missing": "Fertig – Zahlen fehlen",
+      "aborted": "Abgebrochen"
+    },
+    "stateWithReason": "{state} – {reason}",
+    "section": {
+      "running": "Läuft",
+      "needs_look": "Braucht Blick",
+      "done": "Fertig"
+    },
+    "wait": {
+      "model_fresh": "Modell läuft erst kurz — startet um {time}",
+      "box_busy": "Box belegt — startet, sobald sie frei ist",
+      "model_loading": "Modell lädt",
+      "after_class_a": "Startet nach Lauf {after_run}",
+      "box_asleep": "Box schläft"
+    },
+    "abort": {
+      "stopped_by_operator": "von dir gestoppt",
+      "task_deleted": "Auftrag gelöscht",
+      "superseded_by_switch": "durch neuen Modellwechsel ersetzt",
+      "switch_failed": "Modellwechsel fehlgeschlagen",
+      "all_runs_failed": "alle Läufe fehlgeschlagen",
+      "backend_restart": "MC wurde während des Laufs neu gestartet"
+    },
+    "reason": {
+      "numbers_missing": "Zahlen fehlen",
+      "harvest_pending": "Zahlen noch nicht nachgeladen",
+      "runs_pending": "Läufe laufen noch",
+      "runs_truncated": "{runs_cut} von {n_runs} Läufen am Token-Limit abgeschnitten",
+      "hand_made_runtime": "Hand-Runtime, kein Rezept",
+      "no_recipe": "ohne Rezept nicht ablesbar",
+      "not_recorded": "nicht festgehalten",
+      "recorded_before_block": "offen – vor der Sperre aufgenommen",
+      "notMeasured": "nicht gemessen: {reason}"
+    },
+    "blocker": {
+      "box_busy": "Box belegt",
+      "model_fresh": "Modell läuft erst kurz",
+      "box_asleep": "Box schläft",
+      "engine_down": "Motor läuft nicht",
+      "agent_busy": "Agent arbeitet an etwas anderem",
+      "protocol_mismatch": "Protokoll passt nicht",
+      "no_api_key": "Kein API-Schlüssel",
+      "no_model": "Kein Modell geladen"
+    },
+    "runClass": {
+      "A": "Modell pur",
+      "B": "Agent baut",
+      "C": "Tempo"
+    },
+    "harness": {
+      "api": "API pur",
+      "omp": "omp (lokaler Agent)",
+      "hermes": "Hermes",
+      "grok-build": "Grok Build",
+      "claude-code": "Claude Code"
+    },
+    "level": {
+      "default": "Standard",
+      "off": "aus",
+      "on": "an",
+      "low": "niedrig",
+      "medium": "mittel",
+      "high": "hoch",
+      "max": "max"
+    },
+    "levelIsDefault": "{level} (Standard)",
+    "locality": {
+      "local": "lokal",
+      "cloud": "Cloud"
+    },
+    "cost": {
+      "local": "lokal · kostet nichts",
+      "subscription": "über dein Abo",
+      "api_price": "${usd}",
+      "unknown": "Kosten unbekannt",
+      "hypothetical": "API-Preis wäre ≈ ${usd}",
+      "confirm": "Start · ${usd} — OK?",
+      "confirmAgain": "Über ${cap}: wirklich für ${usd} starten?"
+    },
+    "gate": {
+      "green": "Postbar",
+      "amber": "Postbar mit Hinweisen",
+      "red": "Nicht zum Posten",
+      "pending": "Läuft noch",
+      "headline_missing": "Eine Hauptzahl fehlt: {field}",
+      "name_mismatch": "Angezeigter Name weicht vom gemeldeten Modell ab",
+      "dollar_on_local": "$-Betrag bei einem lokalen oder Abo-Lauf",
+      "privacy_hit": "Privates Detail in einem Artefakt",
+      "unfair_comparison": "Vergleich nicht fair oder falsch beschriftet",
+      "runs_truncated": "{runs_cut} von {n_runs} Läufen am Token-Limit abgeschnitten",
+      "single_run": "Einzellauf",
+      "method_v0": "alte Methode (v0)",
+      "box_was_busy": "Box war belegt — Tempo nicht vergleichbar",
+      "effort_unknown": "Effort unbekannt",
+      "first_15_min": "in den ersten 15 min nach dem Start gemessen",
+      "page_check_failed": "Seite lädt nicht"
+    },
+    "range": "{min}–{max}",
+    "medianOf": "Mitte von {n}",
+    "runOf": "Lauf {i} von {n}"
+  },
+  "benchSheet": {
+    "_owner": "package B — test sheet (P3) + live run (P4). Add keys below this line only."
+  },
   "providerDescriptions": {
     "claude_code_oauth_token": "Für cli-bridge-Agenten mit anthropic-*-Runtime (claude setup-token)",
     "openai_api_key": "Für GPT-4o, o1, o3 etc.",
@@ -4380,6 +4491,9 @@
       "busy": "Der Agent arbeitet gerade — wechsle den Modus, wenn die Antwort fertig ist.",
       "questionOpen": "Erst die offene Rückfrage beantworten, dann den Modus wechseln."
     }
+  },
+  "benchResult": {
+    "_owner": "package C — result page (P5), X-Kit (P6), private truncation warning. Add keys below this line only."
   },
   "heads": {
     "section": "Head",
@@ -4613,6 +4727,9 @@
       "expand": "Mehr anzeigen",
       "collapse": "Weniger anzeigen"
     }
+  },
+  "benchHome": {
+    "_owner": "package D — entries (P1 Runtimes, P1b switch toggle, P2 QuickSheet, P8 library, Inbox item) + list (P7). Add keys below this line only."
   },
   "nightShift": {
     "runTonight": "Heute Nacht ausführen",

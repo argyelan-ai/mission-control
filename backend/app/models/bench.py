@@ -42,6 +42,8 @@ class BenchChallenge(SQLModel, table=True):
     # back to orchestrator.RECORD_DURATION_S (legacy 10s behaviour).
     record_duration_s: int | None = None
     # generating -> rendering -> composing -> review -> drafted -> published | failed
+    # W1 adds "waiting" (created, first run not started: auto test after a
+    # recipe switch, quiet-box wait) — see wait_reason.
     status: str = Field(default="generating", index=True)
     series_label: str | None = None
     series_no: int | None = None  # auto-increment per series_label ("Spark Bench #7")
@@ -58,6 +60,38 @@ class BenchChallenge(SQLModel, table=True):
     archived_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
+    # ── Bench W1 (concept §7.3, schema owner: W1 contract 24.10.2026) ──
+    # Which preset started the test: standard | quick | effort_ladder | rerun.
+    # NULL = a pre-W1 challenge (created by the old dialog).
+    preset: str | None = None
+    # sha256 of the frozen prompt_text (system prompt is pinned per protocol
+    # version) — printed on the receipt, compared by gate rule R5.
+    prompt_sha256: str | None = None
+    # "v0" = recorded before W1 (unknowns spelled out, never v1 claims);
+    # "v1" = W1 method (n=3, streaming metrics, network block, receipt) —
+    # set explicitly by the W1 create path, never by default.
+    protocol_version: str = Field(
+        default="v0", sa_column=Column(Text, nullable=False, server_default=text("'v0'"))
+    )
+    # Public episode number (from the overlay catalog) — replaces RUN 0xx.
+    episode_no: int | None = None
+    # How the test was started: runtimes | quick | template | rerun |
+    # auto_switch | list. NULL on pre-W1 rows.
+    trigger: str | None = None
+    # "Nochmal" / "re-run with a larger budget": the test this one repeats.
+    rerun_of: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            Uuid, ForeignKey("bench_challenges.id", ondelete="SET NULL"), nullable=True
+        ),
+    )
+    # Frozen plan the test was started from (picks, preset, budgets,
+    # not_before for an auto test after a recipe switch, cost the operator
+    # confirmed). Read-only after create.
+    plan: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    # Why a test waits before its first run (status "waiting"): a code from
+    # the contract's WaitCode list ("model_fresh", "box_busy", ...).
+    wait_reason: str | None = None
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
@@ -120,6 +154,36 @@ class BenchEntry(SQLModel, table=True):
         default_factory=dict, sa_column=Column(JSON, nullable=False)
     )
     error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # ── Bench W1 (concept §7.1, schema owner: W1 contract 24.10.2026) ──
+    # The runtime this entry ran against (plan); kept when the runtime is
+    # deleted later only as NULL — the receipt holds the public names.
+    runtime_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            Uuid, ForeignKey("runtimes.id", ondelete="SET NULL"), nullable=True, index=True
+        ),
+    )
+    # api | omp | hermes | grok-build | claude-code
+    harness: str | None = None
+    # A (model pure, same prompt) | B (agent builds) | C (tempo, W2)
+    run_class: str | None = None
+    # default | off | on | low | medium | high | max (moved out of metrics)
+    effort_requested: str | None = None
+    # Repetition of one contestant (1..n); entries of one contestant share
+    # ``position``. Only repeat_idx 1 is recorded as video (concept §5.4).
+    repeat_idx: int = Field(
+        default=1, sa_column=Column(Integer, nullable=False, server_default=text("1"))
+    )
+    # Attempt of this repetition (a retry counts up, failures stay counted).
+    attempt_no: int = Field(
+        default=1, sa_column=Column(Integer, nullable=False, server_default=text("1"))
+    )
+    head_run_id: str | None = None  # W2 bench heads
+    # Latest receipt (concept §7.2), write-once per version: a changed
+    # receipt is a NEW bench_receipts row, this column mirrors the newest.
+    receipt: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    # Gate result for this entry {status, reasons[]} (concept §6.4).
+    gate: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 
 
 class BenchProbe(SQLModel, table=True):
@@ -175,6 +239,39 @@ class BenchProbe(SQLModel, table=True):
     status: str = Field(default="ok")
     raw: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
     probed_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
+    )
+
+
+class BenchReceipt(SQLModel, table=True):
+    """Receipt history (bench W1, concept §7.1): one row per receipt version
+    of an entry. Rows are never updated — "Zahlen nachladen" or a recompose
+    that changes a number writes version n+1 and mirrors it into
+    ``bench_entries.receipt``. Every artefact carries the checksum of the
+    version it was rendered from."""
+
+    __tablename__ = "bench_receipts"
+    __table_args__ = (
+        UniqueConstraint("entry_id", "version", name="uq_bench_receipts_entry_version"),
+    )
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    entry_id: uuid.UUID = Field(
+        sa_column=Column(
+            Uuid,
+            ForeignKey("bench_entries.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        ),
+    )
+    version: int = Field(sa_column=Column(Integer, nullable=False))
+    receipt: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    # sha256 over the canonical JSON of ``receipt`` (sorted keys).
+    checksum: str = Field(sa_column=Column(Text, nullable=False))
+    # Why this version exists: run_end | harvest | recompose | backfill_v0
+    reason: str = Field(default="run_end")
+    created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )

@@ -8,6 +8,7 @@ import { C } from "@/lib/colors";
 import { ChallengesTab } from "./ChallengesTab";
 import { PromptLibraryTab } from "./PromptLibraryTab";
 import type { PromptTemplate } from "./types";
+import { TestSheetHost } from "./w1/sheet/TestSheetHost";
 
 type Tab = "challenges" | "library";
 
@@ -108,6 +109,9 @@ export default function BenchStudioPage() {
           <PromptLibraryTab onStartChallenge={startFromTemplate} />
         )}
       </div>
+      {/* Bench W1 test sheet (package B) — opens from `/bench?test=1&…`
+          (lib/benchLinks), whatever tab is showing. */}
+      <TestSheetHost />
     </AppShell>
   );
 }

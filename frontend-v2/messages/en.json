@@ -4243,6 +4243,117 @@
       "notifyFailed": "Could not create draft"
     }
   },
+  "benchShared": {
+    "_owner": "W1 contract (lead) — shared words for B/C/D. Change only with the lead.",
+    "state": {
+      "waiting": "Waiting",
+      "running": "Running",
+      "done": "Done",
+      "done_missing": "Done – numbers missing",
+      "aborted": "Stopped"
+    },
+    "stateWithReason": "{state} – {reason}",
+    "section": {
+      "running": "Running",
+      "needs_look": "Needs a look",
+      "done": "Done"
+    },
+    "wait": {
+      "model_fresh": "Model only just started — starts at {time}",
+      "box_busy": "Box busy — starts as soon as it is free",
+      "model_loading": "Model is loading",
+      "after_class_a": "Starts after run {after_run}",
+      "box_asleep": "Box is asleep"
+    },
+    "abort": {
+      "stopped_by_operator": "stopped by you",
+      "task_deleted": "task deleted",
+      "superseded_by_switch": "replaced by a newer model switch",
+      "switch_failed": "model switch failed",
+      "all_runs_failed": "every run failed",
+      "backend_restart": "MC restarted during the run"
+    },
+    "reason": {
+      "numbers_missing": "numbers missing",
+      "harvest_pending": "numbers not loaded yet",
+      "runs_pending": "runs still going",
+      "runs_truncated": "{runs_cut} of {n_runs} runs hit the token limit",
+      "hand_made_runtime": "hand-made runtime, no recipe",
+      "no_recipe": "not readable without a recipe",
+      "not_recorded": "not recorded",
+      "recorded_before_block": "open — recorded before the block",
+      "notMeasured": "not measured: {reason}"
+    },
+    "blocker": {
+      "box_busy": "Box busy",
+      "model_fresh": "Model only just started",
+      "box_asleep": "Box is asleep",
+      "engine_down": "Engine not running",
+      "agent_busy": "Agent is working on something else",
+      "protocol_mismatch": "Protocol does not fit",
+      "no_api_key": "No API key",
+      "no_model": "No model loaded"
+    },
+    "runClass": {
+      "A": "Model only",
+      "B": "Agent builds",
+      "C": "Speed"
+    },
+    "harness": {
+      "api": "Raw API",
+      "omp": "omp (local agent)",
+      "hermes": "Hermes",
+      "grok-build": "Grok Build",
+      "claude-code": "Claude Code"
+    },
+    "level": {
+      "default": "Default",
+      "off": "off",
+      "on": "on",
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "max": "max"
+    },
+    "levelIsDefault": "{level} (default)",
+    "locality": {
+      "local": "local",
+      "cloud": "cloud"
+    },
+    "cost": {
+      "local": "local · costs nothing",
+      "subscription": "via your subscription",
+      "api_price": "${usd}",
+      "unknown": "cost unknown",
+      "hypothetical": "API price would be ≈ ${usd}",
+      "confirm": "Start · ${usd} — OK?",
+      "confirmAgain": "Over ${cap}: really start for ${usd}?"
+    },
+    "gate": {
+      "green": "Ready to post",
+      "amber": "Postable with notes",
+      "red": "Not ready to post",
+      "pending": "Still running",
+      "headline_missing": "A headline number is missing: {field}",
+      "name_mismatch": "Shown name differs from the served model",
+      "dollar_on_local": "A $ amount on a local or subscription run",
+      "privacy_hit": "Private detail in an artefact",
+      "unfair_comparison": "Comparison not fair or mislabelled",
+      "runs_truncated": "{runs_cut} of {n_runs} runs hit the token limit",
+      "single_run": "single run",
+      "method_v0": "old method (v0)",
+      "box_was_busy": "box was busy — speed not comparable",
+      "effort_unknown": "effort unknown",
+      "first_15_min": "measured in the first 15 min after start",
+      "page_check_failed": "page did not load"
+    },
+    "range": "{min}–{max}",
+    "medianOf": "median of {n}",
+    "runOf": "Run {i} of {n}"
+  },
+  "benchSheet": {
+    "_owner": "package B — test sheet (P3) + live run (P4). Add keys below this line only."
+  },
   "providerDescriptions": {
     "claude_code_oauth_token": "For cli-bridge agents with an anthropic-* runtime (claude setup-token)",
     "openai_api_key": "For GPT-4o, o1, o3 etc.",
@@ -4380,6 +4491,9 @@
       "busy": "The agent is busy — switch the mode when the reply has ended.",
       "questionOpen": "Answer the open question first, then switch the mode."
     }
+  },
+  "benchResult": {
+    "_owner": "package C — result page (P5), X-Kit (P6), private truncation warning. Add keys below this line only."
   },
   "heads": {
     "section": "Head",
@@ -4613,6 +4727,9 @@
       "expand": "Show more",
       "collapse": "Show less"
     }
+  },
+  "benchHome": {
+    "_owner": "package D — entries (P1 Runtimes, P1b switch toggle, P2 QuickSheet, P8 library, Inbox item) + list (P7). Add keys below this line only."
   },
   "nightShift": {
     "runTonight": "Run tonight",

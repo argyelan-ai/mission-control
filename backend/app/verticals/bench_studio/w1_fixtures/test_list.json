@@ -1,0 +1,122 @@
+{
+  "items": [
+    {
+      "id": "a0000000-0000-4000-8000-000000000001",
+      "title": "Pagoda Garden",
+      "created_at": "2026-10-24T09:12:00Z",
+      "section": "running",
+      "state": "running",
+      "state_reason": null,
+      "run_class": "A",
+      "contestants": [
+        {
+          "display_name": "DeepSeek-V4.1",
+          "harness": "api",
+          "locality": "local"
+        }
+      ],
+      "progress": {
+        "done": 1,
+        "total": 3
+      },
+      "gate_status": "pending"
+    },
+    {
+      "id": "a0000000-0000-4000-8000-000000000005",
+      "title": "Pagoda Garden",
+      "created_at": "2026-10-24T09:30:00Z",
+      "section": "running",
+      "state": "waiting",
+      "state_reason": {
+        "code": "model_fresh",
+        "params": {
+          "until": "2026-10-24T09:45:00Z"
+        }
+      },
+      "run_class": "A",
+      "contestants": [
+        {
+          "display_name": "DeepSeek-V4.1",
+          "harness": "api",
+          "locality": "local"
+        }
+      ],
+      "progress": null,
+      "gate_status": "pending"
+    },
+    {
+      "id": "a0000000-0000-4000-8000-000000000004",
+      "title": "Shot Sequence",
+      "created_at": "2026-10-21T20:21:40Z",
+      "section": "needs_look",
+      "state": "done_missing",
+      "state_reason": {
+        "code": "numbers_missing",
+        "params": {
+          "fields": [
+            "tokens_out"
+          ]
+        }
+      },
+      "run_class": "B",
+      "contestants": [
+        {
+          "display_name": "DeepSeek-V4.1",
+          "harness": "omp",
+          "locality": "local"
+        }
+      ],
+      "progress": null,
+      "gate_status": "red"
+    },
+    {
+      "id": "a0000000-0000-4000-8000-000000000003",
+      "title": "Pagoda Garden",
+      "created_at": "2026-10-23T18:02:00Z",
+      "section": "needs_look",
+      "state": "done",
+      "state_reason": {
+        "code": "runs_truncated",
+        "params": {
+          "runs_cut": 1,
+          "n_runs": 3
+        }
+      },
+      "run_class": "A",
+      "contestants": [
+        {
+          "display_name": "DeepSeek-V4.1",
+          "harness": "api",
+          "locality": "local"
+        }
+      ],
+      "progress": null,
+      "gate_status": "amber"
+    },
+    {
+      "id": "a0000000-0000-4000-8000-000000000002",
+      "title": "Pagoda Garden",
+      "created_at": "2026-10-22T19:40:00Z",
+      "section": "done",
+      "state": "done",
+      "state_reason": null,
+      "run_class": "A",
+      "contestants": [
+        {
+          "display_name": "DeepSeek-V4.1",
+          "harness": "api",
+          "locality": "local"
+        }
+      ],
+      "progress": null,
+      "gate_status": "green"
+    }
+  ],
+  "counts": {
+    "running": 2,
+    "needs_look": 2,
+    "done": 1
+  },
+  "total": 5,
+  "last_at": "2026-10-24T09:30:00Z"
+}

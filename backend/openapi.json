@@ -1759,6 +1759,15 @@
         ]
       }
     },
+    "/api/v1/bench/auto-tests": {
+      "post": {
+        "operationId": "create_auto_test_api_v1_bench_auto_tests_post",
+        "summary": "Create Auto Test",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
     "/api/v1/bench/challenges": {
       "get": {
         "operationId": "list_challenges_api_v1_bench_challenges_get",
@@ -1870,6 +1879,15 @@
         ]
       }
     },
+    "/api/v1/bench/contestants": {
+      "get": {
+        "operationId": "list_contestants_api_v1_bench_contestants_get",
+        "summary": "List Contestants",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
     "/api/v1/bench/effort-levels": {
       "get": {
         "operationId": "get_effort_levels_api_v1_bench_effort_levels_get",
@@ -1915,12 +1933,109 @@
         ]
       }
     },
+    "/api/v1/bench/plan": {
+      "get": {
+        "operationId": "get_plan_api_v1_bench_plan_get",
+        "summary": "Get Plan",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/runtime-summary": {
+      "get": {
+        "operationId": "runtime_summary_api_v1_bench_runtime_summary_get",
+        "summary": "Runtime Summary",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
     "/api/v1/bench/spark-models": {
       "get": {
         "operationId": "list_spark_models_api_v1_bench_spark_models_get",
         "summary": "List Spark Models",
         "tags": [
           "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/tests": {
+      "get": {
+        "operationId": "list_tests_api_v1_bench_tests_get",
+        "summary": "List Tests",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      },
+      "post": {
+        "operationId": "create_test_api_v1_bench_tests_post",
+        "summary": "Create Test",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}": {
+      "get": {
+        "operationId": "get_test_api_v1_bench_tests__test_id__get",
+        "summary": "Get Test",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/harvest": {
+      "post": {
+        "operationId": "harvest_test_api_v1_bench_tests__test_id__harvest_post",
+        "summary": "Harvest Test",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/kit": {
+      "get": {
+        "operationId": "get_kit_api_v1_bench_tests__test_id__kit_get",
+        "summary": "Get Kit",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/kit/download-token": {
+      "post": {
+        "operationId": "kit_download_token_api_v1_bench_tests__test_id__kit_download_token_post",
+        "summary": "Kit Download Token",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/kit/files/{name}": {
+      "get": {
+        "operationId": "kit_file_api_v1_bench_tests__test_id__kit_files__name__get",
+        "summary": "Kit File",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/rerun": {
+      "post": {
+        "operationId": "rerun_test_api_v1_bench_tests__test_id__rerun_post",
+        "summary": "Rerun Test",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/stop": {
+      "post": {
+        "operationId": "stop_test_api_v1_bench_tests__test_id__stop_post",
+        "summary": "Stop Test",
+        "tags": [
+          "bench-studio-w1"
         ]
       }
     },

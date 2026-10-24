@@ -21,8 +21,12 @@ def register(app) -> None:
     from .orchestrator import on_task_done, on_task_review  # noqa: PLC0415
     from .routers import router  # noqa: PLC0415
     from .orchestrator import reconcile_loop  # noqa: PLC0415
+    from .w1_routes import router as w1_router  # noqa: PLC0415
 
     app.include_router(router)
+    # Bench W1 contract (24.10.2026): plan, tests, X-Kit, runtime summary,
+    # auto test after a recipe switch — see CONTRACT.md.
+    app.include_router(w1_router)
     # W0.8: orphan sweep (hooks.background_loops) — heals challenges whose
     # agent task failed, was aborted or deleted, without anyone opening them.
     if reconcile_loop not in hooks.background_loops:
