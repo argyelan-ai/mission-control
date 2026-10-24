@@ -1987,6 +1987,15 @@
         ]
       }
     },
+    "/api/v1/bench/tests/{test_id}/seen": {
+      "post": {
+        "operationId": "mark_seen_api_v1_bench_tests__test_id__seen_post",
+        "summary": "Mark Seen",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
     "/api/v1/bench/tests/{test_id}/stop": {
       "post": {
         "operationId": "stop_test_api_v1_bench_tests__test_id__stop_post",
