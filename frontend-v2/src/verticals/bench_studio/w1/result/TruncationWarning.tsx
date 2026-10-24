@@ -8,8 +8,8 @@
 // button) and the X-Kit sheet (in place of the downloads).
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { C, alpha } from "@/lib/colors";
-import type { ContestantResult, TruncationWarning as Truncation } from "../types";
-import { formatInt } from "./format";
+import type { ContestantResult, CostConfirmation, TruncationWarning as Truncation } from "../types";
+import { formatInt, formatUsd } from "./format";
 import type { BenchWords } from "./words";
 
 /** The repeat numbers (1-based) of the cut runs, from the entry ids. */
@@ -20,12 +20,17 @@ export function cutRunNumbers(truncation: Truncation, contestants: ContestantRes
   return [...new Set(out)].sort((a, b) => a - b);
 }
 
+function trimUsd(n: number): string {
+  return Number.isInteger(n) ? String(n) : formatUsd(n);
+}
+
 export function TruncationWarning({
   truncation,
   contestants,
   words,
   canRerun,
   rerunPending,
+  costAsk = null,
   onRerun,
   onContinue,
 }: {
@@ -34,6 +39,8 @@ export function TruncationWarning({
   words: BenchWords;
   canRerun: boolean;
   rerunPending: boolean;
+  /** Set after a 409 CostConfirmation: the button asks for the price (D4). */
+  costAsk?: CostConfirmation | null;
   onRerun: () => void;
   onContinue: () => void;
 }) {
@@ -44,6 +51,11 @@ export function TruncationWarning({
       : null;
   const max = formatInt(truncation.max_tokens, words.locale);
   const suggested = formatInt(truncation.suggested_max_tokens, words.locale);
+  const rerunLabel = !costAsk
+    ? words.tr("truncation.rerun", { suggested })
+    : costAsk.step === 2
+      ? words.ts("cost.confirmAgain", { cap: trimUsd(costAsk.cap_usd), usd: formatUsd(costAsk.usd) })
+      : words.ts("cost.confirm", { usd: formatUsd(costAsk.usd) });
   return (
     <div
       data-testid="truncation-warning"
@@ -79,7 +91,7 @@ export function TruncationWarning({
                 style={{ color: C.textPrimary, border: `1px solid ${C.borderActive}` }}
               >
                 {rerunPending && <Loader2 size={14} aria-hidden className="animate-spin" />}
-                {words.tr("truncation.rerun", { suggested })}
+                {rerunLabel}
               </button>
             )}
             <button

@@ -34,6 +34,7 @@ import { formatBytes, formatDay } from "../result/format";
 import { visibleGateReasons } from "../result/GateView";
 import { TruncationWarning } from "../result/TruncationWarning";
 import { useTruncationAck } from "../result/truncationAck";
+import { useRerunLarger } from "../result/useRerunLarger";
 import { useBenchWords, type BenchWords } from "../result/words";
 import type { BenchTestDetail, KitFile, KitFileName, XKit } from "../types";
 
@@ -189,15 +190,14 @@ function KitBody({ testId, onClose, titleId }: { testId: string; onClose: () => 
     onError: (err) => notify.error(apiErrorText(err, t("notify.harvestFailed"))),
   });
 
-  const rerun = useMutation({
-    mutationFn: () => benchW1Api.tests.rerun(testId, "larger"),
-    onSuccess: (next) => {
-      qc.invalidateQueries({ queryKey: benchW1Keys.testsAll() });
+  const rerun = useRerunLarger(
+    testId,
+    (next) => {
       onClose();
       router.push(benchResultHref(next.id));
     },
-    onError: (err) => notify.error(apiErrorText(err, t("notify.rerunFailed"))),
-  });
+    t("notify.rerunFailed"),
+  );
 
   const header = (
     <div className="flex items-start justify-between gap-2 px-4 pt-3 lg:px-6 lg:pt-4">
@@ -285,8 +285,9 @@ function KitBody({ testId, onClose, titleId }: { testId: string; onClose: () => 
           contestants={test ? test.blocks.flatMap((b) => b.contestants) : []}
           words={words}
           canRerun={test ? test.allowed.includes("rerun_larger") : true}
-          rerunPending={rerun.isPending}
-          onRerun={() => rerun.mutate()}
+          rerunPending={rerun.pending}
+          costAsk={rerun.costAsk}
+          onRerun={rerun.run}
           onContinue={ack}
         />
       )}

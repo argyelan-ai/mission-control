@@ -217,6 +217,29 @@ describe("XKitSheet — private truncation warning", () => {
     expect(screen.queryByTestId("kit-notes")).toBeNull();
   });
 
+  it("over the cap a paid re-run asks twice before it starts (D4)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(benchW1Api.tests.rerun)
+      .mockRejectedValueOnce(
+        new Error('API 409: {"detail":{"code":"bench_cost_confirmation","step":1,"usd":2.5,"cap_usd":1.0}}'),
+      )
+      .mockRejectedValueOnce(
+        new Error('API 409: {"detail":{"code":"bench_cost_confirmation","step":2,"usd":2.5,"cap_usd":1.0}}'),
+      )
+      .mockResolvedValueOnce({ ...testRunningFixture, id: "new-test" });
+    renderSheet(testDoneTruncatedFixture, truncatedKit);
+    await user.click(await screen.findByRole("button", { name: "Re-run with 32,768 tokens" }));
+    await user.click(await screen.findByRole("button", { name: "Start · $2.50 — OK?" }));
+    await user.click(await screen.findByRole("button", { name: "Over $1: really start for $2.50?" }));
+    await waitFor(() =>
+      expect(benchW1Api.tests.rerun).toHaveBeenLastCalledWith(testDoneTruncatedFixture.id, "larger", {
+        cost_confirmed_usd: 2.5,
+        confirm_over_cap: true,
+      }),
+    );
+    await waitFor(() => expect(push).toHaveBeenCalledWith(benchResultHref("new-test")));
+  });
+
   it("re-runs with a larger budget, closes and opens the new result", async () => {
     const user = userEvent.setup();
     vi.mocked(benchW1Api.tests.rerun).mockResolvedValue({ ...testRunningFixture, id: "new-test" });

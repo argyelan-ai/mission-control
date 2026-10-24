@@ -4686,7 +4686,6 @@
       "harvestStarted": "Loading the numbers — the result updates itself.",
       "harvestFailed": "The numbers could not be loaded.",
       "rerunFailed": "The re-run could not be started.",
-      "rerunNeedsCost": "This model costs money — confirm the price in the test sheet.",
       "recompose": "The video is being rebuilt.",
       "rerender": "The video is being re-recorded.",
       "archive": "Test archived.",

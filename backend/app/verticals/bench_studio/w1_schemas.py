@@ -480,6 +480,11 @@ class BenchTestList(BaseModel):
 
 class RerunRequest(BaseModel):
     budget: Literal["same", "larger"] = "same"
+    # D4 on the re-run route too: a paid model answers 409 CostConfirmation;
+    # the page confirms here (same shape as BenchTestCreate) so the larger
+    # budget of the truncation re-run is never lost on a detour.
+    cost_confirmed_usd: float | None = Field(default=None, ge=0)
+    confirm_over_cap: bool = False
 
 
 # ── X-Kit ────────────────────────────────────────────────────────────────

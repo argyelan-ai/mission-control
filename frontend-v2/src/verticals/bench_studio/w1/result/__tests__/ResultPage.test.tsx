@@ -352,6 +352,28 @@ describe("ResultPage — private truncation warning", () => {
     await waitFor(() => expect(push).toHaveBeenCalledWith(benchResultHref("new-test")));
   });
 
+  it("a paid model confirms the price on the spot and keeps the larger budget (D4)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(benchW1Api.tests.rerun)
+      .mockRejectedValueOnce(
+        new Error('API 409: {"detail":{"code":"bench_cost_confirmation","step":1,"usd":0.2,"cap_usd":1.0}}'),
+      )
+      .mockResolvedValueOnce({ ...testRunningFixture, id: "new-test" });
+    renderView(testDoneTruncatedFixture);
+    await user.click(await screen.findByRole("button", { name: "Re-run with 32,768 tokens" }));
+    const ask = await screen.findByRole("button", { name: "Start · $0.20 — OK?" });
+    // no detour through the sheet — that would lose the larger budget
+    expect(push).not.toHaveBeenCalled();
+    await user.click(ask);
+    await waitFor(() =>
+      expect(benchW1Api.tests.rerun).toHaveBeenLastCalledWith(testDoneTruncatedFixture.id, "larger", {
+        cost_confirmed_usd: 0.2,
+        confirm_over_cap: false,
+      }),
+    );
+    await waitFor(() => expect(push).toHaveBeenCalledWith(benchResultHref("new-test")));
+  });
+
   it("'Continue anyway' puts the warning away", async () => {
     const user = userEvent.setup();
     renderView(testDoneTruncatedFixture);

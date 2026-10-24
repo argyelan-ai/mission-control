@@ -195,6 +195,13 @@ export interface BenchTestCreate {
   confirm_over_cap?: boolean;
 }
 
+/** Body extra of POST /tests/{id}/rerun after a 409 CostConfirmation
+ *  (w1_schemas.RerunRequest). */
+export interface RerunCostConfirm {
+  cost_confirmed_usd: number;
+  confirm_over_cap: boolean;
+}
+
 /** 409 detail when money must be confirmed (D4: step 2 over $1). */
 export interface CostConfirmation {
   code: "bench_cost_confirmation";

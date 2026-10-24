@@ -200,6 +200,32 @@ async def test_rerun_with_a_larger_budget_uses_the_suggestion(auth_client, sessi
 
 
 @pytest.mark.asyncio
+async def test_rerun_of_a_paid_test_confirms_the_cost_and_keeps_the_larger_budget(auth_client, session, engines):
+    """The truncation re-run of a paid model asks for the money on its own
+    route (D4: once, over the cap twice) — the larger budget must survive
+    the confirmation instead of being lost on a detour through the sheet."""
+    fleet = await seed_fleet(session)
+    body = {"picks": [_pick(fleet["paid"])], "trigger": "list"}
+    ask = s.CostConfirmation.model_validate((await auth_client.post(f"{BASE}/tests", json=body)).json()["detail"])
+    old = await auth_client.post(f"{BASE}/tests", json={**body, "cost_confirmed_usd": ask.usd, "confirm_over_cap": True})
+    assert old.status_code == 201, old.text
+    old_id = old.json()["id"]
+    url = f"{BASE}/tests/{old_id}/rerun"
+    resp = await auth_client.post(url, json={"budget": "larger"})
+    assert resp.status_code == 409
+    step1 = s.CostConfirmation.model_validate(resp.json()["detail"])
+    assert step1.step == 1
+    resp = await auth_client.post(url, json={"budget": "larger", "cost_confirmed_usd": step1.usd})
+    assert resp.status_code == 409 and resp.json()["detail"]["step"] == 2
+    resp = await auth_client.post(url, json={"budget": "larger", "cost_confirmed_usd": step1.usd,
+                                             "confirm_over_cap": True})
+    assert resp.status_code == 201, resp.text
+    new = await session.get(BenchChallenge, uuid.UUID(resp.json()["id"]))
+    assert new.rerun_of == uuid.UUID(old_id)
+    assert new.plan["contestants"][0]["max_tokens"] == 32768
+
+
+@pytest.mark.asyncio
 async def test_stop_a_waiting_test(auth_client, session, engines):
     fleet = await seed_fleet(session)
     ch = await w1_tests.create_test(session, picks=[_pick(fleet["slot"])], preset="quick", trigger="list", user_id=None)

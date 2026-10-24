@@ -4686,7 +4686,6 @@
       "harvestStarted": "Zahlen werden nachgeladen — das Ergebnis aktualisiert sich selbst.",
       "harvestFailed": "Die Zahlen liessen sich nicht nachladen.",
       "rerunFailed": "Der neue Lauf liess sich nicht starten.",
-      "rerunNeedsCost": "Dieses Modell kostet Geld — bestätige den Preis im Test-Blatt.",
       "recompose": "Das Video wird neu gebaut.",
       "rerender": "Das Video wird neu aufgenommen.",
       "archive": "Test archiviert.",

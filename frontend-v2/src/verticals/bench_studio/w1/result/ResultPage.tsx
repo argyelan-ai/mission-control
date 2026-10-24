@@ -47,7 +47,7 @@ import { notify } from "@/lib/notify";
 // subpath of the video, rerender/recompose/archive/delete and the entry page
 // view token (CONTRACT §2 — mapped from BenchTestDetail.allowed).
 import { benchApi } from "@/verticals/bench_studio/api";
-import { LIVE_POLL_MS, benchW1Api, benchW1Keys, parseCostConfirmation } from "../api";
+import { LIVE_POLL_MS, benchW1Api, benchW1Keys } from "../api";
 import { XKitSheet } from "../kit/XKitSheet";
 import { TestList } from "../list/TestList";
 import { LiveRun } from "../live/LiveRun";
@@ -60,6 +60,7 @@ import { ReceiptView } from "./ReceiptView";
 import { NumbersList, NumbersTable } from "./ResultNumbers";
 import { TruncationWarning } from "./TruncationWarning";
 import { useTruncationAck } from "./truncationAck";
+import { useRerunLarger } from "./useRerunLarger";
 import { useBenchWords, type BenchWords } from "./words";
 
 export interface ResultPageProps {
@@ -277,22 +278,13 @@ export function ResultView({ testId }: ResultPageProps) {
     onError: (err) => notify.error(apiErrorText(err, t("notify.harvestFailed"))),
   });
 
-  const rerunLarger = useMutation({
-    mutationFn: () => benchW1Api.tests.rerun(testId, "larger"),
-    onSuccess: (next) => {
-      qc.invalidateQueries({ queryKey: benchW1Keys.testsAll() });
-      router.push(benchResultHref(next.id));
-    },
-    onError: (err) => {
-      // A paid model: the money must be confirmed in the test sheet (D4).
-      if (parseCostConfirmation(err)) {
-        notify.info(t("notify.rerunNeedsCost"));
-        router.push(benchTestHref({ rerunOf: testId, trigger: "rerun" }));
-        return;
-      }
-      notify.error(apiErrorText(err, t("notify.rerunFailed")));
-    },
-  });
+  // A paid model: the price is confirmed right on the button (D4), the
+  // larger budget stays (no detour through the sheet).
+  const rerunLarger = useRerunLarger(
+    testId,
+    (next) => router.push(benchResultHref(next.id)),
+    t("notify.rerunFailed"),
+  );
 
   const legacy = useMutation({
     mutationFn: async (id: "rerender" | "recompose" | "archive") => {
@@ -385,7 +377,9 @@ export function ResultView({ testId }: ResultPageProps) {
   const contestants = allContestants(test);
   const primary = primaryOf(test);
   const allowed = new Set(test.allowed);
-  const showTruncation = Boolean(test.truncation) && !truncationAcked && !live;
+  // A pending price question keeps the warning in view even after
+  // "continue anyway" (the ⋯ re-run puts its question on this button).
+  const showTruncation = Boolean(test.truncation) && (!truncationAcked || Boolean(rerunLarger.costAsk)) && !live;
   // K3: the name stands in the verdict when there is one contestant with a verdict.
   const nameInVerdict = contestants.length === 1 && test.blocks.length === 1 && Boolean(test.verdict);
   const classWords = test.blocks.map((b) => words.runClass(b.run_class));
@@ -400,7 +394,7 @@ export function ResultView({ testId }: ResultPageProps) {
     if (id === "harvest")
       menu.push({ id, label: t("actions.harvest"), icon: RefreshCw, onClick: () => harvest.mutate(), loading: harvest.isPending });
     if (id === "rerun_larger")
-      menu.push({ id, label: t("actions.rerunLarger"), icon: RefreshCw, onClick: () => rerunLarger.mutate(), loading: rerunLarger.isPending });
+      menu.push({ id, label: t("actions.rerunLarger"), icon: RefreshCw, onClick: rerunLarger.run, loading: rerunLarger.pending });
     if (id === "recompose" || id === "rerender" || id === "archive")
       menu.push({
         id,
@@ -558,8 +552,9 @@ export function ResultView({ testId }: ResultPageProps) {
                 contestants={contestants}
                 words={words}
                 canRerun={allowed.has("rerun_larger")}
-                rerunPending={rerunLarger.isPending}
-                onRerun={() => rerunLarger.mutate()}
+                rerunPending={rerunLarger.pending}
+                costAsk={rerunLarger.costAsk}
+                onRerun={rerunLarger.run}
                 onContinue={ackTruncation}
               />
             )}

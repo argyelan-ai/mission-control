@@ -37,7 +37,7 @@ covers every code in EN + DE).
 | `POST /tests` | 201 `BenchTestDetail` | Body `BenchTestCreate` (1–2 picks). Paid run: 409 `{detail: CostConfirmation}` step 1, over $1 step 2 (`confirm_over_cap`) |
 | `GET /tests?section&model&device&harness&run_class&include_archived` | `BenchTestList` | Human states; GET never writes |
 | `GET /tests/{id}` | `BenchTestDetail` | Result + live (poll `LIVE_POLL_MS` while waiting/running) |
-| `POST /tests/{id}/rerun` | 201 `BenchTestDetail` | `{budget: "same" \| "larger"}` — "Nochmal" / truncation re-run |
+| `POST /tests/{id}/rerun` | 201 `BenchTestDetail` | `{budget: "same" \| "larger", cost_confirmed_usd?, confirm_over_cap?}` — "Nochmal" / truncation re-run. Paid model: 409 CostConfirmation like `POST /tests`; the page confirms on this route, the budget stays (integration 24.10.) |
 | `POST /tests/{id}/stop` | `BenchTestDetail` | |
 | `POST /tests/{id}/harvest` | `BenchTestDetail` | "Zahlen nachladen" → new receipt version + recompose |
 | `GET /tests/{id}/kit` | `XKit` | English texts; red = preview only |

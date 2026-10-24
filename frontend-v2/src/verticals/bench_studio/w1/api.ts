@@ -11,6 +11,7 @@ import type {
   BenchTestList,
   ContestantList,
   CostConfirmation,
+  RerunCostConfirm,
   DownloadToken,
   Harness,
   KitFileName,
@@ -89,10 +90,12 @@ export const benchW1Api = {
         })}`,
       ),
     get: (id: string) => request<BenchTestDetail>(`${B}/tests/${id}`),
-    rerun: (id: string, budget: "same" | "larger" = "same") =>
+    /** "Nochmal" / truncation re-run. A paid model answers 409
+     *  CostConfirmation; the caller repeats with `confirm` (D4). */
+    rerun: (id: string, budget: "same" | "larger" = "same", confirm?: RerunCostConfirm) =>
       request<BenchTestDetail>(`${B}/tests/${id}/rerun`, {
         method: "POST",
-        body: JSON.stringify({ budget }),
+        body: JSON.stringify({ budget, ...confirm }),
       }),
     stop: (id: string) => request<BenchTestDetail>(`${B}/tests/${id}/stop`, { method: "POST" }),
     harvest: (id: string) =>

@@ -139,10 +139,14 @@ async def rerun_test(
 ):
     """"Nochmal" (budget same) or "re-run with a larger budget" from the
     private truncation warning (budget larger → suggested_max_tokens).
-    A paid test answers 409 CostConfirmation — the sheet then confirms via
-    POST /tests with ``rerun_of``."""
+    A paid test answers 409 CostConfirmation (D4: step 1, over the cap
+    step 2); the page confirms with ``cost_confirmed_usd`` /
+    ``confirm_over_cap`` on this same route, keeping the budget."""
     old = await w1_tests.get_or_404(session, test_id)
-    challenge = await w1_tests.rerun_test(session, old, budget=body.budget, user_id=str(current_user.id))
+    challenge = await w1_tests.rerun_test(
+        session, old, budget=body.budget, user_id=str(current_user.id),
+        cost_confirmed_usd=body.cost_confirmed_usd, confirm_over_cap=body.confirm_over_cap,
+    )
     return await w1_tests.test_detail(session, challenge)
 
 
