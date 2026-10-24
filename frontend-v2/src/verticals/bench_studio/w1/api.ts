@@ -143,3 +143,25 @@ export function parseCostConfirmation(err: unknown): CostConfirmation | null {
   }
   return null;
 }
+
+/** The blockers of a 409 `bench_blocked` from tests.create / rerun
+ *  (`{detail: {code, message, blockers: [{code, blocking}]}}`), or null.
+ *  The sheet words them through `benchShared.blocker` — never raw JSON. */
+export function parseBenchBlocked(err: unknown): { code: string; blocking: boolean }[] | null {
+  if (!(err instanceof Error)) return null;
+  const m = /^API 409: ([\s\S]*)$/.exec(err.message);
+  if (!m) return null;
+  try {
+    const detail = (JSON.parse(m[1]) as { detail?: unknown }).detail as
+      | { code?: unknown; blockers?: unknown }
+      | undefined;
+    if (detail && detail.code === "bench_blocked" && Array.isArray(detail.blockers)) {
+      return detail.blockers
+        .filter((b): b is { code: string; blocking?: unknown } => typeof b?.code === "string")
+        .map((b) => ({ code: b.code, blocking: b.blocking !== false }));
+    }
+  } catch {
+    // no JSON detail
+  }
+  return null;
+}

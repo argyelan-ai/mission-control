@@ -11,7 +11,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { AlertTriangle, ArrowLeft, Check, Clock, Cloud, Cpu, Loader2, Plus, X } from "lucide-react";
 import { benchResultHref, type BenchTestParams } from "@/lib/benchLinks";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
-import { benchW1Api, benchW1Keys, parseCostConfirmation, type PlanQuery } from "../api";
+import { benchW1Api, benchW1Keys, parseBenchBlocked, parseCostConfirmation, type PlanQuery } from "../api";
 import type {
   BenchPlan,
   BenchTestCreate,
@@ -145,6 +145,13 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
       const ask = parseCostConfirmation(err);
       if (ask) {
         setServerAsk(ask);
+        return;
+      }
+      // A blocker the server found after the plan was read (e.g. the
+      // engine stopped meanwhile): its words, never the raw answer (K10).
+      const blocked = parseBenchBlocked(err);
+      if (blocked && blocked.length > 0) {
+        setStartError(blocked.map((b) => w.word("blocker", b.code)).join(" · "));
         return;
       }
       const msg = err instanceof Error ? err.message : String(err);
@@ -365,7 +372,7 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
         {subject && sel && (
           <FieldRow
             name={t("row.harness")}
-            sub={harnessSub(subject, t, w.harness)}
+            sub={harnessSub(subject, t, w)}
           >
             <ChipGroup label={t("row.harness")}>
               {subject.harnesses.map((o) => (
@@ -568,9 +575,23 @@ function trimUsd(n: number): string {
   return Number.isInteger(n) ? String(n) : usd(n);
 }
 
-function harnessSub(subject: Contestant, t: T, harnessWord: (h: Harness) => string): string | undefined {
+function reasonWord(w: ReturnType<typeof useBenchWords>, code: string): string | null {
+  for (const group of ["reason", "blocker"]) if (w.has(`${group}.${code}`)) return w.t(`${group}.${code}`);
+  return null;
+}
+
+function harnessSub(subject: Contestant, t: T, w: ReturnType<typeof useBenchWords>): string | undefined {
   const off = subject.harnesses.filter((o) => !o.available);
-  if (off.length) return off.map((o) => t("harnessUnavailable", { harness: harnessWord(o.harness) })).join(" · ");
+  if (off.length)
+    return off
+      .map((o) => {
+        // The server's reason in shared words ("the agent is paused"), else the plain note.
+        const why = o.reason ? reasonWord(w, o.reason.code) : null;
+        return why
+          ? t("harnessUnavailableWhy", { harness: w.harness(o.harness), reason: why })
+          : t("harnessUnavailable", { harness: w.harness(o.harness) });
+      })
+      .join(" · ");
   if (subject.locality === "cloud" && subject.harnesses.length === 1 && subject.harnesses[0].harness === "api") {
     return t("harnessCloudOnly");
   }

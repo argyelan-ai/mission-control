@@ -337,6 +337,35 @@ describe("TestSheetHost — opponent and money (D3/D4, N7)", () => {
   });
 });
 
+describe("TestSheetHost — server refusals in words (K10)", () => {
+  it("a blocked start names the blocker, never the raw answer", async () => {
+    api.create.mockRejectedValueOnce(
+      new Error(
+        'API 409: {"detail":{"code":"bench_blocked","message":"blocked","blockers":[{"code":"engine_down","blocking":true}]}}',
+      ),
+    );
+    const user = userEvent.setup();
+    renderHost(fromRuntimes);
+    await user.click(await startButton());
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Engine not running");
+    expect(alert.textContent).not.toMatch(/bench_blocked|engine_down|\{/);
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("an unavailable harness says why in words", async () => {
+    const plan: BenchPlan = clone(planStandardFixture);
+    const omp = plan.contestants[0].harnesses.find((o) => o.harness === "omp");
+    expect(omp).toBeTruthy();
+    omp!.available = false;
+    omp!.reason = { code: "agent_paused", params: {} };
+    api.plan.mockResolvedValue(plan);
+    renderHost(fromRuntimes);
+    const d = await sheet();
+    expect(await within(d).findByText(/the agent is paused \(quiet mode\)/)).toBeInTheDocument();
+  });
+});
+
 describe("TestSheetHost — blockers before Start", () => {
   function withBlocker(blocking: boolean, code: Contestant["blockers"][number]["code"], until: string | null = null) {
     const plan: BenchPlan = clone(planStandardFixture);

@@ -4282,7 +4282,9 @@
       "no_recipe": "ohne Rezept nicht ablesbar",
       "not_recorded": "nicht festgehalten",
       "recorded_before_block": "offen – vor der Sperre aufgenommen",
-      "notMeasured": "nicht gemessen: {reason}"
+      "notMeasured": "nicht gemessen: {reason}",
+      "agent_paused": "der Agent ist pausiert (Ruhemodus)",
+      "files_not_ready": "Video und Bild sind noch nicht fertig"
     },
     "blocker": {
       "box_busy": "Box belegt",
@@ -4389,6 +4391,7 @@
     "changeTest": "Anderen Test wählen",
     "harnessCloudOnly": "Cloud-Modelle laufen nur direkt über die API",
     "harnessUnavailable": "{harness}: gerade nicht verfügbar",
+    "harnessUnavailableWhy": "{harness}: {reason}",
     "effortStamp": "Stufen geprüft am {date}",
     "effortCount": "{n} gewählt · mehrere möglich",
     "effortOnlyOnOff": "Dieses Modell kennt nur an/aus",

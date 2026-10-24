@@ -55,6 +55,14 @@ Stub marker: until A builds a route it returns its fixture with header
 `X-Bench-Contract-Stub: 1` (kit files: 501). Integration gate:
 `grep -c "_stub(response" w1_routes.py` = 0, no 501 left.
 
+### Settled at integration (24.10.2026)
+
+- **`bench_blocked` 409** (`POST /tests`, rerun): `{detail: {code: "bench_blocked", message, blockers: [{code, blocking}]}}` when a pick has a hard blocker found after the plan was read. The sheet words the blockers through `benchShared.blocker` (`parseBenchBlocked`), never the raw body.
+- **Extra reason codes** `agent_paused` (harness option of a paused agent) and `files_not_ready` (kit `blocked_reason`) live in `benchShared.reason`. Codes with their own path, not a sentence: `bench_blocked`, `bench_cost_confirmation`, `gate_red`, `harness_default` (no note), `omp_session_default` (`benchSheet.ompSession`), `price_unknown` (`cost.unknown`). Guard: `contractFixtures.test.ts` scans `w1_*.py` for every `"code"` and fails on a code without a word.
+- **`allowed` `"kit"`** = the kit can be downloaded (green/amber, finished). A finished red test shows the kit as a preview from the ⋯ menu; its files answer 409.
+- **Paid re-run:** `POST /tests/{id}/rerun` takes the cost confirmation itself (see §2); the result page and the X-Kit sheet ask on the same button (`useRerunLarger`).
+- **Removed with the kill list:** `/effort-levels*` (Spark-only; the plan probe replaces it), besides `/spark-models`, legacy `POST /challenges` and the X draft route.
+
 ## 3. Behaviour rules every package keeps
 
 - **Names:** `display_name` = served model id verbatim (gate R2); alias only next to it. Never the agent name on artefacts.

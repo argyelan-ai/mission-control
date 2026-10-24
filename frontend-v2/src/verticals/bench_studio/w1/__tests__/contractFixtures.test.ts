@@ -136,6 +136,36 @@ describe("benchShared words cover every contract code (EN + DE)", () => {
     for (const s of harnesses) expect(w.harness[s], `harness.${s}`).toBeTruthy();
   });
 
+  it("every reason code the W1 backend sends has a word (no raw code on screen, K10)", () => {
+    // Codes with their own path, not a reason sentence: two error bodies
+    // (parsed in api.ts / the sheet), the red-gate kit block (own branch),
+    // the API harness default (no note) and the unknown price (cost.unknown).
+    const ownPath = new Set([
+      "bench_blocked",
+      "bench_cost_confirmation",
+      "gate_red",
+      "harness_default",
+      "price_unknown",
+      "omp_session_default",
+    ]);
+    const dir = path.resolve(__dirname, "../../../../../../backend/app/verticals/bench_studio");
+    const codes = new Set<string>();
+    for (const f of readdirSync(dir).filter((n) => /^w1_.*\.py$/.test(n))) {
+      for (const m of readFileSync(path.join(dir, f), "utf8").matchAll(/"code":\s*"([a-z0-9_]+)"/g)) codes.add(m[1]);
+    }
+    expect(codes.size).toBeGreaterThan(5);
+    const groups = ["reason", "abort", "wait", "blocker", "gate"];
+    for (const [lang, w] of Object.entries(langs)) {
+      for (const code of codes) {
+        if (ownPath.has(code)) continue;
+        expect(
+          groups.some((g) => Boolean(w[g]?.[code])),
+          `${lang}: benchShared has no word for "${code}"`,
+        ).toBe(true);
+      }
+    }
+  });
+
   it("EN and DE have the same keys in every W1 namespace", () => {
     const keys = (o: unknown, prefix = ""): string[] =>
       o && typeof o === "object"

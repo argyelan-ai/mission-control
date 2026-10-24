@@ -4282,7 +4282,9 @@
       "no_recipe": "not readable without a recipe",
       "not_recorded": "not recorded",
       "recorded_before_block": "open — recorded before the block",
-      "notMeasured": "not measured: {reason}"
+      "notMeasured": "not measured: {reason}",
+      "agent_paused": "the agent is paused (quiet mode)",
+      "files_not_ready": "the video and image are not ready yet"
     },
     "blocker": {
       "box_busy": "Box busy",
@@ -4389,6 +4391,7 @@
     "changeTest": "Choose another test",
     "harnessCloudOnly": "Cloud models run directly through the API only",
     "harnessUnavailable": "{harness}: not available right now",
+    "harnessUnavailableWhy": "{harness}: {reason}",
     "effortStamp": "levels checked on {date}",
     "effortCount": "{n} selected · several possible",
     "effortOnlyOnOff": "This model only knows on/off",
