@@ -24,6 +24,8 @@ import { Stage, type StageMember } from "./Stage";
 import { FreeBox } from "./FreeBox";
 import { AsleepBox } from "./AsleepBox";
 import { BoxCockpit, type BoxCockpitMember } from "./cockpit/BoxCockpit";
+import { useBenchRuntimeSummary } from "../benchSummary";
+import type { BenchRuntimeSummary } from "@/lib/benchLinks";
 
 export interface BuiltStage {
   runtime: Runtime;
@@ -88,11 +90,13 @@ function StageRow({
   groupsByHostId,
   live,
   onOpenBoxCockpit,
+  benchSummary,
 }: {
   runtime: Runtime;
   hostIds: string[];
   groupsByHostId: Map<string, HostGroup>;
   live?: Record<string, RuntimeLiveStatus>;
+  benchSummary?: BenchRuntimeSummary | null;
   onOpenBoxCockpit: (members: BoxCockpitMember[], runtime: Runtime, activeHostId: string) => void;
 }) {
   const devices = useDevices();
@@ -122,6 +126,7 @@ function StageRow({
       members={stageMembers}
       live={rtLive}
       onOpenCockpit={(headHostId) => onOpenBoxCockpit(members, runtime, headHostId)}
+      benchSummary={benchSummary}
     />
   );
 }
@@ -232,6 +237,8 @@ export function FleetStage({
   const { stages, freeHostIds } = useMemo(() => buildStages(stageGroups, live), [stageGroups, live]);
   const groupsByHostId = useMemo(() => new Map(stageGroups.map((g) => [g.host.id, g])), [stageGroups]);
   const devices = useDevices();
+  // Bench W1 P1: which live card gets "Testen" (and which one leads, K11).
+  const benchSummary = useBenchRuntimeSummary();
   // Das Cockpit (Zahnrad, Spec §4) — ersetzt seit PR 5 das alte
   // RuntimeDetailPanel für Stage/FreeBox/AsleepBox. `onOpen` bleibt nur noch
   // für EmptyStage's "Start model" (öffnet den Rezept-Umschalter-Kontext,
@@ -286,6 +293,7 @@ export function FleetStage({
                 hostIds={hostIds}
                 groupsByHostId={groupsByHostId}
                 live={live}
+                benchSummary={benchSummary.get(runtime.id) ?? null}
                 onOpenBoxCockpit={(members, rt, activeHostId) => openCockpit({ members, runtime: rt, activeHostId })}
               />
             </motion.div>

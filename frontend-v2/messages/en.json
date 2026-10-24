@@ -4729,7 +4729,82 @@
     }
   },
   "benchHome": {
-    "_owner": "package D — entries (P1 Runtimes, P1b switch toggle, P2 QuickSheet, P8 library, Inbox item) + list (P7). Add keys below this line only."
+    "_owner": "package D — entries (P1 Runtimes, P1b switch toggle, P2 QuickSheet, P8 library, Inbox item) + list (P7). Add keys below this line only.",
+    "title": "Benchmark",
+    "testModel": "Test a model",
+    "lead": "{count, plural, one {# test} other {# tests}} · last {date}",
+    "leadNoDate": "{count, plural, one {# test} other {# tests}}",
+    "filter": {
+      "label": "Filter",
+      "model": "Model",
+      "device": "Device",
+      "harness": "Harness",
+      "runClass": "Class",
+      "all": "All",
+      "active": "{label}: {value}",
+      "clear": "Remove filter {label}",
+      "reset": "Reset filters",
+      "noHitOne": "No test with {value}",
+      "noHitMany": "No test with these filters"
+    },
+    "harnessTag": {
+      "api": "Raw API",
+      "omp": "omp",
+      "hermes": "Hermes",
+      "grok-build": "Grok Build",
+      "claude-code": "Claude Code"
+    },
+    "progress": "{state} · {done}/{total}",
+    "loading": "Loading …",
+    "loadFailed": "The list cannot be loaded right now.",
+    "retry": "Try again",
+    "empty": {
+      "title": "No test yet",
+      "body": "Tap “Test” on a runtime. MC fills in model, device, harness and effort itself.",
+      "bodyDesktop": "Then every result shows up here, with video and numbers.",
+      "toRuntimes": "Go to Runtimes"
+    },
+    "archiveShow": "Show archive",
+    "archiveHide": "Hide archive",
+    "library": "Prompt library",
+    "libraryBack": "Benchmark",
+    "libraryLead": "Prompts for tests. “Test with…” opens a test with that prompt.",
+    "pickHint": {
+      "title": "Pick a test on the left",
+      "body": "Or test the model that is running now. MC fills in model, device, harness and effort itself.",
+      "action": "Test the running model"
+    },
+    "testWith": "Test with…",
+    "testWithAria": "Test with {title}",
+    "runtimes": {
+      "test": "Test",
+      "testWaits": "Test (waits)",
+      "testFrom": "Test from {time}",
+      "testRunning": "Test running",
+      "lastTest": "Last test: {date} · {title}",
+      "freshNote": "MC does not measure the first 15 min: the model is still warming up.",
+      "busyNote": "A test waits until the box is free. MC starts it itself, after 10 min at the latest.",
+      "noModel": "Testing works once a model runs",
+      "blocked": "Testing is not possible right now"
+    },
+    "autoTest": {
+      "label": "Test automatically afterwards",
+      "on": "Standard test, 3 runs. Starts 15 min after loading. The result goes to the Inbox.",
+      "off": "No test starts after this switch.",
+      "scheduledAt": "Test planned: starts at {time} at the earliest. The result goes to the Inbox.",
+      "scheduled": "Test planned: starts 15 min after loading. The result goes to the Inbox.",
+      "failed": "MC could not plan the test — the switch goes ahead anyway. Test later from the card."
+    },
+    "quick": {
+      "row": "Test a model",
+      "hint": "The running model, everything pre-filled"
+    },
+    "inbox": {
+      "type": "Test done",
+      "open": "View result",
+      "done": "Done",
+      "untitled": "Benchmark test"
+    }
   },
   "nightShift": {
     "runTonight": "Run tonight",

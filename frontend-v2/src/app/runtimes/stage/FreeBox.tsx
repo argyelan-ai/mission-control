@@ -18,6 +18,7 @@ import { MemberRow } from "./MemberRow";
 import { HostRecipeSwitcher } from "@/components/shared/HostRecipeSwitcher";
 import { useAppStore } from "@/lib/store";
 import { WakeBoxButton } from "./WakeBoxButton";
+import { NoModelTestButton } from "./BenchTest";
 
 export function FreeBox({
   host,
@@ -191,11 +192,15 @@ export function FreeBox({
             <HostRecipeSwitcher hostId={host.id} hostName={host.slug} servingName={null} compact primary label={t("startModel")} />
           )
         )}
+        {/* Bench W1 P1: nothing to test until a model runs (mockup 01). */}
+        <span className="ml-auto">
+          <NoModelTestButton />
+        </span>
         <button
           type="button"
           onClick={onOpenCockpit}
           aria-label={t("cockpitAria")}
-          className="stage-actions-gear w-11 h-11 flex items-center justify-center rounded-md cursor-pointer shrink-0 ml-auto"
+          className="stage-actions-gear w-11 h-11 flex items-center justify-center rounded-md cursor-pointer shrink-0"
           style={{ border: `1px solid ${C.borderActive}` }}
         >
           <Settings size={14} style={{ color: C.textSecondary }} />

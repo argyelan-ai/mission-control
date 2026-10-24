@@ -1,5 +1,7 @@
-// Vertical-owned types (ADR-044 §4) — NOT in src/lib/types.ts, so the core
-// type surface stays clean when the vertical is stripped.
+// Vertical-owned legacy types (ADR-044 §4) — NOT in src/lib/types.ts, so the
+// core type surface stays clean when the vertical is stripped. Trimmed in
+// bench W1 (package D): the create/draft/spark-model/effort-probe request
+// shapes went with the old dialog; the W1 shapes live in w1/types.ts.
 
 export interface BenchEntry {
   id: string;
@@ -111,19 +113,6 @@ export interface BenchChallenge {
   actions?: ChallengeAction[];
 }
 
-export interface BenchModelSpec {
-  label: string;
-  source_kind: "spark" | "agent";
-  spark_model?: string | null;
-  agent_id?: string | null;
-  // Custom chip tag for the branded video (e.g. "OMP · DGX SPARK");
-  // empty/undefined = harness-derived default (backend).
-  display_tag?: string | null;
-  // Direct-API rows only: a level the effort probe found for the served
-  // model; null/undefined = "default" (nothing sent). Agent rows: never set.
-  effort?: EffortLevel | null;
-}
-
 // Effort (thinking level) — backend services/reasoning_params.EFFORT_LEVELS.
 export type EffortLevel = "default" | "off" | "on" | "low" | "medium" | "high" | "max";
 
@@ -133,39 +122,6 @@ export type EffortObserved =
   | { thinking: "on" | "off"; reasoning_tokens: number | null; reasoning_chars: number }
   | { source: "omp_session"; level: string; configured: string | null; changed: boolean; attempts: number }
   | { source: "unknown"; reason: string };
-
-// GET /bench/effort-levels — the effort probe for one served model.
-export interface EffortLevels {
-  served_model_id: string | null;
-  reachable: boolean;
-  // ok: levels found · no_effect: no key changed thinking · failed: the probe could not run
-  // · unchecked: never probed for this engine run (GET reads only; POST …/check probes)
-  status: "ok" | "no_effect" | "failed" | "unchecked";
-  thinking_key: string | null;
-  effort_param: string | null;
-  levels: EffortLevel[];
-  default_observed: "on" | "off" | "unknown";
-  probed_at: string | null;
-  serving_since: string | null;
-}
-
-export interface BenchChallengeCreate {
-  title: string;
-  prompt_template_id?: string | null;
-  prompt_text?: string | null;
-  mode: "single" | "side_by_side";
-  models: BenchModelSpec[];
-  series_label?: string | null;
-  // Video length in seconds (5..60); omitted/null = legacy 10s default.
-  record_duration_s?: number | null;
-}
-
-// Bench #21: live Spark vLLM model list for the vanilla (direct-API) row.
-export interface SparkModelsStatus {
-  reachable: boolean;
-  models: string[];
-  active: string | null;
-}
 
 export interface PromptTemplate {
   id: string;
