@@ -6,7 +6,7 @@
 // tones mark state (K6).
 import type { ReactNode } from "react";
 import { Check, ChevronRight } from "lucide-react";
-import { C, STATUS_TEXT, alpha } from "@/lib/colors";
+import { C, STATUS_TEXT } from "@/lib/colors";
 
 const rowEdge = { borderBottom: `1px solid ${C.borderSubtle}` };
 
@@ -133,13 +133,6 @@ export function Chip({
 
 export type NoteTone = "plain" | "info" | "warn" | "error";
 
-const TONE: Record<NoteTone, string> = {
-  plain: C.textSecondary,
-  info: C.info,
-  warn: C.warning,
-  error: C.error,
-};
-
 /** A note the operator should read before Start (blocker, class mix, probe
  *  failed). Only notes that ask for attention get a surface (K8). */
 export function Note({
@@ -157,16 +150,17 @@ export function Note({
   testId?: string;
   className?: string;
 }) {
-  const color = TONE[tone];
   const textColor =
     tone === "warn" ? STATUS_TEXT.warning : tone === "error" ? STATUS_TEXT.error : tone === "info" ? STATUS_TEXT.info : C.textSecondary;
   return (
     <div
       className={`flex gap-3 rounded-lg px-4 py-3 text-sm ${className}`}
       data-testid={testId}
+      // One signal per note (K6): the coloured icon on a quiet surface — no
+      // tinted fill, no coloured frame, no coloured title on top.
       style={{
-        background: tone === "plain" ? "transparent" : alpha(color, 0.08),
-        border: `1px solid ${tone === "plain" ? C.border : alpha(color, 0.3)}`,
+        background: tone === "plain" ? "transparent" : C.bgSurface,
+        border: `1px solid ${C.border}`,
         color: C.textSecondary,
       }}
     >
@@ -175,7 +169,7 @@ export function Note({
       </span>
       <div className="min-w-0">
         {title && (
-          <div className="font-medium" style={{ color: tone === "plain" ? C.textPrimary : textColor }}>
+          <div className="font-medium" style={{ color: C.textPrimary }}>
             {title}
           </div>
         )}

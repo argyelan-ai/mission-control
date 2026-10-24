@@ -4078,7 +4078,19 @@
       "recorded_before_block": "offen – vor der Sperre aufgenommen",
       "notMeasured": "nicht gemessen: {reason}",
       "agent_paused": "der Agent ist pausiert (Ruhemodus)",
-      "files_not_ready": "Video und Bild sind noch nicht fertig"
+      "files_not_ready": "Video und Bild sind noch nicht fertig",
+      "no_html_truncated": "am Token-Limit gestoppt, bevor eine Seite kam",
+      "no_html": "keine HTML-Seite in der Antwort",
+      "http_error": "der Motor antwortete mit einem Fehler",
+      "timeout": "keine Antwort in der Zeit",
+      "unreachable": "Motor nicht erreichbar",
+      "effort_not_offered": "diese Effort-Stufe bietet der Motor nicht mehr an",
+      "effort_probe_failed": "Effort-Prüfung fehlgeschlagen",
+      "runtime_gone": "diese Runtime gibt es nicht mehr",
+      "run_failed": "Lauf fehlgeschlagen",
+      "agent_missing": "kein Agent für diesen Harness",
+      "agent_task_failed": "der Agent-Auftrag ist fehlgeschlagen",
+      "time_limit": "Zeitlimit erreicht"
     },
     "blocker": {
       "box_busy": "Box belegt",
@@ -4096,7 +4108,7 @@
       "C": "Tempo"
     },
     "harness": {
-      "api": "API pur",
+      "api": "API direkt",
       "omp": "omp (lokaler Agent)",
       "hermes": "Hermes",
       "grok-build": "Grok Build",
@@ -4123,7 +4135,8 @@
       "unknown": "Kosten unbekannt",
       "hypothetical": "API-Preis wäre ≈ ${usd}",
       "confirm": "Start · ${usd} — OK?",
-      "confirmAgain": "Über ${cap}: wirklich für ${usd} starten?"
+      "confirmAgain": "Über ${cap}: wirklich für ${usd} starten?",
+      "confirmUnknown": "Start · Kosten unbekannt — OK?"
     },
     "gate": {
       "green": "Postbar",
@@ -4284,8 +4297,11 @@
         "recording": "nimmt das Video auf",
         "composing": "baut das Video",
         "done": "fertig"
-      }
-    }
+      },
+      "tokensApprox": "≈ {n} tok"
+    },
+    "blockerAsleep": "Start geht, sobald sie wach ist.",
+    "wakeBox": "Box wecken"
   },
   "providerDescriptions": {
     "claude_code_oauth_token": "Für cli-bridge-Agenten mit anthropic-*-Runtime (claude setup-token)",
@@ -4505,11 +4521,16 @@
       "kicker": "Bestätigen"
     },
     "truncation": {
-      "body": "{count, plural, one {Lauf {runs} endete} other {Läufe {runs} endeten}} bei {max} Tokens — die Zahlen sind dort zu kurz. Mit {suggested} Tokens zeigt ein neuer Lauf das ganze Ergebnis.",
-      "bodyNoRuns": "Ein Lauf endete bei {max} Tokens — die Zahlen sind dort zu kurz. Mit {suggested} Tokens zeigt ein neuer Lauf das ganze Ergebnis.",
+      "body": "{count, plural, one {Lauf {runs} wurde} other {Läufe {runs} wurden}} bei {max} Tokens gestoppt: die Antwort ist unvollständig, Zeit und Tokens sind darum zu tief. Mit {suggested} Tokens zeigt ein neuer Lauf das ganze Ergebnis.",
+      "bodyNoRuns": "Ein Lauf wurde bei {max} Tokens gestoppt: die Antwort ist unvollständig, Zeit und Tokens sind darum zu tief. Mit {suggested} Tokens zeigt ein neuer Lauf das ganze Ergebnis.",
       "private": "Nur du siehst das — es steht nicht im Video, nicht auf der Karte und nicht in den Texten.",
       "rerun": "Mit {suggested} Tokens nochmal",
-      "continue": "Trotzdem weiter"
+      "continue": "Trotzdem weiter",
+      "bodyNoPage": "{count, plural, one {Lauf {runs} dachte} other {Läufe {runs} dachten}} bis zum Limit von {max} Tokens und {count, plural, one {schrieb} other {schrieben}} keine Seite. Mit {suggested} Tokens hat das Modell Platz für die Seite.",
+      "bodyNoPageNoRuns": "Ein Lauf dachte bis zum Limit von {max} Tokens und schrieb keine Seite. Mit {suggested} Tokens hat das Modell Platz für die Seite.",
+      "videoCut": "Lauf 1 ist das Video: es zeigt eine unfertige Seite.",
+      "rerunConfirm": "Mit {suggested} Tokens nochmal · ${usd} — OK?",
+      "rerunConfirmUnknown": "Mit {suggested} Tokens nochmal · Kosten unbekannt — OK?"
     },
     "checks": {
       "label": "Prüfung",
@@ -4545,7 +4566,7 @@
       "effort": "Effort"
     },
     "video": {
-      "caption": "Lauf {i} · {d}",
+      "caption": "Lauf {i} · {rec} s Aufnahme + {card} s Zahlenkarte",
       "captionShort": "Lauf {i}",
       "seconds": "{s} s",
       "none": "Noch kein Video.",
@@ -4638,7 +4659,11 @@
       "copyFailed": "Kopieren ging nicht.",
       "tokenFailed": "Die Download-Links liessen sich nicht erstellen.",
       "retry": "Nochmal versuchen",
-      "thread": "So postest du: Hauptpost = deine Worte + Video · Antwort 1 = Bild + Einstellungen + Alt-Text · Antwort 2 = Link (sobald veröffentlicht)."
+      "thread": "So postest du: Hauptpost = deine Worte + Video · Antwort 1 = Bild + Alt-Text · danach je Einstellungs-Block eine Antwort.",
+      "settingsHint": "Je Block eine Antwort auf X (höchstens 280 Zeichen).",
+      "copyBlock": "Block {i} kopieren",
+      "noFooter": "Kein Handle eingestellt: Video und Bild haben keine Fusszeile (MC_BENCH_FOOTER in der .env).",
+      "threadWithLink": "So postest du: Hauptpost = deine Worte + Video · Antwort 1 = Bild + Alt-Text · danach je Einstellungs-Block eine Antwort · zuletzt der Link."
     }
   },
   "heads": {
@@ -4931,7 +4956,9 @@
       "freshNote": "Die ersten 15 min misst MC nicht: das Modell wärmt noch auf.",
       "busyNote": "Ein Test wartet, bis die Box frei ist. MC startet ihn selbst, spätestens nach 10 min.",
       "noModel": "Testen geht, sobald ein Modell läuft",
-      "blocked": "Testen geht gerade nicht"
+      "blocked": "Testen geht gerade nicht",
+      "testPlanned": "Test geplant",
+      "testPlannedAt": "Test geplant · {time}"
     },
     "autoTest": {
       "label": "Danach automatisch testen",
@@ -4949,7 +4976,9 @@
       "type": "Test fertig",
       "open": "Ergebnis ansehen",
       "done": "Erledigt",
-      "untitled": "Benchmark-Test"
+      "untitled": "Benchmark-Test",
+      "typeStopped": "Test abgebrochen",
+      "truncated": "Lauf am Token-Limit — erst ansehen"
     }
   },
   "nightShift": {

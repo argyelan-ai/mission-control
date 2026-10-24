@@ -15,9 +15,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Clock, Loader2, Square, X } from "lucide-react";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { benchW1Api, benchW1Keys } from "../api";
-import type { BenchTestDetail, ContestantResult, Reason, ResultBlock, RunView } from "../types";
-import { clockTime, runDuration, stopwatch, tokPerSec, tokenCount } from "./format";
-import { stringParams, useBenchWords } from "./words";
+import type { BenchTestDetail, ContestantResult, ResultBlock, RunView } from "../types";
+import { runDuration, stopwatch, tokPerSec, tokenCount } from "./format";
+import { useBenchWords } from "./words";
 
 export interface LiveRunProps {
   test: BenchTestDetail;
@@ -25,8 +25,9 @@ export interface LiveRunProps {
   onStopped?: (test: BenchTestDetail) => void;
 }
 
+// A normal wait is no warning (DESIGN overview): grey, as in the list.
 const STATE_DOT: Record<BenchTestDetail["state"], string> = {
-  waiting: STATUS.warning,
+  waiting: STATUS.idle,
   running: STATUS.busy,
   done: STATUS.online,
   done_missing: STATUS.warning,
@@ -55,20 +56,9 @@ function findRunning(blocks: ResultBlock[]) {
   return null;
 }
 
-/** "time" / "until" params that are ISO timestamps read as a clock time. */
-function waitParams(r: Reason, locale: string): Record<string, string | number> {
-  const out = stringParams(r.params);
-  for (const k of ["time", "until", "not_before"]) {
-    const v = out[k];
-    if (typeof v === "string" && v.includes("T")) out[k] = clockTime(v, locale) ?? v;
-  }
-  return out;
-}
-
 export function LiveRun({ test, onStopped }: LiveRunProps) {
   const t = useTranslations("benchSheet.live");
   const w = useBenchWords();
-  const locale = useLocale();
   const qc = useQueryClient();
 
   // When did this record arrive? Running clocks add the time since then.
@@ -100,7 +90,7 @@ export function LiveRun({ test, onStopped }: LiveRunProps) {
       test.blocks.flatMap((b) => b.contestants.flatMap((c) => c.runs)).find((r) => r.wait)?.wait ??
       null;
     if (reason) {
-      detail = w.wait(reason, waitParams(reason, locale));
+      detail = w.wait(reason);
       if (reason.code === "box_busy") hint = t("busyHint");
     }
   } else if (test.state === "aborted" && test.state_reason) {
@@ -108,6 +98,10 @@ export function LiveRun({ test, onStopped }: LiveRunProps) {
   }
 
   const live = test.state === "waiting" || test.state === "running";
+  // Two classes: each card says which one it is (plain text, K11 — not a
+  // bordered box that looks like a button). One class: the state line
+  // already says it, no tag.
+  const twoClasses = test.blocks.length > 1;
   const multiName = new Set(test.blocks.flatMap((b) => b.contestants.map((c) => c.display_name))).size > 1;
 
   return (
@@ -147,7 +141,13 @@ export function LiveRun({ test, onStopped }: LiveRunProps) {
             <div className="flex flex-col gap-3">
               {block.contestants.map((c) =>
                 block.run_class === "B" ? (
-                  <AgentCard key={c.key} c={c} delta={delta} aborted={test.state === "aborted"} multiName={multiName} />
+                  <AgentCard
+                    key={c.key}
+                    c={c}
+                    delta={delta}
+                    aborted={test.state === "aborted"}
+                    multiName={multiName}
+                  />
                 ) : (
                   <ApiCard
                     key={c.key}
@@ -155,7 +155,7 @@ export function LiveRun({ test, onStopped }: LiveRunProps) {
                     delta={delta}
                     aborted={test.state === "aborted"}
                     multiName={multiName}
-                    classWord={w.word("runClass", block.run_class)}
+                    classWord={twoClasses ? w.word("runClass", block.run_class) : null}
                   />
                 ),
               )}
@@ -171,7 +171,7 @@ export function LiveRun({ test, onStopped }: LiveRunProps) {
 
 // ---------------------------------------------------------------------------
 
-function CardHead({ title, sub, tag }: { title: string; sub?: string | null; tag: string }) {
+function CardHead({ title, sub, tag }: { title: string; sub?: string | null; tag: string | null }) {
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
@@ -184,12 +184,11 @@ function CardHead({ title, sub, tag }: { title: string; sub?: string | null; tag
           </div>
         )}
       </div>
-      <span
-        className="shrink-0 text-xs px-2 py-1 rounded-sm"
-        style={{ color: C.textSecondary, border: `1px solid ${C.borderActive}` }}
-      >
-        {tag}
-      </span>
+      {tag && (
+        <span className="shrink-0 text-sm" style={{ color: C.textMuted }}>
+          {tag}
+        </span>
+      )}
     </div>
   );
 }
@@ -207,10 +206,10 @@ function ApiCard({
   delta: number;
   aborted: boolean;
   multiName: boolean;
-  classWord: string;
+  classWord: string | null;
 }) {
   const w = useBenchWords();
-  const harnessLevel = [c.harness ? w.harness(c.harness) : null, w.level(c.effort.requested)].filter(Boolean).join(" · ");
+  const harnessLevel = [c.harness ? w.harness(c.harness) : null, w.effort(c.effort)].filter(Boolean).join(" · ");
   return (
     <article data-testid="bench-live-card" className="rounded-lg p-4" style={cardStyle}>
       <CardHead title={multiName ? c.display_name : harnessLevel} sub={multiName ? harnessLevel : null} tag={classWord} />
@@ -240,27 +239,24 @@ function RunLine({ r, delta, aborted, last }: { r: RunView; delta: number; abort
     icon = <Loader2 size={16} aria-hidden className="animate-spin" style={{ color: C.info }} />;
     const parts = [
       stopwatch((r.elapsed_ms ?? 0) + delta),
-      r.tokens_out != null ? t("tokens", { n: tokenCount(r.tokens_out, locale) }) : null,
+      // While a run streams, MC counts stream pieces — close to tokens, not
+      // exact; the finished run shows the engine's own count.
+      r.tokens_out != null ? t("tokensApprox", { n: tokenCount(r.tokens_out, locale) }) : null,
       r.decode_tok_s != null ? t("decode", { n: tokPerSec(r.decode_tok_s, locale) }) : null,
       r.phase === "recording" || r.phase === "composing" ? t(`phase.${r.phase}`) : null,
     ];
     values = parts.filter(Boolean).join(" · ");
   } else if (r.state === "failed") {
     icon = <X size={16} aria-hidden style={{ color: STATUS_TEXT.error }} />;
-    values = r.truncated ? (
-      <>
-        <span style={{ color: STATUS_TEXT.error }}>{t("truncated")}</span>
-        {" · "}
-        {t("maxTokensHit")}
-      </>
-    ) : (
+    // Every run error in words (K10) — never the machine code.
+    values = (
       <span style={{ color: STATUS_TEXT.error }}>
-        {r.error ? w.word("reason", r.error.code) : t("failed")}
+        {r.error ? w.runError(r.error.code) : r.truncated ? w.runError("no_html_truncated") : t("failed")}
       </span>
     );
   } else {
     quiet = true;
-    values = aborted ? t("notStarted") : r.wait ? w.wait(r.wait, stringParams(r.wait.params)) : t("waits");
+    values = aborted ? t("notStarted") : r.wait ? w.wait(r.wait) : t("waits");
     if (aborted) icon = <Square size={14} aria-hidden style={{ color: C.textMuted }} />;
   }
 
@@ -301,7 +297,7 @@ function AgentCard({
   const rows: { k: string; v: ReactNode; sub?: string }[] = [];
   if (run) {
     if (run.state === "waiting") {
-      const text = aborted ? t("notStarted") : run.wait ? w.wait(run.wait, stringParams(run.wait.params)) : t("waits");
+      const text = aborted ? t("notStarted") : run.wait ? w.wait(run.wait) : t("waits");
       rows.push({
         k: t("stateRow"),
         v: (
@@ -328,9 +324,14 @@ function AgentCard({
     } else {
       rows.push({
         k: t("stateRow"),
-        v: run.state === "done" ? t("phase.done") : <span style={{ color: STATUS_TEXT.error }}>{t("failed")}</span>,
+        v:
+          run.state === "done" ? (
+            t("phase.done")
+          ) : (
+            <span style={{ color: STATUS_TEXT.error }}>{run.error ? w.runError(run.error.code) : t("failed")}</span>
+          ),
       });
-      const d = runDuration(run.elapsed_ms, locale);
+      const d = runDuration(run.elapsed_ms, locale, "active_ms");
       if (d) rows.push({ k: t("timeRow"), v: d });
     }
     if (run.tokens_out != null) rows.push({ k: t("tokensRow"), v: tokenCount(run.tokens_out, locale) });

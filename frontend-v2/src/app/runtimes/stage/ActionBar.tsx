@@ -169,6 +169,10 @@ export function ActionBar({
 
   const showBench = benchEnabled && bench != null && variant === "normal";
   const benchLeads = showBench && bench.primary;
+  // While the switch list/confirmation is open its "Starten" is the one
+  // accent button; "Testen" steps down to a bordered button (review M4).
+  const [switching, setSwitching] = useState(false);
+  const benchShown = bench && switching ? { ...bench, primary: false } : bench;
 
   if (blockedClick && locked && headOnBox) {
     const title = headOnBox.title
@@ -264,7 +268,7 @@ export function ActionBar({
       {showBench && <BenchTestNotes summary={bench} />}
       <div className="stage-actions">
         {benchLeads ? (
-          <BenchTestAction summary={bench} className="w-full @min-[600px]:w-auto" />
+          <BenchTestAction summary={benchShown ?? bench} className="w-full @min-[600px]:w-auto" />
         ) : variant === "trouble" ? (
           <button
             type="button"
@@ -299,7 +303,7 @@ export function ActionBar({
           // columns): its inline confirmation — with the auto-test switch —
           // needs the full width of the card to wrap into.
           <div className="col-span-full flex flex-wrap items-center gap-2 @min-[600px]:flex-1 @min-[600px]:justify-end">
-            <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} secondary label={t("switchModel")} blockedBy={lockedReason} onBlocked={() => setBlockedClick("switch")} />
+            <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} secondary label={t("switchModel")} blockedBy={lockedReason} onBlocked={() => setBlockedClick("switch")} onActiveChange={setSwitching} />
             {stopButton}
           </div>
         ) : (

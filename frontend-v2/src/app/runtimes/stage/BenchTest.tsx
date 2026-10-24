@@ -48,7 +48,7 @@ export function BenchTestAction({ summary, className = "" }: { summary: BenchRun
     ? "px-4 font-semibold hover:brightness-110"
     : "px-3 font-medium hover:bg-[var(--color-bg-hover)]";
 
-  if (!summary.testable && !summary.running_test_id) {
+  if (!summary.testable && !summary.running_test_id && !summary.planned_test) {
     return (
       <button
         type="button"
@@ -68,7 +68,14 @@ export function BenchTestAction({ summary, className = "" }: { summary: BenchRun
 
   let href = benchTestHref({ runtimeId: summary.runtime_id, trigger: "runtimes" });
   let label = t("test");
-  if (summary.running_test_id) {
+  const planned = !summary.running_test_id ? summary.planned_test ?? null : null;
+  if (planned) {
+    // The auto test after the switch is already planned: open it — one tap
+    // here must never plan a second test on the same model (review S3).
+    href = benchResultHref(planned.id);
+    const at = clock(planned.not_before, locale);
+    label = at ? t("testPlannedAt", { time: at }) : t("testPlanned");
+  } else if (summary.running_test_id) {
     href = benchResultHref(summary.running_test_id);
     label = t("testRunning");
   } else if (summary.reason?.code === "model_fresh") {
@@ -99,7 +106,7 @@ export function BenchTestNotes({ summary }: { summary: BenchRuntimeSummary }) {
   const locale = useLocale();
 
   let note: string | null = null;
-  if (!summary.running_test_id) {
+  if (!summary.running_test_id && !summary.planned_test) {
     const code = summary.reason?.code ?? null;
     if (!summary.testable) {
       note = code && tShared.has(`blocker.${code}`) ? tShared(`blocker.${code}`) : t("blocked");

@@ -309,6 +309,21 @@ describe("TestSheetHost — opponent and money (D3/D4, N7)", () => {
     expect(api.create.mock.calls[1][0].confirm_over_cap ?? false).toBe(false);
   });
 
+  it("an unknown price asks 'cost unknown — OK?' first and sends that OK (D4 fail-closed)", async () => {
+    api.create.mockRejectedValueOnce(
+      new Error('API 409: {"detail":{"code":"bench_cost_confirmation","step":1,"usd":null,"cap_usd":1.0,"price_unknown":true}}'),
+    );
+    const user = userEvent.setup();
+    renderHost(fromRuntimes);
+    const start = await startButton();
+    await user.click(start);
+    await waitFor(() => expect(start).toHaveTextContent("Start · cost unknown — OK?"));
+    await user.click(start);
+    await waitFor(() => expect(api.create).toHaveBeenCalledTimes(2));
+    expect(api.create.mock.calls[1][0]).toEqual(expect.objectContaining({ confirm_unknown_cost: true }));
+    expect(api.create.mock.calls[1][0].cost_confirmed_usd ?? null).toBeNull();
+  });
+
   it("a 409 step 2 asks the cap question and the next tap sends confirm_over_cap", async () => {
     api.create.mockRejectedValueOnce(
       new Error(
@@ -381,7 +396,17 @@ describe("TestSheetHost — blockers before Start", () => {
     renderHost(fromRuntimes);
     const d = await sheet();
     expect(await within(d).findByText("Box is asleep")).toBeInTheDocument();
-    expect(within(d).getByText("Start works once this is fixed.")).toBeInTheDocument();
+    // Asleep is no error (S4): amber, with the way out to the wake button.
+    expect(within(d).getByText(/Start works once it is awake/)).toBeInTheDocument();
+    expect(within(d).getByRole("link", { name: "Wake the box" })).toHaveAttribute("href", "/runtimes");
+    expect(await startButton()).toBeDisabled();
+  });
+
+  it("an engine that is down still stops Start with the plain reason", async () => {
+    withBlocker(true, "engine_down");
+    renderHost(fromRuntimes);
+    const d = await sheet();
+    expect(await within(d).findByText("Start works once this is fixed.")).toBeInTheDocument();
     expect(await startButton()).toBeDisabled();
   });
 

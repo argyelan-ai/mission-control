@@ -27,12 +27,12 @@ function clone<T>(v: T): T {
 
 function renderLive(test: BenchTestDetail, onStopped = vi.fn()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(
+  const r = render(
     <QueryClientProvider client={qc}>
       <LiveRun test={test} onStopped={onStopped} />
     </QueryClientProvider>,
   );
-  return { onStopped, region: screen.getByTestId("bench-live-run") };
+  return { onStopped, region: screen.getByTestId("bench-live-run"), unmount: r.unmount };
 }
 
 beforeEach(() => {
@@ -51,15 +51,17 @@ describe("LiveRun — running", () => {
   it("class A card: run lines with time, tokens so far and decode", () => {
     const { region } = renderLive(clone(testRunningFixture));
     const [cardA] = within(region).getAllByTestId("bench-live-card");
-    expect(within(cardA).getByText("Raw API · Default")).toBeInTheDocument();
+    // One name per level (K10): the sheet's "high (default)".
+    expect(within(cardA).getByText("Raw API · high (default)")).toBeInTheDocument();
     expect(within(cardA).getByText("Model only")).toBeInTheDocument();
     const runs = within(cardA).getAllByTestId("bench-live-runline");
     expect(runs).toHaveLength(3);
     expect(runs[0]).toHaveTextContent("Run 1");
-    expect(runs[0]).toHaveTextContent("1 min 6 s");
+    // The card's clock — one form for compute time on every bench screen (M3).
+    expect(runs[0]).toHaveTextContent("1:06");
     expect(runs[0]).toHaveTextContent("6,607 tok");
     expect(runs[1]).toHaveTextContent("0:41");
-    expect(runs[1]).toHaveTextContent("3,100 tok");
+    expect(runs[1]).toHaveTextContent("≈ 3,100 tok");
     expect(runs[1]).toHaveTextContent("101 tok/s");
     expect(runs[2]).toHaveTextContent("waiting");
   });
@@ -69,7 +71,7 @@ describe("LiveRun — running", () => {
     expect(within(region).getByText("Then: Agent builds")).toBeInTheDocument();
     const cardB = within(region).getAllByTestId("bench-live-card")[1];
     expect(within(cardB).getByText("omp (local agent)")).toBeInTheDocument();
-    expect(within(cardB).getByText("single run")).toBeInTheDocument();
+    expect(within(cardB).getByText("Single run")).toBeInTheDocument();
     expect(within(cardB).getByText("Starts after run 3")).toBeInTheDocument();
     expect(within(cardB).getByText("The box should be quiet while measuring")).toBeInTheDocument();
     expect(cardB.textContent).not.toMatch(/tok\/s/);
@@ -87,12 +89,47 @@ describe("LiveRun — running", () => {
     expect(within(region).getByTestId("bench-live-status")).toHaveTextContent("Run 3 of 3, 1 failure");
     expect(within(region).getByText("Failed attempts are counted too.")).toBeInTheDocument();
     const runs = within(region).getAllByTestId("bench-live-runline");
-    expect(runs[1]).toHaveTextContent("cut off");
-    expect(runs[1]).toHaveTextContent("max_tokens reached");
+    expect(runs[1]).toHaveTextContent("stopped at the token limit before any page");
+    expect(runs[1].textContent).not.toMatch(/no_html|max_tokens/);
+  });
+
+  it("every run error is a sentence, never the machine code (O-M2)", () => {
+    const codes = [
+      "no_html_truncated", "no_html", "http_error", "timeout", "unreachable", "effort_not_offered",
+      "effort_probe_failed", "runtime_gone", "run_failed", "backend_restart", "stopped_by_operator",
+      "superseded_by_switch", "agent_missing", "agent_task_failed", "time_limit", "task_deleted",
+    ];
+    for (const code of codes) {
+      const t = clone(testRunningFixture);
+      const r = t.blocks[0].contestants[0].runs[1];
+      Object.assign(r, { state: "failed", phase: "done", error: { code, params: {} } });
+      const { region, unmount } = renderLive(t);
+      const line = within(region).getAllByTestId("bench-live-runline")[1];
+      expect(line.textContent, code).not.toContain(code);
+      expect(line.textContent?.length ?? 0, code).toBeGreaterThan(8);
+      unmount();
+    }
   });
 });
 
 describe("LiveRun — waiting", () => {
+  it("a fresh model says the start time, never a raw i18n key (M1)", () => {
+    // The backend sends `until`; the sentence asks for {time}.
+    const t = clone(testRunningFixture);
+    t.state = "waiting";
+    t.state_reason = { code: "model_fresh", params: { until: "2026-10-24T09:45:00Z" } };
+    for (const r of t.blocks[0].contestants[0].runs) {
+      Object.assign(r, { state: "waiting", phase: "queued", wait: null });
+    }
+    const { region } = renderLive(t);
+    const status = within(region).getByTestId("bench-live-status");
+    expect(status.textContent).not.toMatch(/benchShared|model_fresh/);
+    expect(status.textContent).toMatch(/starts at \d{2}:\d{2}/);
+    // A normal wait is no warning: the dot is neutral.
+    const dot = status.querySelector("span[aria-hidden]") as HTMLElement;
+    expect(dot.style.background).not.toMatch(/warning/);
+  });
+
   it("says why the test waits", () => {
     const t = clone(testRunningFixture);
     t.state = "waiting";

@@ -1,6 +1,6 @@
 // Bench W1 API client (contract 24.10.2026) — one function per route in
-// backend/app/verticals/bench_studio/w1_routes.py. Frozen with the
-// contract: packages B/C/D call these, nobody adds a second fetch path.
+// backend/app/verticals/bench_studio/w1_routes.py. Packages B/C/D call
+// these; nobody adds a second fetch path.
 import { BASE_URL, request } from "@/lib/api";
 import type {
   AutoTestCreate,
@@ -18,6 +18,7 @@ import type {
   PresetId,
   RunClass,
   RuntimeTestSummary,
+  SeenResponse,
   Section,
   XKit,
 } from "./types";
@@ -98,6 +99,9 @@ export const benchW1Api = {
         body: JSON.stringify({ budget, ...confirm }),
       }),
     stop: (id: string) => request<BenchTestDetail>(`${B}/tests/${id}/stop`, { method: "POST" }),
+    /** The result page of a finished test was opened: its Eingang item
+     *  "Test fertig" is resolved (idempotent, no side effect). */
+    seen: (id: string) => request<SeenResponse>(`${B}/tests/${id}/seen`, { method: "POST" }),
     harvest: (id: string) =>
       request<BenchTestDetail>(`${B}/tests/${id}/harvest`, { method: "POST" }),
   },
@@ -130,12 +134,14 @@ export function parseCostConfirmation(err: unknown): CostConfirmation | null {
     const detail = (JSON.parse(m[1]) as { detail?: unknown }).detail as
       | Partial<CostConfirmation>
       | undefined;
-    if (detail && detail.code === "bench_cost_confirmation" && typeof detail.usd === "number") {
+    const unknown = detail?.price_unknown === true;
+    if (detail && detail.code === "bench_cost_confirmation" && (typeof detail.usd === "number" || unknown)) {
       return {
         code: "bench_cost_confirmation",
         step: detail.step === 2 ? 2 : 1,
-        usd: detail.usd,
+        usd: typeof detail.usd === "number" ? detail.usd : null,
         cap_usd: typeof detail.cap_usd === "number" ? detail.cap_usd : 1,
+        price_unknown: unknown,
       };
     }
   } catch {

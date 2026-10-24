@@ -74,6 +74,8 @@ export interface BenchRuntimeSummary {
   primary: boolean;
   last_test: { id: string; title: string; created_at: string } | null;
   running_test_id: string | null;
+  /** An auto test after a recipe switch that waits for the model (no runs yet). */
+  planned_test?: { id: string; not_before: string | null } | null;
 }
 
 /** Runtimes page (P1): which cards get "Testen", which one is primary.

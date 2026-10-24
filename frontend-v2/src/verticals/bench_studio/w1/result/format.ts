@@ -9,7 +9,8 @@ import type { Stat } from "../types";
 
 /** The app's number locale: Swiss German or British English (as elsewhere). */
 export function numLocale(locale: string): string {
-  return locale === "de" ? "de-CH" : "en-GB";
+  // Idempotent: "de" and "de-CH" both stay Swiss German.
+  return locale.toLowerCase().startsWith("de") ? "de-CH" : "en-GB";
 }
 
 /** m:ss, or h:mm:ss from one hour on. */

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { BenchTestDetail } from "../../types";
 import {
+  testAbortedTruncatedFixture,
   testDoneGreenFixture,
   testDoneTruncatedFixture,
   testNeedsLookRedFixture,
@@ -31,7 +32,7 @@ vi.mock("@/verticals/bench_studio/w1/api", async () => {
     ...actual,
     LIVE_POLL_MS: 25,
     benchW1Api: {
-      tests: { get: vi.fn(), rerun: vi.fn(), harvest: vi.fn(), stop: vi.fn() },
+      tests: { get: vi.fn(), rerun: vi.fn(), harvest: vi.fn(), stop: vi.fn(), seen: vi.fn().mockResolvedValue({ resolved: 0 }) },
       kit: { get: vi.fn(), downloadToken: vi.fn(), fileUrl: vi.fn() },
     },
   };
@@ -335,12 +336,39 @@ describe("ResultPage — private truncation warning", () => {
     renderView(testDoneTruncatedFixture);
     const warning = await screen.findByTestId("truncation-warning");
     expect(warning).toHaveTextContent("1 of 3 runs hit the token limit");
-    expect(warning).toHaveTextContent("Run 2 stopped at 16,384 tokens");
+    expect(warning).toHaveTextContent("Run 2 was stopped at 16,384 tokens: the answer is unfinished");
     expect(warning).toHaveTextContent("Only you see this");
     const kit = screen.getByRole("button", { name: "X-Kit" });
     // DOM order: warning first, then the button.
     expect(warning.compareDocumentPosition(kit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getAllByText(/runs hit the token limit/)).toHaveLength(1);
+  });
+
+  it("the larger budget is the one primary until 'Continue anyway' (S1)", async () => {
+    renderView(testDoneTruncatedFixture);
+    const rerun = await screen.findByRole("button", { name: "Re-run with 32,768 tokens" });
+    expect(rerun).toHaveAttribute("data-primary", "true");
+    expect(screen.getByRole("button", { name: "X-Kit" })).not.toHaveAttribute("data-primary");
+    // no plain "Run again" at the same budget next to it
+    expect(screen.queryByRole("button", { name: "Run again" })).toBeNull();
+    expect(document.querySelectorAll('[data-primary="true"]')).toHaveLength(1);
+  });
+
+  it("all runs thought until the limit: aborted, but warned with the larger budget (MUST-1)", async () => {
+    renderView(testAbortedTruncatedFixture);
+    const warning = await screen.findByTestId("truncation-warning");
+    expect(warning).toHaveTextContent("thought until the limit of 16,384 tokens and wrote no page");
+    const rerun = within(warning).getByRole("button", { name: "Re-run with 32,768 tokens" });
+    expect(rerun).toHaveAttribute("data-primary", "true");
+    expect(screen.queryByRole("button", { name: "Run again" })).toBeNull();
+  });
+
+  it("says when the video run itself was cut", async () => {
+    renderView({
+      ...testDoneTruncatedFixture,
+      truncation: { ...testDoneTruncatedFixture.truncation!, video_run_cut: true },
+    });
+    expect(await screen.findByTestId("truncation-video")).toHaveTextContent("it shows an unfinished page");
   });
 
   it("re-runs with a larger budget and opens the new result", async () => {
@@ -363,7 +391,7 @@ describe("ResultPage — private truncation warning", () => {
       .mockResolvedValueOnce({ ...testRunningFixture, id: "new-test" });
     renderView(testDoneTruncatedFixture);
     await user.click(await screen.findByRole("button", { name: "Re-run with 32,768 tokens" }));
-    const ask = await screen.findByRole("button", { name: "Start · $0.20 — OK?" });
+    const ask = await screen.findByRole("button", { name: "Re-run with 32,768 tokens · $0.20 — OK?" });
     // no detour through the sheet — that would lose the larger budget
     expect(push).not.toHaveBeenCalled();
     await user.click(ask);
@@ -382,6 +410,23 @@ describe("ResultPage — private truncation warning", () => {
     await user.click(await screen.findByRole("button", { name: "Continue anyway" }));
     expect(screen.queryByTestId("truncation-warning")).toBeNull();
     expect(screen.getByRole("button", { name: "X-Kit" })).toBeInTheDocument();
+  });
+});
+
+describe("ResultPage — Eingang", () => {
+  it("opening a finished result resolves its Eingang item, once", async () => {
+    vi.mocked(benchW1Api.tests.seen).mockClear();
+    renderView(testDoneGreenFixture);
+    await screen.findByTestId("bench-result-page");
+    await waitFor(() => expect(benchW1Api.tests.seen).toHaveBeenCalledWith(testDoneGreenFixture.id));
+    expect(benchW1Api.tests.seen).toHaveBeenCalledTimes(1);
+  });
+
+  it("a running test is not marked seen", async () => {
+    vi.mocked(benchW1Api.tests.seen).mockClear();
+    renderView(testRunningFixture);
+    await screen.findByTestId("live-run-mock");
+    expect(benchW1Api.tests.seen).not.toHaveBeenCalled();
   });
 });
 

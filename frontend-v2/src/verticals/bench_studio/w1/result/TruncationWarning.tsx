@@ -6,8 +6,13 @@
 // the operator must see it BEFORE he downloads the kit, with a one-tap
 // re-run on a larger budget. Used by the result page (above the X-Kit
 // button) and the X-Kit sheet (in place of the downloads).
+//
+// Until the operator says "Trotzdem weiter", the larger-budget re-run IS
+// the page's one primary (his decision: the budget first, then the kit).
+// One signal (K6): the warning icon on a quiet surface — no tinted fill, no
+// coloured frame.
 import { AlertTriangle, Loader2 } from "lucide-react";
-import { C, alpha } from "@/lib/colors";
+import { C } from "@/lib/colors";
 import type { ContestantResult, CostConfirmation, TruncationWarning as Truncation } from "../types";
 import { formatInt, formatUsd } from "./format";
 import type { BenchWords } from "./words";
@@ -31,6 +36,7 @@ export function TruncationWarning({
   canRerun,
   rerunPending,
   costAsk = null,
+  primary = false,
   onRerun,
   onContinue,
 }: {
@@ -41,6 +47,8 @@ export function TruncationWarning({
   rerunPending: boolean;
   /** Set after a 409 CostConfirmation: the button asks for the price (D4). */
   costAsk?: CostConfirmation | null;
+  /** The re-run is the screen's one accent button (K11). */
+  primary?: boolean;
   onRerun: () => void;
   onContinue: () => void;
 }) {
@@ -51,21 +59,27 @@ export function TruncationWarning({
       : null;
   const max = formatInt(truncation.max_tokens, words.locale);
   const suggested = formatInt(truncation.suggested_max_tokens, words.locale);
+  // The price question keeps what the button does (N2): "Mit 32'768 Tokens
+  // nochmal · $0.42 — OK?".
   const rerunLabel = !costAsk
     ? words.tr("truncation.rerun", { suggested })
-    : costAsk.step === 2
-      ? words.ts("cost.confirmAgain", { cap: trimUsd(costAsk.cap_usd), usd: formatUsd(costAsk.usd) })
-      : words.ts("cost.confirm", { usd: formatUsd(costAsk.usd) });
+    : costAsk.price_unknown || costAsk.usd === null
+      ? words.tr("truncation.rerunConfirmUnknown", { suggested })
+      : costAsk.step === 2
+        ? words.ts("cost.confirmAgain", { cap: trimUsd(costAsk.cap_usd), usd: formatUsd(costAsk.usd) })
+        : words.tr("truncation.rerunConfirm", { suggested, usd: formatUsd(costAsk.usd) });
+  const noPage = truncation.runs_without_page > 0 && truncation.runs_without_page >= truncation.runs_cut;
+  const count = runs.length || truncation.runs_cut;
+  const body = runList
+    ? words.tr(noPage ? "truncation.bodyNoPage" : "truncation.body", { runs: runList, count, max, suggested })
+    : words.tr(noPage ? "truncation.bodyNoPageNoRuns" : "truncation.bodyNoRuns", { max, suggested });
   return (
     <div
       data-testid="truncation-warning"
       data-region="result-truncation"
       role="status"
       className="rounded-lg p-4"
-      style={{
-        backgroundColor: alpha(C.warning, 0.08),
-        border: `1px solid ${alpha(C.warning, 0.3)}`,
-      }}
+      style={{ backgroundColor: C.bgSurface, border: `1px solid ${C.border}` }}
     >
       <div className="flex items-start gap-2">
         <AlertTriangle size={16} aria-hidden className="shrink-0 mt-1" style={{ color: C.warning }} />
@@ -74,10 +88,13 @@ export function TruncationWarning({
             {words.ts("reason.runs_truncated", { runs_cut: truncation.runs_cut, n_runs: truncation.n_runs })}
           </p>
           <p className="text-sm" style={{ color: C.textSecondary }}>
-            {runList
-              ? words.tr("truncation.body", { runs: runList, count: runs.length, max, suggested })
-              : words.tr("truncation.bodyNoRuns", { max, suggested })}
+            {body}
           </p>
+          {truncation.video_run_cut && (
+            <p data-testid="truncation-video" className="text-sm" style={{ color: C.textPrimary }}>
+              {words.tr("truncation.videoCut")}
+            </p>
+          )}
           <p className="text-xs" style={{ color: C.textMuted }}>
             {words.tr("truncation.private")}
           </p>
@@ -87,8 +104,13 @@ export function TruncationWarning({
                 type="button"
                 onClick={onRerun}
                 disabled={rerunPending}
+                data-primary={primary ? "true" : undefined}
                 className="flex items-center gap-2 min-h-11 px-4 rounded-md text-sm font-medium cursor-pointer disabled:cursor-wait"
-                style={{ color: C.textPrimary, border: `1px solid ${C.borderActive}` }}
+                style={
+                  primary
+                    ? { backgroundColor: C.accent, color: C.onAccent }
+                    : { color: C.textPrimary, border: `1px solid ${C.borderActive}` }
+                }
               >
                 {rerunPending && <Loader2 size={14} aria-hidden className="animate-spin" />}
                 {rerunLabel}

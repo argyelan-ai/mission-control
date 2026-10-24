@@ -157,7 +157,9 @@ export interface MoneyView {
   provider: string | null;
 }
 
-const KIND_RANK: Record<CostKind, number> = { api_price: 3, subscription: 2, unknown: 1, local: 0 };
+// Same order as the server (w1_plan.total_money): an unknown price is never
+// hidden behind "über dein Abo" (D4 fail-closed).
+const KIND_RANK: Record<CostKind, number> = { api_price: 3, unknown: 2, subscription: 1, local: 0 };
 
 function addOpt(a: number | null, b: number | null): number | null {
   if (a == null) return b;
@@ -166,7 +168,7 @@ function addOpt(a: number | null, b: number | null): number | null {
 }
 
 /** Money for the whole test: the most costly kind decides the wording
- *  (api_price > subscription > unknown > local); real dollars only from
+ *  (api_price > unknown > subscription > local); real dollars only from
  *  api_price contestants, never a bare $ on local/subscription (D3). */
 export function moneyFor(
   picks: Required<ContestantPick>[],

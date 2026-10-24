@@ -16,7 +16,7 @@
 // their parts interleave by `order`.
 //
 // Signature is frozen (ResultPageProps).
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -183,12 +183,16 @@ function VideoBlock({ test, words }: { test: BenchTestDetail; words: BenchWords 
   }
   const url = api.files.contentUrl("shared-deliverables", benchApi.sharedSubpath(test.video.path));
   const duration = test.video.duration_s;
+  // "Lauf 1 · 20 s Aufnahme + 4.5 s Zahlenkarte" — never one number that
+  // reads like the run's compute time.
+  const card = duration !== null && duration > RECEIPT_CARD_S ? RECEIPT_CARD_S : null;
+  const fmt = (v: number) => new Intl.NumberFormat(words.locale, { maximumFractionDigits: 1 }).format(v);
   return (
     <figure className="flex flex-col gap-2">
       <FilePreview fileUrl={url} path={test.video.path} showDownload={false} />
       <figcaption className="text-xs" style={{ color: C.textMuted }}>
-        {duration !== null
-          ? t("video.caption", { i: test.video.run_index, d: words.tr("video.seconds", { s: duration }) })
+        {duration !== null && card !== null
+          ? t("video.caption", { i: test.video.run_index, rec: fmt(duration - card), card: fmt(card) })
           : t("video.captionShort", { i: test.video.run_index })}
       </figcaption>
     </figure>
@@ -242,6 +246,9 @@ function AbortedFacts({ test, words }: { test: BenchTestDetail; words: BenchWord
   );
 }
 
+/** The receipt card at the end of the video (renderer W1_RECEIPT_CARD_S). */
+const RECEIPT_CARD_S = 4.5;
+
 const PRIMARY_BTN =
   "flex items-center justify-center gap-2 min-h-11 px-4 rounded-md text-sm font-medium cursor-pointer transition-colors disabled:cursor-wait";
 
@@ -267,6 +274,24 @@ export function ResultView({ testId }: ResultPageProps) {
   });
 
   const refresh = () => qc.invalidateQueries({ queryKey: key });
+
+  // Opening a finished result is what its Eingang item asks for: resolve it
+  // here, so a test watched live costs no extra "Erledigt" tap (once per
+  // record; the server ignores a test that still runs).
+  const finished = query.data && !isLive(query.data) ? query.data.id : null;
+  const seenFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!finished || seenFor.current === finished) return;
+    seenFor.current = finished;
+    benchW1Api.tests
+      .seen(finished)
+      .then((r) => {
+        if (r.resolved > 0) void qc.invalidateQueries({ queryKey: ["approvals"] });
+      })
+      .catch(() => {
+        // the Eingang card still resolves itself on tap
+      });
+  }, [finished, qc]);
 
   const harvest = useMutation({
     mutationFn: () => benchW1Api.tests.harvest(testId),
@@ -380,6 +405,10 @@ export function ResultView({ testId }: ResultPageProps) {
   // A pending price question keeps the warning in view even after
   // "continue anyway" (the ⋯ re-run puts its question on this button).
   const showTruncation = Boolean(test.truncation) && (!truncationAcked || Boolean(rerunLarger.costAsk)) && !live;
+  // Mark's decision 24.10.: the larger budget first, then the kit — until he
+  // says "Trotzdem weiter" the re-run is the one primary, the kit a quiet
+  // button and the plain "Nochmal" (same budget, same cut) is not offered.
+  const truncationFirst = showTruncation && allowed.has("rerun_larger");
   // K3: the name stands in the verdict when there is one contestant with a verdict.
   const nameInVerdict = contestants.length === 1 && test.blocks.length === 1 && Boolean(test.verdict);
   const classWords = test.blocks.map((b) => words.runClass(b.run_class));
@@ -431,6 +460,23 @@ export function ResultView({ testId }: ResultPageProps) {
   const menuActions = [...head, ...pageItems, ...overlayItems, ...tail];
 
   const primaryButton = (() => {
+    if (truncationFirst) {
+      if (primary === "kit")
+        return (
+          <button type="button" onClick={() => setKitOpen(true)} className={`${PRIMARY_BTN} flex-1`} style={{ color: C.textPrimary, border: `1px solid ${C.borderActive}` }}>
+            <Share size={16} aria-hidden />
+            {t("actions.kit")}
+          </button>
+        );
+      if (primary === "harvest")
+        return (
+          <button type="button" onClick={() => harvest.mutate()} disabled={harvest.isPending} className={`${PRIMARY_BTN} flex-1`} style={{ color: C.textPrimary, border: `1px solid ${C.borderActive}` }}>
+            {harvest.isPending ? <Loader2 size={16} aria-hidden className="animate-spin" /> : <RefreshCw size={16} aria-hidden />}
+            {t("actions.harvest")}
+          </button>
+        );
+      return null;
+    }
     if (primary === "kit")
       return (
         <button type="button" data-primary="true" onClick={() => setKitOpen(true)} className={`${PRIMARY_BTN} flex-1`} style={{ backgroundColor: C.accent, color: C.onAccent }}>
@@ -454,7 +500,7 @@ export function ResultView({ testId }: ResultPageProps) {
       );
     return null;
   })();
-  const secondaryRerun = primary !== "rerun" && allowed.has("rerun") && !live;
+  const secondaryRerun = primary !== "rerun" && allowed.has("rerun") && !live && !truncationFirst;
 
   const receipts = contestants.filter((c) => c.receipt);
   const receiptTitle = (c: ContestantResult, block: string) =>
@@ -555,10 +601,12 @@ export function ResultView({ testId }: ResultPageProps) {
                 canRerun={allowed.has("rerun_larger")}
                 rerunPending={rerunLarger.pending}
                 costAsk={rerunLarger.costAsk}
+                primary={truncationFirst}
                 onRerun={rerunLarger.run}
                 onContinue={ackTruncation}
               />
             )}
+            {(primaryButton || secondaryRerun) && (
             <div className="flex items-center gap-2">
               {primaryButton}
               {secondaryRerun && (
@@ -572,6 +620,7 @@ export function ResultView({ testId }: ResultPageProps) {
                 </button>
               )}
             </div>
+            )}
           </section>
         )}
 

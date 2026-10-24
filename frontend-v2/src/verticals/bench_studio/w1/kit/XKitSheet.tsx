@@ -12,14 +12,18 @@
 // A run cut at max_tokens stops the operator here BEFORE any download
 // (private warning, never in the public texts).
 //
-// Phone: bottom sheet. Desktop ≥ 1024 px: wide dialog, previews left,
-// texts and downloads right.
+// Phone: bottom sheet with a fixed action bar in the thumb zone (like the
+// sheet's Start): "Video sichern" first — through the share sheet when the
+// browser can share files (iOS: "Video sichern" lands in Fotos, where the X
+// app picks media), else a download — then "Bild sichern"; the zip is a
+// quiet link (on an iPhone it would land in Dateien). Desktop ≥ 1024 px:
+// wide dialog, previews left, texts right, "Alles laden (.zip)" primary.
 //
 // Signature is frozen (XKitSheetProps).
 import { useEffect, useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Copy, Download, Film, ImageIcon, Loader2, RefreshCw, X } from "lucide-react";
+import { AlertTriangle, Check, Copy, Download, Film, ImageIcon, Loader2, RefreshCw, Share, X } from "lucide-react";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { FilePreview } from "@/components/task/FilePreview";
 import { api } from "@/lib/api";
@@ -36,6 +40,7 @@ import { TruncationWarning } from "../result/TruncationWarning";
 import { useTruncationAck } from "../result/truncationAck";
 import { useRerunLarger } from "../result/useRerunLarger";
 import { useBenchWords, type BenchWords } from "../result/words";
+import { useDesktop } from "../sheet/SheetFrame";
 import type { BenchTestDetail, KitFile, KitFileName, XKit } from "../types";
 
 export interface XKitSheetProps {
@@ -82,6 +87,70 @@ function Watermark({ words }: { words: BenchWords }) {
   );
 }
 
+function useCopy(text: string, words: BenchWords): [boolean, () => Promise<void>] {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const id = window.setTimeout(() => setCopied(false), 2000);
+    return () => window.clearTimeout(id);
+  }, [copied]);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+    } catch {
+      notify.error(words.tr("kit.copyFailed"));
+    }
+  }
+  return [copied, copy];
+}
+
+function CopyButton({ text, words, label }: { text: string; words: BenchWords; label?: string }) {
+  const [copied, copy] = useCopy(text, words);
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      aria-label={copied ? words.tr("kit.copied") : (label ?? words.tr("kit.copy"))}
+      className="flex items-center gap-2 min-h-11 pl-3 rounded-md text-sm cursor-pointer shrink-0"
+      style={{ color: copied ? C.online : C.textSecondary }}
+    >
+      {copied ? <Check size={16} aria-hidden /> : <Copy size={16} aria-hidden />}
+      <span aria-hidden>{copied ? words.tr("kit.copied") : words.tr("kit.copy")}</span>
+    </button>
+  );
+}
+
+/** The settings text as its blocks — each ≤ 280 characters, each with its
+ *  own copy button, so every block fits one X reply (review S6). */
+function SettingsBlocks({ blocks, words }: { blocks: string[]; words: BenchWords }) {
+  return (
+    <div data-testid="copy-settings" className="flex flex-col gap-1 py-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
+      <h3 className="text-sm font-semibold" style={{ color: C.textPrimary }}>
+        {words.tr("kit.settings")}
+      </h3>
+      <p className="text-xs" style={{ color: C.textMuted }}>
+        {words.tr("kit.settingsHint")}
+      </p>
+      <ol className="flex flex-col">
+        {blocks.map((b, i) => (
+          <li
+            key={b}
+            data-testid="settings-block"
+            className="flex items-start justify-between gap-2 py-2"
+            style={i > 0 ? { borderTop: `1px solid ${C.borderSubtle}` } : undefined}
+          >
+            <span className="font-mono text-xs break-words min-w-0 pt-3" style={{ color: C.textSecondary }}>
+              {b}
+            </span>
+            <CopyButton text={b} words={words} label={words.tr("kit.copyBlock", { i: i + 1 })} />
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 function CopyBlock({
   testId,
   title,
@@ -97,20 +166,7 @@ function CopyBlock({
   mono?: boolean;
   children: React.ReactNode;
 }) {
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const id = window.setTimeout(() => setCopied(false), 2000);
-    return () => window.clearTimeout(id);
-  }, [copied]);
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-    } catch {
-      notify.error(words.tr("kit.copyFailed"));
-    }
-  }
+  const [copied, copy] = useCopy(text, words);
   return (
     <div data-testid={testId} className="flex flex-col gap-1 py-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
       <div className="flex items-center justify-between gap-2">
@@ -149,6 +205,121 @@ function DownloadLink({ href, label }: { href: string; label: string }) {
   );
 }
 
+/** The file behind a token URL, fetched ahead (on open, phone only) so the
+ *  tap can open the share sheet right away — iOS only shares inside the tap.
+ *  null = no file sharing here (desktop, an old browser): plain download. */
+function useShareFile(url: string | null, name: string, mime: string, enabled: boolean): File | null {
+  const [file, setFile] = useState<File | null>(null);
+  useEffect(() => {
+    setFile(null);
+    if (!enabled || !url || typeof navigator === "undefined" || typeof navigator.canShare !== "function") return;
+    try {
+      if (!navigator.canShare({ files: [new File([""], name, { type: mime })] })) return;
+    } catch {
+      return;
+    }
+    const ctrl = new AbortController();
+    fetch(url, { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
+      .then((blob) => setFile(new File([blob], name, { type: mime })))
+      .catch(() => setFile(null));
+    return () => ctrl.abort();
+  }, [url, name, mime, enabled]);
+  return file;
+}
+
+/** Save through the share sheet when the file is ready, else a real link. */
+function SaveAction({
+  file,
+  href,
+  label,
+  primary,
+  testId,
+}: {
+  file: File | null;
+  href: string;
+  label: string;
+  primary: boolean;
+  testId: string;
+}) {
+  const cls = primary
+    ? "flex items-center justify-center gap-2 w-full min-h-12 rounded-md text-base font-medium cursor-pointer"
+    : "flex items-center justify-center gap-2 flex-1 min-h-11 px-3 rounded-md text-sm font-medium cursor-pointer";
+  const style = primary
+    ? { backgroundColor: C.accent, color: C.onAccent }
+    : { color: C.textPrimary, border: `1px solid ${C.borderActive}` };
+  if (file) {
+    return (
+      <button
+        type="button"
+        data-testid={testId}
+        data-primary={primary ? "true" : undefined}
+        onClick={() => {
+          navigator.share({ files: [file] }).catch(() => {
+            // cancelled, or the share sheet refused: the link still works
+            window.location.href = href;
+          });
+        }}
+        className={cls}
+        style={style}
+      >
+        <Share size={primary ? 18 : 16} aria-hidden />
+        {label}
+      </button>
+    );
+  }
+  return (
+    <a href={href} download data-testid={testId} data-primary={primary ? "true" : undefined} className={cls} style={style}>
+      <Download size={primary ? 18 : 16} aria-hidden />
+      {label}
+    </a>
+  );
+}
+
+/** Phone: save to Fotos first (share sheet), the card next, the zip as a
+ *  quiet link at the end. */
+function PhoneSaveBar({
+  videoUrl,
+  cardUrl,
+  zipUrl,
+  name,
+  words,
+}: {
+  videoUrl: string | null;
+  cardUrl: string | null;
+  zipUrl: string | null;
+  name: string;
+  words: BenchWords;
+}) {
+  const t = words.tr;
+  const videoFile = useShareFile(videoUrl, `${name}.mp4`, "video/mp4", Boolean(videoUrl));
+  const cardFile = useShareFile(cardUrl, `${name}.png`, "image/png", Boolean(cardUrl));
+  return (
+    <div className="flex flex-col gap-2">
+      {videoUrl && (
+        <SaveAction file={videoFile} href={videoUrl} label={t("kit.saveVideo")} primary testId="kit-save-video" />
+      )}
+      <div className="flex items-center gap-2">
+        {cardUrl && (
+          <SaveAction file={cardFile} href={cardUrl} label={t("kit.saveCard")} primary={!videoUrl} testId="kit-save-card" />
+        )}
+        {zipUrl && (
+          <a
+            href={zipUrl}
+            download
+            data-testid="kit-zip"
+            className="flex items-center justify-center gap-2 flex-1 min-h-11 px-3 rounded-md text-sm"
+            style={{ color: C.textSecondary }}
+          >
+            <Download size={16} aria-hidden />
+            {t("kit.downloadAll")}
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function fileMeta(f: KitFile | undefined, kind: string, words: BenchWords, extra?: string): string {
   const parts = [kind];
   if (f?.width && f?.height) parts.push(`${f.width}×${f.height}`);
@@ -163,6 +334,7 @@ function KitBody({ testId, onClose, titleId }: { testId: string; onClose: () => 
   const t = words.tr;
   const router = useRouter();
   const qc = useQueryClient();
+  const desktop = useDesktop();
   const [acked, ack] = useTruncationAck(testId);
 
   const kitQ = useQuery({ queryKey: benchW1Keys.kit(testId), queryFn: () => benchW1Api.kit.get(testId) });
@@ -258,6 +430,7 @@ function KitBody({ testId, onClose, titleId }: { testId: string; onClose: () => 
   const videoUrl = downloadable && video?.ready ? url("video.mp4") : null;
   const cardUrl = downloadable && card?.ready ? url("card.png") : null;
   const zipUrl = zip?.ready ? url("kit.zip") : null;
+  const share = !desktop && showDownloads;
 
   const notes = (
     <>
@@ -266,12 +439,14 @@ function KitBody({ testId, onClose, titleId }: { testId: string; onClose: () => 
           data-testid="kit-blocked"
           role="status"
           className="flex items-start gap-2 rounded-lg p-3 text-sm"
-          style={{ border: `1px solid ${alpha(C.error, 0.3)}`, backgroundColor: alpha(C.error, 0.06), color: C.textSecondary }}
+          style={{ border: `1px solid ${C.border}`, color: C.textSecondary }}
         >
           <AlertTriangle size={16} aria-hidden className="shrink-0 mt-1" style={{ color: STATUS_TEXT.error }} />
-          <span>
-            {words.ts("gate.red")}:{" "}
+          <span className="flex flex-col gap-1">
             <span className="font-semibold" style={{ color: C.textPrimary }}>
+              {words.ts("gate.red")}
+            </span>
+            <span>
               {redReasons.length
                 ? redReasons.map((r) => words.gateReason(r)).join(" · ")
                 : words.reason(kit.blocked_reason) ?? t("reason.unknown")}
@@ -287,6 +462,7 @@ function KitBody({ testId, onClose, titleId }: { testId: string; onClose: () => 
           canRerun={test ? test.allowed.includes("rerun_larger") : true}
           rerunPending={rerun.pending}
           costAsk={rerun.costAsk}
+          primary={test ? test.allowed.includes("rerun_larger") : true}
           onRerun={rerun.run}
           onContinue={ack}
         />
@@ -295,7 +471,7 @@ function KitBody({ testId, onClose, titleId }: { testId: string; onClose: () => 
         <div
           data-testid="kit-notes"
           className="flex items-start gap-2 rounded-lg p-3 text-sm"
-          style={{ border: `1px solid ${alpha(C.warning, 0.3)}`, color: C.textSecondary }}
+          style={{ border: `1px solid ${C.border}`, color: C.textSecondary }}
         >
           <AlertTriangle size={16} aria-hidden className="shrink-0 mt-1" style={{ color: C.warning }} />
           <span>{t("kit.amberNote", { reasons: amber.map((r) => words.gateReason(r)).join(" · ") })}</span>
@@ -339,7 +515,7 @@ function KitBody({ testId, onClose, titleId }: { testId: string; onClose: () => 
           <span className="text-xs tabular-nums" style={{ color: C.textMuted }}>
             {fileMeta(video, "MP4", words)}
           </span>
-          {showDownloads && videoUrl && <DownloadLink href={videoUrl} label={t("kit.saveVideo")} />}
+          {desktop && showDownloads && videoUrl && <DownloadLink href={videoUrl} label={t("kit.saveVideo")} />}
         </div>
       </div>
 
@@ -366,12 +542,20 @@ function KitBody({ testId, onClose, titleId }: { testId: string; onClose: () => 
           <span className="text-xs tabular-nums" style={{ color: C.textMuted }}>
             {fileMeta(card, "PNG", words, t("kit.portrait"))}
           </span>
-          {showDownloads && cardUrl && <DownloadLink href={cardUrl} label={t("kit.saveCard")} />}
+          {desktop && showDownloads && cardUrl && <DownloadLink href={cardUrl} label={t("kit.saveCard")} />}
         </div>
-        {kit.footer && (
+        {kit.footer ? (
           <span className="text-xs" style={{ color: C.textMuted }}>
             {t("kit.footer", { footer: kit.footer })}
           </span>
+        ) : (
+          !red && (
+            // Private: the handle is missing on video and card — a forgotten
+            // MC_BENCH_FOOTER in the .env shows before the post, not after.
+            <span data-testid="kit-no-footer" className="text-xs" style={{ color: STATUS_TEXT.warning }}>
+              {t("kit.noFooter")}
+            </span>
+          )
         )}
       </div>
     </div>
@@ -393,13 +577,7 @@ function KitBody({ testId, onClose, titleId }: { testId: string; onClose: () => 
           ))}
         </CopyBlock>
       )}
-      {kit.texts.settings.length > 0 && (
-        <CopyBlock testId="copy-settings" title={t("kit.settings")} text={kit.texts.settings.join("\n")} words={words} mono>
-          {kit.texts.settings.map((s) => (
-            <p key={s}>{s}</p>
-          ))}
-        </CopyBlock>
-      )}
+      {kit.texts.settings.length > 0 && <SettingsBlocks blocks={kit.texts.settings} words={words} />}
       {kit.texts.alt_text && (
         <CopyBlock testId="copy-alt" title={t("kit.altText")} text={kit.texts.alt_text} words={words}>
           {kit.texts.alt_text}
@@ -427,11 +605,23 @@ function KitBody({ testId, onClose, titleId }: { testId: string; onClose: () => 
         {t("actions.harvest")}
       </button>
     );
+  } else if (share && (videoUrl || cardUrl)) {
+    bottom = (
+      <PhoneSaveBar
+        videoUrl={videoUrl}
+        cardUrl={cardUrl}
+        zipUrl={zipUrl}
+        name={(test?.title ?? "bench").replace(/[^A-Za-z0-9.-]+/g, "-").toLowerCase()}
+        words={words}
+      />
+    );
   } else if (showDownloads && zipUrl) {
     bottom = (
       <a
         href={zipUrl}
         download
+        data-testid="kit-zip"
+        data-primary="true"
         className="flex items-center justify-center gap-2 w-full min-h-12 rounded-md text-base font-medium"
         style={{ backgroundColor: C.accent, color: C.onAccent }}
       >
@@ -452,24 +642,42 @@ function KitBody({ testId, onClose, titleId }: { testId: string; onClose: () => 
 
   const thread = (
     <p data-testid="kit-thread" className="text-xs" style={{ color: C.textMuted }}>
-      {t("kit.thread")}
+      {/* No link line while nothing is published (benchmark site offline). */}
+      {kit.texts.link ? t("kit.threadWithLink") : t("kit.thread")}
     </p>
   );
 
   return (
     <>
       {header}
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 pt-3 pb-6 lg:px-6" style={{ paddingBottom: "max(env(safe-area-inset-bottom), 24px)" }}>
+      <div
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 pt-3 pb-6 lg:px-6"
+        style={desktop || !bottom ? { paddingBottom: "max(env(safe-area-inset-bottom), 24px)" } : undefined}
+      >
         <div className="flex flex-col gap-3">{notes}</div>
         <div className="grid grid-cols-1 gap-6 mt-4 lg:grid-cols-[400px_minmax(0,1fr)] lg:gap-8">
           {previews}
           <div className="flex flex-col gap-4 min-w-0">
             {texts}
-            {bottom}
+            {desktop && bottom}
             {thread}
           </div>
         </div>
       </div>
+      {!desktop && bottom && (
+        // Phone: the action bar stays in the thumb zone (review S6/S5).
+        <div
+          data-testid="kit-actions"
+          className="shrink-0 px-4 pt-3"
+          style={{
+            borderTop: `1px solid ${C.border}`,
+            background: C.bgSurface,
+            paddingBottom: "max(env(safe-area-inset-bottom), 16px)",
+          }}
+        >
+          {bottom}
+        </div>
+      )}
     </>
   );
 }

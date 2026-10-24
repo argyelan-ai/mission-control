@@ -135,13 +135,33 @@ describe("XKitSheet — green", () => {
     const facts = await screen.findByTestId("copy-facts");
     await user.click(within(facts).getByRole("button", { name: "Copy" }));
     expect(clipboard.writeText).toHaveBeenCalledWith(kitGreenFixture.texts.facts.join("\n"));
-    await user.click(within(screen.getByTestId("copy-settings")).getByRole("button", { name: "Copy" }));
-    expect(clipboard.writeText).toHaveBeenCalledWith(kitGreenFixture.texts.settings.join("\n"));
+    // One copy button per settings block: each block fits one X reply (S6).
+    const blocks = within(screen.getByTestId("copy-settings")).getAllByTestId("settings-block");
+    expect(blocks).toHaveLength(kitGreenFixture.texts.settings.length);
+    for (const b of kitGreenFixture.texts.settings) expect(b.length).toBeLessThanOrEqual(280);
+    await user.click(within(blocks[1]).getByRole("button", { name: "Copy block 2" }));
+    expect(clipboard.writeText).toHaveBeenCalledWith(kitGreenFixture.texts.settings[1]);
     await user.click(within(screen.getByTestId("copy-alt")).getByRole("button", { name: "Copy" }));
     expect(clipboard.writeText).toHaveBeenCalledWith(kitGreenFixture.texts.alt_text);
     // No link while no episode is published (benchmark site offline).
     expect(screen.queryByTestId("copy-link")).toBeNull();
     expect(screen.getByTestId("kit-thread")).toHaveTextContent("How to post");
+    expect(screen.getByTestId("kit-thread").textContent).not.toMatch(/link/);
+  });
+
+  it("phone: saving the video is the one primary, in the action bar; the zip is quiet", async () => {
+    renderSheet(testDoneGreenFixture, kitGreenFixture);
+    const bar = await screen.findByTestId("kit-actions");
+    const save = await within(bar).findByTestId("kit-save-video");
+    expect(save).toHaveAttribute("data-primary", "true");
+    expect(save).toHaveTextContent("Save video");
+    expect(within(bar).getByTestId("kit-zip")).not.toHaveAttribute("data-primary");
+    expect(screen.getAllByText("Save video")).toHaveLength(1);
+  });
+
+  it("says privately when no handle is set (MC_BENCH_FOOTER missing)", async () => {
+    renderSheet(testDoneGreenFixture, { ...kitGreenFixture, footer: "" });
+    expect(await screen.findByTestId("kit-no-footer")).toHaveTextContent("No handle set");
   });
 
   it("offers the link only when the episode is published", async () => {
@@ -229,7 +249,8 @@ describe("XKitSheet — private truncation warning", () => {
       .mockResolvedValueOnce({ ...testRunningFixture, id: "new-test" });
     renderSheet(testDoneTruncatedFixture, truncatedKit);
     await user.click(await screen.findByRole("button", { name: "Re-run with 32,768 tokens" }));
-    await user.click(await screen.findByRole("button", { name: "Start · $2.50 — OK?" }));
+    // The price question keeps what the button does (N2).
+    await user.click(await screen.findByRole("button", { name: "Re-run with 32,768 tokens · $2.50 — OK?" }));
     await user.click(await screen.findByRole("button", { name: "Over $1: really start for $2.50?" }));
     await waitFor(() =>
       expect(benchW1Api.tests.rerun).toHaveBeenLastCalledWith(testDoneTruncatedFixture.id, "larger", {

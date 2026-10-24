@@ -131,7 +131,9 @@ services:
       HEADS_HARD_LIMIT_CLOUD_S: ${HEADS_HARD_LIMIT_CLOUD_S:-7200}
       # Bench W1: the operator's handle in the footer of the result card,
       # video and X-Kit texts (w1_kit.footer). Empty by default — set it in
-      # .env, never in the repo. API (kit texts) and worker (W1 runner) both.
+      # .env, never in the repo. Read in the API process (kit texts and the
+      # W1 runner, a vertical background loop); the worker carries the same
+      # value so both containers stay alike.
       MC_BENCH_FOOTER: ${MC_BENCH_FOOTER:-}
       # Beweis-Tor (services/proof_gate.py) — runs in the API process on every
       # agent status change to review/done. off | warn | enforce; the date
@@ -500,7 +502,9 @@ services:
       HEADS_HARD_LIMIT_CLOUD_S: ${HEADS_HARD_LIMIT_CLOUD_S:-7200}
       # Bench W1: the operator's handle in the footer of the result card,
       # video and X-Kit texts (w1_kit.footer). Empty by default — set it in
-      # .env, never in the repo. API (kit texts) and worker (W1 runner) both.
+      # .env, never in the repo. Read in the API process (kit texts and the
+      # W1 runner, a vertical background loop); the worker carries the same
+      # value so both containers stay alike.
       MC_BENCH_FOOTER: ${MC_BENCH_FOOTER:-}
       # W2 (Rex-Review PR #500): Migrationen macht der backend-Container
       # (depends_on: backend: service_healthy stellt die Reihenfolge sicher).

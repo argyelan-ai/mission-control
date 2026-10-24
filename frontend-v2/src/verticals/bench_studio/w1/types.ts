@@ -201,21 +201,26 @@ export interface BenchTestCreate {
   budget?: "same" | "larger";
   cost_confirmed_usd?: number | null;
   confirm_over_cap?: boolean;
+  /** D4 fail-closed: "Kosten unbekannt — OK?" was confirmed. */
+  confirm_unknown_cost?: boolean;
 }
 
 /** Body extra of POST /tests/{id}/rerun after a 409 CostConfirmation
  *  (w1_schemas.RerunRequest). */
 export interface RerunCostConfirm {
-  cost_confirmed_usd: number;
-  confirm_over_cap: boolean;
+  cost_confirmed_usd?: number | null;
+  confirm_over_cap?: boolean;
+  confirm_unknown_cost?: boolean;
 }
 
 /** 409 detail when money must be confirmed (D4: step 2 over $1). */
 export interface CostConfirmation {
   code: "bench_cost_confirmation";
   step: 1 | 2;
-  usd: number;
+  /** null with `price_unknown`: a cloud API without a known price. */
+  usd: number | null;
   cap_usd: number;
+  price_unknown: boolean;
 }
 
 /** Median + range; `measured: false` + `reason` = headline missing (K15). */
@@ -230,6 +235,8 @@ export interface Stat {
 
 export interface EffortRecord {
   requested: Effort;
+  /** The level the server default maps to ("hoch (Standard)"). */
+  default_level: Effort | null;
   sent: Record<string, unknown> | null;
   observed: Record<string, unknown> | null;
 }
@@ -356,6 +363,10 @@ export interface TruncationWarning {
   max_tokens: number;
   suggested_max_tokens: number;
   entry_ids: string[];
+  /** Runs that stopped before they wrote any page. */
+  runs_without_page: number;
+  /** Run 1 (the video run) was cut — the video shows an unfinished page. */
+  video_run_cut: boolean;
 }
 
 export interface Verdict {
@@ -491,6 +502,18 @@ export interface RuntimeTestSummary {
   primary: boolean;
   last_test: LastTest | null;
   running_test_id: string | null;
+  /** An auto test after a recipe switch that waits for the model. */
+  planned_test: PlannedTest | null;
+}
+
+export interface PlannedTest {
+  id: string;
+  not_before: string | null;
+}
+
+/** POST /api/v1/bench/tests/{id}/seen */
+export interface SeenResponse {
+  resolved: number;
 }
 
 /** POST /api/v1/bench/auto-tests — request (P1b). */

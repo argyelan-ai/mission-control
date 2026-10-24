@@ -133,6 +133,7 @@ export function HostRecipeSwitcher({
   secondary = false,
   blockedBy = null,
   onBlocked,
+  onActiveChange,
 }: {
   hostId: string;
   /** Name dieser Box — die Erfolgsmeldung eines Duo-Starts nennt beide Boxen. */
@@ -161,6 +162,10 @@ export function HostRecipeSwitcher({
    *  backend guard (409 head_on_box) stays the real protection. */
   blockedBy?: string | null;
   onBlocked?: () => void;
+  /** Bench W1 (review M4): the list or the confirmation is open — the card
+   *  then demotes its own primary ("Testen"), so the dialog's "Starten" is
+   *  the screen's one accent button (K11). */
+  onActiveChange?: (active: boolean) => void;
 }) {
   const t = useTranslations("runtimes.recipeSwitcher");
   const tBench = useTranslations("benchHome.autoTest");
@@ -169,6 +174,10 @@ export function HostRecipeSwitcher({
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState<HostRecipe | null>(null);
+  const active = open || confirm != null;
+  useEffect(() => {
+    onActiveChange?.(active);
+  }, [active, onActiveChange]);
   // Gewählte Worker-Box für das Rezept in der Bestätigungszeile (nur Duo).
   const [workerHostId, setWorkerHostId] = useState<string | null>(null);
   const [starting, setStarting] = useState<{ slug: string; name: string; since: number; worker: string | null } | null>(null);
@@ -426,7 +435,8 @@ export function HostRecipeSwitcher({
                 autoTest: benchEnabled && autoTest,
               })
             }
-            className="rounded-sm px-2 py-1 text-[10px] font-semibold cursor-pointer disabled:cursor-not-allowed"
+            // The decision button: 44 px, text from the type scale (K11).
+            className="inline-flex items-center min-h-11 px-4 rounded-md text-sm font-semibold cursor-pointer disabled:cursor-not-allowed"
             style={{
               background: blocker != null ? C.bgHover : C.accent,
               color: blocker != null ? C.textDim : C.bgDeep,
@@ -438,8 +448,8 @@ export function HostRecipeSwitcher({
           <button
             type="button"
             onClick={() => setConfirm(null)}
-            className="rounded-sm px-2 py-1 text-[10px] cursor-pointer"
-            style={{ border: `1px solid ${C.borderSubtle}`, color: C.textMuted }}
+            className="inline-flex items-center min-h-11 px-3 rounded-md text-sm cursor-pointer"
+            style={{ color: C.textSecondary }}
           >
             {t("cancel")}
           </button>

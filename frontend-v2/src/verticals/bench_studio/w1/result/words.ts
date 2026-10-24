@@ -79,7 +79,10 @@ export function useBenchWords() {
       const requested: Effort = c.effort.requested;
       let word: string;
       if (requested === "default") {
-        word = observedLevel ? ts("levelIsDefault", { level: level(observedLevel) ?? observedLevel }) : ts("level.default");
+        // One name per level (K10): the sheet's "hoch (Standard)" when the
+        // probe knew what the default maps to.
+        const merged = c.effort.default_level ?? observedLevel;
+        word = merged ? ts("levelIsDefault", { level: level(merged) ?? merged }) : ts("level.default");
       } else {
         word = level(requested) ?? requested;
       }

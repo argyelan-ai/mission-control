@@ -416,14 +416,16 @@ def _kit_texts() -> dict:
             "Setup · model only · same prompt (sha d6e0ea9) · n=3, video = run 1 · "
             "temp 0.7 · max_tokens 16384",
             f"{MODEL} · local · DGX Spark ×2 · engine: unknown (hand-made runtime) · "
-            "GPU mode eco · spec-decoding: unknown",
+            "GPU mode eco · spec-decoding: unknown · raw API",
             "effort: server default (thinking observed: on) · network blocked during "
             "render · method v1 · 2026-10-22 · API list price would be ≈ $0.04 (comparison only)",
         ],
+        # Exactly what w1_kit.alt_text builds for this record (review N7).
         "alt_text": (
-            f"Screen recording of a voxel pagoda garden built as one HTML page by {MODEL}, "
-            "running locally on DGX Spark ×2. Result card: compute time 1:06 (median of 3 runs), "
-            "6.6k output tokens, 101 tok/s decode."
+            "Result card: Pagoda Garden · same-prompt showdown · 2026-10-22. "
+            f"{MODEL}, running locally on DGX Spark ×2, raw API, effort high (default): "
+            "compute time 1:06 (median of 3), 6.6k output tokens, 101 tok/s decode. "
+            "Median of 3 runs · same prompt."
         ),
         "facts": [
             f"{MODEL}, local, 3 runs: 1:02–1:11 compute time.",
@@ -433,8 +435,8 @@ def _kit_texts() -> dict:
         "link": None,
         "thread_guide": [
             "Main post: your words + video.mp4",
-            "Reply 1: card.png + settings text + alt text",
-            "Reply 2: link (only if the episode is published)",
+            "Reply 1: card.png + alt text",
+            "Then: one reply per settings block (each at most 280 characters)",
         ],
     }
 

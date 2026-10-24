@@ -1,8 +1,9 @@
 """The operator's handle reaches the containers that write bench artefacts.
 
-``w1_kit.footer()`` reads ``MC_BENCH_FOOTER`` for the X-Kit texts (API
-process) and for the result card / video payload (the W1 runner, which
-lives in the mc-worker background loop). docker-compose.yml lists every
+``w1_kit.footer()`` reads ``MC_BENCH_FOOTER`` for the X-Kit texts and for
+the result card / video payload — both in the API process (the W1 runner is
+a vertical background loop there); the worker carries the same value so the
+two containers stay alike. docker-compose.yml lists every
 variable by hand — there is no env_file — so a value set only in ``.env``
 never arrives and the public footer stays empty. The default is empty:
 the handle lives in the operator's ``.env``, never in the repo.

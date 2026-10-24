@@ -4078,7 +4078,19 @@
       "recorded_before_block": "open — recorded before the block",
       "notMeasured": "not measured: {reason}",
       "agent_paused": "the agent is paused (quiet mode)",
-      "files_not_ready": "the video and image are not ready yet"
+      "files_not_ready": "the video and image are not ready yet",
+      "no_html_truncated": "stopped at the token limit before any page",
+      "no_html": "no HTML page in the answer",
+      "http_error": "the engine answered with an error",
+      "timeout": "no answer in time",
+      "unreachable": "engine not reachable",
+      "effort_not_offered": "the engine no longer offers this effort level",
+      "effort_probe_failed": "effort check failed",
+      "runtime_gone": "this runtime no longer exists",
+      "run_failed": "run failed",
+      "agent_missing": "no agent for this harness",
+      "agent_task_failed": "the agent task failed",
+      "time_limit": "time limit reached"
     },
     "blocker": {
       "box_busy": "Box busy",
@@ -4123,7 +4135,8 @@
       "unknown": "cost unknown",
       "hypothetical": "API price would be ≈ ${usd}",
       "confirm": "Start · ${usd} — OK?",
-      "confirmAgain": "Over ${cap}: really start for ${usd}?"
+      "confirmAgain": "Over ${cap}: really start for ${usd}?",
+      "confirmUnknown": "Start · cost unknown — OK?"
     },
     "gate": {
       "green": "Ready to post",
@@ -4262,7 +4275,7 @@
       "failed": "failed",
       "tokens": "{n} tok",
       "decode": "{n} tok/s",
-      "singleRun": "single run",
+      "singleRun": "Single run",
       "then": "Then: {cls}",
       "stateRow": "State",
       "whyRow": "Why",
@@ -4284,8 +4297,11 @@
         "recording": "recording the video",
         "composing": "building the video",
         "done": "done"
-      }
-    }
+      },
+      "tokensApprox": "≈ {n} tok"
+    },
+    "blockerAsleep": "Start works once it is awake.",
+    "wakeBox": "Wake the box"
   },
   "providerDescriptions": {
     "claude_code_oauth_token": "For cli-bridge agents with an anthropic-* runtime (claude setup-token)",
@@ -4505,11 +4521,16 @@
       "kicker": "Confirm"
     },
     "truncation": {
-      "body": "{count, plural, one {Run {runs} stopped} other {Runs {runs} stopped}} at {max} tokens, so the numbers are cut short. A re-run with {suggested} tokens shows the whole result.",
-      "bodyNoRuns": "A run stopped at {max} tokens, so the numbers are cut short. A re-run with {suggested} tokens shows the whole result.",
+      "body": "{count, plural, one {Run {runs} was} other {Runs {runs} were}} stopped at {max} tokens: the answer is unfinished, so time and tokens are too low. A re-run with {suggested} tokens shows the whole result.",
+      "bodyNoRuns": "A run was stopped at {max} tokens: the answer is unfinished, so time and tokens are too low. A re-run with {suggested} tokens shows the whole result.",
       "private": "Only you see this — it is not in the video, the card or the texts.",
       "rerun": "Re-run with {suggested} tokens",
-      "continue": "Continue anyway"
+      "continue": "Continue anyway",
+      "bodyNoPage": "{count, plural, one {Run {runs}} other {Runs {runs}}} thought until the limit of {max} tokens and wrote no page. With {suggested} tokens the model has room for the page.",
+      "bodyNoPageNoRuns": "A run thought until the limit of {max} tokens and wrote no page. With {suggested} tokens the model has room for the page.",
+      "videoCut": "Run 1 is the video: it shows an unfinished page.",
+      "rerunConfirm": "Re-run with {suggested} tokens · ${usd} — OK?",
+      "rerunConfirmUnknown": "Re-run with {suggested} tokens · cost unknown — OK?"
     },
     "checks": {
       "label": "Check",
@@ -4545,7 +4566,7 @@
       "effort": "Effort"
     },
     "video": {
-      "caption": "Run {i} · {d}",
+      "caption": "Run {i} · {rec} s recording + {card} s number card",
       "captionShort": "Run {i}",
       "seconds": "{s} s",
       "none": "No video yet.",
@@ -4638,7 +4659,11 @@
       "copyFailed": "Copying did not work.",
       "tokenFailed": "The download links could not be made.",
       "retry": "Try again",
-      "thread": "How to post: main post = your words + video · reply 1 = image + settings + alt text · reply 2 = link (once published)."
+      "thread": "How to post: main post = your words + video · reply 1 = image + alt text · then one reply per settings block.",
+      "settingsHint": "One X reply per block (at most 280 characters).",
+      "copyBlock": "Copy block {i}",
+      "noFooter": "No handle set: video and image have no footer (MC_BENCH_FOOTER in the .env).",
+      "threadWithLink": "How to post: main post = your words + video · reply 1 = image + alt text · then one reply per settings block · last the link."
     }
   },
   "heads": {
@@ -4931,7 +4956,9 @@
       "freshNote": "MC does not measure the first 15 min: the model is still warming up.",
       "busyNote": "A test waits until the box is free. MC starts it itself, after 10 min at the latest.",
       "noModel": "Testing works once a model runs",
-      "blocked": "Testing is not possible right now"
+      "blocked": "Testing is not possible right now",
+      "testPlanned": "Test planned",
+      "testPlannedAt": "Test planned · {time}"
     },
     "autoTest": {
       "label": "Test automatically afterwards",
@@ -4949,7 +4976,9 @@
       "type": "Test done",
       "open": "View result",
       "done": "Done",
-      "untitled": "Benchmark test"
+      "untitled": "Benchmark test",
+      "typeStopped": "Test stopped",
+      "truncated": "A run hit the token limit — look first"
     }
   },
   "nightShift": {

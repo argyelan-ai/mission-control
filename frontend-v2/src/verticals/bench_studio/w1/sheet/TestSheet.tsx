@@ -8,7 +8,8 @@ import { useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Check, Clock, Cloud, Cpu, Loader2, Plus, X } from "lucide-react";
+import Link from "next/link";
+import { AlertTriangle, ArrowLeft, Check, Clock, Cloud, Cpu, Info, Loader2, Moon, Plus, X } from "lucide-react";
 import { benchResultHref, type BenchTestParams } from "@/lib/benchLinks";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { benchW1Api, benchW1Keys, parseBenchBlocked, parseCostConfirmation, type PlanQuery } from "../api";
@@ -153,6 +154,9 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
       const blocked = parseBenchBlocked(err);
       if (blocked && blocked.length > 0) {
         setStartError(blocked.map((b) => w.word("blocker", b.code)).join(" · "));
+        // Read the fleet again: the new blocker greys Start with its reason
+        // and the device row stops saying "frei" (review N3).
+        void plan.refetch();
         return;
       }
       const msg = err instanceof Error ? err.message : String(err);
@@ -174,8 +178,12 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
     };
     if (params.rerunOf && (data.preset.id === "rerun" || rerunOf)) body.rerun_of = params.rerunOf;
     if (serverAsk) {
-      body.cost_confirmed_usd = serverAsk.usd;
+      if (serverAsk.price_unknown || serverAsk.usd === null) body.confirm_unknown_cost = true;
+      else body.cost_confirmed_usd = serverAsk.usd;
       if (serverAsk.step === 2) body.confirm_over_cap = true;
+    } else if (money.kind === "unknown") {
+      // D4 fail-closed: the tap on "Start · Kosten unbekannt — OK?" is the OK.
+      body.confirm_unknown_cost = true;
     } else if (money.needsConfirmation && money.usd != null) {
       // D4: the tap on "Start · $X — OK?" is the OK; over the cap ask again.
       if (money.secondConfirmation && !capAsked) {
@@ -191,10 +199,12 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
   function startLabel(): string {
     if (create.isPending) return t("starting");
     if (serverAsk) {
+      if (serverAsk.price_unknown || serverAsk.usd === null) return w.t("cost.confirmUnknown");
       return serverAsk.step === 2
         ? w.t("cost.confirmAgain", { cap: trimUsd(serverAsk.cap_usd), usd: usd(serverAsk.usd) })
         : w.t("cost.confirm", { usd: usd(serverAsk.usd) });
     }
+    if (money.kind === "unknown") return w.t("cost.confirmUnknown");
     if (money.needsConfirmation && money.usd != null) {
       return capAsked
         ? w.t("cost.confirmAgain", { cap: trimUsd(DEFAULT_CAP_USD), usd: usd(money.usd) })
@@ -210,6 +220,8 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
   const modelSub = (c: Contestant) => {
     const loc = w.word("locality", c.locality);
     const place = where(c);
+    // "Ollama Cloud" already says cloud — no "Ollama Cloud · Cloud".
+    if (place && place.toLowerCase().includes(loc.toLowerCase())) return place;
     return place ? t("modelSub", { where: place, locality: loc }) : loc;
   };
   const costWord = (c: Contestant) => {
@@ -363,7 +375,13 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
         />
         <TapRow
           name={t("row.test")}
-          main={t("testMain", { preset: presetWord(data.preset.id), prompt: data.preset.prompt.title })}
+          // Desktop shows the preset as chips right above: the row names
+          // only the prompt then (K3: one fact once).
+          main={
+            desktop
+              ? data.preset.prompt.title
+              : t("testMain", { preset: presetWord(data.preset.id), prompt: data.preset.prompt.title })
+          }
           sub={testSub(data.preset)}
           onClick={() => setView("preset")}
           ariaLabel={t("changeTest")}
@@ -476,7 +494,7 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
         )}
 
         {hasA && hasB && (
-          <Note tone="info" icon={<AlertTriangle size={16} />} testId="bench-sheet-classmix">
+          <Note tone="info" icon={<Info size={16} />} testId="bench-sheet-classmix">
             {t.rich("classMix", {
               a: w.word("runClass", "A"),
               b: w.word("runClass", "B"),
@@ -700,8 +718,19 @@ function BlockerNote({ blocker, locale }: { blocker: Blocker; locale: string }) 
   const t = useTranslations("benchSheet");
   const w = useBenchWords();
   const head = w.word("blocker", blocker.code);
-  let text: string;
-  if (blocker.blocking) text = t("blockerStops");
+  // A sleeping box is no error (review S4): amber, with the way out.
+  const asleep = blocker.code === "box_asleep";
+  let text: ReactNode;
+  if (asleep)
+    text = (
+      <>
+        {t("blockerAsleep")}{" "}
+        <Link href="/runtimes" className="underline underline-offset-2" style={{ color: C.textPrimary }}>
+          {t("wakeBox")}
+        </Link>
+      </>
+    );
+  else if (blocker.blocking) text = t("blockerStops");
   else if (blocker.code === "model_fresh") {
     const time = clockTime(blocker.until, locale);
     text = time ? t("blockerWaits.model_fresh", { time }) : t("blockerWaits.model_fresh_plain");
@@ -710,8 +739,8 @@ function BlockerNote({ blocker, locale }: { blocker: Blocker; locale: string }) 
   } else text = t("blockerWaits.other");
   return (
     <Note
-      tone={blocker.blocking ? "error" : "warn"}
-      icon={blocker.blocking ? <AlertTriangle size={16} /> : <Clock size={16} />}
+      tone={blocker.blocking && !asleep ? "error" : "warn"}
+      icon={asleep ? <Moon size={16} /> : blocker.blocking ? <AlertTriangle size={16} /> : <Clock size={16} />}
       title={head}
       testId={`bench-sheet-blocker-${blocker.code}`}
       className="mb-3"

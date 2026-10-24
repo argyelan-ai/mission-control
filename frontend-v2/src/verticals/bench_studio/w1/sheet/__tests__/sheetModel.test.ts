@@ -20,6 +20,15 @@ function base(): SheetSelection {
 }
 
 describe("sheetModel", () => {
+  it("an unknown price outranks the subscription, as on the server (D4)", () => {
+    const unknown = { ...subscription, runtime_id: "u-1", money: { ...subscription.money, cost_kind: "unknown" as const } };
+    const picks = [
+      { runtime_id: subscription.runtime_id, harness: "api" as const, efforts: ["default" as const] },
+      { runtime_id: unknown.runtime_id, harness: "api" as const, efforts: ["default" as const] },
+    ];
+    expect(moneyFor(picks, [subscription, unknown]).kind).toBe("unknown");
+  });
+
   it("starts from the plan's own picks", () => {
     expect(buildPicks(base())).toEqual(planStandardFixture.picks);
   });

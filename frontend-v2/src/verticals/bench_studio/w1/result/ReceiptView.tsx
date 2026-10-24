@@ -158,7 +158,7 @@ export function receiptRows(c: ContestantResult, r: Receipt, words: BenchWords):
             {unknownVersion && (
               <>
                 {" · "}
-                <span style={{ color: C.warning }}>{words.tr("receipt.versionUnknown")}</span>
+                <span style={{ color: C.textSecondary }}>{words.tr("receipt.versionUnknown")}</span>
               </>
             )}
           </>
@@ -296,8 +296,11 @@ export function ReceiptView({
               <dt className="text-sm shrink-0" style={{ color: C.textMuted }}>
                 {row.label}
               </dt>
+              {/* "unknown" is a fact of the record, not a status: no warning
+                  colour (colour means state; engine unknown never turns the
+                  gate amber) — the value quiet, the reason small below. */}
               <dd className="flex flex-col items-end text-right min-w-0">
-                <span className="text-sm tabular-nums break-words" style={{ color: row.unknown ? C.warning : C.textPrimary }}>
+                <span className="text-sm tabular-nums break-words" style={{ color: row.unknown ? C.textSecondary : C.textPrimary }}>
                   {row.value}
                 </span>
                 {row.sub && (

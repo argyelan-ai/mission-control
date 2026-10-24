@@ -53,6 +53,33 @@ describe("Inbox — Test fertig (bench_result)", () => {
     expect(onResolve).toHaveBeenCalledTimes(2);
   });
 
+  it("says which model and whether it is postable (S1)", () => {
+    render(
+      <ApprovalCard
+        approval={approval({ test_id: "t-7", title: "Pagoda Garden", models: ["DeepSeek-V4.1-Flash-1017"], state: "done", gate_status: "green", truncation: false })}
+        onResolve={vi.fn()}
+      />,
+    );
+    const card = screen.getByTestId("bench-result-card");
+    expect(card).toHaveTextContent("DeepSeek-V4.1-Flash-1017");
+    expect(card).toHaveTextContent("Pagoda Garden · Ready to post");
+  });
+
+  it("a cut run says 'look first'; a stopped test says stopped and why", () => {
+    const { unmount } = render(
+      <ApprovalCard approval={approval({ test_id: "t-7", title: "Pagoda Garden", models: ["m"], state: "done", gate_status: "amber", truncation: true })} onResolve={vi.fn()} />,
+    );
+    expect(screen.getByTestId("bench-result-card")).toHaveTextContent("hit the token limit");
+    unmount();
+    render(
+      <ApprovalCard approval={approval({ test_id: "t-8", title: "Pagoda Garden", models: ["m"], state: "aborted", gate_status: "pending", state_reason: "all_runs_failed" })} onResolve={vi.fn()} />,
+    );
+    const card = screen.getByTestId("bench-result-card");
+    expect(card).toHaveTextContent("Test stopped");
+    expect(card).not.toHaveTextContent("Test done");
+    expect(card).toHaveTextContent("every run failed");
+  });
+
   it("without a test id: still a quiet notice, no dead link", () => {
     render(<ApprovalCard approval={approval(null)} onResolve={vi.fn()} />);
     expect(screen.getByTestId("bench-result-card")).toHaveTextContent("Benchmark test");

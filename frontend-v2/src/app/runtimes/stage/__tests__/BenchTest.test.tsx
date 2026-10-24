@@ -97,6 +97,29 @@ describe("ActionBar — Testen (P1)", () => {
     expect(test).toHaveAttribute("href", benchResultHref("t-9"));
   });
 
+  it("a planned auto test: the button opens it, never plans a second (S3)", async () => {
+    bar(summary({ planned_test: { id: "t-auto", not_before: "2026-10-24T09:45:00Z" } }));
+    const test = await screen.findByTestId("bench-test");
+    expect(test).toHaveTextContent(/^Test planned · \d{1,2}:\d\d( [AP]M)?$/);
+    expect(test).toHaveAttribute("href", benchResultHref("t-auto"));
+  });
+
+  it("a planned auto test on a card without a model is still a link", async () => {
+    bar(summary({ testable: false, reason: { code: "no_model", params: {} }, planned_test: { id: "t-auto", not_before: null } }));
+    const test = await screen.findByTestId("bench-test");
+    expect(test).toHaveTextContent("Test planned");
+    expect(test).toHaveAttribute("href", benchResultHref("t-auto"));
+  });
+
+  it("switch list open: Testen steps down, the dialog owns the one accent (M4)", async () => {
+    const user = (await import("@testing-library/user-event")).default.setup();
+    bar(summary());
+    const test = await screen.findByTestId("bench-test");
+    expect(test).toHaveAttribute("data-primary", "true");
+    await user.click(screen.getByTestId("recipe-dropdown-trigger"));
+    await waitFor(() => expect(screen.getByTestId("bench-test")).toHaveAttribute("data-primary", "false"));
+  });
+
   it("not testable: no link, the blocker in words", async () => {
     bar(summary({ testable: false, reason: { code: "protocol_mismatch", params: {} } }));
     const test = await screen.findByTestId("bench-test");

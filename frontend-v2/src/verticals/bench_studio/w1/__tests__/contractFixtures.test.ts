@@ -150,9 +150,22 @@ describe("benchShared words cover every contract code (EN + DE)", () => {
     ]);
     const dir = path.resolve(__dirname, "../../../../../../backend/app/verticals/bench_studio");
     const codes = new Set<string>();
+    // Every way a code reaches the API: `"code": "x"` (reasons), run errors
+    // (`RunError("x")`, `"error_code": "x"`, `code = "x"`) and the two
+    // fallbacks spelled inside expressions (review O-M2: the first version
+    // only looked for `"code": "x"` and missed every run error).
+    const patterns = [
+      /"code":\s*"([a-z0-9_]+)"/g,
+      /RunError\(\s*"([a-z0-9_]+)"/g,
+      /"error_code":\s*"([a-z0-9_]+)"/g,
+      /\bcode = "([a-z0-9_]+)"/g,
+      /(?:RunError\(|\bcode = )[^\n]*?\belse "([a-z0-9_]+)"/g,
+    ];
     for (const f of readdirSync(dir).filter((n) => /^w1_.*\.py$/.test(n))) {
-      for (const m of readFileSync(path.join(dir, f), "utf8").matchAll(/"code":\s*"([a-z0-9_]+)"/g)) codes.add(m[1]);
+      const src = readFileSync(path.join(dir, f), "utf8");
+      for (const re of patterns) for (const m of src.matchAll(re)) codes.add(m[1]);
     }
+    for (const code of ["no_html", "no_html_truncated", "run_failed"]) expect(codes.has(code), code).toBe(true);
     expect(codes.size).toBeGreaterThan(5);
     const groups = ["reason", "abort", "wait", "blocker", "gate"];
     for (const [lang, w] of Object.entries(langs)) {

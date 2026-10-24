@@ -23,10 +23,13 @@ export function useRerunLarger(
   const mutation = useMutation({
     mutationFn: (ask: CostConfirmation | null) =>
       ask
-        ? benchW1Api.tests.rerun(testId, "larger", {
-            cost_confirmed_usd: ask.usd,
-            confirm_over_cap: ask.step === 2,
-          })
+        ? benchW1Api.tests.rerun(
+            testId,
+            "larger",
+            ask.price_unknown || ask.usd === null
+              ? { confirm_unknown_cost: true }
+              : { cost_confirmed_usd: ask.usd, confirm_over_cap: ask.step === 2 },
+          )
         : benchW1Api.tests.rerun(testId, "larger"),
     onSuccess: (next) => {
       setCostAsk(null);

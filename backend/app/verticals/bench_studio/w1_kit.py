@@ -31,9 +31,10 @@ EFFORT_WORDS = {"default": "default effort", "off": "effort off", "on": "effort 
 
 THREAD_GUIDE = [
     "Main post: your words + video.mp4",
-    "Reply 1: card.png + settings text + alt text",
-    "Reply 2: link (only if the episode is published)",
+    "Reply 1: card.png + alt text",
+    "Then: one reply per settings block (each at most 280 characters)",
 ]
+THREAD_LINK = "Last reply: link"
 
 #: Amber notes that may be printed in the settings text. ``runs_truncated``
 #: is deliberately missing: the token-limit cut is the operator's private
@@ -395,12 +396,13 @@ def episode_link(challenge_id) -> str | None:
 
 
 def kit_texts(detail: dict[str, Any]) -> dict[str, Any]:
+    link = episode_link(detail["id"])
     return {
         "settings": settings_blocks(detail),
         "alt_text": alt_text(detail),
         "facts": facts(detail),
-        "link": episode_link(detail["id"]),
-        "thread_guide": list(THREAD_GUIDE),
+        "link": link,
+        "thread_guide": list(THREAD_GUIDE) + ([THREAD_LINK] if link else []),
     }
 
 

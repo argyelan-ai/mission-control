@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   formatBytes,
   formatClock,
+  formatDay,
+  formatInt,
   formatSeconds,
   formatTime,
   formatTokens,
@@ -10,6 +12,7 @@ import {
   numLocale,
   statText,
 } from "../format";
+import { runDuration, shortDate, tokenCount } from "../../live/format";
 
 describe("bench result number formats", () => {
   it("uses the Swiss/British number locales of the app", () => {
@@ -63,5 +66,31 @@ describe("bench result number formats", () => {
     expect(
       statText({ measured: false, median: null, min: null, max: null, n: 1, reason: null }, fmt),
     ).toBeNull();
+  });
+});
+
+// Review M3 (K10): the live run and the result page share ONE form per value.
+
+describe("one number form on every bench screen", () => {
+  it("token counts: the live card groups like the result page (de-CH / en-GB)", () => {
+    expect(tokenCount(6607, "de")).toBe(formatInt(6607, numLocale("de")));
+    expect(tokenCount(6607, "de")).not.toBe("6.607"); // a dot is the decimal mark in de-CH
+    expect(tokenCount(6607, "en")).toBe(formatInt(6607, numLocale("en")));
+  });
+
+  it("compute time: the live card prints the card's clock", () => {
+    expect(runDuration(66_000, "de")).toBe(formatClock(66_000));
+    expect(runDuration(66_000, "en")).toBe("1:06");
+  });
+
+  it("days: the sheet's stamp is the result page's form", () => {
+    const iso = "2026-10-21T10:00:00Z";
+    expect(shortDate(iso, "en", "UTC")).toBe(formatDay(iso, numLocale("en")));
+    expect(shortDate(iso, "en", "UTC")).toBe("21/10");
+  });
+
+  it("numLocale is idempotent", () => {
+    expect(numLocale(numLocale("de"))).toBe("de-CH");
+    expect(numLocale(numLocale("en"))).toBe("en-GB");
   });
 });
