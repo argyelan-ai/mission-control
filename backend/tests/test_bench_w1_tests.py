@@ -387,3 +387,20 @@ async def test_private_words_skip_public_display_names_and_harness_words(session
     words = await w1_receipt.private_words(session)
     assert "spark" not in words and "Grok" not in words
     assert {"box-7f3", "10.1.2.3", "Alpha"} <= set(words)
+
+
+def test_card_foot_and_numbers_agree_on_the_run_count():
+    """The card's foot line and its number subtitles count the same runs:
+    "median of 3" under the numbers never sits above "single run" in the
+    foot (found rendering the card from the API-shaped fixture, 24.10.)."""
+    import json
+    from datetime import datetime
+    from pathlib import Path
+
+    fx = Path(w1_kit.__file__).parent / "w1_fixtures" / "test_done_green.json"
+    detail = json.loads(fx.read_text())
+    detail["created_at"] = datetime.fromisoformat(detail["created_at"].replace("Z", "+00:00"))
+    card = w1_kit.card_payload(detail)
+    subs = {n["sub"] for n in card["contestants"][0]["numbers"] if n.get("sub")}
+    assert subs == {"median of 3"}
+    assert card["foot"] == "median of 3 runs · same prompt"

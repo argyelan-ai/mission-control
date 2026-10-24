@@ -97,11 +97,17 @@ def chips(r: dict[str, Any], *, compact: bool = False) -> str:
     return " · ".join(p for p in parts if p)
 
 
+def _runs(r: dict[str, Any]) -> int:
+    """Runs behind a contestant's numbers — ONE rule for the foot line and
+    the number subtitles (the API shape carries no ``n_runs``, its summary does)."""
+    return int(r.get("n_runs") or ((r.get("summary") or {}).get("time") or {}).get("n") or 1)
+
+
 def numbers(r: dict[str, Any]) -> list[dict[str, Any]]:
     """The max-3 headline numbers of a contestant, formatted once — card,
     receipt card and alt text all print these exact strings."""
     s = r["summary"]
-    n = (r.get("n_runs") or s["time"].get("n") or 1)
+    n = _runs(r)
     if r.get("run_class") == "B":
         out = [
             _num(s["time"], c.fmt_minutes, "work time", "no waiting" if not s.get("wait_ms") else None,
@@ -139,7 +145,7 @@ def card_payload(detail: dict[str, Any]) -> dict[str, Any]:
     card PNG (1080×1350) — one payload, one template."""
     video = video_contestants(detail)
     run_class = video[0].get("run_class", "A") if video else "A"
-    n = max((r.get("n_runs") or 1) for r in video) if video else 1
+    n = max(_runs(r) for r in video) if video else 1
     if run_class == "B":
         foot = "agent build · " + ("method v0" if detail.get("protocol_version") != c.PROTOCOL_V1 else "single run")
     elif n > 1:
