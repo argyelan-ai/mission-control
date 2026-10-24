@@ -133,7 +133,7 @@ describe("a box without a model", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("asleep box: Testen disabled with the reason", () => {
-    const host = { id: "h-p", slug: "porsche", display_name: "Porsche", power_managed: true } as unknown as Host;
+    const host = { id: "h-p", slug: "gpu-box", display_name: "GPU box", power_managed: true } as unknown as Host;
     wrap(<AsleepBox host={host} onOpenCockpit={() => {}} />);
     const test = screen.getByTestId("bench-test-no-model");
     expect(test).toHaveAttribute("aria-disabled", "true");

@@ -17,6 +17,7 @@ import type {
   PresetView,
   RunClass,
 } from "../types";
+import { isDirectApi } from "../types";
 
 /** D4: above this many dollars per test MC asks a second time. The server's
  *  409 (`CostConfirmation.cap_usd`) is the authority; this is the default
@@ -71,7 +72,7 @@ export function harnessOption(c: Contestant | undefined, h: Harness): HarnessOpt
 }
 
 export function runClassOf(c: Contestant | undefined, h: Harness): RunClass {
-  return harnessOption(c, h)?.run_class ?? (h === "api" ? "A" : "B");
+  return harnessOption(c, h)?.run_class ?? (isDirectApi(h) ? "A" : "B");
 }
 
 /** Initial selection from the plan's own picks (incl. a duel from "Nochmal"). */
@@ -81,7 +82,7 @@ export function selectionFromPlan(plan: BenchPlan): SheetSelection | null {
   const subject = plan.contestants.find((c) => c.runtime_id === subjectId);
   const own = plan.picks.filter((p) => p.runtime_id === subjectId);
   const harnesses = own.length ? own.map((p) => p.harness) : (["api"] as Harness[]);
-  const apiPick = own.find((p) => p.harness === "api");
+  const apiPick = own.find((p) => isDirectApi(p.harness));
   const other = plan.picks.find((p) => p.runtime_id !== subjectId);
   return {
     subjectId,
@@ -97,7 +98,7 @@ export function buildPicks(sel: SheetSelection): Required<ContestantPick>[] {
   const picks: Required<ContestantPick>[] = sel.harnesses.map((h) => ({
     runtime_id: sel.subjectId,
     harness: h,
-    efforts: h === "api" ? [...sel.efforts] : ["default"],
+    efforts: isDirectApi(h) ? [...sel.efforts] : ["default"],
   }));
   if (sel.opponentId) {
     picks.push({ runtime_id: sel.opponentId, harness: "api", efforts: [...sel.opponentEfforts] });
@@ -124,7 +125,7 @@ export function toggleHarness(sel: SheetSelection, h: Harness): SheetSelection {
     return { ...sel, harnesses: sel.harnesses.filter((x) => x !== h) };
   }
   // API first, then the agent — the order the runs happen in (A before B).
-  const next = [...sel.harnesses, h].sort((a, b) => (a === "api" ? -1 : b === "api" ? 1 : 0));
+  const next = [...sel.harnesses, h].sort((a, b) => (isDirectApi(a) ? -1 : isDirectApi(b) ? 1 : 0));
   return { ...sel, harnesses: next.slice(0, MAX_PICKS) };
 }
 
@@ -181,7 +182,7 @@ export function moneyFor(
     const c = contestants.find((x) => x.runtime_id === p.runtime_id);
     if (!c) continue;
     // Agent runs on a local box cost nothing extra and have no API price.
-    const m: Money = p.harness === "api" ? c.money : { ...c.money, usd: null, hypothetical_usd: null };
+    const m: Money = isDirectApi(p.harness) ? c.money : { ...c.money, usd: null, hypothetical_usd: null };
     const factor = Math.max(1, p.efforts.length);
     if (KIND_RANK[m.cost_kind] > KIND_RANK[kind]) kind = m.cost_kind;
     if (m.cost_kind === "api_price" && m.usd != null) total = addOpt(total, m.usd * factor);

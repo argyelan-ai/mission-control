@@ -9,6 +9,14 @@
 // optional fields optional.
 
 export type Harness = "api" | "omp" | "hermes" | "grok-build" | "claude-code";
+/** The bench's own "no harness" marker: the model answers straight through
+ *  its OpenAI-compatible API (class A). Not a CLI harness — the one place the
+ *  W1 frontend names it; everything else asks `isDirectApi` (PRINCIPLES §3.4:
+ *  no harness-name comparisons spread through the UI). */
+export const DIRECT_API: Harness = "api";
+export function isDirectApi(h: Harness | null | undefined): boolean {
+  return h === DIRECT_API;
+}
 export type RunClass = "A" | "B" | "C";
 export type Effort = "default" | "off" | "on" | "low" | "medium" | "high" | "max";
 export type CostKind = "local" | "api_price" | "subscription" | "unknown";

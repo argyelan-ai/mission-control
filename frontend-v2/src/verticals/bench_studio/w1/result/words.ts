@@ -15,6 +15,7 @@ import type {
   Reason,
   RunClass,
 } from "../types";
+import { isDirectApi } from "../types";
 import { formatClockTime, formatUsd, numLocale } from "./format";
 
 type Params = Record<string, unknown>;
@@ -71,7 +72,7 @@ export function useBenchWords() {
     const effort = (c: ContestantResult): string | null => {
       const observed = (c.effort.observed ?? {}) as Params;
       const observedLevel = typeof observed.level === "string" ? (observed.level as string) : null;
-      if (c.harness && c.harness !== "api") {
+      if (c.harness && !isDirectApi(c.harness)) {
         if (!observedLevel) return null;
         return tr("effort.session", { harness: c.harness, level: level(observedLevel) ?? observedLevel });
       }

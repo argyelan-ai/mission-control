@@ -24,6 +24,7 @@ import type {
   PresetId,
   PresetView,
 } from "../types";
+import { isDirectApi } from "../types";
 import { clockTime, minuteRange, shortDate, usd } from "../live/format";
 import { stringParams, useBenchWords } from "../live/words";
 import { SheetBody, SheetFooter, SheetHeader, useDesktop } from "./SheetFrame";
@@ -336,7 +337,7 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
       ompOpt?.effort_note?.code === "omp_session_default"
         ? t("ompSession", { level: w.level((ompOpt.effort_note.params.level as Effort) ?? "default") })
         : null;
-    const agentHarness = sel?.harnesses.find((h) => h !== "api");
+    const agentHarness = sel?.harnesses.find((h) => !isDirectApi(h));
 
     body = (
       <>
@@ -592,7 +593,7 @@ function harnessSub(subject: Contestant, t: T, w: ReturnType<typeof useBenchWord
           : t("harnessUnavailable", { harness: w.harness(o.harness) });
       })
       .join(" · ");
-  if (subject.locality === "cloud" && subject.harnesses.length === 1 && subject.harnesses[0].harness === "api") {
+  if (subject.locality === "cloud" && subject.harnesses.length === 1 && isDirectApi(subject.harnesses[0].harness)) {
     return t("harnessCloudOnly");
   }
   return undefined;
@@ -660,7 +661,7 @@ function summaryParts({
   else if (a) out.push(t("estimate.about", { range: a }));
   else if (b) out.push(t("estimate.agentSoFar", { range: b }), t("estimate.single"));
   if (ladder && sel.harnesses.includes("api") && sel.efforts.includes("max")) out.push(t("estimate.maxThinks"));
-  const aRuntimes = new Set(picks.filter((p) => p.harness === "api").map((p) => p.runtime_id));
+  const aRuntimes = new Set(picks.filter((p) => isDirectApi(p.harness)).map((p) => p.runtime_id));
   if (aRuntimes.size > 1) out.push(t("estimate.contestants", { n: aRuntimes.size, runs: data.preset.n_runs }));
   if (hasA) out.push(t("estimate.video", { n: data.video_run_index }));
   return out;
