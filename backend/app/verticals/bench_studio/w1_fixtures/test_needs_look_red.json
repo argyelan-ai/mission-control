@@ -1,0 +1,201 @@
+{
+  "id": "a0000000-0000-4000-8000-000000000004",
+  "title": "Shot Sequence",
+  "created_at": "2026-10-21T20:21:40Z",
+  "trigger": null,
+  "preset": null,
+  "protocol_version": "v0",
+  "state": "done_missing",
+  "section": "needs_look",
+  "state_reason": {
+    "code": "numbers_missing",
+    "params": {
+      "fields": [
+        "tokens_out"
+      ]
+    }
+  },
+  "prompt": {
+    "template_id": null,
+    "title": "Shot Sequence",
+    "sha256": "9999999999999999999999999999999999999999999999999999999999999999"
+  },
+  "blocks": [
+    {
+      "run_class": "B",
+      "contestants": [
+        {
+          "key": "11111111-1111-4111-8111-111111111111:omp",
+          "runtime_id": "11111111-1111-4111-8111-111111111111",
+          "served_model_id": "DeepSeek-V4.1-Flash-1017",
+          "display_name": "DeepSeek-V4.1-Flash-1017",
+          "alias": null,
+          "locality": "local",
+          "device_name": "DGX Spark ×2",
+          "harness": "omp",
+          "effort": {
+            "requested": "default",
+            "default_level": null,
+            "sent": null,
+            "observed": {
+              "source": "omp_session",
+              "level": "high"
+            }
+          },
+          "runs": [
+            {
+              "entry_id": "e0000000-0000-4000-8000-000000000031",
+              "repeat_idx": 1,
+              "attempt_no": 1,
+              "state": "done",
+              "phase": "done",
+              "elapsed_ms": 5551000,
+              "tokens_out": null,
+              "decode_tok_s": null,
+              "ttft_ms": null,
+              "finish_reason": null,
+              "truncated": false,
+              "wait": null,
+              "error": null,
+              "is_video_run": true
+            }
+          ],
+          "summary": {
+            "time": {
+              "measured": true,
+              "median": 5551000.0,
+              "min": 5551000.0,
+              "max": 5551000.0,
+              "n": 1,
+              "reason": null
+            },
+            "time_kind": "active_ms",
+            "wait_ms": 0,
+            "tokens_out": {
+              "measured": false,
+              "median": null,
+              "min": null,
+              "max": null,
+              "n": 1,
+              "reason": {
+                "code": "harvest_pending",
+                "params": {}
+              }
+            },
+            "tokens_reasoning": null,
+            "tokens_cache_read": null,
+            "decode_tok_s": null,
+            "ttft_ms": null,
+            "cost": {
+              "cost_kind": "local",
+              "usd": null,
+              "hypothetical_usd": null,
+              "price_source": null,
+              "price_date": null,
+              "needs_confirmation": false,
+              "second_confirmation": false,
+              "reason": null
+            },
+            "page_check": null,
+            "tie_with": []
+          },
+          "receipt": {
+            "protocol_version": "v0",
+            "run_class": "B",
+            "served_model_id": "DeepSeek-V4.1-Flash-1017",
+            "display_name": "DeepSeek-V4.1-Flash-1017",
+            "alias": null,
+            "locality": "local",
+            "device": "DGX Spark ×2",
+            "nodes": null,
+            "provider": null,
+            "engine": null,
+            "engine_version": null,
+            "recipe_slug": null,
+            "quant": null,
+            "gpu_mode": null,
+            "spec_decoding": null,
+            "harness": "omp",
+            "harness_version": null,
+            "effort_requested": null,
+            "effort_sent": null,
+            "effort_observed": {
+              "source": "omp_session",
+              "level": "high"
+            },
+            "thinking_key": null,
+            "temperature": null,
+            "max_tokens": null,
+            "system_prompt_sha": null,
+            "prompt_sha256": null,
+            "brief_sha": "7777777777777777777777777777777777777777777777777777777777777777",
+            "tools_allowed": true,
+            "time_limit_min": null,
+            "n_runs": 1,
+            "video_run_index": null,
+            "attempts": 1,
+            "failures": 0,
+            "network_blocked": false,
+            "network_attempts": null,
+            "libraries_inlined": [],
+            "html_bytes": null,
+            "quiet_box": null,
+            "serving_age_min": null,
+            "recorded_at": null,
+            "harvested_at": null,
+            "unknown": {
+              "time_limit_min": "not_recorded",
+              "harness_version": "not_recorded",
+              "network": "recorded_before_block",
+              "engine": "hand_made_runtime",
+              "spec_decoding": "no_recipe"
+            }
+          },
+          "receipt_version": 1,
+          "receipt_checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ],
+      "starts_after": null
+    }
+  ],
+  "gate": {
+    "status": "red",
+    "reasons": [
+      {
+        "rule": "R1",
+        "severity": "red",
+        "code": "headline_missing",
+        "params": {
+          "field": "tokens_out"
+        },
+        "fix": "harvest"
+      },
+      {
+        "rule": "amber",
+        "severity": "amber",
+        "code": "single_run",
+        "params": {},
+        "fix": null
+      },
+      {
+        "rule": "amber",
+        "severity": "amber",
+        "code": "method_v0",
+        "params": {},
+        "fix": null
+      }
+    ],
+    "checksum": null
+  },
+  "verdict": null,
+  "video": null,
+  "truncation": null,
+  "rerun_of": null,
+  "allowed": [
+    "harvest",
+    "rerun",
+    "archive",
+    "delete"
+  ],
+  "overlay_actions": []
+}

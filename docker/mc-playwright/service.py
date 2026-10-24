@@ -40,7 +40,10 @@ from media import (
     CHROMIUM_LAUNCH_KWARGS,
     RENDERER_FEATURES,
     VIEWPORTS,
+    W1_VIDEO_SIZE,
     BrandingSpec,
+    CardRequest,
+    CardResponse,
     ComposeRequest,
     ComposeResponse,
     LoginSpec,
@@ -49,6 +52,11 @@ from media import (
     TranscodeRequest,
     TranscodeResponse,
     build_branded_compose_cmd,
+    build_w1_compose_cmd,
+    is_blank_page,
+    png_with_text,
+    render_card_html,
+    render_frame_w1_html,
     build_compose_cmd,
     build_frame_tokens,
     build_pipe_encode_cmd,
@@ -801,7 +809,9 @@ BENCH_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "bench"
 BENCH_FRAME_VIEWPORT = {"width": 1920, "height": 1080}
 
 
-async def _screenshot_bench_card(html_text: str, out_png: Path) -> None:
+async def _screenshot_bench_card(
+    html_text: str, out_png: Path, viewport: dict | None = None, scale: int = 2
+) -> None:
     """Writes a filled bench template to a scratch dir alongside its shared
     assets (shared.css, fonts/ — referenced via relative href in the
     template) and screenshots it at the canonical 1920x1080 CSS viewport,
@@ -820,10 +830,20 @@ async def _screenshot_bench_card(html_text: str, out_png: Path) -> None:
             browser = await _launch_chromium(p)
             try:
                 context = await browser.new_context(
-                    viewport=BENCH_FRAME_VIEWPORT, device_scale_factor=2
+                    viewport=viewport or BENCH_FRAME_VIEWPORT, device_scale_factor=scale
                 )
                 page = await context.new_page()
                 await page.goto(html_path.as_uri(), wait_until="networkidle", timeout=30000)
+                # W1 templates fit the model name once the fonts are in
+                # (data-fit="done"); older templates have nothing to fit.
+                try:
+                    await page.wait_for_function(
+                        "document.documentElement.dataset.fit === 'done'"
+                        " || !document.querySelector('[data-fit]')",
+                        timeout=10000,
+                    )
+                except Exception:  # noqa: BLE001 — a late fit is still a card
+                    logger.warning("bench card: fit script did not finish, screenshot anyway")
                 await page.screenshot(path=str(out_png))
             finally:
                 await browser.close()
@@ -845,6 +865,25 @@ async def _render_branding_assets(branding: BrandingSpec, render_dir: Path) -> t
     await _screenshot_bench_card(frame_html, frame_png)
     await _screenshot_bench_card(outro_html, outro_png)
     return frame_png, outro_png
+
+
+async def _render_w1_assets(req: ComposeRequest, render_dir: Path) -> tuple[Path, Path]:
+    """Bench W1: the recording frame (chips above the panes) and the 16:9
+    receipt card — both at 1920×1080, device scale 1 (= the output size,
+    no ffmpeg scaling of text). The card comes from card.html, the SAME
+    template as the 1080×1350 PNG of POST /card."""
+    w, h = W1_VIDEO_SIZE
+    frame_html = render_frame_w1_html(
+        (BENCH_TEMPLATES_DIR / "frame_w1.html").read_text(encoding="utf-8"), req.w1.frame
+    )
+    card_html = render_card_html(
+        (BENCH_TEMPLATES_DIR / "card.html").read_text(encoding="utf-8"), req.w1.card, "wide"
+    )
+    frame_png = render_dir / "frame.png"
+    card_png = render_dir / "card.png"
+    await _screenshot_bench_card(frame_html, frame_png, {"width": w, "height": h}, 1)
+    await _screenshot_bench_card(card_html, card_png, {"width": w, "height": h}, 1)
+    return frame_png, card_png
 
 
 def _require_shared_path(raw: str, what: str) -> Path:
@@ -1216,10 +1255,23 @@ async def record(req: RecordRequest):
             except Exception:  # noqa: BLE001 — a crashed page has nothing to add
                 rtc = 0
             guard.note_blocked("webrtc:", count=rtc)
+            # W1 page check: visible text + media elements of the page as
+            # it stands after the capture (deterministic clock).
+            try:
+                seen = await page.evaluate(
+                    "() => ({text: document.body ? document.body.innerText.trim().length : 0,"
+                    " media: document.querySelectorAll('canvas,svg,img,video').length})"
+                )
+            except Exception:  # noqa: BLE001 — a crashed page is checked by the frame alone
+                seen = {"text": 0, "media": 0}
         finally:
             await browser.close()
 
     net = guard.report()
+    page_blank = is_blank_page(
+        screenshot_path.stat().st_size if screenshot_path.exists() else None,
+        int(seen.get("text") or 0), int(seen.get("media") or 0),
+    )
     logger.info(
         "record: %s -> %s (%ds, %d frames @ %dfps, %dx%d) network_attempts=%d libraries=%s",
         req.target_url, video_path, req.duration_s, n_frames, RECORD_FPS,
@@ -1238,6 +1290,7 @@ async def record(req: RecordRequest):
         blocked_requests=net["blocked_requests"],
         libraries_inlined=libraries,
         html_bytes=html_bytes,
+        page_blank=page_blank,
     )
 
 
@@ -1260,7 +1313,18 @@ async def compose(req: ComposeRequest):
     out_path = _require_shared_path(req.output_path, "output_path")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if req.branding is not None:
+    if req.w1 is not None:
+        with tempfile.TemporaryDirectory() as render_tmp:
+            render_dir = Path(render_tmp)
+            frame_png, card_png = await _render_w1_assets(req, render_dir)
+            cmd = build_w1_compose_cmd(
+                req.inputs, str(frame_png), str(card_png), str(out_path),
+                checksum=req.w1.checksum,
+            )
+            timeout = compose_branded_timeout_s(req.duration_s, floor_s=FFMPEG_TIMEOUT_S)
+            await asyncio.to_thread(_run_ffmpeg, cmd, timeout)
+        logger.info("compose (w1): %d inputs -> %s", len(req.inputs), out_path)
+    elif req.branding is not None:
         with tempfile.TemporaryDirectory() as render_tmp:
             render_dir = Path(render_tmp)
             frame_png, outro_png = await _render_branding_assets(req.branding, render_dir)
@@ -1286,6 +1350,28 @@ async def compose(req: ComposeRequest):
         bytes=out_path.stat().st_size,
         inputs=len(req.inputs),
     )
+
+
+@app.post("/card", response_model=CardResponse)
+async def card(req: CardRequest):
+    """Bench W1 result card PNG (default 1080×1350) from card.html — the same
+    template the video's receipt card uses. The PNG carries the record
+    checksum in a tEXt chunk (every artefact names the receipts it shows)."""
+    out_path = _require_shared_path(req.output_path, "output_path")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    shape = "tall" if req.height >= req.width else "wide"
+    html_text = render_card_html(
+        (BENCH_TEMPLATES_DIR / "card.html").read_text(encoding="utf-8"), req.card, shape
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        raw = Path(tmp) / "card.png"
+        await _screenshot_bench_card(html_text, raw, {"width": req.width, "height": req.height}, 1)
+        data = raw.read_bytes()
+    if req.checksum:
+        data = png_with_text(data, "bench-record", req.checksum)
+    out_path.write_bytes(data)
+    logger.info("card: %s (%dx%d, %d bytes)", out_path, req.width, req.height, len(data))
+    return CardResponse(output_path=str(out_path), bytes=len(data), width=req.width, height=req.height)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

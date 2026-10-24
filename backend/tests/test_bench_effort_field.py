@@ -79,58 +79,12 @@ async def _challenge(session, *efforts: str, label: str = LABEL, kind: str = "sp
 # ── create: the label stays the label ──────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_create_keeps_the_typed_label_and_stores_effort_apart(
-    auth_client, _probe, _no_background
-):
-    resp = await auth_client.post("/api/v1/bench/challenges", json={
-        "title": "Off vs Max", "prompt_text": "one page",
-        "models": [_spec("off"), _spec("max")],
-    })
-    assert resp.status_code == 201, resp.text
-    entries = resp.json()["entries"]
-    assert [e["model_label"] for e in entries] == [LABEL, LABEL]
-    assert [e["metrics"]["effort_requested"] for e in entries] == ["off", "max"]
-    assert [e["position"] for e in entries] == [0, 1]
 
 
-@pytest.mark.asyncio
-async def test_two_auto_rows_get_the_plain_model_name(auth_client, monkeypatch, _probe, _no_background):
-    monkeypatch.setattr(orchestrator, "resolve_spark_model_or_422", AsyncMock(return_value="deepseek-x"))
-    resp = await auth_client.post("/api/v1/bench/challenges", json={
-        "title": "Auto", "prompt_text": "one page",
-        "models": [
-            {"label": "", "source_kind": "spark", "effort": "off"},
-            {"label": "", "source_kind": "spark"},
-        ],
-    })
-    assert resp.status_code == 201, resp.text
-    assert [e["model_label"] for e in resp.json()["entries"]] == ["deepseek-x", "deepseek-x"]
 
 
-@pytest.mark.asyncio
-async def test_same_label_and_same_effort_is_refused_with_a_reason(
-    auth_client, _probe, _no_background
-):
-    resp = await auth_client.post("/api/v1/bench/challenges", json={
-        "title": "Twice", "prompt_text": "one page",
-        "models": [_spec("max"), _spec("max", label=f" {LABEL.lower()} ")],
-    })
-    assert resp.status_code == 422
-    detail = resp.json()["detail"][0]["msg"].lower()
-    assert "effort" in detail and "label" in detail
 
 
-@pytest.mark.asyncio
-async def test_long_labels_are_not_cut_any_more(auth_client, monkeypatch, _no_background):
-    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=_probe_row(["off", "medium"])))
-    long_label = "L" * 80
-    resp = await auth_client.post("/api/v1/bench/challenges", json={
-        "title": "Long", "prompt_text": "one page",
-        "models": [_spec("off", label=long_label), _spec("medium", label=long_label)],
-    })
-    assert resp.status_code == 201, resp.text
-    assert [e["model_label"] for e in resp.json()["entries"]] == [long_label, long_label]
 
 
 # ── rename ─────────────────────────────────────────────────────────────────

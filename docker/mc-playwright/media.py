@@ -104,13 +104,23 @@ class RecordResponse(BaseModel):
     blocked_requests: List[str] = Field(default_factory=list)
     libraries_inlined: List[str] = Field(default_factory=list)
     html_bytes: Optional[int] = None
+    # page_check (W1): None = not checked (no thumbnail), True = blank page.
+    page_blank: Optional[bool] = None
 
 
 #: What this renderer understands beyond the base payload — GET /health
 #: lists it, the backend only sends a field the image announces (an older
 #: image would silently drop it).
 #: - branding_effort: ``effort`` per model chip and outro row (2026-10-23).
-RENDERER_FEATURES = ("branding_effort",)
+#: - bench_card_v1: bench W1 (24.10.2026) — POST /card (1080×1350 PNG) and
+#:   ``/compose`` with a ``w1`` payload: 1920×1080 video, chips in two
+#:   lines ABOVE the pane(s), the 4.5 s receipt card from the SAME template
+#:   as the PNG, silent AAC, ~8 Mbit/s, record checksum in the metadata.
+#: - seeded_random: ``Math.random`` is seeded in the recorder, so a
+#:   re-render gives the same video.
+#: - page_check: /record answers ``page_blank`` (deterministic: a near
+#:   uniform mid frame and no visible text = blank page).
+RENDERER_FEATURES = ("branding_effort", "bench_card_v1", "seeded_random", "page_check")
 
 
 class BrandingModelSpec(BaseModel):
@@ -179,6 +189,9 @@ class ComposeRequest(BaseModel):
     speed_labels: Optional[List[str]] = None  # e.g. ["42 s", "87 tok/s"] — appended to labels
     output_path: str
     branding: Optional[BrandingSpec] = None
+    # Bench W1 (bench_card_v1): frame with chips above the panes + the
+    # receipt card from the card template. Wins over ``branding``.
+    w1: Optional["W1ComposeSpec"] = None
     # Source recording length in seconds (Bench #18 configurable video
     # length) — default 10 matches the pre-#18 fixed record duration.
     # Used only to scale the branded-compose ffmpeg timeout (see /compose);
@@ -195,6 +208,8 @@ class ComposeRequest(BaseModel):
             raise ValueError(
                 "branding.models muss gleich viele Eintraege haben wie inputs (1 oder 2)"
             )
+        if self.w1 is not None and len(self.inputs) != len(self.w1.frame.panes):
+            raise ValueError("w1.frame.panes muss gleich viele Eintraege haben wie inputs (1 oder 2)")
         return self
 
 
@@ -709,3 +724,284 @@ def build_storage_state(target_url: str, auth_token: str | None) -> dict | None:
             "localStorage": [{"name": MC_AUTH_STORAGE_KEY, "value": auth_token}],
         }],
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Bench W1 (24.10.2026): result card + receipt card from ONE template, the
+# recording frame with chips ABOVE the pane(s), the X-ready encode.
+#
+# Readability on a phone (critic 32 N5): nothing on the 16:9 video is
+# smaller than 57 px at 1920 wide, nothing on the 1080×1350 card smaller
+# than 32 px (the same physical size in the X feed). The templates carry
+# their font sizes; tests/test_bench_w1_card.py parses them against these
+# floors. All words are filled by the backend (English, public) — the
+# templates hold no copy except the fixed labels the backend sends.
+# ──────────────────────────────────────────────────────────────────────────────
+
+W1_FLOOR_WIDE_PX = 57   # 1920×1080 video frame + receipt card
+W1_FLOOR_TALL_PX = 32   # 1080×1350 card PNG
+W1_VIDEO_SIZE = (1920, 1080)
+W1_CARD_SIZE = (1080, 1350)
+W1_FPS = 30
+W1_VIDEO_BITRATE = "8M"
+W1_RECEIPT_CARD_S = 4.5
+W1_PANE_BG = "0x090B10"
+
+#: Pane rectangles (x, y, w, h) in the 1920×1080 frame — the ONE source for
+#: the template (filled in as CSS) and the ffmpeg overlay. Even sizes only
+#: (yuv420p): a 459 px pane made ffmpeg's pad fail on the scaled 460.
+W1_PANES = {
+    1: [(120, 296, 1680, 740)],
+    2: [(96, 338, 840, 472), (984, 338, 840, 472)],
+}
+
+
+class CardNumber(BaseModel):
+    value: str
+    label: str
+    sub: Optional[str] = None
+    measured: bool = True
+    plain: bool = False   # a count ("n=1"), not a measured value
+
+
+class CardContestant(BaseModel):
+    model: str
+    chips: str
+    # The 790 px duo row of the 16:9 receipt card: no device/provider.
+    chips_short: Optional[str] = None
+    numbers: List[CardNumber] = Field(max_length=3)
+
+
+class CardSpec(BaseModel):
+    layout: Literal["solo", "duo"] = "solo"
+    run_class: Literal["A", "B", "C"] = "A"
+    top: str
+    contestants: List[CardContestant] = Field(min_length=1, max_length=2)
+    foot: str
+    handle: str = ""
+    checksum: Optional[str] = None
+
+
+class FramePane(BaseModel):
+    model: str
+    chips: str
+
+
+class FrameSpec(BaseModel):
+    top: str
+    panes: List[FramePane] = Field(min_length=1, max_length=2)
+    handle: str = ""
+
+
+class W1ComposeSpec(BaseModel):
+    card: CardSpec
+    frame: FrameSpec
+    checksum: Optional[str] = None
+
+
+class CardRequest(BaseModel):
+    """POST /card — the result card PNG (default 1080×1350)."""
+    card: CardSpec
+    output_path: str
+    width: int = Field(default=W1_CARD_SIZE[0], ge=320, le=4096)
+    height: int = Field(default=W1_CARD_SIZE[1], ge=320, le=4096)
+    checksum: Optional[str] = None
+
+
+class CardResponse(BaseModel):
+    output_path: str
+    bytes: int
+    width: int
+    height: int
+
+
+ComposeRequest.model_rebuild()
+
+
+def _e(text: str | None) -> str:
+    return _html.escape(text or "")
+
+
+def _brand(handle: str) -> str:
+    if not handle:
+        return ""
+    return f'<span class="brand"><i></i>{_e(handle)}</span>'
+
+
+def _chips(text: str | None) -> str:
+    """Chips as nowrap parts: a line may break between "·" parts, never
+    inside one ("effort high (default)" stays together)."""
+    parts = [p for p in (text or "").split(" · ") if p]
+    return " · ".join(f'<span class="cp">{_e(p)}</span>' for p in parts)
+
+
+def _number_html(n: CardNumber) -> str:
+    cls = "v num" + (" plain" if n.plain else "") + ("" if n.measured else " nm")
+    sub = f"<small>{_e(n.sub)}</small>" if n.sub else ""
+    return (f'<div class="big"><span class="{cls}">{_e(n.value)}</span>'
+            f'<span class="l">{_e(n.label)}{sub}</span></div>')
+
+
+#: Column heads of the 16:9 duo table (270 px columns at the 57 px floor).
+_SHORT_LABELS = {"compute time": "time", "work time": "time", "output tokens": "out tok",
+                 "tok/s decode": "tok/s", "tok/s": "tok/s", "single run": "runs"}
+
+
+def render_card_body(card: CardSpec, shape: Literal["wide", "tall"]) -> str:
+    """Markup for templates/bench/card.html ``{{BODY}}``. Same payload for
+    the 16:9 receipt card (``wide``) and the 4:5 PNG (``tall``)."""
+    foot = f'<div class="foot"><span>{_e(card.foot)}</span>{_brand(card.handle)}</div>'
+    if card.layout == "duo" and len(card.contestants) == 2:
+        if shape == "wide":
+            labels = [_SHORT_LABELS.get(n.label, n.label) for n in card.contestants[0].numbers]
+            head = "".join(f"<span>{_e(lbl)}</span>" for lbl in labels)
+            rows = []
+            for ct in card.contestants:
+                vals = "".join(
+                    f'<span class="v num{"" if n.measured else " nm"}">{_e(n.value)}</span>' for n in ct.numbers
+                )
+                rows.append(f'<div class="row"><div><b data-fit="model">{_e(ct.model)}</b>'
+                            f'<em>{_chips(ct.chips_short or ct.chips)}</em></div>{vals}</div>')
+            return (f'<div class="wrap duo"><div class="top">{_e(card.top)}</div>'
+                    f'<div class="hrow"><span></span>{head}</div>{"".join(rows)}</div>{foot}')
+        blocks = []
+        for ct in card.contestants:
+            nums = "".join(_number_html(n) for n in ct.numbers)
+            blocks.append(f'<div class="ct"><div class="mdl" data-fit="model">{_e(ct.model)}</div>'
+                          f'<div class="chips">{_chips(ct.chips)}</div><div class="nums trio">{nums}</div></div>')
+        return f'<div class="wrap duo"><div class="top">{_e(card.top)}</div>{"".join(blocks)}</div>{foot}'
+    ct = card.contestants[0]
+    nums = "".join(_number_html(n) for n in ct.numbers)
+    return (f'<div class="wrap solo"><div class="top">{_e(card.top)}</div>'
+            f'<div class="mdl" data-fit="model">{_e(ct.model)}</div>'
+            f'<div class="chips">{_chips(ct.chips)}</div><div class="nums">{nums}</div></div>{foot}')
+
+
+def render_card_html(template_text: str, card: CardSpec, shape: Literal["wide", "tall"]) -> str:
+    width, height = W1_VIDEO_SIZE if shape == "wide" else W1_CARD_SIZE
+    out = template_text.replace("{{SHAPE}}", shape)
+    out = out.replace("{{LAYOUT}}", card.layout).replace("{{RUN_CLASS}}", card.run_class)
+    out = out.replace("{{WIDTH}}", str(width)).replace("{{HEIGHT}}", str(height))
+    out = out.replace("{{FLOOR}}", str(W1_FLOOR_WIDE_PX if shape == "wide" else W1_FLOOR_TALL_PX))
+    return out.replace("{{BODY}}", render_card_body(card, shape))
+
+
+def render_frame_w1_html(template_text: str, frame: FrameSpec) -> str:
+    panes = W1_PANES[len(frame.panes)]
+    duo = len(frame.panes) == 2
+    cells = []
+    for (x, y, w, h), pane in zip(panes, frame.panes):
+        # solo: the handle closes the model line; duo: it sits in the
+        # title line under the panes (two model names fill the top).
+        brand = "" if duo else _brand(frame.handle)
+        cells.append(
+            f'<div class="col" style="left:{x}px;width:{w}px;top:{y}px">'
+            f'<div class="chips2"><div class="l1"><b data-fit="model">{_e(pane.model)}</b>{brand}</div>'
+            f'<span class="c">{_chips(pane.chips)}</span></div>'
+            f'<div class="pane" style="width:{w}px;height:{h}px"></div></div>'
+        )
+    out = template_text.replace("{{MODE}}", "duo" if duo else "solo")
+    out = out.replace("{{FLOOR}}", str(W1_FLOOR_WIDE_PX))
+    out = out.replace("{{TOP}}", _e(frame.top)).replace("{{BRAND}}", _brand(frame.handle) if duo else "")
+    return out.replace("{{PANES}}", "".join(cells))
+
+
+def build_w1_compose_cmd(
+    inputs: List[str],
+    frame_png: str,
+    card_png: str,
+    output_path: str,
+    *,
+    checksum: str | None = None,
+    card_s: float = W1_RECEIPT_CARD_S,
+    fps: int = W1_FPS,
+) -> List[str]:
+    """X-ready encode (concept §6.1): 1920×1080, H.264 High, yuv420p, 30 fps,
+    ~8 Mbit/s, a silent AAC track, faststart; the recording(s) scaled INTO
+    the pane rectangle(s) (letterboxed, never cropped), then the receipt card
+    for ``card_s`` seconds — a clean cut, so X loops back to frame 0."""
+    if len(inputs) not in (1, 2):
+        raise ValueError("build_w1_compose_cmd erwartet 1 oder 2 inputs")
+    w, h = W1_VIDEO_SIZE
+    panes = W1_PANES[len(inputs)]
+    chains: List[str] = []
+    for i, (x, y, pw, ph) in enumerate(panes):
+        chains.append(
+            f"[{i + 1}:v]scale={pw}:{ph}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+            f"pad={pw}:{ph}:(ow-iw)/2:(oh-ih)/2:color={W1_PANE_BG}[p{i}]"
+        )
+    last = "0:v"
+    for i, (x, y, _pw, _ph) in enumerate(panes):
+        chains.append(f"[{last}][p{i}]overlay={x}:{y}:shortest=1[m{i}]")
+        last = f"m{i}"
+    card_idx = len(inputs) + 1
+    audio_idx = card_idx + 1
+    chains += [
+        f"[{last}]scale={w}:{h},fps={fps},format=yuv420p[mainv]",
+        f"[{card_idx}:v]scale={w}:{h},fps={fps},format=yuv420p[cardv]",
+        "[mainv][cardv]concat=n=2:v=1:a=0[outv]",
+    ]
+    cmd: List[str] = [FFMPEG_BIN, "-y", "-loop", "1", "-i", frame_png]
+    for path in inputs:
+        cmd += ["-i", path]
+    cmd += [
+        "-loop", "1", "-t", str(card_s), "-i", card_png,
+        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-filter_complex", ";".join(chains),
+        "-map", "[outv]", "-map", f"{audio_idx}:a",
+        "-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-r", str(fps),
+        "-b:v", W1_VIDEO_BITRATE, "-maxrate", "10M", "-bufsize", "16M", "-preset", "medium",
+        "-c:a", "aac", "-b:a", "128k", "-shortest",
+        "-movflags", "+faststart",
+    ]
+    if checksum:
+        cmd += ["-metadata", f"comment=bench-record:{checksum}"]
+    cmd.append(output_path)
+    return cmd
+
+
+def png_with_text(png: bytes, key: str, value: str) -> bytes:
+    """Adds a tEXt chunk (e.g. the record checksum) right after IHDR — the
+    card PNG carries the checksum of the receipts it was drawn from."""
+    import struct
+    import zlib
+
+    if png[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG")
+    ihdr_len = struct.unpack(">I", png[8:12])[0]
+    cut = 8 + 12 + ihdr_len
+    data = key.encode("latin-1") + b"\x00" + value.encode("latin-1")
+    chunk = struct.pack(">I", len(data)) + b"tEXt" + data
+    chunk += struct.pack(">I", zlib.crc32(b"tEXt" + data) & 0xFFFFFFFF)
+    return png[:cut] + chunk + png[cut:]
+
+
+#: A mid-recording frame whose PNG is this small is (near) one colour.
+BLANK_FRAME_PNG_BYTES = 12_000
+
+
+def is_blank_page(frame_png_bytes: int | None, visible_text_chars: int, media_elements: int) -> bool | None:
+    """Deterministic page check (concept W1, no LLM judge): blank = the mid
+    frame is a near uniform image AND the page shows no text and no
+    canvas/svg/img/video. None when there was no frame to look at."""
+    if frame_png_bytes is None:
+        return None
+    return frame_png_bytes < BLANK_FRAME_PNG_BYTES and visible_text_chars == 0 and media_elements == 0
+
+
+def css_font_sizes(css: str, prefix: str) -> List[tuple[str, int]]:
+    """(selector, px) for every rule under ``prefix`` that sets a font size
+    (``font-size:Npx`` or the ``font:`` shorthand). Used by the type-floor
+    test on the templates."""
+    import re
+
+    out: List[tuple[str, int]] = []
+    for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        sel = sel.strip()
+        if not any(part.strip().startswith(prefix) for part in sel.split(",")):
+            continue
+        for m in re.finditer(r"font(?:-size)?\s*:\s*([^;]+)", body):
+            px = re.search(r"(\d+(?:\.\d+)?)px", m.group(1))
+            if px:
+                out.append((sel, int(float(px.group(1)))))
+    return out

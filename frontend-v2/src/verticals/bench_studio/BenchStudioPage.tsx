@@ -1,113 +1,67 @@
 "use client";
 
-import { useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect } from "react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { ChevronLeft } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
 import { C } from "@/lib/colors";
-import { ChallengesTab } from "./ChallengesTab";
+import { BENCH_LIST_HREF, benchResultHref } from "@/lib/benchLinks";
 import { PromptLibraryTab } from "./PromptLibraryTab";
-import type { PromptTemplate } from "./types";
+import { TestList } from "./w1/list/TestList";
+import { TestSheetHost } from "./w1/sheet/TestSheetHost";
 
-type Tab = "challenges" | "library";
-
+/**
+ * /bench — bench W1 (package D).
+ *
+ *   /bench                     the test list (P7)
+ *   /bench?view=library        the prompt library (P8, kept)
+ *   /bench?test=1&…            either of the above + the test sheet (B)
+ *   /bench?challenge=<id>      old W0 link → /bench/r/<id> (a challenge id is the test id)
+ */
 export default function BenchStudioPage() {
-  const t = useTranslations("bench.page");
-  const [tab, setTab] = useState<Tab>("challenges");
-  // "Challenge starten" from the library prefills the new-challenge dialog:
-  const [prefillTemplate, setPrefillTemplate] = useState<PromptTemplate | null>(null);
-  // The open challenge lives in the URL (`?challenge=<id>`): reload, back
-  // button and a shared link land on the same detail page (t2 SOLL-4).
-  // router.replace, not window.history — Next keeps its own copy of the URL.
+  const t = useTranslations("benchHome");
   const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
-  const selectedId = searchParams.get("challenge");
+  const legacyChallenge = searchParams.get("challenge");
+  const view = searchParams.get("view") === "library" ? "library" : "list";
 
-  function selectChallenge(id: string | null) {
-    const params = new URLSearchParams(searchParams.toString());
-    if (id) params.set("challenge", id);
-    else params.delete("challenge");
-    const query = params.toString();
-    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
-  }
+  useEffect(() => {
+    if (legacyChallenge) router.replace(benchResultHref(legacyChallenge));
+  }, [legacyChallenge, router]);
 
-  // Any tab click leaves an open challenge — also "Challenges" itself, so a
-  // tap on the tab always lands on the list (and out of a dead link).
-  function showTab(next: Tab) {
-    setTab(next);
-    if (selectedId) selectChallenge(null);
-  }
-
-  function startFromTemplate(tpl: PromptTemplate) {
-    setPrefillTemplate(tpl);
-    showTab("challenges");
-  }
-
-  // An open challenge is its own page: it starts with its context row and
-  // title, not under the list's kicker, page title and tabs (r2 S3, K12).
-  const detailOpen = tab === "challenges" && Boolean(selectedId);
+  if (legacyChallenge) return null;
 
   return (
     <AppShell>
-      <div className="flex flex-col gap-6">
-        {!detailOpen && (
-          <>
-            <div>
-              <div className="label-sys mb-2">{t("kicker")}</div>
-              <h1
-                className="display text-2xl font-semibold"
-                style={{ color: C.textPrimary }}
-              >
-                {t("title")}
-              </h1>
-              <p className="text-[13px] mt-1" style={{ color: C.textSecondary }}>
-                {t("subtitle")}
-              </p>
-            </div>
-
-            {/* Tabs — flat underline style, teal accent (Leitstand) */}
-            <div
-              className="flex gap-6"
-              style={{ borderBottom: `1px solid ${C.border}` }}
-              role="tablist"
+      {view === "library" ? (
+        <div className="flex flex-col gap-6">
+          <div className="flex flex-col gap-1">
+            {/* Context bar (K12): back to the list. */}
+            <Link
+              href={BENCH_LIST_HREF}
+              className="self-start inline-flex items-center gap-1 h-11 -ml-2 pr-3 rounded-md text-sm hover:bg-[var(--color-bg-hover)]"
+              style={{ color: C.textSecondary }}
             >
-              {(
-                [
-                  ["challenges", t("tabChallenges")],
-                  ["library", t("tabLibrary")],
-                ] as [Tab, string][]
-              ).map(([key, label]) => (
-                <button
-                  key={key}
-                  role="tab"
-                  aria-selected={tab === key}
-                  onClick={() => showTab(key)}
-                  className="min-h-11 text-sm font-medium -mb-px"
-                  style={{
-                    color: tab === key ? C.textPrimary : C.textSecondary,
-                    borderBottom:
-                      tab === key ? `2px solid ${C.accent}` : "2px solid transparent",
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-
-        {tab === "challenges" ? (
-          <ChallengesTab
-            prefillTemplate={prefillTemplate}
-            onPrefillConsumed={() => setPrefillTemplate(null)}
-            selectedId={selectedId}
-            onSelectedChange={selectChallenge}
-          />
-        ) : (
-          <PromptLibraryTab onStartChallenge={startFromTemplate} />
-        )}
-      </div>
+              <ChevronLeft size={18} aria-hidden />
+              {t("libraryBack")}
+            </Link>
+            <h1 className="display text-2xl font-semibold" style={{ color: C.textPrimary }}>
+              {t("library")}
+            </h1>
+            <p className="text-sm max-w-prose" style={{ color: C.textSecondary }}>
+              {t("libraryLead")}
+            </p>
+          </div>
+          <PromptLibraryTab />
+        </div>
+      ) : (
+        <TestList />
+      )}
+      {/* Bench W1 test sheet (package B) — opens from `/bench?test=1&…`
+          (lib/benchLinks), over the list or the library. */}
+      <TestSheetHost />
     </AppShell>
   );
 }

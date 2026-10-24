@@ -10,7 +10,6 @@ import pytest
 
 pytest.importorskip("app.verticals.bench_studio")
 
-from sqlmodel import select
 
 from app.models.bench import BenchChallenge, BenchEntry
 from app.verticals.bench_studio import orchestrator
@@ -42,214 +41,37 @@ def _create_body(**over):
     return body
 
 
-@pytest.mark.asyncio
-async def test_create_challenge_freezes_prompt_and_fans_out(auth_client):
-    resp = await auth_client.post("/api/v1/bench/challenges", json=_create_body())
-    assert resp.status_code == 201, resp.text
-    data = resp.json()
-    assert data["status"] == "generating"
-    assert data["prompt_text"] == "100 bouncing balls, one index.html"
-    assert len(data["entries"]) == 2
-    assert {e["status"] for e in data["entries"]} == {"pending"}
-    orchestrator.start_challenge.assert_called_once()  # create_task schedules; may not be awaited yet
 
 
-@pytest.mark.asyncio
-async def test_create_challenge_persists_display_tag(auth_client):
-    """Optional per-entry display_tag is persisted (blank -> NULL)."""
-    body = _create_body()
-    body["models"][0]["display_tag"] = "OMP · DGX SPARK"
-    body["models"][1]["display_tag"] = "   "  # whitespace-only -> normalized to NULL
-    resp = await auth_client.post("/api/v1/bench/challenges", json=body)
-    assert resp.status_code == 201, resp.text
-    tags = {e["model_label"]: e["display_tag"] for e in resp.json()["entries"]}
-    assert tags["DeepSeek"] == "OMP · DGX SPARK"
-    assert tags["Claude"] is None
 
 
-@pytest.mark.asyncio
-async def test_create_challenge_defaults_record_duration_to_null(auth_client):
-    """No record_duration_s in the request -> NULL, legacy 10s fallback
-    (orchestrator.RECORD_DURATION_S) applies at record time."""
-    resp = await auth_client.post("/api/v1/bench/challenges", json=_create_body())
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["record_duration_s"] is None
 
 
-@pytest.mark.asyncio
-async def test_create_challenge_persists_record_duration(auth_client):
-    resp = await auth_client.post(
-        "/api/v1/bench/challenges", json=_create_body(record_duration_s=45)
-    )
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["record_duration_s"] == 45
 
 
-@pytest.mark.asyncio
-async def test_create_challenge_record_duration_out_of_bounds_422(auth_client):
-    resp = await auth_client.post(
-        "/api/v1/bench/challenges", json=_create_body(record_duration_s=4)
-    )
-    assert resp.status_code == 422
-    resp = await auth_client.post(
-        "/api/v1/bench/challenges", json=_create_body(record_duration_s=61)
-    )
-    assert resp.status_code == 422
 
 
-@pytest.mark.asyncio
-async def test_create_challenge_requires_prompt(auth_client):
-    resp = await auth_client.post(
-        "/api/v1/bench/challenges", json=_create_body(prompt_text=None)
-    )
-    # A field refusal in FastAPI's own shape (round-7 r1 N4), was a bare 400.
-    assert resp.status_code == 422
-    assert resp.json()["detail"][0]["type"] == "bench_prompt_required"
 
 
-@pytest.mark.asyncio
-async def test_create_challenge_agent_without_id_422(auth_client):
-    body = _create_body()
-    body["models"][1].pop("agent_id")
-    resp = await auth_client.post("/api/v1/bench/challenges", json=body)
-    assert resp.status_code == 422
-    assert resp.json()["detail"][0]["type"] == "bench_agent_required"
 
 
 # ── Bench #21: vanilla (direct-API) spark model resolution ────────────────
 
 
-@pytest.mark.asyncio
-async def test_spark_models_endpoint_passthrough(auth_client, monkeypatch):
-    monkeypatch.setattr(
-        orchestrator, "spark_models_status",
-        AsyncMock(return_value={"reachable": True, "models": ["a", "b"], "active": "a"}),
-    )
-    resp = await auth_client.get("/api/v1/bench/spark-models")
-    assert resp.status_code == 200
-    assert resp.json() == {"reachable": True, "models": ["a", "b"], "active": "a"}
 
 
-@pytest.mark.asyncio
-async def test_create_challenge_spark_auto_resolves_and_freezes_model(auth_client, monkeypatch):
-    """Empty spark_model ("Aktives Modell (auto)") -> resolved live and
-    frozen into the entry; a whitespace-only label is filled with the
-    resolved model name too."""
-    monkeypatch.setattr(
-        orchestrator, "resolve_spark_model_or_422",
-        AsyncMock(return_value="deepseek-live"),
-    )
-    body = _create_body()
-    body["models"] = [{"label": " ", "source_kind": "spark", "spark_model": None}]
-    resp = await auth_client.post("/api/v1/bench/challenges", json=body)
-    assert resp.status_code == 201, resp.text
-    entry = resp.json()["entries"][0]
-    assert entry["spark_model"] == "deepseek-live"
-    assert entry["model_label"] == "deepseek-live"
 
 
-@pytest.mark.asyncio
-async def test_create_challenge_spark_explicit_model_skips_resolution(auth_client, monkeypatch):
-    resolve_mock = AsyncMock(return_value="should-not-be-called")
-    monkeypatch.setattr(orchestrator, "resolve_spark_model_or_422", resolve_mock)
-    body = _create_body()
-    body["models"] = [{"label": "DeepSeek", "source_kind": "spark", "spark_model": "deepseek-x"}]
-    resp = await auth_client.post("/api/v1/bench/challenges", json=body)
-    assert resp.status_code == 201, resp.text
-    entry = resp.json()["entries"][0]
-    assert entry["spark_model"] == "deepseek-x"
-    resolve_mock.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_create_challenge_multiple_auto_spark_specs_resolve_only_once(auth_client, monkeypatch):
-    """Review finding: N auto specs in one request must not fire N
-    sequential probes against Spark for the same answer."""
-    resolve_mock = AsyncMock(return_value="deepseek-live")
-    monkeypatch.setattr(orchestrator, "resolve_spark_model_or_422", resolve_mock)
-    body = _create_body()
-    body["models"] = [
-        {"label": "A", "source_kind": "spark", "spark_model": None},
-        {"label": "B", "source_kind": "spark", "spark_model": None},
-        {"label": "C", "source_kind": "spark", "spark_model": "already-set"},
-    ]
-    resp = await auth_client.post("/api/v1/bench/challenges", json=body)
-    assert resp.status_code == 201, resp.text
-    entries = {e["model_label"]: e["spark_model"] for e in resp.json()["entries"]}
-    assert entries["A"] == "deepseek-live"
-    assert entries["B"] == "deepseek-live"
-    assert entries["C"] == "already-set"
-    resolve_mock.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_create_challenge_spark_unreachable_422(auth_client, monkeypatch):
-    from fastapi import HTTPException
-
-    monkeypatch.setattr(
-        orchestrator, "resolve_spark_model_or_422",
-        AsyncMock(side_effect=HTTPException(422, "Spark is not reachable, so the active model cannot be resolved right now.")),
-    )
-    body = _create_body()
-    body["models"] = [{"label": "DeepSeek", "source_kind": "spark", "spark_model": None}]
-    resp = await auth_client.post("/api/v1/bench/challenges", json=body)
-    assert resp.status_code == 422
 
 
-@pytest.mark.asyncio
-async def test_create_challenge_from_template_freezes_copy(auth_client, session):
-    from app.models.prompt_template import PromptTemplate
-
-    tpl = PromptTemplate(title="Balls", body="frozen body", tags=["3d"])
-    session.add(tpl)
-    await session.commit()
-    await session.refresh(tpl)
-
-    resp = await auth_client.post(
-        "/api/v1/bench/challenges",
-        json=_create_body(prompt_text=None, prompt_template_id=str(tpl.id)),
-    )
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["prompt_text"] == "frozen body"
-    assert resp.json()["prompt_template_id"] == str(tpl.id)
 
 
-@pytest.mark.asyncio
-async def test_create_challenge_edited_text_wins_over_template_body(auth_client, session):
-    """When template_id is set AND prompt_text is provided (user edited),
-    the edited text should be used, not the template body. Template ID is kept for provenance."""
-    from app.models.prompt_template import PromptTemplate
-
-    tpl = PromptTemplate(title="Balls", body="original template body", tags=["3d"])
-    session.add(tpl)
-    await session.commit()
-    await session.refresh(tpl)
-
-    edited_text = "My edited version of the prompt"
-    resp = await auth_client.post(
-        "/api/v1/bench/challenges",
-        json=_create_body(
-            prompt_text=edited_text,
-            prompt_template_id=str(tpl.id)
-        ),
-    )
-    assert resp.status_code == 201, resp.text
-    data = resp.json()
-    assert data["prompt_text"] == edited_text, "Edited text should win over template body"
-    assert data["prompt_template_id"] == str(tpl.id), "Template ID should be preserved for provenance"
 
 
-@pytest.mark.asyncio
-async def test_series_numbering_increments_per_label(auth_client):
-    r1 = await auth_client.post(
-        "/api/v1/bench/challenges", json=_create_body(series_label="Spark Bench")
-    )
-    r2 = await auth_client.post(
-        "/api/v1/bench/challenges",
-        json=_create_body(title="Round 2", series_label="Spark Bench"),
-    )
-    assert r1.json()["series_no"] == 1
-    assert r2.json()["series_no"] == 2
 
 
 @pytest.mark.asyncio
@@ -282,35 +104,6 @@ async def test_detail_404(auth_client):
     assert resp.status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_draft_endpoint(auth_client, session, monkeypatch, make_board):
-    from app.services.x_publisher import DraftValidation
-    from app.verticals.bench_studio import drafts, routers
-
-    monkeypatch.setattr(
-        drafts.x_publisher, "validate_media",
-        lambda paths: DraftValidation(ok=True), raising=False,
-    )
-    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
-    ch = BenchChallenge(title="T", prompt_text="p", status="review",
-                        composed_video_path="/sd/grid.mp4")
-    session.add(ch)
-    await session.commit()
-    await session.refresh(ch)
-    session.add(BenchEntry(challenge_id=ch.id, model_label="A",
-                           source_kind="spark", status="rendered",
-                           video_path="/sd/a.mp4"))
-    await session.commit()
-
-    resp = await auth_client.post(
-        f"/api/v1/bench/challenges/{ch.id}/draft",
-        json={"tweet_text": "hello bench", "include_speed_labels": False,
-              "board_id": str(board.id)},
-    )
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["challenge_status"] == "drafted"
-    assert uuid.UUID(body["approval_id"])
 
 
 @pytest.mark.asyncio
@@ -765,39 +558,6 @@ async def test_recompose_endpoint_allows_single_recorded_entry(auth_client, sess
 # file that no longer exists.
 
 
-@pytest.mark.asyncio
-async def test_recompose_blocked_by_pending_x_post_approval(auth_client, session, make_board, tmp_path):
-    from app.models.approval import Approval
-
-    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
-    old_video = tmp_path / "grid-old.mp4"
-    old_video.write_bytes(b"old")
-
-    ch, _ = await _seed_challenge(
-        session, status="review",
-        entries=[
-            {"model_label": "A", "source_kind": "spark", "status": "rendered",
-             "video_path": "/sd/a.mp4"},
-            {"model_label": "B", "source_kind": "spark", "status": "rendered",
-             "video_path": "/sd/b.mp4"},
-        ],
-    )
-    ch.composed_video_path = str(old_video)
-    session.add(ch)
-    await session.commit()
-
-    session.add(Approval(
-        board_id=board.id, action_type="x_post", description="bench draft",
-        payload={"bench_challenge_id": str(ch.id), "media_paths": [str(old_video)]},
-        status="pending",
-    ))
-    await session.commit()
-
-    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/recompose")
-    assert resp.status_code == 409
-    assert "X-Post" in resp.json()["detail"]
-    orchestrator.recompose_challenge.assert_not_called()
-    assert old_video.exists()  # file must not be touched while the guard blocks
 
 
 @pytest.mark.asyncio
@@ -827,22 +587,6 @@ async def test_recompose_allowed_after_approval_resolved(auth_client, session, m
     orchestrator.recompose_challenge.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_rerender_blocked_by_pending_x_post_approval(auth_client, session, make_board):
-    from app.models.approval import Approval
-
-    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
-    ch, _ = await _seed_challenge(session, status="review")
-    session.add(Approval(
-        board_id=board.id, action_type="x_post", description="bench draft",
-        payload={"bench_challenge_id": str(ch.id)}, status="pending",
-    ))
-    await session.commit()
-
-    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/rerender")
-    assert resp.status_code == 409
-    assert "X-Post" in resp.json()["detail"]
-    orchestrator.rerender_challenge.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -899,26 +643,6 @@ async def test_entry_rerender_409_when_challenge_running(auth_client, session):
     orchestrator.rerender_entry.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_entry_rerender_blocked_by_pending_x_post_approval(auth_client, session, make_board):
-    from app.models.approval import Approval
-
-    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
-    ch, rows = await _seed_challenge(
-        session, status="review",
-        entries=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
-                  "artifact_path": "/sd/a/index.html"}],
-    )
-    session.add(Approval(
-        board_id=board.id, action_type="x_post", description="bench draft",
-        payload={"bench_challenge_id": str(ch.id)}, status="pending",
-    ))
-    await session.commit()
-
-    resp = await auth_client.post(f"/api/v1/bench/entries/{rows[0].id}/rerender")
-    assert resp.status_code == 409
-    assert "X-Post" in resp.json()["detail"]
-    orchestrator.rerender_entry.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,8 @@
 import { Suspense } from "react";
 import BenchStudioPage from "@/verticals/bench_studio/BenchStudioPage";
 
-// useSearchParams (the open challenge in `?challenge=`) needs a Suspense
+// useSearchParams (the test sheet in `?test=1&…`, the library in
+// `?view=library`, old `?challenge=` links → /bench/r/<id>) needs a Suspense
 // boundary in the app router.
 export default function Page() {
   return (

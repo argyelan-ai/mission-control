@@ -26,8 +26,17 @@ describe("effort level words — one source (common.effortLevel)", () => {
   });
 
   it("the bench keeps no second list of level words", () => {
-    expect((de.bench.effort as Record<string, unknown>).level).toBeUndefined();
-    expect((en.bench.effort as Record<string, unknown>).level).toBeUndefined();
+    // W1 (24.10.2026): the legacy bench words are gone; the W1 shared words
+    // (benchShared.level) say the same word as common.effortLevel, only in
+    // lower case where they sit inside a sentence ("high (default)").
+    expect("effort" in de.bench).toBe(false);
+    expect("effort" in en.bench).toBe(false);
+    for (const lang of [de, en]) {
+      for (const [level, word] of Object.entries(lang.benchShared.level)) {
+        const common = lang.common.effortLevel[level as keyof typeof lang.common.effortLevel];
+        expect(word.toLowerCase(), level).toBe(common.toLowerCase());
+      }
+    }
   });
 
   it("the chat's 'default' button starts with the same word as the level", () => {
@@ -36,7 +45,8 @@ describe("effort level words — one source (common.effortLevel)", () => {
   });
 
   it("no bench text appends an English effort word to a label any more", () => {
-    const dialog = de.bench.newChallengeDialog as Record<string, unknown>;
-    expect(dialog.labelEffortSuffix).toBeUndefined();
+    // The legacy "New challenge" dialog and its words are removed (W1).
+    expect("newChallengeDialog" in de.bench).toBe(false);
+    expect("newChallengeDialog" in en.bench).toBe(false);
   });
 });
