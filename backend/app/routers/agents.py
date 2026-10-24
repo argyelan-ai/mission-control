@@ -2522,13 +2522,16 @@ async def get_agent_task_sessions(
 #   - 2026-04-24 (PR #99/#110): install_completed/install_failed silent-drop
 # To add a new type → edit app/comment_types.py.
 from app.comment_types import DELIVERABLE_SYSTEM_TYPES as _DELIVER_SYSTEM_COMMENT_TYPES  # noqa: E402
+from app.comment_types import NOT_DELIVERED_USER_COMMENT_TYPES  # noqa: E402
 
 
 def _is_deliverable_for(c, agent_id) -> bool:
     """True if the comment should be delivered to the agent.
 
     Deliver:
-      (a) User comments (author_type='user')   -> the operator talks directly to the agent
+      (a) User comments (author_type='user')   -> the operator talks directly to the agent,
+          except record-only types (NOT_DELIVERED_USER_COMMENT_TYPES — the
+          approve note: the card is finished, nobody is to be woken by it)
       (b) Actionable events on the task, NOT from the agent itself
           (subtask_completed, resolution, blocker, system)
 
@@ -2537,7 +2540,7 @@ def _is_deliverable_for(c, agent_id) -> bool:
       - Routine comments (checkpoint, progress, message from other agents, audit, etc.)
     """
     if c.author_type == "user":
-        return True
+        return c.comment_type not in NOT_DELIVERED_USER_COMMENT_TYPES
     # The agent's own comments are NEVER delivered (author_agent_id == polling agent)
     if c.author_agent_id == agent_id:
         return False

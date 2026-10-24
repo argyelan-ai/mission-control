@@ -96,7 +96,11 @@ async def test_operator_override_stops_running_reviewer_turn(
             select(TaskComment).where(TaskComment.task_id == task.id)
             .order_by(TaskComment.created_at.asc())
         )).all()
-        stop_notes = [c for c in comments if c.comment_type == "system"
+        # On approve the stop note is a record ("system_notify"), not a
+        # delivered "system" comment — the card is finished, the hard
+        # interrupt alone ends the turn (operator report 24.10.2026, see
+        # test_review_decision_note_delivery.py).
+        stop_notes = [c for c in comments if c.comment_type == "system_notify"
                       and "Operator-Override" in c.content]
         assert len(stop_notes) == 1
         assert "approve" in stop_notes[0].content

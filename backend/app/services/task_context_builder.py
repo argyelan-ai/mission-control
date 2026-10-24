@@ -20,6 +20,7 @@ from sqlalchemy import and_, func, or_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.comment_types import review_note_filter
 from app.models.agent import Agent
 from app.models.board import Project
 from app.models.memory import BoardMemory
@@ -848,7 +849,7 @@ async def _load_dispatch_context(
                 select(TaskComment)
                 .where(
                     TaskComment.task_id == task.id,
-                    TaskComment.comment_type == "review",
+                    review_note_filter(),
                 )
                 .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
                 .limit(1)
