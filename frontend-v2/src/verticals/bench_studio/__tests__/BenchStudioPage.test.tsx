@@ -2,12 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 
-// P4 review SOLL-3: the open challenge lives in the URL (`/bench?challenge=<id>`).
-// These tests pin the page half of that contract: URL → selection, selection →
-// router.replace, tab clicks leave the detail, and the app route keeps the
-// Suspense boundary that useSearchParams needs in the app router.
+// Bench W1 (package D): /bench is the test list (TestList, P7); the prompt
+// library lives under ?view=library; the test sheet (TestSheetHost) is always
+// mounted; an old `/bench?challenge=<id>` link lands on the result page
+// `/bench/r/<id>` (the challenge id IS the test id).
 
 const nav = vi.hoisted(() => ({ search: "", replace: vi.fn() }));
 
@@ -21,20 +20,12 @@ vi.mock("@/components/layout/AppShell", () => ({
   default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-vi.mock("../ChallengesTab", () => ({
-  ChallengesTab: ({
-    selectedId,
-    onSelectedChange,
-  }: {
-    selectedId?: string | null;
-    onSelectedChange?: (id: string | null) => void;
-  }) => (
-    <div>
-      <span data-testid="selected">{selectedId ?? "none"}</span>
-      <button onClick={() => onSelectedChange?.("ch-7")}>open-ch-7</button>
-      <button onClick={() => onSelectedChange?.(null)}>close</button>
-    </div>
-  ),
+vi.mock("../w1/list/TestList", () => ({
+  TestList: () => <div data-testid="test-list" />,
+}));
+
+vi.mock("../w1/sheet/TestSheetHost", () => ({
+  TestSheetHost: () => <div data-testid="test-sheet-host" />,
 }));
 
 vi.mock("../PromptLibraryTab", () => ({
@@ -43,55 +34,42 @@ vi.mock("../PromptLibraryTab", () => ({
 
 import BenchStudioPage from "../BenchStudioPage";
 
-describe("BenchStudioPage — open challenge in the URL (P4, t2 SOLL-4)", () => {
+describe("BenchStudioPage — W1 list, library, sheet", () => {
   beforeEach(() => {
     nav.search = "";
     nav.replace.mockClear();
   });
 
-  it("reads the open challenge from ?challenge=", () => {
-    nav.search = "challenge=ch-9";
+  it("shows the test list and mounts the test sheet", () => {
     render(<BenchStudioPage />);
-    expect(screen.getByTestId("selected").textContent).toBe("ch-9");
-  });
-
-  it("no ?challenge= means the list", () => {
-    render(<BenchStudioPage />);
-    expect(screen.getByTestId("selected").textContent).toBe("none");
-  });
-
-  it("opening a challenge writes it into the URL and keeps other params", async () => {
-    nav.search = "foo=1";
-    render(<BenchStudioPage />);
-    await userEvent.click(screen.getByRole("button", { name: "open-ch-7" }));
-    expect(nav.replace).toHaveBeenCalledWith("/bench?foo=1&challenge=ch-7", { scroll: false });
-  });
-
-  it("closing the detail removes ?challenge= (bare path when nothing is left)", async () => {
-    nav.search = "challenge=ch-9";
-    render(<BenchStudioPage />);
-    await userEvent.click(screen.getByRole("button", { name: "close" }));
-    expect(nav.replace).toHaveBeenCalledWith("/bench", { scroll: false });
-  });
-
-  it("an open challenge replaces the list header: no page title, no tabs (r2 S3)", () => {
-    nav.search = "challenge=ch-9";
-    render(<BenchStudioPage />);
-    expect(screen.queryByRole("heading", { name: "Benchmark Studio" })).toBeNull();
-    expect(screen.queryByRole("tablist")).toBeNull();
-    expect(screen.getByTestId("selected").textContent).toBe("ch-9");
-  });
-
-  it("the list keeps its header and tabs", () => {
-    render(<BenchStudioPage />);
-    expect(screen.getByRole("heading", { name: "Benchmark Studio" })).toBeTruthy();
-    expect(screen.getByRole("tablist")).toBeTruthy();
-  });
-
-  it("tab clicks without an open challenge do not touch the URL", async () => {
-    render(<BenchStudioPage />);
-    await userEvent.click(screen.getByRole("tab", { name: "Challenges" }));
+    expect(screen.getByTestId("test-list")).toBeInTheDocument();
+    expect(screen.getByTestId("test-sheet-host")).toBeInTheDocument();
+    expect(screen.queryByTestId("library")).toBeNull();
     expect(nav.replace).not.toHaveBeenCalled();
+  });
+
+  it("the sheet stays mounted while ?test=1 is set", () => {
+    nav.search = "test=1&from=quick";
+    render(<BenchStudioPage />);
+    expect(screen.getByTestId("test-list")).toBeInTheDocument();
+    expect(screen.getByTestId("test-sheet-host")).toBeInTheDocument();
+  });
+
+  it("?view=library shows the prompt library with a way back", () => {
+    nav.search = "view=library";
+    render(<BenchStudioPage />);
+    expect(screen.getByTestId("library")).toBeInTheDocument();
+    expect(screen.queryByTestId("test-list")).toBeNull();
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Prompt library");
+    expect(screen.getByRole("link", { name: /Benchmark/ })).toHaveAttribute("href", "/bench");
+    expect(screen.getByTestId("test-sheet-host")).toBeInTheDocument();
+  });
+
+  it("an old ?challenge=<id> link goes to the result page", () => {
+    nav.search = "challenge=ch-9";
+    render(<BenchStudioPage />);
+    expect(nav.replace).toHaveBeenCalledWith("/bench/r/ch-9");
+    expect(screen.queryByTestId("test-list")).toBeNull();
   });
 });
 
@@ -99,5 +77,27 @@ describe("bench app route — Suspense boundary for useSearchParams", () => {
   it("wraps BenchStudioPage in <Suspense> (Next app router needs it for useSearchParams)", () => {
     const src = readFileSync(path.resolve(__dirname, "../../../app/bench/page.tsx"), "utf8");
     expect(src).toMatch(/<Suspense[^>]*>\s*<BenchStudioPage\s*\/>\s*<\/Suspense>/);
+  });
+});
+
+describe("legacy UI is gone (W1.8 kill list)", () => {
+  it("the old dialog, detail and list files no longer exist", () => {
+    const dir = path.resolve(__dirname, "..");
+    for (const f of [
+      "NewChallengeDialog.tsx",
+      "EffortChips.tsx",
+      "ChallengeDetail.tsx",
+      "DraftDialog.tsx",
+      "EntryEffort.tsx",
+      "EntryTaskState.tsx",
+      "ChallengesTab.tsx",
+    ]) {
+      expect(() => readFileSync(path.join(dir, f)), f).toThrow();
+    }
+  });
+
+  it("the legacy client no longer offers the removed routes", () => {
+    const src = readFileSync(path.resolve(__dirname, "../api.ts"), "utf8");
+    expect(src).not.toMatch(/spark-models|\/draft|effort-levels/);
   });
 });

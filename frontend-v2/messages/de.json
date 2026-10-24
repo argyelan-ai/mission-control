@@ -5079,7 +5079,82 @@
     }
   },
   "benchHome": {
-    "_owner": "package D — entries (P1 Runtimes, P1b switch toggle, P2 QuickSheet, P8 library, Inbox item) + list (P7). Add keys below this line only."
+    "_owner": "package D — entries (P1 Runtimes, P1b switch toggle, P2 QuickSheet, P8 library, Inbox item) + list (P7). Add keys below this line only.",
+    "title": "Benchmark",
+    "testModel": "Modell testen",
+    "lead": "{count, plural, one {# Test} other {# Tests}} · zuletzt {date}",
+    "leadNoDate": "{count, plural, one {# Test} other {# Tests}}",
+    "filter": {
+      "label": "Filter",
+      "model": "Modell",
+      "device": "Gerät",
+      "harness": "Harness",
+      "runClass": "Klasse",
+      "all": "Alle",
+      "active": "{label}: {value}",
+      "clear": "Filter {label} entfernen",
+      "reset": "Filter zurücksetzen",
+      "noHitOne": "Kein Test mit {value}",
+      "noHitMany": "Kein Test mit diesen Filtern"
+    },
+    "harnessTag": {
+      "api": "API pur",
+      "omp": "omp",
+      "hermes": "Hermes",
+      "grok-build": "Grok Build",
+      "claude-code": "Claude Code"
+    },
+    "progress": "{state} · {done}/{total}",
+    "loading": "Wird geladen …",
+    "loadFailed": "Die Liste lässt sich gerade nicht laden.",
+    "retry": "Nochmal versuchen",
+    "empty": {
+      "title": "Noch kein Test",
+      "body": "Tippe auf einer Runtime auf „Testen“. MC füllt Modell, Gerät, Harness und Effort selbst aus.",
+      "bodyDesktop": "Danach siehst du hier jedes Ergebnis mit Video und Zahlen.",
+      "toRuntimes": "Zu den Runtimes"
+    },
+    "archiveShow": "Archiv anzeigen",
+    "archiveHide": "Archiv ausblenden",
+    "library": "Prompt-Bibliothek",
+    "libraryBack": "Benchmark",
+    "libraryLead": "Vorlagen für Tests. „Testen mit…“ öffnet einen Test mit dieser Vorlage.",
+    "pickHint": {
+      "title": "Wähle links einen Test",
+      "body": "Oder teste das Modell, das gerade läuft. MC füllt Modell, Gerät, Harness und Effort selbst aus.",
+      "action": "Laufendes Modell testen"
+    },
+    "testWith": "Testen mit…",
+    "testWithAria": "Testen mit {title}",
+    "runtimes": {
+      "test": "Testen",
+      "testWaits": "Testen (wartet)",
+      "testFrom": "Testen ab {time}",
+      "testRunning": "Test läuft",
+      "lastTest": "Letzter Test: {date} · {title}",
+      "freshNote": "Die ersten 15 min misst MC nicht: das Modell wärmt noch auf.",
+      "busyNote": "Ein Test wartet, bis die Box frei ist. MC startet ihn selbst, spätestens nach 10 min.",
+      "noModel": "Testen geht, sobald ein Modell läuft",
+      "blocked": "Testen geht gerade nicht"
+    },
+    "autoTest": {
+      "label": "Danach automatisch testen",
+      "on": "Standard-Test, 3 Läufe. Startet 15 min nach dem Laden. Das Ergebnis kommt in den Eingang.",
+      "off": "Nach diesem Wechsel startet kein Test.",
+      "scheduledAt": "Test geplant: startet frühestens um {time}. Das Ergebnis kommt in den Eingang.",
+      "scheduled": "Test geplant: startet 15 min nach dem Laden. Das Ergebnis kommt in den Eingang.",
+      "failed": "Den Test konnte MC nicht planen — der Wechsel läuft trotzdem. Teste später auf der Karte."
+    },
+    "quick": {
+      "row": "Modell testen",
+      "hint": "Das laufende Modell, alles vorausgefüllt"
+    },
+    "inbox": {
+      "type": "Test fertig",
+      "open": "Ergebnis ansehen",
+      "done": "Erledigt",
+      "untitled": "Benchmark-Test"
+    }
   },
   "nightShift": {
     "runTonight": "Heute Nacht ausführen",

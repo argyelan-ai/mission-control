@@ -1,23 +1,24 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
-import { Pencil, Play, Plus, Trash2 } from "lucide-react";
+import { FlaskConical, Pencil, Plus, Trash2 } from "lucide-react";
 import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { Pill } from "@/components/shared/Pill";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { benchApi } from "@/verticals/bench_studio/api";
+import { benchTestHref } from "@/lib/benchLinks";
 import type { BenchChallenge, PromptTemplate } from "./types";
 
-export function PromptLibraryTab({
-  onStartChallenge,
-}: {
-  onStartChallenge: (tpl: PromptTemplate) => void;
-}) {
+/** Prompt library (P8, kept): "Testen mit…" opens the W1 test sheet with
+ *  this template (`/bench?test=1&template=<id>&from=template`). */
+export function PromptLibraryTab() {
   const t = useTranslations("bench.promptLibrary");
+  const tHome = useTranslations("benchHome");
   const tCommon = useTranslations("bench.common");
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
@@ -138,14 +139,14 @@ export function PromptLibraryTab({
                 {tpl.title}
               </span>
               <div className="flex items-center gap-3 shrink-0">
-                <button
-                  onClick={() => onStartChallenge(tpl)}
-                  aria-label={t("startChallenge")}
-                  className="flex items-center gap-1 text-xs font-medium"
-                  style={{ color: C.accent }}
+                <Link
+                  href={benchTestHref({ templateId: tpl.id, trigger: "template" })}
+                  aria-label={tHome("testWithAria", { title: tpl.title })}
+                  className="inline-flex items-center gap-2 min-h-11 px-2 rounded-md text-sm font-medium hover:bg-[var(--color-bg-hover)]"
+                  style={{ color: C.textPrimary }}
                 >
-                  <Play size={12} /> {t("startChallenge")}
-                </button>
+                  <FlaskConical size={15} aria-hidden /> {tHome("testWith")}
+                </Link>
                 <button
                   onClick={() => {
                     setEditing(tpl);

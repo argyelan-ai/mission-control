@@ -14,6 +14,8 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
 import { InstallRequestCard } from "./InstallRequestCard";
 import { XPostApprovalCard } from "./XPostApprovalCard";
+import { BENCH_RESULT_ACTION, BenchResultCard } from "./BenchResultCard";
+import { benchEnabled } from "@/lib/benchLinks";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C, alpha } from "@/lib/colors";
 import type { Approval, AutonomyLevel } from "@/lib/types";
@@ -108,6 +110,11 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
     return (
       <XPostApprovalCard approval={approval} onResolve={onResolve} loading={loading} />
     );
+  }
+
+  // Bench W1: a finished test is a notice with a link, not a decision.
+  if (benchEnabled && approval.action_type === BENCH_RESULT_ACTION) {
+    return <BenchResultCard approval={approval} onResolve={onResolve} loading={loading} />;
   }
 
   const isBlocker = approval.action_type === "blocker_decision";

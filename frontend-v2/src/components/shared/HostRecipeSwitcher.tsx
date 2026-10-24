@@ -25,13 +25,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
 import { api } from "@/lib/api";
 import { pausedRuntimeDetail } from "@/lib/recipeStart";
 import { C, STATUS, STATUS_TEXT, alpha } from "@/lib/colors";
 import { useHeadConflictText } from "@/components/heads/HeadOccupancy";
 import type { HostRecipe } from "@/lib/types";
+import { benchEnabled, scheduleBenchAutoTest } from "@/lib/benchLinks";
 
 // Ein Schlüssel für alle Leser — SlotStage, Detail-Panel und der Deploy im
 // Modell-Browser invalidieren denselben Cache-Eintrag.
@@ -129,6 +130,7 @@ export function HostRecipeSwitcher({
   hideWhenEmpty = false,
   label = null,
   primary = false,
+  secondary = false,
   blockedBy = null,
   onBlocked,
 }: {
@@ -150,6 +152,9 @@ export function HostRecipeSwitcher({
   /** Runtimes-Bühne v2: Akzentfläche + dunkler Text statt der ruhigen
    *  Registerzeile — für die primäre Aktion der Karte (Switch/Start model). */
   primary?: boolean;
+  /** Bench W1 P1: on the card that leads with "Testen" the switch is the
+   *  second action — a bordered button in the sans voice, 44px tall. */
+  secondary?: boolean;
   /** Head launcher §6.7: a head works on this box — switching would cut it
    *  off. The trigger stays clickable, but a click opens nothing: it calls
    *  `onBlocked` so the caller can show the reason at that moment. The
@@ -158,6 +163,8 @@ export function HostRecipeSwitcher({
   onBlocked?: () => void;
 }) {
   const t = useTranslations("runtimes.recipeSwitcher");
+  const tBench = useTranslations("benchHome.autoTest");
+  const locale = useLocale();
   const headConflictText = useHeadConflictText();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -166,6 +173,13 @@ export function HostRecipeSwitcher({
   const [workerHostId, setWorkerHostId] = useState<string | null>(null);
   const [starting, setStarting] = useState<{ slug: string; name: string; since: number; worker: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Bench W1 P1b: "Danach automatisch testen" — on by default, for THIS
+  // switch only (reset whenever a recipe is picked). After the switch the
+  // planned test (or why it could not be planned) is a quiet line.
+  const [autoTest, setAutoTest] = useState(true);
+  const [autoTestNote, setAutoTestNote] = useState<
+    { kind: "scheduled"; notBefore: string | null } | { kind: "failed" } | null
+  >(null);
   const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -187,7 +201,7 @@ export function HostRecipeSwitcher({
   const startMutation = useMutation({
     // Solo bleibt ein Aufruf ohne Körper — nur der Duo-Start schickt die
     // gewählte Worker-Box mit ({"worker_host_id"}, Vertrag P3).
-    mutationFn: ({ recipe, worker }: { recipe: HostRecipe; worker: string | null }) =>
+    mutationFn: ({ recipe, worker }: { recipe: HostRecipe; worker: string | null; autoTest: boolean }) =>
       worker
         ? api.hosts.startRecipe(hostId, recipe.slug, { worker_host_id: worker })
         : api.hosts.startRecipe(hostId, recipe.slug),
@@ -201,7 +215,7 @@ export function HostRecipeSwitcher({
         worker: recipe.candidate_workers.find((w) => w.host_id === worker)?.slug ?? null,
       });
     },
-    onSuccess: (result) => {
+    onSuccess: (result, { recipe, autoTest: wantsTest }) => {
       // Das Backend nennt die Box, die es wirklich genommen hat — die zeigen
       // wir, nicht unsere Vorauswahl (sie könnte abweichen).
       if (result?.worker_slug) {
@@ -212,6 +226,15 @@ export function HostRecipeSwitcher({
       // Ein Duo-Start ändert die Belegung der Flotte (runtime_hosts) und den
       // gemerkten Autostart-Slug am Kopf — beides hängt an ["hosts"].
       queryClient.invalidateQueries({ queryKey: ["hosts"] });
+      // Only after a successful switch, and never able to undo it: a failed
+      // schedule is a quiet line, not an error (W1.11).
+      if (wantsTest && benchEnabled) {
+        scheduleBenchAutoTest(hostId, recipe.slug)
+          .then((res) => {
+            if (res) setAutoTestNote({ kind: "scheduled", notBefore: res.not_before });
+          })
+          .catch(() => setAutoTestNote({ kind: "failed" }));
+      }
     },
     onError: (err: Error) => {
       setStarting(null);
@@ -287,6 +310,8 @@ export function HostRecipeSwitcher({
   const select = (recipe: HostRecipe) => {
     setOpen(false);
     setConfirm(recipe);
+    setAutoTest(true);
+    setAutoTestNote(null);
     // Vorauswahl = erster Kandidat (dieselbe Reihenfolge, die das Backend
     // ohne Angabe nehmen würde) — der Operator kann sie ändern.
     setWorkerHostId(recipe.topology.nodes === 1 ? null : recipe.candidate_workers[0]?.host_id ?? null);
@@ -321,12 +346,19 @@ export function HostRecipeSwitcher({
           // sie neben kompakten Aktionsknöpfen steht. `compact` bleibt nur
           // für den ruhigen Registerzeilen-Auslöser (Panel/SlotStage) in
           // Kraft, wenn `primary` nicht gesetzt ist.
+          data-variant={primary ? "primary" : secondary ? "secondary" : "register"}
           className={`flex items-center justify-center gap-2 rounded-md cursor-pointer max-w-full disabled:opacity-40 disabled:cursor-not-allowed ${
-            primary ? "h-10 px-3.5 text-sm font-semibold" : compact ? "h-7 px-2.5 text-[11px]" : "px-3 py-2 text-xs"
+            primary
+              ? "h-10 px-3.5 text-sm font-semibold"
+              : secondary
+                ? "h-11 px-3 text-sm font-medium hover:bg-[var(--color-bg-hover)]"
+                : compact
+                  ? "h-7 px-2.5 text-[11px]"
+                  : "px-3 py-2 text-xs"
           }`}
           style={{
-            background: primary ? C.accent : C.bgSurface,
-            border: `1px solid ${primary ? C.accent : open ? C.borderAccent : C.border}`,
+            background: primary ? C.accent : secondary ? "transparent" : C.bgSurface,
+            border: `1px solid ${primary ? C.accent : open ? C.borderAccent : secondary ? C.borderActive : C.border}`,
             color: primary ? C.onAccent : C.textPrimary,
           }}
         >
@@ -336,9 +368,9 @@ export function HostRecipeSwitcher({
           {runningRecipe && !label && (
             <span aria-hidden className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: STATUS.online }} />
           )}
-          <span className={`truncate max-w-[260px] ${primary ? "" : "font-mono"}`}>{triggerLabel}</span>
-          {primary ? (
-            <ChevronDown size={16} aria-hidden style={{ color: C.onAccent }} />
+          <span className={`truncate max-w-[260px] ${primary || secondary ? "" : "font-mono"}`}>{triggerLabel}</span>
+          {primary || secondary ? (
+            <ChevronDown size={16} aria-hidden style={{ color: primary ? C.onAccent : C.textSecondary }} />
           ) : (
             <span aria-hidden style={{ color: C.textDim, fontSize: "9px" }}>▾</span>
           )}
@@ -387,7 +419,13 @@ export function HostRecipeSwitcher({
           <button
             type="button"
             disabled={blocker != null}
-            onClick={() => startMutation.mutate({ recipe: confirm, worker: confirm.topology.nodes === 1 ? null : workerHostId })}
+            onClick={() =>
+              startMutation.mutate({
+                recipe: confirm,
+                worker: confirm.topology.nodes === 1 ? null : workerHostId,
+                autoTest: benchEnabled && autoTest,
+              })
+            }
             className="rounded-sm px-2 py-1 text-[10px] font-semibold cursor-pointer disabled:cursor-not-allowed"
             style={{
               background: blocker != null ? C.bgHover : C.accent,
@@ -424,6 +462,44 @@ export function HostRecipeSwitcher({
             </span>
           )}
 
+          {/* Bench W1 P1b: "Danach automatisch testen" belongs to this
+              decision, so it sits in the confirmation, not in a dialog. */}
+          {benchEnabled && blocker == null && (
+            <span className="flex items-start gap-3 w-full pt-2" data-testid="recipe-autotest">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoTest}
+                aria-labelledby="recipe-autotest-label"
+                aria-describedby="recipe-autotest-sentence"
+                onClick={() => setAutoTest((v) => !v)}
+                className="shrink-0 flex items-center justify-center w-11 h-11 -my-3 -ml-1 cursor-pointer rounded-full"
+              >
+                <span
+                  aria-hidden
+                  className="relative block w-9 h-5 rounded-full transition-colors"
+                  style={{
+                    background: autoTest ? C.accent : C.bgElevated,
+                    border: `1px solid ${autoTest ? C.accent : C.border}`,
+                  }}
+                >
+                  <span
+                    className="absolute w-3.5 h-3.5 rounded-full transition-[left]"
+                    style={{ top: "2px", left: autoTest ? "calc(100% - 16px)" : "2px", background: autoTest ? C.onAccent : C.textMuted }}
+                  />
+                </span>
+              </button>
+              <span className="flex flex-col gap-1 min-w-0 whitespace-normal">
+                <span id="recipe-autotest-label" className="text-xs font-medium" style={{ color: C.textPrimary }}>
+                  {tBench("label")}
+                </span>
+                <span id="recipe-autotest-sentence" className="text-xs" style={{ color: C.textMuted }}>
+                  {autoTest ? tBench("on") : tBench("off")}
+                </span>
+              </span>
+            </span>
+          )}
+
           {/* Vorflug-Hinweise dort, wo geklickt wird. Sie sperren nichts —
               wer den Start trotzdem will, klickt ihn; er weiss jetzt nur,
               woran er scheitern kann. */}
@@ -454,6 +530,25 @@ export function HostRecipeSwitcher({
           <span aria-hidden className="w-1.5 h-1.5 rounded-full shrink-0 animate-pulse" style={{ background: STATUS.warning }} />
           <span className="font-mono truncate max-w-[420px]">{startingLabel}</span>
         </div>
+      )}
+
+      {autoTestNote && (
+        <span
+          className="text-xs w-full order-last whitespace-normal"
+          style={{ color: C.textMuted }}
+          data-testid="recipe-autotest-note"
+          role="status"
+        >
+          {autoTestNote.kind === "failed"
+            ? tBench("failed")
+            : autoTestNote.notBefore && !Number.isNaN(new Date(autoTestNote.notBefore).getTime())
+              ? tBench("scheduledAt", {
+                  time: new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(
+                    new Date(autoTestNote.notBefore),
+                  ),
+                })
+              : tBench("scheduled")}
+        </span>
       )}
 
       {recipesQuery.isError && (
