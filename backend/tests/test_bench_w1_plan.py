@@ -8,20 +8,14 @@ runtime. Engines are faked (no network)."""
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 
 import pytest
 from sqlmodel import select
 
 pytest.importorskip("app.verticals.bench_studio")
 
-from app.models.agent import Agent  # noqa: E402
 from app.models.bench import BenchChallenge, BenchEntry, BenchProbe  # noqa: E402
-from app.models.board import Board  # noqa: E402
-from app.models.host import Host  # noqa: E402
-from app.models.model_usage import ModelPrice  # noqa: E402
-from app.models.runtime import Runtime  # noqa: E402
-from app.models.runtime_host import RuntimeHost  # noqa: E402
 from app.verticals.bench_studio import w1_plan, w1_schemas as s  # noqa: E402
 
 from tests.test_bench_w1_fleet import (  # noqa: E402,F401 — shared fleet + the engines fixture

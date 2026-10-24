@@ -262,7 +262,7 @@ async def test_kit_download_token_and_files(auth_client, session, engines, world
 
 @pytest.mark.asyncio
 async def test_red_gate_kit_is_preview_only_and_files_409(auth_client, session, engines, client):
-    fleet = await seed_fleet(session)
+    await seed_fleet(session)
     ch = BenchChallenge(title="Shot", prompt_text="shot", status="review")
     session.add(ch)
     await session.flush()

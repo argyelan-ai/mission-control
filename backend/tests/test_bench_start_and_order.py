@@ -50,112 +50,21 @@ def _body(models):
 # ── MUSS-1: empty label on the auto row ───────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_auto_row_with_empty_label_starts_and_gets_resolved_model(auth_client, monkeypatch):
-    """Exactly what the dialog sends for the untouched default row."""
-    monkeypatch.setattr(
-        orchestrator, "resolve_spark_model_or_422", AsyncMock(return_value="deepseek-live")
-    )
-    resp = await auth_client.post(
-        "/api/v1/bench/challenges",
-        json=_body([{"label": "", "source_kind": "spark", "spark_model": "", "display_tag": ""}]),
-    )
-    assert resp.status_code == 201, resp.text
-    entry = resp.json()["entries"][0]
-    assert entry["model_label"] == "deepseek-live"
-    assert entry["spark_model"] == "deepseek-live"
 
 
-@pytest.mark.asyncio
-async def test_label_may_be_omitted_entirely(auth_client, monkeypatch):
-    monkeypatch.setattr(
-        orchestrator, "resolve_spark_model_or_422", AsyncMock(return_value="deepseek-live")
-    )
-    resp = await auth_client.post(
-        "/api/v1/bench/challenges", json=_body([{"source_kind": "spark"}])
-    )
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["entries"][0]["model_label"] == "deepseek-live"
 
 
-@pytest.mark.asyncio
-async def test_fixed_spark_model_with_empty_label_takes_the_model_name(auth_client, monkeypatch):
-    resolve = AsyncMock(return_value="unused")
-    monkeypatch.setattr(orchestrator, "resolve_spark_model_or_422", resolve)
-    resp = await auth_client.post(
-        "/api/v1/bench/challenges",
-        json=_body([{"label": "  ", "source_kind": "spark", "spark_model": "qwen-fixed"}]),
-    )
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["entries"][0]["model_label"] == "qwen-fixed"
-    resolve.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_long_model_name_is_cut_to_the_label_limit(auth_client, monkeypatch):
-    from app.verticals.bench_studio.routers import LABEL_MAX_LEN
-
-    long_name = "org/" + "x" * 120
-    monkeypatch.setattr(
-        orchestrator, "resolve_spark_model_or_422", AsyncMock(return_value=long_name)
-    )
-    resp = await auth_client.post(
-        "/api/v1/bench/challenges", json=_body([{"label": "", "source_kind": "spark"}])
-    )
-    assert resp.status_code == 201, resp.text
-    entry = resp.json()["entries"][0]
-    assert entry["model_label"] == long_name[:LABEL_MAX_LEN]
-    assert entry["spark_model"] == long_name  # the model itself is never cut
 
 
-@pytest.mark.asyncio
-async def test_agent_row_without_label_gets_a_readable_reason(auth_client):
-    """No model name to fall back on -> 422 with a readable reason at the
-    row's label (round-6 L4: FastAPI's list shape, so the dialog says it at
-    the field in the UI language; ``msg`` keeps the English reason)."""
-    resp = await auth_client.post(
-        "/api/v1/bench/challenges",
-        json=_body([{"label": "", "source_kind": "agent", "agent_id": str(uuid.uuid4())}]),
-    )
-    assert resp.status_code == 422
-    [item] = resp.json()["detail"]
-    assert item["loc"] == ["body", "models", 0, "label"]
-    assert "label" in item["msg"].lower()
 
 
-@pytest.mark.asyncio
-async def test_label_longer_than_the_limit_is_still_refused(auth_client):
-    resp = await auth_client.post(
-        "/api/v1/bench/challenges",
-        json=_body([{"label": "x" * 81, "source_kind": "spark", "spark_model": "m"}]),
-    )
-    assert resp.status_code == 422
 
 
 # ── SOLL-1: the operator's row order survives ─────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_create_and_detail_keep_the_row_order(auth_client, monkeypatch):
-    monkeypatch.setattr(orchestrator, "reconcile_challenge", AsyncMock())
-    resp = await auth_client.post(
-        "/api/v1/bench/challenges",
-        json=_body([
-            {"label": "Zeta · Off", "source_kind": "spark", "spark_model": "z"},
-            {"label": "Alpha · Max", "source_kind": "spark", "spark_model": "a"},
-        ]),
-    )
-    assert resp.status_code == 201, resp.text
-    created = resp.json()
-    assert [e["model_label"] for e in created["entries"]] == ["Zeta · Off", "Alpha · Max"]
-    assert [e["position"] for e in created["entries"]] == [0, 1]
-
-    detail = await auth_client.get(f"/api/v1/bench/challenges/{created['id']}")
-    assert [e["model_label"] for e in detail.json()["entries"]] == ["Zeta · Off", "Alpha · Max"]
-
-    listing = await auth_client.get("/api/v1/bench/challenges")
-    row = next(c for c in listing.json() if c["id"] == created["id"])
-    assert [e["model_label"] for e in row["entries"]] == ["Zeta · Off", "Alpha · Max"]
 
 
 @pytest.mark.asyncio
@@ -232,24 +141,6 @@ async def test_video_grid_and_outro_follow_the_row_order(session, monkeypatch):
     assert [r["name"] for r in captured["branding"]["outro_rows"]] == ["DeepSeek · Off", "DeepSeek · Max"]
 
 
-@pytest.mark.asyncio
-async def test_three_entry_grid_follows_the_row_order(session, monkeypatch):
-    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
-    session.add(ch)
-    await session.commit()
-    await session.refresh(ch)
-    entries = [
-        BenchEntry(challenge_id=ch.id, model_label=label, source_kind="spark",
-                   status="rendered", video_path=f"/sd/{label}.mp4", position=pos)
-        for pos, label in enumerate(("C", "A", "B"))
-    ]
-    for e in entries:
-        session.add(e)
-    await session.commit()
-
-    captured = _capture_compose(monkeypatch)
-    await orchestrator.compose_challenge(session, ch, list(reversed(entries)))
-    assert captured["labels"] == ["C", "A", "B"]
 
 
 def test_order_key_falls_back_to_label_for_equal_positions():

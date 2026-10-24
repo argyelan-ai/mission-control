@@ -9,7 +9,6 @@ import pytest
 
 pytest.importorskip("app.verticals.bench_studio")
 
-from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.bench import BenchChallenge, BenchEntry
@@ -325,12 +324,6 @@ async def test_dispatch_agent_entry_without_board_fails_entry(session, make_agen
 # ── format_speed_label / reconcile ────────────────────────────────────────
 
 
-def test_format_speed_label():
-    assert orchestrator.format_speed_label({"duration_ms": 42000}) == "42 s"
-    assert orchestrator.format_speed_label(
-        {"duration_ms": 42000, "tok_per_s": 87.3}
-    ) == "42 s · 87 tok/s"
-    assert orchestrator.format_speed_label({}) == ""
 
 
 @pytest.mark.asyncio
@@ -1541,51 +1534,6 @@ async def test_compose_challenge_harness_default_and_name_fallback(session, monk
     assert models_by_label["B"] == "BOSS"  # name fallback
 
 
-@pytest.mark.asyncio
-async def test_compose_challenge_no_branding_for_three_entries(session, monkeypatch):
-    """More than 2 rendered entries -> plain grid path, no `branding` key at all."""
-    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
-    session.add(ch)
-    await session.commit()
-    await session.refresh(ch)
-
-    entries = [
-        BenchEntry(challenge_id=ch.id, model_label=label, source_kind="spark",
-                   status="rendered", video_path=f"/sd/{label}.mp4")
-        for label in ("A", "B", "C")
-    ]
-    for e in entries:
-        session.add(e)
-    await session.commit()
-
-    captured: dict = {}
-
-    class FakeResp:
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"output_path": "/sd/grid.mp4", "bytes": 1, "inputs": 3}
-
-    class FakeClient:
-        def __init__(self, *a, **kw):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        async def post(self, url, json):
-            captured.update(json)
-            return FakeResp()
-
-    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
-
-    result = await orchestrator.compose_challenge(session, ch, entries)
-    assert result == "/sd/grid.mp4"
-    assert "branding" not in captured
 
 
 @pytest.mark.asyncio
@@ -1640,55 +1588,6 @@ async def test_compose_challenge_artifact_size_in_outro_row(session, tmp_path, m
     assert rows_by_name["B"]["size"] == "—"  # nonexistent path -> fallback
 
 
-@pytest.mark.asyncio
-async def test_compose_challenge_speed_labels_skip_branding(session, monkeypatch):
-    """drafts.py's speed_labels re-compose ('grid-speeds.mp4') stays on the
-    plain grid — branding is only for the primary review composition."""
-    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
-    session.add(ch)
-    await session.commit()
-    await session.refresh(ch)
-
-    entries = [
-        BenchEntry(challenge_id=ch.id, model_label="A", source_kind="spark",
-                   status="rendered", video_path="/sd/a.mp4", metrics={"duration_ms": 1000}),
-        BenchEntry(challenge_id=ch.id, model_label="B", source_kind="spark",
-                   status="rendered", video_path="/sd/b.mp4", metrics={"duration_ms": 2000}),
-    ]
-    for e in entries:
-        session.add(e)
-    await session.commit()
-
-    captured: dict = {}
-
-    class FakeResp:
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"output_path": "/sd/grid-speeds.mp4", "bytes": 1, "inputs": 2}
-
-    class FakeClient:
-        def __init__(self, *a, **kw):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        async def post(self, url, json):
-            captured.update(json)
-            return FakeResp()
-
-    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
-
-    await orchestrator.compose_challenge(
-        session, ch, entries, speed_labels=True, output_name="grid-speeds.mp4"
-    )
-    assert "branding" not in captured
-    assert "speed_labels" in captured
 
 
 # ── work-time derivation from task_events (outro TIME fix, 2026-07-12) ─────

@@ -211,69 +211,6 @@ async def cached_probe(session: AsyncSession, model: str) -> BenchProbe | None:
     return row
 
 
-async def stored_probe(session: AsyncSession, model: str) -> BenchProbe | None:
-    """What the dialog may show WITHOUT touching the box: the stored probe
-    for ``model`` on the Spark as it runs now — a fresh one, or a failed one
-    (so the dialog can offer "check again"). ``None`` = never checked for
-    this engine run (or the result went stale). No request, no write."""
-    runtime = await spark_runtime(session)
-    runtime_id = runtime.id if runtime is not None else None
-    serving_since = runtime.serving_since if runtime is not None else None
-    row = await _cached(session, runtime_id, model, serving_since)
-    if row is None:
-        return None
-    if row.status == "failed" or _fresh(row, serving_since is not None):
-        return row
-    return None
-
-
-async def spark_busy_reason(session: AsyncSession) -> str | None:
-    """Why a probe must not run now, or None when the Spark is idle.
-
-    A probe is 2-4 real requests against the box. Not while a bench run
-    generates there, and not while an agent bound to a Spark runtime row
-    (recipe or slot) works on a task — the operator rule "check running
-    tasks before loading the Spark"."""
-    from app.models.agent import Agent
-    from app.models.bench import BenchChallenge, BenchEntry
-    from app.services.runtime_model_resolver import spark_runtime_candidates
-
-    # Only entries of a challenge that is still generating: a left-over row
-    # under a stopped/failed challenge is no run. A run cut off by a restart
-    # is healed by the bench sweep within a minute (review SHOULD-2, PR #955).
-    running = (
-        await session.exec(
-            select(BenchChallenge.title)
-            .join(BenchEntry, BenchEntry.challenge_id == BenchChallenge.id)  # type: ignore[arg-type]
-            .where(
-                BenchEntry.source_kind == "spark",
-                BenchEntry.status == "generating",
-                BenchChallenge.status == "generating",
-            )
-        )
-    ).first()
-    if running is not None:
-        return (
-            f"A bench run is generating on the Spark right now (challenge “{running}”) "
-            "— check again when it is done."
-        )
-    runtime_ids = [r.id for r in await spark_runtime_candidates(session)]
-    if not runtime_ids:
-        return None
-    busy = (
-        await session.exec(
-            select(Agent).where(
-                Agent.runtime_id.in_(runtime_ids),  # type: ignore[union-attr]
-                Agent.current_task_id.is_not(None),  # type: ignore[union-attr]
-            )
-        )
-    ).all()
-    if busy:
-        names = ", ".join(sorted(a.name for a in busy))
-        return f"The Spark is busy ({names} working on a task) — check again when it is done."
-    return None
-
-
 async def get_or_probe(session: AsyncSession, model: str, *, refresh: bool = False) -> BenchProbe:
     """The probe for ``model`` on the Spark as it runs now — cached per
     (runtime, model, serving_since), probed when missing, failed, stale
@@ -362,48 +299,6 @@ async def get_or_probe_for(
             model, row.status, row.thinking_key, row.levels, row.default_observed,
         )
         return row
-
-
-def serialize(
-    row: BenchProbe | None, model: str | None, *, reachable: bool = True, status: str = "failed"
-) -> dict[str, Any]:
-    """The dialog's view of a probe (no raw attempts). Without a row:
-    ``status`` says why — "failed" (box offline) or "unchecked" (never
-    probed for this engine run; the dialog offers an explicit check)."""
-    if row is None:
-        return {
-            "served_model_id": model,
-            "reachable": reachable,
-            "status": status,
-            "thinking_key": None,
-            "effort_param": None,
-            "levels": [],
-            "default_observed": "unknown",
-            "probed_at": None,
-            "serving_since": None,
-        }
-    return {
-        "served_model_id": row.served_model_id,
-        "reachable": reachable,
-        "status": row.status,
-        "thinking_key": row.thinking_key,
-        "effort_param": row.effort_param,
-        "levels": list(row.levels or []),
-        "default_observed": row.default_observed,
-        "probed_at": row.probed_at.isoformat() if row.probed_at else None,
-        "serving_since": row.serving_since.isoformat() if row.serving_since else None,
-    }
-
-
-def reached(row: BenchProbe) -> bool:
-    """False when the probe's first request never got an HTTP answer (box
-    offline / connection refused) — the dialog then says "Box offline"
-    instead of "Check failed". Any answer, even an error status, counts as
-    reached."""
-    if row.status != "failed":
-        return True
-    attempts = (row.raw or {}).get("attempts") or []
-    return not attempts or attempts[0].get("http") is not None
 
 
 class EffortProbeFailedError(rp.UnsupportedEffortError):
