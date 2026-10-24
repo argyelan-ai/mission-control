@@ -1300,12 +1300,16 @@ class RuntimeWatcher:
         # The slot row serving this instance follows at once (the slot's own
         # probe would get there after two more probes).
         if not runtime.is_slot:
+            slug = runtime.slug
             try:
                 from app.services.slot_runtimes import mirror_instance_window_to_slot
 
                 await mirror_instance_window_to_slot(session, runtime)
             except Exception:  # noqa: BLE001 — a mirror may not cost the tick
-                logger.exception("slot window mirror failed for %s", runtime.slug)
+                # The rest of the tick shares this session — never leave it
+                # in a failed transaction.
+                await session.rollback()
+                logger.exception("slot window mirror failed for %s", slug)
 
     # ── Engine death (ADR-096 §11) ───────────────────────────────────────
 

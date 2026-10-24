@@ -1048,10 +1048,12 @@ async def restart_runtime(
         # A restart after a window edit: the slot serving this instance must
         # carry the instance's window (the instance row is the truth while
         # the engine reports none).
+        row_slug = runtime_row.slug
         try:
             await slot_runtimes.mirror_instance_window_to_slot(session, runtime_row)
         except Exception:  # noqa: BLE001 — ein erfolgreicher Restart bleibt erfolgreich
-            logger.exception("slot window mirror failed for %s", runtime_row.slug)
+            await session.rollback()
+            logger.exception("slot window mirror failed for %s", row_slug)
     await runtime_readiness.invalidate_readiness(rt.get("slug") or runtime_id)
     return result
 
@@ -1570,14 +1572,15 @@ async def update_runtime_db(
     # …and the slot row serving this instance takes the new window (live
     # 23.10.2026: only the instance was patched, the slot stayed at 1M).
     if window_changed:
+        rt_slug = rt.slug  # read before: a broken session cannot lazy-load it
         try:
             await slot_runtimes.mirror_instance_window_to_slot(session, rt)
         except Exception:  # noqa: BLE001 — the PATCH itself succeeded
-            logger.exception("slot window mirror failed for %s", rt.slug)
             # A failed DB operation leaves the session unusable — without the
             # rollback the refresh below raises and the PATCH answers 500
             # although the edit is already committed.
             await session.rollback()
+            logger.exception("slot window mirror failed for %s", rt_slug)
         await session.refresh(rt)
 
     return await _runtime_row_response(session, rt)

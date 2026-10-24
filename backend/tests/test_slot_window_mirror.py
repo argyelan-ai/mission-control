@@ -628,14 +628,18 @@ async def test_preferred_only_patch_below_the_max_flags_nobody(async_session, au
 async def test_failed_mirror_db_operation_does_not_turn_the_patch_into_500(
     async_session, auth_client
 ):
-    from sqlalchemy import text
-
     host = await _host(async_session)
     inst = await _instance(async_session, host, "inst-big", ctx=OLD)
     await _slot(async_session, host, ctx=OLD)
 
     async def _broken_mirror(session, rt):
-        await session.exec(text("SELECT * FROM table_that_does_not_exist"))
+        # A failed flush (unique slug) leaves the session needing a rollback —
+        # the shape any DB error inside the mirror takes.
+        session.add(Runtime(
+            slug=rt.slug, display_name="dup", runtime_type="openai_compatible",
+            endpoint="http://192.0.2.20:8000/v1",
+        ))
+        await session.flush()
 
     with patch.object(slot_runtimes, "mirror_instance_window_to_slot", new=_broken_mirror):
         resp = await auth_client.patch(
