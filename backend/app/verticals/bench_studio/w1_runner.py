@@ -691,9 +691,12 @@ async def _record_video_runs(factory, challenge_id: uuid.UUID) -> None:
                 result = await orch.record_entry(entry, challenge)
                 orch._apply_record_result(entry, result)
                 page = result.get("page_blank")
-                entry.metrics = {**(entry.metrics or {}),
-                                 "page_check": ("blank" if page else "loads") if page is not None else "unknown",
-                                 "phase": "done"}
+                check = ("blank" if page else "loads") if page is not None else "unknown"
+                # A page whose script/module was blocked never ran its own
+                # code — "loads" would be a claim the video cannot back.
+                if check == "loads" and c.blocked_network(result) == "script":
+                    check = "unknown"
+                entry.metrics = {**(entry.metrics or {}), "page_check": check, "phase": "done"}
                 entry.status = "rendered"
             except Exception as exc:  # noqa: BLE001 — no video is a state, not a crash
                 logger.warning("bench W1 record %s failed: %s", entry_id, exc)

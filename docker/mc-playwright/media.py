@@ -101,6 +101,9 @@ class RecordResponse(BaseModel):
     # that did not set it.
     network_blocked: bool = False
     network_attempts: int = 0
+    # Of those, blocked scripts/modules: the page's code could not run (bench
+    # gate red ``needs_network``). None = this sidecar did not report it.
+    network_blocked_scripts: Optional[int] = None
     blocked_requests: List[str] = Field(default_factory=list)
     libraries_inlined: List[str] = Field(default_factory=list)
     html_bytes: Optional[int] = None

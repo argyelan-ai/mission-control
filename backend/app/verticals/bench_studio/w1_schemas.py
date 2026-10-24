@@ -63,7 +63,7 @@ AbortCode = Literal[
     "stopped_by_operator", "task_deleted", "superseded_by_switch",
     "switch_failed", "all_runs_failed", "backend_restart",
 ]
-GateRule = Literal["R1", "R2", "R3", "R4", "R5", "amber"]
+GateRule = Literal["R1", "R2", "R3", "R4", "R5", "R6", "amber"]
 KitFileName = Literal["video.mp4", "card.png", "kit.zip"]
 
 
@@ -346,6 +346,7 @@ class Receipt(BaseModel):
     failures: int | None = None
     network_blocked: bool | None = None
     network_attempts: int | None = None
+    network_blocked_scripts: int | None = None  # of those, scripts/modules (gate R6)
     libraries_inlined: list[str] = Field(default_factory=list)
     html_bytes: int | None = None
     quiet_box: Literal["ok", "busy", "timeout"] | None = None

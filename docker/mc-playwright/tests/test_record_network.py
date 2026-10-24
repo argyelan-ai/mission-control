@@ -198,3 +198,43 @@ def test_record_endpoint_uses_the_guard():
         "network_attempts",
     ):
         assert needle in body, needle
+
+
+# ── what was blocked: a script means the page could not run (25.10.2026) ──
+
+
+def test_a_blocked_script_is_counted_apart_from_other_requests():
+    """A CDN module (three.js via an import map) = the scene never draws.
+    Fonts, images and stylesheets are counted as attempts only."""
+    guard = RecordNetworkGuard(PAGE)
+    assert guard.allow("https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "script") is False
+    assert guard.allow("https://fonts.googleapis.com/css2?family=Inter", "stylesheet") is False
+    assert guard.allow("https://fonts.gstatic.com/s/inter.woff2", "font") is False
+    assert guard.allow("https://example.com/sky.png", "image") is False
+    assert guard.allow("data:text/javascript,1", "script") is True
+    report = guard.report()
+    assert report["network_attempts"] == 4
+    assert report["network_blocked_scripts"] == 1
+
+
+def test_a_request_without_a_type_is_not_a_script():
+    guard = RecordNetworkGuard(PAGE)
+    guard.allow("https://cdn.example.com/x.js")
+    guard.note_blocked("webrtc:", count=2)
+    assert guard.report()["network_blocked_scripts"] == 0
+
+
+def test_record_response_carries_the_blocked_script_count():
+    r = RecordResponse(video_path="/v.mp4", screenshot_path="", duration_s=10, bytes=1)
+    assert r.network_blocked_scripts is None  # not reported = unknown, never "0"
+
+
+def test_record_route_passes_the_resource_type():
+    import ast
+
+    src = (Path(__file__).resolve().parents[1] / "service.py").read_text(encoding="utf-8")
+    record_fn = next(n for n in ast.walk(ast.parse(src))
+                     if isinstance(n, ast.AsyncFunctionDef) and n.name == "record")
+    body = ast.unparse(record_fn)
+    assert "route.request.resource_type" in body
+    assert "network_blocked_scripts" in body

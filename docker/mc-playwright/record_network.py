@@ -37,6 +37,11 @@ RECORD_DEAD_PROXY = "http://127.0.0.1:9"
 MAX_BLOCKED_URLS_REPORTED = 20
 _BLOCKED_URL_MAX_LEN = 160
 
+# Request types whose block means the page's own code could not run: a
+# <script src>, an ES module import (an import map resolves to one) or a
+# worker script. A blocked font, image or stylesheet leaves the page drawing.
+CRITICAL_RESOURCE_TYPES = frozenset({"script"})
+
 RECORD_NETWORK_GUARD_JS_PATH = Path(__file__).resolve().parent / "record_network_guard.js"
 
 
@@ -64,21 +69,26 @@ class RecordNetworkGuard:
     def __init__(self, page_url: str) -> None:
         self._page = _without_fragment(page_url)
         self.attempts = 0
+        self.blocked_scripts = 0
         self._blocked: list[str] = []
 
-    def allow(self, url: str) -> bool:
+    def allow(self, url: str, resource_type: str | None = None) -> bool:
+        """``resource_type`` = Playwright's ``request.resource_type`` (None
+        for channels without one: WebSocket, WebRTC)."""
         scheme = urlparse(url).scheme.lower()
         if scheme in RECORD_ALLOWED_SCHEMES:
             return True
         if _without_fragment(url) == self._page:
             return True
-        self.note_blocked(url)
+        self.note_blocked(url, resource_type=resource_type)
         return False
 
-    def note_blocked(self, url: str, count: int = 1) -> None:
+    def note_blocked(self, url: str, count: int = 1, resource_type: str | None = None) -> None:
         if count <= 0:
             return
         self.attempts += count
+        if resource_type in CRITICAL_RESOURCE_TYPES:
+            self.blocked_scripts += count
         if len(self._blocked) < MAX_BLOCKED_URLS_REPORTED:
             self._blocked.append(_describe(url))
 
@@ -86,6 +96,7 @@ class RecordNetworkGuard:
         return {
             "network_blocked": True,
             "network_attempts": self.attempts,
+            "network_blocked_scripts": self.blocked_scripts,
             "blocked_requests": list(self._blocked),
         }
 

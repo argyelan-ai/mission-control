@@ -186,6 +186,7 @@
             "failures": 0,
             "network_blocked": true,
             "network_attempts": 0,
+            "network_blocked_scripts": null,
             "libraries_inlined": [],
             "html_bytes": 17204,
             "quiet_box": "ok",

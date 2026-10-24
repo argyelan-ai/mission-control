@@ -49,7 +49,7 @@ export type AbortCode =
   | "switch_failed"
   | "all_runs_failed"
   | "backend_restart";
-export type GateRule = "R1" | "R2" | "R3" | "R4" | "R5" | "amber";
+export type GateRule = "R1" | "R2" | "R3" | "R4" | "R5" | "R6" | "amber";
 export type KitFileName = "video.mp4" | "card.png" | "kit.zip";
 
 /** A machine code + params — worded by the UI (i18n `benchShared`). */
@@ -309,6 +309,8 @@ export interface Receipt {
   failures: number | null;
   network_blocked: boolean | null;
   network_attempts: number | null;
+  /** Of those, blocked scripts/modules — the page code could not run (gate R6). */
+  network_blocked_scripts: number | null;
   libraries_inlined: string[];
   html_bytes: number | null;
   quiet_box: "ok" | "busy" | "timeout" | null;

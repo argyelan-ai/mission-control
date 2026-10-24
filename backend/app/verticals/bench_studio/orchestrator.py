@@ -1382,7 +1382,10 @@ async def _render_and_compose(
 
 # W0.9: recorder network report -> entry.metrics (§7.2 receipt names). The
 # sidecar's URL sample (blocked_requests) stays in its log, not in the record.
-_RECORD_REPORT_KEYS = ("network_blocked", "network_attempts", "libraries_inlined", "html_bytes")
+# network_blocked_scripts (25.10.2026): how many of the attempts were
+# scripts/modules — the page's code could not run (W1 gate needs_network).
+_RECORD_REPORT_KEYS = ("network_blocked", "network_attempts", "network_blocked_scripts",
+                       "libraries_inlined", "html_bytes")
 
 
 def _apply_record_result(entry: BenchEntry, result: dict) -> None:

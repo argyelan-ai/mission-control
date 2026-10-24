@@ -4154,7 +4154,9 @@
       "box_was_busy": "box was busy — speed not comparable",
       "effort_unknown": "effort unknown",
       "first_15_min": "measured in the first 15 min after start",
-      "page_check_failed": "page did not load"
+      "page_check_failed": "page did not load",
+      "needs_network": "The page tried to load a library from the internet (blocked) — the scene stayed empty",
+      "network_assets_blocked": "page tried to load fonts or images from the internet (blocked)"
     },
     "range": "{min}–{max}",
     "medianOf": "median of {n}",
@@ -4538,7 +4540,8 @@
       "okR2": "Name = the model id the engine reported",
       "okR3": "No $ price on a local or subscription run",
       "okR4": "No private details in video, card or texts",
-      "okR5": "Fair comparison: classes apart, same prompt"
+      "okR5": "Fair comparison: classes apart, same prompt",
+      "okR6": "Page works offline: no library from the internet"
     },
     "numbers": {
       "label": "Numbers",

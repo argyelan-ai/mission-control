@@ -453,6 +453,39 @@ describe("ResultPage — two classes", () => {
   });
 });
 
+describe("ResultPage — the page needed the internet (R6)", () => {
+  // Live 25.10.2026: three.js from a CDN, blocked by the recorder — the
+  // video shows only the background. Red, said in words, no "page loads".
+  const needsNetwork: BenchTestDetail = {
+    ...testDoneGreenFixture,
+    verdict: testDoneGreenFixture.verdict ? { ...testDoneGreenFixture.verdict, page_check: "unknown" } : null,
+    gate: {
+      status: "red",
+      reasons: [{ rule: "R6", severity: "red", code: "needs_network", params: {}, fix: null }],
+      checksum: testDoneGreenFixture.gate.checksum,
+    },
+  };
+
+  it("says in plain words why the gate is red", async () => {
+    renderView(needsNetwork);
+    const gate = await screen.findByTestId("result-gate");
+    expect(gate).toHaveTextContent("Not ready to post");
+    expect(gate).toHaveTextContent("The page tried to load a library from the internet (blocked) — the scene stayed empty");
+    expect(screen.getByTestId("result-verdict")).not.toHaveTextContent("page loads");
+  });
+
+  it("lists the offline rule among the checks: failed here, passed on a green test", async () => {
+    const { unmount } = renderView(needsNetwork);
+    const checks = await screen.findByRole("region", { name: "Check" });
+    expect(checks).toHaveTextContent("The page tried to load a library from the internet");
+    unmount();
+    renderView(testDoneGreenFixture);
+    expect(await screen.findByRole("region", { name: "Check" })).toHaveTextContent(
+      "Page works offline: no library from the internet",
+    );
+  });
+});
+
 describe("ResultPage — missing", () => {
   it("shows a not-found state for an unknown id", async () => {
     get.mockRejectedValue(new Error('API 404: {"detail":"not found"}'));
