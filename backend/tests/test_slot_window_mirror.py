@@ -164,6 +164,23 @@ async def test_slot_serving_another_instance_is_untouched(async_session, auth_cl
 
 
 @pytest.mark.asyncio
+async def test_slot_serving_a_model_without_instance_row_is_untouched(
+    async_session, auth_client
+):
+    """Counter-case: the box's ONLY instance row is not what the port serves."""
+    host = await _host(async_session)
+    inst = await _instance(async_session, host, "inst-big")
+    slot = await _slot(async_session, host, model=OTHER)
+
+    resp = await auth_client.patch(
+        f"/api/v1/runtimes/db/{inst.slug}", json={"max_context_len": NEW}
+    )
+    assert resp.status_code == 200, resp.text
+    await async_session.refresh(slot)
+    assert slot.max_context_len == OLD
+
+
+@pytest.mark.asyncio
 async def test_slot_of_another_box_is_untouched(async_session, auth_client):
     host_a = await _host(async_session, "box-m")
     host_b = await _host(async_session, "box-n")
