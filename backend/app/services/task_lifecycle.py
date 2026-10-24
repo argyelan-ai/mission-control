@@ -798,10 +798,15 @@ async def stop_running_reviewer_turn(
         return False
 
     task.run_control = "stopped"
+    # On approve the card is finished: the note stays as a record on the card
+    # ("system_notify" is not in DELIVERABLE_SYSTEM_TYPES) instead of being
+    # pasted into the reviewer's session by the poll — the hard interrupt via
+    # run_control above is what ends the turn (operator report 24.10.2026).
+    # request_changes / hold keep the delivered "system" note.
     session.add(TaskComment(
         task_id=task.id,
         author_type="system",
-        comment_type="system",
+        comment_type="system_notify" if decision == "approve" else "system",
         content=(
             "**Operator-Override: dein laufender Review-Zug wurde gestoppt.**\n\n"
             f"Der Operator hat selbst entschieden: `{decision}` "
@@ -969,11 +974,16 @@ async def execute_review_decision(
             stopped_reviewer_id = _holder_id
 
     # ── 1. Comment (always, atomic with the decision) ──────
+    # The approve note gets its own type (comment_types.review_note_comment_type):
+    # the card is finished, so the poll must not wake the agent with it
+    # (operator report 24.10.2026). request_changes / hold stay "review" and
+    # keep reaching the agent.
+    from app.comment_types import review_note_comment_type
     comment = TaskComment(
         task_id=task.id,
         author_type="agent" if actor_agent else "user",
         author_agent_id=actor_agent.id if actor_agent else None,
-        comment_type="review",
+        comment_type=review_note_comment_type(decision),
         content=comment_text,
     )
     session.add(comment)
@@ -1341,11 +1351,12 @@ async def record_late_review_note(
     }
     actor_name = actor_agent.name if actor_agent else "Operator"
 
+    from app.comment_types import review_note_comment_type
     session.add(TaskComment(
         task_id=task.id,
         author_type="agent" if actor_agent else "user",
         author_agent_id=actor_agent.id if actor_agent else None,
-        comment_type="review",
+        comment_type=review_note_comment_type(decision),
         content=(
             f"**Nachtrag-Review ({decision_map[decision]})** — abgegeben, "
             f"nachdem die Karte den Status `{task.status}` erreicht hatte. "
@@ -2653,11 +2664,14 @@ async def _notify_lead_on_completion(
                 return
 
             # ── Collect evidence ──────────────────────────────
+            from app.comment_types import REVIEW_NOTE_COMMENT_TYPES
             evidence_cmt = (await session.exec(
                 select(TaskComment)
                 .where(
                     TaskComment.task_id == task.id,
-                    TaskComment.comment_type.in_(["resolution", "progress", "review"]),
+                    TaskComment.comment_type.in_(
+                        ["resolution", "progress", *REVIEW_NOTE_COMMENT_TYPES]
+                    ),
                 )
                 .order_by(TaskComment.created_at.desc())
                 .limit(3)

@@ -1,7 +1,9 @@
 """TaskComment.comment_type — Single Source of Truth (REL-01).
 
 Imported by:
-  - backend/app/routers/agents.py (DELIVERABLE_SYSTEM_TYPES → _DELIVER_SYSTEM_COMMENT_TYPES)
+  - backend/app/routers/agents.py (DELIVERABLE_SYSTEM_TYPES → _DELIVER_SYSTEM_COMMENT_TYPES,
+    NOT_DELIVERED_USER_COMMENT_TYPES)
+  - review-note readers (REVIEW_NOTE_COMMENT_TYPES / review_note_filter)
   - backend/app/routers/agent_scoped.py (ALL_COMMENT_TYPES → VALID_COMMENT_TYPES)
 
 No other place is allowed to define its own comment-type sets.
@@ -83,6 +85,49 @@ def activity_comment_filter():
     from app.models.task import TaskComment
 
     return col(TaskComment.comment_type).not_in(NOT_ACTIVITY_COMMENT_TYPES)
+
+# Review decision notes (24.10.2026, operator report: "I approved the card
+# and the agent still got a message"). A review decision always writes the
+# decider's reason as a note on the card. Server-only types — written by
+# task_lifecycle.execute_review_decision / record_late_review_note, never
+# accepted from the comment API (deliberately NOT in ALL_COMMENT_TYPES).
+#   - ``review``          request_changes / hold (and every note written
+#                         before 24.10.2026, whatever its decision);
+#   - ``review_approved`` approve. Same note, but the card is finished:
+#                         nobody must be woken by it.
+# Every reader that means "a review note" uses REVIEW_NOTE_COMMENT_TYPES
+# (``review_note_filter()`` in a query) — never the bare ``"review"``.
+REVIEW_COMMENT_TYPE: Final[str] = "review"
+REVIEW_APPROVED_COMMENT_TYPE: Final[str] = "review_approved"
+REVIEW_NOTE_COMMENT_TYPES: Final[frozenset[str]] = frozenset({
+    REVIEW_COMMENT_TYPE, REVIEW_APPROVED_COMMENT_TYPE,
+})
+assert not (REVIEW_NOTE_COMMENT_TYPES & ALL_COMMENT_TYPES)
+
+
+def review_note_comment_type(decision: str) -> str:
+    """Comment type for the note of a review decision
+    (``approve`` | ``request_changes`` | ``hold``)."""
+    return REVIEW_APPROVED_COMMENT_TYPE if decision == "approve" else REVIEW_COMMENT_TYPE
+
+
+def review_note_filter():
+    """SQL clause: only ``TaskComment`` rows that are review decision notes."""
+    from sqlmodel import col
+
+    from app.models.task import TaskComment
+
+    return col(TaskComment.comment_type).in_(REVIEW_NOTE_COMMENT_TYPES)
+
+
+# Operator-authored comment types that are a RECORD, not a message to the
+# agent: the poll never delivers them (routers/agents.py:_is_deliverable_for).
+# Every other operator comment is delivered — also on `done` cards (rule of
+# 2026-05-18: a free operator comment on a finished card must reach the agent).
+NOT_DELIVERED_USER_COMMENT_TYPES: Final[frozenset[str]] = frozenset({
+    REVIEW_APPROVED_COMMENT_TYPE,
+})
+
 
 # Comment_types that get delivered as actionable system events to the
 # responsible agent via /me/poll. Subset of ALL_COMMENT_TYPES, minus the

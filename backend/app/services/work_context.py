@@ -28,6 +28,7 @@ from fastapi import HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.comment_types import review_note_filter
 from app.models.agent import Agent
 from app.models.board import Board, Project
 from app.models.task import Task, TaskComment
@@ -614,7 +615,7 @@ async def agents_who_reviewed_card(
         select(TaskComment.author_agent_id).where(
             TaskComment.task_id == task_id,
             TaskComment.author_type == "agent",
-            TaskComment.comment_type == "review",
+            review_note_filter(),
             TaskComment.author_agent_id.is_not(None),  # type: ignore[union-attr]
         )
     )
