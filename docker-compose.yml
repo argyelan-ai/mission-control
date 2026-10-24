@@ -123,6 +123,10 @@ services:
       # default, engine-death report) — config.usage_timezone. Default UTC;
       # set USAGE_TIMEZONE in .env (e.g. Europe/Zurich).
       USAGE_TIMEZONE: ${USAGE_TIMEZONE:-UTC}
+      # Bench W1: the operator's handle in the footer of the result card,
+      # video and X-Kit texts (w1_kit.footer). Empty by default — set it in
+      # .env, never in the repo. API (kit texts) and worker (W1 runner) both.
+      MC_BENCH_FOOTER: ${MC_BENCH_FOOTER:-}
       # Head launcher switch (docs/specs/head-launcher.md) — off unless set in .env
       HEADS_ENABLED: ${HEADS_ENABLED:-false}
       # Head watchdog: stop after N min without progress; hard limit = emergency brake
@@ -488,6 +492,10 @@ services:
       # default, engine-death report) — config.usage_timezone. Default UTC;
       # set USAGE_TIMEZONE in .env (e.g. Europe/Zurich).
       USAGE_TIMEZONE: ${USAGE_TIMEZONE:-UTC}
+      # Bench W1: the operator's handle in the footer of the result card,
+      # video and X-Kit texts (w1_kit.footer). Empty by default — set it in
+      # .env, never in the repo. API (kit texts) and worker (W1 runner) both.
+      MC_BENCH_FOOTER: ${MC_BENCH_FOOTER:-}
       # Head launcher switch (docs/specs/head-launcher.md) — off unless set in .env
       HEADS_ENABLED: ${HEADS_ENABLED:-false}
       # Head watchdog: stop after N min without progress; hard limit = emergency brake
