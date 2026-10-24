@@ -34,16 +34,17 @@ covers every code in EN + DE).
 |---|---|---|
 | `GET /plan?runtime_id&preset&template_id&rerun_of` | `BenchPlan` | Pre-filled sheet. No runtime → most recently started live runtime. Read-only: never probes, never a completion |
 | `GET /contestants` | `ContestantList` | local (one row per engine, `pairs._dedupe_local`) + cloud |
-| `POST /tests` | 201 `BenchTestDetail` | Body `BenchTestCreate` (1–2 picks). Paid run: 409 `{detail: CostConfirmation}` step 1, over $1 step 2 (`confirm_over_cap`) |
+| `POST /tests` | 201 `BenchTestDetail` | Body `BenchTestCreate` (1–2 picks, never the same pick twice → 422 `bench_pick_duplicate`). Paid run: 409 `{detail: CostConfirmation}` step 1, over $1 step 2 (`confirm_over_cap`). Cloud API with no known price: 409 `CostConfirmation{usd: null, price_unknown: true}`, confirmed with `confirm_unknown_cost` |
 | `GET /tests?section&model&device&harness&run_class&include_archived` | `BenchTestList` | Human states; GET never writes |
 | `GET /tests/{id}` | `BenchTestDetail` | Result + live (poll `LIVE_POLL_MS` while waiting/running) |
 | `POST /tests/{id}/rerun` | 201 `BenchTestDetail` | `{budget: "same" \| "larger", cost_confirmed_usd?, confirm_over_cap?}` — "Nochmal" / truncation re-run. Paid model: 409 CostConfirmation like `POST /tests`; the page confirms on this route, the budget stays (integration 24.10.) |
+| `POST /tests/{id}/seen` | `SeenResponse` | The result page of a FINISHED test was opened: resolves its Eingang item `bench_result` (no side effect, idempotent; a live test resolves nothing) |
 | `POST /tests/{id}/stop` | `BenchTestDetail` | |
 | `POST /tests/{id}/harvest` | `BenchTestDetail` | "Zahlen nachladen" → new receipt version + recompose |
 | `GET /tests/{id}/kit` | `XKit` | English texts; red = preview only |
 | `POST /tests/{id}/kit/download-token` | `DownloadToken` | Resource-scoped, short-lived |
 | `GET /tests/{id}/kit/files/{video.mp4\|card.png\|kit.zip}?token=` | file | `Content-Disposition: attachment`; red gate → 409 |
-| `GET /runtime-summary` | `RuntimeTestSummary[]` | Runtimes cards: testable, primary (K11), last test |
+| `GET /runtime-summary` | `RuntimeTestSummary[]` | Runtimes cards: testable, primary (K11), last test, `planned_test` (an auto test after a switch that has no runs yet) |
 | `POST /auto-tests` | 201 `AutoTestResponse` | From the switch dialog; waiting test, superseded by a later switch |
 
 The legacy routes (`/challenges*`, `/entries*`, `/effort-levels*`,
@@ -61,6 +62,13 @@ Stub marker: until A builds a route it returns its fixture with header
 - **Extra reason codes** `agent_paused` (harness option of a paused agent) and `files_not_ready` (kit `blocked_reason`) live in `benchShared.reason`. Codes with their own path, not a sentence: `bench_blocked`, `bench_cost_confirmation`, `gate_red`, `harness_default` (no note), `omp_session_default` (`benchSheet.ompSession`), `price_unknown` (`cost.unknown`). Guard: `contractFixtures.test.ts` scans `w1_*.py` for every `"code"` and fails on a code without a word.
 - **`allowed` `"kit"`** = the kit can be downloaded (green/amber, finished). A finished red test shows the kit as a preview from the ⋯ menu; its files answer 409.
 - **Paid re-run:** `POST /tests/{id}/rerun` takes the cost confirmation itself (see §2); the result page and the X-Kit sheet ask on the same button (`useRerunLarger`).
+- **Review fixes (24.10., PR #982 reviews):**
+  - A run that thinks until `max_tokens` and writes no page keeps `finish_reason`/`truncated`/`max_tokens` on the failed entry, is not retried, and counts in `truncation` (also on an aborted test: `runs_without_page`, `rerun_larger` allowed). `video_run_cut` = run 1 (the video) was cut.
+  - Card, alt text and settings text count the MEASURED runs behind the median ("median of 2 of 3", foot "· 1 run failed"); the card prints the full chips (device/provider), `chips_short` only for the 790 px duo row of the 16:9 receipt card.
+  - D4 fail-closed: a run with real or unknown cost is attempted once (no spend past the OK); a paid run never probes (stored probe only); `cost_of` counts every attempt that reported usage. Ranking api_price > unknown > subscription > local on both sides.
+  - Every direct attempt writes one `model_usage_events` row (harness `vanilla`, `$` only on `api_price`).
+  - `EffortRecord.default_level` = the level the server default maps to ("hoch (Standard)" on sheet, live card, result page; "effort high (default)" on the card).
+  - Run error codes are words in `benchShared.reason` (guard scans `RunError("…")`, `"error_code": "…"`, `code = "…"` too).
 - **Removed with the kill list:** `/effort-levels*` (Spark-only; the plan probe replaces it), besides `/spark-models`, legacy `POST /challenges` and the X draft route.
 
 ## 3. Behaviour rules every package keeps
