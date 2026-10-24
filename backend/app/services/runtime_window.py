@@ -48,6 +48,56 @@ def runtime_context_window(runtime: Any | None) -> int | None:
     return value if value > 0 else None
 
 
+def _valid_window(context_len: Any) -> bool:
+    return (
+        isinstance(context_len, int)
+        and not isinstance(context_len, bool)
+        and context_len > 0
+    )
+
+
+# rule: R-runtime-window-one-writer - every window write follows one preferred rule
+def window_would_change(runtime: Any, context_len: Any) -> bool:
+    """Would :func:`apply_window` change ``runtime`` for ``context_len``?
+
+    The no-op guard on its own, for callers that must decide BEFORE they write
+    (the watcher skips its ownership SSH round trip when nothing would move).
+    """
+    if not _valid_window(context_len):
+        return False
+    old_max = getattr(runtime, "max_context_len", None)
+    old_preferred = getattr(runtime, "preferred_context_len", None)
+    return not (
+        old_max == context_len and (old_preferred is None or old_preferred <= context_len)
+    )
+
+
+def apply_window(runtime: Any, context_len: Any) -> bool:
+    """Set a runtime row's window — the ONE write rule (ADR-096), slot or instance.
+
+    ``max_context_len`` takes ``context_len``. ``preferred_context_len``
+    follows only where it said "use the whole window" (empty or equal to the
+    old max) or where it would now exceed the new max. Without the
+    ``== old_max`` case a switch 250000 → 1048576 left preferred at 250000
+    (live 01.10.2026). A deliberately smaller preferred value stays: the
+    engine owns the ceiling, the operator the working size below it.
+
+    Used by the slot writer (``slot_runtimes.write_slot_state``), the
+    instance → slot mirror, the watcher's context drift and the catalog
+    follow (``local_registry.follow_recipe_into_runtimes``). Anything that is
+    not a positive int is ignored. Returns whether anything changed; the
+    caller commits.
+    """
+    if not window_would_change(runtime, context_len):
+        return False
+    old_max = runtime.max_context_len
+    old_preferred = runtime.preferred_context_len
+    runtime.max_context_len = context_len
+    if old_preferred is None or old_preferred == old_max or old_preferred > context_len:
+        runtime.preferred_context_len = context_len
+    return True
+
+
 async def agent_runtime_window(agent: Any | None, session: Any | None = None) -> int | None:
     """The context window of the runtime ``agent`` is bound to, or ``None``.
 

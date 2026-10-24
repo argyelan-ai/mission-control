@@ -1567,9 +1567,11 @@ async def start_recipe_on_host(
                 session,
                 host.id,
                 model=recipe.model_identifier,
-                # A recipe without its own window falls back to the instance
-                # row (built from the same recipe, possibly edited since).
-                context_len=recipe.context_len or instance.max_context_len,
+                # The instance row is the truth (built from the recipe,
+                # possibly edited since — live 23.10.2026: a 262144 edit on
+                # the instance lost to the recipe's 1M); the recipe is the
+                # fallback for an instance without a window.
+                context_len=instance.max_context_len or recipe.context_len,
                 supports_vision=recipe.supports_vision,
             )
             # …und die Agenten an dieser Zeile müssen es auch erfahren.

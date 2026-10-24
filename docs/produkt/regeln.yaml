@@ -405,6 +405,21 @@ rules:
     status: active
     checked: 2026-10-22
 
+  - id: R-runtime-window-one-writer
+    says: "Every write of a runtime row's window goes through runtime_window.apply_window (max takes the new value; preferred follows only when empty, equal to the old max, or above the new max): the slot writer, the instance -> slot mirror, the watcher's context drift and the catalog follow. A slot row takes the window of the instance it serves (slot_runtimes.mirror_instance_window_to_slot) on PATCH, restart, recipe start and confirmed drift; the instance row beats the recipe while the engine reports no window; a catalog window change reaches only instances still holding the recipe's old value."
+    source: "ADR-096 (one truth, every path through one function); live 23.10.2026 (slot kept 1M after the instance went to 262144); PR #980"
+    owner: backend/app/services/runtime_window.py
+    applies_to: ["backend/app/services/runtime_window.py", "backend/app/services/slot_runtimes.py", "backend/app/services/runtime_watcher.py", "backend/app/services/local_registry.py", "backend/app/services/recipe_switcher.py", "backend/app/routers/runtimes.py"]
+    enforced_by:
+      - {test: "backend/tests/test_slot_window_mirror.py::test_apply_window_preferred_rule"}
+      - {test: "backend/tests/test_slot_window_mirror.py::test_patching_the_instance_window_reaches_the_slot"}
+      - {test: "backend/tests/test_slot_window_mirror.py::test_recipe_start_gives_the_slot_the_instance_window"}
+      - {test: "backend/tests/test_slot_window_mirror.py::test_confirmed_instance_drift_reaches_the_slot_in_the_same_tick"}
+      - {test: "backend/tests/test_slot_window_mirror.py::test_catalog_window_change_follows_into_untouched_instances"}
+      - {test: "backend/tests/test_slot_window_mirror.py::test_lone_instance_of_another_confirmed_recipe_lends_no_window"}
+    status: active
+    checked: 2026-10-24
+
   - id: R-lead-usage-only-from-lead-dir
     says: "Host Claude Code usage is booked on the lead agent only when the transcript lives in the lead's own project dir (the Claude Code encoding of its working dir, MC_CHECKOUT_PATH / token_harvester.lead_checkout_path). Every other MC-looking transcript under the host's ~/.claude/projects is the operator's own usage (agent_id NULL, harness operator-session) and shows as its own cost bucket; private ones are skipped. The harvester, the Sessions chat and the usage baseline read the lead dir from that one helper."
     source: "Cost misattribution found 2026-10-22: operator sessions were booked on the lead (~150x inflated lead cost)"
