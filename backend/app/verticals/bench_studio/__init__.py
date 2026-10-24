@@ -22,6 +22,7 @@ def register(app) -> None:
     from .routers import router  # noqa: PLC0415
     from .orchestrator import reconcile_loop  # noqa: PLC0415
     from .w1_routes import router as w1_router  # noqa: PLC0415
+    from .w1_runner import w1_loop  # noqa: PLC0415
 
     app.include_router(router)
     # Bench W1 contract (24.10.2026): plan, tests, X-Kit, runtime summary,
@@ -31,6 +32,10 @@ def register(app) -> None:
     # agent task failed, was aborted or deleted, without anyone opening them.
     if reconcile_loop not in hooks.background_loops:
         hooks.background_loops.append(reconcile_loop)
+    # Bench W1: the one-test-at-a-time runner (waiting tests, auto tests
+    # after a recipe switch, probe warming on a quiet box, restart heal).
+    if w1_loop not in hooks.background_loops:
+        hooks.background_loops.append(w1_loop)
     if on_task_review not in hooks.task_review_hooks:
         hooks.task_review_hooks.append(on_task_review)
     if on_task_done not in hooks.task_done_hooks:

@@ -1526,6 +1526,11 @@ async def maybe_advance(session: AsyncSession, challenge_id: uuid.UUID) -> None:
     challenge = await session.get(BenchChallenge, challenge_id)
     if challenge is None or challenge.status != "generating":
         return
+    if (challenge.protocol_version or "v0") == "v1":
+        # Bench W1 tests are driven by the W1 runner (w1_runner.run_test):
+        # it records only run 1 and composes with the W1 templates. The
+        # legacy all-entries render would record every repetition.
+        return
     entries = (
         await session.exec(
             select(BenchEntry).where(BenchEntry.challenge_id == challenge_id)
@@ -1770,9 +1775,14 @@ async def reconcile_open_challenges() -> int:
     from app.database import engine
 
     async with AsyncSession(engine, expire_on_commit=False) as session:
+        # W1 tests heal through the W1 runner (w1_runner.heal_after_restart):
+        # their agent runs are watched by the runner itself.
         ids = (
             await session.exec(
-                select(BenchChallenge.id).where(BenchChallenge.status == "generating")
+                select(BenchChallenge.id).where(
+                    BenchChallenge.status == "generating",
+                    BenchChallenge.protocol_version != "v1",
+                )
             )
         ).all()
 

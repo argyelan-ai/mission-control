@@ -155,8 +155,12 @@ async def test_probe_finds_reasoning_effort_with_max(monkeypatch):
     assert result["effort_param"] == rp.REASONING_EFFORT
     assert result["default_observed"] == "on"
     assert result["levels"] == ["off", "low", "medium", "high", "max"]
-    # baseline, the off switch, the max check — no more
-    assert len(calls) == 3
+    # baseline, the off switch, the max check, and (bench W1, critic 32 S3)
+    # one "high" request: it thinks like the baseline, so the server
+    # default IS high and the sheet shows one chip "high (default)"
+    assert len(calls) == 4
+    assert calls[-1]["reasoning_effort"] == "high"
+    assert result["raw"]["default_level"] == "high"
     assert all(c["max_tokens"] == effort_probe.PROBE_MAX_TOKENS for c in calls)
 
 
@@ -238,13 +242,13 @@ async def test_probe_is_cached_per_serving_since(session, monkeypatch, spark_run
     first = await effort_probe.get_or_probe(session, "deepseek-x")
     second = await effort_probe.get_or_probe(session, "deepseek-x")
     assert first.id == second.id
-    assert len(calls) == 3  # probed once
+    assert len(calls) == 4  # probed once (incl. the W1 default-level check)
 
     # Engine restarted: new serving_since -> a fresh probe, a second row.
     spark_runtime.serving_since = spark_runtime.serving_since + timedelta(hours=2)
     third = await effort_probe.get_or_probe(session, "deepseek-x")
     assert third.id != first.id
-    assert len(calls) == 6
+    assert len(calls) == 8
     rows = (await session.exec(select(BenchProbe))).all()
     assert len(rows) == 2
 
@@ -823,3 +827,26 @@ def test_level_fields_no_effect_is_not_offered_failed_is_check_failed():
     assert not isinstance(no_eff.value, effort_probe.EffortProbeFailedError)
     with pytest.raises(effort_probe.EffortProbeFailedError):
         effort_probe.level_fields(_probe_row([], key=None, status="failed"), "max")
+
+
+@pytest.mark.asyncio
+async def test_probe_keeps_default_apart_when_high_thinks_more(monkeypatch):
+    """Bench W1: "high (default)" is merged only when the server default
+    really thinks like ``high`` — an engine whose default is ``medium``
+    keeps two chips."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        effort = body.get("reasoning_effort")
+        think = effort != "none"
+        text = ("step " * (60 if effort in ("high", "max") else 20)) if think else None
+        return httpx.Response(200, json={
+            "model": body["model"],
+            "choices": [{"message": {"content": "42", "reasoning_content": text}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 30},
+        })
+
+    _route(monkeypatch, handler)
+    result = await effort_probe.run_probe("http://engine/v1", "m", api_key="k")
+    assert result["status"] == "ok"
+    assert "default_level" not in result["raw"]

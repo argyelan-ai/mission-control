@@ -24,6 +24,8 @@ from app.models.bench import BenchChallenge, BenchEntry, BenchReceipt  # noqa: E
 from app.verticals.bench_studio import w1_schemas as s  # noqa: E402
 from app.verticals.bench_studio.w1_fixtures import build  # noqa: E402
 
+from tests.test_bench_w1_fleet import engines, world  # noqa: E402,F401 — fake fleet for the route checks
+
 FIXTURE_DIR = pathlib.Path(build.__file__).resolve().parent
 MIGRATION = (
     pathlib.Path(__file__).parents[1] / "alembic" / "versions" / "0224_bench_w1_schema.py"
@@ -71,7 +73,7 @@ def test_fixture_rules_hold():
     assert paid.cost_kind == "api_price" and paid.needs_confirmation and paid.second_confirmation
 
 
-# ── Route stubs ───────────────────────────────────────────────────────────
+# ── Routes (real since package A; the stubs and their header are gone) ──
 
 GREEN = "a0000000-0000-4000-8000-000000000002"
 
@@ -83,29 +85,54 @@ GREEN = "a0000000-0000-4000-8000-000000000002"
         ("get", "/api/v1/bench/plan", None, 200, s.BenchPlan),
         ("get", "/api/v1/bench/contestants", None, 200, s.ContestantList),
         ("post", "/api/v1/bench/tests",
-         {"picks": [{"runtime_id": str(uuid.uuid4())}], "trigger": "runtimes"}, 201,
-         s.BenchTestDetail),
+         {"picks": [{"runtime_id": "{rt}"}], "trigger": "runtimes"}, 201, s.BenchTestDetail),
         ("get", "/api/v1/bench/tests", None, 200, s.BenchTestList),
-        ("get", f"/api/v1/bench/tests/{GREEN}", None, 200, s.BenchTestDetail),
-        ("post", f"/api/v1/bench/tests/{GREEN}/rerun", {"budget": "larger"}, 201,
-         s.BenchTestDetail),
-        ("post", f"/api/v1/bench/tests/{GREEN}/stop", None, 200, s.BenchTestDetail),
-        ("post", f"/api/v1/bench/tests/{GREEN}/harvest", None, 200, s.BenchTestDetail),
-        ("get", f"/api/v1/bench/tests/{GREEN}/kit", None, 200, s.XKit),
-        ("post", f"/api/v1/bench/tests/{GREEN}/kit/download-token", None, 200, s.DownloadToken),
+        ("get", "/api/v1/bench/tests/{done}", None, 200, s.BenchTestDetail),
+        ("post", "/api/v1/bench/tests/{done}/rerun", {"budget": "larger"}, 201, s.BenchTestDetail),
+        ("post", "/api/v1/bench/tests/{waiting}/stop", None, 200, s.BenchTestDetail),
+        ("post", "/api/v1/bench/tests/{done}/harvest", None, 200, s.BenchTestDetail),
+        ("get", "/api/v1/bench/tests/{done}/kit", None, 200, s.XKit),
+        ("post", "/api/v1/bench/tests/{done}/kit/download-token", None, 200, s.DownloadToken),
         ("get", "/api/v1/bench/runtime-summary", None, 200, None),
         ("post", "/api/v1/bench/auto-tests",
-         {"host_id": str(uuid.uuid4()), "recipe_slug": "glm53-flash"}, 201, s.AutoTestResponse),
+         {"host_id": "{host}", "recipe_slug": "glm53-flash"}, 201, s.AutoTestResponse),
     ],
 )
-async def test_w1_route_answers_with_its_contract_model(auth_client, method, path, body, code, model):
+async def test_w1_route_answers_with_its_contract_model(
+    auth_client, session, engines, world, method, path, body, code, model
+):
+    from app.verticals.bench_studio import w1_runner, w1_tests
+
+    from tests.test_bench_w1_fleet import factory, no_sleep, seed_fleet
+
+    fleet = await seed_fleet(session)
+    pick = [{"runtime_id": str(fleet["slot"].id), "harness": "api", "efforts": ["default"]}]
+    done = await w1_tests.create_test(session, picks=pick, preset="quick", trigger="runtimes", user_id=None)
+    await w1_runner.run_test(done.id, factory, sleep=no_sleep)
+    waiting = await w1_tests.create_test(session, picks=pick, preset="quick", trigger="list", user_id=None)
+    ids = {"{rt}": str(fleet["slot"].id), "{done}": str(done.id), "{waiting}": str(waiting.id),
+           "{host}": str(fleet["spark1"].id)}
+    for k, v in ids.items():
+        path = path.replace(k, v)
+    if body is not None:
+        body = json.loads(json.dumps(body).replace('"{rt}"', f'"{ids["{rt}"]}"')
+                          .replace('"{host}"', f'"{ids["{host}"]}"'))
     call = getattr(auth_client, method)
     resp = await (call(path, json=body) if body is not None else call(path))
     assert resp.status_code == code, resp.text
+    assert "x-bench-contract-stub" not in resp.headers
     if model is not None:
         model.model_validate(resp.json())
     else:
         [s.RuntimeTestSummary.model_validate(r) for r in resp.json()]
+
+
+def test_integration_gate_no_stub_left():
+    """CONTRACT.md: no `_stub(response`, no stub header, no 501 route."""
+    src = (pathlib.Path(build.__file__).resolve().parents[1] / "w1_routes.py").read_text(encoding="utf-8")
+    assert src.count("_stub(response") == 0
+    assert "STUB_HEADER" not in src and "X-Bench-Contract-Stub" not in src
+    assert "501" not in src
 
 
 @pytest.mark.asyncio

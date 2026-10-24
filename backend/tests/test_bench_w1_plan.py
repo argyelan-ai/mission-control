@@ -24,78 +24,9 @@ from app.models.runtime import Runtime  # noqa: E402
 from app.models.runtime_host import RuntimeHost  # noqa: E402
 from app.verticals.bench_studio import w1_plan, w1_schemas as s  # noqa: E402
 
-DS = "DeepSeek-V4.1-Flash-1017"  # model-catalog: allow (test data, never a request)
-GLM = "GLM-5.3-Flash"  # model-catalog: allow (test data)
-CLOUD_DS = "deepseek-v4.1-flash"  # model-catalog: allow (test data)
-PAID = "example-frontier-1"
-SPARK_EP = "http://192.0.2.10:8000/v1"
-PORSCHE_EP = "http://192.0.2.20:8000/v1"
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-async def seed_fleet(session, *, serving_age_min: int = 120, agent_model: str | None = "Qwen-3.5") -> dict:
-    spark1 = Host(slug="spark-a", display_name="DGX Spark 1", kind="ssh", ssh_host="203.0.113.54",
-                  agent_device_state={"gpu_mode": "eco"})
-    spark2 = Host(slug="spark-b", display_name="DGX Spark 2", kind="ssh", ssh_host="203.0.113.55")
-    porsche = Host(slug="porsche", display_name="RTX 5090", kind="flask_wol", power_managed=True)
-    session.add_all([spark1, spark2, porsche])
-    await session.flush()
-    since = _now() - timedelta(minutes=serving_age_min)
-    slot = Runtime(slug="dgx-spark-slot", display_name="Spark slot", runtime_type="openai_compatible",
-                   endpoint=SPARK_EP, model_identifier=DS, host_id=spark1.id, is_slot=True,
-                   serving_since=since, ui_order=1, max_context_len=131072)
-    glm = Runtime(slug="glm53-recipe", display_name="GLM recipe", runtime_type="vllm_docker",
-                  endpoint=SPARK_EP, model_identifier=GLM, host_id=spark1.id,
-                  serving_since=since, ui_order=2)
-    porsche_rt = Runtime(slug="porsche-slot", display_name="Porsche slot", runtime_type="openai_compatible",
-                         endpoint=PORSCHE_EP, model_identifier="qwen3-coder", host_id=porsche.id,
-                         is_slot=True, ui_order=3)
-    ollama = Runtime(slug="ollama-ds", display_name="Ollama DS", runtime_type="openai_compatible",
-                     endpoint="https://ollama.com/v1", model_identifier=CLOUD_DS,
-                     api_key_secret_id=uuid.uuid4(), ui_order=10)
-    paid = Runtime(slug="paid-api", display_name="Paid", runtime_type="openai_compatible",
-                   endpoint="https://api.example-llm.dev/v1", model_identifier=PAID,
-                   api_key_secret_id=uuid.uuid4(), ui_order=11, role_tags=["bench:api_price"])
-    session.add_all([slot, glm, porsche_rt, ollama, paid])
-    await session.flush()
-    session.add(RuntimeHost(runtime_id=slot.id, host_id=spark2.id, role="worker", node_rank=1))
-    board = Board(name="B", slug="b")
-    session.add(board)
-    await session.flush()
-    sparky = Agent(name="Sparky", board_id=board.id, harness="omp", runtime_id=slot.id, model=agent_model)
-    session.add(sparky)
-    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    session.add_all([
-        ModelPrice(model_pattern="*", input_per_mtok=0, output_per_mtok=0, valid_from=t0, priority=0),
-        ModelPrice(model_pattern="deepseek*", input_per_mtok=0.27, output_per_mtok=1.10, valid_from=t0,
-                   priority=10),
-        ModelPrice(model_pattern="DeepSeek*", input_per_mtok=0.27, output_per_mtok=1.10, valid_from=t0,
-                   priority=10),
-        ModelPrice(model_pattern="example-frontier*", input_per_mtok=15, output_per_mtok=75,
-                   valid_from=t0, priority=10),
-    ])
-    await session.commit()
-    return {"slot": slot, "glm": glm, "porsche": porsche_rt, "ollama": ollama, "paid": paid,
-            "sparky": sparky, "spark1": spark1, "board": board}
-
-
-@pytest.fixture
-def engines(monkeypatch):
-    """Spark serves DeepSeek only; the Porsche box does not answer."""
-    state = {"served": {SPARK_EP: frozenset({DS})}, "in_use": {SPARK_EP: False}}
-
-    async def served(ep):
-        return state["served"].get(ep)
-
-    async def in_use(ep):
-        return state["in_use"].get(ep)
-
-    monkeypatch.setattr(w1_plan, "_served", served)
-    monkeypatch.setattr(w1_plan, "_in_use", in_use)
-    return state
+from tests.test_bench_w1_fleet import (  # noqa: E402,F401 — shared fleet + the engines fixture
+    CLOUD_DS, DS, GLM, PAID, PORSCHE_EP, SPARK_EP, engines, seed_fleet,
+)
 
 
 # ── contestants ──────────────────────────────────────────────────────────
