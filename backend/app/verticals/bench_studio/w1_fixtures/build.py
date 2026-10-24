@@ -38,6 +38,8 @@ T_GREEN = "a0000000-0000-4000-8000-000000000002"
 T_TRUNC = "a0000000-0000-4000-8000-000000000003"
 T_RED = "a0000000-0000-4000-8000-000000000004"
 T_AUTO = "a0000000-0000-4000-8000-000000000005"
+T_CUT = "a0000000-0000-4000-8000-000000000006"
+RT_SWITCHING = "77777777-7777-4777-8777-777777777777"
 E = "e0000000-0000-4000-8000-0000000000{:02d}".format
 
 MODEL = "DeepSeek-V4.1-Flash-1017"  # model-catalog: allow (fixture data, never a request)
@@ -169,7 +171,7 @@ def _a_result(runs: list[dict], *, truncated: bool = False) -> dict:
         "key": RT_SPARK, "runtime_id": RT_SPARK, "served_model_id": MODEL,
         "display_name": MODEL, "locality": "local", "device_name": "DGX Spark ×2",
         "harness": "api",
-        "effort": {"requested": "default", "sent": None,
+        "effort": {"requested": "default", "default_level": "high", "sent": None,
                    "observed": {"thinking": "on", "reasoning_tokens": 2140}},
         "runs": runs,
         "summary": {
@@ -300,6 +302,36 @@ def test_done_truncated() -> s.BenchTestDetail:
         "truncation": {"runs_cut": 1, "n_runs": 3, "max_tokens": 16384,
                        "suggested_max_tokens": 32768, "entry_ids": [E(22)]},
         "allowed": ["kit", "rerun", "rerun_larger", "rerender", "recompose", "archive", "delete"],
+    })
+
+
+def test_aborted_truncated() -> s.BenchTestDetail:
+    """Every run thought until max_tokens and wrote no page (high/max effort
+    on a thinking model): aborted, but the private warning + "larger budget"
+    re-run are offered (review MUST-1)."""
+    cut = {"code": "no_html_truncated", "params": {}}
+    runs = [_run(i, 30 + i, state="failed", elapsed_ms=162_000 + i * 1_000, tokens_out=16_384,
+                 decode_tok_s=None, ttft_ms=400, finish_reason="length", truncated=True, error=cut)
+            for i in (1, 2, 3)]
+    res = _a_result(runs)
+    res.update({"receipt": None, "receipt_version": None, "receipt_checksum": None})
+    res["summary"] = {
+        "time": {"measured": False, "n": 0, "reason": {"code": "all_runs_failed"}},
+        "tokens_out": {"measured": False, "n": 0, "reason": {"code": "all_runs_failed"}},
+        "cost": {"cost_kind": "local"},
+    }
+    return s.BenchTestDetail.model_validate({
+        "id": T_CUT, "title": "Pagoda Garden", "created_at": "2026-10-24T10:05:00Z",
+        "trigger": "runtimes", "preset": "effort_ladder", "protocol_version": "v1",
+        "state": "aborted", "section": "needs_look",
+        "state_reason": {"code": "all_runs_failed", "params": {}},
+        "prompt": PAGODA,
+        "blocks": [{"run_class": "A", "contestants": [res]}],
+        "gate": {"status": "pending"},
+        "truncation": {"runs_cut": 3, "n_runs": 3, "max_tokens": 16384,
+                       "suggested_max_tokens": 32768, "entry_ids": [E(31), E(32), E(33)],
+                       "runs_without_page": 3, "video_run_cut": False},
+        "allowed": ["rerun", "rerun_larger", "archive", "delete"],
     })
 
 
@@ -454,6 +486,9 @@ def runtime_summary() -> list[s.RuntimeTestSummary]:
             "reason": {"code": "no_model"}}),
         s.RuntimeTestSummary.model_validate({"runtime_id": RT_CLOUD_DS, "testable": True}),
         s.RuntimeTestSummary.model_validate({"runtime_id": RT_CLOUD_PAID, "testable": True}),
+        s.RuntimeTestSummary.model_validate({
+            "runtime_id": RT_SWITCHING, "testable": False, "reason": {"code": "no_model"},
+            "planned_test": {"id": T_AUTO, "not_before": "2026-10-24T09:45:00Z"}}),
     ]
 
 
@@ -466,6 +501,10 @@ def cost_confirmation() -> s.CostConfirmation:
     return s.CostConfirmation.model_validate({"step": 2, "usd": 1.35})
 
 
+def cost_confirmation_unknown() -> s.CostConfirmation:
+    return s.CostConfirmation.model_validate({"step": 1, "usd": None, "price_unknown": True})
+
+
 # name -> (builder, TS type annotation)
 FIXTURES = {
     "plan_standard": (plan, "BenchPlan"),
@@ -473,6 +512,7 @@ FIXTURES = {
     "test_running": (test_running, "BenchTestDetail"),
     "test_done_green": (test_done_green, "BenchTestDetail"),
     "test_done_truncated": (test_done_truncated, "BenchTestDetail"),
+    "test_aborted_truncated": (test_aborted_truncated, "BenchTestDetail"),
     "test_needs_look_red": (test_needs_look_red, "BenchTestDetail"),
     "test_list": (test_list, "BenchTestList"),
     "kit_green": (kit_green, "XKit"),
@@ -480,6 +520,7 @@ FIXTURES = {
     "runtime_summary": (runtime_summary, "RuntimeTestSummary[]"),
     "auto_test": (auto_test, "AutoTestResponse"),
     "cost_confirmation": (cost_confirmation, "CostConfirmation"),
+    "cost_confirmation_unknown": (cost_confirmation_unknown, "CostConfirmation"),
 }
 
 

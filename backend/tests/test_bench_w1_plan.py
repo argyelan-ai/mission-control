@@ -19,7 +19,7 @@ from app.models.bench import BenchChallenge, BenchEntry, BenchProbe  # noqa: E40
 from app.verticals.bench_studio import w1_plan, w1_schemas as s  # noqa: E402
 
 from tests.test_bench_w1_fleet import (  # noqa: E402,F401 — shared fleet + the engines fixture
-    CLOUD_DS, DS, GLM, PAID, PORSCHE_EP, SPARK_EP, engines, seed_fleet,
+    CLOUD_DS, DS, GLM, PAID, WOL_EP, SPARK_EP, engines, seed_fleet,
 )
 
 
@@ -58,9 +58,9 @@ async def test_label_never_comes_from_agents_model(session, engines):
 async def test_sleeping_box_is_listed_with_a_blocking_reason(session, engines):
     await seed_fleet(session)
     out = s.ContestantList.model_validate(await w1_plan.list_contestants(session))
-    porsche = next(c for c in out.local if c.device and c.device.name == "RTX 5090")
-    assert porsche.device.state == "asleep"
-    assert [b.code for b in porsche.blockers] == ["box_asleep"] and porsche.blockers[0].blocking
+    wol_box = next(c for c in out.local if c.device and c.device.name == "RTX 5090")
+    assert wol_box.device.state == "asleep"
+    assert [b.code for b in wol_box.blockers] == ["box_asleep"] and wol_box.blockers[0].blocking
 
 
 @pytest.mark.asyncio
@@ -262,7 +262,7 @@ async def test_runtime_summary_primary_and_reasons(session, engines):
     [s.RuntimeTestSummary.model_validate(r) for r in rows.values()]
     assert rows[fleet["slot"].id]["testable"] and rows[fleet["slot"].id]["primary"]
     assert rows[fleet["glm"].id]["testable"] is False  # drifted recipe row
-    assert rows[fleet["porsche"].id]["reason"]["code"] == "box_asleep"
+    assert rows[fleet["wol"].id]["reason"]["code"] == "box_asleep"
     assert rows[fleet["ollama"].id]["testable"] and not rows[fleet["ollama"].id].get("primary")
     assert sum(1 for r in rows.values() if r.get("primary")) == 1  # K11: one primary
 

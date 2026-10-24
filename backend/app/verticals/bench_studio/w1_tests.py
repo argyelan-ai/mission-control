@@ -220,6 +220,8 @@ async def test_detail(
             digest = c.checksum(rec)
         hm = (head.metrics or {}) if head else {}
         effort = {"requested": pc.get("effort") or "default"}
+        if pc.get("effort_default_level"):
+            effort["default_level"] = pc["effort_default_level"]
         if hm.get("effort_sent") is not None:
             effort["sent"] = hm["effort_sent"]
         if hm.get("effort_observed") is not None:
@@ -265,7 +267,10 @@ async def test_detail(
         blocks.append({"run_class": "B", "contestants": b, "starts_after": "A" if a else None})
 
     context_limit = (challenge.plan or {}).get("context_limit")
-    truncation = w1_receipt.truncation_info(pairs, context_limit=context_limit) if finished else None
+    # A test whose runs ALL stopped at the limit ends "aborted" — exactly the
+    # case the private warning + "larger budget" re-run exists for.
+    truncation = (w1_receipt.truncation_info(pairs, context_limit=context_limit)
+                  if finished or challenge.status == "failed" else None)
     prompt = {
         "template_id": challenge.prompt_template_id,
         "title": ((challenge.plan or {}).get("prompt") or {}).get("title") or challenge.title,
@@ -457,7 +462,12 @@ async def _resolve_contestants(
     pcs_b: list[dict] = []
     moneys: list[dict] = []
     blockers: list[dict] = []
+    seen: set[tuple[str, str]] = set()
     for i, pick in enumerate(picks):
+        dup = (str(pick["runtime_id"]), pick.get("harness") or "api")
+        if dup in seen:
+            raise _field_422(["body", "picks", i], "bench_pick_duplicate", "the same contestant was picked twice")
+        seen.add(dup)
         view = w1_plan.find_view(views, uuid.UUID(str(pick["runtime_id"])))
         if view is None or not view.served_model:
             raise _field_422(["body", "picks", i, "runtime_id"], "bench_runtime_not_testable",
@@ -514,9 +524,10 @@ async def _resolve_contestants(
                                           max_tokens=max_tokens)
                 moneys.append(money)
                 key = str(view.runtime.id) if len(efforts) == 1 else f"{view.runtime.id}:{level}"
+                merged = next((o.get("merged_level") for o in d["effort"]["options"] if o.get("is_default")), None)
                 pcs_a.append({**base, "key": key, "harness": "api", "run_class": "A", "effort": level,
                               "max_tokens": max_tokens, "n_runs": n_runs, "money": money, "price": price_d,
-                              "effort_status": d["effort"]["status"]})
+                              "effort_status": d["effort"]["status"], "effort_default_level": merged})
         else:
             if efforts != ["default"]:
                 raise _field_422(["body", "picks", i, "efforts"], "bench_effort_agent_path",
@@ -540,9 +551,16 @@ async def _resolve_contestants(
     return pcs, w1_plan.total_money(moneys), blockers
 
 
-def _cost_gate(money: dict, confirmed: float | None, over_cap: bool) -> None:
+def _cost_gate(money: dict, confirmed: float | None, over_cap: bool, unknown_ok: bool = False) -> None:
     """D4: a paid test starts only with the operator's OK for the quoted
-    amount; above $1 a second, explicit OK."""
+    amount; above $1 a second, explicit OK. Fail-closed: a cloud API whose
+    price MC does not know (not a subscription) asks "Kosten unbekannt —
+    OK?" before the first request."""
+    if money.get("cost_kind") == "unknown":
+        if not unknown_ok:
+            raise HTTPException(409, {"code": "bench_cost_confirmation", "step": 1, "usd": None,
+                                      "cap_usd": c.COST_CAP_USD, "price_unknown": True})
+        return
     if money.get("cost_kind") != "api_price":
         return
     usd = float(money.get("usd") or 0)
@@ -569,6 +587,7 @@ async def create_test(
     max_tokens_override: int | None = None,
     cost_confirmed_usd: float | None = None,
     confirm_over_cap: bool = False,
+    confirm_unknown_cost: bool = False,
 ) -> BenchChallenge:
     if prompt is None:
         prompt = await w1_plan.default_prompt(session, template_id)
@@ -577,7 +596,7 @@ async def create_test(
         session, picks, preset=preset, n_runs=n_runs, prompt_text=prompt["text"],
         max_tokens_override=max_tokens_override,
     )
-    _cost_gate(money, cost_confirmed_usd, confirm_over_cap)
+    _cost_gate(money, cost_confirmed_usd, confirm_over_cap, confirm_unknown_cost)
     video = [pc for pc in pcs if pc["video"]]
     plan = {
         "preset": preset,
@@ -678,6 +697,7 @@ async def rerun_test(
     user_id: str | None,
     cost_confirmed_usd: float | None = None,
     confirm_over_cap: bool = False,
+    confirm_unknown_cost: bool = False,
     picks: list[dict[str, Any]] | None = None,
 ) -> BenchChallenge:
     """"Nochmal" = the same plan against the model live NOW. ``budget``
@@ -709,6 +729,7 @@ async def rerun_test(
         session, picks=picks, preset="rerun", trigger="rerun", user_id=user_id, prompt=prompt,
         n_runs=n_runs, rerun_of=old.id, budget=budget, max_tokens_override=override,
         cost_confirmed_usd=cost_confirmed_usd, confirm_over_cap=confirm_over_cap,
+        confirm_unknown_cost=confirm_unknown_cost,
     )
 
 
@@ -811,3 +832,32 @@ async def create_auto_test(
     _wake_runner()
     return {"test_id": challenge.id, "state": "waiting", "not_before": not_before,
             "superseded_test_id": superseded}
+
+
+# ── Eingang: the result page clears its own "Test fertig" item ───────────
+
+
+async def mark_seen(session: AsyncSession, challenge: BenchChallenge) -> int:
+    """Opening a FINISHED test's result page is what the Eingang item asks
+    for — it resolves the item (no side effect for ``bench_result``), so a
+    test Mark watched live does not cost him an extra "Erledigt" tap.
+    Returns how many items were resolved."""
+    from app.models.approval import Approval
+
+    if challenge.status in LIVE:
+        return 0
+    rows = (
+        await session.exec(select(Approval).where(Approval.action_type == "bench_result",
+                                                  Approval.status == "pending"))
+    ).all()
+    n = 0
+    for a in rows:
+        if (a.payload or {}).get("test_id") == str(challenge.id):
+            a.status = "approved"
+            a.resolved_at = c.now_utc()
+            a.resolver_note = "seen on the result page"
+            session.add(a)
+            n += 1
+    if n:
+        await session.commit()
+    return n

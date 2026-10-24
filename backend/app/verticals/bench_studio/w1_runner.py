@@ -58,6 +58,11 @@ LIVE_WRITE_EVERY_S = 2.0
 MAX_ATTEMPTS = 2
 STREAM_READ_TIMEOUT_S = 300.0
 PROBE_RETRY_AFTER = timedelta(minutes=30)
+#: A paid run never probes (D4); the stored probe counts for this long.
+PAID_PROBE_TTL = timedelta(days=7)
+#: Probe warming looks at the fleet at most this often (it reloads every
+#: runtime and asks every local engine; the loop itself ticks every 5 s).
+WARM_EVERY_S = 60.0
 FEATURE_CARD = "bench_card_v1"
 #: model_usage_events rows the bench writes itself (orchestrator._record_spark_usage_event).
 _BENCH_OWN_USAGE = ("vanilla",)
@@ -65,6 +70,7 @@ _BENCH_OWN_USAGE = ("vanilla",)
 _wake_event: asyncio.Event | None = None
 _tasks: dict[uuid.UUID, asyncio.Task] = {}
 _probe_failures: dict[str, datetime] = {}
+_last_warm: float | None = None
 
 SessionFactory = Callable[[], AsyncSession]
 
@@ -261,10 +267,19 @@ async def _effort_fields(session: AsyncSession, pc: dict, rt, api_key: str | Non
         return {}, {}
     ttl = effort_probe.UNPINNED_PROBE_TTL if local else effort_probe.CLOUD_PROBE_TTL
     try:
-        probe = await effort_probe.get_or_probe_for(
-            session, runtime_id=rt.id, model=pc["served_model_id"], serving_since=rt.serving_since,
-            llm_url=rt.endpoint, api_key=api_key, ttl=ttl,
-        )
+        if paid:
+            # D4: probe requests to a paid API are not in the confirmed
+            # amount — a paid run uses the probe the sheet offered the level
+            # from, never a new one.
+            probe = await effort_probe.stored_probe_for(
+                session, rt.id, pc["served_model_id"], rt.serving_since, ttl=PAID_PROBE_TTL)
+            if probe is None or probe.status == "failed":
+                raise RunError("effort_probe_failed", "no stored probe for a paid run")
+        else:
+            probe = await effort_probe.get_or_probe_for(
+                session, runtime_id=rt.id, model=pc["served_model_id"], serving_since=rt.serving_since,
+                llm_url=rt.endpoint, api_key=api_key, ttl=ttl,
+            )
     except Exception as exc:  # noqa: BLE001
         if level == "default":
             return {}, {}
@@ -292,11 +307,70 @@ async def _set_metrics(factory, entry_id: uuid.UUID, **fields) -> None:
         await s.commit()
 
 
+#: Run errors that are never retried: the same request fails the same way
+#: (a run that thought until max_tokens with the same budget, an effort the
+#: engine no longer offers, a runtime that is gone).
+NO_RETRY = ("no_html_truncated", "effort_not_offered", "runtime_gone")
+#: What a failed attempt keeps from its stream: the private truncation
+#: warning and the receipt need them even when no page came back.
+_FAILED_KEEP = ("model", "finish_reason", "truncated", "streamed", "gen_ms", "ttft_ms", "tokens_in",
+                "tokens_out", "tokens_reasoning", "tokens_cache_read", "usage_missing", "effort_observed")
+
+
+def max_attempts(pc: dict) -> int:
+    """D4: a run that costs real money (or an unknown amount) is attempted
+    once — a retry would spend past the amount Mark confirmed."""
+    kind = (pc.get("money") or {}).get("cost_kind")
+    return 1 if kind in ("api_price", "unknown") else MAX_ATTEMPTS
+
+
+async def _record_usage(factory, pc: dict, entry_id: uuid.UUID, challenge_id: uuid.UUID,
+                        metrics: dict[str, Any]) -> None:
+    """One ``model_usage_events`` row per attempt that reported usage (the
+    direct path has no fleet task, so nothing else records it): usage and
+    cost pages see the bench's spend. ``harness`` "vanilla" keeps the
+    quiet-box rule from counting the bench's own runs as fleet usage. Real
+    money only on a paid run (local / subscription carry no $, R3).
+    Best-effort — never fails the run."""
+    tokens_in = metrics.get("tokens_in")
+    tokens_out = metrics.get("tokens_out")
+    if tokens_in is None and tokens_out is None:
+        return
+    try:
+        from app.models.model_usage import ModelUsageEvent
+
+        cache = int(metrics.get("tokens_cache_read") or 0)
+        uncached_in = max(int(tokens_in or 0) - cache, 0)
+        out = int(tokens_out or 0)
+        price = pc.get("price") or {}
+        cost = None
+        if (pc.get("money") or {}).get("cost_kind") == "api_price" and price:
+            cost = round((uncached_in * price.get("input_per_mtok", 0)
+                          + cache * price.get("input_per_mtok", 0)
+                          + out * price.get("output_per_mtok", 0)) / 1e6, 6)
+        provider = "local" if pc.get("locality") == "local" else (pc.get("provider") or "api")
+        async with _session(factory) as s:
+            s.add(ModelUsageEvent(
+                agent_id=None, task_id=None, harness=_BENCH_OWN_USAGE[0],
+                model=metrics.get("model") or pc.get("served_model_id") or "unknown",
+                provider=str(provider)[:64],
+                session_id=f"bench-{challenge_id}",
+                message_uuid=f"vanilla:{challenge_id}:{entry_id}:{uuid.uuid4().hex[:8]}",
+                input_tokens=uncached_in, output_tokens=out, cache_read_tokens=cache, cache_write_tokens=0,
+                cost_usd=cost, ts=c.now_utc(), source_file=f"bench-entry:{entry_id}",
+            ))
+            await s.commit()
+    except Exception:  # noqa: BLE001 — usage tracking must never fail the bench run
+        logger.warning("bench W1 run %s: usage row not written", entry_id, exc_info=True)
+
+
 async def run_api_entry(factory, challenge_id: uuid.UUID, pc: dict, entry_id: uuid.UUID, quiet: dict) -> bool:
-    """One repetition of one class A contestant, up to MAX_ATTEMPTS attempts
-    (every attempt counted). Returns True when the run produced a page."""
+    """One repetition of one class A contestant, up to :func:`max_attempts`
+    attempts (every attempt counted). Returns True when the run produced a
+    page."""
     from app.services import reasoning_params
 
+    limit = max_attempts(pc)
     async with _session(factory) as s:
         entry = await s.get(BenchEntry, entry_id)
         challenge = await s.get(BenchChallenge, challenge_id)
@@ -305,7 +379,14 @@ async def run_api_entry(factory, challenge_id: uuid.UUID, pc: dict, entry_id: uu
         prompt = challenge.prompt_text
         attempt = entry.attempt_no or 1
         errors = list((entry.metrics or {}).get("attempt_errors") or [])
-    while attempt <= MAX_ATTEMPTS:
+    if attempt > limit:
+        # A restart cut the last allowed attempt (heal counted it): the run
+        # ends here with that reason instead of waiting forever.
+        code = errors[-1] if errors else "backend_restart"
+        await _set_metrics(factory, entry_id, status="failed", error=code, error_code=code,
+                           attempt_errors=errors, phase="done", attempt_no=limit)
+        return False
+    while attempt <= limit:
         await _set_metrics(factory, entry_id, status="generating", attempt_no=attempt, phase="generating",
                            tokens_so_far=0, elapsed_ms=0, quiet_box=quiet.get("status"),
                            serving_age_min=quiet.get("age_min"))
@@ -333,8 +414,13 @@ async def run_api_entry(factory, challenge_id: uuid.UUID, pc: dict, entry_id: uu
                 await _set_metrics(factory, entry_id, **live)
 
             content, metrics = await stream_chat(url, body, api_key=api_key, on_progress=progress)
+            await _record_usage(factory, pc, entry_id, challenge_id, metrics)
             html = orch.extract_html(content)
             if not html:
+                # Keep what the stream measured: a run that thought until
+                # max_tokens and wrote no page is the commonest truncation —
+                # the private warning and the "larger budget" re-run need it.
+                await _set_metrics(factory, entry_id, **{k: metrics[k] for k in _FAILED_KEEP if k in metrics})
                 raise RunError("no_html_truncated" if metrics.get("truncated") else "no_html",
                                f"finish_reason={metrics.get('finish_reason')}")
             async with _session(factory) as s:
@@ -358,7 +444,7 @@ async def run_api_entry(factory, challenge_id: uuid.UUID, pc: dict, entry_id: uu
             errors.append(code)
             logger.warning("bench W1 run %s attempt %d failed: %s", entry_id, attempt, exc)
             attempt += 1
-            if attempt > MAX_ATTEMPTS or code in ("effort_not_offered", "runtime_gone"):
+            if attempt > limit or code in NO_RETRY:
                 await _set_metrics(factory, entry_id, status="failed", error=f"{code}: {exc}"[:2000],
                                    error_code=code, attempt_errors=errors, phase="done")
                 return False
@@ -510,7 +596,14 @@ async def run_agent_contestant(factory, challenge_id: uuid.UUID, pc: dict, entry
                 s.add(entry)
                 await s.commit()
                 return False
-        started = c.now_utc()
+        # The time limit counts from the first dispatch — a backend restart
+        # must not hand the agent a fresh 120 minutes.
+        stamp = (entry.metrics or {}).get("agent_started_at")
+        started = c.as_aware(datetime.fromisoformat(stamp)) if stamp else c.now_utc()
+        if not stamp:
+            entry.metrics = {**(entry.metrics or {}), "agent_started_at": started.isoformat()}
+            s.add(entry)
+            await s.commit()
     deadline = started + timedelta(minutes=pc.get("time_limit_min") or c.AGENT_TIME_LIMIT_MIN)
     while True:
         async with _session(factory) as s:
@@ -681,12 +774,15 @@ async def compose_artefacts(factory, challenge_id: uuid.UUID) -> None:
 
 
 def cleanup_stale_artefacts(challenge_id: uuid.UUID, checksum: str | None) -> None:
-    """W1.9 retention: only the current card/zip survive a recompose."""
+    """W1.9 retention: only the current card survives a recompose. Every
+    kit.zip goes — a compose can change the files behind an unchanged
+    checksum (the card arrives after a renderer rebuild, a new video), and
+    the next download builds the zip again from what is on disk."""
     root = orch.challenge_dir(challenge_id)
     keep = (checksum or "")[:12]
     for pattern in ("card-*.png", "kit-*.zip"):
         for p in root.glob(pattern):
-            if keep and keep in p.name:
+            if pattern == "card-*.png" and keep and keep in p.name:
                 continue
             try:
                 p.unlink()
@@ -742,9 +838,13 @@ async def post_inbox_item(session: AsyncSession, challenge: BenchChallenge, deta
     if any((a.payload or {}).get("test_id") == str(challenge.id) for a in existing):
         return
     names = [r["display_name"] for b in detail["blocks"] for r in b["contestants"]]
+    if not names:
+        names = [pc.get("served_model_id") or "" for pc in (challenge.plan or {}).get("contestants") or []]
+        names = [n for n in names if n]
+    verb = "stopped" if detail["state"] == "aborted" else "finished"
     session.add(Approval(
         action_type="bench_result",
-        description=f"Test finished: {', '.join(names) or challenge.title} · {challenge.title}",
+        description=f"Test {verb}: {', '.join(names) or challenge.title} · {challenge.title}",
         payload={
             "test_id": str(challenge.id),
             "href": f"/bench/r/{challenge.id}",
@@ -755,6 +855,7 @@ async def post_inbox_item(session: AsyncSession, challenge: BenchChallenge, deta
             "gate_status": detail["gate"]["status"],
             "trigger": challenge.trigger,
             "truncation": bool(detail.get("truncation")),
+            "state_reason": (detail.get("state_reason") or {}).get("code"),
         },
     ))
 
@@ -965,7 +1066,7 @@ async def resolve_auto_tests(factory: SessionFactory | None = None) -> None:
             except Exception as exc:  # noqa: BLE001
                 logger.info("bench W1 auto test %s not ready yet: %s", ch.id, exc)
                 continue
-            if money.get("cost_kind") == "api_price":
+            if money.get("cost_kind") in ("api_price", "unknown"):
                 ch.status = "failed"
                 ch.error = "switch_failed"
                 s.add(ch)
@@ -1073,6 +1174,7 @@ async def next_test_id(factory: SessionFactory | None = None) -> uuid.UUID | Non
 
 
 async def tick(factory: SessionFactory | None = None) -> uuid.UUID | None:
+    global _last_warm
     await resolve_auto_tests(factory)
     if running():
         return None
@@ -1082,6 +1184,9 @@ async def tick(factory: SessionFactory | None = None) -> uuid.UUID | None:
 
         _tasks[test_id] = create_tracked_task(run_test(test_id, factory), name=f"bench_w1_test({test_id})")
         return test_id
+    if _last_warm is not None and time.monotonic() - _last_warm < WARM_EVERY_S:
+        return None
+    _last_warm = time.monotonic()
     try:
         await warm_probes(factory)
     except Exception:  # noqa: BLE001

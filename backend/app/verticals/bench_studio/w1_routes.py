@@ -7,6 +7,7 @@ are thin: plan builder (``w1_plan``), tests (``w1_tests``), runner
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Literal
 
@@ -83,12 +84,14 @@ async def create_test(
         challenge = await w1_tests.rerun_test(
             session, old, budget=body.budget, user_id=str(current_user.id), picks=picks,
             cost_confirmed_usd=body.cost_confirmed_usd, confirm_over_cap=body.confirm_over_cap,
+            confirm_unknown_cost=body.confirm_unknown_cost,
         )
     else:
         challenge = await w1_tests.create_test(
             session, picks=picks, preset=body.preset, trigger=body.trigger, user_id=str(current_user.id),
             template_id=body.prompt_template_id, budget=body.budget,
             cost_confirmed_usd=body.cost_confirmed_usd, confirm_over_cap=body.confirm_over_cap,
+            confirm_unknown_cost=body.confirm_unknown_cost,
         )
     return await w1_tests.test_detail(session, challenge)
 
@@ -146,8 +149,22 @@ async def rerun_test(
     challenge = await w1_tests.rerun_test(
         session, old, budget=body.budget, user_id=str(current_user.id),
         cost_confirmed_usd=body.cost_confirmed_usd, confirm_over_cap=body.confirm_over_cap,
+        confirm_unknown_cost=body.confirm_unknown_cost,
     )
     return await w1_tests.test_detail(session, challenge)
+
+
+@router.post("/tests/{test_id}/seen", response_model=s.SeenResponse)
+async def mark_seen(
+    test_id: uuid.UUID,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """The result page of a finished test was opened: its Eingang item
+    "Test fertig" is resolved (no side effect). Idempotent."""
+    challenge = await w1_tests.get_or_404(session, test_id)
+    return {"resolved": await w1_tests.mark_seen(session, challenge)}
 
 
 @router.post("/tests/{test_id}/stop", response_model=s.BenchTestDetail)
@@ -234,12 +251,15 @@ async def kit_file(
     detail = await w1_tests.test_detail(session, challenge, with_actions=False)
     if detail["gate"]["status"] == "red":
         raise HTTPException(409, {"code": "gate_red", "reasons": detail["gate"]["reasons"]})
-    if detail["gate"]["status"] == "pending":
-        raise HTTPException(409, {"code": "runs_pending"})
-    if name == "kit.zip":
-        if not any(f["ready"] for f in w1_kit.kit_files(challenge, detail)):
+    kit = w1_kit.kit(challenge, detail)
+    if not kit["downloadable"]:
+        # ONE rule with the kit sheet: what it does not offer is not served.
+        blocked = kit["blocked_reason"] or {"code": "runs_pending"}
+        if blocked["code"] == "files_not_ready":
             raise HTTPException(404, "Kit files are not ready yet")
-        path = w1_kit.build_zip(challenge, detail)
+        raise HTTPException(409, {"code": blocked["code"]})
+    if name == "kit.zip":
+        path = await asyncio.to_thread(w1_kit.build_zip, challenge, detail)
         filename = w1_kit.download_filename(detail, "zip")
     else:
         path = w1_kit.artefact_paths(challenge, detail)[name]

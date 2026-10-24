@@ -73,7 +73,7 @@ async def test_create_refuses_a_drifted_row_and_a_sleeping_box(auth_client, sess
     resp = await auth_client.post(f"{BASE}/tests", json={"picks": [_pick(fleet["glm"])]})
     assert resp.status_code == 422 and resp.json()["detail"][0]["type"] == "bench_runtime_not_testable"
     engines["served"]["http://192.0.2.20:8000/v1"] = None
-    resp = await auth_client.post(f"{BASE}/tests", json={"picks": [_pick(fleet["porsche"])]})
+    resp = await auth_client.post(f"{BASE}/tests", json={"picks": [_pick(fleet["wol"])]})
     assert resp.status_code in (409, 422)
 
 

@@ -23,7 +23,7 @@ GLM = "GLM-5.3-Flash"  # model-catalog: allow (test data)
 CLOUD_DS = "deepseek-v4.1-flash"  # model-catalog: allow (test data)
 PAID = "example-frontier-1"
 SPARK_EP = "http://192.0.2.10:8000/v1"
-PORSCHE_EP = "http://192.0.2.20:8000/v1"
+WOL_EP = "http://192.0.2.20:8000/v1"
 
 
 def _now() -> datetime:
@@ -34,8 +34,8 @@ async def seed_fleet(session, *, serving_age_min: int = 120, agent_model: str | 
     spark1 = Host(slug="spark-a", display_name="DGX Spark 1", kind="ssh", ssh_host="203.0.113.54",
                   agent_device_state={"gpu_mode": "eco"})
     spark2 = Host(slug="spark-b", display_name="DGX Spark 2", kind="ssh", ssh_host="203.0.113.55")
-    porsche = Host(slug="porsche", display_name="RTX 5090", kind="flask_wol", power_managed=True)
-    session.add_all([spark1, spark2, porsche])
+    wol_box = Host(slug="wol-box", display_name="RTX 5090", kind="flask_wol", power_managed=True)
+    session.add_all([spark1, spark2, wol_box])
     await session.flush()
     since = _now() - timedelta(minutes=serving_age_min)
     slot = Runtime(slug="dgx-spark-slot", display_name="Spark slot", runtime_type="openai_compatible",
@@ -44,8 +44,8 @@ async def seed_fleet(session, *, serving_age_min: int = 120, agent_model: str | 
     glm = Runtime(slug="glm53-recipe", display_name="GLM recipe", runtime_type="vllm_docker",
                   endpoint=SPARK_EP, model_identifier=GLM, host_id=spark1.id,
                   serving_since=since, ui_order=2)
-    porsche_rt = Runtime(slug="porsche-slot", display_name="Porsche slot", runtime_type="openai_compatible",
-                         endpoint=PORSCHE_EP, model_identifier="qwen3-coder", host_id=porsche.id,
+    wol_rt = Runtime(slug="wol-slot", display_name="WoL slot", runtime_type="openai_compatible",
+                         endpoint=WOL_EP, model_identifier="qwen3-coder", host_id=wol_box.id,
                          is_slot=True, ui_order=3)
     ollama = Runtime(slug="ollama-ds", display_name="Ollama DS", runtime_type="openai_compatible",
                      endpoint="https://ollama.com/v1", model_identifier=CLOUD_DS,
@@ -53,7 +53,7 @@ async def seed_fleet(session, *, serving_age_min: int = 120, agent_model: str | 
     paid = Runtime(slug="paid-api", display_name="Paid", runtime_type="openai_compatible",
                    endpoint="https://api.example-llm.dev/v1", model_identifier=PAID,
                    api_key_secret_id=uuid.uuid4(), ui_order=11, role_tags=["bench:api_price"])
-    session.add_all([slot, glm, porsche_rt, ollama, paid])
+    session.add_all([slot, glm, wol_rt, ollama, paid])
     await session.flush()
     session.add(RuntimeHost(runtime_id=slot.id, host_id=spark2.id, role="worker", node_rank=1))
     board = Board(name="B", slug="b")
@@ -72,13 +72,13 @@ async def seed_fleet(session, *, serving_age_min: int = 120, agent_model: str | 
                    valid_from=t0, priority=10),
     ])
     await session.commit()
-    return {"slot": slot, "glm": glm, "porsche": porsche_rt, "ollama": ollama, "paid": paid,
+    return {"slot": slot, "glm": glm, "wol": wol_rt, "ollama": ollama, "paid": paid,
             "omp_agent": omp_agent, "spark1": spark1, "board": board}
 
 
 @pytest.fixture
 def engines(monkeypatch):  # noqa: F811
-    """Spark serves DeepSeek only; the Porsche box does not answer."""
+    """Spark serves DeepSeek only; the WoL box does not answer."""
     state = {"served": {SPARK_EP: frozenset({DS})}, "in_use": {SPARK_EP: False}}
 
     async def served(ep):
@@ -238,4 +238,4 @@ async def test_fleet_seed_has_the_live_shape(session):
 
 
 def test_fleet_names_are_documentation_addresses():
-    assert SPARK_EP.startswith("http://192.0.2.") and PORSCHE_EP.startswith("http://192.0.2.")
+    assert SPARK_EP.startswith("http://192.0.2.") and WOL_EP.startswith("http://192.0.2.")

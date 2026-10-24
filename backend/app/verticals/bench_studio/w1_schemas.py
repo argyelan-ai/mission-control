@@ -235,14 +235,20 @@ class BenchTestCreate(BaseModel):
     budget: Literal["same", "larger"] = "same"
     cost_confirmed_usd: float | None = None
     confirm_over_cap: bool = False
+    # D4 fail-closed: a cloud API with no known price asks "Kosten
+    # unbekannt — OK?" first (409 CostConfirmation with price_unknown).
+    confirm_unknown_cost: bool = False
 
 
 class CostConfirmation(BaseModel):
-    """409 detail body when money must be confirmed first."""
+    """409 detail body when money must be confirmed first. ``usd`` None +
+    ``price_unknown`` = a cloud API without a price row: the amount cannot
+    be quoted, the operator confirms "unknown" explicitly."""
     code: Literal["bench_cost_confirmation"] = "bench_cost_confirmation"
     step: Literal[1, 2]
-    usd: float
+    usd: float | None = None
     cap_usd: float = 1.0
+    price_unknown: bool = False
 
 
 # ── Results ──────────────────────────────────────────────────────────────
@@ -261,6 +267,9 @@ class Stat(BaseModel):
 
 class EffortRecord(BaseModel):
     requested: Effort = "default"
+    # The level the server default maps to, as the probe found it at start
+    # ("hoch (Standard)" in the sheet, on the result page and on the card).
+    default_level: Effort | None = None
     sent: dict[str, Any] | None = None        # {key, value} raw; None = nothing sent
     observed: dict[str, Any] | None = None    # {thinking, reasoning_tokens} | {source, level}
 
@@ -396,6 +405,10 @@ class TruncationWarning(BaseModel):
     max_tokens: int
     suggested_max_tokens: int
     entry_ids: list[uuid.UUID] = Field(default_factory=list)
+    # Runs that stopped before they wrote any page (thinking until the limit).
+    runs_without_page: int = 0
+    # Run 1 (the video run) was cut: the video shows an unfinished page.
+    video_run_cut: bool = False
 
 
 class Verdict(BaseModel):
@@ -478,6 +491,11 @@ class BenchTestList(BaseModel):
     last_at: datetime | None = None
 
 
+class SeenResponse(BaseModel):
+    """POST /bench/tests/{id}/seen — Eingang items resolved."""
+    resolved: int = 0
+
+
 class RerunRequest(BaseModel):
     budget: Literal["same", "larger"] = "same"
     # D4 on the re-run route too: a paid model answers 409 CostConfirmation;
@@ -485,6 +503,7 @@ class RerunRequest(BaseModel):
     # budget of the truncation re-run is never lost on a detour.
     cost_confirmed_usd: float | None = Field(default=None, ge=0)
     confirm_over_cap: bool = False
+    confirm_unknown_cost: bool = False
 
 
 # ── X-Kit ────────────────────────────────────────────────────────────────
@@ -531,6 +550,11 @@ class DownloadToken(BaseModel):
 # ── Entries (Runtimes cards, auto test after a switch) ───────────────────
 
 
+class PlannedTest(BaseModel):
+    id: uuid.UUID
+    not_before: datetime | None = None
+
+
 class RuntimeTestSummary(BaseModel):
     """GET /bench/runtime-summary — one row per runtime for the Runtimes
     page "Testen" buttons (P1). ``primary``: only the most recently
@@ -541,6 +565,10 @@ class RuntimeTestSummary(BaseModel):
     primary: bool = False
     last_test: LastTest | None = None
     running_test_id: uuid.UUID | None = None
+    # An auto test after a recipe switch that has no runs yet (it waits for
+    # the model): the card says "Test geplant · 11:45" instead of offering a
+    # second test on the same model.
+    planned_test: PlannedTest | None = None
 
 
 class AutoTestCreate(BaseModel):

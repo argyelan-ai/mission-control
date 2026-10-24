@@ -60,7 +60,7 @@ def contestant_summary(
             "wait_ms": m.get("wait_ms"),
             "tokens_out": stat([out], reason=pending or ("harvest_pending" if e else "all_runs_failed")),
             "tokens_cache_read": m.get("tokens_cache_read"),
-            "cost": cost_of(pc, runs),
+            "cost": cost_of(pc, entries),
             "page_check": m.get("page_check"),
         }
         return summary
@@ -70,7 +70,7 @@ def contestant_summary(
         "time": stat([_m(e).get("gen_ms") for e in runs], reason=pending or ("all_runs_failed" if not runs else "not_recorded")),
         "time_kind": "gen_ms",
         "tokens_out": stat([_m(e).get("tokens_out") for e in runs], reason=reason_missing),
-        "cost": cost_of(pc, runs),
+        "cost": cost_of(pc, entries),
         "page_check": page_check_of(entries),
     }
     reasoning = [_m(e).get("tokens_reasoning") for e in runs if _m(e).get("tokens_reasoning") is not None]
@@ -94,9 +94,12 @@ def page_check_of(entries: list[BenchEntry]) -> str | None:
     return None
 
 
-def cost_of(pc: dict[str, Any], runs: list[BenchEntry]) -> dict[str, Any]:
+def cost_of(pc: dict[str, Any], entries: list[BenchEntry]) -> dict[str, Any]:
     """Money as spent: local/subscription never carry ``usd`` (R3); a paid
-    run is the API list price of the tokens really used."""
+    run is the API list price of the tokens really used — by EVERY attempt
+    that reported usage, a failed one too (it was paid all the same)."""
+    runs = [e for e in entries if e.status in DONE_ENTRY
+            or _m(e).get("tokens_out") is not None or _m(e).get("tokens_in") is not None]
     money = dict(pc.get("money") or {"cost_kind": "unknown"})
     kind = money.get("cost_kind", "unknown")
     price = pc.get("price") or {}
@@ -206,7 +209,7 @@ def build_receipt(
             "quiet_box": hm.get("quiet_box"),
             "serving_age_min": hm.get("serving_age_min"),
             "finish_reasons": [_m(e).get("finish_reason") for e in sorted(entries, key=lambda e: e.repeat_idx)],
-            "truncated_runs": sum(1 for e in runs if _m(e).get("truncated")),
+            "truncated_runs": sum(1 for e in entries if _m(e).get("truncated")),
             "tokens_in": c.median([_m(e).get("tokens_in") for e in runs]),
         })
         for name in ("decode_tok_s", "ttft_ms", "tokens_reasoning"):
@@ -296,6 +299,8 @@ def truncation_info(
     cut: list[BenchEntry] = []
     total = 0
     max_tokens = 0
+    no_page = 0
+    video_cut = False
     for pc, entries in contestants:
         if pc.get("run_class") != "A":
             continue
@@ -305,6 +310,10 @@ def truncation_info(
             max_tokens = max(max_tokens, int(m.get("max_tokens") or pc.get("max_tokens") or 0))
             if m.get("truncated") or m.get("finish_reason") == "length":
                 cut.append(e)
+                if e.status not in DONE_ENTRY:
+                    no_page += 1
+                elif pc.get("video") and (e.repeat_idx or 1) == c.VIDEO_RUN_INDEX:
+                    video_cut = True
     if not cut:
         return None
     suggested = max_tokens * c.LARGER_BUDGET_FACTOR
@@ -316,6 +325,8 @@ def truncation_info(
         "max_tokens": max_tokens,
         "suggested_max_tokens": suggested,
         "entry_ids": [e.id for e in cut],
+        "runs_without_page": no_page,
+        "video_run_cut": video_cut,
     }
 
 

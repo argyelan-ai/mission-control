@@ -421,6 +421,7 @@ export const testRunningFixture: BenchTestDetail = {
           "harness": "api",
           "effort": {
             "requested": "default",
+            "default_level": "high",
             "sent": null,
             "observed": {
               "thinking": "on",
@@ -540,6 +541,7 @@ export const testRunningFixture: BenchTestDetail = {
           "harness": "omp",
           "effort": {
             "requested": "default",
+            "default_level": null,
             "sent": null,
             "observed": null
           },
@@ -661,6 +663,7 @@ export const testDoneGreenFixture: BenchTestDetail = {
           "harness": "api",
           "effort": {
             "requested": "default",
+            "default_level": "high",
             "sent": null,
             "observed": {
               "thinking": "on",
@@ -912,6 +915,7 @@ export const testDoneTruncatedFixture: BenchTestDetail = {
           "harness": "api",
           "effort": {
             "requested": "default",
+            "default_level": "high",
             "sent": null,
             "observed": {
               "thinking": "on",
@@ -1132,7 +1136,9 @@ export const testDoneTruncatedFixture: BenchTestDetail = {
     "suggested_max_tokens": 32768,
     "entry_ids": [
       "e0000000-0000-4000-8000-000000000022"
-    ]
+    ],
+    "runs_without_page": 0,
+    "video_run_cut": false
   },
   "rerun_of": null,
   "allowed": [
@@ -1141,6 +1147,185 @@ export const testDoneTruncatedFixture: BenchTestDetail = {
     "rerun_larger",
     "rerender",
     "recompose",
+    "archive",
+    "delete"
+  ],
+  "overlay_actions": []
+};
+
+export const testAbortedTruncatedFixture: BenchTestDetail = {
+  "id": "a0000000-0000-4000-8000-000000000006",
+  "title": "Pagoda Garden",
+  "created_at": "2026-10-24T10:05:00Z",
+  "trigger": "runtimes",
+  "preset": "effort_ladder",
+  "protocol_version": "v1",
+  "state": "aborted",
+  "section": "needs_look",
+  "state_reason": {
+    "code": "all_runs_failed",
+    "params": {}
+  },
+  "prompt": {
+    "template_id": "66666666-6666-4666-8666-666666666666",
+    "title": "Pagoda Garden",
+    "sha256": "d6e0ea9000000000000000000000000000000000000000000000000000000000"
+  },
+  "blocks": [
+    {
+      "run_class": "A",
+      "contestants": [
+        {
+          "key": "11111111-1111-4111-8111-111111111111",
+          "runtime_id": "11111111-1111-4111-8111-111111111111",
+          "served_model_id": "DeepSeek-V4.1-Flash-1017",
+          "display_name": "DeepSeek-V4.1-Flash-1017",
+          "alias": null,
+          "locality": "local",
+          "device_name": "DGX Spark ×2",
+          "harness": "api",
+          "effort": {
+            "requested": "default",
+            "default_level": "high",
+            "sent": null,
+            "observed": {
+              "thinking": "on",
+              "reasoning_tokens": 2140
+            }
+          },
+          "runs": [
+            {
+              "entry_id": "e0000000-0000-4000-8000-000000000031",
+              "repeat_idx": 1,
+              "attempt_no": 1,
+              "state": "failed",
+              "phase": "done",
+              "elapsed_ms": 163000,
+              "tokens_out": 16384,
+              "decode_tok_s": null,
+              "ttft_ms": 400,
+              "finish_reason": "length",
+              "truncated": true,
+              "wait": null,
+              "error": {
+                "code": "no_html_truncated",
+                "params": {}
+              },
+              "is_video_run": true
+            },
+            {
+              "entry_id": "e0000000-0000-4000-8000-000000000032",
+              "repeat_idx": 2,
+              "attempt_no": 1,
+              "state": "failed",
+              "phase": "done",
+              "elapsed_ms": 164000,
+              "tokens_out": 16384,
+              "decode_tok_s": null,
+              "ttft_ms": 400,
+              "finish_reason": "length",
+              "truncated": true,
+              "wait": null,
+              "error": {
+                "code": "no_html_truncated",
+                "params": {}
+              },
+              "is_video_run": false
+            },
+            {
+              "entry_id": "e0000000-0000-4000-8000-000000000033",
+              "repeat_idx": 3,
+              "attempt_no": 1,
+              "state": "failed",
+              "phase": "done",
+              "elapsed_ms": 165000,
+              "tokens_out": 16384,
+              "decode_tok_s": null,
+              "ttft_ms": 400,
+              "finish_reason": "length",
+              "truncated": true,
+              "wait": null,
+              "error": {
+                "code": "no_html_truncated",
+                "params": {}
+              },
+              "is_video_run": false
+            }
+          ],
+          "summary": {
+            "time": {
+              "measured": false,
+              "median": null,
+              "min": null,
+              "max": null,
+              "n": 0,
+              "reason": {
+                "code": "all_runs_failed",
+                "params": {}
+              }
+            },
+            "time_kind": "gen_ms",
+            "wait_ms": null,
+            "tokens_out": {
+              "measured": false,
+              "median": null,
+              "min": null,
+              "max": null,
+              "n": 0,
+              "reason": {
+                "code": "all_runs_failed",
+                "params": {}
+              }
+            },
+            "tokens_reasoning": null,
+            "tokens_cache_read": null,
+            "decode_tok_s": null,
+            "ttft_ms": null,
+            "cost": {
+              "cost_kind": "local",
+              "usd": null,
+              "hypothetical_usd": null,
+              "price_source": null,
+              "price_date": null,
+              "needs_confirmation": false,
+              "second_confirmation": false,
+              "reason": null
+            },
+            "page_check": null,
+            "tie_with": []
+          },
+          "receipt": null,
+          "receipt_version": null,
+          "receipt_checksum": null
+        }
+      ],
+      "starts_after": null
+    }
+  ],
+  "gate": {
+    "status": "pending",
+    "reasons": [],
+    "checksum": null
+  },
+  "verdict": null,
+  "video": null,
+  "truncation": {
+    "runs_cut": 3,
+    "n_runs": 3,
+    "max_tokens": 16384,
+    "suggested_max_tokens": 32768,
+    "entry_ids": [
+      "e0000000-0000-4000-8000-000000000031",
+      "e0000000-0000-4000-8000-000000000032",
+      "e0000000-0000-4000-8000-000000000033"
+    ],
+    "runs_without_page": 3,
+    "video_run_cut": false
+  },
+  "rerun_of": null,
+  "allowed": [
+    "rerun",
+    "rerun_larger",
     "archive",
     "delete"
   ],
@@ -1184,6 +1369,7 @@ export const testNeedsLookRedFixture: BenchTestDetail = {
           "harness": "omp",
           "effort": {
             "requested": "default",
+            "default_level": null,
             "sent": null,
             "observed": {
               "source": "omp_session",
@@ -1609,7 +1795,8 @@ export const runtimeSummaryFixture: RuntimeTestSummary[] = [
       "title": "Pagoda Garden",
       "created_at": "2026-10-22T19:40:00Z"
     },
-    "running_test_id": null
+    "running_test_id": null,
+    "planned_test": null
   },
   {
     "runtime_id": "44444444-4444-4444-8444-444444444444",
@@ -1620,7 +1807,8 @@ export const runtimeSummaryFixture: RuntimeTestSummary[] = [
     },
     "primary": false,
     "last_test": null,
-    "running_test_id": null
+    "running_test_id": null,
+    "planned_test": null
   },
   {
     "runtime_id": "22222222-2222-4222-8222-222222222222",
@@ -1628,7 +1816,8 @@ export const runtimeSummaryFixture: RuntimeTestSummary[] = [
     "reason": null,
     "primary": false,
     "last_test": null,
-    "running_test_id": null
+    "running_test_id": null,
+    "planned_test": null
   },
   {
     "runtime_id": "33333333-3333-4333-8333-333333333333",
@@ -1636,7 +1825,23 @@ export const runtimeSummaryFixture: RuntimeTestSummary[] = [
     "reason": null,
     "primary": false,
     "last_test": null,
-    "running_test_id": null
+    "running_test_id": null,
+    "planned_test": null
+  },
+  {
+    "runtime_id": "77777777-7777-4777-8777-777777777777",
+    "testable": false,
+    "reason": {
+      "code": "no_model",
+      "params": {}
+    },
+    "primary": false,
+    "last_test": null,
+    "running_test_id": null,
+    "planned_test": {
+      "id": "a0000000-0000-4000-8000-000000000005",
+      "not_before": "2026-10-24T09:45:00Z"
+    }
   }
 ];
 
@@ -1651,5 +1856,14 @@ export const costConfirmationFixture: CostConfirmation = {
   "code": "bench_cost_confirmation",
   "step": 2,
   "usd": 1.35,
-  "cap_usd": 1.0
+  "cap_usd": 1.0,
+  "price_unknown": false
+};
+
+export const costConfirmationUnknownFixture: CostConfirmation = {
+  "code": "bench_cost_confirmation",
+  "step": 1,
+  "usd": null,
+  "cap_usd": 1.0,
+  "price_unknown": true
 };

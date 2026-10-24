@@ -28,6 +28,7 @@
           "harness": "api",
           "effort": {
             "requested": "default",
+            "default_level": "high",
             "sent": null,
             "observed": {
               "thinking": "on",

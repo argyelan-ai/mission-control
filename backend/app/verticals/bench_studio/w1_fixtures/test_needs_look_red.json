@@ -35,6 +35,7 @@
           "harness": "omp",
           "effort": {
             "requested": "default",
+            "default_level": null,
             "sent": null,
             "observed": {
               "source": "omp_session",

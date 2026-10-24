@@ -34,6 +34,7 @@
           "harness": "api",
           "effort": {
             "requested": "default",
+            "default_level": "high",
             "sent": null,
             "observed": {
               "thinking": "on",
@@ -254,7 +255,9 @@
     "suggested_max_tokens": 32768,
     "entry_ids": [
       "e0000000-0000-4000-8000-000000000022"
-    ]
+    ],
+    "runs_without_page": 0,
+    "video_run_cut": false
   },
   "rerun_of": null,
   "allowed": [

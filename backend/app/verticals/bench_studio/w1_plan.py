@@ -260,7 +260,13 @@ async def load_views(session: AsyncSession, *, live: bool = True) -> list[Engine
     endpoints = sorted(by_endpoint)
     if live:
         served_list = await asyncio.gather(*(_served(ep) for ep in endpoints))
-        in_use_list = await asyncio.gather(*(_in_use(ep) for ep in endpoints))
+
+        async def _busy(ep: str, served: frozenset[str] | None) -> bool | None:
+            # A box that did not answer /models is not asked again for its
+            # load: a sleeping box would add its timeout to every sheet.
+            return await _in_use(ep) if served is not None else None
+
+        in_use_list = await asyncio.gather(*(_busy(ep, sv) for ep, sv in zip(endpoints, served_list)))
     else:
         served_list = [None] * len(endpoints)
         in_use_list = [None] * len(endpoints)
@@ -982,6 +988,7 @@ async def runtime_summary(session: AsyncSession) -> list[dict[str, Any]]:
     views = await load_views(session)
     lt = await last_tests(session)
     running = await _running_tests_by_runtime(session)
+    planned = await _planned_auto_tests(session)
     by_row: dict[uuid.UUID, EngineView] = {}
     for v in views:
         for rid in v.row_ids:
@@ -1008,7 +1015,32 @@ async def runtime_summary(session: AsyncSession) -> list[dict[str, Any]]:
                 row["primary"] = primary_view is not None and v is primary_view and rt.id == v.runtime.id
             row["last_test"] = _last_for(v, lt)
             row["running_test_id"] = next((running[i] for i in v.row_ids if i in running), None)
+        host_id = rt.host_id or (v.runtime.host_id if v is not None else None)
+        plan = planned.get(str(host_id)) if host_id else None
+        if plan is not None and not row.get("running_test_id"):
+            row["planned_test"] = plan
         out.append(row)
+    return out
+
+
+async def _planned_auto_tests(session: AsyncSession) -> dict[str, dict[str, Any]]:
+    """Waiting auto tests that have no runs yet (the switched model is still
+    loading), by host id — the Runtimes card shows them as planned."""
+    rows = (
+        await session.exec(
+            select(BenchChallenge).where(BenchChallenge.status == "waiting",
+                                         BenchChallenge.trigger == "auto_switch",
+                                         BenchChallenge.protocol_version == c.PROTOCOL_V1)
+        )
+    ).all()
+    out: dict[str, dict[str, Any]] = {}
+    for ch in rows:
+        plan = ch.plan or {}
+        host_id = (plan.get("auto") or {}).get("host_id")
+        if not host_id:
+            continue
+        nb = plan.get("not_before")
+        out[host_id] = {"id": ch.id, "not_before": c.as_aware(datetime.fromisoformat(nb)) if nb else None}
     return out
 
 

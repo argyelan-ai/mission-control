@@ -82,7 +82,13 @@ def _effort_word(r: dict[str, Any]) -> str:
         obs = (r.get("effort") or {}).get("observed") or {}
         level = obs.get("level") if isinstance(obs, dict) else None
         return f"effort {level}" if level else "session default effort"
-    return EFFORT_WORDS.get((r.get("effort") or {}).get("requested") or "default", "default effort")
+    eff = r.get("effort") or {}
+    requested = eff.get("requested") or "default"
+    if requested == "default" and eff.get("default_level"):
+        # One name per level (K10): the sheet says "hoch (Standard)", the
+        # card says the same in English.
+        return f"effort {eff['default_level']} (default)"
+    return EFFORT_WORDS.get(requested, "default effort")
 
 
 def chips(r: dict[str, Any], *, compact: bool = False) -> str:
@@ -97,17 +103,34 @@ def chips(r: dict[str, Any], *, compact: bool = False) -> str:
     return " · ".join(p for p in parts if p)
 
 
+def _planned(r: dict[str, Any]) -> int:
+    return int(r.get("n_runs") or 1)
+
+
 def _runs(r: dict[str, Any]) -> int:
-    """Runs behind a contestant's numbers — ONE rule for the foot line and
-    the number subtitles (the API shape carries no ``n_runs``, its summary does)."""
-    return int(r.get("n_runs") or ((r.get("summary") or {}).get("time") or {}).get("n") or 1)
+    """Runs BEHIND the printed median — the measured count, never the
+    planned one (a failed run is not in the median). ONE rule for the foot
+    line, the number subtitles, the alt text and the settings text."""
+    s = r.get("summary") or {}
+    for field in ("time", "tokens_out"):
+        st = s.get(field) or {}
+        if st.get("measured") and st.get("n"):
+            return int(st["n"])
+    return _planned(r)
+
+
+def _runs_sub(r: dict[str, Any]) -> str:
+    """'median of 3' · 'median of 2 of 3' · 'single run' · '1 of 3 runs'."""
+    n, planned = _runs(r), _planned(r)
+    if n > 1:
+        return f"median of {n}" if n >= planned else f"median of {n} of {planned}"
+    return "single run" if planned <= 1 else f"1 of {planned} runs"
 
 
 def numbers(r: dict[str, Any]) -> list[dict[str, Any]]:
     """The max-3 headline numbers of a contestant, formatted once — card,
     receipt card and alt text all print these exact strings."""
     s = r["summary"]
-    n = _runs(r)
     if r.get("run_class") == "B":
         out = [
             _num(s["time"], c.fmt_minutes, "work time", "no waiting" if not s.get("wait_ms") else None,
@@ -117,7 +140,7 @@ def numbers(r: dict[str, Any]) -> list[dict[str, Any]]:
              "alt": "single run"},
         ]
         return out
-    sub = f"median of {n}" if n > 1 else "single run"
+    sub = _runs_sub(r)
     out = [
         _num(s["time"], c.fmt_clock, "compute time", sub, alt="compute time {v} (" + sub + ")"),
         _num(s["tokens_out"], c.fmt_tokens, "output tokens", sub, alt="{v} output tokens"),
@@ -145,13 +168,21 @@ def card_payload(detail: dict[str, Any]) -> dict[str, Any]:
     card PNG (1080×1350) — one payload, one template."""
     video = video_contestants(detail)
     run_class = video[0].get("run_class", "A") if video else "A"
-    n = max(_runs(r) for r in video) if video else 1
+    ns = [_runs(r) for r in video] or [1]
+    failed = sum(max(0, _planned(r) - _runs(r)) for r in video)
     if run_class == "B":
         foot = "agent build · " + ("method v0" if detail.get("protocol_version") != c.PROTOCOL_V1 else "single run")
-    elif n > 1:
-        foot = f"median of {n} runs" + (" each" if len(video) > 1 else "") + " · same prompt"
+    elif max(ns) > 1:
+        if len(set(ns)) == 1:
+            foot = f"median of {ns[0]} runs" + (" each" if len(video) > 1 else "")
+        else:
+            foot = "median of " + " / ".join(str(n) for n in ns) + " runs"
+        foot += " · same prompt"
     else:
         foot = "single run · same prompt"
+    if run_class != "B" and failed:
+        # Every attempt is counted (concept §5): a run that failed is said.
+        foot += f" · {failed} run{'s' if failed > 1 else ''} failed"
     return {
         "layout": "duo" if len(video) == 2 else "solo",
         "run_class": run_class,
@@ -159,7 +190,10 @@ def card_payload(detail: dict[str, Any]) -> dict[str, Any]:
         "contestants": [
             {
                 "model": r["served_model_id"] or r["display_name"],
-                "chips": chips(r, compact=len(video) == 2),
+                # The card has room for the full line (device + provider are
+                # the story of a local-vs-cloud post); only the 840 px video
+                # pane gets the compact one.
+                "chips": chips(r),
                 "numbers": numbers(r),
             }
             for r in video
@@ -223,8 +257,10 @@ def settings_blocks(detail: dict[str, Any]) -> list[str]:
         rec = first.get("receipt") or {}
         if block["run_class"] == "A":
             n = rec.get("n_runs") or first.get("n_runs") or 1
+            counted = min(_runs(r) for r in rs)
+            runs = f"n={n}" if counted >= n else f"n={n} ({n - counted} failed)"
             head = ["Setup · model only", f"same prompt (sha {sha[:7]})",
-                    f"n={n}, video = run {c.VIDEO_RUN_INDEX}" if n > 1 else "n=1",
+                    f"{runs}, video = run {c.VIDEO_RUN_INDEX}" if n > 1 else runs,
                     f"temp {rec.get('temperature', c.TEMPERATURE)}",
                     f"max_tokens {rec.get('max_tokens') or c.BASE_MAX_TOKENS}"]
         else:
@@ -482,33 +518,60 @@ def kit_files(challenge, detail: dict[str, Any]) -> list[dict[str, Any]]:
     return files
 
 
+def _zip_key(paths: dict[str, Any], texts: dict[str, Any]) -> str:
+    """What is IN the zip: the files (name, size, mtime) and the texts. A
+    compose that adds the card or a new video behind an unchanged record
+    checksum gives a new key, so a stale zip is never served."""
+    import hashlib
+    import json
+
+    parts: list[Any] = []
+    for name in ("video.mp4", "card.png"):
+        p = paths.get(name)
+        if p is not None:
+            st = p.stat()
+            parts.append([name, p.name, st.st_size, int(st.st_mtime)])
+    parts.append(texts)
+    return hashlib.sha256(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:8]
+
+
 def build_zip(challenge, detail: dict[str, Any]):
-    """kit.zip = video + card + the copy texts, cached per record checksum."""
+    """kit.zip = video + card + the copy texts, cached per record checksum
+    AND content key (blocking file I/O: callers run it in a thread)."""
+    import uuid as _uuid
     import zipfile
     from pathlib import Path
 
     from .orchestrator import challenge_dir
 
     checksum = (detail.get("gate") or {}).get("checksum") or "nochecksum"
-    out = challenge_dir(challenge.id) / f"kit-{checksum[:12]}.zip"
     paths = artefact_paths(challenge, detail)
+    texts = kit_texts(detail)
+    out = challenge_dir(challenge.id) / f"kit-{checksum[:12]}-{_zip_key(paths, texts)}.zip"
     if out.is_file():
         return out
-    texts = kit_texts(detail)
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = Path(str(out) + ".tmp")
-    with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_STORED) as z:
-        if paths["video.mp4"] is not None:
-            z.write(paths["video.mp4"], download_filename(detail, "mp4"))
-        if paths["card.png"] is not None:
-            z.write(paths["card.png"], download_filename(detail, "png"))
-        z.writestr("settings.txt", "\n\n".join(texts["settings"]) + "\n")
-        z.writestr("alt-text.txt", texts["alt_text"] + "\n")
-        z.writestr("facts.txt", "\n".join(texts["facts"]) + "\n")
-        z.writestr("thread.txt", "\n".join(texts["thread_guide"]) + "\n")
-        if texts.get("link"):
-            z.writestr("link.txt", texts["link"] + "\n")
-    tmp.replace(out)
+    for old in out.parent.glob(f"kit-{checksum[:12]}-*.zip"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    tmp = Path(f"{out}.{_uuid.uuid4().hex[:8]}.tmp")  # two parallel taps never share a temp file
+    try:
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_STORED) as z:
+            if paths["video.mp4"] is not None:
+                z.write(paths["video.mp4"], download_filename(detail, "mp4"))
+            if paths["card.png"] is not None:
+                z.write(paths["card.png"], download_filename(detail, "png"))
+            z.writestr("settings.txt", "\n\n".join(texts["settings"]) + "\n")
+            z.writestr("alt-text.txt", texts["alt_text"] + "\n")
+            z.writestr("facts.txt", "\n".join(texts["facts"]) + "\n")
+            z.writestr("thread.txt", "\n".join(texts["thread_guide"]) + "\n")
+            if texts.get("link"):
+                z.writestr("link.txt", texts["link"] + "\n")
+        tmp.replace(out)
+    finally:
+        tmp.unlink(missing_ok=True)
     return out
 
 
