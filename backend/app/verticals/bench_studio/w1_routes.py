@@ -20,8 +20,12 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
-from app.auth import require_user
+from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.auth import require_user
+from app.database import get_session
+
+from . import w1_plan
 from . import w1_schemas as s
 
 router = APIRouter(prefix="/api/v1/bench", tags=["bench-studio-w1"])
@@ -66,6 +70,7 @@ async def get_plan(
     preset: s.PresetId = "standard",
     template_id: uuid.UUID | None = None,
     rerun_of: uuid.UUID | None = None,
+    session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
     """Everything the test sheet shows, pre-filled from live runtimes,
@@ -73,14 +78,20 @@ async def get_plan(
     ``runtime_id`` the subject is the most recently started live runtime.
     ``rerun_of`` = "Nochmal": the same plan against the model live NOW.
     Read-only: never probes, never sends a completion."""
-    return _stub(response, "plan_standard")
+    return await w1_plan.build_plan(
+        session, runtime_id=runtime_id, preset=preset, template_id=template_id, rerun_of=rerun_of
+    )
 
 
 @router.get("/contestants", response_model=s.ContestantList)
-async def list_contestants(response: Response, current_user=Depends(require_user)):
+async def list_contestants(
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
     """All testable models: local (one row per engine) + cloud. Used by
     "+ Gegner hinzufügen" and "Cloud-Modelle ›"."""
-    return _stub(response, "contestants")
+    return await w1_plan.list_contestants(session)
 
 
 # ── Tests (create, list, detail, actions) ─────────────────────────────────
@@ -190,8 +201,15 @@ async def kit_file(
 
 
 @router.get("/runtime-summary", response_model=list[s.RuntimeTestSummary])
-async def runtime_summary(response: Response, current_user=Depends(require_user)):
-    return _stub(response, "runtime_summary")
+async def runtime_summary(
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """One row per enabled runtime for the Runtimes cards (P1): testable,
+    the one primary "Testen" (most recently started live card, K11), the
+    last test and a running one."""
+    return await w1_plan.runtime_summary(session)
 
 
 @router.post(

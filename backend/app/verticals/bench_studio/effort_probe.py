@@ -68,12 +68,39 @@ async def _ask(cli: httpx.AsyncClient, url: str, model: str, fields: dict[str, A
     return {"http": 200, **seen, "finish_reason": choice.get("finish_reason")}
 
 
-async def run_probe(llm_url: str, model: str) -> dict[str, Any]:
+def _amount(seen: dict[str, Any]) -> int | None:
+    """How much the answer thought: reasoning tokens when the engine reports
+    them, else the reasoning text length."""
+    tokens = seen.get("reasoning_tokens")
+    if isinstance(tokens, int) and tokens > 0:
+        return tokens
+    chars = seen.get("reasoning_chars")
+    return chars if isinstance(chars, int) and chars > 0 else None
+
+
+def _same_amount(a: int | None, b: int | None) -> bool:
+    """Two answers to the same question at temperature 0 thought "the same"
+    — within 10 % (batching makes engines a few tokens nondeterministic)."""
+    if a is None or b is None:
+        return False
+    return abs(a - b) <= max(2, 0.1 * max(a, b))
+
+
+async def run_probe(llm_url: str, model: str, *, api_key: str | None = None) -> dict[str, Any]:
     """Probe ``model`` at ``llm_url`` (OpenAI base URL ending in ``/v1``).
-    Pure: no DB. Never raises — a dead engine is ``status: "failed"``."""
+    Pure: no DB. Never raises — a dead engine is ``status: "failed"``.
+
+    ``api_key``: Bearer token for keyed (cloud) runtimes (bench W1: the probe
+    works for every OpenAI-compatible runtime, not only the Spark).
+
+    W1 (critic 32 S3): an engine with a graded key that thinks by default is
+    asked once more with ``high``; when that answer thinks as much as the
+    baseline, the server default IS high — the sheet then shows one chip
+    "high (default)" instead of two chips doing the same (``default_level``)."""
     url = f"{llm_url.rstrip('/')}/chat/completions"
     attempts: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(timeout=PROBE_REQUEST_TIMEOUT_S) as cli:
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+    async with httpx.AsyncClient(timeout=PROBE_REQUEST_TIMEOUT_S, headers=headers) as cli:
         base = await _ask(cli, url, model, {})
         attempts.append({"key": None, "value": None, **base})
         if base.get("http") != 200 or "thinking" not in base:
@@ -98,6 +125,7 @@ async def run_probe(llm_url: str, model: str) -> dict[str, Any]:
 
         levels: list[str] = []
         effort_param: str | None = None
+        default_level: str | None = None
         if thinking_key == rp.REASONING_EFFORT:
             effort_param = rp.REASONING_EFFORT
             # low/medium/high are the OpenAI-standard values of the same key
@@ -108,15 +136,24 @@ async def run_probe(llm_url: str, model: str) -> dict[str, Any]:
             attempts.append({**(rp.wire_fields(fields) or {}), **top})
             if top.get("http") == 200 and top.get("thinking") == "on":
                 levels.append("max")
+            if default_on:
+                fields = rp.request_fields(rp.REASONING_EFFORT, "high")
+                high = await _ask(cli, url, model, fields)
+                attempts.append({**(rp.wire_fields(fields) or {}), **high})
+                if high.get("http") == 200 and _same_amount(_amount(base), _amount(high)):
+                    default_level = "high"
         elif thinking_key is not None:
             levels = [want]
+    raw: dict[str, Any] = {"attempts": attempts}
+    if default_level:
+        raw["default_level"] = default_level
     return {
         "status": "ok" if thinking_key else "no_effect",
         "thinking_key": thinking_key,
         "effort_param": effort_param,
         "levels": levels,
         "default_observed": "on" if default_on else "off",
-        "raw": {"attempts": attempts},
+        "raw": raw,
     }
 
 
@@ -131,7 +168,7 @@ async def spark_runtime(session: AsyncSession):
         return None
 
 
-def _fresh(row: BenchProbe, pinned: bool) -> bool:
+def _fresh(row: BenchProbe, pinned: bool, ttl: timedelta = UNPINNED_PROBE_TTL) -> bool:
     """A failed probe is never reused (the box may just have been busy). A
     probe pinned to a serving_since stays valid for that engine run; one
     without (engine state unknown) only for ``UNPINNED_PROBE_TTL``."""
@@ -144,7 +181,7 @@ def _fresh(row: BenchProbe, pinned: bool) -> bool:
         return False
     if probed.tzinfo is None:
         probed = probed.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - probed < UNPINNED_PROBE_TTL
+    return datetime.now(timezone.utc) - probed < ttl
 
 
 async def _cached(session: AsyncSession, runtime_id, model: str, serving_since) -> BenchProbe | None:
@@ -244,13 +281,61 @@ async def get_or_probe(session: AsyncSession, model: str, *, refresh: bool = Fal
     from app.services.spark_client import SparkClient
 
     runtime = await spark_runtime(session)
-    runtime_id = runtime.id if runtime is not None else None
-    serving_since = runtime.serving_since if runtime is not None else None
+    return await get_or_probe_for(
+        session,
+        runtime_id=runtime.id if runtime is not None else None,
+        model=model,
+        serving_since=runtime.serving_since if runtime is not None else None,
+        llm_url=SparkClient().llm_url,
+        refresh=refresh,
+    )
+
+
+#: A cloud runtime has no ``serving_since`` MC could pin a probe to (nobody
+#: starts the engine here): its probe is trusted for a day (bench W1).
+CLOUD_PROBE_TTL = timedelta(hours=24)
+
+
+async def stored_probe_for(
+    session: AsyncSession,
+    runtime_id,
+    model: str,
+    serving_since,
+    *,
+    ttl: timedelta = UNPINNED_PROBE_TTL,
+) -> BenchProbe | None:
+    """Bench W1, any runtime: what the sheet may show WITHOUT touching the
+    engine — the stored probe for (runtime, served model, serving_since), a
+    fresh one or a failed one. ``None`` = never checked for this engine run
+    (the sheet shows "unchecked" and only offers the default). No request,
+    no write."""
+    row = await _cached(session, runtime_id, model, serving_since)
+    if row is None:
+        return None
+    if row.status == "failed" or _fresh(row, serving_since is not None, ttl):
+        return row
+    return None
+
+
+async def get_or_probe_for(
+    session: AsyncSession,
+    *,
+    runtime_id,
+    model: str,
+    serving_since,
+    llm_url: str,
+    api_key: str | None = None,
+    refresh: bool = False,
+    ttl: timedelta = UNPINNED_PROBE_TTL,
+) -> BenchProbe:
+    """The probe for ``model`` on one runtime as it runs now — cached per
+    (runtime, model, serving_since), probed when missing, failed, stale or
+    ``refresh``. Generalised from the Spark-only W0.6 path (bench W1)."""
     async with _probe_lock:
         row = await _cached(session, runtime_id, model, serving_since)
-        if row is not None and not refresh and _fresh(row, serving_since is not None):
+        if row is not None and not refresh and _fresh(row, serving_since is not None, ttl):
             return row
-        result = await run_probe(SparkClient().llm_url, model)
+        result = await run_probe(llm_url, model, api_key=api_key)
         if row is None:
             row = BenchProbe(runtime_id=runtime_id, served_model_id=model, serving_since=serving_since)
         row.thinking_key = result["thinking_key"]
