@@ -827,6 +827,16 @@ class RuntimeWatcher:
         """
         if not runtime.is_slot or runtime.host_id is None or not served:
             return None
+        # The instance row serving this slot is the truth first (live
+        # 23.10.2026): an operator who patched the instance's window must not
+        # see the slot dragged back to the recipe's older number every tick.
+        from app.services.slot_runtimes import serving_instance_for_slot
+
+        if (runtime.model_identifier or "").strip() == served.strip():
+            instance = await serving_instance_for_slot(session, runtime)
+            inst_ctx = instance.max_context_len if instance is not None else None
+            if isinstance(inst_ctx, int) and not isinstance(inst_ctx, bool) and inst_ctx > 0:
+                return inst_ctx
         from app.models.host import Host
         from app.models.local_recipe import LocalRecipe
 
@@ -1294,6 +1304,15 @@ class RuntimeWatcher:
         # pending_runtime_sync is a boolean, and _tick_inner's single
         # sync_pending_agents pass runs after every runtime has been probed.
         await mark_agents_for_sync(session, runtime)
+        # The slot row serving this instance follows at once (the slot's own
+        # probe would get there after two more probes).
+        if not runtime.is_slot:
+            try:
+                from app.services.slot_runtimes import mirror_instance_window_to_slot
+
+                await mirror_instance_window_to_slot(session, runtime)
+            except Exception:  # noqa: BLE001 — a mirror may not cost the tick
+                logger.exception("slot window mirror failed for %s", runtime.slug)
 
     # ── Engine death (ADR-096 §11) ───────────────────────────────────────
 

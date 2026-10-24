@@ -135,6 +135,143 @@ async def find_slot_runtime(
     ).first()
 
 
+def apply_slot_window(slot: Runtime, context_len: int | None) -> bool:
+    """Set a slot row's window — the ONE place that writes it (ADR-096).
+
+    ``preferred`` follows only where it said "use the whole window" (empty or
+    equal to the old max) or where it would now exceed the new max — the same
+    rule as ``runtime_watcher._handle_context_drift``. Without the
+    ``== old_max`` case a switch 250000 → 1048576 left preferred at 250000
+    (live 01.10.2026). A deliberately smaller preferred value stays: the
+    engine owns the ceiling, the operator the working size below it.
+
+    Returns whether anything changed; the caller commits.
+    """
+    if isinstance(context_len, bool) or not isinstance(context_len, int) or context_len <= 0:
+        return False
+    old_max = slot.max_context_len
+    old_preferred = slot.preferred_context_len
+    if old_max == context_len and (old_preferred is None or old_preferred <= context_len):
+        return False
+    slot.max_context_len = context_len
+    if old_preferred is None or old_preferred == old_max or old_preferred > context_len:
+        slot.preferred_context_len = context_len
+    return True
+
+
+async def serving_instance_for_slot(
+    session: AsyncSession, slot: Runtime
+) -> Runtime | None:
+    """The instance row a slot row is serving right now — or ``None``.
+
+    A slot row carries the model the box's port answers with. The instance
+    serving it is the non-slot row on the same box with that model. Two such
+    rows (one model, two recipes — e.g. vLLM and TensorFold builds of GLM)
+    are told apart by the box's confirmed recipe
+    (``hosts.autostart_recipe_slug``, matched with
+    ``recipe_switcher.recipe_matches_runtime``). Anything still ambiguous
+    returns ``None``: a window copied from the wrong instance is exactly the
+    stale-window bug this exists to stop.
+    """
+    if not slot.is_slot or slot.host_id is None:
+        return None
+    model = (slot.model_identifier or "").strip().lower()
+    if not model:
+        return None
+    rows = (
+        await session.exec(
+            select(Runtime).where(
+                Runtime.host_id == slot.host_id,
+                Runtime.is_slot == False,  # noqa: E712
+            )
+        )
+    ).all()
+    candidates = [
+        rt for rt in rows if (rt.model_identifier or "").strip().lower() == model
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        return None
+    host = await session.get(Host, slot.host_id)
+    recipe_slug = (getattr(host, "autostart_recipe_slug", None) or "").strip()
+    if not recipe_slug:
+        return None
+    from app.models.local_recipe import LocalRecipe
+    from app.services.recipe_switcher import recipe_matches_runtime
+
+    recipe = (
+        await session.exec(select(LocalRecipe).where(LocalRecipe.slug == recipe_slug))
+    ).first()
+    if recipe is None:
+        return None
+    # The explicit backlink first: with two rows of one model, the weakest
+    # signal of recipe_matches_runtime (same model id) matches both.
+    explicit = [
+        rt
+        for rt in candidates
+        if isinstance(rt.topology, dict) and rt.topology.get("recipe_slug") == recipe.slug
+    ]
+    if len(explicit) == 1:
+        return explicit[0]
+    matched = [rt for rt in candidates if recipe_matches_runtime(recipe, rt)]
+    return matched[0] if len(matched) == 1 else None
+
+
+async def mirror_instance_window_to_slot(
+    session: AsyncSession, instance: Runtime
+) -> Runtime | None:
+    """Mirror an instance row's window onto the slot row that serves it.
+
+    Live 23.10.2026: DeepSeek was switched to a 262144 window, only the
+    instance row was patched, the box's slot row stayed at 1048576 — and every
+    agent on the slot would have sized its turns against 1M until the memory
+    guard killed the engine.
+
+    Rule: as long as the engine reports no window of its own, the instance row
+    is the truth. Called from every path that changes an instance window —
+    ``PATCH /runtimes/db/{slug}``, ``POST /runtimes/{id}/restart``, the
+    watcher's context drift — and the window write itself goes through
+    :func:`apply_slot_window`, the same function ``write_slot_state`` uses.
+
+    On a change, the slot's agents are flagged for a re-sync: the watcher's
+    sync pass re-renders omp (``models.yml`` + ``omp.env`` via
+    ``reload_omp_config``) and rewrites a Hermes host agent's ``agent.env``
+    (``MC_CONTEXT_WINDOW``; the token line is kept).
+
+    Returns the slot when it was changed, otherwise ``None`` (no slot, slot
+    serves another instance, ambiguous box, nothing to change).
+    """
+    if instance.is_slot or instance.host_id is None or not instance.max_context_len:
+        return None
+    slot = await find_slot_runtime(session, instance.host_id)
+    if slot is None:
+        return None
+    serving = await serving_instance_for_slot(session, slot)
+    if serving is None or serving.id != instance.id:
+        return None
+    old_max, old_preferred = slot.max_context_len, slot.preferred_context_len
+    if not apply_slot_window(slot, instance.max_context_len):
+        return None
+    session.add(slot)
+    await session.commit()
+    await session.refresh(slot)
+    logger.info(
+        "slot %s mirrors instance %s: window %r → %r (preferred %r → %r)",
+        slot.slug, instance.slug, old_max, slot.max_context_len,
+        old_preferred, slot.preferred_context_len,
+    )
+    from app.services.runtime_model_resolver import invalidate_cached_model
+    from app.services.runtime_propagation import mark_agents_for_sync
+
+    try:
+        await invalidate_cached_model(slot.slug)
+    except Exception:  # noqa: BLE001 — a cache must not cost the mirror
+        logger.debug("slot: cache invalidation for %s failed", slot.slug)
+    await mark_agents_for_sync(session, slot)
+    return slot
+
+
 async def write_slot_state(
     session: AsyncSession,
     host_id: uuid.UUID | None,
@@ -180,21 +317,7 @@ async def write_slot_state(
         # "nur wenn leer" wie beim Wächter — jeder bestätigte Start ist ein
         # neuer Zeitpunkt für die neue Belegung dieser Zeile.
         slot.serving_since = datetime.now(timezone.utc)
-    if context_len and slot.max_context_len != context_len:
-        old_max = slot.max_context_len
-        slot.max_context_len = context_len
-        # ``preferred`` folgt nur, wo es „nimm das ganze Fenster" ausdrückte
-        # (leer oder gleich dem alten Maximum) oder das neue Maximum
-        # überschreiten würde — dieselbe Regel wie in
-        # runtime_watcher._handle_context_drift. Ohne den ``== old_max``-Fall
-        # blieb ein Wechsel 250000 → 1048576 bei preferred 250000 stehen
-        # (Live 01.10.2026).
-        if (
-            slot.preferred_context_len is None
-            or slot.preferred_context_len == old_max
-            or slot.preferred_context_len > context_len
-        ):
-            slot.preferred_context_len = context_len
+    if apply_slot_window(slot, context_len):
         changed = True
     if host is not None:
         name = slot_display_name(host, slot.endpoint, slot.model_identifier)
