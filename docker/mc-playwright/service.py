@@ -1192,7 +1192,7 @@ async def record(req: RecordRequest):
         libraries = detect_inlined_libraries(html_text)
 
     async def _route(route):
-        if guard.allow(route.request.url):
+        if guard.allow(route.request.url, route.request.resource_type):
             await route.continue_()
         else:
             await route.abort("blockedbyclient")
@@ -1287,6 +1287,7 @@ async def record(req: RecordRequest):
         bytes=video_path.stat().st_size,
         network_blocked=net["network_blocked"],
         network_attempts=net["network_attempts"],
+        network_blocked_scripts=net["network_blocked_scripts"],
         blocked_requests=net["blocked_requests"],
         libraries_inlined=libraries,
         html_bytes=html_bytes,

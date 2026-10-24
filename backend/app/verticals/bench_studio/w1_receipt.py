@@ -178,6 +178,8 @@ def build_receipt(
         "failures": failures,
         "network_blocked": hm.get("network_blocked"),
         "network_attempts": hm.get("network_attempts"),
+        **({"network_blocked_scripts": hm["network_blocked_scripts"]}
+           if hm.get("network_blocked_scripts") is not None else {}),
         "libraries_inlined": list(hm.get("libraries_inlined") or []),
         "html_bytes": hm.get("html_bytes"),
         "recorded_at": hm.get("recorded_at"),
@@ -351,7 +353,7 @@ def evaluate_gate(
     truncation: dict[str, Any] | None,
     finished: bool,
 ) -> dict[str, Any]:
-    """Five red rules, the rest amber (printed, not blocking). ``receipts``
+    """Six red rules (R6 = the page needed the internet), the rest amber (printed, not blocking). ``receipts``
     = (contestant result, receipt, checksum) per contestant."""
     if not finished:
         return {"status": "pending", "reasons": []}
@@ -393,8 +395,17 @@ def evaluate_gate(
             reasons.append(_reason("R5", "red", "unfair_comparison", {"why": "time_kind"}))
         if run_class == "B" and summary.get("time_kind") != "active_ms":
             reasons.append(_reason("R5", "red", "unfair_comparison", {"why": "time_kind"}))
-        # amber
         r = receipt or {}
+        # R6 — the page needed the internet (live finding 25.10.2026): the
+        # recorder blocks every request, so a blocked script/module (three.js
+        # from a CDN) leaves an empty scene — red. Only fonts/images/styles
+        # blocked: the scene still draws — amber, printed.
+        net = c.blocked_network(r)
+        if net == "script":
+            reasons.append(_reason("R6", "red", "needs_network"))
+        elif net == "assets":
+            reasons.append(_reason("amber", "amber", "network_assets_blocked"))
+        # amber
         obs = r.get("effort_observed")
         if not obs or (isinstance(obs, dict) and obs.get("source") == "unknown"):
             reasons.append(_reason("amber", "amber", "effort_unknown"))

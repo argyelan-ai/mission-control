@@ -45,6 +45,7 @@ PUBLIC_AMBER = {
     "single_run": "single run",
     "first_15_min": "measured in the first 15 min after start",
     "page_check_failed": "page did not load",
+    "network_assets_blocked": "web fonts/images blocked (offline render)",
     "method_v0": "old method (v0)",
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 // The gate light (concept §6.4): one dot + one word in the head, the reasons
-// in one quiet line under it; on the desktop the right column lists the five
+// in one quiet line under it; on the desktop the right column lists the six
 // red rules as checks (passed, failed) plus the amber notes.
 import { AlertTriangle, Check, X } from "lucide-react";
 import { C, STATUS_TEXT } from "@/lib/colors";
@@ -51,7 +51,7 @@ export function GateLine({
   );
 }
 
-const RED_RULES: Exclude<GateRule, "amber">[] = ["R1", "R2", "R3", "R4", "R5"];
+const RED_RULES: Exclude<GateRule, "amber">[] = ["R1", "R2", "R3", "R4", "R5", "R6"];
 
 /** Desktop "Prüfung" list: each red rule passed or failed, then the amber notes. */
 export function GateChecks({

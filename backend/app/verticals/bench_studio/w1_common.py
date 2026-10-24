@@ -197,3 +197,20 @@ def privacy_hits(texts: Iterable[str], private_words: Iterable[str] = ()) -> lis
         if h not in seen:
             seen.append(h)
     return seen
+
+
+def blocked_network(record: dict[str, Any]) -> str | None:
+    """What the recorder's network block cost the page (live finding
+    25.10.2026): ``"script"`` = a script/module was blocked, so the page's
+    own code (e.g. three.js from a CDN) never ran and the scene stayed
+    empty; ``"assets"`` = only fonts/images/stylesheets were blocked;
+    None = nothing blocked or no block recorded. A record that counts
+    attempts but not their type (older sidecar) cannot prove the scene
+    drew, so it counts as ``"script"``."""
+    attempts = record.get("network_attempts") or 0
+    if not record.get("network_blocked") or attempts <= 0:
+        return None
+    scripts = record.get("network_blocked_scripts")
+    if scripts is None or scripts > 0:
+        return "script"
+    return "assets"

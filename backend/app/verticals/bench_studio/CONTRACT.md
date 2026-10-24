@@ -71,6 +71,14 @@ Stub marker: until A builds a route it returns its fixture with header
   - Run error codes are words in `benchShared.reason` (guard scans `RunError("…")`, `"error_code": "…"`, `code = "…"` too).
 - **Removed with the kill list:** `/effort-levels*` (Spark-only; the plan probe replaces it), besides `/spark-models`, legacy `POST /challenges` and the X draft route.
 
+### Gate rule R6 — the page needed the internet (live finding 25.10.2026)
+
+- The recorder blocks every request (W0.9). `/record` now also answers `network_blocked_scripts` = how many blocked requests were scripts/modules (Playwright `resource_type == "script"`: `<script src>`, an ES-module import resolved by an import map, a worker). It travels into `entry.metrics` (`_RECORD_REPORT_KEYS`) and the receipt (only when reported, so old receipts keep their checksum).
+- **Red `R6` / `needs_network`:** at least one blocked script/module — the page's own code never ran (e.g. `import * as THREE from 'three'` from a CDN), the video shows an empty scene. Also red when attempts > 0 but the sidecar did not report the type (older image): it cannot prove the scene drew. Kit files answer 409 like every red gate.
+- **Amber `network_assets_blocked`:** only fonts/images/stylesheets/other requests blocked — the scene still draws; printed in the settings text notes.
+- `page_check` is `"unknown"` (not `"loads"`) when a script was blocked: the recorder saw a frame, not the page's work.
+- A pinned local three.js for all contestants (backlog "three.js lokal") is the later fairness fix; R6 only makes the broken rule visible.
+
 ## 3. Behaviour rules every package keeps
 
 - **Names:** `display_name` = served model id verbatim (gate R2); alias only next to it. Never the agent name on artefacts.

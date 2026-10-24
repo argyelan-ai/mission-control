@@ -4154,7 +4154,9 @@
       "box_was_busy": "Box war belegt — Tempo nicht vergleichbar",
       "effort_unknown": "Effort unbekannt",
       "first_15_min": "in den ersten 15 min nach dem Start gemessen",
-      "page_check_failed": "Seite lädt nicht"
+      "page_check_failed": "Seite lädt nicht",
+      "needs_network": "Die Seite wollte eine Bibliothek aus dem Internet laden (blockiert) — die Szene blieb leer",
+      "network_assets_blocked": "Seite wollte Schriften oder Bilder aus dem Internet laden (blockiert)"
     },
     "range": "{min}–{max}",
     "medianOf": "Mitte von {n}",
@@ -4538,7 +4540,8 @@
       "okR2": "Name = vom Motor gemeldeter Modellname",
       "okR3": "Kein $-Preis bei lokal oder Abo",
       "okR4": "Keine privaten Daten in Video, Karte oder Texten",
-      "okR5": "Fairer Vergleich: Klassen getrennt, gleicher Prompt"
+      "okR5": "Fairer Vergleich: Klassen getrennt, gleicher Prompt",
+      "okR6": "Seite läuft offline: keine Bibliothek aus dem Internet"
     },
     "numbers": {
       "label": "Zahlen",
