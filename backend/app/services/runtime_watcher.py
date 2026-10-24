@@ -95,6 +95,7 @@ from app.services.runtime_propagation import (
     recreate_pending_agents,
     sync_pending_agents,
 )
+from app.services.runtime_window import apply_window, window_would_change
 from app.utils import ensure_aware
 
 logger = logging.getLogger(__name__)
@@ -832,7 +833,7 @@ class RuntimeWatcher:
         # see the slot dragged back to the recipe's older number every tick.
         from app.services.slot_runtimes import serving_instance_for_slot
 
-        if (runtime.model_identifier or "").strip() == served.strip():
+        if (runtime.model_identifier or "").strip().lower() == served.strip().lower():
             instance = await serving_instance_for_slot(session, runtime)
             inst_ctx = instance.max_context_len if instance is not None else None
             if isinstance(inst_ctx, int) and not isinstance(inst_ctx, bool) and inst_ctx > 0:
@@ -856,15 +857,11 @@ class RuntimeWatcher:
 
     @staticmethod
     def _context_would_change(runtime: Runtime, served_ctx: int) -> bool:
-        """Mirror of ``_handle_context_drift``'s no-op guard, evaluated BEFORE
-        the ownership check so a row that matches the served window anyway
-        never pays for an SSH round trip."""
-        old_max = runtime.max_context_len
-        old_preferred = runtime.preferred_context_len
-        return not (
-            old_max == served_ctx
-            and (old_preferred is None or old_preferred <= served_ctx)
-        )
+        """``_handle_context_drift``'s no-op guard, evaluated BEFORE the
+        ownership check so a row that matches the served window anyway never
+        pays for an SSH round trip. Same function as the write itself
+        (``runtime_window``), so the guard and the write cannot drift apart."""
+        return window_would_change(runtime, served_ctx)
 
     async def _served_answer_is_own(
         self, session: AsyncSession, runtime: Runtime
@@ -1259,9 +1256,7 @@ class RuntimeWatcher:
         """
         old_max = runtime.max_context_len
         old_preferred = runtime.preferred_context_len
-        if old_max == served_ctx and (
-            old_preferred is None or old_preferred <= served_ctx
-        ):
+        if not window_would_change(runtime, served_ctx):
             return
 
         key = RedisKeys.runtime_context_drift_candidate(runtime.slug)
@@ -1273,9 +1268,7 @@ class RuntimeWatcher:
             return
 
         await redis.delete(key)
-        runtime.max_context_len = served_ctx
-        if old_preferred is None or old_preferred == old_max or old_preferred > served_ctx:
-            runtime.preferred_context_len = served_ctx
+        apply_window(runtime, served_ctx)
         session.add(runtime)
         await session.commit()
         await session.refresh(runtime)

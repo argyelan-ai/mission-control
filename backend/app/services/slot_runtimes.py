@@ -45,6 +45,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.models.agent import Agent
 from app.models.host import Host
 from app.models.runtime import Runtime
+from app.services.runtime_window import apply_window
 
 logger = logging.getLogger("mc.slot_runtimes")
 
@@ -135,43 +136,20 @@ async def find_slot_runtime(
     ).first()
 
 
-def apply_slot_window(slot: Runtime, context_len: int | None) -> bool:
-    """Set a slot row's window — the ONE place that writes it (ADR-096).
-
-    ``preferred`` follows only where it said "use the whole window" (empty or
-    equal to the old max) or where it would now exceed the new max — the same
-    rule as ``runtime_watcher._handle_context_drift``. Without the
-    ``== old_max`` case a switch 250000 → 1048576 left preferred at 250000
-    (live 01.10.2026). A deliberately smaller preferred value stays: the
-    engine owns the ceiling, the operator the working size below it.
-
-    Returns whether anything changed; the caller commits.
-    """
-    if isinstance(context_len, bool) or not isinstance(context_len, int) or context_len <= 0:
-        return False
-    old_max = slot.max_context_len
-    old_preferred = slot.preferred_context_len
-    if old_max == context_len and (old_preferred is None or old_preferred <= context_len):
-        return False
-    slot.max_context_len = context_len
-    if old_preferred is None or old_preferred == old_max or old_preferred > context_len:
-        slot.preferred_context_len = context_len
-    return True
-
-
 async def serving_instance_for_slot(
     session: AsyncSession, slot: Runtime
 ) -> Runtime | None:
     """The instance row a slot row is serving right now — or ``None``.
 
     A slot row carries the model the box's port answers with. The instance
-    serving it is the non-slot row on the same box with that model. Two such
-    rows (one model, two recipes — e.g. vLLM and TensorFold builds of GLM)
-    are told apart by the box's confirmed recipe
-    (``hosts.autostart_recipe_slug``, matched with
-    ``recipe_switcher.recipe_matches_runtime``). Anything still ambiguous
-    returns ``None``: a window copied from the wrong instance is exactly the
-    stale-window bug this exists to stop.
+    serving it is the non-slot row on the same box with that model. When the
+    box has a confirmed recipe of that model (``hosts.autostart_recipe_slug``),
+    the row must belong to it (``recipe_switcher.recipe_matches_runtime``) —
+    with one candidate as with two (one model, two recipes, e.g. vLLM and
+    TensorFold builds of GLM). Without a confirmed recipe only a single
+    candidate counts. Anything still ambiguous returns ``None``: a window
+    copied from the wrong instance is exactly the stale-window bug this
+    exists to stop.
     """
     if not slot.is_slot or slot.host_id is None:
         return None
@@ -189,24 +167,31 @@ async def serving_instance_for_slot(
     candidates = [
         rt for rt in rows if (rt.model_identifier or "").strip().lower() == model
     ]
-    if len(candidates) == 1:
-        return candidates[0]
     if not candidates:
-        return None
-    host = await session.get(Host, slot.host_id)
-    recipe_slug = (getattr(host, "autostart_recipe_slug", None) or "").strip()
-    if not recipe_slug:
         return None
     from app.models.local_recipe import LocalRecipe
     from app.services.recipe_switcher import recipe_matches_runtime
 
-    recipe = (
-        await session.exec(select(LocalRecipe).where(LocalRecipe.slug == recipe_slug))
-    ).first()
+    host = await session.get(Host, slot.host_id)
+    recipe_slug = (getattr(host, "autostart_recipe_slug", None) or "").strip()
+    recipe = None
+    if recipe_slug:
+        recipe = (
+            await session.exec(select(LocalRecipe).where(LocalRecipe.slug == recipe_slug))
+        ).first()
+    if recipe is not None and (recipe.model_identifier or "").strip().lower() != model:
+        # The confirmed recipe serves another model than the port does right
+        # now (a hand start since) — it says nothing about THIS slot.
+        recipe = None
     if recipe is None:
-        return None
-    # The explicit backlink first: with two rows of one model, the weakest
-    # signal of recipe_matches_runtime (same model id) matches both.
+        # Nothing confirmed: only a single row of that model is unambiguous.
+        return candidates[0] if len(candidates) == 1 else None
+    # The box confirmed a recipe of this model: the serving row must belong
+    # to it — also when it is the only candidate (live 01.10.2026: vLLM
+    # 250000 vs TensorFold 1M, one model; a lone row pointing at the OTHER
+    # recipe must never lend the slot its window). The explicit backlink
+    # first: with two rows of one model, the weakest signal of
+    # recipe_matches_runtime (same model id) matches both.
     explicit = [
         rt
         for rt in candidates
@@ -232,7 +217,11 @@ async def mirror_instance_window_to_slot(
     is the truth. Called from every path that changes an instance window —
     ``PATCH /runtimes/db/{slug}``, ``POST /runtimes/{id}/restart``, the
     watcher's context drift — and the window write itself goes through
-    :func:`apply_slot_window`, the same function ``write_slot_state`` uses.
+    :func:`runtime_window.apply_window`, the same function
+    ``write_slot_state``, the watcher's context drift and the catalog follow
+    use. Only the MAXIMUM is mirrored: it is the window MC tells the harness
+    (``runtime_window.runtime_context_window``); the slot's own preferred
+    value follows by the same rule as every other write.
 
     On a change, the slot's agents are flagged for a re-sync: the watcher's
     sync pass re-renders omp (``models.yml`` + ``omp.env`` via
@@ -251,7 +240,7 @@ async def mirror_instance_window_to_slot(
     if serving is None or serving.id != instance.id:
         return None
     old_max, old_preferred = slot.max_context_len, slot.preferred_context_len
-    if not apply_slot_window(slot, instance.max_context_len):
+    if not apply_window(slot, instance.max_context_len):
         return None
     session.add(slot)
     await session.commit()
@@ -317,7 +306,7 @@ async def write_slot_state(
         # "nur wenn leer" wie beim Wächter — jeder bestätigte Start ist ein
         # neuer Zeitpunkt für die neue Belegung dieser Zeile.
         slot.serving_since = datetime.now(timezone.utc)
-    if apply_slot_window(slot, context_len):
+    if apply_window(slot, context_len):
         changed = True
     if host is not None:
         name = slot_display_name(host, slot.endpoint, slot.model_identifier)

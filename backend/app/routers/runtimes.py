@@ -40,6 +40,7 @@ from app.services.host_resolver import (
 from app.services.runtime_manager import add_lmstudio_runtime
 from app.services.runtime_model_resolver import invalidate_cached_model
 from app.services.runtime_propagation import mark_agents_for_sync, sync_pending_agents
+from app.services.runtime_window import runtime_context_window
 from app.services import activity
 from app.services import runtime_membership
 from app.services.runtime_autostart import (
@@ -1469,7 +1470,7 @@ async def update_runtime_db(
     # no watcher, so this PATCH is their only path to a fresh model.
     old_model = rt.model_identifier
     old_vision = rt.supports_vision
-    old_window = (rt.max_context_len, rt.preferred_context_len)
+    old_window = runtime_context_window(rt)
     for k, v in changes.items():
         setattr(rt, k, v)
     if "host_id" in body.model_fields_set:
@@ -1558,8 +1559,11 @@ async def update_runtime_db(
         )
 
     # A window edit reaches the rendered env too (OMP_CONTEXT_WINDOW /
-    # MC_CONTEXT_WINDOW) — the agents on this row need the same re-sync.
-    window_changed = (rt.max_context_len, rt.preferred_context_len) != old_window
+    # MC_CONTEXT_WINDOW) — the agents on this row need the same re-sync. Only
+    # the TOLD window counts (runtime_window.runtime_context_window: the max,
+    # preferred only as its fallback): a preferred edit below a set max
+    # renders nothing new, so it flags nobody and mirrors nothing.
+    window_changed = runtime_context_window(rt) != old_window
     if model_changed or vision_changed or window_changed:
         await mark_agents_for_sync(session, rt)
 
@@ -1570,6 +1574,10 @@ async def update_runtime_db(
             await slot_runtimes.mirror_instance_window_to_slot(session, rt)
         except Exception:  # noqa: BLE001 — the PATCH itself succeeded
             logger.exception("slot window mirror failed for %s", rt.slug)
+            # A failed DB operation leaves the session unusable — without the
+            # rollback the refresh below raises and the PATCH answers 500
+            # although the edit is already committed.
+            await session.rollback()
         await session.refresh(rt)
 
     return await _runtime_row_response(session, rt)

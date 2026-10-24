@@ -366,3 +366,280 @@ async def test_mirrored_window_reaches_omp_render_and_hermes_agent_env(
     text = env_path.read_text()
     assert f"MC_CONTEXT_WINDOW='{NEW}'" in text
     assert "MC_AGENT_TOKEN='tok-keep'" in text
+
+
+# ── 6. Recipe start: the instance's window beats the recipe's (review #980) ──
+
+
+def _start_patches():
+    from app.services import recipe_switcher, runtime_grace, runtime_manager
+
+    return (
+        patch.object(recipe_switcher, "probe_running", AsyncMock(return_value=False)),
+        patch.object(runtime_manager, "already_running", AsyncMock(return_value=None)),
+        patch.object(
+            runtime_manager, "start_runtime",
+            AsyncMock(return_value={"ok": True, "message": "started"}),
+        ),
+        patch.object(runtime_grace, "mark_switching", AsyncMock()),
+        patch.object(runtime_grace, "clear_switching", AsyncMock()),
+    )
+
+
+async def _recipe(session: AsyncSession, slug: str = "recipe-big", **kw) -> LocalRecipe:
+    fields = dict(
+        slug=slug, display_name=slug, engine="vllm_docker", model_identifier=MODEL,
+        launch_template=(
+            "docker run -d --name {container_name} --label mc.runtime.slug={slug} "
+            "-p {port}:8000 img"
+        ),
+        port=8000, context_len=OLD,
+    )
+    fields.update(kw)
+    recipe = LocalRecipe(**fields)
+    session.add(recipe)
+    await session.commit()
+    await session.refresh(recipe)
+    return recipe
+
+
+@pytest.mark.asyncio
+async def test_recipe_start_gives_the_slot_the_instance_window(async_session):
+    """Instance edited to 262144, recipe still 1M → the slot gets 262144."""
+    from app.services import recipe_switcher
+
+    host = await _host(async_session)
+    recipe = await _recipe(async_session)
+    await _instance(
+        async_session, host, "inst-big", ctx=NEW, topology={"recipe_slug": recipe.slug}
+    )
+    slot = await _slot(async_session, host, ctx=OLD)
+
+    p = _start_patches()
+    with p[0], p[1], p[2], p[3], p[4]:
+        result = await recipe_switcher.start_recipe_on_host(async_session, host, recipe)
+    assert result["ok"] is True, result
+
+    await async_session.refresh(slot)
+    assert slot.max_context_len == NEW
+
+
+@pytest.mark.asyncio
+async def test_recipe_start_falls_back_to_the_recipe_window(async_session):
+    """Counter-case: an instance without a window takes the recipe's."""
+    from app.services import recipe_switcher
+
+    host = await _host(async_session)
+    recipe = await _recipe(async_session, context_len=NEW)
+    inst = await _instance(
+        async_session, host, "inst-big", topology={"recipe_slug": recipe.slug}
+    )
+    inst.max_context_len = None
+    inst.preferred_context_len = None
+    async_session.add(inst)
+    await async_session.commit()
+    slot = await _slot(async_session, host, ctx=OLD)
+
+    p = _start_patches()
+    with p[0], p[1], p[2], p[3], p[4]:
+        await recipe_switcher.start_recipe_on_host(async_session, host, recipe)
+
+    await async_session.refresh(slot)
+    assert slot.max_context_len == NEW
+
+
+# ── 7. Watcher drift on the INSTANCE pulls the slot in the same tick ────────
+
+
+@pytest.mark.asyncio
+async def test_confirmed_instance_drift_reaches_the_slot_in_the_same_tick(
+    async_session, fake_redis
+):
+    """The instance's engine reports 262144 twice; the slot (its own probe
+    silent about the window) must not wait two more probes for it."""
+    from app.services import sse as sse_mod
+    from app.services.runtime_watcher import RuntimeWatcher
+
+    host = await _host(async_session)
+    inst = await _instance(async_session, host, "inst-big", ctx=OLD)
+    slot = await _slot(async_session, host, ctx=OLD)
+    agent = await _agent(async_session, slot)
+
+    async def _probe(rt, *a, **kw):
+        return ProbedModel(MODEL, None if rt.is_slot else NEW)
+
+    async def _get():
+        return fake_redis
+
+    with patch(
+        "app.services.runtime_watcher.probe_runtime_model_info", new=_probe
+    ), patch("app.services.runtime_watcher.get_redis", _get), patch.object(
+        sse_mod, "get_redis", _get
+    ), patch(
+        "app.services.runtime_watcher.RuntimeWatcher._served_answer_is_own",
+        new=AsyncMock(return_value=True),
+    ), patch(
+        "app.services.runtime_watcher.sync_pending_agents", new=AsyncMock(return_value=None)
+    ):
+        watcher = RuntimeWatcher(interval=90)
+        await watcher.tick(session=async_session)
+        await watcher.tick(session=async_session)
+
+    await async_session.refresh(inst)
+    assert inst.max_context_len == NEW, "precondition: the instance drift was confirmed"
+    await async_session.refresh(slot)
+    assert slot.max_context_len == NEW
+    await async_session.refresh(agent)
+    assert agent.pending_runtime_sync is True
+
+
+# ── 8. One row of the model, but the box confirmed ANOTHER recipe ───────────
+
+
+@pytest.mark.asyncio
+async def test_lone_instance_of_another_confirmed_recipe_lends_no_window(async_session):
+    """The 01.10. shape: one model, two recipes. The box confirmed recipe-tf;
+    the only instance row belongs to recipe-vllm → no mirror."""
+    host = await _host(async_session, autostart_recipe_slug="recipe-tf")
+    await _recipe(async_session, "recipe-tf")
+    await _recipe(async_session, "recipe-vllm", context_len=250_000)
+    vllm = await _instance(
+        async_session, host, "inst-vllm", ctx=250_000, topology={"recipe_slug": "recipe-vllm"}
+    )
+    slot = await _slot(async_session, host, ctx=OLD)
+
+    assert await slot_runtimes.serving_instance_for_slot(async_session, slot) is None
+    assert await slot_runtimes.mirror_instance_window_to_slot(async_session, vllm) is None
+    await async_session.refresh(slot)
+    assert slot.max_context_len == OLD
+
+
+@pytest.mark.asyncio
+async def test_lone_instance_of_the_confirmed_recipe_is_the_serving_one(async_session):
+    """Counter-case: the same lone row, its recipe confirmed → it serves."""
+    host = await _host(async_session, autostart_recipe_slug="recipe-vllm")
+    await _recipe(async_session, "recipe-vllm", context_len=250_000)
+    vllm = await _instance(
+        async_session, host, "inst-vllm", ctx=250_000, topology={"recipe_slug": "recipe-vllm"}
+    )
+    slot = await _slot(async_session, host, ctx=OLD)
+
+    serving = await slot_runtimes.serving_instance_for_slot(async_session, slot)
+    assert serving is not None and serving.id == vllm.id
+    assert await slot_runtimes.mirror_instance_window_to_slot(async_session, vllm) is not None
+    await async_session.refresh(slot)
+    assert slot.max_context_len == 250_000
+
+
+# ── 9. A catalog window fix reaches untouched instances (and their slot) ────
+
+
+@pytest.mark.asyncio
+async def test_catalog_window_change_follows_into_untouched_instances(async_session):
+    from app.services.local_registry import (
+        follow_recipe_into_runtimes,
+        propagate_followed_windows,
+    )
+
+    host_a = await _host(async_session, "box-m")
+    host_b = await _host(async_session, "box-n")
+    untouched = await _instance(
+        async_session, host_a, "inst-a", ctx=OLD, topology={"recipe_slug": "recipe-big"}
+    )
+    hand = await _instance(
+        async_session, host_b, "inst-hand", ctx=131_072, topology={"recipe_slug": "recipe-big"}
+    )
+    slot = await _slot(async_session, host_a, ctx=OLD)
+    inst_agent = await _agent(async_session, untouched, "agent-inst")
+
+    followed: list[str] = []
+    changed = await follow_recipe_into_runtimes(
+        async_session, "recipe-big", False, False,
+        old_context_len=OLD, new_context_len=NEW, windows_followed=followed,
+    )
+    await async_session.commit()
+    assert changed == ["inst-a"] and followed == ["inst-a"]
+    await propagate_followed_windows(async_session, followed)
+
+    await async_session.refresh(untouched)
+    await async_session.refresh(hand)
+    await async_session.refresh(slot)
+    await async_session.refresh(inst_agent)
+    assert untouched.max_context_len == NEW
+    assert untouched.preferred_context_len == NEW
+    assert hand.max_context_len == 131_072, "a hand-set instance window is kept"
+    assert slot.max_context_len == NEW
+    assert inst_agent.pending_runtime_sync is True
+
+
+@pytest.mark.asyncio
+async def test_catalog_sync_carries_the_window_end_to_end(async_session, monkeypatch):
+    """sync_builtin_recipes: a shipped window fix moves recipe → instance → slot."""
+    from app.services import local_registry
+
+    recipe = await _recipe(async_session, source_registry="builtin")
+    spec = local_registry.RecipeSpec(
+        **{a: getattr(recipe, a) for a in local_registry.MANAGED_FIELDS
+           if a not in ("env", "topology", "env_map", "tags")},
+        slug=recipe.slug,
+    ).model_copy(update={"context_len": NEW})
+    monkeypatch.setattr(local_registry, "_load_seed", lambda: [spec])
+    monkeypatch.setattr(
+        local_registry, "load_shipped_fingerprints",
+        lambda path=None: {recipe.slug: {local_registry.row_fingerprint(recipe)}},
+    )
+    host = await _host(async_session)
+    inst = await _instance(
+        async_session, host, "inst-big", ctx=OLD, topology={"recipe_slug": recipe.slug}
+    )
+    slot = await _slot(async_session, host, ctx=OLD)
+
+    result = await local_registry.sync_builtin_recipes(async_session)
+    assert recipe.slug in result.updated
+
+    await async_session.refresh(inst)
+    await async_session.refresh(slot)
+    assert inst.max_context_len == NEW
+    assert slot.max_context_len == NEW
+
+
+# ── 10. PATCH edge cases (review #980 NICE-1/2) ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_preferred_only_patch_below_the_max_flags_nobody(async_session, auth_client):
+    """The told window is the max; a smaller preferred renders nothing new."""
+    host = await _host(async_session)
+    inst = await _instance(async_session, host, "inst-big", ctx=OLD)
+    slot = await _slot(async_session, host, ctx=OLD)
+    inst_agent = await _agent(async_session, inst, "agent-inst")
+
+    resp = await auth_client.patch(
+        f"/api/v1/runtimes/db/{inst.slug}", json={"preferred_context_len": 131_072}
+    )
+    assert resp.status_code == 200, resp.text
+    await async_session.refresh(inst_agent)
+    assert inst_agent.pending_runtime_sync is False
+    await async_session.refresh(slot)
+    assert slot.max_context_len == OLD
+
+
+@pytest.mark.asyncio
+async def test_failed_mirror_db_operation_does_not_turn_the_patch_into_500(
+    async_session, auth_client
+):
+    from sqlalchemy import text
+
+    host = await _host(async_session)
+    inst = await _instance(async_session, host, "inst-big", ctx=OLD)
+    await _slot(async_session, host, ctx=OLD)
+
+    async def _broken_mirror(session, rt):
+        await session.exec(text("SELECT * FROM table_that_does_not_exist"))
+
+    with patch.object(slot_runtimes, "mirror_instance_window_to_slot", new=_broken_mirror):
+        resp = await auth_client.patch(
+            f"/api/v1/runtimes/db/{inst.slug}", json={"max_context_len": NEW}
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["max_context_len"] == NEW
