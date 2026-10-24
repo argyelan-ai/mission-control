@@ -507,10 +507,11 @@ export function ResultView({ testId }: ResultPageProps) {
               {meta.join(" · ")}
             </p>
           </div>
+          {/* While it runs the live run owns the one state line (K3). */}
           {done ? (
             <GateLine gate={test.gate} words={words} hideTruncation={Boolean(test.truncation)} />
           ) : (
-            <StateLine test={test} words={words} />
+            !live && <StateLine test={test} words={words} />
           )}
           {done && <VerdictLine test={test} words={words} />}
         </header>

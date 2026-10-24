@@ -117,6 +117,8 @@ describe("ResultPage — live", () => {
     // No verdict, no X-Kit, no numbers while it runs.
     expect(screen.queryByRole("button", { name: /X-Kit/ })).toBeNull();
     expect(screen.queryByTestId("result-numbers")).toBeNull();
+    // ONE state line: the live run (package B) brings its own (K3).
+    expect(screen.queryByTestId("result-state")).toBeNull();
     await waitFor(() => expect(get.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
 
