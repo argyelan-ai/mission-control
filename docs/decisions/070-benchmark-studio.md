@@ -206,13 +206,56 @@ Kopie des Generations-Prompts, nie der Tweet-Text.
   und `_handle_x_post_resolution` die Registry ruft.
 - 5-s-Polling im Studio-Tab erzeugt Grundlast (ein Operator — akzeptiert).
 
+## Nachtrag 24.10.2026 — Bench = Testmotor fuer B10 ("Testen in 2 Taps", W1)
+
+**Status:** Accepted (Operator-Entscheide D1–D5 vom 22.10.2026, alle wie empfohlen;
+Ergaenzungen 24.10.2026). Konzept: `concept 30` rev. 2 (privat), Vertrag
+`backend/app/verticals/bench_studio/CONTRACT.md`.
+
+**Entscheidung.** Das Vertical wird fuer Welle 0 + Welle 1 aufgetaut (D1) und ist ab
+jetzt der Testmotor der Roadmap B10 ("Equal-quality test … the standard bench
+method"). Drei Klassen, nie in einer Tabelle gemischt:
+
+- **Klasse A · Modell pur** (jetzt): derselbe Prompt (sha), Temperatur 0.7, Direkt-API
+  gegen **jede** OpenAI-kompatible Runtime (nicht mehr nur `settings.spark_llm_url`),
+  Streaming mit `include_usage` → TTFT, Decode tok/s (Plausi: ≥ Wand-Durchschnitt),
+  `finish_reason`, Reasoning-Token; n = 3, Video = Lauf 1 (vorher festgelegt, einzige
+  Aufnahme). Effort aus der Probe pro (Runtime, Modell, serving_since).
+- **Klasse B · Agent baut** (gekennzeichnet): bestehender Flotten-Weg (omp, Grok Build),
+  ein Lauf mit Zeitlimit, Effort nur angezeigt (D5); laeuft immer **nach** Klasse A,
+  nie gleichzeitig auf derselben Box.
+- **Klasse C · Tempo**: spaeter (W2, `spark-bench-standard`).
+
+**Was das Vertical jetzt tut.** Plan aus dem, was MC weiss (`GET /bench/plan`: Runtime,
+serviertes Modell = Name auf jedem Artefakt, Geraet, Rezept, GPU-Modus, Probe-Stufen,
+Harness aus der Bindung, Preis-Art, Blocker, Zeit-Spanne aus der Historie) → ein Test
+pro Start (`POST /bench/tests`), seriell im Hintergrund-Loop des Verticals
+(`hooks.background_loops`), ruhige Box (≥ 15 min nach serving_since, Engine frei, keine
+Flotten-Nutzung in 2 min; "belegt" wartet max. 10 min, dann gelb) → Quittung write-once
+(`bench_receipts`, neue Version statt Update) → Ampel (5 rote Regeln R1–R5, Rest gelb)
+→ X-Kit (Video 16:9 + Karte 1080×1350 aus **einer** Vorlage, englische Texte,
+Fusszeile aus `MC_BENCH_FOOTER`) → Eingang-Eintrag `Approval(action_type="bench_result")`.
+Auto-Test nach einem Rezeptwechsel (`POST /bench/auto-tests`). Geld: lokal/Abo nie mit
+`$`, echte API-Kosten nur nach Bestaetigung (ueber $1 zweimal, D4).
+
+**Ersetzt (W1-Kill-List).** Der X-Entwurfs-Weg dieses ADR (`drafts.py`, `POST
+/challenges/{id}/draft` → `Approval(x_post)` → `x_publisher`, `x_post_resolved_hook`,
+`grid-speeds.mp4`) ist entfernt: Mark postet selbst, MC liefert nur das Kit. Ebenso der
+alte Anlege-Dialog (`POST /challenges` mit 1–6 Zeilen, unbeschriftetes 3–6-Raster),
+`GET /spark-models` und die Spark-only `/effort-levels`. Bestehende Challenges bleiben
+lesbar (als Protokoll v0, Unbekanntes ausgeschrieben).
+
+**Unveraendert.** Strippbares Vertical (ADR-044), kein Task-Kern-Feld (ADR-085 §4: kein
+`tasks.effort`), ein Renderer (mc-playwright, neue Vorlagen + `RENDERER_FEATURES`
+`bench_card_v1`, `seeded_random`, `page_check`), keine X-API.
+
 ## Referenzen
 
 - `backend/app/models/bench.py` — `BenchChallenge`, `BenchEntry` (SQLModel)
 - `backend/alembic/versions/0154_bench_studio_tables.py` — Migration
 - `backend/app/verticals/hooks.py` — `x_post_resolved_hooks` (neue Registry)
 - `backend/app/verticals/bench_studio/orchestrator.py` — Zustands-Maschine + Generierungs-Pfade
-- `backend/app/verticals/bench_studio/drafts.py` — Draft-Idempotenz, Pipeline-Reuse
+- `backend/app/verticals/bench_studio/w1_*.py` — W1: Plan, Tests, Runner, Quittung/Ampel, X-Kit (Nachtrag 24.10.2026; `drafts.py` entfernt)
 - `backend/app/verticals/bench_studio/routers.py` — `/api/v1/bench/*`
 - `frontend-v2/src/verticals/bench_studio/` — BenchStudioPage, ChallengesTab, PromptLibraryTab,
   DraftDialog, NewChallengeDialog, ChallengeDetail, api.ts, types.ts

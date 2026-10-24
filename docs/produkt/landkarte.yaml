@@ -589,7 +589,7 @@ features:
   - id: F-bench
     name: "Benchmark studio"
     ui: {route: /bench}
-    status: frozen
+    status: frozen  # W0+W1 unfrozen (D1, ADR-070 amendment 24.10.2026) — flips to active with its journey (lead, integration)
     source: "operator decision 2026-09-29; ADR-070 (benchmark studio as a vertical); ADR-044 (strippable vertical)"
     # Frozen, not removed: the operator has not used it lately and it stays
     # reversible as a strippable vertical (ADR-044).

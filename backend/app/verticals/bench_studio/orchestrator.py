@@ -1,7 +1,8 @@
 """Benchmark Studio orchestrator — the production state machine.
 
 Challenge lifecycle:  generating -> rendering -> composing -> review
-                      (-> drafted -> published via drafts.py + core hooks)
+                      (drafted/published only on challenges from before the
+                       W1 kill list — MC no longer drafts X posts)
 Entry lifecycle:      pending -> generating -> generated -> rendered | failed
 
 Design rules (spec §7):
@@ -248,35 +249,6 @@ def _versioned_output_name(prefix: str = "grid") -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}.mp4"
 
 
-async def pending_x_post_approval(session: AsyncSession, challenge_id: uuid.UUID):
-    """The pending x_post Approval referencing this challenge, if any — None
-    otherwise. Filter pending x_post approvals in SQL; match
-    bench_challenge_id in Python (JSON column, avoids DB-specific operators).
-
-    Shared guard: drafts.create_draft uses it to reject a second draft while
-    one is still pending; routers.rerender_challenge/recompose_challenge use
-    it (inverted) to block overwriting the video a pending post approval
-    still points at — Approval.payload.media_paths freezes a path at draft
-    time, and a later recompose/rerender both renames AND deletes the old
-    file (_cleanup_old_compose), so approving the post days later would try
-    to post a file that no longer exists (2026-07-13 incident)."""
-    from app.models.approval import Approval
-
-    pending = (
-        await session.exec(
-            select(Approval).where(
-                Approval.action_type == "x_post",
-                Approval.status == "pending",
-            )
-        )
-    ).all()
-    for approval in pending:
-        payload = approval.payload or {}
-        if payload.get("bench_challenge_id") == str(challenge_id):
-            return approval
-    return None
-
-
 def _cleanup_old_compose(old_path: str | None, new_path: str | None) -> None:
     """Best-effort removal of a superseded composed video. Versioned
     filenames mean the previous file is otherwise orphaned on disk forever
@@ -429,75 +401,6 @@ async def _spark_generate(
         if cached:
             metrics["cache_read_tokens"] = cached
     return content, metrics
-
-
-SPARK_MODELS_PROBE_TIMEOUT_S = 3.0  # Bench #21: the dialog must never hang on an unreachable box.
-# Covers the /v1/models GET (bounded by SPARK_MODELS_PROBE_TIMEOUT_S itself)
-# PLUS the _resolve_llm_model() leg after it, which can fall through to its
-# own live re-probe (runtime_model_resolver._probe_live_spark_model) on a
-# DEFAULT — unbounded-by-us — httpx timeout. Wrapping the whole body is the
-# only way to guarantee this function itself never outlives ~4s (review
-# finding, Bench #21).
-_SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S = 4.0
-
-
-async def _probe_spark_models() -> dict:
-    """The actual probe body — see spark_models_status for the timeout
-    wrapper and docstring."""
-    from app.services.spark_client import SparkClient
-
-    spark = SparkClient(timeout=SPARK_MODELS_PROBE_TIMEOUT_S)
-    try:
-        async with httpx.AsyncClient(timeout=spark.timeout) as cli:
-            resp = await cli.get(f"{spark.llm_url}/models")
-            resp.raise_for_status()
-            models = sorted({m["id"] for m in resp.json().get("data", [])})
-    except (httpx.HTTPError, KeyError, ValueError):
-        return {"reachable": False, "models": [], "active": None}
-    active = await spark._resolve_llm_model()
-    if models and active not in models:
-        # The box is the truth: a resolver answer it does not serve would
-        # freeze a wrong model into an "auto" entry (round-1 user test:
-        # "auto" named the stopped GLM while DeepSeek was served).
-        logger.warning(
-            "bench spark-models: resolver said %r, box serves %s — using the box", active, models
-        )
-        active = models[0]
-    return {"reachable": True, "models": models, "active": active or None}
-
-
-async def spark_models_status() -> dict:
-    """Live probe of the Spark vLLM server for the bench dialog's vanilla
-    model picker (Bench #21) — GET /v1/models with a short timeout so the
-    dialog never hangs. Reuses SparkClient for URL + active-model
-    resolution (same source of truth _spark_generate uses).
-
-    Never raises: an unreachable Spark is a normal, expected state here
-    (operator might be mid-benchmark on something else), not a router 500 —
-    a timeout on the whole body (see _SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S)
-    is treated exactly like an unreachable box.
-    """
-    try:
-        return await asyncio.wait_for(_probe_spark_models(), timeout=_SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S)
-    except (TimeoutError, asyncio.TimeoutError):
-        return {"reachable": False, "models": [], "active": None}
-
-
-async def resolve_spark_model_or_422() -> str:
-    """Resolves the live active Spark model for a create-time spec with an
-    empty/None spark_model (routers.create_challenge, Bench #21 vanilla
-    "auto" option) — freezes it into the entry so the outro/label never end
-    up empty regardless of later model switches on the box.
-
-    Raises HTTPException(422) when Spark can't be reached right now and
-    there is nothing to freeze.
-    """
-    status = await spark_models_status()
-    if not status["reachable"] or not status["active"]:
-        raise HTTPException(
-            422, "Spark is not reachable, so the active model cannot be resolved right now."
-        )
-    return status["active"]
 
 
 async def _record_spark_usage_event(session: AsyncSession, entry: BenchEntry, metrics: dict) -> None:
@@ -1122,18 +1025,6 @@ async def _legacy_run_label(session: AsyncSession, challenge: BenchChallenge) ->
     return f"{len(prior_ids):03d}"
 
 
-def format_speed_label(metrics: dict) -> str:
-    """'42 s · 87 tok/s' — optional per-model overlay for the grid (spec §4)."""
-    parts: list[str] = []
-    duration_ms = metrics.get("duration_ms")
-    if duration_ms:
-        parts.append(f"{duration_ms / 1000:.0f} s")
-    tok_per_s = metrics.get("tok_per_s")
-    if tok_per_s:
-        parts.append(f"{tok_per_s:.0f} tok/s")
-    return " · ".join(parts)
-
-
 def _first_prompt_line(prompt_text: str, max_len: int = 110) -> str:
     """First non-empty line of the prompt, truncated for the frame's
     single-line PROMPT footer (spec: video-branding, 2026-07-12)."""
@@ -1387,49 +1278,40 @@ async def compose_challenge(
     challenge: BenchChallenge,
     rendered: list[BenchEntry],
     *,
-    speed_labels: bool = False,
     output_name: str | None = None,
 ) -> str:
-    """POST /compose on mc-playwright (PR 1) — grid video with model labels,
-    or (1 or 2 rendered entries) the branded frame + outro video (spec:
-    bench-video-branding, 2026-07-12; single-video-branding 2026-07-13).
-    Returns the composed video_path. Raises on failure.
+    """POST /compose on mc-playwright — the branded frame + outro video for
+    1 (solo) or 2 (side by side) recorded entries (spec: bench-video-branding,
+    2026-07-12; single-video-branding 2026-07-13). Returns the composed
+    video_path. Raises on failure.
+
+    Bench W1 kill list: the unbranded 3-6 grid and the speed-label
+    X-draft variant are gone — a video shows at most two contestants; an old
+    challenge with more recordings keeps the video it has.
 
     output_name defaults to a fresh versioned filename (_versioned_output_name)
-    so every compose produces a distinct file — callers that need a stable
-    name (drafts.py's "grid-speeds.mp4") pass it explicitly."""
+    so every compose produces a distinct file."""
     if output_name is None:
         output_name = _versioned_output_name()
     ordered = sorted(rendered, key=entry_order_key)
+    if len(ordered) not in (1, 2):
+        raise ValueError(f"a bench video shows 1 or 2 contestants, not {len(ordered)}")
     effort_words = video_effort_words(ordered)
     duration_s = (
         challenge.record_duration_s
         if challenge.record_duration_s is not None
         else RECORD_DURATION_S
     )
+    effort_field = RENDERER_FEATURE_BRANDING_EFFORT in await renderer_features()
     payload: dict = {
         "inputs": [e.video_path for e in ordered],
         "labels": [video_label(e, effort_words[e.id]) for e in ordered],
         "layout": "grid",
         "output_path": str(challenge_dir(challenge.id) / output_name),
-        # Bench #18: scales the sidecar's branded-compose ffmpeg timeout
-        # (media.compose_branded_timeout_s) — a no-op for the plain grid
-        # path, which doesn't read this field.
+        # Bench #18: scales the sidecar's branded-compose ffmpeg timeout.
         "duration_s": duration_s,
+        "branding": await _build_branding_payload(session, challenge, ordered, effort_field=effort_field),
     }
-    if speed_labels:
-        payload["speed_labels"] = [format_speed_label(e.metrics or {}) for e in ordered]
-    # speed_labels re-compose (drafts.py "grid-speeds.mp4" for X posts with
-    # per-model metric overlays) stays on the plain grid path — branding is
-    # only for the primary review composition, not the metrics variant.
-    # 1 or 2 entries -> branded (solo/side-by-side); 3-4 entries (side_by_side
-    # models list beyond the branded pair) fall through to the plain grid
-    # path unchanged (pre-existing behaviour, regression-safe).
-    if not speed_labels and len(ordered) in (1, 2):
-        effort_field = RENDERER_FEATURE_BRANDING_EFFORT in await renderer_features()
-        payload["branding"] = await _build_branding_payload(
-            session, challenge, ordered, effort_field=effort_field
-        )
     async with httpx.AsyncClient(timeout=COMPOSE_TIMEOUT_S) as cli:
         resp = await cli.post(f"{PLAYWRIGHT_BASE}/compose", json=payload)
         resp.raise_for_status()
@@ -1475,9 +1357,10 @@ async def _render_and_compose(
     # composes its 1 entry into the branded solo frame (2026-07-13,
     # single-video-branding — previously single mode never composed and
     # shipped the raw, unbranded recording).
-    should_compose = (
-        (challenge.mode == "side_by_side" and len(rendered) >= 1)
-        or (challenge.mode == "single" and len(rendered) == 1)
+    # W1 kill list: no 3-6 grid — 1 or 2 recordings compose into the
+    # branded frame, more keep their single recordings (old challenges).
+    should_compose = len(rendered) in (1, 2) and (
+        challenge.mode == "side_by_side" or len(rendered) == 1
     )
     if should_compose:
         challenge.status = "composing"
@@ -1525,6 +1408,11 @@ async def maybe_advance(session: AsyncSession, challenge_id: uuid.UUID) -> None:
     """
     challenge = await session.get(BenchChallenge, challenge_id)
     if challenge is None or challenge.status != "generating":
+        return
+    if (challenge.protocol_version or "v0") == "v1":
+        # Bench W1 tests are driven by the W1 runner (w1_runner.run_test):
+        # it records only run 1 and composes with the W1 templates. The
+        # legacy all-entries render would record every repetition.
         return
     entries = (
         await session.exec(
@@ -1770,9 +1658,14 @@ async def reconcile_open_challenges() -> int:
     from app.database import engine
 
     async with AsyncSession(engine, expire_on_commit=False) as session:
+        # W1 tests heal through the W1 runner (w1_runner.heal_after_restart):
+        # their agent runs are watched by the runner itself.
         ids = (
             await session.exec(
-                select(BenchChallenge.id).where(BenchChallenge.status == "generating")
+                select(BenchChallenge.id).where(
+                    BenchChallenge.status == "generating",
+                    BenchChallenge.protocol_version != "v1",
+                )
             )
         ).all()
 
@@ -1826,7 +1719,7 @@ async def stop_challenge(
     Non-terminal entries (pending/generating) -> failed with a stop marker;
     rendered/generated entries keep their state. The challenge itself goes to
     `failed` (deliberate reuse: every existing gate — entry retry, rerender,
-    drafts — already treats `failed` correctly; a new "stopped" status would
+    the old draft path — already treats `failed` correctly; a new "stopped" status would
     have to be threaded through all of them for zero benefit).
 
     Open fleet tasks of stopped agent entries are stopped through the same

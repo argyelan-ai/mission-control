@@ -155,8 +155,12 @@ async def test_probe_finds_reasoning_effort_with_max(monkeypatch):
     assert result["effort_param"] == rp.REASONING_EFFORT
     assert result["default_observed"] == "on"
     assert result["levels"] == ["off", "low", "medium", "high", "max"]
-    # baseline, the off switch, the max check — no more
-    assert len(calls) == 3
+    # baseline, the off switch, the max check, and (bench W1, critic 32 S3)
+    # one "high" request: it thinks like the baseline, so the server
+    # default IS high and the sheet shows one chip "high (default)"
+    assert len(calls) == 4
+    assert calls[-1]["reasoning_effort"] == "high"
+    assert result["raw"]["default_level"] == "high"
     assert all(c["max_tokens"] == effort_probe.PROBE_MAX_TOKENS for c in calls)
 
 
@@ -238,13 +242,13 @@ async def test_probe_is_cached_per_serving_since(session, monkeypatch, spark_run
     first = await effort_probe.get_or_probe(session, "deepseek-x")
     second = await effort_probe.get_or_probe(session, "deepseek-x")
     assert first.id == second.id
-    assert len(calls) == 3  # probed once
+    assert len(calls) == 4  # probed once (incl. the W1 default-level check)
 
     # Engine restarted: new serving_since -> a fresh probe, a second row.
     spark_runtime.serving_since = spark_runtime.serving_since + timedelta(hours=2)
     third = await effort_probe.get_or_probe(session, "deepseek-x")
     assert third.id != first.id
-    assert len(calls) == 6
+    assert len(calls) == 8
     rows = (await session.exec(select(BenchProbe))).all()
     assert len(rows) == 2
 
@@ -482,84 +486,20 @@ def _body(*, effort=None, source="spark"):
     return {"title": "Effort", "prompt_text": "one page", "models": [spec]}
 
 
-@pytest.mark.asyncio
-async def test_create_with_probed_effort_stores_it(auth_client, session, monkeypatch, _no_background):
-    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=_probe_row(["off", "low", "medium", "high", "max"])))
-    resp = await auth_client.post("/api/v1/bench/challenges", json=_body(effort="max"))
-    assert resp.status_code == 201, resp.text
-    entry = resp.json()["entries"][0]
-    assert entry["metrics"] == {"effort_requested": "max"}
 
 
-@pytest.mark.asyncio
-async def test_create_without_effort_stores_default_and_never_probes(auth_client, monkeypatch, _no_background):
-    probe = AsyncMock()
-    monkeypatch.setattr(effort_probe, "get_or_probe", probe)
-    resp = await auth_client.post("/api/v1/bench/challenges", json=_body())
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["entries"][0]["metrics"] == {"effort_requested": "default"}
-    probe.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_create_unknown_level_422(auth_client, _no_background):
-    resp = await auth_client.post("/api/v1/bench/challenges", json=_body(effort="turbo"))
-    assert resp.status_code == 422
 
 
-@pytest.mark.asyncio
-async def test_create_unprobed_level_422(auth_client, monkeypatch, _no_background):
-    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=_probe_row(["off"], key=rp.ENABLE_THINKING)))
-    resp = await auth_client.post("/api/v1/bench/challenges", json=_body(effort="max"))
-    assert resp.status_code == 422
-    assert "not available" in resp.json()["detail"][0]["msg"]
 
 
-@pytest.mark.asyncio
-async def test_create_effort_on_no_effect_probe_422(auth_client, monkeypatch, _no_background):
-    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=_probe_row([], key=None, status="no_effect")))
-    resp = await auth_client.post("/api/v1/bench/challenges", json=_body(effort="off"))
-    assert resp.status_code == 422
-    assert "no_effect" in resp.json()["detail"][0]["msg"]
 
 
-@pytest.mark.asyncio
-async def test_create_agent_row_with_effort_422(auth_client, _no_background):
-    resp = await auth_client.post("/api/v1/bench/challenges", json=_body(effort="high", source="agent"))
-    assert resp.status_code == 422
-    assert "agent path" in resp.json()["detail"][0]["msg"]
 
 
-@pytest.mark.asyncio
-async def test_effort_levels_endpoint(auth_client, monkeypatch):
-    """GET reads the stored probe only (round-1 P3: it used to probe)."""
-    row = _probe_row(["off", "low", "medium", "high", "max"])
-    row.probed_at = datetime(2026, 10, 21, 22, 14, tzinfo=timezone.utc)
-    stored = AsyncMock(return_value=row)
-    probe = AsyncMock()
-    monkeypatch.setattr(effort_probe, "stored_probe", stored)
-    monkeypatch.setattr(effort_probe, "get_or_probe", probe)
-    resp = await auth_client.get("/api/v1/bench/effort-levels?model=deepseek-x")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "ok"
-    assert data["levels"] == ["off", "low", "medium", "high", "max"]
-    assert data["default_observed"] == "on"
-    assert "raw" not in data
-    stored.assert_awaited_once()
-    probe.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_effort_levels_endpoint_unreachable_box(auth_client, monkeypatch):
-    monkeypatch.setattr(
-        orchestrator, "spark_models_status",
-        AsyncMock(return_value={"reachable": False, "models": [], "active": None}),
-    )
-    resp = await auth_client.get("/api/v1/bench/effort-levels")
-    assert resp.status_code == 200
-    assert resp.json()["reachable"] is False
-    assert resp.json()["levels"] == []
 
 
 # ── agent path: effort recorded from the omp task session (W0.7) ─────────
@@ -788,31 +728,6 @@ async def test_spark_generate_logs_the_effort_sent(monkeypatch, caplog):
     assert "max_tokens=65536" in line
 
 
-@pytest.mark.asyncio
-async def test_effort_levels_endpoint_box_offline_for_a_named_model(auth_client, monkeypatch):
-    """Named model, box down: the probe's first request got no HTTP answer
-    -> reachable false ("Box offline"), not "Check failed"."""
-    row = BenchProbe(
-        served_model_id="deepseek-x", status="failed", levels=[], default_observed="unknown",
-        raw={"attempts": [{"key": None, "value": None, "http": None, "error": "ConnectError"}]},
-    )
-    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=row))
-    monkeypatch.setattr(effort_probe, "spark_busy_reason", AsyncMock(return_value=None))
-    check = {"model": "deepseek-x"}
-    resp = await auth_client.post("/api/v1/bench/effort-levels/check", json=check)
-    assert resp.json()["reachable"] is False
-    assert resp.json()["status"] == "failed"
-
-    # The box answered, just not with 200 -> reached, the check failed.
-    row.raw = {"attempts": [{"key": None, "value": None, "http": 500, "error": "boom"}]}
-    resp = await auth_client.post("/api/v1/bench/effort-levels/check", json=check)
-    assert resp.json()["reachable"] is True
-
-    # A stored failed probe: the read-only GET says the same (no new probe).
-    monkeypatch.setattr(effort_probe, "stored_probe", AsyncMock(return_value=row))
-    resp = await auth_client.get("/api/v1/bench/effort-levels?model=deepseek-x")
-    assert resp.json()["status"] == "failed"
-    assert resp.json()["reachable"] is True
 
 
 def test_level_fields_no_effect_is_not_offered_failed_is_check_failed():
@@ -823,3 +738,26 @@ def test_level_fields_no_effect_is_not_offered_failed_is_check_failed():
     assert not isinstance(no_eff.value, effort_probe.EffortProbeFailedError)
     with pytest.raises(effort_probe.EffortProbeFailedError):
         effort_probe.level_fields(_probe_row([], key=None, status="failed"), "max")
+
+
+@pytest.mark.asyncio
+async def test_probe_keeps_default_apart_when_high_thinks_more(monkeypatch):
+    """Bench W1: "high (default)" is merged only when the server default
+    really thinks like ``high`` — an engine whose default is ``medium``
+    keeps two chips."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        effort = body.get("reasoning_effort")
+        think = effort != "none"
+        text = ("step " * (60 if effort in ("high", "max") else 20)) if think else None
+        return httpx.Response(200, json={
+            "model": body["model"],
+            "choices": [{"message": {"content": "42", "reasoning_content": text}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 30},
+        })
+
+    _route(monkeypatch, handler)
+    result = await effort_probe.run_probe("http://engine/v1", "m", api_key="k")
+    assert result["status"] == "ok"
+    assert "default_level" not in result["raw"]

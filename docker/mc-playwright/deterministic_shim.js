@@ -29,6 +29,18 @@
     constructor(...a){ a.length ? super(...a) : super(epoch + vt); }
     static now(){ return epoch + vt; }
   };
+  // Seeded Math.random (bench W1, 24.10.2026): many generated pages draw
+  // stars, petals or particles from Math.random — unseeded, every
+  // "Neu rendern" gave a different video of the same page. mulberry32 with
+  // a fixed seed: same page, same frames (frame hash stable).
+  let seed = 0x6d2b79f5 >>> 0;
+  Math.random = () => {
+    seed = (seed + 0x6d2b79f5) >>> 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
   window.requestAnimationFrame = (fn) => { const id = nextRaf++; rafQ.push({id, fn}); return id; };
   window.cancelAnimationFrame = (id) => { const i = rafQ.findIndex(r => r.id === id); if (i>=0) rafQ.splice(i,1); };
   // Math.max(1,d) on setTimeout too (2026-07-15, review finding): real

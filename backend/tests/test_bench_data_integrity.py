@@ -18,8 +18,6 @@ Vertical test: skipped entirely when the vertical directory is stripped.
 """
 from __future__ import annotations
 
-import uuid
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
 import pytest
@@ -27,7 +25,6 @@ import pytest
 pytest.importorskip("app.verticals.bench_studio")
 
 from sqlalchemy import text
-from sqlmodel import select
 
 from app.models.bench import BenchChallenge, BenchEntry, BenchProbe
 from app.services import reasoning_params as rp
@@ -143,15 +140,6 @@ def _spec(effort=None, label=LABEL, model="deepseek-x"):
     return spec
 
 
-@pytest.mark.asyncio
-async def test_create_refuses_true_duplicate_labels(auth_client, monkeypatch, _no_background):
-    monkeypatch.setattr(effort_probe, "get_or_probe", AsyncMock(return_value=_probe_row(["off", "max"])))
-    resp = await auth_client.post("/api/v1/bench/challenges", json={
-        "title": "Twice", "prompt_text": "one page",
-        "models": [_spec("max"), _spec("max", label=f" {LABEL.lower()} ")],
-    })
-    assert resp.status_code == 422
-    assert "label" in resp.json()["detail"][0]["msg"].lower()
 
 
 # ── video: effort in tag and outro ─────────────────────────────────────────
@@ -233,81 +221,14 @@ async def test_effort_sent_is_stored_before_the_request_goes_out(session, tmp_pa
 # ── effort-levels: GET reads, POST probes ──────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_effort_levels_get_never_probes_or_writes(auth_client, session, monkeypatch):
-    run = AsyncMock()
-    monkeypatch.setattr(effort_probe, "run_probe", run)
-    monkeypatch.setattr(effort_probe, "spark_runtime", AsyncMock(return_value=None))
-
-    resp = await auth_client.get("/api/v1/bench/effort-levels?model=never-probed")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "unchecked"
-    assert resp.json()["levels"] == []
-    run.assert_not_awaited()
-    rows = (await session.exec(select(BenchProbe).where(BenchProbe.served_model_id == "never-probed"))).all()
-    assert rows == []
 
 
-@pytest.mark.asyncio
-async def test_effort_levels_get_returns_the_cached_probe(auth_client, session, monkeypatch):
-    run = AsyncMock()
-    monkeypatch.setattr(effort_probe, "run_probe", run)
-    monkeypatch.setattr(effort_probe, "spark_runtime", AsyncMock(return_value=None))
-    row = _probe_row(["off", "max"], model="cached-x")
-    row.probed_at = datetime.now(timezone.utc)
-    session.add(row)
-    await session.commit()
-
-    resp = await auth_client.get("/api/v1/bench/effort-levels?model=cached-x")
-    assert resp.json()["status"] == "ok"
-    assert resp.json()["levels"] == ["off", "max"]
-    run.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_effort_levels_check_probes_on_request(auth_client, monkeypatch):
-    row = _probe_row(["off", "max"])
-    probe = AsyncMock(return_value=row)
-    monkeypatch.setattr(effort_probe, "get_or_probe", probe)
-    resp = await auth_client.post("/api/v1/bench/effort-levels/check", json={"model": "deepseek-x"})
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["levels"] == ["off", "max"]
-    probe.assert_awaited_once()
-    assert probe.await_args.kwargs == {"refresh": True}
 
 
-@pytest.mark.asyncio
-async def test_effort_levels_check_refused_while_a_spark_run_is_going(auth_client, session, monkeypatch):
-    probe = AsyncMock()
-    monkeypatch.setattr(effort_probe, "get_or_probe", probe)
-    ch, (entry,) = await _challenge(session, "default")
-    entry.status = "generating"
-    session.add(entry)
-    await session.commit()
-
-    resp = await auth_client.post("/api/v1/bench/effort-levels/check", json={"model": "deepseek-x"})
-    assert resp.status_code == 409
-    probe.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_effort_levels_check_refused_while_an_agent_works_on_the_spark(
-    auth_client, session, monkeypatch, make_agent
-):
-    from app.models.runtime import Runtime
-
-    probe = AsyncMock()
-    monkeypatch.setattr(effort_probe, "get_or_probe", probe)
-    rt = Runtime(slug=f"spark-{uuid.uuid4().hex[:6]}", display_name="Spark", runtime_type="ssh_process",
-                 endpoint="http://192.0.2.10:8000/v1", enabled=True)
-    session.add(rt)
-    await session.commit()
-    await make_agent(name="Worker", runtime_id=rt.id, current_task_id=uuid.uuid4())
-
-    resp = await auth_client.post("/api/v1/bench/effort-levels/check", json={"model": "deepseek-x"})
-    assert resp.status_code == 409
-    assert "Worker" in resp.json()["detail"]
-    probe.assert_not_awaited()
 
 
 # ── a direct-API run cut off by a restart never blocks the Spark for good ──
@@ -366,36 +287,5 @@ async def test_sweep_keeps_a_direct_api_run_that_is_still_going(session, monkeyp
     assert entry.error is None
 
 
-@pytest.mark.asyncio
-async def test_effort_check_names_the_challenge_that_is_running(auth_client, session, monkeypatch):
-    probe = AsyncMock()
-    monkeypatch.setattr(effort_probe, "get_or_probe", probe)
-    ch, (entry,) = await _challenge(session, "default")
-    entry.status = "generating"
-    session.add(entry)
-    await session.commit()
-
-    resp = await auth_client.post("/api/v1/bench/effort-levels/check", json={"model": "deepseek-x"})
-    assert resp.status_code == 409
-    assert "Pagoda" in resp.json()["detail"]
-    probe.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_effort_check_ignores_a_left_over_entry_of_a_finished_challenge(
-    auth_client, session, monkeypatch
-):
-    """An entry still at `generating` under a challenge that is no longer
-    generating (stopped, failed, archived after review) is no run."""
-    probe = AsyncMock(return_value=_probe_row(["off", "max"]))
-    monkeypatch.setattr(effort_probe, "get_or_probe", probe)
-    ch, (entry,) = await _challenge(session, "default")
-    entry.status = "generating"
-    ch.status = "failed"
-    session.add(entry)
-    session.add(ch)
-    await session.commit()
-
-    resp = await auth_client.post("/api/v1/bench/effort-levels/check", json={"model": "deepseek-x"})
-    assert resp.status_code == 200, resp.text
-    probe.assert_awaited_once()
