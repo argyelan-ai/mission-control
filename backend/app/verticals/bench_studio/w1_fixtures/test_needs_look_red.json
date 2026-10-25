@@ -126,6 +126,7 @@
             "thinking_key": null,
             "temperature": null,
             "max_tokens": null,
+            "max_tokens_rule": null,
             "system_prompt_sha": null,
             "prompt_sha256": null,
             "brief_sha": "7777777777777777777777777777777777777777777777777777777777777777",

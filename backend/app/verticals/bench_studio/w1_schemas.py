@@ -338,11 +338,14 @@ class Receipt(BaseModel):
     thinking_key: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
+    # How max_tokens was set (25.10.2026): cap · context (local, the whole
+    # window) · engine (local, none sent). None on older receipts.
+    max_tokens_rule: Literal["cap", "context", "engine"] | None = None
     system_prompt_sha: str | None = None
     prompt_sha256: str | None = None
     brief_sha: str | None = None              # class B
     tools_allowed: bool | None = None         # class B
-    time_limit_min: int | None = None         # class B
+    time_limit_min: int | None = None         # class B; class A since 25.10.2026
     n_runs: int | None = None
     video_run_index: int | None = None
     attempts: int | None = None
@@ -415,6 +418,9 @@ class TruncationWarning(BaseModel):
     n_runs: int
     max_tokens: int
     suggested_max_tokens: int
+    # A capped run was cut, so a re-run with more tokens exists. False when
+    # only local runs were cut: they already had the whole context window.
+    larger_budget: bool = True
     entry_ids: list[uuid.UUID] = Field(default_factory=list)
     # Runs that stopped before they wrote any page (thinking until the limit).
     runs_without_page: int = 0

@@ -60,9 +60,12 @@ RECORD_TIMEOUT_S = 900.0
 # (media.compose_branded_timeout_s) for a 60s input, so the client-side
 # HTTP timeout must cover that plus request/response overhead.
 COMPOSE_TIMEOUT_S = 1200.0
-# Reasoning models (Laguna) spend minutes thinking before the HTML comes out
-# (~10k tokens at ~25 tok/s) — 300s cut those runs off mid-generation.
-SPARK_TIMEOUT_S = 900.0
+#: Wall clock one generation may take (operator decision 25.10.2026): a
+#: visual test must let the model finish the page, so TIME ends a run, not a
+#: token cap. Shared by the W1 runner (``w1_common.RUN_TIME_LIMIT_MIN``) and
+#: the legacy W0 retry below. Was 900 s scaled by max_tokens.
+GENERATION_TIME_LIMIT_S = 2 * 60 * 60
+SPARK_TIMEOUT_S = float(GENERATION_TIME_LIMIT_S)
 SPARK_MAX_TOKENS = 16384
 SPARK_TEMPERATURE = 0.7
 
@@ -334,8 +337,9 @@ async def _spark_generate(
     serving default governs. No model-name guard any more: the old
     "qwen in the name -> enable_thinking false" switch silently ran every
     Qwen bench without thinking and never said so (bench W0.6).
-    ``max_tokens`` is scaled by the caller for deep effort levels; the HTTP
-    timeout grows with it.
+    ``max_tokens`` is scaled by the caller for deep effort levels (this
+    legacy W0 retry keeps the v0 budget so a retried entry stays comparable
+    with its siblings); the HTTP wait is the 2 h generation time limit.
 
     Returns (content, metrics). Raises on HTTP errors — the caller converts
     that into entry.status = "failed".
@@ -343,8 +347,7 @@ async def _spark_generate(
     from app.services import reasoning_params
     from app.services.spark_client import SparkClient
 
-    timeout = SPARK_TIMEOUT_S * max(1.0, max_tokens / SPARK_MAX_TOKENS)
-    spark = SparkClient(timeout=timeout)
+    spark = SparkClient(timeout=SPARK_TIMEOUT_S)
     model = model_override or await spark._resolve_llm_model()
     started = time.monotonic()
     payload: dict = {
@@ -363,9 +366,14 @@ async def _spark_generate(
         "bench spark request model=%s effort_sent=%s max_tokens=%s",
         model, reasoning_params.wire_fields(effort_fields or {}), max_tokens,
     )
-    async with httpx.AsyncClient(timeout=spark.timeout) as cli:
-        resp = await cli.post(f"{spark.llm_url}/chat/completions", json=payload)
-        resp.raise_for_status()
+    try:
+        async with httpx.AsyncClient(timeout=spark.timeout) as cli:
+            resp = await cli.post(f"{spark.llm_url}/chat/completions", json=payload)
+            resp.raise_for_status()
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(
+            f"time_limit: no answer within the {SPARK_TIMEOUT_S / 3600:g} h generation time limit"
+        ) from exc
     duration_ms = int((time.monotonic() - started) * 1000)
     data = resp.json()
     choice = data["choices"][0]

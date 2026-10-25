@@ -211,6 +211,10 @@ def build_receipt(
             "thinking_key": hm.get("thinking_key"),
             "temperature": hm.get("temperature", c.TEMPERATURE),
             "max_tokens": hm.get("max_tokens") or pc.get("max_tokens"),
+            # context = the whole context window (local, no practical cap) ·
+            # engine = none sent, the engine's maximum · cap = a token cap.
+            "max_tokens_rule": pc.get("max_tokens_rule"),
+            "time_limit_min": pc.get("time_limit_min"),
             "system_prompt_sha": c.SYSTEM_PROMPT_SHA,
             "quiet_box": hm.get("quiet_box"),
             "serving_age_min": hm.get("serving_age_min"),
@@ -299,37 +303,45 @@ def truncation_info(
     contestants: list[tuple[dict[str, Any], list[BenchEntry]]], *, context_limit: int | None = None
 ) -> dict[str, Any] | None:
     """Runs that stopped at max_tokens — for the OPERATOR only. Never on a
-    public artefact; the result page offers "re-run with a larger budget"."""
+    public artefact; the result page offers "re-run with a larger budget"
+    when a capped run was cut (``larger_budget``). A local run already had
+    the whole context window: a larger budget does not exist there."""
     from app.services.reasoning_params import _PROMPT_HEADROOM
 
     cut: list[BenchEntry] = []
     total = 0
     max_tokens = 0
+    capped_cut = False
     no_page = 0
     video_cut = False
     for pc, entries in contestants:
         if pc.get("run_class") != "A":
             continue
+        capped = pc.get("max_tokens_rule", "cap") == "cap"
         for e in entries:
             total += 1
             m = _m(e)
-            max_tokens = max(max_tokens, int(m.get("max_tokens") or pc.get("max_tokens") or 0))
+            max_tokens = max(max_tokens, int(m.get("max_tokens") or pc.get("max_tokens") or m.get("tokens_out") or 0))
             if m.get("truncated") or m.get("finish_reason") == "length":
                 cut.append(e)
+                capped_cut = capped_cut or capped
                 if e.status not in DONE_ENTRY:
                     no_page += 1
                 elif pc.get("video") and (e.repeat_idx or 1) == c.VIDEO_RUN_INDEX:
                     video_cut = True
     if not cut:
         return None
-    suggested = max_tokens * c.LARGER_BUDGET_FACTOR
-    if context_limit and context_limit > _PROMPT_HEADROOM:
-        suggested = max(max_tokens, min(suggested, context_limit - _PROMPT_HEADROOM))
+    suggested = max_tokens
+    if capped_cut:
+        suggested = max_tokens * c.LARGER_BUDGET_FACTOR
+        if context_limit and context_limit > _PROMPT_HEADROOM:
+            suggested = max(max_tokens, min(suggested, context_limit - _PROMPT_HEADROOM))
     return {
         "runs_cut": len(cut),
         "n_runs": total,
         "max_tokens": max_tokens,
         "suggested_max_tokens": suggested,
+        "larger_budget": suggested > max_tokens,
         "entry_ids": [e.id for e in cut],
         "runs_without_page": no_page,
         "video_run_cut": video_cut,
@@ -441,7 +453,7 @@ def evaluate_gate(
     if truncation:
         reasons.append(_reason("amber", "amber", "runs_truncated",
                                {"runs_cut": truncation["runs_cut"], "n_runs": truncation["n_runs"]},
-                               "rerun_larger"))
+                               "rerun_larger" if truncation.get("larger_budget") else None))
     # one reason per (rule, code)
     seen: set[tuple] = set()
     unique: list[dict] = []

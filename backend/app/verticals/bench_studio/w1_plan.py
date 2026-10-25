@@ -469,6 +469,59 @@ def offered_levels(effort: dict[str, Any]) -> list[str]:
     return [o["level"] for o in effort.get("options", [])]
 
 
+# ── Token budget (operator decision 25.10.2026: time, not tokens) ────────
+
+
+def effective_level(level: str | None, effort: dict[str, Any] | None) -> str:
+    """The level whose budget a run gets. "default" sends nothing, but the
+    server then thinks at ITS default: the level the probe merged it into
+    ("high (default)"), else "on" when the probe saw it think by default.
+    "default" counted as factor 1 and a "high (default)" run got half the
+    budget of an explicit "high" (live: thought until 16 384, no page)."""
+    level = level or "default"
+    if level != "default" or not effort:
+        return level
+    merged = next((o.get("merged_level") for o in effort.get("options", []) if o.get("is_default")), None)
+    if merged:
+        return merged
+    return "on" if effort.get("default_observed") == "on" else "default"
+
+
+def budget_rule(view: EngineView) -> str:
+    """How a run of this engine is limited: ``context`` = local, the whole
+    context window (no practical cap); ``engine`` = local with an unknown
+    context limit, no max_tokens sent (the engine's own maximum); ``cap`` =
+    every other run (paid, unknown price, subscription) keeps a token cap.
+    Time ends every run (``c.RUN_TIME_LIMIT_MIN``)."""
+    from app.services import reasoning_params
+
+    if view.locality != "local":
+        return "cap"
+    return "context" if reasoning_params.context_budget(view.runtime.max_context_len) else "engine"
+
+
+def run_max_tokens(view: EngineView, level: str | None, effort: dict[str, Any] | None) -> int | None:
+    """max_tokens one class A run sends. Local: context minus prompt room
+    (``None`` = send none, the context limit is unknown). Others: the paid
+    cap for the effective level, inside the context window."""
+    from app.services import reasoning_params
+
+    ctx = view.runtime.max_context_len
+    if view.locality == "local":
+        return reasoning_params.context_budget(ctx)
+    scaled = reasoning_params.max_tokens_for(effective_level(level, effort), c.PAID_BASE_MAX_TOKENS, ctx)
+    return min(scaled, c.PAID_MAX_TOKENS_CEILING)
+
+
+def worst_max_tokens(view: EngineView, effort: dict[str, Any] | None) -> int | None:
+    """The largest budget any offered level gets — the contestant's money
+    in the sheet is quoted for it, so the shown price is never too low
+    whichever level is picked (D4)."""
+    levels = offered_levels(effort or {}) or ["default"]
+    budgets = [b for b in (run_max_tokens(view, lv, effort) for lv in levels) if b is not None]
+    return max(budgets, default=None)
+
+
 # ── History (estimates + token guesses) ──────────────────────────────────
 
 
@@ -538,17 +591,32 @@ def estimate_a(hist: History, n_runs: int) -> dict[str, Any]:
     return {"min_s": lo * n_runs, "max_s": hi * n_runs, "basis": "default"}
 
 
-def estimate_a_effort(hist: History, n_runs: int, level: str, context_limit: int | None) -> dict[str, Any]:
-    """Deep levels can think until max_tokens (critic 32 S4): the upper end
-    then comes from the measured decode rate and the scaled budget."""
-    from app.services import reasoning_params
-
+def estimate_a_effort(hist: History, n_runs: int, level: str, expected_tokens: int) -> dict[str, Any]:
+    """Deep levels can think for long (critic 32 S4): the upper end then
+    comes from the measured decode rate and the tokens a run is expected
+    to write (:func:`expected_tokens`). One run never counts longer than
+    the time limit — that is where it ends."""
     base = estimate_a(hist, n_runs)
     if level in ("high", "max", "on") and hist.a_decode:
-        budget = reasoning_params.max_tokens_for(level, c.BASE_MAX_TOKENS, context_limit)
-        worst = budget / max(1.0, c.median(hist.a_decode) or 1.0)
-        return {"min_s": base["min_s"], "max_s": int(max(base["max_s"], worst * n_runs)), "basis": "probe"}
+        per_run = expected_tokens / max(1.0, c.median(hist.a_decode) or 1.0)
+        per_run = min(per_run, c.RUN_TIME_LIMIT_MIN * 60)
+        return {"min_s": base["min_s"], "max_s": int(max(base["max_s"], per_run * n_runs)), "basis": "probe"}
     return base
+
+
+def expected_tokens(view: EngineView, level: str | None, effort: dict[str, Any] | None) -> int:
+    """Tokens a run of ``level`` is expected to write, for the time
+    estimate. A capped run can write its whole cap. A local run has no cap
+    (the whole context): its estimate stays on the realistic budget a deep
+    level used to get (16k x effort factor), not on 250k tokens of
+    context — that would read "about 9 h" for a page that takes minutes."""
+    from app.services import reasoning_params
+
+    eff = effective_level(level, effort)
+    cap = run_max_tokens(view, level, effort)
+    if view.locality == "local" or cap is None:
+        return reasoning_params.max_tokens_for(eff, c.BASE_MAX_TOKENS, view.runtime.max_context_len)
+    return cap
 
 
 def estimate_b(hist: History, harness: str) -> dict[str, Any]:
@@ -640,12 +708,14 @@ def money_for(
     *,
     n_runs: int,
     run_class: str,
-    max_tokens: int = c.BASE_MAX_TOKENS,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """What one contestant costs. local/subscription: no money, the API list
     price only as a small comparison (D3). api_price: real money, quoted as
-    the worst case (every run up to its token budget) so the confirmed
-    amount is never too low (D4)."""
+    the worst case (every run up to its token budget, by default the paid
+    ceiling) so the confirmed amount is never too low (D4)."""
+    if max_tokens is None:
+        max_tokens = c.PAID_MAX_TOKENS_CEILING
     price = price_for(view.served_model, prices)
     kind = cost_kind_of(view, price)
     tok_in = c.median(hist.a_tokens_in) or DEFAULT_TOKENS_IN
@@ -804,7 +874,8 @@ async def contestant(
         "serving_since": view.serving_since,
         "harnesses": harness_options(view, hist, n_runs, blockers),
         "effort": effort,
-        "money": money_for(view, prices, hist, n_runs=n_runs if run_class == "A" else 1, run_class=run_class),
+        "money": money_for(view, prices, hist, n_runs=n_runs if run_class == "A" else 1, run_class=run_class,
+                           max_tokens=worst_max_tokens(view, effort)),
         "blockers": blockers,
         "cloud_build_unknown": view.locality == "cloud",
         "last_test": _last_for(view, lt or {}),
@@ -951,9 +1022,10 @@ async def build_plan(
         pick = picks[i]
         if pick["harness"] == "api":
             for level in pick["efforts"]:
-                estimates.append(estimate_a_effort(history[v.key], n_runs, level, v.runtime.max_context_len))
-            moneys.append(money_for(v, prices, history[v.key], n_runs=n_runs * len(pick["efforts"]),
-                                    run_class="A"))
+                estimates.append(estimate_a_effort(history[v.key], n_runs, effective_level(level, d["effort"]),
+                                                   expected_tokens(v, level, d["effort"])))
+                moneys.append(money_for(v, prices, history[v.key], n_runs=n_runs, run_class="A",
+                                        max_tokens=run_max_tokens(v, level, d["effort"])))
         else:
             estimates.append(estimate_b(history[v.key], pick["harness"]))
             moneys.append(money_for(v, prices, history[v.key], n_runs=1, run_class="B"))

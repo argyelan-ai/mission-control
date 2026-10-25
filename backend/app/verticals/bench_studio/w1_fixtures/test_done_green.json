@@ -169,6 +169,7 @@
             "thinking_key": "reasoning_effort",
             "temperature": 0.7,
             "max_tokens": 16384,
+            "max_tokens_rule": null,
             "system_prompt_sha": "4b1c0de000000000000000000000000000000000000000000000000000000000",
             "prompt_sha256": "d6e0ea9000000000000000000000000000000000000000000000000000000000",
             "brief_sha": null,
