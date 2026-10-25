@@ -290,3 +290,22 @@ async def test_plan_unknown_runtime_is_404(auth_client, session, engines):
     await seed_fleet(session)
     resp = await auth_client.get(f"/api/v1/bench/plan?runtime_id={uuid.uuid4()}")
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("display_name", "nodes", "expected"),
+    [
+        ("GX10 (box-a)", 1, "GX10"),
+        ("GX10 (box-a)", 2, "GX10 ×2"),
+        ("DGX Spark 1", 2, "DGX Spark ×2"),
+        ("Spark-2", 2, "Spark ×2"),
+        ("Box #3", 2, "Box ×2"),
+        ("DGX Spark", 1, "DGX Spark"),
+    ],
+)
+def test_device_name_keeps_a_number_that_is_part_of_the_model_name(display_name, nodes, expected):
+    """Only a separate box number is stripped for a duo: 'DGX Spark 1' is box
+    one, but the 10 in 'GX10' is the product name ('GX ×2' was wrong)."""
+    from types import SimpleNamespace
+
+    assert w1_plan.device_display_name([SimpleNamespace(display_name=display_name)], nodes) == expected

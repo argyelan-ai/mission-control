@@ -189,7 +189,7 @@ def provider_of(runtime: Runtime) -> tuple[str | None, str | None]:
     return None, None
 
 
-_TRAILING_NO = re.compile(r"[\s#_-]*\d+$")
+_TRAILING_NO = re.compile(r"[\s#_-]+\d+$")  # "Spark 2", not the 10 in "GX10"
 _PAREN = re.compile(r"\s*\([^)]*\)\s*")
 
 
