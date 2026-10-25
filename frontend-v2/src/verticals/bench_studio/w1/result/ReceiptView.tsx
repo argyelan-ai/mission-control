@@ -223,6 +223,22 @@ export function receiptRows(c: ContestantResult, r: Receipt, words: BenchWords):
     rows.push({ key: "html", label: words.tr("receipt.html"), value: bits.join(" · ") });
   }
 
+  if (r.lib_track === "three-local") {
+    // Lane lib:three-local: what MC served, what the page asked for, and that
+    // the page needs three.js from the internet anywhere else.
+    const subs = [];
+    if (r.three_version_mismatch && r.three_requested?.length)
+      subs.push(words.tr("receipt.libraryAsked", { versions: r.three_requested.join(", ") }));
+    if (r.three_import_map_injected) subs.push(words.tr("receipt.libraryMap"));
+    subs.push(words.tr("receipt.libraryOutside"));
+    rows.push({
+      key: "library",
+      label: words.tr("receipt.library"),
+      value: words.tr("receipt.libraryLocal", { lib: r.libraries_provided[0] ?? "three.js" }),
+      sub: subs.join(" · "),
+    });
+  }
+
   const recorded = r.recorded_at ? formatDate(r.recorded_at, loc) : null;
   rows.push({
     key: "method",

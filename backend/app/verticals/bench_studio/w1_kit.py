@@ -46,6 +46,8 @@ PUBLIC_AMBER = {
     "first_15_min": "measured in the first 15 min after start",
     "page_check_failed": "page did not load",
     "network_assets_blocked": "web fonts/images blocked (offline render)",
+    "three_version_differs": "page asked for another three.js version than the recorder serves",
+    "lib_tracks_mixed": "not every page used three.js (separate lanes)",
     "method_v0": "old method (v0)",
 }
 
@@ -93,16 +95,38 @@ def _effort_word(r: dict[str, Any]) -> str:
     return EFFORT_WORDS.get(requested, "default effort")
 
 
+def three_label(r: dict[str, Any]) -> str | None:
+    """'three.js r170' when the recorder served MC's three.js to this
+    contestant (lane lib:three-local), else None."""
+    rec = r.get("receipt") or {}
+    if c.lib_lane(rec) != c.LANE_THREE_LOCAL:
+        return None
+    provided = rec.get("libraries_provided") or []
+    return provided[0] if provided else "three.js"
+
+
 def chips(r: dict[str, Any], *, compact: bool = False) -> str:
     """'local · DGX Spark ×2 · raw API · default effort' (compact for a duo
-    pane: no device)."""
+    pane: no device). A page that got MC's three.js says so: '… · three.js r170'."""
     parts = [_where(r)]
     place = _place(r)
     if place and not compact:
         parts.append(place)
     parts.append(HARNESS_WORDS.get(r.get("harness") or "api", r.get("harness") or ""))
     parts.append(_effort_word(r))
+    parts.append(three_label(r) or "")
     return " · ".join(p for p in parts if p)
+
+
+def _three_disclosure(r: dict[str, Any], rec: dict[str, Any]) -> list[str]:
+    label = three_label(r)
+    if not label:
+        return []
+    asked = ", ".join(rec.get("three_requested") or [])
+    served = f"{label} served offline by the recorder"
+    if asked and rec.get("three_version_mismatch"):
+        served += f" (page asked for {asked})"
+    return [served, "page loads three.js from a CDN"]
 
 
 def _planned(r: dict[str, Any]) -> int:
@@ -291,6 +315,7 @@ def settings_blocks(detail: dict[str, Any]) -> list[str]:
             tail = [_effort_disclosure(r, rec)]
             if rec.get("network_blocked"):
                 tail.append("network blocked during render")
+            tail += _three_disclosure(r, rec)
             tail.append(f"method {detail.get('protocol_version', c.PROTOCOL_V1)}")
             tail.append(_date(detail.get("created_at")))
             cost = r["summary"]["cost"]

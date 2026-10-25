@@ -77,7 +77,16 @@ Stub marker: until A builds a route it returns its fixture with header
 - **Red `R6` / `needs_network`:** at least one blocked script/module — the page's own code never ran (e.g. `import * as THREE from 'three'` from a CDN), the video shows an empty scene. Also red when attempts > 0 but the sidecar did not report the type (older image): it cannot prove the scene drew. Kit files answer 409 like every red gate.
 - **Amber `network_assets_blocked`:** only fonts/images/stylesheets/other requests blocked — the scene still draws; printed in the settings text notes.
 - `page_check` is `"unknown"` (not `"loads"`) when a script was blocked: the recorder saw a frame, not the page's work.
-- A pinned local three.js for all contestants (backlog "three.js lokal") is the later fairness fix; R6 only makes the broken rule visible.
+- The pinned local three.js (lane `lib:three-local`, below) is the fairness fix: a three.js request on a known CDN is no longer blocked, so it never counts for R6.
+
+### Lane `lib:three-local` — MC serves one pinned three.js (25.10.2026)
+
+- **What:** `docker/mc-playwright/vendor/three/` holds ONE pinned three.js (r170: `three.module.min.js` verbatim, `three.global.min.js` = classic `window.THREE` built with esbuild, 17 addons from `examples/jsm`, MIT `LICENSE`, `MANIFEST.json` with sha256; rebuild with its `build.sh`). `record_three.py` answers requests for it on known CDNs (unpkg, jsDelivr, cdnjs, esm.sh, Skypack, jspm, threejs.org): module, classic global, the vendored addons (`three/addons/…` = `examples/jsm/…`) and classic `examples/js/…` stubs. A bare `import … from 'three'` without an import map gets MC's import map injected into the page. **Everything else stays blocked and counted** (other libraries, addons MC does not ship, the WebGPU build, any other host).
+- **Automatic, not opt-in:** the lane is set when the page asked for three.js — no flag, no extra tap in the two-tap flow. It is labelled everywhere instead: `/record` answers `lib_track` (`three-local` | `none`), `libraries_provided` (`["three.js r170"]`), `three_requested` (`["r160"]`), `three_version_mismatch`, `three_import_map_injected`; they travel into `entry.metrics` (`LIB_LANE_KEYS`) and the receipt (only when reported — old receipts keep their checksum). `ContestantResult.lib_track` mirrors it.
+- **Never compared silently:** a block with contestants in different lanes gets amber `lib_tracks_mixed` (printed), a page that asked for another version gets amber `three_version_differs`. The video/card chips and the result page chip say `three.js r170`; the settings text says `three.js r170 served offline by the recorder (page asked for r160) · page loads three.js from a CDN`.
+- **Served copy ≠ pasted copy:** `libraries_inlined` scans only the page's own HTML, so the served file never counts as pasted.
+- **Prompt variants:** a "with three.js" prompt should load exactly the pinned version (no mismatch): import map `"three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"`, `"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"`, and name the allowed addons. The system prompt is unchanged (`system_prompt_sha` stays).
+- **Render cost (measured 25.10.2026, Mac mini M4, Docker, SwiftShader software GL, 2880×1620):** simple lit cube 56 ms/frame (20 s video ≈ 34 s); 1 600 instanced shadowed boxes + bloom 871 ms/frame (20 s video ≈ 8.7 min, the capture cap is 900 s — a heavy scene longer than ~20 s times out).
 
 ## 3. Behaviour rules every package keeps
 

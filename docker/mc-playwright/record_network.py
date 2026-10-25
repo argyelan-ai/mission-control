@@ -14,9 +14,15 @@ network at all, except the page document itself and inline schemes:
   3. ``record_network_guard.js`` (init script) stubs WebRTC, which neither
      routing nor an HTTP proxy covers, and counts attempts.
 
+One exception, decided per request in ``route_decision``: a request for
+three.js on a known CDN is answered with MC's own pinned copy
+(record_three.py, lane ``lib:three-local``) — never counted as blocked,
+never fetched from the network.
+
 ``detect_inlined_libraries`` scans the HTML for vendored library banners so a
 page that pasted three.js is labelled as such (P2 V2), not compared as if it
-were hand-written.
+were hand-written. The copy MC serves is not in the page's HTML, so it is
+never counted as pasted.
 
 Unit tests: cd backend && python -m pytest ../docker/mc-playwright/tests/test_record_network.py
 """
@@ -25,6 +31,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from urllib.parse import urlparse
+
+from record_three import LocalThree
 
 # Schemes that never leave the browser process.
 RECORD_ALLOWED_SCHEMES = frozenset({"data", "blob", "about"})
@@ -72,6 +80,9 @@ class RecordNetworkGuard:
         self.blocked_scripts = 0
         self._blocked: list[str] = []
 
+    def is_page(self, url: str) -> bool:
+        return _without_fragment(url) == self._page
+
     def allow(self, url: str, resource_type: str | None = None) -> bool:
         """``resource_type`` = Playwright's ``request.resource_type`` (None
         for channels without one: WebSocket, WebRTC)."""
@@ -99,6 +110,32 @@ class RecordNetworkGuard:
             "network_blocked_scripts": self.blocked_scripts,
             "blocked_requests": list(self._blocked),
         }
+
+
+#: Headers on a locally served three.js file: a module script fetched from a
+#: file:// page (origin "null") needs CORS; never cached between recordings.
+LOCAL_LIBRARY_HEADERS = {"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"}
+
+
+def route_decision(
+    url: str,
+    resource_type: str | None,
+    *,
+    guard: RecordNetworkGuard,
+    three: LocalThree,
+    page_body: str | None = None,
+) -> tuple:
+    """What the recorder's route handler does with one request:
+    ``("fulfill", body_bytes, content_type)`` — the page itself with an
+    injected import map, or MC's local three.js; ``("continue",)`` — the
+    page document as it is, inline schemes; ``("abort",)`` — everything
+    else (counted by the guard)."""
+    if page_body is not None and guard.is_page(url):
+        return ("fulfill", page_body.encode("utf-8"), "text/html; charset=utf-8")
+    served = three.serve(url)
+    if served is not None:
+        return ("fulfill", served[0], served[1])
+    return ("continue",) if guard.allow(url, resource_type) else ("abort",)
 
 
 def record_proxy_settings(page_url: str) -> dict:

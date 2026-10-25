@@ -188,6 +188,11 @@
             "network_attempts": 0,
             "network_blocked_scripts": null,
             "libraries_inlined": [],
+            "lib_track": null,
+            "libraries_provided": [],
+            "three_requested": null,
+            "three_version_mismatch": null,
+            "three_import_map_injected": null,
             "html_bytes": 17204,
             "quiet_box": "ok",
             "serving_age_min": 1410,
@@ -199,6 +204,7 @@
               "engine_version": "hand_made_runtime"
             }
           },
+          "lib_track": "none",
           "receipt_version": 1,
           "receipt_checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         }

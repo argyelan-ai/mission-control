@@ -4156,7 +4156,9 @@
       "first_15_min": "measured in the first 15 min after start",
       "page_check_failed": "page did not load",
       "needs_network": "The page tried to load a library from the internet (blocked) — the scene stayed empty",
-      "network_assets_blocked": "page tried to load fonts or images from the internet (blocked)"
+      "network_assets_blocked": "page tried to load fonts or images from the internet (blocked)",
+      "three_version_differs": "page asked for a different three.js version than the one MC serves",
+      "lib_tracks_mixed": "Separate lanes: only some pages got three.js from MC"
     },
     "range": "{min}–{max}",
     "medianOf": "median of {n}",
@@ -4541,7 +4543,7 @@
       "okR3": "No $ price on a local or subscription run",
       "okR4": "No private details in video, card or texts",
       "okR5": "Fair comparison: classes apart, same prompt",
-      "okR6": "Page works offline: no library from the internet"
+      "okR6": "Page works offline: no library from the internet (MC serves three.js locally)"
     },
     "numbers": {
       "label": "Numbers",
@@ -4632,7 +4634,12 @@
       "harvestedAt": "numbers loaded on {date}",
       "notHarvested": "numbers not loaded yet",
       "version": "Receipt",
-      "versionValue": "version {v}"
+      "versionValue": "version {v}",
+      "library": "Library",
+      "libraryLocal": "{lib} · served locally by MC",
+      "libraryAsked": "page asked for {versions}",
+      "libraryMap": "MC added the import map",
+      "libraryOutside": "Outside the recording the page loads three.js from the internet"
     },
     "kit": {
       "title": "X-Kit",
@@ -4667,6 +4674,9 @@
       "copyBlock": "Copy block {i}",
       "noFooter": "No handle set: video and image have no footer (MC_BENCH_FOOTER in the .env).",
       "threadWithLink": "How to post: main post = your words + video · reply 1 = image + alt text · then one reply per settings block · last the link."
+    },
+    "lane": {
+      "threeLocal": "{lib} from MC"
     }
   },
   "heads": {

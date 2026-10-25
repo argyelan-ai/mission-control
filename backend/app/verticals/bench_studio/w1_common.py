@@ -214,3 +214,16 @@ def blocked_network(record: dict[str, Any]) -> str | None:
     if scripts is None or scripts > 0:
         return "script"
     return "assets"
+
+
+#: Library lanes (``lib:three-local``, 25.10.2026): the recorder answered the
+#: page's CDN request for three.js with MC's one pinned copy instead of
+#: blocking it. Record keys: orchestrator.LIB_LANE_KEYS.
+LANE_THREE_LOCAL = "three-local"
+LANE_NONE = "none"
+
+
+def lib_lane(record: dict[str, Any] | None) -> str:
+    """The contestant's library lane. A record from before the lane existed
+    had no three.js served (everything was blocked), so it is ``none``."""
+    return (record or {}).get("lib_track") or LANE_NONE

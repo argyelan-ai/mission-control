@@ -106,6 +106,14 @@ class RecordResponse(BaseModel):
     network_blocked_scripts: Optional[int] = None
     blocked_requests: List[str] = Field(default_factory=list)
     libraries_inlined: List[str] = Field(default_factory=list)
+    # lib:three-local (record_three.py): the page asked a CDN for three.js and
+    # the recorder served its own pinned copy. None = this sidecar did not
+    # report a lane (older image); "none" = nothing was served.
+    lib_track: Optional[str] = None
+    libraries_provided: List[str] = Field(default_factory=list)
+    three_requested: Optional[List[str]] = None  # versions the page asked for ("r160")
+    three_version_mismatch: Optional[bool] = None
+    three_import_map_injected: Optional[bool] = None
     html_bytes: Optional[int] = None
     # page_check (W1): None = not checked (no thumbnail), True = blank page.
     page_blank: Optional[bool] = None
@@ -123,7 +131,9 @@ class RecordResponse(BaseModel):
 #:   re-render gives the same video.
 #: - page_check: /record answers ``page_blank`` (deterministic: a near
 #:   uniform mid frame and no visible text = blank page).
-RENDERER_FEATURES = ("branding_effort", "bench_card_v1", "seeded_random", "page_check")
+#: - three_local: /record serves a pinned three.js for CDN requests and
+#:   answers ``lib_track`` / ``libraries_provided`` (lane lib:three-local).
+RENDERER_FEATURES = ("branding_effort", "bench_card_v1", "seeded_random", "page_check", "three_local")
 
 
 class BrandingModelSpec(BaseModel):

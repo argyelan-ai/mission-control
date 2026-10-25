@@ -71,11 +71,14 @@ from media import (
     resolve_contained_path,
 )
 from record_network import (
+    LOCAL_LIBRARY_HEADERS,
     RecordNetworkGuard,
     detect_inlined_libraries,
     load_record_network_guard_script,
     record_proxy_settings,
+    route_decision,
 )
+from record_three import LocalThree, inject_import_map, needs_import_map
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mc.playwright_service")
@@ -1184,15 +1187,28 @@ async def record(req: RecordRequest):
     # proxy catches whatever routing does not see, the init script stubs
     # WebRTC, service workers are off (they would bypass routing).
     guard = RecordNetworkGuard(req.target_url)
+    # lib:three-local: a CDN request for three.js is answered with the pinned
+    # local copy (record_three.py) instead of being blocked. A bare
+    # `import … from 'three'` without an import map gets MC's map injected.
+    three = LocalThree()
+    page_body: str | None = None
     libraries: list[str] = []
     html_bytes: int | None = None
     if req.html_path:
         html_text = html.read_text(encoding="utf-8", errors="replace")
         html_bytes = html.stat().st_size
         libraries = detect_inlined_libraries(html_text)
+        if three.available and needs_import_map(html_text):
+            page_body = inject_import_map(html_text)
+            three.import_map_injected = True
 
     async def _route(route):
-        if guard.allow(route.request.url, route.request.resource_type):
+        action = route_decision(route.request.url, route.request.resource_type,
+                                guard=guard, three=three, page_body=page_body)
+        if action[0] == "fulfill":
+            await route.fulfill(status=200, body=action[1], content_type=action[2],
+                                headers=LOCAL_LIBRARY_HEADERS)
+        elif action[0] == "continue":
             await route.continue_()
         else:
             await route.abort("blockedbyclient")
@@ -1268,14 +1284,15 @@ async def record(req: RecordRequest):
             await browser.close()
 
     net = guard.report()
+    lib = three.report()
     page_blank = is_blank_page(
         screenshot_path.stat().st_size if screenshot_path.exists() else None,
         int(seen.get("text") or 0), int(seen.get("media") or 0),
     )
     logger.info(
-        "record: %s -> %s (%ds, %d frames @ %dfps, %dx%d) network_attempts=%d libraries=%s",
+        "record: %s -> %s (%ds, %d frames @ %dfps, %dx%d) network_attempts=%d libraries=%s lib=%s",
         req.target_url, video_path, req.duration_s, n_frames, RECORD_FPS,
-        RECORD_OUTPUT_WIDTH, RECORD_OUTPUT_HEIGHT, net["network_attempts"], libraries,
+        RECORD_OUTPUT_WIDTH, RECORD_OUTPUT_HEIGHT, net["network_attempts"], libraries, lib,
     )
     if net["network_attempts"]:
         logger.info("record: blocked %s", net["blocked_requests"])
@@ -1290,6 +1307,11 @@ async def record(req: RecordRequest):
         network_blocked_scripts=net["network_blocked_scripts"],
         blocked_requests=net["blocked_requests"],
         libraries_inlined=libraries,
+        lib_track=lib["lib_track"],
+        libraries_provided=lib["libraries_provided"],
+        three_requested=lib.get("three_requested"),
+        three_version_mismatch=lib.get("three_version_mismatch"),
+        three_import_map_injected=lib.get("three_import_map_injected"),
         html_bytes=html_bytes,
         page_blank=page_blank,
     )

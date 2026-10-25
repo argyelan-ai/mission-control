@@ -114,7 +114,13 @@ export function useBenchWords() {
       }
     };
 
-    return { reason, gateReason, harness, runClass, level, effort, money, locale, ts, tr };
+    /** Lane chip: "three.js r170 von MC" when the recorder served MC's three.js. */
+    const lane = (c: ContestantResult): string | null =>
+      c.lib_track === "three-local"
+        ? tr("lane.threeLocal", { lib: c.receipt?.libraries_provided?.[0] ?? "three.js" })
+        : null;
+
+    return { reason, gateReason, harness, runClass, level, effort, money, lane, locale, ts, tr };
   }, [ts, tr, locale]);
 }
 

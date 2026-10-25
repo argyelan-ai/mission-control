@@ -139,6 +139,11 @@
             "network_attempts": null,
             "network_blocked_scripts": null,
             "libraries_inlined": [],
+            "lib_track": null,
+            "libraries_provided": [],
+            "three_requested": null,
+            "three_version_mismatch": null,
+            "three_import_map_injected": null,
             "html_bytes": null,
             "quiet_box": null,
             "serving_age_min": null,
@@ -152,6 +157,7 @@
               "spec_decoding": "no_recipe"
             }
           },
+          "lib_track": "none",
           "receipt_version": 1,
           "receipt_checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
