@@ -106,6 +106,22 @@ describe("TestList — sections and rows (P7)", () => {
     expect(screen.queryByText("Pick a test on the left")).toBeNull();
   });
 
+  it("never lays out columns of its own: it also lives in the 280 px column beside a result", async () => {
+    // 25.10.: a viewport grid (list 320–400 px + a "pick a test" column) inside
+    // the result page's 280 px column spilled over the video. The list sizes
+    // itself by its container only.
+    renderList();
+    await screen.findAllByTestId("bench-test-row");
+    const root = screen.getByTestId("bench-test-list");
+    expect(root.className).toMatch(/(^|\s)@container(\s|$)/);
+    const all = [root, ...Array.from(root.querySelectorAll<HTMLElement>("*"))];
+    const viewportColumns = all.filter((el) =>
+      /(^|\s)(sm|md|lg|xl|2xl):(grid|grid-cols-\S+)(\s|$)/.test(el.getAttribute("class") ?? ""),
+    );
+    expect(viewportColumns).toEqual([]);
+    expect(root.querySelector("aside")).toBeNull();
+  });
+
   it("the prompt library sits in the header, next to 'Test a model'", async () => {
     renderList();
     await screen.findAllByTestId("bench-test-row");

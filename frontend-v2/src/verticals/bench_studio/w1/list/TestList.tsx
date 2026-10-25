@@ -11,9 +11,12 @@
  * ChallengesTab list.
  *
  * Desktop: one readable column. Master–detail lives on the result page
- * (/bench/r/<id>, a shareable URL): from 1536 px it shows this list beside
- * the result and the open test's row is marked (aria-current). The list
- * page itself has nothing selected, so it gets no empty second column.
+ * (/bench/r/<id>, a shareable URL): from 1536 px it shows this list in a
+ * 280 px column beside the result and the open test's row is marked
+ * (aria-current). So the list never lays out columns of its own and sizes
+ * its header by its container (@container), never by the viewport — a
+ * viewport grid here once spilled the list and a "pick a test" column
+ * across the result (25.10.).
  *
  * Words: state/section/wait/abort/gate words come from `benchShared`
  * (contract), everything else from `benchHome`.
@@ -335,30 +338,35 @@ export function TestList() {
   const lastDay = day(base.data?.last_at ?? null, locale);
   const testHref = benchTestHref({ trigger: "list" });
 
-  // Phone: two rows in a grid — title | Modell testen, then count | library.
-  // Desktop: one bar — title … library · Modell testen, the count below.
+  // Narrow (phone, or the 280 px column beside a result): two rows —
+  // title | Modell testen (the button wraps under the title when the room
+  // is too small, never over it), then count | library. Wide: one bar —
+  // title … library · Modell testen, the count below. Container queries,
+  // not viewport breakpoints: the list must lay out by the room it gets.
   const header = (
     <div
       data-testid="bench-list-header"
-      className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 lg:flex lg:flex-wrap"
+      className="flex flex-wrap items-center gap-x-3 gap-y-1"
     >
-      <h1 className="display text-2xl font-semibold lg:order-1 lg:flex-1" style={{ color: C.textPrimary }}>
+      <h1 className="display text-2xl font-semibold flex-1 @2xl:order-1" style={{ color: C.textPrimary }}>
         {t("title")}
       </h1>
       {!isEmpty && base.isSuccess && (
         <Link
           href={testHref}
           data-testid="bench-list-test"
-          className={`${PRIMARY_BTN} lg:order-3`}
+          className={`${PRIMARY_BTN} @2xl:order-3`}
           style={{ background: C.accent, color: C.onAccent }}
         >
           <FlaskConical size={16} aria-hidden />
           {t("testModel")}
         </Link>
       )}
+      {/* Narrow only: ends the title row. */}
+      <span aria-hidden className="basis-full h-0 @2xl:hidden" />
       {base.isSuccess && total > 0 && (
         <p
-          className="text-sm tabular-nums min-w-0 lg:order-4 lg:basis-full"
+          className="text-sm tabular-nums flex-1 min-w-0 @2xl:order-4 @2xl:basis-full"
           style={{ color: C.textSecondary }}
           data-testid="bench-list-lead"
         >
@@ -369,7 +377,7 @@ export function TestList() {
         <Link
           href="/bench?view=library"
           data-testid="bench-list-library"
-          className="col-start-2 justify-self-end inline-flex items-center gap-2 h-11 px-3 -mr-3 rounded-md text-sm font-medium whitespace-nowrap hover:bg-[var(--color-bg-hover)] lg:order-2 lg:mr-0 lg:border"
+          className="ml-auto inline-flex items-center gap-2 h-11 px-3 -mr-3 rounded-md text-sm font-medium whitespace-nowrap hover:bg-[var(--color-bg-hover)] @2xl:order-2 @2xl:mr-0 @2xl:border"
           style={{ color: C.textPrimary, borderColor: C.border }}
         >
           <BookOpen size={16} aria-hidden />
@@ -381,7 +389,7 @@ export function TestList() {
 
   if (isEmpty) {
     return (
-      <div data-testid="bench-test-list" className="flex flex-col gap-8">
+      <div data-testid="bench-test-list" className="@container flex flex-col gap-8">
         {header}
         <div className="flex flex-col items-start gap-3 max-w-md pt-8">
           <FlaskConical size={32} aria-hidden style={{ color: C.textMuted }} />
@@ -404,7 +412,7 @@ export function TestList() {
   const noHit = activeFilters.length > 0 && filtered.isSuccess && (data?.items.length ?? 0) === 0;
 
   return (
-    <div data-testid="bench-test-list" className="max-w-4xl">
+    <div data-testid="bench-test-list" className="@container max-w-4xl">
       <div className="flex flex-col gap-4 min-w-0">
         {header}
 
