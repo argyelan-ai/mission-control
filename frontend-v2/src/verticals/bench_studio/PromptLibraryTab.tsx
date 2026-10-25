@@ -12,6 +12,7 @@ import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { benchTestHref } from "@/lib/benchLinks";
+import { PROMPT_TEMPLATES_KEY, filterTemplates, templateTags } from "./promptFilter";
 import type { BenchChallenge, PromptTemplate } from "./types";
 
 /** Prompt library (P8, kept): "Testen mit…" opens the W1 test sheet with
@@ -28,7 +29,7 @@ export function PromptLibraryTab() {
   const [deleteTarget, setDeleteTarget] = useState<PromptTemplate | null>(null);
 
   const { data: templates } = useQuery({
-    queryKey: ["prompt-templates"],
+    queryKey: PROMPT_TEMPLATES_KEY,
     queryFn: benchApi.promptTemplates.list,
   });
   // Usage history: challenges referencing a template via the frozen-copy FK.
@@ -41,24 +42,13 @@ export function PromptLibraryTab() {
     mutationFn: (id: string) => benchApi.promptTemplates.remove(id),
     onSuccess: () => {
       notify.success(t("notifyTemplateDeleted"));
-      qc.invalidateQueries({ queryKey: ["prompt-templates"] });
+      qc.invalidateQueries({ queryKey: PROMPT_TEMPLATES_KEY });
     },
     onError: () => notify.error(t("notifyDeleteFailed")),
   });
 
-  const allTags = useMemo(
-    () => Array.from(new Set((templates ?? []).flatMap((t) => t.tags ?? []))).sort(),
-    [templates]
-  );
-
-  const filtered = (templates ?? []).filter((t) => {
-    const q = search.trim().toLowerCase();
-    const matchesSearch =
-      !q || t.title.toLowerCase().includes(q) || t.body.toLowerCase().includes(q);
-    const matchesTag = !activeTag || (t.tags ?? []).includes(activeTag);
-    return matchesSearch && matchesTag;
-  });
-
+  const allTags = useMemo(() => templateTags(templates), [templates]);
+  const filtered = filterTemplates(templates, search, activeTag);
 
   const usageByTemplate = useMemo(() => {
     const map: Record<string, BenchChallenge[]> = {};
@@ -246,7 +236,7 @@ function TemplateEditor({
     },
     onSuccess: () => {
       notify.success(editing ? t("notifyTemplateUpdated") : t("notifyTemplateCreated"));
-      qc.invalidateQueries({ queryKey: ["prompt-templates"] });
+      qc.invalidateQueries({ queryKey: PROMPT_TEMPLATES_KEY });
       onClose();
     },
     onError: () => notify.error(t("notifySaveFailed")),

@@ -138,7 +138,9 @@ async def test_v0_agent_challenge_reads_as_red_with_unknowns(auth_client, sessio
     await session.commit()
     resp = await auth_client.get(f"{BASE}/tests/{ch.id}")
     d = s.BenchTestDetail.model_validate(resp.json())
-    assert d.protocol_version == "v0" and d.state == "done_missing" and d.section == "needs_look"
+    # A pre-W1 test is history: its missing numbers stay in the pill, but it
+    # never lands in "Braucht Blick" (live 25.10.: 34 of 41 rows were v0).
+    assert d.protocol_version == "v0" and d.state == "done_missing" and d.section == "done"
     assert d.state_reason.code == "numbers_missing" and d.state_reason.params["fields"] == ["tokens_out"]
     b = d.blocks[0].contestants[0]
     assert d.blocks[0].run_class == "B" and b.summary.decode_tok_s is None and b.summary.ttft_ms is None
@@ -150,6 +152,24 @@ async def test_v0_agent_challenge_reads_as_red_with_unknowns(auth_client, sessio
     assert ("amber", "single_run") in codes
     assert d.gate.status == "red" and "harvest" in d.allowed and "kit" not in d.allowed
     assert (await session.exec(select(BenchReceipt))).first() is None
+
+
+@pytest.mark.asyncio
+async def test_v0_tests_never_need_a_look_v1_ones_do(auth_client, session, engines):
+    """"Braucht Blick" holds only W1 tests: an old aborted (v0) test sits in
+    "Fertig" with its "Abgebrochen" pill, a W1 one that failed stays in view."""
+    old = BenchChallenge(title="Old abort", prompt_text="p", status="failed",
+                         error="all entries failed during generation")
+    new = BenchChallenge(title="New abort", prompt_text="p", status="failed", error="all_runs_failed",
+                         protocol_version="v1")
+    session.add(old)
+    session.add(new)
+    await session.commit()
+    body = (await auth_client.get(f"{BASE}/tests")).json()
+    by_id = {i["id"]: i for i in body["items"]}
+    assert by_id[str(old.id)]["state"] == "aborted" and by_id[str(old.id)]["section"] == "done"
+    assert by_id[str(new.id)]["state"] == "aborted" and by_id[str(new.id)]["section"] == "needs_look"
+    assert body["counts"]["needs_look"] == 1
 
 
 @pytest.mark.asyncio

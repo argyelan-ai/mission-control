@@ -43,7 +43,30 @@ vi.mock("../../api", async (importOriginal) => {
   };
 });
 
+// The prompt picker reads the same library as the Prompt-Bibliothek page.
+const lib = vi.hoisted(() => ({ list: vi.fn() }));
+vi.mock("@/verticals/bench_studio/api", () => ({
+  benchApi: { promptTemplates: { list: lib.list } },
+}));
+
 import { TestSheetHost } from "../TestSheetHost";
+import type { PromptTemplate } from "../../../types";
+
+const tpl = (id: string, title: string, body: string, tags: string[]): PromptTemplate => ({
+  id,
+  title,
+  body,
+  tags,
+  created_at: "2026-07-11T09:00:00Z",
+  updated_at: "2026-07-11T09:00:00Z",
+});
+const PAGODA_ID = "66666666-6666-4666-8666-666666666666";
+const BALLS_ID = "77777777-7777-4777-8777-777777777777";
+const LIBRARY: PromptTemplate[] = [
+  tpl(PAGODA_ID, "Pagoda Garden", "A pagoda in a garden", ["3d", "scene"]),
+  tpl(BALLS_ID, "Bouncing balls", "100 bouncing balls in one index.html", ["physics", "animation"]),
+  tpl("88888888-8888-4888-8888-888888888888", "Snake", "a snake game", ["game", "animation"]),
+];
 
 function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
@@ -79,6 +102,7 @@ beforeEach(() => {
   api.plan.mockReset().mockResolvedValue(clone(planStandardFixture));
   api.contestants.mockReset().mockResolvedValue(clone(contestantsFixture));
   api.create.mockReset().mockResolvedValue(clone(testRunningFixture));
+  lib.list.mockReset().mockResolvedValue(clone(LIBRARY));
 });
 
 describe("TestSheetHost — opens from the URL", () => {
@@ -96,8 +120,11 @@ describe("TestSheetHost — opens from the URL", () => {
       expect.objectContaining({ runtimeId: "11111111-1111-4111-8111-111111111111" }),
     );
     expect(within(d).getByText("DGX Spark ×2 · local")).toBeInTheDocument();
-    expect(within(d).getByText("Standard · Pagoda Garden")).toBeInTheDocument();
+    // Test (preset) and Prompt are two rows: the prompt is chosen on its own.
+    expect(within(d).getByTestId("bench-sheet-test")).toHaveTextContent("Standard");
+    expect(within(d).getByTestId("bench-sheet-test")).not.toHaveTextContent("Pagoda Garden");
     expect(within(d).getByText("3 runs · same prompt")).toBeInTheDocument();
+    expect(within(d).getByTestId("bench-sheet-prompt")).toHaveTextContent("Pagoda Garden");
     // Harness chips from the runtime binding, effort chips from the real probe.
     expect(within(d).getByRole("button", { name: "Raw API" })).toHaveAttribute("aria-pressed", "true");
     expect(within(d).getByRole("button", { name: "omp (local agent)" })).toHaveAttribute("aria-pressed", "false");
@@ -175,7 +202,7 @@ describe("TestSheetHost — effort", () => {
     const user = userEvent.setup();
     renderHost(`${fromRuntimes}&preset=effort_ladder`);
     const d = await sheet();
-    await within(d).findByText("Effort ladder · Pagoda Garden");
+    await within(d).findByText("Effort ladder");
     expect(within(d).getByText("3 levels × 3 runs")).toBeInTheDocument();
     expect(within(d).getByText(/3 selected · several possible/)).toBeInTheDocument();
     for (const name of ["off", "high (default)", "max"]) {
@@ -426,7 +453,7 @@ describe("TestSheetHost — presets", () => {
     const user = userEvent.setup();
     renderHost(fromRuntimes);
     const d = await sheet();
-    await within(d).findByText("Standard · Pagoda Garden");
+    await within(d).findByTestId("bench-sheet-prompt");
     await user.click(within(d).getByRole("button", { name: "Choose another test" }));
     await user.click(await within(d).findByRole("button", { name: /^Quick look/ }));
     await waitFor(() =>
@@ -440,5 +467,102 @@ describe("TestSheetHost — presets", () => {
     const d = await sheet();
     await user.click(await within(d).findByRole("button", { name: "Choose another test" }));
     expect(within(d).queryByRole("button", { name: /^Again/ })).not.toBeInTheDocument();
+  });
+});
+
+/** The plan echoes the picked prompt like the server does (default_prompt). */
+function planFor(q: { templateId?: string | null; preset?: string | null; rerunOf?: string | null }): BenchPlan {
+  const plan = clone(planStandardFixture);
+  const picked = q.rerunOf ? null : LIBRARY.find((x) => x.id === q.templateId);
+  if (picked) {
+    plan.preset.prompt = { ...plan.preset.prompt, template_id: picked.id, title: picked.title };
+  }
+  if (q.preset === "quick") plan.preset = { ...plan.preset, id: "quick", n_runs: 1 };
+  return plan;
+}
+
+describe("TestSheetHost — prompt from the library", () => {
+  beforeEach(() => {
+    api.plan.mockImplementation(async (q) => planFor(q));
+  });
+
+  it("lists the library with search and tags; a pick reloads the plan and Start sends it", async () => {
+    const user = userEvent.setup();
+    renderHost(fromRuntimes);
+    const d = await sheet();
+    await user.click(await within(d).findByRole("button", { name: "Choose another prompt" }));
+    // The library, with the current prompt marked.
+    expect(await within(d).findByRole("button", { name: /Bouncing balls/ })).toBeInTheDocument();
+    expect(within(d).getByRole("button", { name: /Pagoda Garden/ })).toHaveAttribute("aria-current", "true");
+    expect(within(d).getByRole("button", { name: /Snake/ })).toBeInTheDocument();
+    // Search narrows by title or text.
+    await user.type(within(d).getByRole("searchbox", { name: "Search prompts" }), "index.html");
+    expect(within(d).queryByRole("button", { name: /Snake/ })).not.toBeInTheDocument();
+    expect(within(d).getByRole("button", { name: /Bouncing balls/ })).toBeInTheDocument();
+    await user.clear(within(d).getByRole("searchbox", { name: "Search prompts" }));
+    // A tag narrows to its prompts.
+    await user.click(within(d).getByRole("button", { name: "#game" }));
+    expect(within(d).queryByRole("button", { name: /Bouncing balls/ })).not.toBeInTheDocument();
+    await user.click(within(d).getByRole("button", { name: "#game" }));
+    await user.click(within(d).getByRole("button", { name: /Bouncing balls/ }));
+    // Back on the main view: the plan is read with the template, the row says so.
+    await waitFor(() =>
+      expect(api.plan).toHaveBeenLastCalledWith(expect.objectContaining({ templateId: BALLS_ID })),
+    );
+    await waitFor(() => expect(within(d).getByTestId("bench-sheet-prompt")).toHaveTextContent("Bouncing balls"));
+    await user.click(await startButton());
+    await waitFor(() => expect(api.create).toHaveBeenCalledTimes(1));
+    expect(api.create.mock.calls[0][0]).toMatchObject({ prompt_template_id: BALLS_ID });
+  });
+
+  it("keeps the picked prompt when the preset changes", async () => {
+    const user = userEvent.setup();
+    renderHost(fromRuntimes);
+    const d = await sheet();
+    await user.click(await within(d).findByRole("button", { name: "Choose another prompt" }));
+    await user.click(await within(d).findByRole("button", { name: /Bouncing balls/ }));
+    await waitFor(() => expect(within(d).getByTestId("bench-sheet-prompt")).toHaveTextContent("Bouncing balls"));
+    await user.click(within(d).getByRole("button", { name: "Choose another test" }));
+    await user.click(await within(d).findByRole("button", { name: /^Quick look/ }));
+    await waitFor(() =>
+      expect(api.plan).toHaveBeenLastCalledWith(
+        expect.objectContaining({ preset: "quick", templateId: BALLS_ID }),
+      ),
+    );
+    await waitFor(() => expect(within(d).getByTestId("bench-sheet-test")).toHaveTextContent("Quick look"));
+    expect(within(d).getByTestId("bench-sheet-prompt")).toHaveTextContent("Bouncing balls");
+  });
+
+  it("a library link (Testen mit…) arrives with its prompt already chosen", async () => {
+    renderHost(benchTestHref({ templateId: BALLS_ID, trigger: "template" }).split("?")[1]);
+    const d = await sheet();
+    await waitFor(() => expect(within(d).getByTestId("bench-sheet-prompt")).toHaveTextContent("Bouncing balls"));
+    expect(api.plan).toHaveBeenCalledWith(expect.objectContaining({ templateId: BALLS_ID }));
+  });
+
+  it("another prompt on a re-run makes it a fresh test with that prompt", async () => {
+    const user = userEvent.setup();
+    renderHost(benchTestHref({ rerunOf: "old-test", trigger: "rerun" }).split("?")[1]);
+    const d = await sheet();
+    await user.click(await within(d).findByRole("button", { name: "Choose another prompt" }));
+    await user.click(await within(d).findByRole("button", { name: /Bouncing balls/ }));
+    await waitFor(() =>
+      expect(api.plan).toHaveBeenLastCalledWith(
+        expect.objectContaining({ templateId: BALLS_ID, rerunOf: null, preset: "standard" }),
+      ),
+    );
+  });
+
+  it("an empty library says so and points to the library page", async () => {
+    const user = userEvent.setup();
+    lib.list.mockResolvedValue([]);
+    renderHost(fromRuntimes);
+    const d = await sheet();
+    await user.click(await within(d).findByRole("button", { name: "Choose another prompt" }));
+    expect(await within(d).findByText(/No prompts in the library yet/)).toBeInTheDocument();
+    expect(within(d).getByRole("link", { name: /Open the prompt library/ })).toHaveAttribute(
+      "href",
+      "/bench?view=library",
+    );
   });
 });

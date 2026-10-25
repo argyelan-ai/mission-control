@@ -6,10 +6,17 @@
  * Sections Läuft · Braucht Blick · Fertig (GET /bench/tests, human states
  * only), every row a link to its result page (benchResultHref), header
  * button "Modell testen" into the test sheet (benchTestHref, trigger
- * "list"), filters model · device · harness · class (server-side query),
- * archive toggle and the way to the prompt library. Desktop adds the
- * mockup's centre column: "Wähle links einen Test" + "Laufendes Modell
- * testen". Replaces the legacy ChallengesTab list.
+ * "list") with the prompt library next to it, filters model · device ·
+ * harness · class (server-side query), archive toggle. Replaces the legacy
+ * ChallengesTab list.
+ *
+ * Desktop: one readable column. Master–detail lives on the result page
+ * (/bench/r/<id>, a shareable URL): from 1536 px it shows this list in a
+ * 280 px column beside the result and the open test's row is marked
+ * (aria-current). So the list never lays out columns of its own and sizes
+ * its header by its container (@container), never by the viewport — a
+ * viewport grid here once spilled the list and a "pick a test" column
+ * across the result (25.10.).
  *
  * Words: state/section/wait/abort/gate words come from `benchShared`
  * (contract), everything else from `benchHome`.
@@ -19,6 +26,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
 import { Archive, BookOpen, ChevronDown, FlaskConical, Server, X } from "lucide-react";
@@ -115,7 +123,7 @@ function useRowStatus() {
   };
 }
 
-function TestRow({ item }: { item: BenchTestListItem }) {
+function TestRow({ item, current }: { item: BenchTestListItem; current: boolean }) {
   const t = useTranslations("benchHome");
   const { ts } = useBenchWords();
   const locale = useLocale();
@@ -129,7 +137,9 @@ function TestRow({ item }: { item: BenchTestListItem }) {
       <Link
         href={benchResultHref(item.id)}
         data-testid="bench-test-row"
+        aria-current={current ? "page" : undefined}
         className="block -mx-2 px-2 py-3 rounded-lg transition-colors hover:bg-[var(--color-bg-hover)]"
+        style={current ? { background: C.bgHover } : undefined}
       >
         <div className="flex items-baseline justify-between gap-3">
           <span className="text-base font-medium truncate" style={{ color: C.textPrimary }}>
@@ -264,6 +274,7 @@ export function TestList() {
   const t = useTranslations("benchHome");
   const { ts } = useBenchWords();
   const locale = useLocale();
+  const pathname = usePathname();
   const [filters, setFilters] = useState<Filters>({});
   const [archive, setArchive] = useState(false);
 
@@ -327,30 +338,58 @@ export function TestList() {
   const lastDay = day(base.data?.last_at ?? null, locale);
   const testHref = benchTestHref({ trigger: "list" });
 
+  // Narrow (phone, or the 280 px column beside a result): two rows —
+  // title | Modell testen (the button wraps under the title when the room
+  // is too small, never over it), then count | library. Wide: one bar —
+  // title … library · Modell testen, the count below. Container queries,
+  // not viewport breakpoints: the list must lay out by the room it gets.
   const header = (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="display text-2xl font-semibold" style={{ color: C.textPrimary }}>
-          {t("title")}
-        </h1>
-        {!isEmpty && base.isSuccess && (
-          <Link href={testHref} data-testid="bench-list-test" className={PRIMARY_BTN} style={{ background: C.accent, color: C.onAccent }}>
-            <FlaskConical size={16} aria-hidden />
-            {t("testModel")}
-          </Link>
-        )}
-      </div>
+    <div
+      data-testid="bench-list-header"
+      className="flex flex-wrap items-center gap-x-3 gap-y-1"
+    >
+      <h1 className="display text-2xl font-semibold flex-1 @2xl:order-1" style={{ color: C.textPrimary }}>
+        {t("title")}
+      </h1>
+      {!isEmpty && base.isSuccess && (
+        <Link
+          href={testHref}
+          data-testid="bench-list-test"
+          className={`${PRIMARY_BTN} @2xl:order-3`}
+          style={{ background: C.accent, color: C.onAccent }}
+        >
+          <FlaskConical size={16} aria-hidden />
+          {t("testModel")}
+        </Link>
+      )}
+      {/* Narrow only: ends the title row. */}
+      <span aria-hidden className="basis-full h-0 @2xl:hidden" />
       {base.isSuccess && total > 0 && (
-        <p className="text-sm tabular-nums" style={{ color: C.textSecondary }} data-testid="bench-list-lead">
+        <p
+          className="text-sm tabular-nums flex-1 min-w-0 @2xl:order-4 @2xl:basis-full"
+          style={{ color: C.textSecondary }}
+          data-testid="bench-list-lead"
+        >
           {lastDay ? t("lead", { count: total, date: lastDay }) : t("leadNoDate", { count: total })}
         </p>
+      )}
+      {base.isSuccess && (
+        <Link
+          href="/bench?view=library"
+          data-testid="bench-list-library"
+          className="ml-auto inline-flex items-center gap-2 h-11 px-3 -mr-3 rounded-md text-sm font-medium whitespace-nowrap hover:bg-[var(--color-bg-hover)] @2xl:order-2 @2xl:mr-0 @2xl:border"
+          style={{ color: C.textPrimary, borderColor: C.border }}
+        >
+          <BookOpen size={16} aria-hidden />
+          {t("library")}
+        </Link>
       )}
     </div>
   );
 
   if (isEmpty) {
     return (
-      <div data-testid="bench-test-list" className="flex flex-col gap-8">
+      <div data-testid="bench-test-list" className="@container flex flex-col gap-8">
         {header}
         <div className="flex flex-col items-start gap-3 max-w-md pt-8">
           <FlaskConical size={32} aria-hidden style={{ color: C.textMuted }} />
@@ -373,7 +412,7 @@ export function TestList() {
   const noHit = activeFilters.length > 0 && filtered.isSuccess && (data?.items.length ?? 0) === 0;
 
   return (
-    <div data-testid="bench-test-list" className="lg:grid lg:grid-cols-[minmax(320px,400px)_1fr] lg:gap-12">
+    <div data-testid="bench-test-list" className="@container max-w-4xl">
       <div className="flex flex-col gap-4 min-w-0">
         {header}
 
@@ -463,7 +502,7 @@ export function TestList() {
                     </div>
                     <div className="flex flex-col">
                       {items.map((item) => (
-                        <TestRow key={item.id} item={item} />
+                        <TestRow key={item.id} item={item} current={pathname === benchResultHref(item.id)} />
                       ))}
                     </div>
                   </section>
@@ -486,39 +525,10 @@ export function TestList() {
               <Archive size={16} aria-hidden />
               {archive ? t("archiveHide") : t("archiveShow")}
             </button>
-            <Link
-              href="/bench?view=library"
-              data-testid="bench-list-library"
-              className="inline-flex items-center gap-2 h-11 px-3 rounded-md text-sm hover:bg-[var(--color-bg-hover)]"
-              style={{ color: C.textSecondary }}
-            >
-              <BookOpen size={16} aria-hidden />
-              {t("library")}
-            </Link>
           </div>
         )}
       </div>
 
-      {/* Desktop centre (mockup 06): nothing selected — pick a row, or test
-          what runs now. Rows open their own page (/bench/r/<id>). */}
-      <aside className="hidden lg:block pt-32" data-testid="bench-pick-hint">
-        <div className="sticky top-8 flex flex-col items-start gap-1 max-w-lg">
-          <h2 className="text-lg font-semibold" style={{ color: C.textPrimary }}>
-            {t("pickHint.title")}
-          </h2>
-          <p className="text-sm" style={{ color: C.textSecondary }}>
-            {t("pickHint.body")}
-          </p>
-          <Link
-            href={testHref}
-            className="inline-flex items-center gap-2 h-11 px-3 -ml-3 mt-1 rounded-md text-sm font-medium hover:bg-[var(--color-bg-hover)]"
-            style={{ color: C.textPrimary }}
-          >
-            <FlaskConical size={16} aria-hidden />
-            {t("pickHint.action")}
-          </Link>
-        </div>
-      </aside>
     </div>
   );
 }
