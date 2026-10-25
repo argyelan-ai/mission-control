@@ -4174,7 +4174,8 @@
       "harness": "Harness",
       "effort": "Effort",
       "device": "Device",
-      "opponent": "Opponent"
+      "opponent": "Opponent",
+      "prompt": "Prompt"
     },
     "preset": {
       "standard": "Standard",
@@ -4189,7 +4190,6 @@
       "rerun": "same setup as last time"
     },
     "presets": "Test preset",
-    "testMain": "{preset} · {prompt}",
     "testSub": {
       "runs": "{n, plural, one {# run} other {# runs}} · same prompt",
       "ladder": "{levels, plural, one {# level} other {# levels}} × {n, plural, one {# run} other {# runs}}",
@@ -4303,7 +4303,20 @@
       "tokensApprox": "≈ {n} tok"
     },
     "blockerAsleep": "Start works once it is awake.",
-    "wakeBox": "Wake the box"
+    "wakeBox": "Wake the box",
+    "changePrompt": "Choose another prompt",
+    "promptRerun": "as in the first test",
+    "promptPicker": {
+      "search": "Search prompts",
+      "searchPlaceholder": "Title or text …",
+      "tags": "Tags",
+      "loading": "Loading prompts …",
+      "error": "The prompts could not be loaded.",
+      "retry": "Try again",
+      "empty": "No prompts in the library yet. Add one there.",
+      "noHit": "No prompt matches the search.",
+      "openLibrary": "Open the prompt library"
+    }
   },
   "providerDescriptions": {
     "claude_code_oauth_token": "For cli-bridge agents with an anthropic-* runtime (claude setup-token)",
@@ -4943,11 +4956,6 @@
     "library": "Prompt library",
     "libraryBack": "Benchmark",
     "libraryLead": "Prompts for tests. “Test with…” opens a test with that prompt.",
-    "pickHint": {
-      "title": "Pick a test on the left",
-      "body": "Or test the model that is running now. MC fills in model, device, harness and effort itself.",
-      "action": "Test the running model"
-    },
     "testWith": "Test with…",
     "testWithAria": "Test with {title}",
     "runtimes": {

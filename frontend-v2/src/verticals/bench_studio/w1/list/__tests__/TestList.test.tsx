@@ -13,6 +13,12 @@ import { contestantsFixture, runtimeSummaryFixture, testListFixture } from "../.
 import type { BenchTestList } from "../../types";
 import { benchResultHref, benchTestHref, type BenchRuntimeSummary } from "@/lib/benchLinks";
 import { BENCH_RUNTIME_SUMMARY_KEY } from "@/app/runtimes/benchSummary";
+
+// The result page (≥ 1536 px) shows this list beside the result: the row of
+// the open test is marked by its path.
+const nav = vi.hoisted(() => ({ pathname: "/bench" }));
+vi.mock("next/navigation", () => ({ usePathname: () => nav.pathname }));
+
 import { TestList } from "../TestList";
 
 function renderList() {
@@ -93,17 +99,41 @@ describe("TestList — sections and rows (P7)", () => {
     expect(rows[0]).toHaveTextContent("Raw API");
   });
 
-  it("desktop pick hint offers to test the running model", async () => {
+  it("one wide column: no empty 'pick a test' half on the desktop", async () => {
     renderList();
-    const hint = await screen.findByTestId("bench-pick-hint");
-    expect(within(hint).getByRole("link")).toHaveAttribute("href", benchTestHref({ trigger: "list" }));
+    await screen.findAllByTestId("bench-test-row");
+    expect(screen.queryByTestId("bench-pick-hint")).toBeNull();
+    expect(screen.queryByText("Pick a test on the left")).toBeNull();
   });
 
-  it("links to the prompt library and toggles the archive", async () => {
+  it("the prompt library sits in the header, next to 'Test a model'", async () => {
+    renderList();
+    await screen.findAllByTestId("bench-test-row");
+    const header = screen.getByTestId("bench-list-header");
+    const library = within(header).getByTestId("bench-list-library");
+    expect(library).toHaveAttribute("href", "/bench?view=library");
+    expect(library).toHaveAccessibleName("Prompt library");
+    expect(within(header).getByTestId("bench-list-test")).toBeInTheDocument();
+    // Once only: no second link at the end of the list.
+    expect(screen.getAllByTestId("bench-list-library")).toHaveLength(1);
+  });
+
+  it("marks the open test's row when the list sits beside a result", async () => {
+    nav.pathname = benchResultHref(testListFixture.items[2].id);
+    try {
+      renderList();
+      const rows = await screen.findAllByTestId("bench-test-row");
+      expect(rows[2]).toHaveAttribute("aria-current", "page");
+      expect(rows.filter((r) => r.hasAttribute("aria-current"))).toHaveLength(1);
+    } finally {
+      nav.pathname = "/bench";
+    }
+  });
+
+  it("toggles the archive", async () => {
     const list = vi.mocked(benchW1Api.tests.list);
     renderList();
     await screen.findAllByTestId("bench-test-row");
-    expect(screen.getByTestId("bench-list-library")).toHaveAttribute("href", "/bench?view=library");
     await userEvent.click(screen.getByTestId("bench-list-archive"));
     await waitFor(() =>
       expect(list).toHaveBeenCalledWith(expect.objectContaining({ includeArchived: true })),
@@ -167,6 +197,8 @@ describe("TestList — empty, loading, error", () => {
     expect(screen.getByRole("link", { name: /Go to Runtimes/ })).toHaveAttribute("href", "/runtimes");
     expect(screen.queryByTestId("bench-list-test")).toBeNull();
     expect(screen.queryByTestId("bench-filter-harness")).toBeNull();
+    // Prompts can exist before the first test: the library stays reachable.
+    expect(screen.getByTestId("bench-list-library")).toHaveAttribute("href", "/bench?view=library");
   });
 
   it("loading shows a quiet placeholder", () => {

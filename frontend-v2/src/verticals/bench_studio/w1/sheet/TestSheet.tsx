@@ -1,17 +1,21 @@
 "use client";
 
 // The content of the test sheet (P3): rows pre-filled from GET /bench/plan,
-// pickers for model / test / opponent inside the same sheet (one level
-// deeper, a back arrow — no second dialog), notes before Start, and the
+// pickers for model / test / prompt / opponent inside the same sheet (one
+// level deeper, a back arrow — no second dialog), notes before Start, and the
 // footer with the time + money summary and the one Start button (K11).
+// The prompt comes from the Prompt-Bibliothek (same data and filter as the
+// library page) and travels as `template_id` into /plan and Start.
 import { useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, Check, Clock, Cloud, Cpu, Info, Loader2, Moon, Plus, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookOpen, Check, Clock, Cloud, Cpu, Info, Loader2, Moon, Plus, Search, X } from "lucide-react";
 import { benchResultHref, type BenchTestParams } from "@/lib/benchLinks";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import { benchApi } from "@/verticals/bench_studio/api";
+import { PROMPT_TEMPLATES_KEY, filterTemplates, templateTags } from "../../promptFilter";
 import { benchW1Api, benchW1Keys, parseBenchBlocked, parseCostConfirmation, type PlanQuery } from "../api";
 import type {
   BenchPlan,
@@ -50,7 +54,10 @@ import {
   type SheetSelection,
 } from "./sheetModel";
 
-type View = "main" | "preset" | "model" | "opponent";
+type View = "main" | "preset" | "prompt" | "model" | "opponent";
+
+/** The library page — where prompts are written and edited. */
+const LIBRARY_HREF = "/bench?view=library";
 
 const DEVICE_DOT: Record<DeviceState, string> = {
   free: STATUS.online,
@@ -69,11 +76,14 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
 
   const [preset, setPreset] = useState<PresetId | null>(params.preset);
   const [runtimeId, setRuntimeId] = useState<string | null>(params.runtimeId);
+  // The prompt: from the link ("Testen mit…") or picked here. A preset
+  // change keeps it — the plan is always read with it.
+  const [templateId, setTemplateId] = useState<string | null>(params.templateId);
   const [view, setView] = useState<View>("main");
 
   // "Nochmal" keeps its source; another preset tests the same subject fresh.
   const rerunOf = preset === null || preset === "rerun" ? params.rerunOf : null;
-  const planQuery: PlanQuery = { runtimeId, preset, templateId: params.templateId, rerunOf };
+  const planQuery: PlanQuery = { runtimeId, preset, templateId, rerunOf };
   const plan = useQuery({
     queryKey: benchW1Keys.plan(planQuery),
     queryFn: () => benchW1Api.plan(planQuery),
@@ -243,7 +253,9 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
   const title =
     view === "preset"
       ? t("changeTest")
-      : view === "model"
+      : view === "prompt"
+        ? t("changePrompt")
+        : view === "model"
         ? t("picker.model")
         : view === "opponent"
           ? t("picker.opponent")
@@ -293,6 +305,16 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
               }
               onPick={(id) => {
                 setPreset(id);
+                setView("main");
+              }}
+            />
+          ) : view === "prompt" ? (
+            <PromptPicker
+              current={data.preset.prompt.template_id}
+              onPick={(id) => {
+                setTemplateId(id);
+                // A re-run repeats the old prompt; another prompt is a fresh test.
+                if (rerunOf) setPreset("standard");
                 setView("main");
               }}
             />
@@ -354,7 +376,7 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
     body = (
       <>
         {desktop && (
-          <div className="pt-1 pb-2">
+          <div className="pt-1 pb-2" data-testid="bench-sheet-test">
             <ChipGroup label={t("presets")}>
               {presetChoices(data, Boolean(params.rerunOf)).map((p) => (
                 <Chip key={p.id} on={p.id === data.preset.id} onClick={() => setPreset(p.id)}>
@@ -362,6 +384,9 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
                 </Chip>
               ))}
             </ChipGroup>
+            <p className="text-sm mt-2" style={{ color: C.textMuted }}>
+              {testSub(data.preset)}
+            </p>
           </div>
         )}
 
@@ -373,19 +398,24 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
           ariaLabel={t("changeModel")}
           testId="bench-sheet-model"
         />
+        {/* Desktop shows the preset as chips above (K3: one fact once). */}
+        {!desktop && (
+          <TapRow
+            name={t("row.test")}
+            main={presetWord(data.preset.id)}
+            sub={testSub(data.preset)}
+            onClick={() => setView("preset")}
+            ariaLabel={t("changeTest")}
+            testId="bench-sheet-test"
+          />
+        )}
         <TapRow
-          name={t("row.test")}
-          // Desktop shows the preset as chips right above: the row names
-          // only the prompt then (K3: one fact once).
-          main={
-            desktop
-              ? data.preset.prompt.title
-              : t("testMain", { preset: presetWord(data.preset.id), prompt: data.preset.prompt.title })
-          }
-          sub={testSub(data.preset)}
-          onClick={() => setView("preset")}
-          ariaLabel={t("changeTest")}
-          testId="bench-sheet-test"
+          name={t("row.prompt")}
+          main={data.preset.prompt.title}
+          sub={rerunOf ? t("promptRerun") : undefined}
+          onClick={() => setView("prompt")}
+          ariaLabel={t("changePrompt")}
+          testId="bench-sheet-prompt"
         />
 
         {subject && sel && (
@@ -814,6 +844,117 @@ function PickRow({
       </span>
       {selected && <Check size={18} aria-hidden style={{ color: C.accent }} className="shrink-0" />}
     </button>
+  );
+}
+
+/** The Prompt-Bibliothek inside the sheet: search + tags (the library page's
+ *  own filter and cache), the current prompt marked, a way to the library. */
+function PromptPicker({ current, onPick }: { current: string | null; onPick: (id: string) => void }) {
+  const t = useTranslations("benchSheet.promptPicker");
+  const [search, setSearch] = useState("");
+  const [tag, setTag] = useState<string | null>(null);
+  const list = useQuery({ queryKey: PROMPT_TEMPLATES_KEY, queryFn: benchApi.promptTemplates.list });
+
+  const toLibrary = (
+    <Link
+      href={LIBRARY_HREF}
+      className="inline-flex items-center gap-2 min-h-touch text-sm font-medium"
+      style={{ color: C.textPrimary }}
+    >
+      <BookOpen size={16} aria-hidden />
+      {t("openLibrary")}
+    </Link>
+  );
+
+  if (list.isError) {
+    return (
+      <div className="py-6">
+        <Note tone="error" icon={<AlertTriangle size={16} />} title={t("error")} />
+        <button
+          type="button"
+          onClick={() => void list.refetch()}
+          className="mt-3 min-h-touch text-sm font-medium cursor-pointer"
+          style={{ color: C.textPrimary }}
+        >
+          {t("retry")}
+        </button>
+      </div>
+    );
+  }
+  if (!list.data) {
+    return (
+      <div className="flex items-center gap-2 py-8 text-sm" style={{ color: C.textMuted }} role="status">
+        <Loader2 size={16} className="animate-spin" aria-hidden />
+        {t("loading")}
+      </div>
+    );
+  }
+  if (list.data.length === 0) {
+    return (
+      <div className="flex flex-col items-start gap-2 py-8">
+        <p className="text-sm" style={{ color: C.textMuted }}>
+          {t("empty")}
+        </p>
+        {toLibrary}
+      </div>
+    );
+  }
+
+  const tags = templateTags(list.data);
+  const shown = filterTemplates(list.data, search, tag);
+  return (
+    <div className="flex flex-col gap-3 py-2">
+      <label className="relative block">
+        <Search
+          size={16}
+          aria-hidden
+          className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none"
+          style={{ color: C.textMuted }}
+        />
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          aria-label={t("search")}
+          placeholder={t("searchPlaceholder")}
+          className="w-full min-h-touch rounded-md pl-12 pr-3 text-base outline-none"
+          style={{ background: C.bgDeep, color: C.textPrimary, border: `1px solid ${C.border}` }}
+        />
+      </label>
+      {tags.length > 0 && (
+        <ChipGroup label={t("tags")}>
+          {tags.map((x) => (
+            <Chip key={x} on={tag === x} onClick={() => setTag(tag === x ? null : x)}>
+              #{x}
+            </Chip>
+          ))}
+        </ChipGroup>
+      )}
+      {shown.length === 0 ? (
+        <p className="py-4 text-sm" style={{ color: C.textMuted }}>
+          {t("noHit")}
+        </p>
+      ) : (
+        <ul>
+          {shown.map((p) => (
+            <li key={p.id}>
+              <PickRow
+                selected={p.id === current}
+                main={p.title}
+                sub={(p.tags ?? []).map((x) => `#${x}`).join(" ") || undefined}
+                extra={
+                  <span className="block text-sm mt-1 line-clamp-2 break-words" style={{ color: C.textSecondary }}>
+                    {p.body}
+                  </span>
+                }
+                onClick={() => onPick(p.id)}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="pt-1">{toLibrary}</div>
+    </div>
   );
 }
 

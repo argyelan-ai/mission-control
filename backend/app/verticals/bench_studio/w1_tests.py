@@ -303,6 +303,10 @@ async def test_detail(
     else:
         detail["gate"] = gate_pre
     state, section, reason = human_state(challenge, detail["gate"], results, truncation)
+    if section == "needs_look" and not is_v1(challenge):
+        # A pre-W1 test is history, not a task: its pill still says what is
+        # missing, but "Braucht Blick" holds only what a look can fix now.
+        section = "done"
     detail.update({"state": state, "section": section, "state_reason": reason, "truncation": truncation})
     lead = (a or b or [None])[0]
     if lead is not None and finished:

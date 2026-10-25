@@ -4174,7 +4174,8 @@
       "harness": "Harness",
       "effort": "Effort",
       "device": "Gerät",
-      "opponent": "Gegner"
+      "opponent": "Gegner",
+      "prompt": "Prompt"
     },
     "preset": {
       "standard": "Standard",
@@ -4189,7 +4190,6 @@
       "rerun": "gleicher Aufbau wie letztes Mal"
     },
     "presets": "Test-Vorlage",
-    "testMain": "{preset} · {prompt}",
     "testSub": {
       "runs": "{n, plural, one {# Lauf} other {# Läufe}} · gleicher Prompt",
       "ladder": "{levels, plural, one {# Stufe} other {# Stufen}} × {n, plural, one {# Lauf} other {# Läufe}}",
@@ -4303,7 +4303,20 @@
       "tokensApprox": "≈ {n} tok"
     },
     "blockerAsleep": "Start geht, sobald sie wach ist.",
-    "wakeBox": "Box wecken"
+    "wakeBox": "Box wecken",
+    "changePrompt": "Anderen Prompt wählen",
+    "promptRerun": "wie im ersten Test",
+    "promptPicker": {
+      "search": "Prompts durchsuchen",
+      "searchPlaceholder": "Titel oder Text …",
+      "tags": "Tags",
+      "loading": "Prompts werden geladen …",
+      "error": "Die Prompts konnten nicht geladen werden.",
+      "retry": "Nochmal versuchen",
+      "empty": "Noch keine Prompts in der Bibliothek. Lege dort einen an.",
+      "noHit": "Kein Prompt passt zur Suche.",
+      "openLibrary": "Prompt-Bibliothek öffnen"
+    }
   },
   "providerDescriptions": {
     "claude_code_oauth_token": "Für cli-bridge-Agenten mit anthropic-*-Runtime (claude setup-token)",
@@ -4943,11 +4956,6 @@
     "library": "Prompt-Bibliothek",
     "libraryBack": "Benchmark",
     "libraryLead": "Vorlagen für Tests. „Testen mit…“ öffnet einen Test mit dieser Vorlage.",
-    "pickHint": {
-      "title": "Wähle links einen Test",
-      "body": "Oder teste das Modell, das gerade läuft. MC füllt Modell, Gerät, Harness und Effort selbst aus.",
-      "action": "Laufendes Modell testen"
-    },
     "testWith": "Testen mit…",
     "testWithAria": "Testen mit {title}",
     "runtimes": {
