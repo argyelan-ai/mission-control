@@ -18,6 +18,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.models.bench import BenchChallenge, BenchEntry, BenchReceipt
 
 from . import w1_common as c
+from .orchestrator import LIB_LANE_KEYS
 
 DONE_ENTRY = ("generated", "rendered")
 
@@ -181,6 +182,9 @@ def build_receipt(
         **({"network_blocked_scripts": hm["network_blocked_scripts"]}
            if hm.get("network_blocked_scripts") is not None else {}),
         "libraries_inlined": list(hm.get("libraries_inlined") or []),
+        # Lane lib:three-local — only when the recorder reported it, so the
+        # receipts of older recordings keep their checksum.
+        **{k: hm[k] for k in LIB_LANE_KEYS if hm.get(k) is not None},
         "html_bytes": hm.get("html_bytes"),
         "recorded_at": hm.get("recorded_at"),
         "harvested_at": harvested_at,
@@ -361,6 +365,13 @@ def evaluate_gate(
     for block in blocks:
         if len({r.get("run_class") for r in block["contestants"]} | {block["run_class"]}) > 1:
             reasons.append(_reason("R5", "red", "unfair_comparison", {"why": "classes_mixed"}))
+        # Lanes (lib:three-local vs none, 25.10.2026): MC served three.js to
+        # one contestant, the other wrote everything itself. Same prompt, so
+        # not unfair — but never compared silently: printed, and each pane
+        # chip names its lane.
+        lanes = sorted({c.lib_lane(r.get("receipt")) for r in block["contestants"]})
+        if len(lanes) > 1:
+            reasons.append(_reason("amber", "amber", "lib_tracks_mixed", {"tracks": lanes}))
     for result, receipt, _sum in receipts:
         summary = result["summary"]
         run_class = (receipt or {}).get("run_class") or result.get("run_class", "A")
@@ -405,6 +416,10 @@ def evaluate_gate(
             reasons.append(_reason("R6", "red", "needs_network"))
         elif net == "assets":
             reasons.append(_reason("amber", "amber", "network_assets_blocked"))
+        # The page asked for another three.js version than the one MC serves
+        # (e.g. r128 code on r170): printed, the scene may differ in detail.
+        if r.get("three_version_mismatch"):
+            reasons.append(_reason("amber", "amber", "three_version_differs"))
         # amber
         obs = r.get("effort_observed")
         if not obs or (isinstance(obs, dict) and obs.get("source") == "unknown"):

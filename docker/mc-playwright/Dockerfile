@@ -89,6 +89,10 @@ COPY service.py /app/service.py
 COPY deterministic_shim.js /app/deterministic_shim.js
 COPY record_network.py /app/record_network.py
 COPY record_network_guard.js /app/record_network_guard.js
+# lib:three-local — the ONE pinned three.js (+ MIT licence) the recorder serves
+# for CDN requests (record_three.py; vendored, nothing fetched at build time).
+COPY record_three.py /app/record_three.py
+COPY vendor/ /app/vendor/
 COPY templates/ /app/templates/
 
 # Proof by effect, at build time and on whatever architecture builds the

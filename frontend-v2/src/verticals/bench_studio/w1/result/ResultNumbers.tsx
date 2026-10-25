@@ -136,7 +136,7 @@ function ValueCell({ cell, align = "right" }: { cell: Cell; align?: "right" | "l
 }
 
 function Chips({ c, words }: { c: ContestantResult; words: BenchWords }) {
-  const items = [words.harness(c.harness), words.effort(c)].filter(Boolean) as string[];
+  const items = [words.harness(c.harness), words.effort(c), words.lane(c)].filter(Boolean) as string[];
   if (items.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-2">
@@ -302,7 +302,14 @@ export function NumbersTable({
                         </td>
                       )}
                       <td className="py-3 pr-4" style={{ color: C.textSecondary }}>
-                        {words.harness(c.harness)}
+                        <span className="flex flex-col">
+                          <span>{words.harness(c.harness)}</span>
+                          {words.lane(c) && (
+                            <span className="text-xs" data-testid={`lane-${c.key}`} style={{ color: C.textMuted }}>
+                              {words.lane(c)}
+                            </span>
+                          )}
+                        </span>
                       </td>
                       <td className="py-3 pr-4" style={{ color: C.textSecondary }}>
                         {words.effort(c)}

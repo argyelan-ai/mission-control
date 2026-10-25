@@ -312,6 +312,15 @@ export interface Receipt {
   /** Of those, blocked scripts/modules — the page code could not run (gate R6). */
   network_blocked_scripts: number | null;
   libraries_inlined: string[];
+  /** Lane lib:three-local: the recorder served MC's pinned three.js for the
+   *  page's CDN request (null = recorded before the lane existed). */
+  lib_track: LibTrack | null;
+  libraries_provided: string[];
+  /** Versions the page asked for ("r160"). */
+  three_requested: string[] | null;
+  three_version_mismatch: boolean | null;
+  /** A bare `from 'three'` without an import map got MC's map. */
+  three_import_map_injected: boolean | null;
   html_bytes: number | null;
   quiet_box: "ok" | "busy" | "timeout" | null;
   serving_age_min: number | null;
@@ -319,6 +328,9 @@ export interface Receipt {
   harvested_at: string | null;
   unknown: Record<string, string>;
 }
+
+/** "three-local" = MC served its pinned three.js; never compared silently with "none". */
+export type LibTrack = "three-local" | "none";
 
 export interface ContestantResult {
   key: string;
@@ -333,6 +345,7 @@ export interface ContestantResult {
   runs: RunView[];
   summary: Summary;
   receipt: Receipt | null;
+  lib_track: LibTrack;
   receipt_version: number | null;
   receipt_checksum: string | null;
 }

@@ -1384,8 +1384,13 @@ async def _render_and_compose(
 # sidecar's URL sample (blocked_requests) stays in its log, not in the record.
 # network_blocked_scripts (25.10.2026): how many of the attempts were
 # scripts/modules — the page's code could not run (W1 gate needs_network).
+# lib_track & co. (lane lib:three-local, 25.10.2026): the recorder served its
+# own pinned three.js for the page's CDN request — what it served and which
+# version the page asked for (docker/mc-playwright/record_three.py).
+LIB_LANE_KEYS = ("lib_track", "libraries_provided", "three_requested",
+                 "three_version_mismatch", "three_import_map_injected")
 _RECORD_REPORT_KEYS = ("network_blocked", "network_attempts", "network_blocked_scripts",
-                       "libraries_inlined", "html_bytes")
+                       "libraries_inlined", "html_bytes", *LIB_LANE_KEYS)
 
 
 def _apply_record_result(entry: BenchEntry, result: dict) -> None:

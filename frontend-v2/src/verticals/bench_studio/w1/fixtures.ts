@@ -521,6 +521,7 @@ export const testRunningFixture: BenchTestDetail = {
             "tie_with": []
           },
           "receipt": null,
+          "lib_track": "none",
           "receipt_version": null,
           "receipt_checksum": null
         }
@@ -611,6 +612,7 @@ export const testRunningFixture: BenchTestDetail = {
             "tie_with": []
           },
           "receipt": null,
+          "lib_track": "none",
           "receipt_version": null,
           "receipt_checksum": null
         }
@@ -817,6 +819,11 @@ export const testDoneGreenFixture: BenchTestDetail = {
             "network_attempts": 0,
             "network_blocked_scripts": null,
             "libraries_inlined": [],
+            "lib_track": null,
+            "libraries_provided": [],
+            "three_requested": null,
+            "three_version_mismatch": null,
+            "three_import_map_injected": null,
             "html_bytes": 17204,
             "quiet_box": "ok",
             "serving_age_min": 1410,
@@ -828,6 +835,7 @@ export const testDoneGreenFixture: BenchTestDetail = {
               "engine_version": "hand_made_runtime"
             }
           },
+          "lib_track": "none",
           "receipt_version": 1,
           "receipt_checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         }
@@ -1070,6 +1078,11 @@ export const testDoneTruncatedFixture: BenchTestDetail = {
             "network_attempts": 0,
             "network_blocked_scripts": null,
             "libraries_inlined": [],
+            "lib_track": null,
+            "libraries_provided": [],
+            "three_requested": null,
+            "three_version_mismatch": null,
+            "three_import_map_injected": null,
             "html_bytes": 17204,
             "quiet_box": "ok",
             "serving_age_min": 1410,
@@ -1081,6 +1094,7 @@ export const testDoneTruncatedFixture: BenchTestDetail = {
               "engine_version": "hand_made_runtime"
             }
           },
+          "lib_track": "none",
           "receipt_version": 1,
           "receipt_checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         }
@@ -1297,6 +1311,7 @@ export const testAbortedTruncatedFixture: BenchTestDetail = {
             "tie_with": []
           },
           "receipt": null,
+          "lib_track": "none",
           "receipt_version": null,
           "receipt_checksum": null
         }
@@ -1475,6 +1490,11 @@ export const testNeedsLookRedFixture: BenchTestDetail = {
             "network_attempts": null,
             "network_blocked_scripts": null,
             "libraries_inlined": [],
+            "lib_track": null,
+            "libraries_provided": [],
+            "three_requested": null,
+            "three_version_mismatch": null,
+            "three_import_map_injected": null,
             "html_bytes": null,
             "quiet_box": null,
             "serving_age_min": null,
@@ -1488,6 +1508,7 @@ export const testNeedsLookRedFixture: BenchTestDetail = {
               "spec_decoding": "no_recipe"
             }
           },
+          "lib_track": "none",
           "receipt_version": 1,
           "receipt_checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }

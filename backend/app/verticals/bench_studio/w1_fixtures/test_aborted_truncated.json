@@ -140,6 +140,7 @@
             "tie_with": []
           },
           "receipt": null,
+          "lib_track": "none",
           "receipt_version": null,
           "receipt_checksum": null
         }

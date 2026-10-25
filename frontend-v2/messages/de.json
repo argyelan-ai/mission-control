@@ -4156,7 +4156,9 @@
       "first_15_min": "in den ersten 15 min nach dem Start gemessen",
       "page_check_failed": "Seite lädt nicht",
       "needs_network": "Die Seite wollte eine Bibliothek aus dem Internet laden (blockiert) — die Szene blieb leer",
-      "network_assets_blocked": "Seite wollte Schriften oder Bilder aus dem Internet laden (blockiert)"
+      "network_assets_blocked": "Seite wollte Schriften oder Bilder aus dem Internet laden (blockiert)",
+      "three_version_differs": "Seite wollte eine andere three.js-Version als die, die MC liefert",
+      "lib_tracks_mixed": "Getrennte Spuren: nur ein Teil der Seiten bekam three.js von MC"
     },
     "range": "{min}–{max}",
     "medianOf": "Mitte von {n}",
@@ -4541,7 +4543,7 @@
       "okR3": "Kein $-Preis bei lokal oder Abo",
       "okR4": "Keine privaten Daten in Video, Karte oder Texten",
       "okR5": "Fairer Vergleich: Klassen getrennt, gleicher Prompt",
-      "okR6": "Seite läuft offline: keine Bibliothek aus dem Internet"
+      "okR6": "Seite läuft offline: keine Bibliothek aus dem Internet (three.js liefert MC lokal)"
     },
     "numbers": {
       "label": "Zahlen",
@@ -4632,7 +4634,12 @@
       "harvestedAt": "Zahlen nachgeladen am {date}",
       "notHarvested": "noch nicht nachgeladen",
       "version": "Quittung",
-      "versionValue": "Version {v}"
+      "versionValue": "Version {v}",
+      "library": "Bibliothek",
+      "libraryLocal": "{lib} · von MC lokal geliefert",
+      "libraryAsked": "Seite wollte {versions}",
+      "libraryMap": "Import-Map von MC ergänzt",
+      "libraryOutside": "Ausserhalb der Aufnahme lädt die Seite three.js aus dem Internet"
     },
     "kit": {
       "title": "X-Kit",
@@ -4667,6 +4674,9 @@
       "copyBlock": "Block {i} kopieren",
       "noFooter": "Kein Handle eingestellt: Video und Bild haben keine Fusszeile (MC_BENCH_FOOTER in der .env).",
       "threadWithLink": "So postest du: Hauptpost = deine Worte + Video · Antwort 1 = Bild + Alt-Text · danach je Einstellungs-Block eine Antwort · zuletzt der Link."
+    },
+    "lane": {
+      "threeLocal": "{lib} von MC"
     }
   },
   "heads": {

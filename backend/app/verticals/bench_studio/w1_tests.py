@@ -242,6 +242,8 @@ async def test_detail(
                      for i, e in enumerate(es)],
             "summary": summary,
             "receipt": rec,
+            # Lane lib:three-local / none (from the record the receipt mirrors).
+            "lib_track": c.lib_lane(rec or hm),
             "receipt_version": version,
             "receipt_checksum": digest,
             "run_class": pc.get("run_class", "A"),

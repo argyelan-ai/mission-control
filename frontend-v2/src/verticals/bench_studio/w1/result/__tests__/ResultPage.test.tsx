@@ -486,6 +486,78 @@ describe("ResultPage — the page needed the internet (R6)", () => {
   });
 });
 
+describe("ResultPage — lane lib:three-local (MC served three.js)", () => {
+  // 25.10.2026: the recorder answers the page's CDN request for three.js with
+  // MC's pinned copy. The page says so — chip + receipt row — and a test that
+  // mixes lanes is marked instead of compared silently.
+  const green = testDoneGreenFixture;
+  const block = green.blocks[0];
+  const first = block.contestants[0];
+  const threeLocal: BenchTestDetail = {
+    ...green,
+    blocks: [
+      {
+        ...block,
+        contestants: [
+          {
+            ...first,
+            lib_track: "three-local",
+            receipt: first.receipt && {
+              ...first.receipt,
+              lib_track: "three-local",
+              libraries_provided: ["three.js r170"],
+              three_requested: ["r160"],
+              three_version_mismatch: true,
+              three_import_map_injected: false,
+            },
+          },
+          ...block.contestants.slice(1),
+        ],
+      },
+      ...green.blocks.slice(1),
+    ],
+    gate: {
+      status: "amber",
+      reasons: [
+        { rule: "amber", severity: "amber", code: "three_version_differs", params: {}, fix: null },
+        { rule: "amber", severity: "amber", code: "lib_tracks_mixed", params: { tracks: ["none", "three-local"] }, fix: null },
+      ],
+      checksum: green.gate.checksum,
+    },
+  };
+
+  it("shows a lane chip only on the contestant that got MC's three.js", async () => {
+    renderView(threeLocal);
+    const list = await screen.findByTestId("numbers-list");
+    expect(within(list).getAllByText("three.js r170 from MC")).toHaveLength(1);
+  });
+
+  it("says what MC served, what the page asked for, and that it needs three.js elsewhere", async () => {
+    const user = userEvent.setup();
+    renderView(threeLocal);
+    const buttons = await screen.findAllByRole("button", { name: /Receipt/ });
+    await user.click(buttons[0]);
+    const receipt = screen.getAllByTestId("receipt-A")[0];
+    expect(receipt).toHaveTextContent("Library");
+    expect(receipt).toHaveTextContent("three.js r170 · served locally by MC");
+    expect(receipt).toHaveTextContent("page asked for r160");
+    expect(receipt).toHaveTextContent("Outside the recording the page loads three.js from the internet");
+  });
+
+  it("marks the version mismatch and the mixed lanes in the gate", async () => {
+    renderView(threeLocal);
+    const gate = await screen.findByTestId("result-gate");
+    expect(gate).toHaveTextContent("page asked for a different three.js version than the one MC serves");
+    expect(gate).toHaveTextContent("Separate lanes: only some pages got three.js from MC");
+  });
+
+  it("shows no lane on a test without MC's three.js", async () => {
+    renderView(green);
+    await screen.findByTestId("numbers-list");
+    expect(screen.queryByText(/from MC$/)).toBeNull();
+  });
+});
+
 describe("ResultPage — missing", () => {
   it("shows a not-found state for an unknown id", async () => {
     get.mockRejectedValue(new Error('API 404: {"detail":"not found"}'));

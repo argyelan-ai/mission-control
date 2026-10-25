@@ -64,6 +64,9 @@ AbortCode = Literal[
     "switch_failed", "all_runs_failed", "backend_restart",
 ]
 GateRule = Literal["R1", "R2", "R3", "R4", "R5", "R6", "amber"]
+# Library lane: "three-local" = the recorder served MC's pinned three.js for
+# the page's CDN request; "none" = no library from MC (25.10.2026).
+LibTrack = Literal["three-local", "none"]
 KitFileName = Literal["video.mp4", "card.png", "kit.zip"]
 
 
@@ -348,6 +351,12 @@ class Receipt(BaseModel):
     network_attempts: int | None = None
     network_blocked_scripts: int | None = None  # of those, scripts/modules (gate R6)
     libraries_inlined: list[str] = Field(default_factory=list)
+    # Lane lib:three-local (only on recordings that reported it).
+    lib_track: LibTrack | None = None
+    libraries_provided: list[str] = Field(default_factory=list)  # ["three.js r170"]
+    three_requested: list[str] | None = None  # versions the page asked for ["r160"]
+    three_version_mismatch: bool | None = None
+    three_import_map_injected: bool | None = None  # bare `from 'three'` got MC's import map
     html_bytes: int | None = None
     quiet_box: Literal["ok", "busy", "timeout"] | None = None
     serving_age_min: int | None = None
@@ -369,6 +378,7 @@ class ContestantResult(BaseModel):
     runs: list[RunView]
     summary: Summary
     receipt: Receipt | None = None
+    lib_track: LibTrack = "none"
     receipt_version: int | None = None
     receipt_checksum: str | None = None
 
