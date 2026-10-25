@@ -433,6 +433,10 @@ describe("ResultPage — where the parts sit on the desktop", () => {
     expect(warning.compareDocumentPosition(screen.getByTestId("result-no-video")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const facts = document.querySelector('[data-region="result-facts"]')!;
     expect(region(facts, "result-side")).not.toBeNull();
+    // In the narrow rail a long model name moves under its label whole.
+    for (const row of Array.from(facts.querySelectorAll("dl > div"))) {
+      expect(row.className).toMatch(/(^|\s)flex-wrap(\s|$)/);
+    }
     expect(screen.getByTestId("bench-result-page").getAttribute("data-columns")).toBe("main-side");
   });
 
@@ -508,6 +512,8 @@ describe("ResultPage — where the parts sit on the desktop", () => {
       const pane = document.querySelector(`[data-region="${name}"]`)!;
       expect(pane.className).toMatch(/(^|\s)2xl:overflow-y-auto(\s|$)/);
       expect(pane.className).toMatch(/(^|\s)2xl:h-full(\s|$)/);
+      // Windows draws classic bars: the room stays reserved, nothing shifts.
+      expect(pane.className).toMatch(/(^|\s)2xl:\[scrollbar-gutter:stable\](\s|$)/);
     }
   });
 });

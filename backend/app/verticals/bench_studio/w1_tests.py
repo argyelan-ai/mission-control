@@ -383,6 +383,11 @@ def poster_entry(entries: list[BenchEntry]) -> BenchEntry | None:
     return shot[0]
 
 
+def _has_poster(entries: list[BenchEntry]) -> bool:
+    e = poster_entry(entries)
+    return e is not None and not w1_kit.poster_known_blank(e.screenshot_path)
+
+
 async def list_tests(
     session: AsyncSession,
     *,
@@ -422,7 +427,7 @@ async def list_tests(
                 for r in results
             ],
             "gate_status": d["gate"]["status"],
-            "poster": poster_entry(by_ch.get(ch.id, [])) is not None,
+            "poster": _has_poster(by_ch.get(ch.id, [])),
         }
         if d["state"] in ("running", "waiting"):
             runs = [run for r in results for run in r["runs"]]

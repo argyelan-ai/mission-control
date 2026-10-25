@@ -250,13 +250,15 @@ function AbortedFacts({ test, words }: { test: BenchTestDetail; words: BenchWord
         {rows.map((r) => (
           <div
             key={r.key}
-            className="flex items-start justify-between gap-4 py-3"
+            // In the narrow rail a long model name moves under its label
+            // whole instead of breaking at a hyphen.
+            className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 py-3"
             style={{ borderBottom: `1px solid ${C.borderSubtle}` }}
           >
             <dt className="text-sm" style={{ color: C.textMuted }}>
               {r.label}
             </dt>
-            <dd className="flex flex-col items-end text-right">
+            <dd className="ml-auto flex flex-col items-end text-right min-w-0 [overflow-wrap:anywhere]">
               <span className="text-sm tabular-nums" style={{ color: C.textPrimary }}>
                 {r.value}
               </span>
@@ -556,7 +558,9 @@ export function ResultView({ testId }: ResultPageProps) {
   //   receipt of a finished test, start and contestant of a stopped one;
   // · from 1536 px the list joins as a third pane. Each pane scrolls on its
   //   own, hairlines part them, all three start on one top line.
-  // A live test has no rail: the live run owns the page (K3).
+  // A live test has no rail: the live run owns the page (K3). The panes keep
+  // their scrollbar's room (Windows draws classic bars), so a result that
+  // scrolls and one that does not put the column on the same pixels.
   const hasButtons = Boolean(primaryButton || secondaryRerun);
   const checksShown = done && test.gate.status !== "pending";
   const aborted = !live && test.state === "aborted";
@@ -607,7 +611,7 @@ export function ResultView({ testId }: ResultPageProps) {
       }`}
     >
       <aside
-        className={`hidden 2xl:block min-w-0 2xl:h-full 2xl:overflow-y-auto scroll-quiet 2xl:pr-6 ${PANE_WIDE_PAD_R} 2xl:pb-8 2xl:border-r`}
+        className={`hidden 2xl:block min-w-0 2xl:h-full 2xl:overflow-y-auto 2xl:[scrollbar-gutter:stable] scroll-quiet 2xl:pr-6 ${PANE_WIDE_PAD_R} 2xl:pb-8 2xl:border-r`}
         style={{ borderColor: C.border }}
         data-region="result-list"
       >
@@ -621,7 +625,7 @@ export function ResultView({ testId }: ResultPageProps) {
           the head), every line on its left edge. */}
       <div
         data-region="result-main"
-        className={`contents lg:block min-w-0 2xl:h-full 2xl:overflow-y-auto scroll-quiet 2xl:px-6 ${PANE_WIDE_PAD_X} 2xl:pb-8`}
+        className={`contents lg:block min-w-0 2xl:h-full 2xl:overflow-y-auto 2xl:[scrollbar-gutter:stable] scroll-quiet 2xl:px-6 ${PANE_WIDE_PAD_X} 2xl:pb-8`}
       >
         <div className={`contents lg:flex lg:flex-col lg:gap-6 lg:w-full ${STAGE_MAX_W} 2xl:mx-auto`}>
           <header data-region="result-head" className="order-1 lg:order-none flex flex-col gap-3 min-w-0">
@@ -705,7 +709,7 @@ export function ResultView({ testId }: ResultPageProps) {
       {hasSide && (
         <div
           data-region="result-side"
-          className={`contents lg:flex lg:flex-col lg:gap-6 lg:sticky lg:top-0 lg:self-start min-w-0 2xl:static 2xl:self-stretch 2xl:h-full 2xl:overflow-y-auto scroll-quiet 2xl:pl-6 ${PANE_WIDE_PAD_L} 2xl:pb-8 2xl:border-l`}
+          className={`contents lg:flex lg:flex-col lg:gap-6 lg:sticky lg:top-0 lg:self-start min-w-0 2xl:static 2xl:self-stretch 2xl:h-full 2xl:overflow-y-auto 2xl:[scrollbar-gutter:stable] scroll-quiet 2xl:pl-6 ${PANE_WIDE_PAD_L} 2xl:pb-8 2xl:border-l`}
           style={{ borderColor: C.border }}
         >
           {buttons}

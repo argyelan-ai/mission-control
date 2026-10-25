@@ -636,14 +636,17 @@ def kit(challenge, detail: dict[str, Any]) -> dict[str, Any]:
 #: Poster width in pixels: a gallery card is at most ~400 CSS px wide, so
 #: 800 covers a 2× screen; a page screenshot is 8 KB–1.4 MB, a poster ~30 KB.
 POSTER_WIDTH = 800
+#: A page that is this much ONE colour drew nothing worth showing (a sky-blue
+#: canvas, a black scene that never started). Measured on the 49 live
+#: screenshots of 25.10.2026: the 8 blank ones are 0.937–0.995, the most
+#: uniform real picture 0.875 (a helix on black).
+POSTER_BLANK_SHARE = 0.9
 
 
-def poster_webp(path: str | None) -> bytes | None:
-    """A small WebP of one run's page screenshot, or None when there is no
-    file. Only files below the shared-deliverables root are read."""
+def _poster_source(path: str | None):
+    """The screenshot as a Path when it may be read (a file below the
+    shared-deliverables root), else None."""
     from pathlib import Path
-
-    from PIL import Image
 
     from . import orchestrator as orch
 
@@ -653,12 +656,65 @@ def poster_webp(path: str | None) -> bytes | None:
     p = Path(path).resolve()
     if root not in p.parents or not p.is_file():
         return None
-    import io
+    return p
 
+
+def _poster_cache(p) -> tuple[Any, Any]:
+    """Cache files next to the screenshot, keyed on its mtime and size: a new
+    screenshot (re-record) gets a new key, so a stale poster is never served."""
+    st = p.stat()
+    key = f"{st.st_mtime_ns}-{st.st_size}"
+    return p.with_name(f".{p.stem}.poster-{key}.webp"), p.with_name(f".{p.stem}.poster-{key}.blank")
+
+
+def poster_is_blank(image) -> bool:
+    """True when one colour covers ≥ POSTER_BLANK_SHARE of the picture."""
+    small = image.convert("RGB").resize((64, 36))
+    colours = small.getcolors(64 * 36) or []
+    return bool(colours) and max(n for n, _ in colours) / (64 * 36) >= POSTER_BLANK_SHARE
+
+
+def poster_known_blank(path: str | None) -> bool:
+    """The cache already knows this screenshot is blank (cheap: one stat)."""
+    p = _poster_source(path)
+    return p is not None and _poster_cache(p)[1].exists()
+
+
+def poster_webp(path: str | None) -> bytes | None:
+    """A small WebP of one run's page screenshot, or None when there is no
+    file, the file lies outside the shared-deliverables root, or the page is
+    blank. The result is cached next to the screenshot (best effort: a
+    read-only disk only costs the cache)."""
+    import io
+    import os
+
+    from PIL import Image
+
+    p = _poster_source(path)
+    if p is None:
+        return None
+    webp, blank = _poster_cache(p)
+    if blank.exists():
+        return None
+    if webp.is_file():
+        return webp.read_bytes()
     with Image.open(p) as im:
         im = im.convert("RGB")
-        if im.width > POSTER_WIDTH:
-            im = im.resize((POSTER_WIDTH, round(im.height * POSTER_WIDTH / im.width)), Image.Resampling.LANCZOS)
-        out = io.BytesIO()
-        im.save(out, "WEBP", quality=80, method=4)
-    return out.getvalue()
+        is_blank = poster_is_blank(im)
+        data = None
+        if not is_blank:
+            if im.width > POSTER_WIDTH:
+                im = im.resize((POSTER_WIDTH, round(im.height * POSTER_WIDTH / im.width)), Image.Resampling.LANCZOS)
+            out = io.BytesIO()
+            im.save(out, "WEBP", quality=80, method=4)
+            data = out.getvalue()
+    try:
+        for old in p.parent.glob(f".{p.stem}.poster-*"):
+            old.unlink(missing_ok=True)
+        target = blank if is_blank else webp
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_bytes(data or b"")
+        os.replace(tmp, target)
+    except OSError:
+        pass
+    return data

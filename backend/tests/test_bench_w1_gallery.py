@@ -6,6 +6,7 @@ shared-deliverables root — and every run carries the tokens it thought
 from __future__ import annotations
 
 import io
+import os
 
 import pytest
 from sqlmodel import select
@@ -29,6 +30,25 @@ def _png(path, w=1920, h=1080, color=(30, 60, 90)):
     return path
 
 
+def _noisy_png(path, w=1440, h=810, seed=1):
+    """A picture with real content (no colour covers 90 %)."""
+    import random
+
+    rnd = random.Random(seed)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    im = Image.new("RGB", (w, h))
+    px = im.load()
+    for y in range(0, h, 9):
+        for x in range(0, w, 9):
+            c = (rnd.randrange(256), rnd.randrange(256), rnd.randrange(256))
+            for dy in range(9):
+                for dx in range(9):
+                    if x + dx < w and y + dy < h:
+                        px[x + dx, y + dy] = c
+    im.save(path, "PNG")
+    return path
+
+
 async def _test_with_entries(session, fleet):
     ch = await w1_tests.create_test(
         session, picks=[{"runtime_id": str(fleet["slot"].id), "harness": "api", "efforts": ["default"]}],
@@ -49,7 +69,7 @@ def test_poster_entry_prefers_the_video_run():
 
 def test_poster_webp_scales_down_and_stays_inside_the_root(tmp_path, monkeypatch):
     monkeypatch.setattr(orch, "SHARED_DELIVERABLES", tmp_path / "shared")
-    inside = _png(tmp_path / "shared" / "bench-1" / "run" / "screenshot.png")
+    inside = _noisy_png(tmp_path / "shared" / "bench-1" / "run" / "screenshot.png", 1920, 1080)
     data = w1_kit.poster_webp(str(inside))
     assert data is not None
     im = Image.open(io.BytesIO(data))
@@ -73,7 +93,7 @@ async def test_list_says_poster_and_the_route_serves_it(auth_client, session, en
     assert item["poster"] is False
     assert (await auth_client.get(f"{BASE}/tests/{ch.id}/poster")).status_code == 404
 
-    shot = _png(tmp_path / f"bench-{ch.id}" / "run-1" / "screenshot.png", 1280, 720)
+    shot = _noisy_png(tmp_path / f"bench-{ch.id}" / "run-1" / "screenshot.png", 1280, 720)
     entries[0].screenshot_path = str(shot)
     session.add(entries[0])
     await session.commit()
@@ -111,3 +131,72 @@ async def test_each_run_carries_the_tokens_it_thought(auth_client, session, engi
     assert run1["tokens_reasoning"] == 16384 and run1["tokens_out"] == 16384
     assert run1["error"]["code"] == "no_html_truncated"
     assert next(r for r in runs if r["repeat_idx"] == 2)["tokens_reasoning"] is None
+
+
+def test_poster_is_cached_next_to_the_screenshot_and_refreshed_by_a_new_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(orch, "SHARED_DELIVERABLES", tmp_path)
+    shot = _noisy_png(tmp_path / "bench-1" / "run" / "screenshot.png")
+    first = w1_kit.poster_webp(str(shot))
+    cached = list(shot.parent.glob(".screenshot.poster-*.webp"))
+    assert first is not None and len(cached) == 1 and cached[0].read_bytes() == first
+
+    # A hit does not decode the screenshot again.
+    def boom(*a, **k):
+        raise AssertionError("screenshot decoded on a cache hit")
+
+    import PIL.Image as PImage
+
+    real_open, real_blank = PImage.open, w1_kit.poster_is_blank
+    monkeypatch.setattr(PImage, "open", boom)
+    monkeypatch.setattr(w1_kit, "poster_is_blank", boom)
+    assert w1_kit.poster_webp(str(shot)) == first
+    monkeypatch.setattr(PImage, "open", real_open)
+    monkeypatch.setattr(w1_kit, "poster_is_blank", real_blank)
+
+    # Re-recorded: new bytes + new mtime → a new poster, the old cache file is gone.
+    _noisy_png(shot, seed=2)
+    st = shot.stat()
+    os.utime(shot, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+    second = w1_kit.poster_webp(str(shot))
+    assert second is not None and second != first
+    left = list(shot.parent.glob(".screenshot.poster-*"))
+    assert len(left) == 1 and left[0].read_bytes() == second
+
+
+def test_a_blank_page_has_no_poster_and_the_list_learns_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(orch, "SHARED_DELIVERABLES", tmp_path)
+    sky = _png(tmp_path / "bench-1" / "run" / "screenshot.png", 1440, 810, (135, 206, 235))
+    # a small label on a sky-blue canvas is still blank (≥ 90 % one colour)
+    im = Image.open(sky)
+    for x in range(20, 200):
+        for y in range(20, 40):
+            im.putpixel((x, y), (40, 40, 40))
+    im.save(sky)
+    assert w1_kit.poster_is_blank(Image.open(sky))
+    assert not w1_kit.poster_known_blank(str(sky))
+    assert w1_kit.poster_webp(str(sky)) is None
+    assert w1_kit.poster_known_blank(str(sky))
+    # a real picture is not blank
+    assert not w1_kit.poster_is_blank(Image.open(_noisy_png(tmp_path / "bench-2" / "r" / "screenshot.png")))
+
+
+def test_the_cache_never_lives_outside_the_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(orch, "SHARED_DELIVERABLES", tmp_path / "shared")
+    outside = _noisy_png(tmp_path / "elsewhere" / "screenshot.png")
+    assert w1_kit.poster_webp(str(outside)) is None
+    assert list(outside.parent.glob(".screenshot.poster-*")) == []
+
+
+@pytest.mark.asyncio
+async def test_list_says_no_poster_for_a_known_blank_page(auth_client, session, engines, tmp_path, monkeypatch):
+    monkeypatch.setattr(orch, "SHARED_DELIVERABLES", tmp_path)
+    fleet = await seed_fleet(session)
+    ch, entries = await _test_with_entries(session, fleet)
+    shot = _png(tmp_path / f"bench-{ch.id}" / "run-1" / "screenshot.png", 1440, 810, (0, 0, 0))
+    entries[0].screenshot_path = str(shot)
+    session.add(entries[0])
+    await session.commit()
+    item = lambda r: next(i for i in r.json()["items"] if i["id"] == str(ch.id))  # noqa: E731
+    assert item(await auth_client.get(f"{BASE}/tests"))["poster"] is True   # not known yet
+    assert (await auth_client.get(f"{BASE}/tests/{ch.id}/poster")).status_code == 404
+    assert item(await auth_client.get(f"{BASE}/tests"))["poster"] is False  # now known
