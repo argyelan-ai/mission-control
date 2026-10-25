@@ -9,11 +9,12 @@
 // test waits or runs the page polls the record (LIVE_POLL_MS) and shows the
 // live run (package B) instead of video and numbers.
 //
-// Phone: one column, content to the edge (K8). Desktop ≥ 1024 px: content
-// left, a sticky right column with the actions, the gate checks and the
-// receipt; ≥ 1536 px the test list (package D) joins on the left. One DOM
-// for both: the two column wrappers are `display: contents` on the phone, so
-// their parts interleave by `order`.
+// Phone: one column, content to the edge (K8). Desktop ≥ 1024 px: the main
+// column (head, private warning, video, numbers; at most 68 rem) and, for a
+// finished test only, a sticky right column with the actions, the gate checks
+// and the receipt; ≥ 1536 px the test list (package D) joins on the left in
+// a fluid 20–28 rem column. One DOM for both: the column wrappers are
+// `display: contents` on the phone, so their parts interleave by `order`.
 //
 // Signature is frozen (ResultPageProps).
 import { Suspense, useEffect, useRef, useState } from "react";
@@ -508,11 +509,61 @@ export function ResultView({ testId }: ResultPageProps) {
       ? t("receipt.title")
       : t("receipt.titleFor", { name: test.blocks.length > 1 ? block : c.display_name });
 
+  // Where the parts sit (25.10., operator on a 1920 px screen): the warning
+  // is part of the test's state — main column, under the head, never alone
+  // in a corner. The side column exists for a finished test only: what to do
+  // with it (X-Kit, Run again), the checks, the receipt. A stopped or live
+  // test keeps its one action in the main column and gets no empty third
+  // column. The main column stops at 68 rem so its lines stay readable.
+  const hasButtons = Boolean(primaryButton || secondaryRerun);
+  const checksShown = done && test.gate.status !== "pending";
+  const hasSide = done && (hasButtons || checksShown || receipts.length > 0);
+
+  const notice = showTruncation && test.truncation && (
+    <section data-region="result-notice" className="order-2 lg:order-none min-w-0">
+      <TruncationWarning
+        truncation={test.truncation}
+        contestants={contestants}
+        words={words}
+        canRerun={allowed.has("rerun_larger")}
+        rerunPending={rerunLarger.pending}
+        costAsk={rerunLarger.costAsk}
+        primary={truncationFirst}
+        onRerun={rerunLarger.run}
+        onContinue={ackTruncation}
+      />
+    </section>
+  );
+
+  const buttons = hasButtons && (
+    <section
+      data-region="result-actions"
+      className={`order-2 lg:order-none flex items-center gap-2 ${hasSide ? "" : "lg:max-w-xs"}`}
+    >
+      {primaryButton}
+      {secondaryRerun && (
+        <button
+          type="button"
+          onClick={() => router.push(benchTestHref({ rerunOf: testId, trigger: "rerun" }))}
+          className="min-h-11 px-4 rounded-md text-sm cursor-pointer"
+          style={{ color: C.textSecondary }}
+        >
+          {t("actions.rerun")}
+        </button>
+      )}
+    </section>
+  );
+
   return (
     <div
       data-testid="bench-result-page"
       data-test-id={testId}
-      className="grid grid-cols-1 gap-y-6 pb-8 lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-x-8 2xl:grid-cols-[280px_minmax(0,1fr)_320px]"
+      data-columns={hasSide ? "main-side" : "main"}
+      className={`grid grid-cols-1 gap-y-6 pb-8 lg:gap-x-8 ${
+        hasSide
+          ? "lg:grid-cols-[minmax(0,68rem)_300px] 2xl:grid-cols-[clamp(20rem,24%,28rem)_minmax(0,68rem)_clamp(300px,18%,22.5rem)]"
+          : "lg:grid-cols-[minmax(0,68rem)] 2xl:grid-cols-[clamp(20rem,24%,28rem)_minmax(0,68rem)]"
+      }`}
     >
       <aside className="hidden 2xl:block min-w-0" data-region="result-list">
         <Suspense fallback={null}>
@@ -520,8 +571,8 @@ export function ResultView({ testId }: ResultPageProps) {
         </Suspense>
       </aside>
 
-      {/* Center: head, video/live, numbers */}
-      <div className="contents lg:flex lg:flex-col lg:gap-6 min-w-0">
+      {/* Main: head, warning, video/live, numbers */}
+      <div data-region="result-main" className="contents lg:flex lg:flex-col lg:gap-6 min-w-0">
         <header data-region="result-head" className="order-1 lg:order-none flex flex-col gap-3 min-w-0">
           <div className="flex items-center -ml-2 -mr-2">
             <Link
@@ -562,6 +613,9 @@ export function ResultView({ testId }: ResultPageProps) {
           {done && <VerdictLine test={test} words={words} />}
         </header>
 
+        {notice}
+        {!hasSide && buttons}
+
         <section data-region="result-video" className="order-3 lg:order-none min-w-0">
           {live ? (
             <LiveRun test={test} onStopped={(next) => qc.setQueryData(key, next)} />
@@ -589,59 +643,33 @@ export function ResultView({ testId }: ResultPageProps) {
         )}
       </div>
 
-      {/* Side: next step, checks, receipt (sticky on the desktop) */}
-      <div className="contents lg:flex lg:flex-col lg:gap-6 lg:sticky lg:top-0 lg:self-start lg:pt-12">
-        {(showTruncation || primaryButton || secondaryRerun) && (
-          <section data-region="result-actions" className="order-2 lg:order-none flex flex-col gap-3">
-            {showTruncation && test.truncation && (
-              <TruncationWarning
-                truncation={test.truncation}
-                contestants={contestants}
-                words={words}
-                canRerun={allowed.has("rerun_larger")}
-                rerunPending={rerunLarger.pending}
-                costAsk={rerunLarger.costAsk}
-                primary={truncationFirst}
-                onRerun={rerunLarger.run}
-                onContinue={ackTruncation}
-              />
-            )}
-            {(primaryButton || secondaryRerun) && (
-            <div className="flex items-center gap-2">
-              {primaryButton}
-              {secondaryRerun && (
-                <button
-                  type="button"
-                  onClick={() => router.push(benchTestHref({ rerunOf: testId, trigger: "rerun" }))}
-                  className="min-h-11 px-4 rounded-md text-sm cursor-pointer"
-                  style={{ color: C.textSecondary }}
-                >
-                  {t("actions.rerun")}
-                </button>
-              )}
+      {/* Side (finished tests): next step, checks, receipt — sticky on the desktop */}
+      {hasSide && (
+        <div
+          data-region="result-side"
+          className="contents lg:flex lg:flex-col lg:gap-6 lg:sticky lg:top-0 lg:self-start lg:pt-12 min-w-0"
+        >
+          {buttons}
+
+          {checksShown && (
+            <div className="hidden lg:block">
+              <GateChecks gate={test.gate} words={words} hideTruncation={Boolean(test.truncation)} />
             </div>
-            )}
-          </section>
-        )}
+          )}
 
-        {done && (
-          <div className="hidden lg:block">
-            <GateChecks gate={test.gate} words={words} hideTruncation={Boolean(test.truncation)} />
-          </div>
-        )}
-
-        {done && receipts.length > 0 && (
-          <section data-region="result-receipt" className="order-5 lg:order-none" style={{ borderBottom: `1px solid ${C.border}` }}>
-            {test.blocks.map((b) =>
-              b.contestants
-                .filter((c) => c.receipt)
-                .map((c) => (
-                  <ReceiptView key={c.key} contestant={c} words={words} title={receiptTitle(c, words.runClass(b.run_class))} />
-                )),
-            )}
-          </section>
-        )}
-      </div>
+          {receipts.length > 0 && (
+            <section data-region="result-receipt" className="order-5 lg:order-none" style={{ borderBottom: `1px solid ${C.border}` }}>
+              {test.blocks.map((b) =>
+                b.contestants
+                  .filter((c) => c.receipt)
+                  .map((c) => (
+                    <ReceiptView key={c.key} contestant={c} words={words} title={receiptTitle(c, words.runClass(b.run_class))} />
+                  )),
+              )}
+            </section>
+          )}
+        </div>
+      )}
 
       <XKitSheet testId={testId} open={kitOpen} onClose={() => setKitOpen(false)} />
       <ConfirmDialog

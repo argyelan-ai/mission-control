@@ -106,7 +106,7 @@ describe("TestList — sections and rows (P7)", () => {
     expect(screen.queryByText("Pick a test on the left")).toBeNull();
   });
 
-  it("never lays out columns of its own: it also lives in the 280 px column beside a result", async () => {
+  it("never lays out columns of its own: it also lives in the narrow column beside a result", async () => {
     // 25.10.: a viewport grid (list 320–400 px + a "pick a test" column) inside
     // the result page's 280 px column spilled over the video. The list sizes
     // itself by its container only.
@@ -120,6 +120,23 @@ describe("TestList — sections and rows (P7)", () => {
     );
     expect(viewportColumns).toEqual([]);
     expect(root.querySelector("aside")).toBeNull();
+  });
+
+  it("a narrow column never cuts the model name or the title: they wrap, the tags go below", async () => {
+    // 25.10. (operator, 1920 px): beside a result the row cut the model to
+    // "DeepSeek-V4.1-Fla…" — or "D." with two tags — and the title to
+    // "[Usertest R4] Effort Aus vs Ma…". jsdom has no layout, so the rule is
+    // checked on the structure: no ellipsis on the words, a wrapping meta row.
+    renderList();
+    const rows = await screen.findAllByTestId("bench-test-row");
+    for (const row of rows) {
+      const title = within(row).getByTestId("bench-row-title");
+      expect(title.className).not.toMatch(/(^|\s)(truncate|line-clamp-\d)(\s|$)/);
+      const models = within(row).getByTestId("bench-row-models");
+      expect(models.className).not.toMatch(/(^|\s)(truncate|line-clamp-\d)(\s|$)/);
+      expect(models.parentElement!.className).toMatch(/(^|\s)flex-wrap(\s|$)/);
+    }
+    expect(within(rows[0]).getByTestId("bench-row-models")).toHaveTextContent("DeepSeek-V4.1");
   });
 
   it("the prompt library sits in the header, next to 'Test a model'", async () => {

@@ -12,7 +12,7 @@
  *
  * Desktop: one readable column. Master–detail lives on the result page
  * (/bench/r/<id>, a shareable URL): from 1536 px it shows this list in a
- * 280 px column beside the result and the open test's row is marked
+ * 20–28 rem column beside the result and the open test's row is marked
  * (aria-current). So the list never lays out columns of its own and sizes
  * its header by its container (@container), never by the viewport — a
  * viewport grid here once spilled the list and a "pick a test" column
@@ -141,17 +141,28 @@ function TestRow({ item, current }: { item: BenchTestListItem; current: boolean 
         className="block -mx-2 px-2 py-3 rounded-lg transition-colors hover:bg-[var(--color-bg-hover)]"
         style={current ? { background: C.bgHover } : undefined}
       >
+        {/* Title and model wrap, never "…": beside a result the column is
+            narrow, and a cut model name ("D.", 25.10.) says nothing. The tags
+            and the state go to the next line when they do not fit. */}
         <div className="flex items-baseline justify-between gap-3">
-          <span className="text-base font-medium truncate" style={{ color: C.textPrimary }}>
+          <span
+            data-testid="bench-row-title"
+            className="text-base font-medium min-w-0 [overflow-wrap:anywhere]"
+            style={{ color: C.textPrimary }}
+          >
             {item.title}
           </span>
           <span className="text-sm tabular-nums shrink-0" style={{ color: C.textMuted }}>
             {day(item.created_at, locale)}
           </span>
         </div>
-        <div className="flex items-center gap-2 mt-1 min-w-0">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 min-w-0">
           {models && (
-            <span className="text-sm truncate min-w-0" style={{ color: C.textSecondary }}>
+            <span
+              data-testid="bench-row-models"
+              className="text-sm min-w-0 [overflow-wrap:anywhere]"
+              style={{ color: C.textSecondary }}
+            >
               {models}
             </span>
           )}
@@ -338,7 +349,7 @@ export function TestList() {
   const lastDay = day(base.data?.last_at ?? null, locale);
   const testHref = benchTestHref({ trigger: "list" });
 
-  // Narrow (phone, or the 280 px column beside a result): two rows —
+  // Narrow (phone, or the column beside a result): two rows —
   // title | Modell testen (the button wraps under the title when the room
   // is too small, never over it), then count | library. Wide: one bar —
   // title … library · Modell testen, the count below. Container queries,

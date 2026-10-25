@@ -413,6 +413,54 @@ describe("ResultPage — private truncation warning", () => {
   });
 });
 
+// 25.10. (operator, Windows desktop): the warning sat alone in the right
+// column, top right, away from the test it describes. It belongs to the
+// state of the test: main column, right under the head. The side column is
+// for a finished test only — what to do with it, the checks, the receipt.
+describe("ResultPage — where the parts sit on the desktop", () => {
+  const region = (el: Element, name: string) => el.closest(`[data-region="${name}"]`);
+
+  it("stopped, all runs cut: the warning sits in the main column under the state line, no side column", async () => {
+    renderView(testAbortedTruncatedFixture);
+    const warning = await screen.findByTestId("truncation-warning");
+    expect(region(warning, "result-main")).not.toBeNull();
+    expect(region(warning, "result-side")).toBeNull();
+    const state = screen.getByTestId("result-state");
+    expect(state.compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(warning.compareDocumentPosition(screen.getByText(/No video/)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Nothing is left for a third column: the page has two (list + main).
+    expect(document.querySelector('[data-region="result-side"]')).toBeNull();
+    expect(screen.getByTestId("bench-result-page").getAttribute("data-columns")).toBe("main");
+  });
+
+  it("stopped without a cut: 'Run again' stays with the test in the main column", async () => {
+    renderView({ ...testAbortedTruncatedFixture, truncation: null });
+    const rerun = await screen.findByRole("button", { name: "Run again" });
+    expect(region(rerun, "result-main")).not.toBeNull();
+    expect(document.querySelector('[data-region="result-side"]')).toBeNull();
+  });
+
+  it("finished with a cut run: warning in the main column, kit, checks and receipt in the side column", async () => {
+    renderView(testDoneTruncatedFixture);
+    const warning = await screen.findByTestId("truncation-warning");
+    expect(region(warning, "result-main")).not.toBeNull();
+    expect(region(warning, "result-side")).toBeNull();
+    expect(region(screen.getByRole("button", { name: "X-Kit" }), "result-side")).not.toBeNull();
+    expect(region(screen.getByRole("region", { name: "Check" }), "result-side")).not.toBeNull();
+    expect(screen.getByTestId("bench-result-page").getAttribute("data-columns")).toBe("main-side");
+  });
+
+  it("finished green: the side column holds the X-Kit, 'Run again', the checks and the receipt", async () => {
+    renderView(testDoneGreenFixture);
+    const kit = await screen.findByRole("button", { name: "X-Kit" });
+    const side = region(kit, "result-side")!;
+    expect(side).not.toBeNull();
+    expect(within(side as HTMLElement).getByRole("button", { name: "Run again" })).toBeInTheDocument();
+    expect(side.querySelector('[data-region="result-checks"]')).not.toBeNull();
+    expect(side.querySelector('[data-region="result-receipt"]')).not.toBeNull();
+  });
+});
+
 describe("ResultPage — Eingang", () => {
   it("opening a finished result resolves its Eingang item, once", async () => {
     vi.mocked(benchW1Api.tests.seen).mockClear();
