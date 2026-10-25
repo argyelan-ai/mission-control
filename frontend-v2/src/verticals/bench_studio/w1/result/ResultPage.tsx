@@ -606,8 +606,8 @@ export function ResultView({ testId }: ResultPageProps) {
       data-columns={hasSide ? "main-side" : "main"}
       className={`grid grid-cols-1 gap-y-6 pb-8 lg:gap-x-8 2xl:h-full 2xl:pb-0 2xl:gap-x-0 ${
         hasSide
-          ? "lg:grid-cols-[minmax(0,1fr)_clamp(18rem,26%,22rem)] 2xl:grid-cols-[clamp(22rem,24%,32rem)_minmax(0,1fr)_clamp(18rem,18%,28rem)]"
-          : "2xl:grid-cols-[clamp(22rem,24%,32rem)_minmax(0,1fr)]"
+          ? "lg:grid-cols-[minmax(0,1fr)_clamp(18rem,26%,22rem)] 2xl:grid-cols-[clamp(23rem,25%,32rem)_minmax(0,1fr)_clamp(18rem,18%,28rem)]"
+          : "2xl:grid-cols-[clamp(23rem,25%,32rem)_minmax(0,1fr)]"
       }`}
     >
       <aside

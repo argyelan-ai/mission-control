@@ -207,6 +207,30 @@ describe("TestList — sections and rows (P7)", () => {
     }
   });
 
+  it("the selected box sits on the pane's own edges: no margin from 1536 px, equal padding, text on one line selected or not", async () => {
+    // 25.10. (operator, 1920 px): the box hung 8 px out on both sides; the
+    // scrolling pane cut its left edge and the text sat on the cut.
+    nav.pathname = benchResultHref(testListFixture.items[1].id);
+    try {
+      renderList();
+      const rows = await screen.findAllByTestId("bench-test-row");
+      const spacing = (el: Element) =>
+        (el.getAttribute("class") ?? "").split(/\s+/).filter((c) => /^-?(m|p)[xylrtb]?-/.test(c)).sort();
+      for (const row of rows) {
+        const cls = row.getAttribute("class") ?? "";
+        // in the pane (≥ 1536 px) the box sits on the list's edges
+        expect(cls).toMatch(/(^|\s)2xl:mx-0(\s|$)/);
+        expect(cls).toMatch(/(^|\s)px-2(\s|$)/);
+        expect(cls).toMatch(/(^|\s)focus-inset(\s|$)/);
+        // the selected row has exactly the spacing of every other row
+        expect(spacing(row)).toEqual(spacing(rows[0]));
+      }
+      expect(rows[1]).toHaveAttribute("aria-current", "page");
+    } finally {
+      nav.pathname = "/bench";
+    }
+  });
+
   it("the open test's row is marked by the selection pattern, not only by a hover tone", async () => {
     nav.pathname = benchResultHref(testListFixture.items[1].id);
     try {

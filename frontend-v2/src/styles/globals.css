@@ -512,6 +512,12 @@ body {
   border-radius: var(--radius-sm);
 }
 
+/* Rows inside a pane that scrolls: the pane clips what lies outside it, so
+   their ring goes inside the box instead of 2px around it (bench list). */
+.focus-inset:focus-visible {
+  outline-offset: -2px;
+}
+
 /* The command palette's input is the panel's only field and is focused the
    moment the panel opens, so a 2px ring around the whole row shouts without
    telling the user anything new. Focus moves to the divider underneath — still

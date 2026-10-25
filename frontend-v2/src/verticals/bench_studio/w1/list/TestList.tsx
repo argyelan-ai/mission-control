@@ -197,8 +197,14 @@ function TestRow({ item, current }: { item: BenchTestListItem; current: boolean 
         data-testid="bench-test-row"
         aria-current={current ? "page" : undefined}
         // The open test: accent tint + accent hairline (the selection pattern,
-        // no bar, no halo); the others only lighten on hover.
-        className={`group block -mx-2 px-2 py-3 rounded-lg border transition-colors @4xl:mx-0 @4xl:p-0 @4xl:h-full @4xl:overflow-hidden @4xl:flex @4xl:flex-col ${
+        // no bar, no halo); the others only lighten on hover. Every row has
+        // the same box and the same inner padding left and right, so text
+        // stays on one line selected or not. On the phone the hover tone may
+        // bleed 8 px past the text; in the result page's pane (from 1536 px,
+        // where the open test is marked) the box sits ON the list's edges —
+        // a pane that scrolls clips what sticks out (25.10.) — and the focus
+        // ring goes inside it for the same reason.
+        className={`group block -mx-2 px-2 py-3 rounded-lg border transition-colors focus-inset 2xl:mx-0 @4xl:mx-0 @4xl:p-0 @4xl:h-full @4xl:overflow-hidden @4xl:flex @4xl:flex-col ${
           current
             ? ""
             : "border-transparent @4xl:border-[var(--color-border)] @4xl:bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)]"
