@@ -19,7 +19,8 @@
         "done": 1,
         "total": 3
       },
-      "gate_status": "pending"
+      "gate_status": "pending",
+      "poster": false
     },
     {
       "id": "a0000000-0000-4000-8000-000000000005",
@@ -42,7 +43,8 @@
         }
       ],
       "progress": null,
-      "gate_status": "pending"
+      "gate_status": "pending",
+      "poster": false
     },
     {
       "id": "a0000000-0000-4000-8000-000000000004",
@@ -67,7 +69,8 @@
         }
       ],
       "progress": null,
-      "gate_status": "red"
+      "gate_status": "red",
+      "poster": true
     },
     {
       "id": "a0000000-0000-4000-8000-000000000003",
@@ -91,7 +94,8 @@
         }
       ],
       "progress": null,
-      "gate_status": "amber"
+      "gate_status": "amber",
+      "poster": true
     },
     {
       "id": "a0000000-0000-4000-8000-000000000002",
@@ -109,7 +113,8 @@
         }
       ],
       "progress": null,
-      "gate_status": "green"
+      "gate_status": "green",
+      "poster": true
     }
   ],
   "counts": {

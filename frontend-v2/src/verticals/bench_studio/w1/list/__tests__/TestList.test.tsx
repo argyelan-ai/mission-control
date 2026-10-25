@@ -5,7 +5,7 @@
  * no-hit, loading and error states. Data = the contract fixtures.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { benchW1Api, benchW1Keys } from "../../api";
@@ -139,7 +139,7 @@ describe("TestList — sections and rows (P7)", () => {
     expect(within(rows[0]).getByTestId("bench-row-models")).toHaveTextContent("DeepSeek-V4.1");
   });
 
-  it("a wide page puts more tests side by side, not longer rows: rows flow into ≥ 30 rem columns by the list's own width", async () => {
+  it("a wide page is a gallery: each section's rows become ≥ 19 rem cards with a picture slot", async () => {
     renderList();
     await screen.findAllByTestId("bench-test-row");
     const root = screen.getByTestId("bench-test-list");
@@ -147,7 +147,63 @@ describe("TestList — sections and rows (P7)", () => {
     expect(root.className).not.toMatch(/(^|\s)max-w-\S+/);
     for (const rows of screen.getAllByTestId("bench-section-rows")) {
       expect(rows.className).toMatch(/(^|\s)grid-cols-1(\s|$)/);
-      expect(rows.className).toMatch(/@4xl:grid-cols-\[repeat\(auto-fill,minmax\(30rem,1fr\)\)\]/);
+      expect(rows.className).toMatch(/@4xl:grid-cols-\[repeat\(auto-fill,minmax\(19rem,1fr\)\)\]/);
+    }
+    // Every row carries its picture slot, shown only in the wide shape.
+    const rows = screen.getAllByTestId("bench-test-row");
+    for (const row of rows) {
+      const poster = within(row).getByTestId("bench-row-poster");
+      expect(poster.className).toMatch(/(^|\s)hidden(\s|$)/);
+      expect(poster.className).toMatch(/(^|\s)@4xl:flex(\s|$)/);
+      expect(poster.className).toMatch(/(^|\s)aspect-video(\s|$)/);
+    }
+  });
+
+  it("pictures load only for tests that have one, once their card is on screen; the others get a deliberate frame", async () => {
+    const observers: IO[] = [];
+    class IO {
+      cb: IntersectionObserverCallback;
+      els: Element[] = [];
+      constructor(cb: IntersectionObserverCallback) {
+        this.cb = cb;
+        observers.push(this);
+      }
+      fire() {
+        this.cb(this.els.map((target) => ({ target, isIntersecting: true }) as IntersectionObserverEntry), this as never);
+      }
+      observe(el: Element) {
+        this.els.push(el);
+      }
+      disconnect() {}
+      unobserve() {}
+      takeRecords() {
+        return [];
+      }
+    }
+    vi.stubGlobal("IntersectionObserver", IO);
+    const fetchSpy = vi.fn(async () => new Response(new Blob(["x"], { type: "image/webp" })));
+    vi.stubGlobal("fetch", fetchSpy);
+    const created = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:poster");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    try {
+      renderList();
+      const rows = await screen.findAllByTestId("bench-test-row");
+      const withPoster = testListFixture.items.filter((i) => i.poster).map((i) => i.id);
+      expect(withPoster.length).toBeGreaterThan(0);
+      // Nothing is fetched before a card is on screen.
+      expect(fetchSpy).not.toHaveBeenCalled();
+      act(() => observers.forEach((o) => o.fire()));
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(withPoster.length));
+      const urls = fetchSpy.mock.calls.map((c) => String((c as unknown[])[0]));
+      for (const id of withPoster) expect(urls.some((u) => u.endsWith(`/bench/tests/${id}/poster`))).toBe(true);
+      await waitFor(() => expect(created).toHaveBeenCalled());
+      for (const [i, item] of testListFixture.items.entries()) {
+        const poster = within(rows[i]).getByTestId("bench-row-poster");
+        if (item.poster) await waitFor(() => expect(poster.querySelector("img")).not.toBeNull());
+        else expect(poster).toHaveTextContent(item.state === "running" || item.state === "waiting" ? "No picture yet" : "No picture");
+      }
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 

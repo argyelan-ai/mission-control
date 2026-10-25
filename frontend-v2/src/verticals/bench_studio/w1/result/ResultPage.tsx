@@ -59,6 +59,7 @@ import { formatClockTime, formatDay, formatTime, formatTokens, statText } from "
 import { GateChecks, GateLine } from "./GateView";
 import { isLive, menuIds, openablePages, primaryOf, safeOverlayActions } from "./plan";
 import { ReceiptView } from "./ReceiptView";
+import { RunsBreakdown } from "./RunsBreakdown";
 import { NumbersList, NumbersTable } from "./ResultNumbers";
 import { TruncationWarning } from "./TruncationWarning";
 import { useTruncationAck } from "./truncationAck";
@@ -677,14 +678,20 @@ export function ResultView({ testId }: ResultPageProps) {
             )}
           </section>
 
+          {aborted && (
+            <section data-region="result-runs" className="order-4 lg:order-none min-w-0">
+              <RunsBreakdown test={test} words={words} />
+            </section>
+          )}
+
           {done && test.blocks.length > 0 && (
             <section data-region="result-numbers" data-testid="result-numbers" className="order-4 lg:order-none min-w-0">
               <h2 className="label-sys">{t("numbers.label")}</h2>
               <div className="lg:hidden">
                 <NumbersList blocks={test.blocks} words={words} showNames={!nameInVerdict} />
               </div>
-              {/* A table past ~72 rem only puts air between its columns. */}
-              <div className="hidden lg:block mt-2 max-w-[72rem]">
+              {/* Across the column: video and table share one right edge. */}
+              <div className="hidden lg:block mt-2">
                 <NumbersTable blocks={test.blocks} words={words} showNames={!nameInVerdict} />
               </div>
             </section>

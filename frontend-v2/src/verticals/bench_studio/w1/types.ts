@@ -249,6 +249,8 @@ export interface RunView {
   phase: RunPhase;
   elapsed_ms: number | null;
   tokens_out: number | null;
+  /** Of tokens_out: thought, not written — when the engine says. */
+  tokens_reasoning: number | null;
   decode_tok_s: number | null;
   ttft_ms: number | null;
   finish_reason: string | null;
@@ -463,6 +465,8 @@ export interface BenchTestListItem {
   contestants: BenchTestListContestant[];
   progress: Record<string, number> | null;
   gate_status: GateStatus;
+  /** A page screenshot exists: GET /bench/tests/{id}/poster (gallery). */
+  poster: boolean;
 }
 
 /** GET /api/v1/bench/tests */

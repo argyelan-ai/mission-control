@@ -286,6 +286,7 @@ class RunView(BaseModel):
     phase: RunPhase = "queued"
     elapsed_ms: int | None = None
     tokens_out: int | None = None             # so far while running
+    tokens_reasoning: int | None = None       # of tokens_out: thought, not written (when the engine says)
     decode_tok_s: float | None = None         # class A only
     ttft_ms: int | None = None
     finish_reason: str | None = None
@@ -493,6 +494,7 @@ class BenchTestListItem(BaseModel):
     contestants: list[BenchTestListContestant]
     progress: dict[str, int] | None = None    # {"done": 2, "total": 3} while running
     gate_status: GateStatus = "pending"
+    poster: bool = False                      # a page screenshot exists: GET /tests/{id}/poster
 
 
 class BenchTestList(BaseModel):

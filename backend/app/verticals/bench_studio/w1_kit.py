@@ -629,3 +629,36 @@ def kit(challenge, detail: dict[str, Any]) -> dict[str, Any]:
         "footer": footer(),
         "truncation": detail.get("truncation"),
     }
+
+
+# ── Poster (the list's gallery, 25.10.2026) ──────────────────────────────
+
+#: Poster width in pixels: a gallery card is at most ~400 CSS px wide, so
+#: 800 covers a 2× screen; a page screenshot is 8 KB–1.4 MB, a poster ~30 KB.
+POSTER_WIDTH = 800
+
+
+def poster_webp(path: str | None) -> bytes | None:
+    """A small WebP of one run's page screenshot, or None when there is no
+    file. Only files below the shared-deliverables root are read."""
+    from pathlib import Path
+
+    from PIL import Image
+
+    from . import orchestrator as orch
+
+    if not path:
+        return None
+    root = orch.SHARED_DELIVERABLES.resolve()
+    p = Path(path).resolve()
+    if root not in p.parents or not p.is_file():
+        return None
+    import io
+
+    with Image.open(p) as im:
+        im = im.convert("RGB")
+        if im.width > POSTER_WIDTH:
+            im = im.resize((POSTER_WIDTH, round(im.height * POSTER_WIDTH / im.width)), Image.Resampling.LANCZOS)
+        out = io.BytesIO()
+        im.save(out, "WEBP", quality=80, method=4)
+    return out.getvalue()

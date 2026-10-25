@@ -15,8 +15,10 @@
  * test's row carries the selection (aria-current). The list never uses
  * viewport columns — a viewport grid here once spilled the list across the
  * result (25.10.). It lays out by its own width (@container): one column in
- * the pane and on the phone; on the wide /bench page the rows of a section
- * flow into columns of ≥ 30 rem, so width shows more tests, not longer lines.
+ * the pane and on the phone; on the wide /bench page (≥ 56 rem) each section
+ * becomes a gallery of cards with the test's picture (GET …/poster, loaded
+ * when a card comes on screen), because a benchmark is recognised by what it
+ * drew, not by its title.
  *
  * Words: state/section/wait/abort/gate words come from `benchShared`
  * (contract), everything else from `benchHome`.
@@ -29,7 +31,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
-import { Archive, BookOpen, ChevronDown, FlaskConical, Server, X } from "lucide-react";
+import { Archive, BookOpen, ChevronDown, FlaskConical, ImageOff, Server, X } from "lucide-react";
+import { useAuthBlob } from "@/hooks/useAuthBlob";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { Pill } from "@/components/shared/Pill";
 import { benchResultHref, benchTestHref } from "@/lib/benchLinks";
@@ -123,6 +126,51 @@ function useRowStatus() {
   };
 }
 
+/** The test's picture for the gallery: fetched only once the card is on
+ *  screen (a hidden poster — the narrow list — never loads), with the
+ *  Bearer header like every file. No picture: a quiet, deliberate frame. */
+function Poster({ item }: { item: BenchTestListItem }) {
+  const t = useTranslations("benchHome");
+  const ref = useRef<HTMLDivElement>(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || seen || !item.poster || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setSeen(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [item.poster, seen]);
+  const { blobUrl, error } = useAuthBlob(seen ? benchW1Api.tests.posterUrl(item.id) : null);
+  const live = item.state === "running" || item.state === "waiting";
+  const empty = !item.poster || error;
+  return (
+    <div
+      ref={ref}
+      data-testid="bench-row-poster"
+      className="hidden @4xl:flex relative aspect-video items-center justify-center overflow-hidden"
+      style={{ backgroundColor: C.bgDeep, borderBottom: `1px solid ${C.border}` }}
+    >
+      {blobUrl && !error ? (
+        // Decorative: the title below names the test.
+        <img src={blobUrl} alt="" className="absolute inset-0 w-full h-full object-cover object-top" />
+      ) : empty ? (
+        <span className="flex flex-col items-center gap-2 text-sm" style={{ color: C.textMuted }}>
+          <ImageOff size={18} aria-hidden />
+          {t(live ? "poster.notYet" : "poster.none")}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function TestRow({ item, current }: { item: BenchTestListItem; current: boolean }) {
   const t = useTranslations("benchHome");
   const { ts } = useBenchWords();
@@ -138,8 +186,11 @@ function TestRow({ item, current }: { item: BenchTestListItem; current: boolean 
     if (current) ref.current?.scrollIntoView?.({ block: "nearest" });
   }, [current]);
   return (
-    // The hairline sits on the wrapper: on the rounded link it would curve up at the ends.
-    <div style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
+    // One row, two shapes by the list's width (@container): a hairline row in
+    // a pane or on the phone; a card with the test's picture on the wide page.
+    // The row hairline sits on the wrapper: on the rounded link it would
+    // curve up at the ends.
+    <div className="border-b @4xl:border-b-0" style={{ borderColor: C.borderSubtle }}>
       <Link
         ref={ref}
         href={benchResultHref(item.id)}
@@ -147,70 +198,75 @@ function TestRow({ item, current }: { item: BenchTestListItem; current: boolean 
         aria-current={current ? "page" : undefined}
         // The open test: accent tint + accent hairline (the selection pattern,
         // no bar, no halo); the others only lighten on hover.
-        className={`block -mx-2 px-2 py-3 rounded-lg border transition-colors ${
-          current ? "" : "border-transparent hover:bg-[var(--color-bg-hover)]"
+        className={`group block -mx-2 px-2 py-3 rounded-lg border transition-colors @4xl:mx-0 @4xl:p-0 @4xl:h-full @4xl:overflow-hidden @4xl:flex @4xl:flex-col ${
+          current
+            ? ""
+            : "border-transparent @4xl:border-[var(--color-border)] @4xl:bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)]"
         }`}
         style={current ? { background: C.accentSubtle, borderColor: C.borderAccent } : undefined}
       >
+        <Poster item={item} />
         {/* Title and model wrap, never "…": beside a result the column is
             narrow, and a cut model name ("D.", 25.10.) says nothing. The tags
             and the state go to the next line when they do not fit. */}
-        <div className="flex items-baseline justify-between gap-3">
-          <span
-            data-testid="bench-row-title"
-            className="text-base font-medium min-w-0 [overflow-wrap:anywhere]"
-            style={{ color: C.textPrimary }}
-          >
-            {item.title}
-          </span>
-          <span className="text-sm tabular-nums shrink-0" style={{ color: C.textMuted }}>
-            {day(item.created_at, locale)}
-          </span>
-        </div>
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 min-w-0">
-          {models && (
+        <div className="@4xl:px-4 @4xl:pt-3 @4xl:pb-4 @4xl:flex @4xl:flex-col @4xl:flex-1">
+          <div className="flex items-baseline justify-between gap-3">
             <span
-              data-testid="bench-row-models"
-              className="text-sm min-w-0 [overflow-wrap:anywhere]"
-              style={{ color: C.textSecondary }}
+              data-testid="bench-row-title"
+              className="text-base font-medium min-w-0 [overflow-wrap:anywhere]"
+              style={{ color: C.textPrimary }}
             >
-              {models}
+              {item.title}
             </span>
-          )}
-          {harnesses.map((h) => (
-            <span
-              key={h}
-              className="text-xs px-2 py-1 rounded-sm shrink-0 leading-none"
-              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
-            >
-              {t(`harnessTag.${h}`)}
+            <span className="text-sm tabular-nums shrink-0" style={{ color: C.textMuted }}>
+              {day(item.created_at, locale)}
             </span>
-          ))}
-          {cloud && (
-            <span
-              className="text-xs px-2 py-1 rounded-sm shrink-0 leading-none"
-              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
-            >
-              {ts("locality.cloud")}
-            </span>
-          )}
-          <span className="ml-auto shrink-0 pl-2">
-            {status.pill ? (
-              <Pill color={status.pill.color} casing="sentence" data-testid="bench-row-pill">
-                {status.pill.text}
-              </Pill>
-            ) : (
-              <span className="text-sm" style={{ color: C.textMuted }}>
-                {status.quiet}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 min-w-0 @4xl:mt-auto @4xl:pt-2">
+            {models && (
+              <span
+                data-testid="bench-row-models"
+                className="text-sm min-w-0 [overflow-wrap:anywhere]"
+                style={{ color: C.textSecondary }}
+              >
+                {models}
               </span>
             )}
-          </span>
-        </div>
-        {status.note && (
-          <div className="text-xs mt-1 first-letter:uppercase" style={{ color: C.textMuted }} data-testid="bench-row-note">
-            {status.note}
+            {harnesses.map((h) => (
+              <span
+                key={h}
+                className="text-xs px-2 py-1 rounded-sm shrink-0 leading-none"
+                style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+              >
+                {t(`harnessTag.${h}`)}
+              </span>
+            ))}
+            {cloud && (
+              <span
+                className="text-xs px-2 py-1 rounded-sm shrink-0 leading-none"
+                style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+              >
+                {ts("locality.cloud")}
+              </span>
+            )}
+            <span className="ml-auto shrink-0 pl-2">
+              {status.pill ? (
+                <Pill color={status.pill.color} casing="sentence" data-testid="bench-row-pill">
+                  {status.pill.text}
+                </Pill>
+              ) : (
+                <span className="text-sm" style={{ color: C.textMuted }}>
+                  {status.quiet}
+                </span>
+              )}
+            </span>
           </div>
-        )}
+          {status.note && (
+            <div className="text-xs mt-1 first-letter:uppercase" style={{ color: C.textMuted }} data-testid="bench-row-note">
+              {status.note}
+            </div>
+          )}
+        </div>
       </Link>
     </div>
   );
@@ -524,10 +580,10 @@ export function TestList() {
                         {count}
                       </span>
                     </div>
-                    {/* One column in a pane or on the phone; on a wide page the
-                        rows flow into columns of ≥ 30 rem (row by row, newest
-                        first), so the width carries more tests, not longer lines. */}
-                    <div data-testid="bench-section-rows" className="grid grid-cols-1 @4xl:grid-cols-[repeat(auto-fill,minmax(30rem,1fr))] @4xl:gap-x-12">
+                    {/* One column of rows in a pane or on the phone; on the wide
+                        page a gallery: cards of ≥ 19 rem with the test's picture
+                        (benchmarks are visual), newest first. */}
+                    <div data-testid="bench-section-rows" className="grid grid-cols-1 @4xl:grid-cols-[repeat(auto-fill,minmax(19rem,1fr))] @4xl:gap-6 @4xl:mt-3">
                       {items.map((item) => (
                         <TestRow key={item.id} item={item} current={pathname === benchResultHref(item.id)} />
                       ))}

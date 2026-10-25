@@ -1978,6 +1978,15 @@
         ]
       }
     },
+    "/api/v1/bench/tests/{test_id}/poster": {
+      "get": {
+        "operationId": "test_poster_api_v1_bench_tests__test_id__poster_get",
+        "summary": "Test Poster",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
     "/api/v1/bench/tests/{test_id}/rerun": {
       "post": {
         "operationId": "rerun_test_api_v1_bench_tests__test_id__rerun_post",

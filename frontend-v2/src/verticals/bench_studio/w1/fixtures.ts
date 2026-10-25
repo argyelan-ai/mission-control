@@ -437,6 +437,7 @@ export const testRunningFixture: BenchTestDetail = {
               "phase": "done",
               "elapsed_ms": 66000,
               "tokens_out": 6607,
+              "tokens_reasoning": null,
               "decode_tok_s": 101.0,
               "ttft_ms": 410,
               "finish_reason": "stop",
@@ -453,6 +454,7 @@ export const testRunningFixture: BenchTestDetail = {
               "phase": "generating",
               "elapsed_ms": 41000,
               "tokens_out": 3100,
+              "tokens_reasoning": null,
               "decode_tok_s": 101.0,
               "ttft_ms": 395,
               "finish_reason": null,
@@ -469,6 +471,7 @@ export const testRunningFixture: BenchTestDetail = {
               "phase": "queued",
               "elapsed_ms": null,
               "tokens_out": null,
+              "tokens_reasoning": null,
               "decode_tok_s": null,
               "ttft_ms": null,
               "finish_reason": null,
@@ -555,6 +558,7 @@ export const testRunningFixture: BenchTestDetail = {
               "phase": "queued",
               "elapsed_ms": null,
               "tokens_out": null,
+              "tokens_reasoning": null,
               "decode_tok_s": null,
               "ttft_ms": null,
               "finish_reason": null,
@@ -681,6 +685,7 @@ export const testDoneGreenFixture: BenchTestDetail = {
               "phase": "done",
               "elapsed_ms": 66000,
               "tokens_out": 6607,
+              "tokens_reasoning": 2140,
               "decode_tok_s": 101.0,
               "ttft_ms": 410,
               "finish_reason": "stop",
@@ -697,6 +702,7 @@ export const testDoneGreenFixture: BenchTestDetail = {
               "phase": "done",
               "elapsed_ms": 62000,
               "tokens_out": 6400,
+              "tokens_reasoning": 2050,
               "decode_tok_s": 103.0,
               "ttft_ms": 380,
               "finish_reason": "stop",
@@ -713,6 +719,7 @@ export const testDoneGreenFixture: BenchTestDetail = {
               "phase": "done",
               "elapsed_ms": 71000,
               "tokens_out": 6900,
+              "tokens_reasoning": 2230,
               "decode_tok_s": 99.5,
               "ttft_ms": 460,
               "finish_reason": "stop",
@@ -940,6 +947,7 @@ export const testDoneTruncatedFixture: BenchTestDetail = {
               "phase": "done",
               "elapsed_ms": 66000,
               "tokens_out": 6607,
+              "tokens_reasoning": null,
               "decode_tok_s": 101.0,
               "ttft_ms": 410,
               "finish_reason": "stop",
@@ -956,6 +964,7 @@ export const testDoneTruncatedFixture: BenchTestDetail = {
               "phase": "done",
               "elapsed_ms": 162000,
               "tokens_out": 16384,
+              "tokens_reasoning": null,
               "decode_tok_s": 101.0,
               "ttft_ms": 400,
               "finish_reason": "length",
@@ -972,6 +981,7 @@ export const testDoneTruncatedFixture: BenchTestDetail = {
               "phase": "done",
               "elapsed_ms": 71000,
               "tokens_out": 6900,
+              "tokens_reasoning": null,
               "decode_tok_s": 99.5,
               "ttft_ms": 460,
               "finish_reason": "stop",
@@ -1218,6 +1228,7 @@ export const testAbortedTruncatedFixture: BenchTestDetail = {
               "phase": "done",
               "elapsed_ms": 163000,
               "tokens_out": 16384,
+              "tokens_reasoning": 16384,
               "decode_tok_s": null,
               "ttft_ms": 400,
               "finish_reason": "length",
@@ -1237,6 +1248,7 @@ export const testAbortedTruncatedFixture: BenchTestDetail = {
               "phase": "done",
               "elapsed_ms": 164000,
               "tokens_out": 16384,
+              "tokens_reasoning": 16384,
               "decode_tok_s": null,
               "ttft_ms": 400,
               "finish_reason": "length",
@@ -1256,6 +1268,7 @@ export const testAbortedTruncatedFixture: BenchTestDetail = {
               "phase": "done",
               "elapsed_ms": 165000,
               "tokens_out": 16384,
+              "tokens_reasoning": 16384,
               "decode_tok_s": null,
               "ttft_ms": 400,
               "finish_reason": "length",
@@ -1402,6 +1415,7 @@ export const testNeedsLookRedFixture: BenchTestDetail = {
               "phase": "done",
               "elapsed_ms": 5551000,
               "tokens_out": null,
+              "tokens_reasoning": null,
               "decode_tok_s": null,
               "ttft_ms": null,
               "finish_reason": null,
@@ -1579,7 +1593,8 @@ export const testListFixture: BenchTestList = {
         "done": 1,
         "total": 3
       },
-      "gate_status": "pending"
+      "gate_status": "pending",
+      "poster": false
     },
     {
       "id": "a0000000-0000-4000-8000-000000000005",
@@ -1602,7 +1617,8 @@ export const testListFixture: BenchTestList = {
         }
       ],
       "progress": null,
-      "gate_status": "pending"
+      "gate_status": "pending",
+      "poster": false
     },
     {
       "id": "a0000000-0000-4000-8000-000000000004",
@@ -1627,7 +1643,8 @@ export const testListFixture: BenchTestList = {
         }
       ],
       "progress": null,
-      "gate_status": "red"
+      "gate_status": "red",
+      "poster": true
     },
     {
       "id": "a0000000-0000-4000-8000-000000000003",
@@ -1651,7 +1668,8 @@ export const testListFixture: BenchTestList = {
         }
       ],
       "progress": null,
-      "gate_status": "amber"
+      "gate_status": "amber",
+      "poster": true
     },
     {
       "id": "a0000000-0000-4000-8000-000000000002",
@@ -1669,7 +1687,8 @@ export const testListFixture: BenchTestList = {
         }
       ],
       "progress": null,
-      "gate_status": "green"
+      "gate_status": "green",
+      "poster": true
     }
   ],
   "counts": {

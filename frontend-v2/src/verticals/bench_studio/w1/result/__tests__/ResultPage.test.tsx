@@ -469,6 +469,31 @@ describe("ResultPage — where the parts sit on the desktop", () => {
     expect(stage.className).toMatch(/(^|\s)aspect-video(\s|$)/);
   });
 
+  it("stopped: the main column says run by run what happened — time, thought vs. written, outcome in words", async () => {
+    renderView(testAbortedTruncatedFixture);
+    const runs = await screen.findByTestId("result-runs");
+    expect(runs.closest('[data-region="result-main"]')).not.toBeNull();
+    expect(screen.getByTestId("result-no-video").compareDocumentPosition(runs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const rows = within(runs).getAllByTestId("result-run-row");
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toHaveTextContent("Run 1");
+    expect(rows[0]).toHaveTextContent("16.4k");          // thought
+    expect(rows[0]).toHaveTextContent("0");              // written
+    expect(rows[0]).toHaveTextContent(/stopped at the token limit before any page/i);
+    expect(rows[2]).toHaveTextContent("Run 3");
+    // the phone list says the same in sentences
+    expect(within(runs).getAllByTestId("result-run")[0]).toHaveTextContent(/thought 16.4k · wrote 0/);
+  });
+
+  it("finished: no per-run block — the numbers say it; the table shares the video's right edge", async () => {
+    renderView(testDoneGreenFixture);
+    const numbers = await screen.findByTestId("result-numbers");
+    expect(screen.queryByTestId("result-runs")).toBeNull();
+    for (const el of [numbers, ...Array.from(numbers.querySelectorAll("*"))]) {
+      expect(el.getAttribute("class") ?? "").not.toMatch(/(^|\s)max-w-/);
+    }
+  });
+
   it("live: no rail, the live run owns the page", async () => {
     renderView(testRunningFixture);
     await screen.findByTestId("live-run-mock");
