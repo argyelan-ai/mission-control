@@ -10,13 +10,13 @@
  * harness · class (server-side query), archive toggle. Replaces the legacy
  * ChallengesTab list.
  *
- * Desktop: one readable column. Master–detail lives on the result page
- * (/bench/r/<id>, a shareable URL): from 1536 px it shows this list in a
- * 20–28 rem column beside the result and the open test's row is marked
- * (aria-current). So the list never lays out columns of its own and sizes
- * its header by its container (@container), never by the viewport — a
- * viewport grid here once spilled the list and a "pick a test" column
- * across the result (25.10.).
+ * Desktop: master–detail lives on the result page (/bench/r/<id>, a
+ * shareable URL): from 1536 px this list is its left pane and the open
+ * test's row carries the selection (aria-current). The list never uses
+ * viewport columns — a viewport grid here once spilled the list across the
+ * result (25.10.). It lays out by its own width (@container): one column in
+ * the pane and on the phone; on the wide /bench page the rows of a section
+ * flow into columns of ≥ 30 rem, so width shows more tests, not longer lines.
  *
  * Words: state/section/wait/abort/gate words come from `benchShared`
  * (contract), everything else from `benchHome`.
@@ -24,7 +24,7 @@
  * Signature is frozen (contract): no props.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -131,15 +131,26 @@ function TestRow({ item, current }: { item: BenchTestListItem; current: boolean 
   const models = item.contestants.map((c) => c.display_name).join(" · ");
   const harnesses = [...new Set(item.contestants.map((c) => c.harness).filter((h): h is Harness => !!h))];
   const cloud = item.contestants.some((c) => c.locality === "cloud");
+  // Beside a result the open test is brought into the list's view once — it
+  // may sit far down a long "Done" section.
+  const ref = useRef<HTMLAnchorElement>(null);
+  useEffect(() => {
+    if (current) ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [current]);
   return (
     // The hairline sits on the wrapper: on the rounded link it would curve up at the ends.
     <div style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
       <Link
+        ref={ref}
         href={benchResultHref(item.id)}
         data-testid="bench-test-row"
         aria-current={current ? "page" : undefined}
-        className="block -mx-2 px-2 py-3 rounded-lg transition-colors hover:bg-[var(--color-bg-hover)]"
-        style={current ? { background: C.bgHover } : undefined}
+        // The open test: accent tint + accent hairline (the selection pattern,
+        // no bar, no halo); the others only lighten on hover.
+        className={`block -mx-2 px-2 py-3 rounded-lg border transition-colors ${
+          current ? "" : "border-transparent hover:bg-[var(--color-bg-hover)]"
+        }`}
+        style={current ? { background: C.accentSubtle, borderColor: C.borderAccent } : undefined}
       >
         {/* Title and model wrap, never "…": beside a result the column is
             narrow, and a cut model name ("D.", 25.10.) says nothing. The tags
@@ -423,7 +434,7 @@ export function TestList() {
   const noHit = activeFilters.length > 0 && filtered.isSuccess && (data?.items.length ?? 0) === 0;
 
   return (
-    <div data-testid="bench-test-list" className="@container max-w-4xl">
+    <div data-testid="bench-test-list" className="@container">
       <div className="flex flex-col gap-4 min-w-0">
         {header}
 
@@ -503,7 +514,9 @@ export function TestList() {
                 if (count === 0) return null;
                 return (
                   <section key={section} data-testid={`bench-section-${section}`} aria-labelledby={`bench-section-h-${section}`}>
-                    <div className="flex items-baseline justify-between">
+                    {/* Count at the row's end in one column; next to the heading
+                        once rows flow into columns (the end is far away then). */}
+                    <div className="flex items-baseline justify-between @4xl:justify-start @4xl:gap-3">
                       <h2 id={`bench-section-h-${section}`} className="text-base font-semibold" style={{ color: C.textPrimary }}>
                         {ts(`section.${section}`)}
                       </h2>
@@ -511,7 +524,10 @@ export function TestList() {
                         {count}
                       </span>
                     </div>
-                    <div className="flex flex-col">
+                    {/* One column in a pane or on the phone; on a wide page the
+                        rows flow into columns of ≥ 30 rem (row by row, newest
+                        first), so the width carries more tests, not longer lines. */}
+                    <div data-testid="bench-section-rows" className="grid grid-cols-1 @4xl:grid-cols-[repeat(auto-fill,minmax(30rem,1fr))] @4xl:gap-x-12">
                       {items.map((item) => (
                         <TestRow key={item.id} item={item} current={pathname === benchResultHref(item.id)} />
                       ))}

@@ -34,7 +34,9 @@ export default function BenchStudioPage() {
   if (legacyChallenge) return null;
 
   return (
-    <AppShell>
+    // The list lays out by its own width (rows flow into columns), so it
+    // takes the whole page; the library keeps the app's 1600 px column.
+    <AppShell wide={view === "list"}>
       {view === "library" ? (
         <div className="flex flex-col gap-6">
           <div className="flex flex-col gap-1">

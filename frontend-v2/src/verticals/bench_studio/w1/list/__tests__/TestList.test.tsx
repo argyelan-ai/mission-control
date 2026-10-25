@@ -139,6 +139,31 @@ describe("TestList — sections and rows (P7)", () => {
     expect(within(rows[0]).getByTestId("bench-row-models")).toHaveTextContent("DeepSeek-V4.1");
   });
 
+  it("a wide page puts more tests side by side, not longer rows: rows flow into ≥ 30 rem columns by the list's own width", async () => {
+    renderList();
+    await screen.findAllByTestId("bench-test-row");
+    const root = screen.getByTestId("bench-test-list");
+    // The list no longer caps itself; its width decides.
+    expect(root.className).not.toMatch(/(^|\s)max-w-\S+/);
+    for (const rows of screen.getAllByTestId("bench-section-rows")) {
+      expect(rows.className).toMatch(/(^|\s)grid-cols-1(\s|$)/);
+      expect(rows.className).toMatch(/@4xl:grid-cols-\[repeat\(auto-fill,minmax\(30rem,1fr\)\)\]/);
+    }
+  });
+
+  it("the open test's row is marked by the selection pattern, not only by a hover tone", async () => {
+    nav.pathname = benchResultHref(testListFixture.items[1].id);
+    try {
+      renderList();
+      const rows = await screen.findAllByTestId("bench-test-row");
+      expect(rows[1].getAttribute("style") ?? "").toMatch(/accent-subtle/);
+      expect(rows[1].getAttribute("style") ?? "").toMatch(/border-accent/);
+      expect(rows[0].getAttribute("style") ?? "").not.toMatch(/accent/);
+    } finally {
+      nav.pathname = "/bench";
+    }
+  });
+
   it("the prompt library sits in the header, next to 'Test a model'", async () => {
     renderList();
     await screen.findAllByTestId("bench-test-row");
