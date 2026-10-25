@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -87,23 +88,49 @@ _SPEC_TAGS = ("dflash", "mtp", "eagle3", "eagle", "medusa", "ngram", "speculativ
 
 # ── Live lookups (patched in tests; the conftest keeps engines offline) ──
 
+#: Seconds one box may take to say what it serves. On the LAN an engine
+#: answers /models in well under a second; a sleeping box never answers, so
+#: a long wait only delays the sheet.
+LIVE_TIMEOUT_S = 2.0
+#: How long an answer stands. The sheet re-reads the plan on every preset or
+#: prompt tap — a sleeping box must cost its timeout once, not on every tap.
+#: A cached "down" expires like any other answer, so a woken box shows up
+#: within this window (the same 20 s the engine's own /models cache keeps).
+SERVED_TTL_S = 20.0
+#: Load changes fast (a run starts or ends); only a short window.
+IN_USE_TTL_S = 5.0
+
+_live_cache: dict[tuple[str, str], tuple[float, Any]] = {}
+
+
+def clear_live_cache() -> None:
+    _live_cache.clear()
+
+
+async def _cached(kind: str, endpoint: str, ttl: float, ask) -> Any:
+    """``ask()`` once per ``ttl`` per endpoint; a timeout or error is the
+    answer None and is cached too (that is the whole point: the dead box)."""
+    hit = _live_cache.get((kind, endpoint))
+    if hit is not None and time.monotonic() - hit[0] < ttl:
+        return hit[1]
+    try:
+        value = await asyncio.wait_for(ask(), timeout=LIVE_TIMEOUT_S)
+    except Exception:  # noqa: BLE001 — an unreachable box is a state, not an error
+        value = None
+    _live_cache[(kind, endpoint)] = (time.monotonic(), value)
+    return value
+
 
 async def _served(endpoint: str) -> frozenset[str] | None:
     from app.services.heads import engine
 
-    try:
-        return await asyncio.wait_for(engine.served_models(endpoint), timeout=4.0)
-    except Exception:  # noqa: BLE001 — an unreachable box is a state, not an error
-        return None
+    return await _cached("served", endpoint, SERVED_TTL_S, lambda: engine.served_models(endpoint))
 
 
 async def _in_use(endpoint: str) -> bool | None:
     from app.services.heads import engine
 
-    try:
-        n = await asyncio.wait_for(engine.running_requests(endpoint), timeout=4.0)
-    except Exception:  # noqa: BLE001
-        return None
+    n = await _cached("in_use", endpoint, IN_USE_TTL_S, lambda: engine.running_requests(endpoint))
     return None if n is None else n > 0
 
 
