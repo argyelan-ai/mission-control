@@ -33,20 +33,25 @@ lock refuses it while the engine is still serving requests.
 | Recipe | Boxes | Engine | Measured on 2× DGX Spark |
 |---|---|---|---|
 | **GLM-5.3-Flash** · EXL3 4-bit · TensorFold | **2** (tensor parallel) | TensorFold | **62.6 tok/s** single stream · **211 tok/s** at 16 parallel · 1M context per request · prefill ~1,800 tok/s |
+| **DeepSeek-V4.1-Flash-1017** · EXL3 2.9-bit · TensorFold | **2** (tensor parallel) | TensorFold | not yet measured by us |
 <!-- recipes:end -->
 
-This is the recipe MC ships today; more recipes are on the way and land in
-the same [catalog](backend/config/local-recipes.json). The recipe builds on other people's engines, quants and
-models — see [CREDITS](CREDITS.md). Note: the GLM recipe's default speculative
-drafter is licensed CC BY-NC-ND 4.0 (non-commercial); a licence-free drafter
-option exists. Numbers: our own benchmark (tokens counted from the
+These are the two recipes MC ships today; more land in the same
+[catalog](backend/config/local-recipes.json). They build on other people's engines, quants and
+models — see [CREDITS](CREDITS.md). Licences: the GLM recipe's default speculative
+drafter is CC BY-NC-ND 4.0 (non-commercial); a licence-free drafter
+option exists. The DeepSeek recipe is permissive (Apache-2.0 scripts and engine,
+MIT weights); its optional abliterated mode (`ABLIT=1`) needs access to a gated
+Hugging Face repo, and its worker reads the head's model cache over NFS, which you
+export once by hand. Numbers: our own benchmark (tokens counted from the
 API's `usage`, greedy, 512-token answers, on our own 2× DGX Spark pair,
-08 Oct 2026); the same weights on the plain vLLM recipe reach 34.6 tok/s —
-the dedicated recipe is ~1.8× faster. **Catalog status:** this entry's
-`gb10_validated` flag is currently `false` — the catalog's own marker for
-"actually watched running on a GB10 box" is not yet set for this recipe,
-even though the numbers above come from a real run; if you install it and
-hit a mismatch, open an issue with your own numbers. How it works:
+08 Oct 2026); the same GLM weights on the plain vLLM recipe reach 34.6 tok/s —
+the dedicated recipe is ~1.8× faster. The DeepSeek recipe has no numbers of ours
+yet. **Catalog status:** the GLM entry carries `gb10_validated: true` — the
+catalog's marker for "installed from zero through MC and watched running on a
+GB10 box"; the DeepSeek entry stays `false` until that one-click run and our
+benchmark are done. If you install
+one and hit a mismatch, open an issue with your own numbers. How it works:
 [ADR-077](docs/decisions/077-rezept-modell-ein-startbefehl.md)
 · [Runtimes](docs/handbook/concepts/runtimes.md).
 
