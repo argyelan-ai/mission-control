@@ -93,6 +93,32 @@ export function selectionFromPlan(plan: BenchPlan): SheetSelection | null {
   };
 }
 
+/** A new plan for the SAME model (another preset or prompt) keeps what the
+ *  operator picked: harnesses the subject still offers, efforts that are
+ *  still options. Into or out of the ladder with several levels the plan's
+ *  own fill wins — a single choice is no ladder, three levels no single
+ *  choice. Another model re-fills from the plan (`next` as it is). */
+export function keepPicks(
+  prev: SheetSelection | null,
+  prevLadder: boolean,
+  next: SheetSelection,
+  plan: BenchPlan,
+): SheetSelection {
+  if (!prev || prev.subjectId !== next.subjectId) return next;
+  const subject = plan.contestants.find((c) => c.runtime_id === next.subjectId);
+  if (!subject) return next;
+  const harnesses = prev.harnesses.filter((h) => harnessOption(subject, h)?.available);
+  const ladder = Boolean(plan.preset.multi_effort);
+  const levels = new Set(subject.effort.options.map((o) => o.level));
+  const efforts = prev.efforts.filter((e) => levels.has(e));
+  const sameShape = ladder === prevLadder || (!ladder && efforts.length === 1);
+  return {
+    ...next,
+    harnesses: harnesses.length ? harnesses : next.harnesses,
+    efforts: sameShape && efforts.length ? efforts : next.efforts,
+  };
+}
+
 /** The request picks. Agent harnesses send no effort (D5: display only). */
 export function buildPicks(sel: SheetSelection): Required<ContestantPick>[] {
   const picks: Required<ContestantPick>[] = sel.harnesses.map((h) => ({

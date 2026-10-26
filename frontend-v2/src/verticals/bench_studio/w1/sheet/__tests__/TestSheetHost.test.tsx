@@ -553,6 +553,57 @@ describe("TestSheetHost — prompt from the library", () => {
     );
   });
 
+  // Live bug 25.10.: the new plan for another preset or prompt re-filled the
+  // rows from the plan and threw the operator's effort away ("off" flipped
+  // back to "high (default)" and Start sent ["default"]).
+  it("keeps the picked effort and harness when a new plan arrives for the same model", async () => {
+    const user = userEvent.setup();
+    renderHost(fromRuntimes);
+    const d = await sheet();
+    await user.click(await within(d).findByRole("button", { name: "off" }));
+    await user.click(within(d).getByRole("button", { name: "omp (local agent)" }));
+    // Another test …
+    await user.click(within(d).getByRole("button", { name: "Choose another test" }));
+    await user.click(await within(d).findByRole("button", { name: /^Quick look/ }));
+    await waitFor(() => expect(within(d).getByTestId("bench-sheet-test")).toHaveTextContent("Quick look"));
+    // … and another prompt: both re-read the plan, neither drops the picks.
+    await user.click(within(d).getByRole("button", { name: "Choose another prompt" }));
+    await user.click(await within(d).findByRole("button", { name: /Bouncing balls/ }));
+    await waitFor(() => expect(within(d).getByTestId("bench-sheet-prompt")).toHaveTextContent("Bouncing balls"));
+    expect(api.plan).toHaveBeenLastCalledWith(expect.objectContaining({ preset: "quick", templateId: BALLS_ID }));
+    expect(within(d).getByRole("button", { name: "off" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(d).getByRole("button", { name: "omp (local agent)" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(await startButton());
+    await waitFor(() => expect(api.create).toHaveBeenCalledTimes(1));
+    expect(api.create.mock.calls[0][0].picks).toEqual([
+      { runtime_id: "11111111-1111-4111-8111-111111111111", harness: "api", efforts: ["off"] },
+      { runtime_id: "11111111-1111-4111-8111-111111111111", harness: "omp", efforts: ["default"] },
+    ]);
+  });
+
+  it("while the new plan loads the sheet shows the new test and nothing can be tapped into the old view", async () => {
+    const user = userEvent.setup();
+    let release: (() => void) | undefined;
+    api.plan.mockImplementation(async (q) => {
+      if (q.preset === "quick") await new Promise<void>((r) => (release = r));
+      return planFor(q);
+    });
+    renderHost(fromRuntimes);
+    const d = await sheet();
+    await within(d).findByRole("button", { name: "off" });
+    await user.click(within(d).getByRole("button", { name: "Choose another test" }));
+    await user.click(await within(d).findByRole("button", { name: /^Quick look/ }));
+    // The tap shows at once; the old rows are busy and their chips locked.
+    await waitFor(() => expect(within(d).getByTestId("bench-sheet-test")).toHaveTextContent("Quick look"));
+    expect(within(d).getByTestId("bench-sheet-rows")).toHaveAttribute("aria-busy", "true");
+    expect(within(d).getByRole("button", { name: "off" })).toBeDisabled();
+    expect(within(d).getByRole("button", { name: "Raw API" })).toBeDisabled();
+    expect(await startButton()).toBeDisabled();
+    release?.();
+    await waitFor(() => expect(within(d).getByTestId("bench-sheet-rows")).toHaveAttribute("aria-busy", "false"));
+    expect(within(d).getByRole("button", { name: "off" })).toBeEnabled();
+  });
+
   it("an empty library says so and points to the library page", async () => {
     const user = userEvent.setup();
     lib.list.mockResolvedValue([]);

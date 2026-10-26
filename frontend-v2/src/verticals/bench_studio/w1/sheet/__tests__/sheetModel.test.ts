@@ -4,6 +4,7 @@ import {
   buildPicks,
   canAddOpponent,
   estimateFor,
+  keepPicks,
   moneyFor,
   selectionFromPlan,
   toggleEffort,
@@ -84,5 +85,52 @@ describe("sheetModel", () => {
     const e = estimateFor(buildPicks(ladder), all);
     expect(e.a).toMatchObject({ min_s: 540, max_s: 780 });
     expect(e.b).toMatchObject({ min_s: 240, max_s: 5520 });
+  });
+
+  describe("keepPicks — a new plan for the same model keeps the operator's picks", () => {
+    const clonePlan = () => JSON.parse(JSON.stringify(planStandardFixture)) as typeof planStandardFixture;
+    const ladderPlan = () => {
+      const p = clonePlan();
+      p.preset = JSON.parse(JSON.stringify(p.presets[2]));
+      return p;
+    };
+
+    it("same shape: harness and effort stay", () => {
+      const prev: SheetSelection = { ...base(), harnesses: ["api", "omp"], efforts: ["off"] };
+      const plan = clonePlan();
+      const next = keepPicks(prev, false, selectionFromPlan(plan)!, plan);
+      expect(next.harnesses).toEqual(["api", "omp"]);
+      expect(next.efforts).toEqual(["off"]);
+    });
+
+    it("a level the new plan no longer offers falls back to the plan's", () => {
+      const prev: SheetSelection = { ...base(), efforts: ["off"] };
+      const plan = clonePlan();
+      plan.contestants[0].effort.options = plan.contestants[0].effort.options.filter((o) => o.level !== "off");
+      expect(keepPicks(prev, false, selectionFromPlan(plan)!, plan).efforts).toEqual(["default"]);
+    });
+
+    it("into the ladder the plan's levels win; inside the ladder the picked levels stay", () => {
+      const plan = ladderPlan();
+      plan.picks[0].efforts = ["off", "default", "max"];
+      const single: SheetSelection = { ...base(), efforts: ["off"] };
+      expect(keepPicks(single, false, selectionFromPlan(plan)!, plan).efforts).toEqual(["off", "default", "max"]);
+      const two: SheetSelection = { ...base(), efforts: ["off", "max"] };
+      expect(keepPicks(two, true, selectionFromPlan(plan)!, plan).efforts).toEqual(["off", "max"]);
+    });
+
+    it("out of the ladder several levels reset, one level stays", () => {
+      const plan = clonePlan();
+      const many: SheetSelection = { ...base(), efforts: ["off", "max"] };
+      expect(keepPicks(many, true, selectionFromPlan(plan)!, plan).efforts).toEqual(["default"]);
+      const one: SheetSelection = { ...base(), efforts: ["max"] };
+      expect(keepPicks(one, true, selectionFromPlan(plan)!, plan).efforts).toEqual(["max"]);
+    });
+
+    it("another model re-fills from the plan", () => {
+      const prev: SheetSelection = { ...base(), subjectId: "someone-else", harnesses: ["omp"], efforts: ["off"] };
+      const plan = clonePlan();
+      expect(keepPicks(prev, false, selectionFromPlan(plan)!, plan)).toEqual(selectionFromPlan(plan));
+    });
   });
 });

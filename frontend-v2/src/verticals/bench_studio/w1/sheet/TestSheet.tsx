@@ -42,6 +42,7 @@ import {
   defaultEffort,
   estimateFor,
   harnessOption,
+  keepPicks,
   moneyFor,
   moneyFromPlan,
   orderedOptions,
@@ -101,12 +102,19 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
   const [seenPicksKey, setSeenPicksKey] = useState("");
 
   const data = plan.data;
-  // A fresh plan (first load, preset, model) re-fills the rows; an opponent
-  // chosen by hand survives a preset change.
+  // While the plan for a new preset/prompt/model loads, the old one stays on
+  // screen (keepPreviousData): it is shown busy and its chips are locked, so
+  // nothing is picked into a view that is about to change.
+  const stale = plan.isPlaceholderData;
+  // A fresh plan re-fills the rows from the plan only for another model; for
+  // the same model (preset, prompt, refetch) the operator's harness + effort
+  // picks stay (keepPicks). An opponent chosen by hand survives a preset change.
   if (data !== seenPlan) {
     setSeenPlan(data);
     if (data) {
-      const next = selectionFromPlan(data);
+      const fresh = selectionFromPlan(data);
+      const next =
+        fresh && seenPlan ? keepPicks(sel, Boolean(seenPlan.preset.multi_effort), fresh, data) : fresh;
       if (next && !next.opponentId && sel?.opponentId && sel.opponentId !== next.subjectId && next.harnesses.length < 2) {
         next.opponentId = sel.opponentId;
         next.opponentEfforts = sel.opponentEfforts;
@@ -372,6 +380,9 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
         ? t("ompSession", { level: w.level((ompOpt.effort_note.params.level as Effort) ?? "default") })
         : null;
     const agentHarness = sel?.harnesses.find((h) => !isDirectApi(h));
+    // The test the operator just tapped shows at once, before its plan is in.
+    const shownPreset: PresetId = stale && preset ? preset : data.preset.id;
+    const shownTestSub = stale ? t("loading") : testSub(data.preset);
 
     body = (
       <>
@@ -379,181 +390,191 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
           <div className="pt-1 pb-2" data-testid="bench-sheet-test">
             <ChipGroup label={t("presets")}>
               {presetChoices(data, Boolean(params.rerunOf)).map((p) => (
-                <Chip key={p.id} on={p.id === data.preset.id} onClick={() => setPreset(p.id)}>
+                <Chip key={p.id} on={p.id === shownPreset} onClick={() => setPreset(p.id)}>
                   {presetWord(p.id)}
                 </Chip>
               ))}
             </ChipGroup>
             <p className="text-sm mt-2" style={{ color: C.textMuted }}>
-              {testSub(data.preset)}
+              {shownTestSub}
             </p>
           </div>
         )}
 
-        <TapRow
-          name={t("row.model")}
-          main={subject?.display_name ?? t("picker.model")}
-          sub={subject ? modelSub(subject) : undefined}
-          onClick={() => setView("model")}
-          ariaLabel={t("changeModel")}
-          testId="bench-sheet-model"
-        />
-        {/* Desktop shows the preset as chips above (K3: one fact once). */}
-        {!desktop && (
+        <div
+          data-testid="bench-sheet-rows"
+          aria-busy={stale}
+          className="transition-opacity"
+          style={{ opacity: stale ? 0.55 : 1 }}
+        >
           <TapRow
-            name={t("row.test")}
-            main={presetWord(data.preset.id)}
-            sub={testSub(data.preset)}
-            onClick={() => setView("preset")}
-            ariaLabel={t("changeTest")}
-            testId="bench-sheet-test"
+            name={t("row.model")}
+            main={subject?.display_name ?? t("picker.model")}
+            sub={subject ? modelSub(subject) : undefined}
+            onClick={() => setView("model")}
+            ariaLabel={t("changeModel")}
+            testId="bench-sheet-model"
           />
-        )}
-        <TapRow
-          name={t("row.prompt")}
-          main={data.preset.prompt.title}
-          sub={rerunOf ? t("promptRerun") : undefined}
-          onClick={() => setView("prompt")}
-          ariaLabel={t("changePrompt")}
-          testId="bench-sheet-prompt"
-        />
+          {/* Desktop shows the preset as chips above (K3: one fact once). */}
+          {!desktop && (
+            <TapRow
+              name={t("row.test")}
+              main={presetWord(shownPreset)}
+              sub={shownTestSub}
+              onClick={() => setView("preset")}
+              ariaLabel={t("changeTest")}
+              testId="bench-sheet-test"
+            />
+          )}
+          <TapRow
+            name={t("row.prompt")}
+            main={data.preset.prompt.title}
+            sub={rerunOf ? t("promptRerun") : undefined}
+            onClick={() => setView("prompt")}
+            ariaLabel={t("changePrompt")}
+            testId="bench-sheet-prompt"
+          />
 
-        {subject && sel && (
-          <FieldRow
-            name={t("row.harness")}
-            sub={harnessSub(subject, t, w)}
-          >
-            <ChipGroup label={t("row.harness")}>
-              {subject.harnesses.map((o) => (
-                <Chip
-                  key={o.harness}
-                  on={sel.harnesses.includes(o.harness)}
-                  disabled={!o.available}
-                  onClick={() => setSel(toggleHarness(sel, o.harness))}
+          {subject && sel && (
+            <FieldRow
+              name={t("row.harness")}
+              sub={harnessSub(subject, t, w)}
+            >
+              <ChipGroup label={t("row.harness")}>
+                {subject.harnesses.map((o) => (
+                  <Chip
+                    key={o.harness}
+                    on={sel.harnesses.includes(o.harness)}
+                    disabled={!o.available || stale}
+                    onClick={() => setSel(toggleHarness(sel, o.harness))}
+                  >
+                    {w.harness(o.harness)}
+                  </Chip>
+                ))}
+              </ChipGroup>
+            </FieldRow>
+          )}
+
+          {subject && sel && apiPicked && (
+            <FieldRow
+              name={t("row.effort")}
+              sub={
+                <EffortSub
+                  parts={effortSubParts({
+                    subject,
+                    sel,
+                    ladder,
+                    agent: agentHarness ? (sessionNote ?? w.harness(agentHarness)) : null,
+                    t,
+                    apiWord: w.harness("api"),
+                    stamp: shortDate(subject.effort.probed_at, locale),
+                  })}
+                  failed={subject.effort.status === "failed"}
+                  failedText={t("effortFailed")}
+                />
+              }
+            >
+              <ChipGroup label={t("row.effort")}>
+                {orderedOptions(subject, ladder).map((o) => (
+                  <Chip
+                    key={o.level}
+                    on={sel.efforts.includes(o.level)}
+                    check={ladder}
+                    disabled={stale}
+                    onClick={() => setSel(toggleEffort(sel, o.level, ladder))}
+                  >
+                    {w.option(o, subject.effort.default_observed)}
+                  </Chip>
+                ))}
+              </ChipGroup>
+            </FieldRow>
+          )}
+
+          {subject && sel && !apiPicked && (
+            <FieldRow name={t("row.effort")} sub={t("effortDisplayOnly")}>
+              <div className="text-base font-medium" style={{ color: C.textPrimary }}>
+                {sessionNote ?? w.level("default")}
+              </div>
+            </FieldRow>
+          )}
+
+          {opponent && sel && (
+            <FieldRow
+              name={t("row.opponent")}
+              sub={
+                opponent.cloud_build_unknown
+                  ? [where(opponent), t("cloudBuildUnknown")].filter(Boolean).join(" · ")
+                  : modelSub(opponent)
+              }
+              action={
+                <button
+                  type="button"
+                  onClick={() => setSel({ ...sel, opponentId: null })}
+                  disabled={stale}
+                  aria-label={t("removeOpponent")}
+                  className="flex items-center justify-center min-h-touch min-w-touch -mr-3 rounded-md cursor-pointer shrink-0"
+                  style={{ color: C.textSecondary }}
                 >
-                  {w.harness(o.harness)}
-                </Chip>
-              ))}
-            </ChipGroup>
-          </FieldRow>
-        )}
+                  <X size={18} aria-hidden />
+                </button>
+              }
+            >
+              <div className="text-base font-medium break-words" style={{ color: C.textPrimary }}>
+                {opponent.display_name}
+              </div>
+            </FieldRow>
+          )}
 
-        {subject && sel && apiPicked && (
-          <FieldRow
-            name={t("row.effort")}
-            sub={
-              <EffortSub
-                parts={effortSubParts({
-                  subject,
-                  sel,
-                  ladder,
-                  agent: agentHarness ? (sessionNote ?? w.harness(agentHarness)) : null,
-                  t,
-                  apiWord: w.harness("api"),
-                  stamp: shortDate(subject.effort.probed_at, locale),
-                })}
-                failed={subject.effort.status === "failed"}
-                failedText={t("effortFailed")}
-              />
-            }
-          >
-            <ChipGroup label={t("row.effort")}>
-              {orderedOptions(subject, ladder).map((o) => (
-                <Chip
-                  key={o.level}
-                  on={sel.efforts.includes(o.level)}
-                  check={ladder}
-                  onClick={() => setSel(toggleEffort(sel, o.level, ladder))}
-                >
-                  {w.option(o, subject.effort.default_observed)}
-                </Chip>
-              ))}
-            </ChipGroup>
-          </FieldRow>
-        )}
+          {subject?.device && (
+            <FieldRow name={t("row.device")}>
+              <div className="flex items-center gap-2">
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  aria-hidden
+                  style={{ background: DEVICE_DOT[subject.device.state] }}
+                />
+                <span className="text-base font-medium" style={{ color: C.textPrimary }}>
+                  {[subject.device.name, subject.device.gpu_mode, t(`deviceState.${subject.device.state}`)]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+              </div>
+            </FieldRow>
+          )}
 
-        {subject && sel && !apiPicked && (
-          <FieldRow name={t("row.effort")} sub={t("effortDisplayOnly")}>
-            <div className="text-base font-medium" style={{ color: C.textPrimary }}>
-              {sessionNote ?? w.level("default")}
-            </div>
-          </FieldRow>
-        )}
+          {hasA && hasB && (
+            <Note tone="info" icon={<Info size={16} />} testId="bench-sheet-classmix">
+              {t.rich("classMix", {
+                a: w.word("runClass", "A"),
+                b: w.word("runClass", "B"),
+                strong: (chunks) => (
+                  <strong className="font-medium" style={{ color: C.textPrimary }}>
+                    {chunks}
+                  </strong>
+                ),
+              })}
+            </Note>
+          )}
 
-        {opponent && sel && (
-          <FieldRow
-            name={t("row.opponent")}
-            sub={
-              opponent.cloud_build_unknown
-                ? [where(opponent), t("cloudBuildUnknown")].filter(Boolean).join(" · ")
-                : modelSub(opponent)
-            }
-            action={
-              <button
-                type="button"
-                onClick={() => setSel({ ...sel, opponentId: null })}
-                aria-label={t("removeOpponent")}
-                className="flex items-center justify-center min-h-touch min-w-touch -mr-3 rounded-md cursor-pointer shrink-0"
-                style={{ color: C.textSecondary }}
-              >
-                <X size={18} aria-hidden />
-              </button>
-            }
-          >
-            <div className="text-base font-medium break-words" style={{ color: C.textPrimary }}>
-              {opponent.display_name}
-            </div>
-          </FieldRow>
-        )}
+          {subject && apiPicked && subject.effort.status === "failed" && (
+            <Note tone="warn" icon={<AlertTriangle size={16} />}>
+              {t("effortFailedNote")}
+            </Note>
+          )}
 
-        {subject?.device && (
-          <FieldRow name={t("row.device")}>
-            <div className="flex items-center gap-2">
-              <span
-                className="w-2 h-2 rounded-full shrink-0"
-                aria-hidden
-                style={{ background: DEVICE_DOT[subject.device.state] }}
-              />
-              <span className="text-base font-medium" style={{ color: C.textPrimary }}>
-                {[subject.device.name, subject.device.gpu_mode, t(`deviceState.${subject.device.state}`)]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </span>
-            </div>
-          </FieldRow>
-        )}
-
-        {hasA && hasB && (
-          <Note tone="info" icon={<Info size={16} />} testId="bench-sheet-classmix">
-            {t.rich("classMix", {
-              a: w.word("runClass", "A"),
-              b: w.word("runClass", "B"),
-              strong: (chunks) => (
-                <strong className="font-medium" style={{ color: C.textPrimary }}>
-                  {chunks}
-                </strong>
-              ),
-            })}
-          </Note>
-        )}
-
-        {subject && apiPicked && subject.effort.status === "failed" && (
-          <Note tone="warn" icon={<AlertTriangle size={16} />}>
-            {t("effortFailedNote")}
-          </Note>
-        )}
-
-        {sel && subject && canAddOpponent(sel) && (
-          <button
-            type="button"
-            onClick={() => setView("opponent")}
-            className="mt-3 inline-flex items-center gap-2 min-h-touch text-base font-medium cursor-pointer"
-            style={{ color: C.textPrimary }}
-          >
-            <Plus size={18} aria-hidden />
-            {t("addOpponent")}
-          </button>
-        )}
+          {sel && subject && canAddOpponent(sel) && (
+            <button
+              type="button"
+              onClick={() => setView("opponent")}
+              disabled={stale}
+              className="mt-3 inline-flex items-center gap-2 min-h-touch text-base font-medium cursor-pointer"
+              style={{ color: C.textPrimary }}
+            >
+              <Plus size={18} aria-hidden />
+              {t("addOpponent")}
+            </button>
+          )}
+        </div>
       </>
     );
   }
