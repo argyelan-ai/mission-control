@@ -160,6 +160,7 @@
     "n_runs": 3,
     "max_tokens": 16384,
     "suggested_max_tokens": 32768,
+    "larger_budget": true,
     "entry_ids": [
       "e0000000-0000-4000-8000-000000000031",
       "e0000000-0000-4000-8000-000000000032",

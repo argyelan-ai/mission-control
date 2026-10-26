@@ -298,6 +298,8 @@ export interface Receipt {
   thinking_key: string | null;
   temperature: number | null;
   max_tokens: number | null;
+  /** How max_tokens was set (25.10.2026): cap · context (local, whole window) · engine (local, none sent). */
+  max_tokens_rule: "cap" | "context" | "engine" | null;
   system_prompt_sha: string | null;
   prompt_sha256: string | null;
   brief_sha: string | null;
@@ -377,6 +379,9 @@ export interface TruncationWarning {
   n_runs: number;
   max_tokens: number;
   suggested_max_tokens: number;
+  /** A capped run was cut, so a re-run with more tokens exists. False when only
+   *  local runs were cut — they already had the whole context window. */
+  larger_budget: boolean;
   entry_ids: string[];
   /** Runs that stopped before they wrote any page. */
   runs_without_page: number;

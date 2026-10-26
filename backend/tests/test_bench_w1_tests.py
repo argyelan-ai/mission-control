@@ -61,7 +61,10 @@ async def test_create_freezes_a_v1_plan_with_one_entry_per_run(auth_client, sess
     assert len(ch.prompt_sha256) == 64 and ch.title == "Pagoda Garden"
     pc = ch.plan["contestants"][0]
     assert pc["served_model_id"] == DS and pc["device_name"] == "DGX Spark ×2" and pc["video"] is True
-    assert pc["max_tokens"] == 16384 and pc["n_runs"] == 3
+    # Local: no practical token cap — the whole context (131072) minus the
+    # prompt room; time ends the run (operator decision 25.10.2026).
+    assert pc["max_tokens"] == 131072 - 4096 and pc["max_tokens_rule"] == "context" and pc["n_runs"] == 3
+    assert pc["time_limit_min"] == 120
     entries = (await session.exec(select(BenchEntry).where(BenchEntry.challenge_id == ch.id))).all()
     assert sorted(e.repeat_idx for e in entries) == [1, 2, 3]
     assert {(e.run_class, e.harness, e.source_kind) for e in entries} == {("A", "api", "api")}
@@ -205,7 +208,11 @@ async def test_unknown_test_is_404(auth_client):
 
 
 @pytest.mark.asyncio
-async def test_rerun_with_a_larger_budget_uses_the_suggestion(auth_client, session, engines, world):
+async def test_rerun_with_a_larger_budget_keeps_a_local_run_on_the_whole_context(auth_client, session, engines,
+                                                                                  world):
+    """A local run already had the whole context window (25.10.2026): a
+    "larger budget" re-run has nothing to add — it runs on the same context
+    budget instead of a cap from the old 16k world."""
     fleet = await seed_fleet(session)
     world.finish = ["stop", "length", "stop"]
     old = await _finished(session, fleet)
@@ -213,10 +220,11 @@ async def test_rerun_with_a_larger_budget_uses_the_suggestion(auth_client, sessi
     assert resp.status_code == 201, resp.text
     new = await session.get(BenchChallenge, uuid.UUID(resp.json()["id"]))
     assert new.rerun_of == old.id and new.preset == "rerun" and new.trigger == "rerun"
-    assert new.plan["contestants"][0]["max_tokens"] == 32768
+    assert new.plan["contestants"][0]["max_tokens"] == 131072 - 4096
     assert new.prompt_sha256 == old.prompt_sha256
     same = await auth_client.post(f"{BASE}/tests/{old.id}/rerun", json={"budget": "same"})
-    assert (await session.get(BenchChallenge, uuid.UUID(same.json()["id"]))).plan["contestants"][0]["max_tokens"] == 16384
+    assert (await session.get(BenchChallenge, uuid.UUID(same.json()["id"]))).plan["contestants"][0]["max_tokens"] \
+        == 131072 - 4096
 
 
 @pytest.mark.asyncio
@@ -242,7 +250,10 @@ async def test_rerun_of_a_paid_test_confirms_the_cost_and_keeps_the_larger_budge
     assert resp.status_code == 201, resp.text
     new = await session.get(BenchChallenge, uuid.UUID(resp.json()["id"]))
     assert new.rerun_of == uuid.UUID(old_id)
-    assert new.plan["contestants"][0]["max_tokens"] == 32768
+    # The paid cap (32k for a default level the probe never saw think)
+    # doubled — and the old test ran on exactly that cap.
+    assert (await session.get(BenchChallenge, uuid.UUID(old_id))).plan["contestants"][0]["max_tokens"] == 32768
+    assert new.plan["contestants"][0]["max_tokens"] == 65536
 
 
 @pytest.mark.asyncio
@@ -268,7 +279,8 @@ async def test_kit_texts_are_english_bounded_and_from_green_numbers(auth_client,
     assert kit.downloadable and kit.footer == "@example_handle" and kit.texts.link is None
     assert all(len(b) <= 280 for b in kit.texts.settings) and len(kit.texts.alt_text) <= 1000
     blob = " ".join(kit.texts.settings)
-    assert "same prompt (sha" in blob and "temp 0.7" in blob and "max_tokens 16384" in blob
+    assert "same prompt (sha" in blob and "temp 0.7" in blob and "max_tokens 126976 (full context)" in blob
+    assert "time limit 120 min" in blob
     assert "engine: unknown (hand-made runtime)" in blob and "spec-decoding: unknown" in blob
     assert "GPU mode eco" in blob and "method v1" in blob and "(comparison only)" in blob
     assert DS in kit.texts.alt_text and "6.6k" in kit.texts.alt_text

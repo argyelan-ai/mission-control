@@ -356,7 +356,8 @@ async def test_spark_generate_sends_effort_fields_and_scaled_budget(monkeypatch)
     )
     assert captured["json"]["reasoning_effort"] == "max"
     assert captured["json"]["max_tokens"] == 65536
-    assert captured["timeout"] == orchestrator.SPARK_TIMEOUT_S * 4
+    # The wait is the 2 h generation time limit, no longer scaled by tokens.
+    assert captured["timeout"] == orchestrator.SPARK_TIMEOUT_S == 2 * 60 * 60
     assert metrics["effort_sent"] == {"key": "reasoning_effort", "value": "max"}
     assert metrics["max_tokens"] == 65536
 
