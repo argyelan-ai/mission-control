@@ -4547,7 +4547,9 @@
       "bodyNoPageNoRuns": "A run thought until the limit of {max} tokens and wrote no page. With {suggested} tokens the model has room for the page.",
       "videoCut": "Run 1 is the video: it shows an unfinished page.",
       "rerunConfirm": "Re-run with {suggested} tokens · ${usd} — OK?",
-      "rerunConfirmUnknown": "Re-run with {suggested} tokens · cost unknown — OK?"
+      "rerunConfirmUnknown": "Re-run with {suggested} tokens · cost unknown — OK?",
+      "bodyContext": "{count, plural, one {Run {runs} filled} other {Runs {runs} filled}} the model's whole context ({max} tokens) and stopped: the answer is unfinished. This engine has no room for a larger budget.",
+      "bodyContextNoRuns": "A run filled the model's whole context ({max} tokens) and stopped: the answer is unfinished. This engine has no room for a larger budget."
     },
     "checks": {
       "label": "Check",
@@ -4618,6 +4620,8 @@
       "prompt": "Prompt",
       "temp": "temp {v}",
       "maxTokens": "max {v}",
+      "maxTokensContext": "max {v} (whole context)",
+      "maxTokensEngine": "max = engine limit",
       "runs": "Runs",
       "videoRun": "video = run {v}",
       "failures": "{f, plural, one {# failure} other {# failures}}",

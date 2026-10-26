@@ -145,9 +145,12 @@ async def test_truncated_run_warns_privately_and_never_publicly(session, engines
     d = await w1_tests.test_detail(session, ch)
     detail = s.BenchTestDetail.model_validate(d)
     assert detail.truncation.runs_cut == 1 and detail.truncation.n_runs == 3
-    assert detail.truncation.suggested_max_tokens > detail.truncation.max_tokens == 16384
-    assert detail.section == "needs_look" and "rerun_larger" in detail.allowed
-    assert any(r.code == "runs_truncated" and r.fix == "rerun_larger" for r in detail.gate.reasons)
+    # A local run had the whole context: still warned, but no larger budget
+    # exists, so none is offered (25.10.2026).
+    assert detail.truncation.suggested_max_tokens == detail.truncation.max_tokens == 131072 - 4096
+    assert detail.truncation.larger_budget is False
+    assert detail.section == "needs_look" and "rerun_larger" not in detail.allowed
+    assert any(r.code == "runs_truncated" and r.fix is None for r in detail.gate.reasons)
     assert detail.gate.status != "red"
     public = " ".join(w1_kit.public_strings(d) + w1_kit.settings_blocks(d) + w1_kit.facts(d)).lower()
     assert "truncat" not in public and "token limit" not in public and "length" not in public
@@ -197,7 +200,8 @@ async def test_effort_is_sent_with_the_probed_key(session, engines, world):
     sent = [b.get("reasoning_effort") for b in world.chat]
     assert sent == ["none"] * 3 + ["max"] * 3  # A contestants one after another
     maxes = [b["max_tokens"] for b in world.chat]
-    assert maxes[:3] == [16384] * 3 and maxes[3] > 16384  # max effort gets a scaled budget
+    # Local: every level gets the whole context, time ends the run.
+    assert maxes == [131072 - 4096] * 6
     assert len(world.records) == 2  # two video contestants, run 1 each
 
 

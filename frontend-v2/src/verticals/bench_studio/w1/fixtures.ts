@@ -813,6 +813,7 @@ export const testDoneGreenFixture: BenchTestDetail = {
             "thinking_key": "reasoning_effort",
             "temperature": 0.7,
             "max_tokens": 16384,
+            "max_tokens_rule": null,
             "system_prompt_sha": "4b1c0de000000000000000000000000000000000000000000000000000000000",
             "prompt_sha256": "d6e0ea9000000000000000000000000000000000000000000000000000000000",
             "brief_sha": null,
@@ -1075,6 +1076,7 @@ export const testDoneTruncatedFixture: BenchTestDetail = {
             "thinking_key": "reasoning_effort",
             "temperature": 0.7,
             "max_tokens": 16384,
+            "max_tokens_rule": null,
             "system_prompt_sha": "4b1c0de000000000000000000000000000000000000000000000000000000000",
             "prompt_sha256": "d6e0ea9000000000000000000000000000000000000000000000000000000000",
             "brief_sha": null,
@@ -1160,6 +1162,7 @@ export const testDoneTruncatedFixture: BenchTestDetail = {
     "n_runs": 3,
     "max_tokens": 16384,
     "suggested_max_tokens": 32768,
+    "larger_budget": true,
     "entry_ids": [
       "e0000000-0000-4000-8000-000000000022"
     ],
@@ -1344,6 +1347,7 @@ export const testAbortedTruncatedFixture: BenchTestDetail = {
     "n_runs": 3,
     "max_tokens": 16384,
     "suggested_max_tokens": 32768,
+    "larger_budget": true,
     "entry_ids": [
       "e0000000-0000-4000-8000-000000000031",
       "e0000000-0000-4000-8000-000000000032",
@@ -1491,6 +1495,7 @@ export const testNeedsLookRedFixture: BenchTestDetail = {
             "thinking_key": null,
             "temperature": null,
             "max_tokens": null,
+            "max_tokens_rule": null,
             "system_prompt_sha": null,
             "prompt_sha256": null,
             "brief_sha": "7777777777777777777777777777777777777777777777777777777777777777",

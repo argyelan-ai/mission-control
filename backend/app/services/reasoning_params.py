@@ -101,6 +101,17 @@ def max_tokens_for(level: str | None, base: int, context_limit: int | None = Non
     return max(scaled, base)
 
 
+def context_budget(context_limit: int | None) -> int | None:
+    """All the room an engine has for the answer: its context limit minus
+    the prompt head-room. ``None`` when the limit is unknown (or too small
+    to subtract from) — the caller then sends no max_tokens and the engine
+    uses its own maximum. Used where no token cap is wanted (local bench
+    runs: time, not tokens, ends them)."""
+    if context_limit and context_limit > _PROMPT_HEADROOM:
+        return context_limit - _PROMPT_HEADROOM
+    return None
+
+
 def reasoning_of(message: dict[str, Any] | None, usage: dict[str, Any] | None) -> dict[str, Any]:
     """What the response shows about thinking: ``reasoning_tokens`` from
     ``usage.completion_tokens_details`` when the engine reports it, and

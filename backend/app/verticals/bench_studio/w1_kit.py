@@ -272,6 +272,16 @@ def _fit(parts: list[str], limit: int = SETTINGS_BLOCK_MAX) -> str:
     return out
 
 
+def _budget_text(rec: dict[str, Any]) -> str:
+    """How max_tokens was set (25.10.2026): a local run has the whole
+    context window (or the engine's own maximum), a paid run a cap."""
+    rule = rec.get("max_tokens_rule")
+    if rule == "engine":
+        return "max_tokens engine max"
+    value = rec.get("max_tokens") or c.BASE_MAX_TOKENS
+    return f"max_tokens {value} (full context)" if rule == "context" else f"max_tokens {value}"
+
+
 def settings_blocks(detail: dict[str, Any]) -> list[str]:
     """The disclosure line (§5.5), machine-filled, fixed order, English."""
     blocks: list[str] = []
@@ -289,7 +299,9 @@ def settings_blocks(detail: dict[str, Any]) -> list[str]:
             head = ["Setup · model only", f"same prompt (sha {sha[:7]})",
                     f"{runs}, video = run {c.VIDEO_RUN_INDEX}" if n > 1 else runs,
                     f"temp {rec.get('temperature', c.TEMPERATURE)}",
-                    f"max_tokens {rec.get('max_tokens') or c.BASE_MAX_TOKENS}"]
+                    _budget_text(rec)]
+            if rec.get("time_limit_min"):
+                head.append(f"time limit {rec['time_limit_min']} min")
         else:
             limit = rec.get("time_limit_min")
             head = ["Setup · agent build", f"same brief (sha {(rec.get('brief_sha') or sha)[:7]})", "n=1",

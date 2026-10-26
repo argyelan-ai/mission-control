@@ -347,7 +347,7 @@ def allowed_actions(challenge: BenchChallenge, detail: dict, results: list[dict]
     if harvest and detail["state"] != "aborted":
         out.append("harvest")
     out.append("rerun")
-    if detail.get("truncation"):
+    if (detail.get("truncation") or {}).get("larger_budget"):
         out.append("rerun_larger")
     if challenge.composed_video_path or any(r["_video"] for r in results):
         if detail["state"] in ("done", "done_missing"):
@@ -475,7 +475,6 @@ async def _resolve_contestants(
     """Re-resolve the sheet's picks against the fleet as it runs NOW (a
     stale sheet never freezes a wrong model). Returns (contestant plans,
     total money, blockers)."""
-    from app.services import reasoning_params
 
     from .orchestrator import AGENT_BRIEF_TEMPLATE
 
@@ -542,15 +541,22 @@ async def _resolve_contestants(
                 if level not in offered:
                     raise _field_422(["body", "picks", i, "efforts"], "bench_effort_not_offered",
                                      f"effort {level!r} was not offered by the probe")
-                max_tokens = max_tokens_override or reasoning_params.max_tokens_for(
-                    level, c.BASE_MAX_TOKENS, view.runtime.max_context_len)
+                # Local: the whole context, time ends the run — a "larger
+                # budget" override has nothing to add there. Others: the
+                # paid cap for the level the server really thinks at.
+                rule = w1_plan.budget_rule(view)
+                max_tokens = w1_plan.run_max_tokens(view, level, d["effort"])
+                if max_tokens_override and rule == "cap":
+                    max_tokens = max_tokens_override
                 money = w1_plan.money_for(view, prices, history[view.key], n_runs=n_runs, run_class="A",
                                           max_tokens=max_tokens)
                 moneys.append(money)
                 key = str(view.runtime.id) if len(efforts) == 1 else f"{view.runtime.id}:{level}"
                 merged = next((o.get("merged_level") for o in d["effort"]["options"] if o.get("is_default")), None)
                 pcs_a.append({**base, "key": key, "harness": "api", "run_class": "A", "effort": level,
-                              "max_tokens": max_tokens, "n_runs": n_runs, "money": money, "price": price_d,
+                              "max_tokens": max_tokens, "max_tokens_rule": rule,
+                              "time_limit_min": c.RUN_TIME_LIMIT_MIN,
+                              "n_runs": n_runs, "money": money, "price": price_d,
                               "effort_status": d["effort"]["status"], "effort_default_level": merged})
         else:
             if efforts != ["default"]:
@@ -744,7 +750,8 @@ async def rerun_test(
         if trunc is not None:
             override = trunc["suggested_max_tokens"]
         else:
-            current = max((int((pc.get("max_tokens") or c.BASE_MAX_TOKENS)) for pc, _ in pairs), default=c.BASE_MAX_TOKENS)
+            current = max((int((pc.get("max_tokens") or c.BASE_MAX_TOKENS)) for pc, _ in pairs
+                           if pc.get("max_tokens_rule", "cap") == "cap"), default=c.BASE_MAX_TOKENS)
             override = current * c.LARGER_BUDGET_FACTOR
     prompt = {"template_id": old.prompt_template_id, "title": old.title, "text": old.prompt_text,
               "sha256": old.prompt_sha256 or c.sha256_text(old.prompt_text)}

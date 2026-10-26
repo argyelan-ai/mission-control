@@ -4547,7 +4547,9 @@
       "bodyNoPageNoRuns": "Ein Lauf dachte bis zum Limit von {max} Tokens und schrieb keine Seite. Mit {suggested} Tokens hat das Modell Platz für die Seite.",
       "videoCut": "Lauf 1 ist das Video: es zeigt eine unfertige Seite.",
       "rerunConfirm": "Mit {suggested} Tokens nochmal · ${usd} — OK?",
-      "rerunConfirmUnknown": "Mit {suggested} Tokens nochmal · Kosten unbekannt — OK?"
+      "rerunConfirmUnknown": "Mit {suggested} Tokens nochmal · Kosten unbekannt — OK?",
+      "bodyContext": "{count, plural, one {Lauf {runs} hat} other {Läufe {runs} haben}} den ganzen Kontext des Modells ({max} Tokens) gefüllt: die Antwort ist unvollständig. Mehr Tokens gibt diese Engine nicht her.",
+      "bodyContextNoRuns": "Ein Lauf hat den ganzen Kontext des Modells ({max} Tokens) gefüllt: die Antwort ist unvollständig. Mehr Tokens gibt diese Engine nicht her."
     },
     "checks": {
       "label": "Prüfung",
@@ -4618,6 +4620,8 @@
       "prompt": "Prompt",
       "temp": "temp {v}",
       "maxTokens": "max {v}",
+      "maxTokensContext": "max {v} (ganzer Kontext)",
+      "maxTokensEngine": "max = Limit der Engine",
       "runs": "Läufe",
       "videoRun": "Video = Lauf {v}",
       "failures": "{f} Fehler",

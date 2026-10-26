@@ -297,6 +297,29 @@ describe("ResultPage — red agent result (v0)", () => {
     expect(within(screen.getByTestId("numbers-list")).getAllByText(/DeepSeek-V4\.1-Flash-1017/)).toHaveLength(1);
   });
 
+  it("class A receipt says the budget is the whole context and shows the time limit (25.10.)", async () => {
+    const user = userEvent.setup();
+    const block = testDoneGreenFixture.blocks[0];
+    const first = block.contestants[0];
+    renderView({
+      ...testDoneGreenFixture,
+      blocks: [
+        {
+          ...block,
+          contestants: [
+            { ...first, receipt: first.receipt && { ...first.receipt, max_tokens: 126976, max_tokens_rule: "context", time_limit_min: 120 } },
+            ...block.contestants.slice(1),
+          ],
+        },
+        ...testDoneGreenFixture.blocks.slice(1),
+      ],
+    });
+    await user.click(await screen.findByRole("button", { name: /Receipt · all settings/ }));
+    const receipt = screen.getByTestId("receipt-A");
+    expect(receipt).toHaveTextContent("max 126,976 (whole context)");
+    expect(receipt).toHaveTextContent("Time limit120 min");
+  });
+
   it("shows the class B receipt with v0 unknowns spelled out", async () => {
     const user = userEvent.setup();
     renderView(testNeedsLookRedFixture);
@@ -361,6 +384,24 @@ describe("ResultPage — private truncation warning", () => {
     const rerun = within(warning).getByRole("button", { name: "Re-run with 32,768 tokens" });
     expect(rerun).toHaveAttribute("data-primary", "true");
     expect(screen.queryByRole("button", { name: "Run again" })).toBeNull();
+  });
+
+  it("a local run that filled the whole context is warned without a larger-budget re-run (25.10.)", async () => {
+    renderView({
+      ...testDoneTruncatedFixture,
+      allowed: testDoneTruncatedFixture.allowed.filter((a) => a !== "rerun_larger"),
+      truncation: {
+        ...testDoneTruncatedFixture.truncation!,
+        max_tokens: 126976,
+        suggested_max_tokens: 126976,
+        larger_budget: false,
+      },
+    });
+    const warning = await screen.findByTestId("truncation-warning");
+    expect(warning).toHaveTextContent("filled the model's whole context (126,976 tokens)");
+    expect(warning).toHaveTextContent("no room for a larger budget");
+    expect(within(warning).queryByRole("button", { name: /Re-run with/ })).toBeNull();
+    expect(within(warning).getByRole("button", { name: "Continue anyway" })).toBeInTheDocument();
   });
 
   it("says when the video run itself was cut", async () => {

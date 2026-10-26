@@ -555,6 +555,17 @@ def block_real_engine_metrics():
     engine._transport = original
 
 
+@pytest.fixture(autouse=True)
+def fresh_bench_live_cache():
+    """The bench plan caches liveness answers per endpoint (20 s); no test
+    may see another test's boxes."""
+    from app.verticals.bench_studio import w1_plan
+
+    w1_plan.clear_live_cache()
+    yield
+    w1_plan.clear_live_cache()
+
+
 # ── Host paths, per test + the guard around the whole run ───────────────
 
 def _is_under(path: Path, root: Path) -> bool:

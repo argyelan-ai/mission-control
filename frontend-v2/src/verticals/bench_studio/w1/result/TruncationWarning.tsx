@@ -70,9 +70,16 @@ export function TruncationWarning({
         : words.tr("truncation.rerunConfirm", { suggested, usd: formatUsd(costAsk.usd) });
   const noPage = truncation.runs_without_page > 0 && truncation.runs_without_page >= truncation.runs_cut;
   const count = runs.length || truncation.runs_cut;
-  const body = runList
-    ? words.tr(noPage ? "truncation.bodyNoPage" : "truncation.body", { runs: runList, count, max, suggested })
-    : words.tr(noPage ? "truncation.bodyNoPageNoRuns" : "truncation.bodyNoRuns", { max, suggested });
+  // A local run had the whole context window (25.10.2026): no larger budget
+  // exists, so the warning says so and offers no re-run.
+  const larger = truncation.larger_budget !== false;
+  const body = !larger
+    ? runList
+      ? words.tr("truncation.bodyContext", { runs: runList, count, max })
+      : words.tr("truncation.bodyContextNoRuns", { max })
+    : runList
+      ? words.tr(noPage ? "truncation.bodyNoPage" : "truncation.body", { runs: runList, count, max, suggested })
+      : words.tr(noPage ? "truncation.bodyNoPageNoRuns" : "truncation.bodyNoRuns", { max, suggested });
   return (
     <div
       data-testid="truncation-warning"
@@ -99,7 +106,7 @@ export function TruncationWarning({
             {words.tr("truncation.private")}
           </p>
           <div className="flex flex-wrap items-center gap-2 mt-2">
-            {canRerun && (
+            {canRerun && larger && (
               <button
                 type="button"
                 onClick={onRerun}

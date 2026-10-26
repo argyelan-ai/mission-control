@@ -62,7 +62,13 @@ export function receiptRows(c: ContestantResult, r: Receipt, words: BenchWords):
   if (!isB) {
     const bits: string[] = [];
     if (r.temperature !== null) bits.push(words.tr("receipt.temp", { v: r.temperature }));
-    if (r.max_tokens !== null) bits.push(words.tr("receipt.maxTokens", { v: formatInt(r.max_tokens, loc) }));
+    if (r.max_tokens_rule === "engine") bits.push(words.tr("receipt.maxTokensEngine"));
+    else if (r.max_tokens !== null)
+      bits.push(
+        words.tr(r.max_tokens_rule === "context" ? "receipt.maxTokensContext" : "receipt.maxTokens", {
+          v: formatInt(r.max_tokens, loc),
+        }),
+      );
     if (r.prompt_sha256 || bits.length) {
       rows.push({
         key: "prompt",
@@ -82,6 +88,9 @@ export function receiptRows(c: ContestantResult, r: Receipt, words: BenchWords):
       if (r.failures !== null) parts.push(words.tr("receipt.failures", { f: r.failures }));
       rows.push({ key: "runs", label: words.tr("receipt.runs"), value: parts.join(" · ") });
     }
+    // Since 25.10.2026 time, not tokens, ends a direct run; older receipts carry none.
+    if (r.time_limit_min !== null)
+      rows.push({ key: "timeLimit", label: words.tr("receipt.timeLimit"), value: words.tr("receipt.minutes", { v: r.time_limit_min }) });
   } else {
     const bits: string[] = [];
     if (r.tools_allowed !== null) bits.push(words.tr(r.tools_allowed ? "receipt.toolsAllowed" : "receipt.toolsNone"));

@@ -13,13 +13,31 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from .orchestrator import GENERATION_SYSTEM_PROMPT
+from .orchestrator import GENERATION_SYSTEM_PROMPT, GENERATION_TIME_LIMIT_S
 
 PROTOCOL_V1 = "v1"
 
 #: Class A request knobs (concept §5.1, operator default "temperature 0.7").
 TEMPERATURE = 0.7
+#: The v1 budget before 25.10.2026 — still what a run is EXPECTED to write
+#: (estimates of local runs) and the fallback of plans that carry none.
 BASE_MAX_TOKENS = 16384
+
+#: Time, not tokens, ends a run (operator decision 25.10.2026): a visual
+#: test must let the model finish the page. One limit for every run — the
+#: direct generation (wall clock of the streamed request) and the agent
+#: build alike. Hitting it ends the run with error code ``time_limit``.
+RUN_TIME_LIMIT_MIN = GENERATION_TIME_LIMIT_S // 60
+
+#: Runs that cost money (or an unknown amount, or a subscription with an
+#: output limit) keep a token cap — a large one. ``base`` x the effort
+#: factor (``reasoning_params.max_tokens_for``), never above the ceiling:
+#: 64k is the common output maximum of paid APIs (above it many answer 400),
+#: and the worst case at that cap is what the cost question quotes (D4).
+#: Local runs ("local · costs nothing") have no practical cap: the whole
+#: context window minus the prompt room.
+PAID_BASE_MAX_TOKENS = 32768
+PAID_MAX_TOKENS_CEILING = 65536
 #: Video length of the one recorded run (preset, concept §4 "Video length
 #: field" -> preset 20 s).
 VIDEO_DURATION_S = 20
@@ -38,8 +56,9 @@ FRESH_MIN = 15
 BUSY_WINDOW_S = 120
 QUIET_WAIT_MAX_S = 600
 
-#: Class B (agent builds): one run, a time limit printed on the receipt.
-AGENT_TIME_LIMIT_MIN = 120
+#: Class B (agent builds): one run, a time limit printed on the receipt —
+#: the same limit as a direct run.
+AGENT_TIME_LIMIT_MIN = RUN_TIME_LIMIT_MIN
 
 #: D4: above this a paid test asks a second time.
 COST_CAP_USD = 1.0
@@ -48,7 +67,8 @@ COST_CAP_USD = 1.0
 #: answers (aborted: switch_failed).
 AUTO_TEST_SWITCH_TIMEOUT_MIN = 45
 
-#: A "larger budget" re-run doubles the token budget (truncation warning).
+#: A "larger budget" re-run doubles the token budget (truncation warning)
+#: of capped (paid) runs; a local run already has the whole context.
 LARGER_BUDGET_FACTOR = 2
 
 SYSTEM_PROMPT = GENERATION_SYSTEM_PROMPT

@@ -85,25 +85,34 @@ async def test_truncation_without_any_content_is_warned_and_not_retried(session,
     cut = entries[1]
     assert cut.status == "failed" and cut.metrics["error_code"] == "no_html_truncated"
     assert cut.metrics["finish_reason"] == "length" and cut.metrics["truncated"] is True
-    assert cut.metrics["max_tokens"] == c.BASE_MAX_TOKENS and cut.attempt_no == 1
+    assert cut.metrics["max_tokens"] == 131072 - 4096 and cut.attempt_no == 1
     d = s.BenchTestDetail.model_validate(await w1_tests.test_detail(session, ch))
     assert d.truncation is not None and d.truncation.runs_cut == 1 and d.truncation.runs_without_page == 1
-    assert d.truncation.suggested_max_tokens > c.BASE_MAX_TOKENS and not d.truncation.video_run_cut
-    assert "rerun_larger" in d.allowed
+    assert not d.truncation.video_run_cut
+    # Local: the run had the whole context window — no larger budget exists.
+    assert d.truncation.larger_budget is False and "rerun_larger" not in d.allowed
 
 
 @pytest.mark.asyncio
 async def test_all_runs_cut_still_offers_the_larger_budget(session, engines, world):
     """Every run thought until the limit: the test is aborted, but the page
-    still warns and offers the larger budget instead of "Nochmal" only."""
+    still warns and offers the larger budget instead of "Nochmal" only.
+    Since 25.10.2026 only a capped (paid) run has a larger budget."""
     fleet = await seed_fleet(session)
     _script(world, ["cut"])
-    ch = await _create(session, fleet)
+    try:
+        await _create(session, fleet, preset="quick", rt=fleet["paid"])
+    except Exception as exc:  # noqa: BLE001
+        ask = exc.detail
+    ch = await _create(session, fleet, preset="quick", rt=fleet["paid"], cost_confirmed_usd=ask["usd"],
+                       confirm_over_cap=True)
     await w1_runner.run_test(ch.id, factory, sleep=no_sleep)
     await session.refresh(ch)
     d = s.BenchTestDetail.model_validate(await w1_tests.test_detail(session, ch))
     assert d.state == "aborted"
-    assert d.truncation is not None and d.truncation.runs_cut == 3 and d.truncation.runs_without_page == 3
+    assert d.truncation is not None and d.truncation.runs_cut == 1 and d.truncation.runs_without_page == 1
+    assert d.truncation.max_tokens == c.PAID_BASE_MAX_TOKENS
+    assert d.truncation.larger_budget is True and d.truncation.suggested_max_tokens == 2 * c.PAID_BASE_MAX_TOKENS
     assert "rerun_larger" in d.allowed
 
 

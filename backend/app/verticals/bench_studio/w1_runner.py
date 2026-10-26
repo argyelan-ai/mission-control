@@ -122,8 +122,16 @@ async def stream_chat(
     api_key: str | None,
     on_progress: Callable[[dict[str, Any]], Any] | None = None,
     read_timeout: float = STREAM_READ_TIMEOUT_S,
+    time_limit_s: float | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """POST a streaming chat completion; returns (content, metrics).
+
+    ``time_limit_s``: wall clock the whole generation may take (operator
+    decision 25.10.2026 — time, not tokens, ends a run). Checked after every
+    streamed line, so a run that is still writing ends with RunError
+    ``time_limit``; closing the stream tells the engine to stop. A stream
+    that goes silent is ended earlier by ``read_timeout`` ("timeout") —
+    that is a stall, not a slow model.
 
     gen_ms = request -> last token; ttft_ms = request -> first token
     (thinking counts as a token: it is generated output); decode =
@@ -162,6 +170,8 @@ async def stream_chat(
                 else:
                     streamed = True
                     async for line in resp.aiter_lines():
+                        if time_limit_s is not None and _clock() - t_start > time_limit_s:
+                            raise RunError("time_limit", f"still generating after {int(time_limit_s)} s")
                         line = line.strip()
                         if not line.startswith("data:"):
                             continue
@@ -308,9 +318,25 @@ async def _set_metrics(factory, entry_id: uuid.UUID, **fields) -> None:
 
 
 #: Run errors that are never retried: the same request fails the same way
-#: (a run that thought until max_tokens with the same budget, an effort the
+#: (a run that thought until max_tokens with the same budget, one that ran
+#: out of time — a second try would take two more hours —, an effort the
 #: engine no longer offers, a runtime that is gone).
-NO_RETRY = ("no_html_truncated", "effort_not_offered", "runtime_gone")
+NO_RETRY = ("no_html_truncated", "time_limit", "effort_not_offered", "runtime_gone")
+
+
+def request_max_tokens(pc: dict) -> int | None:
+    """max_tokens the request sends. ``None`` = send none: a local engine
+    whose context limit MC does not know uses its own maximum (time ends
+    the run). Plans from before 25.10.2026 carry no rule and keep their
+    stored budget."""
+    if pc.get("max_tokens_rule") == "engine":
+        return None
+    return pc.get("max_tokens") or c.BASE_MAX_TOKENS
+
+
+def run_time_limit_s(pc: dict) -> float:
+    """Wall clock one direct run may generate."""
+    return float((pc.get("time_limit_min") or c.RUN_TIME_LIMIT_MIN) * 60)
 #: What a failed attempt keeps from its stream: the private truncation
 #: warning and the receipt need them even when no page came back.
 _FAILED_KEEP = ("model", "finish_reason", "truncated", "streamed", "gen_ms", "ttft_ms", "tokens_in",
@@ -398,22 +424,25 @@ async def run_api_entry(factory, challenge_id: uuid.UUID, pc: dict, entry_id: uu
                 "model": pc["served_model_id"],
                 "messages": [{"role": "system", "content": c.SYSTEM_PROMPT},
                              {"role": "user", "content": prompt}],
-                "max_tokens": pc.get("max_tokens") or c.BASE_MAX_TOKENS,
                 "temperature": c.TEMPERATURE,
                 "stream": True,
                 "stream_options": {"include_usage": True},
                 **fields,
             }
+            max_tokens = request_max_tokens(pc)
+            if max_tokens is not None:
+                body["max_tokens"] = max_tokens
             sent = reasoning_params.wire_fields(fields)
             await _set_metrics(factory, entry_id, effort_sent=sent, thinking_key=info.get("thinking_key"),
-                               temperature=c.TEMPERATURE, max_tokens=body["max_tokens"])
+                               temperature=c.TEMPERATURE, max_tokens=max_tokens)
             logger.info("bench W1 run %s model=%s effort_sent=%s max_tokens=%s",
-                        entry_id, body["model"], sent, body["max_tokens"])
+                        entry_id, body["model"], sent, max_tokens)
 
             async def progress(live: dict) -> None:
                 await _set_metrics(factory, entry_id, **live)
 
-            content, metrics = await stream_chat(url, body, api_key=api_key, on_progress=progress)
+            content, metrics = await stream_chat(url, body, api_key=api_key, on_progress=progress,
+                                                 time_limit_s=run_time_limit_s(pc))
             await _record_usage(factory, pc, entry_id, challenge_id, metrics)
             html = orch.extract_html(content)
             if not html:
