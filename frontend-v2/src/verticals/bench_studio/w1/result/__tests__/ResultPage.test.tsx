@@ -481,6 +481,19 @@ describe("ResultPage — where the parts sit on the desktop", () => {
     expect(screen.getByTestId("bench-result-page").getAttribute("data-columns")).toBe("main-side");
   });
 
+  it("a local run that had the whole context (#988, no larger budget): the warning still sits in the main column, without a re-run button", async () => {
+    renderView({
+      ...testAbortedTruncatedFixture,
+      truncation: { ...testAbortedTruncatedFixture.truncation!, larger_budget: false },
+      allowed: testAbortedTruncatedFixture.allowed.filter((a) => a !== "rerun_larger"),
+    });
+    const warning = await screen.findByTestId("truncation-warning");
+    expect(region(warning, "result-main")).not.toBeNull();
+    expect(region(warning, "result-side")).toBeNull();
+    expect(within(warning).queryByRole("button", { name: /Re-run with/ })).toBeNull();
+    expect(screen.getByTestId("result-state").compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("stopped without a cut: 'Run again' heads the rail, above start and contestant", async () => {
     renderView({ ...testAbortedTruncatedFixture, truncation: null });
     const rerun = await screen.findByRole("button", { name: "Run again" });
