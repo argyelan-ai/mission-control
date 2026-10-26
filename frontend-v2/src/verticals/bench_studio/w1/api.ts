@@ -104,6 +104,9 @@ export const benchW1Api = {
     seen: (id: string) => request<SeenResponse>(`${B}/tests/${id}/seen`, { method: "POST" }),
     harvest: (id: string) =>
       request<BenchTestDetail>(`${B}/tests/${id}/harvest`, { method: "POST" }),
+    /** The gallery picture (WebP of a run's page) — fetched with the Bearer
+     *  header (useAuthBlob); only when the list item says `poster`. */
+    posterUrl: (id: string) => `${BASE_URL}${B}/tests/${id}/poster`,
   },
   kit: {
     get: (id: string) => request<XKit>(`${B}/tests/${id}/kit`),

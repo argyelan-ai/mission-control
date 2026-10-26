@@ -135,6 +135,7 @@
     "GET /api/v1/bench/tests/{test_id}",
     "GET /api/v1/bench/tests/{test_id}/kit",
     "GET /api/v1/bench/tests/{test_id}/kit/files/{name}",
+    "GET /api/v1/bench/tests/{test_id}/poster",
     "GET /api/v1/boards",
     "GET /api/v1/boards/{board_id}",
     "GET /api/v1/boards/{board_id}/memory",

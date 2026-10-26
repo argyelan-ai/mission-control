@@ -51,6 +51,7 @@
               "phase": "done",
               "elapsed_ms": 5551000,
               "tokens_out": null,
+              "tokens_reasoning": null,
               "decode_tok_s": null,
               "ttft_ms": null,
               "finish_reason": null,

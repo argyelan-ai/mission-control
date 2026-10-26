@@ -10,13 +10,15 @@
  * harness · class (server-side query), archive toggle. Replaces the legacy
  * ChallengesTab list.
  *
- * Desktop: one readable column. Master–detail lives on the result page
- * (/bench/r/<id>, a shareable URL): from 1536 px it shows this list in a
- * 280 px column beside the result and the open test's row is marked
- * (aria-current). So the list never lays out columns of its own and sizes
- * its header by its container (@container), never by the viewport — a
- * viewport grid here once spilled the list and a "pick a test" column
- * across the result (25.10.).
+ * Desktop: master–detail lives on the result page (/bench/r/<id>, a
+ * shareable URL): from 1536 px this list is its left pane and the open
+ * test's row carries the selection (aria-current). The list never uses
+ * viewport columns — a viewport grid here once spilled the list across the
+ * result (25.10.). It lays out by its own width (@container): one column in
+ * the pane and on the phone; on the wide /bench page (≥ 56 rem) each section
+ * becomes a gallery of cards with the test's picture (GET …/poster, loaded
+ * when a card comes on screen), because a benchmark is recognised by what it
+ * drew, not by its title.
  *
  * Words: state/section/wait/abort/gate words come from `benchShared`
  * (contract), everything else from `benchHome`.
@@ -24,12 +26,13 @@
  * Signature is frozen (contract): no props.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
-import { Archive, BookOpen, ChevronDown, FlaskConical, Server, X } from "lucide-react";
+import { Archive, BookOpen, ChevronDown, FlaskConical, ImageOff, Server, X } from "lucide-react";
+import { useAuthBlob } from "@/hooks/useAuthBlob";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { Pill } from "@/components/shared/Pill";
 import { benchResultHref, benchTestHref } from "@/lib/benchLinks";
@@ -123,6 +126,51 @@ function useRowStatus() {
   };
 }
 
+/** The test's picture for the gallery: fetched only once the card is on
+ *  screen (a hidden poster — the narrow list — never loads), with the
+ *  Bearer header like every file. No picture: a quiet, deliberate frame. */
+function Poster({ item }: { item: BenchTestListItem }) {
+  const t = useTranslations("benchHome");
+  const ref = useRef<HTMLDivElement>(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || seen || !item.poster || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setSeen(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [item.poster, seen]);
+  const { blobUrl, error } = useAuthBlob(seen ? benchW1Api.tests.posterUrl(item.id) : null);
+  const live = item.state === "running" || item.state === "waiting";
+  const empty = !item.poster || error;
+  return (
+    <div
+      ref={ref}
+      data-testid="bench-row-poster"
+      className="hidden @4xl:flex relative aspect-video items-center justify-center overflow-hidden"
+      style={{ backgroundColor: C.bgDeep, borderBottom: `1px solid ${C.border}` }}
+    >
+      {blobUrl && !error ? (
+        // Decorative: the title below names the test.
+        <img src={blobUrl} alt="" className="absolute inset-0 w-full h-full object-cover object-top" />
+      ) : empty ? (
+        <span className="flex flex-col items-center gap-2 text-sm" style={{ color: C.textMuted }}>
+          <ImageOff size={18} aria-hidden />
+          {t(live ? "poster.notYet" : "poster.none")}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function TestRow({ item, current }: { item: BenchTestListItem; current: boolean }) {
   const t = useTranslations("benchHome");
   const { ts } = useBenchWords();
@@ -131,64 +179,100 @@ function TestRow({ item, current }: { item: BenchTestListItem; current: boolean 
   const models = item.contestants.map((c) => c.display_name).join(" · ");
   const harnesses = [...new Set(item.contestants.map((c) => c.harness).filter((h): h is Harness => !!h))];
   const cloud = item.contestants.some((c) => c.locality === "cloud");
+  // Beside a result the open test is brought into the list's view once — it
+  // may sit far down a long "Done" section.
+  const ref = useRef<HTMLAnchorElement>(null);
+  useEffect(() => {
+    if (current) ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [current]);
   return (
-    // The hairline sits on the wrapper: on the rounded link it would curve up at the ends.
-    <div style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
+    // One row, two shapes by the list's width (@container): a hairline row in
+    // a pane or on the phone; a card with the test's picture on the wide page.
+    // The row hairline sits on the wrapper: on the rounded link it would
+    // curve up at the ends.
+    <div className="border-b @4xl:border-b-0" style={{ borderColor: C.borderSubtle }}>
       <Link
+        ref={ref}
         href={benchResultHref(item.id)}
         data-testid="bench-test-row"
         aria-current={current ? "page" : undefined}
-        className="block -mx-2 px-2 py-3 rounded-lg transition-colors hover:bg-[var(--color-bg-hover)]"
-        style={current ? { background: C.bgHover } : undefined}
+        // The open test: accent tint + accent hairline (the selection pattern,
+        // no bar, no halo); the others only lighten on hover. Every row has
+        // the same box and the same inner padding left and right, so text
+        // stays on one line selected or not. On the phone the hover tone may
+        // bleed 8 px past the text; in the result page's pane (from 1536 px,
+        // where the open test is marked) the box sits ON the list's edges —
+        // a pane that scrolls clips what sticks out (25.10.) — and the focus
+        // ring goes inside it for the same reason.
+        className={`group block -mx-2 px-2 py-3 rounded-lg border transition-colors focus-inset 2xl:mx-0 @4xl:mx-0 @4xl:p-0 @4xl:h-full @4xl:overflow-hidden @4xl:flex @4xl:flex-col ${
+          current
+            ? ""
+            : "border-transparent @4xl:border-[var(--color-border)] @4xl:bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)]"
+        }`}
+        style={current ? { background: C.accentSubtle, borderColor: C.borderAccent } : undefined}
       >
-        <div className="flex items-baseline justify-between gap-3">
-          <span className="text-base font-medium truncate" style={{ color: C.textPrimary }}>
-            {item.title}
-          </span>
-          <span className="text-sm tabular-nums shrink-0" style={{ color: C.textMuted }}>
-            {day(item.created_at, locale)}
-          </span>
-        </div>
-        <div className="flex items-center gap-2 mt-1 min-w-0">
-          {models && (
-            <span className="text-sm truncate min-w-0" style={{ color: C.textSecondary }}>
-              {models}
-            </span>
-          )}
-          {harnesses.map((h) => (
+        <Poster item={item} />
+        {/* Title and model wrap, never "…": beside a result the column is
+            narrow, and a cut model name ("D.", 25.10.) says nothing. The tags
+            and the state go to the next line when they do not fit. */}
+        <div className="@4xl:px-4 @4xl:pt-3 @4xl:pb-4 @4xl:flex @4xl:flex-col @4xl:flex-1">
+          <div className="flex items-baseline justify-between gap-3">
             <span
-              key={h}
-              className="text-xs px-2 py-1 rounded-sm shrink-0 leading-none"
-              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+              data-testid="bench-row-title"
+              className="text-base font-medium min-w-0 [overflow-wrap:anywhere]"
+              style={{ color: C.textPrimary }}
             >
-              {t(`harnessTag.${h}`)}
+              {item.title}
             </span>
-          ))}
-          {cloud && (
-            <span
-              className="text-xs px-2 py-1 rounded-sm shrink-0 leading-none"
-              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
-            >
-              {ts("locality.cloud")}
+            <span className="text-sm tabular-nums shrink-0" style={{ color: C.textMuted }}>
+              {day(item.created_at, locale)}
             </span>
-          )}
-          <span className="ml-auto shrink-0 pl-2">
-            {status.pill ? (
-              <Pill color={status.pill.color} casing="sentence" data-testid="bench-row-pill">
-                {status.pill.text}
-              </Pill>
-            ) : (
-              <span className="text-sm" style={{ color: C.textMuted }}>
-                {status.quiet}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 min-w-0 @4xl:mt-auto @4xl:pt-2">
+            {models && (
+              <span
+                data-testid="bench-row-models"
+                className="text-sm min-w-0 [overflow-wrap:anywhere]"
+                style={{ color: C.textSecondary }}
+              >
+                {models}
               </span>
             )}
-          </span>
-        </div>
-        {status.note && (
-          <div className="text-xs mt-1 first-letter:uppercase" style={{ color: C.textMuted }} data-testid="bench-row-note">
-            {status.note}
+            {harnesses.map((h) => (
+              <span
+                key={h}
+                className="text-xs px-2 py-1 rounded-sm shrink-0 leading-none"
+                style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+              >
+                {t(`harnessTag.${h}`)}
+              </span>
+            ))}
+            {cloud && (
+              <span
+                className="text-xs px-2 py-1 rounded-sm shrink-0 leading-none"
+                style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+              >
+                {ts("locality.cloud")}
+              </span>
+            )}
+            <span className="ml-auto shrink-0 pl-2">
+              {status.pill ? (
+                <Pill color={status.pill.color} casing="sentence" data-testid="bench-row-pill">
+                  {status.pill.text}
+                </Pill>
+              ) : (
+                <span className="text-sm" style={{ color: C.textMuted }}>
+                  {status.quiet}
+                </span>
+              )}
+            </span>
           </div>
-        )}
+          {status.note && (
+            <div className="text-xs mt-1 first-letter:uppercase" style={{ color: C.textMuted }} data-testid="bench-row-note">
+              {status.note}
+            </div>
+          )}
+        </div>
       </Link>
     </div>
   );
@@ -338,7 +422,7 @@ export function TestList() {
   const lastDay = day(base.data?.last_at ?? null, locale);
   const testHref = benchTestHref({ trigger: "list" });
 
-  // Narrow (phone, or the 280 px column beside a result): two rows —
+  // Narrow (phone, or the column beside a result): two rows —
   // title | Modell testen (the button wraps under the title when the room
   // is too small, never over it), then count | library. Wide: one bar —
   // title … library · Modell testen, the count below. Container queries,
@@ -412,7 +496,7 @@ export function TestList() {
   const noHit = activeFilters.length > 0 && filtered.isSuccess && (data?.items.length ?? 0) === 0;
 
   return (
-    <div data-testid="bench-test-list" className="@container max-w-4xl">
+    <div data-testid="bench-test-list" className="@container">
       <div className="flex flex-col gap-4 min-w-0">
         {header}
 
@@ -492,7 +576,9 @@ export function TestList() {
                 if (count === 0) return null;
                 return (
                   <section key={section} data-testid={`bench-section-${section}`} aria-labelledby={`bench-section-h-${section}`}>
-                    <div className="flex items-baseline justify-between">
+                    {/* Count at the row's end in one column; next to the heading
+                        once rows flow into columns (the end is far away then). */}
+                    <div className="flex items-baseline justify-between @4xl:justify-start @4xl:gap-3">
                       <h2 id={`bench-section-h-${section}`} className="text-base font-semibold" style={{ color: C.textPrimary }}>
                         {ts(`section.${section}`)}
                       </h2>
@@ -500,7 +586,10 @@ export function TestList() {
                         {count}
                       </span>
                     </div>
-                    <div className="flex flex-col">
+                    {/* One column of rows in a pane or on the phone; on the wide
+                        page a gallery: cards of ≥ 19 rem with the test's picture
+                        (benchmarks are visual), newest first. */}
+                    <div data-testid="bench-section-rows" className="grid grid-cols-1 @4xl:grid-cols-[repeat(auto-fill,minmax(19rem,1fr))] @4xl:gap-6 @4xl:mt-3">
                       {items.map((item) => (
                         <TestRow key={item.id} item={item} current={pathname === benchResultHref(item.id)} />
                       ))}

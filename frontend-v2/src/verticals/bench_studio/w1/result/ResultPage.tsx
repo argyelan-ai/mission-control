@@ -9,17 +9,19 @@
 // test waits or runs the page polls the record (LIVE_POLL_MS) and shows the
 // live run (package B) instead of video and numbers.
 //
-// Phone: one column, content to the edge (K8). Desktop ≥ 1024 px: content
-// left, a sticky right column with the actions, the gate checks and the
-// receipt; ≥ 1536 px the test list (package D) joins on the left. One DOM
-// for both: the two column wrappers are `display: contents` on the phone, so
-// their parts interleave by `order`.
+// Phone: one column, content to the edge (K8). Desktop ≥ 1024 px: the main
+// column (head, private warning, video, numbers; at most 68 rem) and, for a
+// finished test only, a sticky right column with the actions, the gate checks
+// and the receipt; ≥ 1536 px the test list (package D) joins on the left in
+// a fluid 20–28 rem column. One DOM for both: the column wrappers are
+// `display: contents` on the phone, so their parts interleave by `order`.
 //
 // Signature is frozen (ResultPageProps).
 import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import {
   Archive,
   Check,
@@ -35,10 +37,10 @@ import {
   Trash2,
 } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
-import { FilePreview } from "@/components/task/FilePreview";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { NotFoundState } from "@/components/shared/NotFoundState";
 import { OverflowMenu, type OverflowAction } from "@/components/shared/OverflowMenu";
+import { useAuthBlob } from "@/hooks/useAuthBlob";
 import { api, request } from "@/lib/api";
 import { BENCH_LIST_HREF, benchResultHref, benchTestHref } from "@/lib/benchLinks";
 import { C } from "@/lib/colors";
@@ -57,6 +59,7 @@ import { formatClockTime, formatDay, formatTime, formatTokens, statText } from "
 import { GateChecks, GateLine } from "./GateView";
 import { isLive, menuIds, openablePages, primaryOf, safeOverlayActions } from "./plan";
 import { ReceiptView } from "./ReceiptView";
+import { RunsBreakdown } from "./RunsBreakdown";
 import { NumbersList, NumbersTable } from "./ResultNumbers";
 import { TruncationWarning } from "./TruncationWarning";
 import { useTruncationAck } from "./truncationAck";
@@ -69,8 +72,9 @@ export interface ResultPageProps {
 
 export default function ResultPage({ testId }: ResultPageProps) {
   return (
-    <AppShell fullHeight mobileHideAppBar>
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pt-safe md:pt-0">
+    <AppShell fullHeight mobileHideAppBar wide>
+      {/* One scroll for the page up to 1535 px; from 1536 px the panes scroll. */}
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pt-safe md:pt-0 2xl:overflow-hidden">
         <ResultView testId={testId} />
       </div>
     </AppShell>
@@ -171,6 +175,7 @@ function VideoBlock({ test, words }: { test: BenchTestDetail; words: BenchWords 
   if (!test.video) {
     return (
       <div
+        data-testid="result-no-video"
         className="w-full min-h-24 rounded-lg flex items-center justify-center px-4 py-6 text-center"
         style={{ backgroundColor: C.bgDeep, border: `1px dashed ${C.borderActive}` }}
       >
@@ -189,13 +194,38 @@ function VideoBlock({ test, words }: { test: BenchTestDetail; words: BenchWords 
   const fmt = (v: number) => new Intl.NumberFormat(words.locale, { maximumFractionDigits: 1 }).format(v);
   return (
     <figure className="flex flex-col gap-2">
-      <FilePreview fileUrl={url} path={test.video.path} showDownload={false} />
+      <VideoStage url={url} />
       <figcaption className="text-xs" style={{ color: C.textMuted }}>
         {duration !== null && card !== null
           ? t("video.caption", { i: test.video.run_index, rec: fmt(duration - card), card: fmt(card) })
           : t("video.captionShort", { i: test.video.run_index })}
       </figcaption>
     </figure>
+  );
+}
+
+/** The video is the hero of a finished test: a 16:9 stage that holds its
+ *  place while the bytes load (nothing jumps), the recording fills it. The
+ *  column around it is sized so the stage never leaves the screen. */
+function VideoStage({ url }: { url: string }) {
+  const tf = useTranslations("filePreview");
+  const { blobUrl, error } = useAuthBlob(url);
+  return (
+    <div
+      data-testid="result-video-stage"
+      className="relative w-full aspect-video rounded-lg overflow-hidden flex items-center justify-center"
+      style={{ backgroundColor: C.bgDeep, border: `1px solid ${C.border}` }}
+    >
+      {blobUrl ? (
+        <video src={blobUrl} controls preload="metadata" className="absolute inset-0 w-full h-full object-contain" />
+      ) : error ? (
+        <span className="text-sm" style={{ color: C.textMuted }}>
+          {tf("loadFailed")}
+        </span>
+      ) : (
+        <Loader2 size={18} aria-label={tf("loading")} className="animate-spin" style={{ color: C.textMuted }} />
+      )}
+    </div>
   );
 }
 
@@ -220,13 +250,15 @@ function AbortedFacts({ test, words }: { test: BenchTestDetail; words: BenchWord
         {rows.map((r) => (
           <div
             key={r.key}
-            className="flex items-start justify-between gap-4 py-3"
+            // In the narrow rail a long model name moves under its label
+            // whole instead of breaking at a hyphen.
+            className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 py-3"
             style={{ borderBottom: `1px solid ${C.borderSubtle}` }}
           >
             <dt className="text-sm" style={{ color: C.textMuted }}>
               {r.label}
             </dt>
-            <dd className="flex flex-col items-end text-right">
+            <dd className="ml-auto flex flex-col items-end text-right min-w-0 [overflow-wrap:anywhere]">
               <span className="text-sm tabular-nums" style={{ color: C.textPrimary }}>
                 {r.value}
               </span>
@@ -248,6 +280,16 @@ function AbortedFacts({ test, words }: { test: BenchTestDetail; words: BenchWord
 
 /** The receipt card at the end of the video (renderer W1_RECEIPT_CARD_S). */
 const RECEIPT_CARD_S = 4.5;
+
+/** Gutters beside the pane hairlines: 24 px, 32 px from 1920 px. */
+const PANE_WIDE_PAD_R = "min-[120rem]:pr-8";
+const PANE_WIDE_PAD_L = "min-[120rem]:pl-8";
+const PANE_WIDE_PAD_X = "min-[120rem]:px-8";
+/** The main column from 1024 px: as wide as a 16:9 video can be with the
+ *  head above it and the caption still on screen (≈ 20 rem), never under
+ *  40 rem. One width for every state, so stepping through the list never
+ *  moves the left edge or the head. */
+const STAGE_MAX_W = "lg:max-w-[max(40rem,calc((100dvh-20rem)*16/9))]";
 
 const PRIMARY_BTN =
   "flex items-center justify-center gap-2 min-h-11 px-4 rounded-md text-sm font-medium cursor-pointer transition-colors disabled:cursor-wait";
@@ -508,140 +550,195 @@ export function ResultView({ testId }: ResultPageProps) {
       ? t("receipt.title")
       : t("receipt.titleFor", { name: test.blocks.length > 1 ? block : c.display_name });
 
+  // Where the parts sit (25.10., operator on 1920–3440 px screens):
+  // · the main column tells what happened: head, the private warning right
+  //   under the state line, the video as the hero, the numbers;
+  // · the right rail says what to do and what it was (K12 "properties from
+  //   1024 px in a right column"): X-Kit / Run again, the checks and the
+  //   receipt of a finished test, start and contestant of a stopped one;
+  // · from 1536 px the list joins as a third pane. Each pane scrolls on its
+  //   own, hairlines part them, all three start on one top line.
+  // A live test has no rail: the live run owns the page (K3). The panes keep
+  // their scrollbar's room (Windows draws classic bars), so a result that
+  // scrolls and one that does not put the column on the same pixels.
+  const hasButtons = Boolean(primaryButton || secondaryRerun);
+  const checksShown = done && test.gate.status !== "pending";
+  const aborted = !live && test.state === "aborted";
+  const hasSide = !live && (aborted || hasButtons || checksShown || receipts.length > 0);
+
+  const notice = showTruncation && test.truncation && (
+    // The warning's paragraphs keep a reading measure inside the full-width box.
+    <section data-region="result-notice" className="order-2 lg:order-none min-w-0 [&_p]:max-w-[72ch]">
+      <TruncationWarning
+        truncation={test.truncation}
+        contestants={contestants}
+        words={words}
+        canRerun={allowed.has("rerun_larger")}
+        rerunPending={rerunLarger.pending}
+        costAsk={rerunLarger.costAsk}
+        primary={truncationFirst}
+        onRerun={rerunLarger.run}
+        onContinue={ackTruncation}
+      />
+    </section>
+  );
+
+  const buttons = hasButtons && (
+    <section data-region="result-actions" className="order-2 lg:order-none flex items-center gap-2">
+      {primaryButton}
+      {secondaryRerun && (
+        <button
+          type="button"
+          onClick={() => router.push(benchTestHref({ rerunOf: testId, trigger: "rerun" }))}
+          className="min-h-11 px-4 rounded-md text-sm cursor-pointer"
+          style={{ color: C.textSecondary }}
+        >
+          {t("actions.rerun")}
+        </button>
+      )}
+    </section>
+  );
+
   return (
     <div
       data-testid="bench-result-page"
       data-test-id={testId}
-      className="grid grid-cols-1 gap-y-6 pb-8 lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-x-8 2xl:grid-cols-[280px_minmax(0,1fr)_320px]"
+      data-columns={hasSide ? "main-side" : "main"}
+      className={`grid grid-cols-1 gap-y-6 pb-8 lg:gap-x-8 2xl:h-full 2xl:pb-0 2xl:gap-x-0 ${
+        hasSide
+          ? "lg:grid-cols-[minmax(0,1fr)_clamp(18rem,26%,22rem)] 2xl:grid-cols-[clamp(23rem,25%,32rem)_minmax(0,1fr)_clamp(18rem,18%,28rem)]"
+          : "2xl:grid-cols-[clamp(23rem,25%,32rem)_minmax(0,1fr)]"
+      }`}
     >
-      <aside className="hidden 2xl:block min-w-0" data-region="result-list">
+      <aside
+        className={`hidden 2xl:block min-w-0 2xl:h-full 2xl:overflow-y-auto 2xl:[scrollbar-gutter:stable] scroll-quiet 2xl:pr-6 ${PANE_WIDE_PAD_R} 2xl:pb-8 2xl:border-r`}
+        style={{ borderColor: C.border }}
+        data-region="result-list"
+      >
         <Suspense fallback={null}>
           <TestList />
         </Suspense>
       </aside>
 
-      {/* Center: head, video/live, numbers */}
-      <div className="contents lg:flex lg:flex-col lg:gap-6 min-w-0">
-        <header data-region="result-head" className="order-1 lg:order-none flex flex-col gap-3 min-w-0">
-          <div className="flex items-center -ml-2 -mr-2">
-            <Link
-              href={BENCH_LIST_HREF}
-              className="flex items-center gap-1 min-h-11 px-2 rounded-md text-sm"
-              style={{ color: C.textSecondary }}
-            >
-              <ChevronLeft size={18} aria-hidden />
-              {t("back")}
-            </Link>
-            <span className="flex-1" />
-            <button
-              type="button"
-              onClick={() => void copyLink()}
-              aria-label={t("copyLink")}
-              title={t("copyLink")}
-              className="flex items-center justify-center w-11 h-11 rounded-md cursor-pointer"
-              style={{ color: C.textMuted }}
-            >
-              <Link2 size={18} aria-hidden />
-            </button>
-            <OverflowMenu actions={menuActions} label={t("menu.more")} testId="result-more" />
-          </div>
-          <div className="flex flex-col gap-1">
-            <h1 className="display text-2xl font-semibold break-words" style={{ color: C.textPrimary }}>
-              {test.title}
-            </h1>
-            <p className="text-xs" style={{ color: C.textMuted }}>
-              {meta.join(" · ")}
-            </p>
-          </div>
-          {/* While it runs the live run owns the one state line (K3). */}
-          {done ? (
-            <GateLine gate={test.gate} words={words} hideTruncation={Boolean(test.truncation)} />
-          ) : (
-            !live && <StateLine test={test} words={words} />
-          )}
-          {done && <VerdictLine test={test} words={words} />}
-        </header>
-
-        <section data-region="result-video" className="order-3 lg:order-none min-w-0">
-          {live ? (
-            <LiveRun test={test} onStopped={(next) => qc.setQueryData(key, next)} />
-          ) : (
-            <VideoBlock test={test} words={words} />
-          )}
-        </section>
-
-        {!live && test.state === "aborted" && (
-          <section data-region="result-facts" className="order-4 lg:order-none">
-            <AbortedFacts test={test} words={words} />
-          </section>
-        )}
-
-        {done && test.blocks.length > 0 && (
-          <section data-region="result-numbers" data-testid="result-numbers" className="order-4 lg:order-none min-w-0">
-            <h2 className="label-sys">{t("numbers.label")}</h2>
-            <div className="lg:hidden">
-              <NumbersList blocks={test.blocks} words={words} showNames={!nameInVerdict} />
+      {/* Main: head, warning, video/live, numbers. From 1024 px one column
+          as wide as the video can be without leaving the screen (16:9 under
+          the head), every line on its left edge. */}
+      <div
+        data-region="result-main"
+        className={`contents lg:block min-w-0 2xl:h-full 2xl:overflow-y-auto 2xl:[scrollbar-gutter:stable] scroll-quiet 2xl:px-6 ${PANE_WIDE_PAD_X} 2xl:pb-8`}
+      >
+        <div className={`contents lg:flex lg:flex-col lg:gap-6 lg:w-full ${STAGE_MAX_W} 2xl:mx-auto`}>
+          <header data-region="result-head" className="order-1 lg:order-none flex flex-col gap-3 min-w-0">
+            <div className="flex items-center -ml-2 -mr-2">
+              <Link
+                href={BENCH_LIST_HREF}
+                className="flex items-center gap-1 min-h-11 px-2 rounded-md text-sm"
+                style={{ color: C.textSecondary }}
+              >
+                <ChevronLeft size={18} aria-hidden />
+                {t("back")}
+              </Link>
+              <span className="flex-1" />
+              <button
+                type="button"
+                onClick={() => void copyLink()}
+                aria-label={t("copyLink")}
+                title={t("copyLink")}
+                className="flex items-center justify-center w-11 h-11 rounded-md cursor-pointer"
+                style={{ color: C.textMuted }}
+              >
+                <Link2 size={18} aria-hidden />
+              </button>
+              <OverflowMenu actions={menuActions} label={t("menu.more")} testId="result-more" />
             </div>
-            <div className="hidden lg:block mt-2">
-              <NumbersTable blocks={test.blocks} words={words} showNames={!nameInVerdict} />
+            <div className="flex flex-col gap-1">
+              <h1 className="display text-2xl font-semibold break-words max-w-[72ch]" style={{ color: C.textPrimary }}>
+                {test.title}
+              </h1>
+              <p className="text-xs" style={{ color: C.textMuted }}>
+                {meta.join(" · ")}
+              </p>
             </div>
+            {/* While it runs the live run owns the one state line (K3). */}
+            {done ? (
+              <GateLine gate={test.gate} words={words} hideTruncation={Boolean(test.truncation)} />
+            ) : (
+              !live && <StateLine test={test} words={words} />
+            )}
+            {done && (
+              <div className="max-w-[72ch]">
+                <VerdictLine test={test} words={words} />
+              </div>
+            )}
+          </header>
+
+          {notice}
+
+          <section data-region="result-video" className="order-3 lg:order-none min-w-0">
+            {live ? (
+              <LiveRun test={test} onStopped={(next) => qc.setQueryData(key, next)} />
+            ) : (
+              <VideoBlock test={test} words={words} />
+            )}
           </section>
-        )}
+
+          {aborted && (
+            <section data-region="result-runs" className="order-4 lg:order-none min-w-0">
+              <RunsBreakdown test={test} words={words} />
+            </section>
+          )}
+
+          {done && test.blocks.length > 0 && (
+            <section data-region="result-numbers" data-testid="result-numbers" className="order-4 lg:order-none min-w-0">
+              <h2 className="label-sys">{t("numbers.label")}</h2>
+              <div className="lg:hidden">
+                <NumbersList blocks={test.blocks} words={words} showNames={!nameInVerdict} />
+              </div>
+              {/* Across the column: video and table share one right edge. */}
+              <div className="hidden lg:block mt-2">
+                <NumbersTable blocks={test.blocks} words={words} showNames={!nameInVerdict} />
+              </div>
+            </section>
+          )}
+        </div>
       </div>
 
-      {/* Side: next step, checks, receipt (sticky on the desktop) */}
-      <div className="contents lg:flex lg:flex-col lg:gap-6 lg:sticky lg:top-0 lg:self-start lg:pt-12">
-        {(showTruncation || primaryButton || secondaryRerun) && (
-          <section data-region="result-actions" className="order-2 lg:order-none flex flex-col gap-3">
-            {showTruncation && test.truncation && (
-              <TruncationWarning
-                truncation={test.truncation}
-                contestants={contestants}
-                words={words}
-                canRerun={allowed.has("rerun_larger")}
-                rerunPending={rerunLarger.pending}
-                costAsk={rerunLarger.costAsk}
-                primary={truncationFirst}
-                onRerun={rerunLarger.run}
-                onContinue={ackTruncation}
-              />
-            )}
-            {(primaryButton || secondaryRerun) && (
-            <div className="flex items-center gap-2">
-              {primaryButton}
-              {secondaryRerun && (
-                <button
-                  type="button"
-                  onClick={() => router.push(benchTestHref({ rerunOf: testId, trigger: "rerun" }))}
-                  className="min-h-11 px-4 rounded-md text-sm cursor-pointer"
-                  style={{ color: C.textSecondary }}
-                >
-                  {t("actions.rerun")}
-                </button>
+      {/* Rail: next step, checks, receipt — or start and contestant of a
+          stopped test. Sticky beside the page up to 1535 px, its own pane from
+          1536 px; on the phone its parts fall into the one column by order. */}
+      {hasSide && (
+        <div
+          data-region="result-side"
+          className={`contents lg:flex lg:flex-col lg:gap-6 lg:sticky lg:top-0 lg:self-start min-w-0 2xl:static 2xl:self-stretch 2xl:h-full 2xl:overflow-y-auto 2xl:[scrollbar-gutter:stable] scroll-quiet 2xl:pl-6 ${PANE_WIDE_PAD_L} 2xl:pb-8 2xl:border-l`}
+          style={{ borderColor: C.border }}
+        >
+          {buttons}
+
+          {checksShown && (
+            <div className="hidden lg:block">
+              <GateChecks gate={test.gate} words={words} hideTruncation={Boolean(test.truncation)} />
+            </div>
+          )}
+
+          {aborted && (
+            <section data-region="result-facts" className="order-4 lg:order-none">
+              <AbortedFacts test={test} words={words} />
+            </section>
+          )}
+
+          {done && receipts.length > 0 && (
+            <section data-region="result-receipt" className="order-5 lg:order-none" style={{ borderBottom: `1px solid ${C.border}` }}>
+              {test.blocks.map((b) =>
+                b.contestants
+                  .filter((c) => c.receipt)
+                  .map((c) => (
+                    <ReceiptView key={c.key} contestant={c} words={words} title={receiptTitle(c, words.runClass(b.run_class))} />
+                  )),
               )}
-            </div>
-            )}
-          </section>
-        )}
-
-        {done && (
-          <div className="hidden lg:block">
-            <GateChecks gate={test.gate} words={words} hideTruncation={Boolean(test.truncation)} />
-          </div>
-        )}
-
-        {done && receipts.length > 0 && (
-          <section data-region="result-receipt" className="order-5 lg:order-none" style={{ borderBottom: `1px solid ${C.border}` }}>
-            {test.blocks.map((b) =>
-              b.contestants
-                .filter((c) => c.receipt)
-                .map((c) => (
-                  <ReceiptView key={c.key} contestant={c} words={words} title={receiptTitle(c, words.runClass(b.run_class))} />
-                )),
-            )}
-          </section>
-        )}
-      </div>
+            </section>
+          )}
+        </div>
+      )}
 
       <XKitSheet testId={testId} open={kitOpen} onClose={() => setKitOpen(false)} />
       <ConfirmDialog

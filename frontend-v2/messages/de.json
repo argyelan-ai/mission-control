@@ -4597,6 +4597,19 @@
       "contestant": "Teilnehmer",
       "tip": "Nochmal startet denselben Test auf dem Modell, das jetzt läuft."
     },
+    "runs": {
+      "label": "Läufe",
+      "run": "Lauf {i}",
+      "runHead": "Lauf",
+      "time": "Zeit",
+      "thought": "Gedacht",
+      "written": "Geschrieben",
+      "outcome": "Ergebnis",
+      "thoughtLine": "{v} gedacht",
+      "writtenLine": "{v} geschrieben",
+      "page": "hat eine Seite geschrieben",
+      "notStarted": "nicht gestartet"
+    },
     "receipt": {
       "title": "Quittung · alle Einstellungen",
       "titleFor": "Quittung · {name}",
@@ -4931,6 +4944,10 @@
   },
   "benchHome": {
     "_owner": "package D — entries (P1 Runtimes, P1b switch toggle, P2 QuickSheet, P8 library, Inbox item) + list (P7). Add keys below this line only.",
+    "poster": {
+      "none": "Kein Bild",
+      "notYet": "Noch kein Bild"
+    },
     "title": "Benchmark",
     "testModel": "Modell testen",
     "lead": "{count, plural, one {# Test} other {# Tests}} · zuletzt {date}",

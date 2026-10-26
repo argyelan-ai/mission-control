@@ -32,6 +32,7 @@ dependencies = [
     "python-frontmatter>=1.1.0",
     "scikit-learn>=1.5.0",
     "pdfplumber>=0.11.0",
+    "pillow>=10.0",  # bench gallery posters (w1_kit.poster_webp); came in via pdfplumber before
     "tweepy>=4.14.0",
     # Bildschirm-Emulator fuer die Live-Vorschau aus dem tmux-Strom: der Strom
     # ist rohe Terminal-Ausgabe mit Cursor-Spruengen, kein anhaengbarer Text.

@@ -4597,6 +4597,19 @@
       "contestant": "Contestant",
       "tip": "Run again starts the same test on the model that is running now."
     },
+    "runs": {
+      "label": "Runs",
+      "run": "Run {i}",
+      "runHead": "Run",
+      "time": "Time",
+      "thought": "Thought",
+      "written": "Written",
+      "outcome": "Outcome",
+      "thoughtLine": "thought {v}",
+      "writtenLine": "wrote {v}",
+      "page": "wrote a page",
+      "notStarted": "did not start"
+    },
     "receipt": {
       "title": "Receipt · all settings",
       "titleFor": "Receipt · {name}",
@@ -4931,6 +4944,10 @@
   },
   "benchHome": {
     "_owner": "package D — entries (P1 Runtimes, P1b switch toggle, P2 QuickSheet, P8 library, Inbox item) + list (P7). Add keys below this line only.",
+    "poster": {
+      "none": "No picture",
+      "notYet": "No picture yet"
+    },
     "title": "Benchmark",
     "testModel": "Test a model",
     "lead": "{count, plural, one {# test} other {# tests}} · last {date}",

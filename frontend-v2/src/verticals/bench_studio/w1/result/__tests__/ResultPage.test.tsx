@@ -454,6 +454,124 @@ describe("ResultPage — private truncation warning", () => {
   });
 });
 
+// 25.10. (operator, Windows desktop): the warning sat alone in the right
+// column, top right, away from the test it describes. It belongs to the
+// state of the test: main column, right under the head. The rail says what
+// to do and what it was (K12 properties): X-Kit / Run again, checks and
+// receipt of a finished test; start, contestant and Run again of a stopped
+// one. A live test has no rail.
+describe("ResultPage — where the parts sit on the desktop", () => {
+  const region = (el: Element, name: string) => el.closest(`[data-region="${name}"]`);
+
+  it("stopped, all runs cut: the warning sits in the main column under the state line; start and contestant in the rail", async () => {
+    renderView(testAbortedTruncatedFixture);
+    const warning = await screen.findByTestId("truncation-warning");
+    expect(region(warning, "result-main")).not.toBeNull();
+    expect(region(warning, "result-side")).toBeNull();
+    const state = screen.getByTestId("result-state");
+    expect(region(state, "result-main")).not.toBeNull();
+    expect(state.compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(warning.compareDocumentPosition(screen.getByTestId("result-no-video")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const facts = document.querySelector('[data-region="result-facts"]')!;
+    expect(region(facts, "result-side")).not.toBeNull();
+    // In the narrow rail a long model name moves under its label whole.
+    for (const row of Array.from(facts.querySelectorAll("dl > div"))) {
+      expect(row.className).toMatch(/(^|\s)flex-wrap(\s|$)/);
+    }
+    expect(screen.getByTestId("bench-result-page").getAttribute("data-columns")).toBe("main-side");
+  });
+
+  it("a local run that had the whole context (#988, no larger budget): the warning still sits in the main column, without a re-run button", async () => {
+    renderView({
+      ...testAbortedTruncatedFixture,
+      truncation: { ...testAbortedTruncatedFixture.truncation!, larger_budget: false },
+      allowed: testAbortedTruncatedFixture.allowed.filter((a) => a !== "rerun_larger"),
+    });
+    const warning = await screen.findByTestId("truncation-warning");
+    expect(region(warning, "result-main")).not.toBeNull();
+    expect(region(warning, "result-side")).toBeNull();
+    expect(within(warning).queryByRole("button", { name: /Re-run with/ })).toBeNull();
+    expect(screen.getByTestId("result-state").compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("stopped without a cut: 'Run again' heads the rail, above start and contestant", async () => {
+    renderView({ ...testAbortedTruncatedFixture, truncation: null });
+    const rerun = await screen.findByRole("button", { name: "Run again" });
+    const side = region(rerun, "result-side")!;
+    expect(side).not.toBeNull();
+    const facts = side.querySelector('[data-region="result-facts"]')!;
+    expect(rerun.compareDocumentPosition(facts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("finished with a cut run: warning in the main column, kit, checks and receipt in the rail", async () => {
+    renderView(testDoneTruncatedFixture);
+    const warning = await screen.findByTestId("truncation-warning");
+    expect(region(warning, "result-main")).not.toBeNull();
+    expect(region(warning, "result-side")).toBeNull();
+    expect(region(screen.getByRole("button", { name: "X-Kit" }), "result-side")).not.toBeNull();
+    expect(region(screen.getByRole("region", { name: "Check" }), "result-side")).not.toBeNull();
+    expect(screen.getByTestId("bench-result-page").getAttribute("data-columns")).toBe("main-side");
+  });
+
+  it("finished green: the video stage leads the main column; X-Kit, 'Run again', checks and receipt in the rail", async () => {
+    renderView(testDoneGreenFixture);
+    const kit = await screen.findByRole("button", { name: "X-Kit" });
+    const side = region(kit, "result-side")!;
+    expect(side).not.toBeNull();
+    expect(within(side as HTMLElement).getByRole("button", { name: "Run again" })).toBeInTheDocument();
+    expect(side.querySelector('[data-region="result-checks"]')).not.toBeNull();
+    expect(side.querySelector('[data-region="result-receipt"]')).not.toBeNull();
+    const stage = screen.getByTestId("result-video-stage");
+    expect(region(stage, "result-main")).not.toBeNull();
+    // The stage keeps its 16:9 place while the bytes load: nothing jumps.
+    expect(stage.className).toMatch(/(^|\s)aspect-video(\s|$)/);
+  });
+
+  it("stopped: the main column says run by run what happened — time, thought vs. written, outcome in words", async () => {
+    renderView(testAbortedTruncatedFixture);
+    const runs = await screen.findByTestId("result-runs");
+    expect(runs.closest('[data-region="result-main"]')).not.toBeNull();
+    expect(screen.getByTestId("result-no-video").compareDocumentPosition(runs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const rows = within(runs).getAllByTestId("result-run-row");
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toHaveTextContent("Run 1");
+    expect(rows[0]).toHaveTextContent("16.4k");          // thought
+    expect(rows[0]).toHaveTextContent("0");              // written
+    expect(rows[0]).toHaveTextContent(/stopped at the token limit before any page/i);
+    expect(rows[2]).toHaveTextContent("Run 3");
+    // the phone list says the same in sentences
+    expect(within(runs).getAllByTestId("result-run")[0]).toHaveTextContent(/thought 16.4k · wrote 0/);
+  });
+
+  it("finished: no per-run block — the numbers say it; the table shares the video's right edge", async () => {
+    renderView(testDoneGreenFixture);
+    const numbers = await screen.findByTestId("result-numbers");
+    expect(screen.queryByTestId("result-runs")).toBeNull();
+    for (const el of [numbers, ...Array.from(numbers.querySelectorAll("*"))]) {
+      expect(el.getAttribute("class") ?? "").not.toMatch(/(^|\s)max-w-/);
+    }
+  });
+
+  it("live: no rail, the live run owns the page", async () => {
+    renderView(testRunningFixture);
+    await screen.findByTestId("live-run-mock");
+    expect(document.querySelector('[data-region="result-side"]')).toBeNull();
+    expect(screen.getByTestId("bench-result-page").getAttribute("data-columns")).toBe("main");
+  });
+
+  it("from 1536 px the list, the main column and the rail are panes that scroll on their own", async () => {
+    renderView(testDoneGreenFixture);
+    await screen.findByRole("button", { name: "X-Kit" });
+    for (const name of ["result-list", "result-main", "result-side"]) {
+      const pane = document.querySelector(`[data-region="${name}"]`)!;
+      expect(pane.className).toMatch(/(^|\s)2xl:overflow-y-auto(\s|$)/);
+      expect(pane.className).toMatch(/(^|\s)2xl:h-full(\s|$)/);
+      // Windows draws classic bars: the room stays reserved, nothing shifts.
+      expect(pane.className).toMatch(/(^|\s)2xl:\[scrollbar-gutter:stable\](\s|$)/);
+    }
+  });
+});
+
 describe("ResultPage — Eingang", () => {
   it("opening a finished result resolves its Eingang item, once", async () => {
     vi.mocked(benchW1Api.tests.seen).mockClear();

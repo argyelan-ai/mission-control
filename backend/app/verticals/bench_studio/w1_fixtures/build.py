@@ -256,9 +256,9 @@ def test_running() -> s.BenchTestDetail:
 
 
 def test_done_green() -> s.BenchTestDetail:
-    runs = [_run(1, 11, elapsed_ms=66_000, tokens_out=6_607, decode_tok_s=101, ttft_ms=410),
-            _run(2, 12, elapsed_ms=62_000, tokens_out=6_400, decode_tok_s=103, ttft_ms=380),
-            _run(3, 13, elapsed_ms=71_000, tokens_out=6_900, decode_tok_s=99.5, ttft_ms=460)]
+    runs = [_run(1, 11, elapsed_ms=66_000, tokens_out=6_607, tokens_reasoning=2_140, decode_tok_s=101, ttft_ms=410),
+            _run(2, 12, elapsed_ms=62_000, tokens_out=6_400, tokens_reasoning=2_050, decode_tok_s=103, ttft_ms=380),
+            _run(3, 13, elapsed_ms=71_000, tokens_out=6_900, tokens_reasoning=2_230, decode_tok_s=99.5, ttft_ms=460)]
     res = _a_result(runs)
     return s.BenchTestDetail.model_validate({
         "id": T_GREEN, "title": "Pagoda Garden", "created_at": "2026-10-22T19:40:00Z",
@@ -311,7 +311,7 @@ def test_aborted_truncated() -> s.BenchTestDetail:
     re-run are offered (review MUST-1)."""
     cut = {"code": "no_html_truncated", "params": {}}
     runs = [_run(i, 30 + i, state="failed", elapsed_ms=162_000 + i * 1_000, tokens_out=16_384,
-                 decode_tok_s=None, ttft_ms=400, finish_reason="length", truncated=True, error=cut)
+                 tokens_reasoning=16_384, decode_tok_s=None, ttft_ms=400, finish_reason="length", truncated=True, error=cut)
             for i in (1, 2, 3)]
     res = _a_result(runs)
     res.update({"receipt": None, "receipt_version": None, "receipt_checksum": None})
@@ -395,14 +395,14 @@ def test_list() -> s.BenchTestList:
             {"id": T_RED, "title": "Shot Sequence", "created_at": "2026-10-21T20:21:40Z",
              "section": "needs_look", "state": "done_missing", "run_class": "B",
              "state_reason": {"code": "numbers_missing", "params": {"fields": ["tokens_out"]}},
-             "contestants": [{**ds, "harness": "omp"}], "gate_status": "red"},
+             "contestants": [{**ds, "harness": "omp"}], "gate_status": "red", "poster": True},
             {"id": T_TRUNC, "title": "Pagoda Garden", "created_at": "2026-10-23T18:02:00Z",
              "section": "needs_look", "state": "done", "run_class": "A",
              "state_reason": {"code": "runs_truncated", "params": {"runs_cut": 1, "n_runs": 3}},
-             "contestants": [ds], "gate_status": "amber"},
+             "contestants": [ds], "gate_status": "amber", "poster": True},
             {"id": T_GREEN, "title": "Pagoda Garden", "created_at": "2026-10-22T19:40:00Z",
              "section": "done", "state": "done", "run_class": "A",
-             "contestants": [ds], "gate_status": "green"},
+             "contestants": [ds], "gate_status": "green", "poster": True},
         ],
         "counts": {"running": 2, "needs_look": 2, "done": 1},
         "total": 5,

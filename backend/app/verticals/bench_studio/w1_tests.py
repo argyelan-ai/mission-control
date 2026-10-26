@@ -117,6 +117,7 @@ def run_view(pc: dict[str, Any], e: BenchEntry, *, wait: dict | None) -> dict[st
         "phase": phase,
         "elapsed_ms": m.get("gen_ms") or m.get("active_ms") or m.get("elapsed_ms") or m.get("duration_ms"),
         "tokens_out": m.get("tokens_out") if m.get("tokens_out") is not None else m.get("tokens_so_far"),
+        "tokens_reasoning": m.get("tokens_reasoning"),
         "ttft_ms": m.get("ttft_ms"),
         "finish_reason": m.get("finish_reason"),
         "truncated": bool(m.get("truncated")),
@@ -371,6 +372,22 @@ async def overlay_actions(session: AsyncSession, challenge: BenchChallenge, entr
     return out
 
 
+def poster_entry(entries: list[BenchEntry]) -> BenchEntry | None:
+    """The run whose page screenshot stands for the test in the gallery:
+    the video run first (its page is the one in the video), else the first
+    run that has one. None = no picture (the list draws a placeholder)."""
+    shot = [e for e in entries if e.screenshot_path]
+    if not shot:
+        return None
+    shot.sort(key=lambda e: ((e.repeat_idx or 1) != c.VIDEO_RUN_INDEX, e.repeat_idx or 1, e.attempt_no or 1))
+    return shot[0]
+
+
+def _has_poster(entries: list[BenchEntry]) -> bool:
+    e = poster_entry(entries)
+    return e is not None and not w1_kit.poster_known_blank(e.screenshot_path)
+
+
 async def list_tests(
     session: AsyncSession,
     *,
@@ -410,6 +427,7 @@ async def list_tests(
                 for r in results
             ],
             "gate_status": d["gate"]["status"],
+            "poster": _has_poster(by_ch.get(ch.id, [])),
         }
         if d["state"] in ("running", "waiting"):
             runs = [run for r in results for run in r["runs"]]

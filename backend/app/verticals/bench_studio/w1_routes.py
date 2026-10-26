@@ -234,6 +234,27 @@ async def kit_download_token(
 _MEDIA = {"video.mp4": "video/mp4", "card.png": "image/png", "kit.zip": "application/zip"}
 
 
+@router.get("/tests/{test_id}/poster")
+async def test_poster(
+    test_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """The gallery picture of a test: a small WebP of the video run's page
+    screenshot (else the first run that has one). 404 = no picture; the list
+    item says so up front (``poster``). Read-only."""
+    await w1_tests.get_or_404(session, test_id)
+    entry = w1_tests.poster_entry(await w1_tests.entries_of(session, test_id))
+    data = await asyncio.to_thread(w1_kit.poster_webp, entry.screenshot_path if entry else None)
+    if data is None:
+        raise HTTPException(404, "No picture for this test")
+    return Response(
+        data,
+        media_type="image/webp",
+        headers={"Cache-Control": "private, max-age=600", "X-Content-Type-Options": "nosniff"},
+    )
+
+
 @router.get("/tests/{test_id}/kit/files/{name}")
 async def kit_file(
     test_id: uuid.UUID,
