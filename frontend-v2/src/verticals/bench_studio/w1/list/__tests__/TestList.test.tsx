@@ -181,7 +181,10 @@ describe("TestList — sections and rows (P7)", () => {
       }
     }
     vi.stubGlobal("IntersectionObserver", IO);
-    const fetchSpy = vi.fn(async () => new Response(new Blob(["x"], { type: "image/webp" })));
+    // A plain answer object, not a real Response: undici's body reading of a
+    // jsdom Blob took over waitFor's 1 s on a loaded CI runner (25.10.).
+    const picture = new Blob(["x"], { type: "image/webp" });
+    const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, blob: async () => picture }) as unknown as Response);
     vi.stubGlobal("fetch", fetchSpy);
     const created = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:poster");
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
@@ -192,20 +195,24 @@ describe("TestList — sections and rows (P7)", () => {
       expect(withPoster.length).toBeGreaterThan(0);
       // Nothing is fetched before a card is on screen.
       expect(fetchSpy).not.toHaveBeenCalled();
+      // Every observer is attached once the cards are in the DOM.
+      await waitFor(() => expect(observers.flatMap((o) => o.els)).toHaveLength(withPoster.length));
       act(() => observers.forEach((o) => o.fire()));
-      await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(withPoster.length));
+      // Wait on the effect itself (fetch → blob → object URL → <img>), never on a clock.
+      const SLOW_CI = { timeout: 4_000 };
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(withPoster.length), SLOW_CI);
       const urls = fetchSpy.mock.calls.map((c) => String((c as unknown[])[0]));
       for (const id of withPoster) expect(urls.some((u) => u.endsWith(`/bench/tests/${id}/poster`))).toBe(true);
-      await waitFor(() => expect(created).toHaveBeenCalled());
+      await waitFor(() => expect(created).toHaveBeenCalledTimes(withPoster.length), SLOW_CI);
       for (const [i, item] of testListFixture.items.entries()) {
         const poster = within(rows[i]).getByTestId("bench-row-poster");
-        if (item.poster) await waitFor(() => expect(poster.querySelector("img")).not.toBeNull());
+        if (item.poster) await waitFor(() => expect(poster.querySelector("img")).not.toBeNull(), SLOW_CI);
         else expect(poster).toHaveTextContent(item.state === "running" || item.state === "waiting" ? "No picture yet" : "No picture");
       }
     } finally {
       vi.unstubAllGlobals();
     }
-  });
+  }, 20_000);
 
   it("the selected box sits on the pane's own edges: no margin from 1536 px, equal padding, text on one line selected or not", async () => {
     // 25.10. (operator, 1920 px): the box hung 8 px out on both sides; the
