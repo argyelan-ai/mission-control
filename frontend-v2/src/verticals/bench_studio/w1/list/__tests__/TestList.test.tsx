@@ -374,3 +374,48 @@ describe("core door ↔ vertical (contract)", () => {
     expect(rows).toHaveLength(runtimeSummaryFixture.length);
   });
 });
+
+describe("TestList — a fresh result is found at once (27.10.)", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+
+  it("a test finished within the last day sits on top under 'New', above old tests that need a look", async () => {
+    const [running, , missing, amber, green] = testListFixture.items;
+    const fresh = { ...green, id: "f0000000-0000-4000-8000-000000000001", title: "Ribbon Highway", created_at: hoursAgo(2) };
+    const list: BenchTestList = {
+      items: [{ ...running, created_at: hoursAgo(1) }, fresh, missing, amber, green],
+      counts: { running: 1, needs_look: 2, done: 2 },
+      total: 5,
+      last_at: fresh.created_at,
+    };
+    vi.spyOn(benchW1Api.tests, "list").mockResolvedValue(list);
+    vi.spyOn(benchW1Api, "contestants").mockResolvedValue(contestantsFixture);
+    renderList();
+    const sections = await screen.findAllByTestId(/^bench-section-(running|new|needs_look|done)$/);
+    expect(sections.map((s) => s.getAttribute("data-testid"))).toEqual([
+      "bench-section-running",
+      "bench-section-new",
+      "bench-section-needs_look",
+      "bench-section-done",
+    ]);
+    const neu = sections[1];
+    expect(within(neu).getByRole("heading")).toHaveTextContent("New");
+    expect(within(neu).getAllByTestId("bench-test-row").map((r) => r.getAttribute("href"))).toEqual([
+      benchResultHref(fresh.id),
+    ]);
+    expect(within(neu).getByTestId("bench-section-count")).toHaveTextContent("1");
+    // Moved, not copied: "Done" keeps only the older green test.
+    expect(within(sections[3]).getAllByTestId("bench-test-row")).toHaveLength(1);
+    expect(within(sections[3]).getByTestId("bench-section-count")).toHaveTextContent("1");
+    // A running test stays under "Running", however new.
+    expect(within(sections[0]).getAllByTestId("bench-test-row")).toHaveLength(1);
+  });
+
+  it("nothing fresh: no 'New' section", async () => {
+    vi.spyOn(benchW1Api.tests, "list").mockResolvedValue(testListFixture);
+    vi.spyOn(benchW1Api, "contestants").mockResolvedValue(contestantsFixture);
+    renderList();
+    await screen.findAllByTestId("bench-test-row");
+    expect(screen.queryByTestId("bench-section-new")).toBeNull();
+  });
+});

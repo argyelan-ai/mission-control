@@ -62,6 +62,19 @@ export function benchResultHref(testId: string): string {
   return `/bench/r/${encodeURIComponent(testId)}`;
 }
 
+// Written by the bench orchestrator on every bench agent task
+// (backend bench_studio/callbacks.py BENCH_AUTO_REASON_PREFIX + the test id).
+const BENCH_TASK_REASON = /^bench_studio challenge ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/** A bench agent run is a fleet task; its result lives in the benchmark.
+ *  The result page of the task's test, or null for any other task (never
+ *  guessed from the title: an operator card named "[Bench] …" is no run). */
+export function benchResultHrefOfTask(task: { auto_reason?: string | null }): string | null {
+  if (!benchEnabled) return null;
+  const m = BENCH_TASK_REASON.exec(task.auto_reason ?? "");
+  return m ? benchResultHref(m[1]) : null;
+}
+
 /** The bench list (P7). */
 export const BENCH_LIST_HREF = "/bench";
 

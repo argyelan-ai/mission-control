@@ -13,6 +13,7 @@ import { useTranslations } from "next-intl";
 import { getToken } from "@/lib/api";
 import { C, alpha } from "@/lib/colors";
 import { DeliverableCard } from "./DeliverableCard";
+import { BenchResultLink } from "./detail/BenchResultLink";
 import type { TaskDeliverable } from "@/lib/types";
 
 // ── Authenticated Image ──────────────────────────────────────────────────────
@@ -137,17 +138,22 @@ export function DeliverablesTab({
   deliverables,
   boardId,
   taskId,
+  benchHref = null,
 }: {
   deliverables: TaskDeliverable[];
   boardId: string;
   taskId: string;
+  /** A bench run: its file is judged in the benchmark — say so on top. */
+  benchHref?: string | null;
 }) {
   const t = useTranslations("tasks");
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
+  const bench = benchHref ? <BenchResultLink href={benchHref} testId="deliverables-bench-result" note /> : null;
 
   if (!deliverables.length) {
     return (
       <div className="flex flex-col items-center justify-center py-10 gap-2">
+        {bench}
         <ImageIcon size={24} style={{ color: C.bgHover }} />
         <p className="text-sm" style={{ color: C.textMuted }}>No deliverables</p>
       </div>
@@ -167,6 +173,7 @@ export function DeliverablesTab({
 
   return (
     <div className="space-y-4">
+      {bench}
       {fromSubtasks > 0 && (
         <div
           className="text-[10px] px-2.5 py-1.5 rounded-sm flex items-center gap-2"

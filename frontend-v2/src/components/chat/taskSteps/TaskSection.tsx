@@ -23,6 +23,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { ChevronRight, ClipboardList } from "lucide-react";
 import { C } from "@/lib/colors";
+import { benchResultHrefOfTask } from "@/lib/benchLinks";
 import type { ChatTaskStub } from "@/lib/chatTypes";
 import type { DetailLevel } from "../chatOptions";
 import { useScrollAnchor } from "../useScrollAnchor";
@@ -46,6 +47,13 @@ export function linkAction(status: string): "view" | "review" | "answer" {
   return LINK_KEY[status] ?? "view";
 }
 
+/** Where a card's head leads: a bench run to its benchmark result (the
+ *  task page only holds the raw file), every other task to the task. */
+export function headLink(stub: ChatTaskStub): { href: string; action: "view" | "review" | "answer" | "bench" } {
+  const bench = benchResultHrefOfTask({ auto_reason: stub.autoReason });
+  return bench ? { href: bench, action: "bench" } : { href: taskHref(stub.taskId), action: linkAction(stub.status) };
+}
+
 const BAND = "bg-deep border-y";
 const MARK = "\u0000";
 
@@ -63,9 +71,10 @@ export function TaskSectionHeader({
   // "{title} · continues": the title is drawn on its own (truncated), the
   // words around it stay whole — in whatever order the language puts them.
   const parts = continuation ? t("continues", { title: MARK }).split(MARK) : null;
+  const link = headLink(stub);
   return (
     <Link
-      href={taskHref(stub.taskId)}
+      href={link.href}
       data-testid="chat-task-head"
       data-region="chat-task-head"
       className={`${sticky ? "sticky top-0 z-[1]" : ""} bg-deep min-h-11 px-4 flex items-center gap-2 no-underline`}
@@ -89,7 +98,7 @@ export function TaskSectionHeader({
         )}
       </span>
       <span className="shrink-0 flex items-center gap-1 text-xs" style={{ color: C.textSecondary }}>
-        {t(`action.${linkAction(stub.status)}`)}
+        {t(`action.${link.action}`)}
         <ChevronRight size={14} aria-hidden="true" />
       </span>
     </Link>
@@ -230,7 +239,7 @@ export const TaskCard = memo(function TaskCard({
           </span>
         </button>
         <Link
-          href={taskHref(stub.taskId)}
+          href={headLink(stub).href}
           data-region="chat-task-head"
           className="min-w-0 flex-1 min-h-11 pr-4 flex items-center gap-2 no-underline"
         >
@@ -238,7 +247,7 @@ export const TaskCard = memo(function TaskCard({
             {stub.title}
           </span>
           <span className="shrink-0 flex items-center gap-1 text-xs" style={{ color: C.textSecondary }}>
-            {t(`action.${linkAction(stub.status)}`)}
+            {t(`action.${headLink(stub).action}`)}
             <ChevronRight size={14} aria-hidden="true" />
           </span>
         </Link>

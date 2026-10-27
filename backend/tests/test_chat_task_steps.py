@@ -1229,3 +1229,24 @@ async def test_task_stubs_count_only_real_run_starts(
     assert datetime.fromisoformat(tasks["Dragged"]["runStartedAt"]) == reject + timedelta(seconds=5)
     assert tasks["Rewritten"]["runs"] == 2
     assert datetime.fromisoformat(tasks["Rewritten"]["runStartedAt"]) == rewrite
+
+
+@pytest.mark.asyncio
+async def test_task_stubs_carry_the_auto_reason(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
+):
+    """A bench run's card links to its benchmark result, not the task: the
+    stub carries the task's ``auto_reason`` (``bench_studio challenge <id>``)
+    so the chat can tell. Plain tasks carry null."""
+    board, agent, _root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    test_id = uuid.uuid4()
+    await make_task(board.id, title="[Bench] Pagoda", status="done", assigned_agent_id=agent.id,
+                    auto_reason=f"bench_studio challenge {test_id}", is_auto_created=True,
+                    started_at=_utc(now - timedelta(hours=1)))
+    await make_task(board.id, title="Plain", status="done", assigned_agent_id=agent.id,
+                    started_at=_utc(now - timedelta(hours=2)))
+    body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/tasks")).json()
+    by_title = {t["title"]: t for t in body["tasks"]}
+    assert by_title["[Bench] Pagoda"]["autoReason"] == f"bench_studio challenge {test_id}"
+    assert by_title["Plain"]["autoReason"] is None
