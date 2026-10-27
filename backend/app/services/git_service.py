@@ -844,22 +844,55 @@ _Keine Revisionen._
         except Exception:
             return False
 
-    async def get_task_git_info(self, workspace_path: str, branch_name: str | None = None) -> dict:
-        """Git status for UI display: branch, commits, uncommitted, ahead, PR URL."""
+    async def _base_ref(self, cwd: str) -> str | None:
+        """The branch a task branch was cut from: local main/master, else the
+        remote's default branch. None when the repo has neither."""
+        for name in ("main", "master"):
+            try:
+                await self._run_cmd("git", "rev-parse", "--verify", "--quiet", f"refs/heads/{name}", cwd=cwd)
+                return name
+            except RuntimeError:
+                continue
+        try:
+            ref = (await self._run_cmd("git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD", cwd=cwd)).strip()
+            return ref or None
+        except RuntimeError:
+            return None
+
+    async def get_task_git_info(
+        self,
+        workspace_path: str,
+        branch_name: str | None = None,
+        since: datetime | None = None,
+    ) -> dict:
+        """Git status for UI display: branch, commits, uncommitted, ahead, PR URL.
+
+        Commits are the TASK's own, never the base history (27.10.2026: a
+        fresh task branch listed 10 old commits of other work):
+        - on a task branch: ``<base>..<branch>`` (what the branch adds);
+        - on the base branch itself: commits since the task started
+          (``since``), or none when the start is unknown.
+        """
         info: dict = {"commits": [], "pr_url": None}
         try:
             info["branch"] = (
                 await self._run_cmd("git", "branch", "--show-current", cwd=workspace_path)
             ).strip()
 
-            # Last 10 commits — filtered by branch_name if given
-            log_args = ["git", "log"]
-            if branch_name:
-                log_args.append(branch_name)
-            log_args += ["--pretty=format:%h\x1f%s\x1f%an\x1f%ar", "-10"]
-            log_raw = (
-                await self._run_cmd(*log_args, cwd=workspace_path)
-            ).strip()
+            target = branch_name or "HEAD"
+            base = await self._base_ref(workspace_path)
+            on_base = base is not None and (branch_name or info["branch"]) in (base, base.split("/", 1)[-1])
+            log_args: list[str] | None = None
+            if base and not on_base:
+                log_args = ["git", "log", f"{base}..{target}"]
+            elif since is not None:
+                log_args = ["git", "log", target, f"--since={since.isoformat()}"]
+            log_raw = ""
+            if log_args:
+                log_args += ["--pretty=format:%h\x1f%s\x1f%an\x1f%ar", "-10"]
+                log_raw = (
+                    await self._run_cmd(*log_args, cwd=workspace_path)
+                ).strip()
             commits = []
             if log_raw:
                 for line in log_raw.splitlines():
@@ -881,10 +914,12 @@ _Keine Revisionen._
             ).strip()
             info["uncommitted"] = bool(dirty)
 
-            ahead_str = (
-                await self._run_cmd("git", "rev-list", "--count", "main..HEAD", cwd=workspace_path)
-            ).strip()
-            info["ahead"] = int(ahead_str) if ahead_str.isdigit() else 0
+            info["ahead"] = 0
+            if base and not on_base:
+                ahead_str = (
+                    await self._run_cmd("git", "rev-list", "--count", f"{base}..{target}", cwd=workspace_path)
+                ).strip()
+                info["ahead"] = int(ahead_str) if ahead_str.isdigit() else 0
 
             # PR URL via gh CLI (non-critical, no error if there's no PR)
             try:

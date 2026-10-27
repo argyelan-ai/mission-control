@@ -1473,7 +1473,13 @@ async def get_task_git_info_endpoint(
         }
 
     from app.services.git_service import git_service
-    info = await git_service.get_task_git_info(task.workspace_path, branch_name=task.branch_name)
+    # Only the task's own commits: what its branch adds over the base, or —
+    # working on the base branch itself — what came after the task started.
+    info = await git_service.get_task_git_info(
+        task.workspace_path,
+        branch_name=task.branch_name,
+        since=task.started_at or task.dispatched_at,
+    )
     info["workspace_path"] = task.workspace_path
 
     # Attach repo metadata from the project

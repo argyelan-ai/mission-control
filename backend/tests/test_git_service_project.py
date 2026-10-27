@@ -123,7 +123,8 @@ async def test_get_resume_briefing_returns_string(git):
 
 @pytest.mark.asyncio
 async def test_get_task_git_info_uses_branch_name(tmp_path):
-    """get_task_git_info passes branch_name to git log when provided."""
+    """get_task_git_info logs what branch_name adds over the base (never the
+    base history — see test_task_git_info_scope.py)."""
     from app.services.git_service import GitService
     service = GitService.__new__(GitService)
 
@@ -151,4 +152,4 @@ async def test_get_task_git_info_uses_branch_name(tmp_path):
     # Find the git log call and check it includes the branch name
     log_calls = [c for c in calls if "log" in c]
     assert len(log_calls) == 1
-    assert "task/my-branch" in log_calls[0]
+    assert "main..task/my-branch" in log_calls[0]
