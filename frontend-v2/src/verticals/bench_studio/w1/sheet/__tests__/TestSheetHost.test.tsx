@@ -678,12 +678,15 @@ describe("TestSheetHost — a paused agent is woken from the sheet", () => {
 
   it("a failed activation says so and keeps the button", async () => {
     api.plan.mockResolvedValue(planWithOmp(true));
-    agents.update.mockRejectedValueOnce(new Error("API 500: boom"));
+    agents.update.mockRejectedValueOnce(new Error('API 503: {"detail":"database not reachable"}'));
     const user = userEvent.setup();
     renderHost(fromRuntimes);
     const d = await sheet();
     await user.click(await within(d).findByRole("button", { name: "Activate Testagent" }));
-    expect(await within(d).findByText(/Testagent could not be activated/)).toBeInTheDocument();
+    const alert = await within(d).findByText(/Testagent could not be activated/);
+    // The server's sentence, never the raw answer (K10).
+    expect(alert).toHaveTextContent("database not reachable");
+    expect(alert.textContent).not.toMatch(/\{|API 503/);
     expect(within(d).getByRole("button", { name: "Activate Testagent" })).toBeEnabled();
     expect(ompChip(d)).toBeDisabled();
   });

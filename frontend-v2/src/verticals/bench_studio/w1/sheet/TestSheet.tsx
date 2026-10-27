@@ -11,13 +11,13 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, BookOpen, Check, Clock, Cloud, Cpu, Info, Loader2, Moon, Plus, Search, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookOpen, Check, Clock, Cloud, Cpu, Info, Loader2, Moon, Play, Plus, Search, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { benchResultHref, type BenchTestParams } from "@/lib/benchLinks";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { PROMPT_TEMPLATES_KEY, filterTemplates, templateTags } from "../../promptFilter";
-import { benchW1Api, benchW1Keys, parseBenchBlocked, parseCostConfirmation, type PlanQuery } from "../api";
+import { benchW1Api, benchW1Keys, errorDetail, parseBenchBlocked, parseCostConfirmation, type PlanQuery } from "../api";
 import type {
   BenchPlan,
   BenchTestCreate,
@@ -736,7 +736,7 @@ function HarnessSub({
   const sleeper = off.find((o) => pausedAgent(o));
   const agent = sleeper ? pausedAgent(sleeper) : null;
   if (!sleeper || !agent) return <>{text}</>;
-  const detail = wakeError?.message ?? "";
+  const detail = wakeError ? errorDetail(wakeError) : "";
   return (
     <>
       <span>{text}</span>
@@ -746,9 +746,9 @@ function HarnessSub({
           disabled={waking}
           onClick={() => onWake(agent.id, sleeper.harness)}
           className="inline-flex items-center gap-2 min-h-11 px-4 rounded-full text-sm font-medium cursor-pointer disabled:cursor-wait"
-          style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.textPrimary }}
+          style={{ background: "transparent", border: `1px solid ${C.online}`, color: C.online }}
         >
-          {waking && <Loader2 size={15} className="animate-spin" aria-hidden />}
+          {waking ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <Play size={15} aria-hidden />}
           {waking ? t("agentWaking", { agent: agent.name }) : t("agentWake", { agent: agent.name })}
         </button>
       </span>
