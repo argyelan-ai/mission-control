@@ -309,3 +309,48 @@ def test_device_name_keeps_a_number_that_is_part_of_the_model_name(display_name,
     from types import SimpleNamespace
 
     assert w1_plan.device_display_name([SimpleNamespace(display_name=display_name)], nodes) == expected
+
+
+# ── a paused / busy agent names itself (the sheet offers "activate") ─────
+
+
+def _omp(row):
+    return next(h for h in row.harnesses if h.harness == "omp")
+
+
+async def _spark_row(session):
+    out = s.ContestantList.model_validate(await w1_plan.list_contestants(session))
+    return next(c for c in out.local if c.device and c.device.name.startswith("DGX Spark"))
+
+
+@pytest.mark.asyncio
+async def test_paused_agent_reason_names_the_agent(session, engines):
+    fleet = await seed_fleet(session)
+    agent = fleet["omp_agent"]
+    agent.operational_mode = "paused"
+    session.add(agent)
+    await session.commit()
+    omp = _omp(await _spark_row(session))
+    # The quiet-mode rule stays: a paused agent is never picked silently.
+    assert omp.available is False
+    assert omp.reason.code == "agent_paused"
+    assert omp.reason.params == {"agent_id": str(agent.id), "agent_name": "Alpha"}
+
+
+@pytest.mark.asyncio
+async def test_busy_agent_reason_names_the_agent(session, engines):
+    from app.models.task import Task
+
+    fleet = await seed_fleet(session)
+    agent = fleet["omp_agent"]
+    task = Task(title="busy", board_id=fleet["board"].id)
+    session.add(task)
+    await session.commit()
+    agent.operational_mode = "active"
+    agent.current_task_id = task.id
+    session.add(agent)
+    await session.commit()
+    omp = _omp(await _spark_row(session))
+    assert omp.available is True
+    assert omp.reason.code == "agent_busy"
+    assert omp.reason.params == {"agent_id": str(agent.id), "agent_name": "Alpha"}

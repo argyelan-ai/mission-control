@@ -11,12 +11,13 @@ import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, BookOpen, Check, Clock, Cloud, Cpu, Info, Loader2, Moon, Plus, Search, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookOpen, Check, Clock, Cloud, Cpu, Info, Loader2, Moon, Play, Plus, Search, X } from "lucide-react";
+import { api } from "@/lib/api";
 import { benchResultHref, type BenchTestParams } from "@/lib/benchLinks";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { PROMPT_TEMPLATES_KEY, filterTemplates, templateTags } from "../../promptFilter";
-import { benchW1Api, benchW1Keys, parseBenchBlocked, parseCostConfirmation, type PlanQuery } from "../api";
+import { benchW1Api, benchW1Keys, errorDetail, parseBenchBlocked, parseCostConfirmation, type PlanQuery } from "../api";
 import type {
   BenchPlan,
   BenchTestCreate,
@@ -26,6 +27,7 @@ import type {
   DeviceState,
   Effort,
   Harness,
+  HarnessOption,
   PresetId,
   PresetView,
 } from "../types";
@@ -181,6 +183,32 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
       setStartError(msg.length > 160 ? `${msg.slice(0, 157)}…` : msg);
     },
   });
+
+  // A paused agent (quiet mode) greys its harness. The sheet offers to
+  // activate it — the same PATCH the agent page's Resume button sends — then
+  // reads the plan again and picks the harness, since that was the intent.
+  const [wakeFor, setWakeFor] = useState<Harness | null>(null);
+  const wake = useMutation({
+    mutationFn: ({ agentId }: { agentId: string; harness: Harness }) =>
+      api.agents.update(agentId, { operational_mode: "active" }),
+    onMutate: ({ harness }) => setWakeFor(harness),
+    onSuccess: (_agent, { agentId }) => {
+      void qc.invalidateQueries({ queryKey: ["bench-w1", "plan"] });
+      void qc.invalidateQueries({ queryKey: benchW1Keys.contestants() });
+      void qc.invalidateQueries({ queryKey: ["agents"] });
+      void qc.invalidateQueries({ queryKey: ["agent", agentId] });
+    },
+    onError: () => setWakeFor(null),
+  });
+  // Once the fresh plan is in (and already synced into `sel`): pick the woken
+  // harness, or give up quietly when the server still says no (the note and
+  // the button come back).
+  if (wakeFor && wake.isSuccess && data === seenPlan && !stale && !plan.isFetching && sel && subject) {
+    const o = harnessOption(subject, wakeFor);
+    if (o?.available && !sel.harnesses.includes(wakeFor)) setSel(toggleHarness(sel, wakeFor));
+    setWakeFor(null);
+  }
+  const waking = wake.isPending || wakeFor !== null;
 
   const ready = Boolean(data && sel && subject && !plan.isPlaceholderData && picks.length > 0);
   const canStart = ready && !blocked && !ladderShort && !create.isPending;
@@ -438,7 +466,18 @@ export function TestSheet({ params, onClose }: { params: BenchTestParams; onClos
           {subject && sel && (
             <FieldRow
               name={t("row.harness")}
-              sub={harnessSub(subject, t, w)}
+              sub={
+                hasHarnessSub(subject) && (
+                  <HarnessSub
+                    subject={subject}
+                    t={t}
+                    w={w}
+                    waking={waking}
+                    wakeError={wake.error}
+                    onWake={(agentId, harness) => wake.mutate({ agentId, harness })}
+                  />
+                )
+              }
             >
               <ChipGroup label={t("row.harness")}>
                 {subject.harnesses.map((o) => (
@@ -650,22 +689,79 @@ function reasonWord(w: ReturnType<typeof useBenchWords>, code: string): string |
   return null;
 }
 
-function harnessSub(subject: Contestant, t: T, w: ReturnType<typeof useBenchWords>): string | undefined {
+/** The paused agent behind a harness option, when the server named it. */
+function pausedAgent(o: HarnessOption): { id: string; name: string } | null {
+  if (o.reason?.code !== "agent_paused") return null;
+  const { agent_id: id, agent_name: name } = o.reason.params ?? {};
+  return typeof id === "string" && typeof name === "string" && id && name ? { id, name } : null;
+}
+
+function cloudOnly(subject: Contestant): boolean {
+  return subject.locality === "cloud" && subject.harnesses.length === 1 && isDirectApi(subject.harnesses[0].harness);
+}
+
+function hasHarnessSub(subject: Contestant): boolean {
+  return subject.harnesses.some((o) => !o.available) || cloudOnly(subject);
+}
+
+/** Why a harness is greyed — and for a paused agent the one-click way out. */
+function HarnessSub({
+  subject,
+  t,
+  w,
+  waking,
+  wakeError,
+  onWake,
+}: {
+  subject: Contestant;
+  t: T;
+  w: ReturnType<typeof useBenchWords>;
+  waking: boolean;
+  wakeError: Error | null;
+  onWake: (agentId: string, harness: Harness) => void;
+}) {
   const off = subject.harnesses.filter((o) => !o.available);
-  if (off.length)
-    return off
-      .map((o) => {
-        // The server's reason in shared words ("the agent is paused"), else the plain note.
-        const why = o.reason ? reasonWord(w, o.reason.code) : null;
-        return why
-          ? t("harnessUnavailableWhy", { harness: w.harness(o.harness), reason: why })
-          : t("harnessUnavailable", { harness: w.harness(o.harness) });
-      })
-      .join(" · ");
-  if (subject.locality === "cloud" && subject.harnesses.length === 1 && isDirectApi(subject.harnesses[0].harness)) {
-    return t("harnessCloudOnly");
-  }
-  return undefined;
+  if (!off.length) return cloudOnly(subject) ? <>{t("harnessCloudOnly")}</> : null;
+  const text = off
+    .map((o) => {
+      // A named paused agent says its name; otherwise the server's reason in
+      // shared words ("the agent is paused"), else the plain note.
+      const agent = pausedAgent(o);
+      const why = agent ? t("agentPaused", { agent: agent.name }) : o.reason ? reasonWord(w, o.reason.code) : null;
+      return why
+        ? t("harnessUnavailableWhy", { harness: w.harness(o.harness), reason: why })
+        : t("harnessUnavailable", { harness: w.harness(o.harness) });
+    })
+    .join(" · ");
+  const sleeper = off.find((o) => pausedAgent(o));
+  const agent = sleeper ? pausedAgent(sleeper) : null;
+  if (!sleeper || !agent) return <>{text}</>;
+  const detail = wakeError ? errorDetail(wakeError) : "";
+  return (
+    <>
+      <span>{text}</span>
+      <span className="flex flex-wrap items-center gap-2 mt-2">
+        <button
+          type="button"
+          disabled={waking}
+          onClick={() => onWake(agent.id, sleeper.harness)}
+          className="inline-flex items-center gap-2 min-h-11 px-4 rounded-full text-sm font-medium cursor-pointer disabled:cursor-wait"
+          style={{ background: "transparent", border: `1px solid ${C.online}`, color: C.online }}
+        >
+          {waking ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <Play size={15} aria-hidden />}
+          {waking ? t("agentWaking", { agent: agent.name }) : t("agentWake", { agent: agent.name })}
+        </button>
+      </span>
+      {wakeError && !waking && (
+        <span role="alert" className="block mt-1 break-words" style={{ color: STATUS_TEXT.error }}>
+          {t("agentWakeFailed", {
+            agent: agent.name,
+            detail: detail.length > 120 ? `${detail.slice(0, 117)}…` : detail,
+          })}
+        </span>
+      )}
+    </>
+  );
 }
 
 function effortSubParts({

@@ -156,6 +156,21 @@ export function parseCostConfirmation(err: unknown): CostConfirmation | null {
 /** The blockers of a 409 `bench_blocked` from tests.create / rerun
  *  (`{detail: {code, message, blockers: [{code, blocking}]}}`), or null.
  *  The sheet words them through `benchShared.blocker` — never raw JSON. */
+/** The readable part of a failed request: the server's `detail` sentence when
+ *  it sent one, else the message without the "API 503:" prefix — never raw JSON. */
+export function errorDetail(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const m = /^API (\d+): ([\s\S]*)$/.exec(msg);
+  if (!m) return msg;
+  try {
+    const detail = (JSON.parse(m[2]) as { detail?: unknown }).detail;
+    if (typeof detail === "string" && detail) return detail;
+  } catch {
+    // not JSON — the text itself
+  }
+  return m[2].trim() && !m[2].trim().startsWith("{") ? m[2].trim() : `HTTP ${m[1]}`;
+}
+
 export function parseBenchBlocked(err: unknown): { code: string; blocking: boolean }[] | null {
   if (!(err instanceof Error)) return null;
   const m = /^API 409: ([\s\S]*)$/.exec(err.message);
