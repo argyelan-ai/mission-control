@@ -52,6 +52,8 @@ import { TaskHistory } from "./TaskHistory";
 import { TaskTimeline } from "./TaskTimeline";
 import { TaskTranscript } from "./TaskTranscript";
 import { DeliverablesTab } from "./DeliverablesTab";
+import { BenchResultLink } from "./detail/BenchResultLink";
+import { benchResultHrefOfTask } from "@/lib/benchLinks";
 import { WorkspaceTab } from "./WorkspaceTab";
 import { ThreadPanel } from "./ThreadPanel";
 import { GitPanel, gitSectionInfo } from "./GitPanel";
@@ -1024,6 +1026,8 @@ export function TaskDetailBody({
   // The PR shows in the header when the header is about it: a result, a card
   // in review, or a head that opened one. Otherwise it is a property.
   const reviewPr = !headOwnsRun && task.status === "review" && !!task.pr_url;
+  // A bench run: the result (and the live run) are judged in the benchmark.
+  const benchHref = benchResultHrefOfTask(task);
   const prInHeader =
     reviewPr ||
     (stateCard?.kind === "result" && !!stateCard.prUrl) ||
@@ -1257,6 +1261,11 @@ export function TaskDetailBody({
               <ExternalLink size={14} aria-hidden />
             </a>
           )}
+          {benchHref && (
+            <div className="mt-3">
+              <BenchResultLink href={benchHref} testId="task-bench-result" />
+            </div>
+          )}
           {showActions && (
             <div className="mt-4">
               <TaskActions
@@ -1459,7 +1468,7 @@ export function TaskDetailBody({
           ) : activeTab === "transcript" ? (
             <TaskTranscript taskId={task.id} isLive={task.status === "in_progress" || task.status === "review"} />
           ) : activeTab === "deliverables" ? (
-            <DeliverablesTab deliverables={deliverables ?? []} boardId={boardId} taskId={task.id} />
+            <DeliverablesTab deliverables={deliverables ?? []} boardId={boardId} taskId={task.id} benchHref={benchHref} />
           ) : activeTab === "workspace" ? (
             <WorkspaceTab task={task} boardId={boardId} />
           ) : activeTab === "timeline" ? (

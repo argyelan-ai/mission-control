@@ -444,6 +444,10 @@ export interface ChatTaskStub {
    *  the `review` card): not live, but a real task turn (round-4 r1 S2).
    *  Absent on an older backend = false. */
   reviewRun?: boolean;
+  /** The task's `auto_reason` — a bench run carries "bench_studio challenge
+   *  <test id>" and its card leads to the benchmark result. Absent on an
+   *  older backend = a plain task. */
+  autoReason?: string | null;
 }
 
 export type ChatTasksResponse =

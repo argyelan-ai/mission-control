@@ -3,8 +3,8 @@
 /**
  * Bench W1 list (P7, package D) — the bench home.
  *
- * Sections Läuft · Braucht Blick · Fertig (GET /bench/tests, human states
- * only), every row a link to its result page (benchResultHref), header
+ * Sections Läuft · Neu · Braucht Blick · Fertig (GET /bench/tests, human
+ * states only; "Neu" = the list's own: ended tests started < 24 h ago), every row a link to its result page (benchResultHref), header
  * button "Modell testen" into the test sheet (benchTestHref, trigger
  * "list") with the prompt library next to it, filters model · device ·
  * harness · class (server-side query), archive toggle. Replaces the legacy
@@ -39,7 +39,20 @@ import { benchResultHref, benchTestHref } from "@/lib/benchLinks";
 import { benchW1Api, benchW1Keys, type TestListQuery } from "../api";
 import type { BenchTestList, BenchTestListItem, Harness, Reason, RunClass, Section } from "../types";
 
-const SECTIONS: Section[] = ["running", "needs_look", "done"];
+type Group = Section | "new";
+/** Sections in order; "new" is the list's own (not a server section). */
+const GROUPS: Group[] = ["running", "new", "needs_look", "done"];
+/** A test started within this window that no longer runs sits on top
+ *  under "New" — a fresh result must not hide below old tests that need a
+ *  look (27.10.: an agent run ended after an hour, below the fold). */
+const FRESH_MS = 24 * 3_600_000;
+
+function isFresh(item: BenchTestListItem, now: number): boolean {
+  if (item.section === "running") return false;
+  const at = Date.parse(item.created_at);
+  return Number.isFinite(at) && now - at < FRESH_MS;
+}
+
 const HARNESSES: Harness[] = ["api", "omp", "hermes", "grok-build", "claude-code"];
 const RUN_CLASSES: RunClass[] = ["A", "B", "C"];
 /** While something runs or waits, the list follows it (the live run itself polls faster). */
@@ -570,9 +583,15 @@ export function TestList() {
         ) : (
           data && (
             <div className="flex flex-col gap-6">
-              {SECTIONS.map((section) => {
-                const items = data.items.filter((i) => i.section === section);
-                const count = Math.max(data.counts[section] ?? 0, items.length);
+              {GROUPS.map((section) => {
+                const now = Date.now();
+                const items =
+                  section === "new"
+                    ? data.items.filter((i) => isFresh(i, now))
+                    : data.items.filter((i) => i.section === section && !isFresh(i, now));
+                // Moved, not copied: a section's server count loses its fresh tests.
+                const moved = section === "new" ? 0 : data.items.filter((i) => i.section === section && isFresh(i, now)).length;
+                const count = section === "new" ? items.length : Math.max((data.counts[section] ?? 0) - moved, items.length);
                 if (count === 0) return null;
                 return (
                   <section key={section} data-testid={`bench-section-${section}`} aria-labelledby={`bench-section-h-${section}`}>
@@ -580,7 +599,7 @@ export function TestList() {
                         once rows flow into columns (the end is far away then). */}
                     <div className="flex items-baseline justify-between @4xl:justify-start @4xl:gap-3">
                       <h2 id={`bench-section-h-${section}`} className="text-base font-semibold" style={{ color: C.textPrimary }}>
-                        {ts(`section.${section}`)}
+                        {section === "new" ? t("sectionNew") : ts(`section.${section}`)}
                       </h2>
                       <span className="text-sm tabular-nums" style={{ color: C.textMuted }} data-testid="bench-section-count">
                         {count}

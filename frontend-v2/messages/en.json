@@ -258,6 +258,8 @@
     "required": "Required",
     "taskLabel": "Task",
     "closeTaskDetails": "Close task details",
+    "benchResult": "View result in Benchmark",
+    "benchResultNote": "This task is a benchmark run. Its result is judged in the benchmark, with video and numbers.",
     "description": "Description",
     "briefing": "Briefing",
     "properties": "Properties",
@@ -1290,7 +1292,8 @@
       "action": {
         "view": "View",
         "review": "Review",
-        "answer": "Answer"
+        "answer": "Answer",
+        "bench": "In Benchmark"
       },
       "continues": "{title} · continues",
       "attempt": "Attempt {n} · {time}",
@@ -4947,6 +4950,7 @@
     }
   },
   "benchHome": {
+    "sectionNew": "New",
     "_owner": "package D — entries (P1 Runtimes, P1b switch toggle, P2 QuickSheet, P8 library, Inbox item) + list (P7). Add keys below this line only.",
     "poster": {
       "none": "No picture",

@@ -1013,6 +1013,9 @@ async def task_stubs(session: AsyncSession, agent: Agent, limit: int = 20) -> di
             # S2): not a live section, but the chat's task turn is real —
             # the status line must not call it ready.
             "reviewRun": review_run_holds(task, agent),
+            # Why the system made the card (e.g. "bench_studio challenge
+            # <id>"): a bench run's card leads to its benchmark result.
+            "autoReason": task.auto_reason,
         }
 
     return {

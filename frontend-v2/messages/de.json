@@ -258,6 +258,8 @@
     "required": "Erforderlich",
     "taskLabel": "Aufgabe",
     "closeTaskDetails": "Aufgaben-Details schliessen",
+    "benchResult": "Ergebnis im Benchmark ansehen",
+    "benchResultNote": "Diese Aufgabe ist ein Benchmark-Lauf. Bewertet wird das Ergebnis im Benchmark, mit Video und Zahlen.",
     "description": "Beschreibung",
     "briefing": "Briefing",
     "properties": "Eigenschaften",
@@ -1290,7 +1292,8 @@
       "action": {
         "view": "Ansehen",
         "review": "Prüfen",
-        "answer": "Antworten"
+        "answer": "Antworten",
+        "bench": "Im Benchmark"
       },
       "continues": "{title} · läuft weiter",
       "attempt": "Versuch {n} · {time}",
@@ -4947,6 +4950,7 @@
     }
   },
   "benchHome": {
+    "sectionNew": "Neu",
     "_owner": "package D — entries (P1 Runtimes, P1b switch toggle, P2 QuickSheet, P8 library, Inbox item) + list (P7). Add keys below this line only.",
     "poster": {
       "none": "Kein Bild",
