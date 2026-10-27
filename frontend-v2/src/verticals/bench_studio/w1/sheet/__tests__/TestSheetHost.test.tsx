@@ -49,6 +49,13 @@ vi.mock("@/verticals/bench_studio/api", () => ({
   benchApi: { promptTemplates: { list: lib.list } },
 }));
 
+// The paused agent is woken with the agent route the agent page uses too.
+const agents = vi.hoisted(() => ({ update: vi.fn() }));
+vi.mock("@/lib/api", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("@/lib/api")>();
+  return { ...orig, api: { ...orig.api, agents: { ...orig.api.agents, update: agents.update } } };
+});
+
 import { TestSheetHost } from "../TestSheetHost";
 import type { PromptTemplate } from "../../../types";
 
@@ -102,6 +109,7 @@ beforeEach(() => {
   api.plan.mockReset().mockResolvedValue(clone(planStandardFixture));
   api.contestants.mockReset().mockResolvedValue(clone(contestantsFixture));
   api.create.mockReset().mockResolvedValue(clone(testRunningFixture));
+  agents.update.mockReset();
   lib.list.mockReset().mockResolvedValue(clone(LIBRARY));
 });
 
@@ -615,5 +623,78 @@ describe("TestSheetHost — prompt from the library", () => {
       "href",
       "/bench?view=library",
     );
+  });
+});
+
+describe("TestSheetHost — a paused agent is woken from the sheet", () => {
+  const AGENT_ID = "99999999-9999-4999-8999-999999999999";
+
+  function planWithOmp(paused: boolean): BenchPlan {
+    const plan: BenchPlan = clone(planStandardFixture);
+    const omp = plan.contestants[0].harnesses.find((o) => o.harness === "omp")!;
+    omp.available = !paused;
+    omp.reason = paused ? { code: "agent_paused", params: { agent_id: AGENT_ID, agent_name: "Testagent" } } : null;
+    return plan;
+  }
+
+  function ompChip(d: HTMLElement) {
+    return within(within(d).getByRole("group", { name: "Harness" })).getByRole("button", { name: /omp/i });
+  }
+
+  it("names the paused agent and offers one button to activate it", async () => {
+    api.plan.mockResolvedValue(planWithOmp(true));
+    renderHost(fromRuntimes);
+    const d = await sheet();
+    expect(await within(d).findByText(/Testagent is paused \(quiet mode\)/)).toBeInTheDocument();
+    expect(within(d).getByRole("button", { name: "Activate Testagent" })).toBeEnabled();
+    expect(ompChip(d)).toBeDisabled();
+  });
+
+  it("activates the agent, reads the plan again and picks the agent harness", async () => {
+    api.plan.mockResolvedValue(planWithOmp(true));
+    let done!: () => void;
+    agents.update.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          done = () => resolve({ id: AGENT_ID, operational_mode: "active" });
+        }),
+    );
+    const user = userEvent.setup();
+    renderHost(fromRuntimes);
+    const d = await sheet();
+    await user.click(await within(d).findByRole("button", { name: "Activate Testagent" }));
+    expect(agents.update).toHaveBeenCalledWith(AGENT_ID, { operational_mode: "active" });
+    // Pending is shown honestly: the button says so and cannot be pressed twice.
+    expect(within(d).getByRole("button", { name: /Activating Testagent/ })).toBeDisabled();
+
+    const callsBefore = api.plan.mock.calls.length;
+    api.plan.mockResolvedValue(planWithOmp(false));
+    done();
+    await waitFor(() => expect(api.plan.mock.calls.length).toBeGreaterThan(callsBefore));
+    await waitFor(() => expect(ompChip(d)).toBeEnabled());
+    await waitFor(() => expect(ompChip(d)).toHaveAttribute("aria-pressed", "true"));
+    expect(within(d).queryByRole("button", { name: /Activate Testagent/ })).not.toBeInTheDocument();
+  });
+
+  it("a failed activation says so and keeps the button", async () => {
+    api.plan.mockResolvedValue(planWithOmp(true));
+    agents.update.mockRejectedValueOnce(new Error("API 500: boom"));
+    const user = userEvent.setup();
+    renderHost(fromRuntimes);
+    const d = await sheet();
+    await user.click(await within(d).findByRole("button", { name: "Activate Testagent" }));
+    expect(await within(d).findByText(/Testagent could not be activated/)).toBeInTheDocument();
+    expect(within(d).getByRole("button", { name: "Activate Testagent" })).toBeEnabled();
+    expect(ompChip(d)).toBeDisabled();
+  });
+
+  it("without the agent in the reason it stays a plain note (older server)", async () => {
+    const plan = planWithOmp(true);
+    plan.contestants[0].harnesses.find((o) => o.harness === "omp")!.reason = { code: "agent_paused", params: {} };
+    api.plan.mockResolvedValue(plan);
+    renderHost(fromRuntimes);
+    const d = await sheet();
+    expect(await within(d).findByText(/the agent is paused \(quiet mode\)/)).toBeInTheDocument();
+    expect(within(d).queryByRole("button", { name: /^Activate/ })).not.toBeInTheDocument();
   });
 });

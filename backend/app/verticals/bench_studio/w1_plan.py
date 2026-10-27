@@ -834,11 +834,14 @@ def harness_options(view: EngineView, hist: History, n_runs: int, blockers: list
                                   "params": {"level": hist.b_level.get(harness, default_level)}}
         else:
             opt["effort_note"] = {"code": "harness_default", "params": {}}
+        # The agent names itself so the sheet can offer "activate <name>"
+        # (PATCH /agents/{id}); the quiet-mode rule itself stays.
+        who = {"agent_id": str(agent.id), "agent_name": agent.name}
         if agent.operational_mode != "active":
             opt["available"] = False
-            opt["reason"] = {"code": "agent_paused", "params": {}}
+            opt["reason"] = {"code": "agent_paused", "params": who}
         elif agent.current_task_id is not None:
-            opt["reason"] = {"code": "agent_busy", "params": {}}
+            opt["reason"] = {"code": "agent_busy", "params": who}
         if view.locality == "local" and blocked:
             opt["available"] = False
             opt["reason"] = {"code": next(b["code"] for b in blockers if b["blocking"]), "params": {}}
