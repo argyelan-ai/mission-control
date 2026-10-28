@@ -554,6 +554,20 @@ rules:
     status: active
     checked: 2026-10-23
 
+  - id: R-run-end-signal-never-starves
+    says: "The poll's stopped/cancelled answer ends the session on THAT card and nothing more. It wins only while the agent is still on the card: its current_task_id names the card, or it has no pointer and a live working heartbeat. Otherwise the poll delivers the agent's real work (a newly dispatched card, a running card's working answer), and a stopped card is never handed out again as new work. With nothing else to deliver the old answer stays, so Stop then Resume is unchanged. A bench time-limit stop leaves blocked + stopped for good — it used to answer stopped on every poll while a new card waited."
+    source: "live incident 28.10.2026 (bench time-limit stop, PR #995)"
+    owner: backend/app/routers/agents.py
+    applies_to: ["backend/app/routers/agents.py", "backend/app/services/operations.py"]
+    enforced_by:
+      - {test: "backend/tests/test_poll_stopped_card_starvation.py::test_old_stopped_card_does_not_shadow_new_dispatched_card"}
+      - {test: "backend/tests/test_poll_stopped_card_starvation.py::test_freshly_stopped_card_is_never_redelivered_as_new_task"}
+      - {test: "backend/tests/test_poll_stopped_card_starvation.py::test_stop_wins_while_agent_is_in_turn_on_the_card"}
+      - {test: "backend/tests/test_poll_stopped_card_starvation.py::test_agent_working_on_another_card_reports_working"}
+      - {test: "backend/tests/test_poll_stopped_card_starvation.py::test_resume_delivers_the_stopped_card_again"}
+    status: active
+    checked: 2026-10-28
+
 rejected:
   - id: X-own-control-room
     idea: "An own control-room UI, job page or coordinator for heads"

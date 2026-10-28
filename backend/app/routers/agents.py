@@ -3337,6 +3337,49 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
     }
 
 
+# rule: R-run-end-signal-never-starves - a stopped/failed card ends its own session, never the agent's queue
+async def _run_end_signal_binds(session: AsyncSession, agent: Agent, task: Task) -> bool:
+    """Does the ``cancelled``/``stopped`` answer for `task` still have a
+    session to end?
+
+    The answer is a one-shot instruction: end the session that works on THAT
+    card. It binds while the agent is demonstrably on the card — its pointer
+    (``current_task_id``) names it, or it has no pointer at all and the
+    heartbeat shows a live turn (``status == "working"``, refreshed within
+    dispatch Guard 3's TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS; the stop clears
+    the pointer) that no other delivered card of the agent can explain — a
+    review turn runs without a pointer too, and must not be ended by an old
+    stopped card.
+    Freshness is read from ``last_task_activity_at`` — the working heartbeat
+    stamps it on every beat — not ``last_seen_at``: agent auth bumps that on
+    every request, this poll included, so it would always look fresh here.
+    A pointer on ANOTHER card means the agent already runs that one — the
+    stop must not end it. Otherwise nothing is left to end: the answer must
+    not shadow deliverable work (live incident 28.10.2026: a bench time-limit
+    stop left ``blocked + stopped`` for good, and the agent's poll answered
+    ``stopped`` on every call while a new dispatched card waited).
+    """
+    if agent.current_task_id is not None:
+        return agent.current_task_id == task.id
+    if agent.status != "working" or agent.last_task_activity_at is None:
+        return False
+    from app.services.dispatch import TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS
+    from app.utils import ensure_aware, utcnow
+
+    age = (utcnow() - ensure_aware(agent.last_task_activity_at)).total_seconds()
+    if age >= TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS:
+        return False
+    other_delivered = (await session.exec(
+        select(Task.id)
+        .where(Task.assigned_agent_id == agent.id)
+        .where(Task.id != task.id)
+        .where(Task.status.in_(["in_progress", "review", "waiting"]))  # type: ignore[union-attr]
+        .where(Task.ack_at.is_not(None))  # type: ignore[union-attr]
+        .limit(1)
+    )).first()
+    return other_delivered is None
+
+
 @router.get("/agent/me/poll")
 async def agent_poll(
     agent: Agent = Depends(require_agent),
@@ -3407,8 +3450,6 @@ async def agent_poll(
         .limit(1)
     )
     failed = failed_result.first()
-    if failed is not None:
-        return {"state": "cancelled", "task_id": str(failed.id), **_poll_extra}
 
     # 1b. Manually stopped tasks (run_control=stopped). Own state so that
     # poll.sh cleanly terminates the session (ESC + /clear + context reset)
@@ -3422,8 +3463,23 @@ async def agent_poll(
         .limit(1)
     )
     stopped = stopped_result.first()
-    if stopped is not None:
-        return {"state": "stopped", "task_id": str(stopped.id), **_poll_extra}
+
+    # Both answers end the session on THAT card — they win only while that
+    # session still exists (_run_end_signal_binds). Otherwise the poll goes
+    # on to the agent's real work; with nothing to deliver the old answer
+    # stays (clients dedup it per card), so stop -> resume is unchanged.
+    # A failed card normally never lingers here (apply_terminal_unassign
+    # unassigns on every ->failed path); a stopped one keeps its assignee
+    # on purpose (resume goes back to the same agent), so it needs this rule.
+    _run_end_answer: dict | None = None
+    for _end_state, _end_task in (("cancelled", failed), ("stopped", stopped)):
+        if _end_task is None:
+            continue
+        _answer = {"state": _end_state, "task_id": str(_end_task.id)}
+        if await _run_end_signal_binds(session, agent, _end_task):
+            return {**_answer, **_poll_extra}
+        if _run_end_answer is None:
+            _run_end_answer = _answer
 
     # 2. Phase-approval tasks take priority over the "working" bail-out, because the
     # parent deliberately stays in_progress until the Board Lead processes the approval task.
@@ -3433,6 +3489,9 @@ async def agent_poll(
         .where(Task.assigned_agent_id == agent.id)
         .where(Task.status == "inbox")
         .where(Task.delegation_type == "phase_approval")
+        # A stopped approval card is not deliverable work (reachable since a
+        # non-binding stop answer falls through, see above).
+        .where(Task.run_control.is_distinct_from("stopped"))  # type: ignore[union-attr]
         .order_by(Task.created_at.asc())
         .limit(1)
     )
@@ -3466,6 +3525,16 @@ async def agent_poll(
         # unblocked old task (freshest updated_at, stale ack_at set) shadows
         # the task the real session is running — poll reports "working" on
         # the wrong task.
+        # A stopped card is never this agent's active work: its stop cleared
+        # ack_at, so the "prompt never delivered" branch below would hand it
+        # out again as new_task and undo the stop (reachable only since the
+        # stop answer above can fall through). Resume clears run_control.
+        from sqlalchemy import or_ as _or
+
+        _not_stopped = _or(
+            Task.run_control.is_(None),  # type: ignore[union-attr]
+            Task.run_control != "stopped",
+        )
         active = None
         if agent.current_task_id is not None:
             _cur_result = await session.exec(
@@ -3479,6 +3548,7 @@ async def agent_poll(
                 # current_task_id, this branch is skipped and the agent becomes
                 # claimable again (park releases → inbox-claim OK).
                 .where(Task.status.in_(["in_progress", "blocked", "review", "waiting"]))
+                .where(_not_stopped)
                 .limit(1)
             )
             active = _cur_result.first()
@@ -3487,6 +3557,7 @@ async def agent_poll(
                 select(Task)
                 .where(Task.assigned_agent_id == agent.id)
                 .where(Task.status.in_(["in_progress", "blocked", "review"]))
+                .where(_not_stopped)
                 .order_by(Task.updated_at.desc())
                 .limit(1)
             )
@@ -3662,6 +3733,10 @@ async def agent_poll(
                     }
 
     if task is None:
+        # Nothing to deliver: a pending stop/cancel answer keeps its old
+        # place (idempotent per card on every client).
+        if _run_end_answer is not None:
+            return {**_run_end_answer, **_poll_extra}
         return {"state": "idle", **_poll_extra}
 
     # Guard 2 (erledigte/fremde Karte, 14.09.2026 incident): `task` was
