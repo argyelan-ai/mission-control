@@ -5184,7 +5184,7 @@ def run_acp_once(
                     client.load_session(resume_session_id, cwd)
                     sid = resume_session_id
                     outcome.resumed = True
-                except acp_client.ACPError as e:
+                except Exception as e:  # noqa: BLE001 — any failed load falls back
                     outcome.resumed = False
                     outcome.resume_error = str(e)
                     sys.stderr.write(

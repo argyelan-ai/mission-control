@@ -26,7 +26,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from tests.conftest import test_engine
 
 
-async def _setup(*, status: str, seen_ago_s: float | None, on_this_card: bool = True):
+async def _setup(*, status: str, seen_ago_s: float | None, on_this_card: bool = True,
+                 silent_hours: float = 3):
     from app.auth import generate_agent_token
     from app.models.agent import Agent
     from app.models.board import Board
@@ -40,8 +41,9 @@ async def _setup(*, status: str, seen_ago_s: float | None, on_this_card: bool = 
     task = Task(
         id=uuid.uuid4(), board_id=board.id, title="Long thinking run",
         status="in_progress", assigned_agent_id=agent_id,
-        started_at=now - timedelta(hours=3), updated_at=now - timedelta(hours=3),
-        ack_at=now - timedelta(hours=3),
+        started_at=now - timedelta(hours=silent_hours),
+        updated_at=now - timedelta(hours=silent_hours),
+        ack_at=now - timedelta(hours=silent_hours),
     )
     other = Task(
         id=uuid.uuid4(), board_id=board.id, title="Other card",
@@ -111,6 +113,19 @@ async def test_turn_on_another_card_does_not_shield_this_one(fake_redis):
     """Counter-probe: the agent is mid-turn on a DIFFERENT card -> this
     card's silence is still a stall."""
     task = await _setup(status="working", seen_ago_s=10, on_this_card=False)
+    recovery = await _run_stale_check()
+    assert task.id in [c.args[1].id for c in recovery.await_args_list]
+
+
+@pytest.mark.asyncio
+async def test_turn_signal_shield_has_an_upper_bound(fake_redis):
+    """Counter-probe: "working" only proves the heartbeat thread lives. After
+    TURN_SIGNAL_SHIELD_FACTOR x the idle threshold (4 h) with no real
+    activity, recovery runs even with a fresh heartbeat."""
+    from app.services.task_runner import TURN_SIGNAL_SHIELD_FACTOR
+
+    assert TURN_SIGNAL_SHIELD_FACTOR == 4
+    task = await _setup(status="working", seen_ago_s=10, silent_hours=5)
     recovery = await _run_stale_check()
     assert task.id in [c.args[1].id for c in recovery.await_args_list]
 

@@ -269,6 +269,31 @@ def test_resume_failure_falls_back_to_fresh_session_with_full_prompt():
     assert outcome.final_stop_reason == "end_turn"
 
 
+def test_resume_non_acp_error_also_falls_back():
+    """Any load failure (not only ACPError) takes the fresh-session fallback
+    instead of ending the attempt as a launch error (review finding)."""
+    fake = taa.InProcessFake(taa.FIXTURES["normal"], [])
+
+    def boom(*_a, **_k):
+        raise RuntimeError("load exploded")
+
+    fake.client.load_session = boom
+    try:
+        outcome = bridge.run_acp_once(
+            "nudge", cwd=str(HERE), model=None, max_time=10,
+            permission_policy="yolo", task_id="T1", cancel_poll_interval=0.01,
+            client_factory=lambda: fake.client,
+            resume_session_id="whatever", fresh_prompt="FULL TASK PROMPT",
+        )
+    finally:
+        fake.close()
+    assert outcome.resumed is False
+    assert "load exploded" in (outcome.resume_error or "")
+    # the fallback opened a fresh session (not a launch-preflight failure)
+    assert outcome.saw_session is True
+    assert outcome.session_id == SID
+
+
 def test_no_resume_requested_keeps_session_new():
     outcome, _sink = taa.run_adapter(taa.FIXTURES["normal"])
     assert outcome.resumed is None

@@ -161,6 +161,11 @@ def active_waiting_seconds(
 TIER3_DISPATCH_TIMEOUT_SECONDS = 90
 
 
+#: How long a live turn signal may hold off the stale check, as a multiple of
+#: the agent's idle threshold (60 min -> 4 h without a comment/message).
+TURN_SIGNAL_SHIELD_FACTOR = 4
+
+
 def _turn_signal_on_task(agent, task, now) -> bool:
     """Is `agent` demonstrably mid-turn on `task` right now?
 
@@ -1668,7 +1673,15 @@ class TaskRunnerService:
             # detectable: once the heartbeat goes stale (bridge/process dead)
             # or the turn moves to another card, the old clock applies again.
             # Runtime-free; settings.host_turn_signal_enabled is the rollback.
-            if _turn_signal_on_task(agent, task, now) and agent.last_seen_at is not None:
+            # Upper bound (review): "working" only proves the heartbeat thread
+            # lives, not that the turn moves. After TURN_SIGNAL_SHIELD_FACTOR x
+            # the idle threshold without a real activity, recovery runs anyway.
+            _silent_minutes = (now - last_activity).total_seconds() / 60
+            if (
+                _turn_signal_on_task(agent, task, now)
+                and agent.last_seen_at is not None
+                and _silent_minutes < TURN_SIGNAL_SHIELD_FACTOR * _idle_threshold_for(agent)
+            ):
                 _seen = ensure_aware(agent.last_seen_at)
                 if _seen > last_activity:
                     last_activity = _seen
