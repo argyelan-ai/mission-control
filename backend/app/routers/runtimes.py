@@ -1472,6 +1472,7 @@ async def update_runtime_db(
     # no watcher, so this PATCH is their only path to a fresh model.
     old_model = rt.model_identifier
     old_vision = rt.supports_vision
+    old_reasoning = rt.supports_reasoning
     old_window = runtime_context_window(rt)
     for k, v in changes.items():
         setattr(rt, k, v)
@@ -1566,7 +1567,13 @@ async def update_runtime_db(
     # preferred only as its fallback): a preferred edit below a set max
     # renders nothing new, so it flags nobody and mirrors nothing.
     window_changed = runtime_context_window(rt) != old_window
-    if model_changed or vision_changed or window_changed:
+    # The reasoning flag decides omp's thinking cap (routers/internal.py,
+    # omp_thinking_budget -> models.yml compat.extraBody), so an edit must
+    # reach the bound agents like a vision edit does.
+    reasoning_changed = (
+        "supports_reasoning" in changes and rt.supports_reasoning != old_reasoning
+    )
+    if model_changed or vision_changed or window_changed or reasoning_changed:
         await mark_agents_for_sync(session, rt)
 
     # …and the slot row serving this instance takes the new window (live
