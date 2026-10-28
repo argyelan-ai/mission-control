@@ -65,7 +65,7 @@ function OpenIncomplete({ entryId, label, onOpen }: { entryId: string; label: st
       type="button"
       data-testid="result-run-open-incomplete"
       onClick={() => onOpen(entryId)}
-      className="inline-flex items-center gap-1.5 min-h-11 -ml-2 px-2 rounded-md text-sm cursor-pointer self-start"
+      className="inline-flex items-center gap-2 min-h-11 -ml-2 px-2 rounded-md text-sm cursor-pointer self-start"
       style={{ color: C.textSecondary }}
     >
       <ExternalLink size={14} aria-hidden />
