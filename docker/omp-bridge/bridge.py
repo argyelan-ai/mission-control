@@ -212,6 +212,7 @@ class Kind(str, Enum):
     ABORT_TRANSIENT_API = "abort_transient_api"            # the openclaude bug (retryable)
     ABORT_ERROR = "abort_error"                # stopReason==error, non-transient
     ABORT_MAXTIME = "abort_maxtime"            # --max-time cut a tool mid-flight
+    ABORT_OUTPUT_CAP = "abort_output_cap"      # ACP stopReason=max_tokens: output cap hit mid-thought
     ABORT_CRASH = "abort_crash"                # no agent_end at process exit
     ABORT_HANG = "abort_hang"                  # watchdog no-progress / wall-clock kill
     ABORT_UNKNOWN = "abort_unknown"            # any other non-stop terminal stopReason
@@ -225,6 +226,7 @@ RETRYABLE_KINDS = frozenset(
         Kind.ABORT_TRANSIENT_API,
         Kind.ABORT_ERROR,
         Kind.ABORT_MAXTIME,
+        Kind.ABORT_OUTPUT_CAP,
         Kind.ABORT_CRASH,
         Kind.ABORT_HANG,
         Kind.ABORT_UNKNOWN,
@@ -241,11 +243,18 @@ RETRYABLE_KINDS = frozenset(
 # a Blocker they get a follow-up prompt in the SAME session. These are NOT in
 # RETRYABLE_KINDS (a full re-run would relaunch fresh and drop the model's
 # context — a continue keeps it).
+#
+# ABORT_OUTPUT_CAP is BOTH (live 27./28.10.2026): the model hit the output
+# token cap while still thinking. A fresh relaunch throws its planning away
+# and repeats the same over-long turn, so it continues in the same session
+# first; only when the continue budget is spent does the retry (in
+# RETRYABLE_KINDS) take over — decide_lifecycle checks continue before retry.
 CONTINUEABLE_KINDS = frozenset(
     {
         Kind.SILENT_ABORT_NO_SENTINEL,
         Kind.MALFORMED_REFLECTION,
         Kind.TRAILING_TOOL_ERROR,
+        Kind.ABORT_OUTPUT_CAP,
     }
 )
 
@@ -264,6 +273,12 @@ CONTINUE_NUDGE_PROMPTS: dict[Kind, str] = {
         "Dein letzter Tool-Aufruf endete mit einem Fehler, obwohl du abgeschlossen "
         "hast. Pruefe das Ergebnis, korrigiere falls noetig, und schliesse sauber "
         "ab (Reflexion + TASK_COMPLETE)."
+    ),
+    Kind.ABORT_OUTPUT_CAP: (
+        "Your last reply hit the output limit while you were still thinking — "
+        "nothing was written and no tool ran. Stop planning and act now: write "
+        "the file(s) in several smaller write/edit calls (one section per "
+        "call), then continue with the task. Keep each reply short."
     ),
 }
 
@@ -327,6 +342,11 @@ class RunOutcome:
     session_id: Optional[str] = None
     # ACP path: usage dict from the session/prompt result (totalTokens etc.).
     usage: Optional[dict] = None
+    # ACP continue (output cap / continue-nudge): None = no resume asked,
+    # True = the previous session was loaded (`session/load`), False = the
+    # load failed and the turn ran in a fresh session with the full prompt.
+    resumed: Optional[bool] = None
+    resume_error: Optional[str] = None
     watchdog_killed: bool = False         # set by the live supervisor, not the file
     # Why the watchdog fired: "deadline" (per-task wall clock ran out while the
     # model was still producing), "idle" (no progress for idle_timeout), or
@@ -1750,9 +1770,14 @@ def drive_live_run(
                 question=question, classification=cls,
                 reflection=outcome.reflection_block,
             )
+        # No continue executor (subprocess path): the continue budget does
+        # not exist, so a kind that is both continueable and retryable
+        # (ABORT_OUTPUT_CAP) falls through to its retry instead of a
+        # stranded "continue" collapsing into a blocker.
         action = decide_lifecycle(
             cls, board_requires_review=board_requires_review,
-            retries_left=attempts_left, continues_left=continues,
+            retries_left=attempts_left,
+            continues_left=continues if continue_once is not None else 0,
         )
         # Continue-Nudge: resume the SAME session with a follow-up prompt (Fix B).
         if action.action == "continue" and continue_once is not None and continues > 0:
@@ -1767,12 +1792,26 @@ def drive_live_run(
                     action="halted_external", classification=cls,
                     reflection=outcome.reflection_block,
                 )
-            _note(f"omp {cls.reason}; continue-nudge, {continues} left")
+            if cls.kind is Kind.ABORT_OUTPUT_CAP:
+                _note(
+                    f"omp hit the output limit (max_tokens) while thinking; "
+                    f"continued in same session (output cap), {continues} left"
+                )
+            else:
+                _note(f"omp {cls.reason}; continue-nudge, {continues} left")
             continues -= 1
             attempt_index = nudge_counts.get(cls.kind, 0)
             nudge_counts[cls.kind] = attempt_index + 1
             nudge_prompt = _nudge_prompt_for(cls.kind, attempt_index)
             outcome = continue_once(nudge_prompt)
+            if getattr(outcome, "resumed", None) is False:
+                # Honest trail: the load failed, the turn ran in a fresh
+                # session that got the full task prompt plus the nudge.
+                _note(
+                    "omp session could not be resumed "
+                    f"({(outcome.resume_error or 'unknown')[:160]}); "
+                    "continued in a fresh session with the task prompt"
+                )
             continue
         if action.action == "retry" and attempts_left > 0:
             if _ownership_lost(lifecycle, task_id, acked=acked or ack_gate is None):
@@ -1781,7 +1820,7 @@ def drive_live_run(
                     action="halted_external", classification=cls,
                     reflection=outcome.reflection_block,
                 )
-            _note(f"omp abort ({cls.reason}); retrying, {attempts_left} left")
+            _note(f"omp abort ({cls.reason}); retrying in a fresh session, {attempts_left} left")
             attempts_left -= 1
             # Fresh session = fresh nudge history: a retry relaunches a BRAND-NEW
             # session that never saw the explanatory first nudge, so escalation
@@ -3578,6 +3617,10 @@ def serve_loop(
                     on_first_activity=ack_gate.trigger,
                 )
 
+                # The session id of the latest attempt of THIS task — what a
+                # continue resumes. A fresh retry (run_once) replaces it.
+                acp_last_session: list = [None]
+
                 def run_once(_p=prompt, _cwd=cwd) -> RunOutcome:
                     acp_cancel.requested = False  # fresh cancel per turn (Major 4)
                     interrupt_state.clear()  # fresh signal per turn
@@ -3591,17 +3634,33 @@ def serve_loop(
                     # exists, so it passes this check). See the guard's own
                     # docstring for what it does and doesn't cover.
                     _require_prepared_acp_workspace(_cwd)
-                    return acp_run(_p, origin_kind="task")
+                    o = acp_run(_p, origin_kind="task")
+                    acp_last_session[0] = o.session_id
+                    return o
 
                 # Continue-Nudge (Fix B, ACP flavour — Review #464 Major 3):
-                # the ACP session survives a turn end, so a continueable abort
-                # can resume the SAME session with the nudge as the next prompt
-                # instead of collapsing to a blocker.
-                def continue_once(nudge: str, _cwd=cwd) -> RunOutcome:
+                # a continueable abort (missing sentinel, output cap, ...)
+                # resumes the SAME session with the nudge as the next prompt
+                # instead of collapsing to a blocker. Each attempt runs its
+                # own `omp acp` child, so "same session" means `session/load`
+                # of the previous attempt's id (run_acp_once
+                # resume_session_id). Before 28.10.2026 the nudge went into a
+                # fresh session that had never seen the task. A failed load
+                # falls back to the full task prompt + nudge (fresh_prompt).
+                def continue_once(nudge: str, _cwd=cwd, _p=prompt) -> RunOutcome:
                     acp_cancel.requested = False
                     interrupt_state.clear()
                     _require_prepared_acp_workspace(_cwd)
-                    return acp_run(nudge, origin_kind="nudge")
+                    if not acp_last_session[0]:
+                        o = acp_run(f"{_p}\n\n{nudge}", origin_kind="task")
+                    else:
+                        o = acp_run(
+                            nudge, origin_kind="nudge",
+                            resume_session_id=acp_last_session[0],
+                            fresh_prompt=f"{_p}\n\n{nudge}",
+                        )
+                    acp_last_session[0] = o.session_id
+                    return o
             else:
                 task_file = _task_file_for(str(task["id"]))
                 _isolate = isolation != "slash"
@@ -4851,8 +4910,22 @@ def run_acp_once(
     media_sink: Optional[Callable[[str, bytes], bool]] = None,
     origin_kind: Optional[str] = None,
     on_first_activity: Optional[Callable[[], None]] = None,
+    resume_session_id: Optional[str] = None,
+    fresh_prompt: Optional[str] = None,
 ) -> RunOutcome:
     """One task attempt over ACP: prompt in, terminal RunOutcome out.
+
+    ``resume_session_id`` (continue-nudge / output cap, 28.10.2026): continue
+    THAT session instead of opening a new one. Every attempt spawns its own
+    ``omp acp`` child (the client is closed at the end of each call), so the
+    previous turn's context survives only in omp's session file —
+    ``session/load`` (omp advertises ``loadSession``; the chat daemon resumes
+    the same way) brings it back. The history omp replays before answering
+    the load is muted: it is neither this turn's text (classification) nor
+    new chat lines. A failed load falls back to ``session/new`` with
+    ``fresh_prompt`` (the full task prompt + nudge) when given — a bare
+    nudge in a session that never saw the task would be meaningless.
+    ``outcome.resumed`` records which way it went (None = no resume asked).
 
     ``origin_kind`` (``"task"`` | ``"nudge"``): what the caller sends, for the
     chat line (:func:`task_prompt_origin`). None = guessed from the header.
@@ -4965,7 +5038,13 @@ def run_acp_once(
         except Exception:  # noqa: BLE001 — the claim must never kill the run
             sys.stderr.write("[acp] on_first_activity failed\n")
 
+    # True while `session/load` runs: omp replays the loaded session's
+    # history before it answers — history, not this turn's work.
+    _replaying = [False]
+
     def on_event(params: dict) -> None:
+        if _replaying[0]:
+            return
         upd = params.get("update") or {}
         su = upd.get("sessionUpdate")
         if su in ("agent_thought_chunk", "tool_call"):
@@ -5093,8 +5172,32 @@ def run_acp_once(
             client._reader = _th.Thread(target=client._read_loop, name="acp-reader", daemon=True)
             client._reader.start()
 
-        client.initialize()
-        sid = client.new_session(cwd)
+        sid: Optional[str] = None
+        if resume_session_id:
+            # Muted from before the handshake: the fake/real server may start
+            # replaying as soon as the load request lands.
+            _replaying[0] = True
+        try:
+            client.initialize()
+            if resume_session_id:
+                try:
+                    client.load_session(resume_session_id, cwd)
+                    sid = resume_session_id
+                    outcome.resumed = True
+                except acp_client.ACPError as e:
+                    outcome.resumed = False
+                    outcome.resume_error = str(e)
+                    sys.stderr.write(
+                        f"[acp] session {resume_session_id[:8]} could not be resumed "
+                        f"({e}) -> fresh session with the full prompt\n"
+                    )
+                    if fresh_prompt:
+                        prompt = fresh_prompt
+                        origin_kind = "task"
+        finally:
+            _replaying[0] = False
+        if sid is None:
+            sid = client.new_session(cwd)
         outcome.session_id = sid
         # Review #465 low 5: the REAL sessionId flows into the transcript
         # sink — the file name (and the session header) carry it, so the
@@ -5144,7 +5247,8 @@ def run_acp_once(
                 )
             model = pinned
         sys.stderr.write(
-            f"[acp] session {sid[:8]} started (model={model or 'omp-default'}, "
+            f"[acp] session {sid[:8]} {'resumed' if outcome.resumed else 'started'} "
+            f"(model={model or 'omp-default'}, "
             f"policy={permission_policy}, cwd={cwd}, task={task_id[:8] if task_id else '-'})\n"
         )
         _t_prompt = time.monotonic()
@@ -5337,7 +5441,19 @@ def classify_acp(outcome: RunOutcome) -> Classification:
             detail=f"Modell/Provider-Fehler (stopReason=error): {(o.error_message or '').strip()[:200]}",
         )
 
-    if sr == "max_tokens" or sr == "maxtime":
+    if sr == "max_tokens":
+        # The OUTPUT cap, not wall time (live 27./28.10.2026: three 32k-token
+        # turns of pure thinking, then omp's "recovery cap reached"). The
+        # session is intact — continue it with a targeted nudge before any
+        # fresh retry (CONTINUEABLE_KINDS + RETRYABLE_KINDS).
+        return Classification(
+            Kind.ABORT_OUTPUT_CAP,
+            retryable=True,
+            reason="output_cap",
+            detail="Turn hit the output token limit (stopReason='max_tokens') "
+                   "before writing anything — incomplete.",
+        )
+    if sr == "maxtime":
         return Classification(
             Kind.ABORT_MAXTIME,
             retryable=True,
@@ -5494,26 +5610,38 @@ def _make_acp_run_factory(
     cancel_state = cancel_state or ACPCancelState()
     cwd = cwd or os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()
 
-    def run(prompt: str, origin_kind: Optional[str] = None) -> RunOutcome:
+    # One transcript sink per ACP session for the life of this factory (one
+    # task run): a continue that RESUMES a session (``resume_session_id``)
+    # keeps writing into the same file instead of opening a second one for
+    # the same session id — the chat view's rollover would split the run.
+    sinks_by_session: dict = {}
+    psinks_by_session: dict = {}
+
+    def run(
+        prompt: str,
+        origin_kind: Optional[str] = None,
+        resume_session_id: Optional[str] = None,
+        fresh_prompt: Optional[str] = None,
+    ) -> RunOutcome:
         # Sessions chat view: one JSONL transcript per ACP session, written
         # where the backend's omp chat adapter reads. A sink that resolves
         # to None (no PI_CODING_AGENT_DIR — e.g. local replay) degrades to
         # no-op inside the sink. Created lazily on first write, then REUSED
         # (one file per ACP session — recreating per batch would spawn one
         # file per event).
-        holder: dict = {"sink": None, "psink": None, "session_id": "acp-session"}
+        holder: dict = {"session_id": "acp-session"}
 
         def on_session_id(session_id: str) -> None:
             holder["session_id"] = session_id
 
         def sink_obj_for_session() -> "acp_chat_events.ChatEventSink":
-            sink_obj = holder["sink"]
-            if sink_obj is None or sink_obj.session_id != holder["session_id"]:
+            sink_obj = sinks_by_session.get(holder["session_id"])
+            if sink_obj is None:
                 directory = acp_chat_events.session_dir(cwd=cwd)
                 sink_obj = acp_chat_events.ChatEventSink(
                     directory, holder["session_id"], task_id=task_id
                 )
-                holder["sink"] = sink_obj
+                sinks_by_session[holder["session_id"]] = sink_obj
             return sink_obj
 
         def sink(lines: list[str]) -> None:
@@ -5529,13 +5657,13 @@ def _make_acp_run_factory(
             # the SIBLING preview file — same reuse discipline as the
             # transcript sink (one file per session, lazy creation, no-op
             # when the directory is unavailable).
-            psink_obj = holder["psink"]
-            if psink_obj is None or psink_obj.session_id != holder["session_id"]:
+            psink_obj = psinks_by_session.get(holder["session_id"])
+            if psink_obj is None:
                 directory = acp_chat_events.session_dir(cwd=cwd)
                 psink_obj = acp_chat_events.PreviewEventSink(
                     directory, holder["session_id"]
                 )
-                holder["psink"] = psink_obj
+                psinks_by_session[holder["session_id"]] = psink_obj
             psink_obj.write(lines)
 
         return run_acp_once(
@@ -5554,6 +5682,10 @@ def _make_acp_run_factory(
             media_sink=media_sink,
             context_pct=context_pct,
             origin_kind=origin_kind,
+            **(
+                {"resume_session_id": resume_session_id, "fresh_prompt": fresh_prompt}
+                if resume_session_id else {}
+            ),
             **(
                 {"interrupt_state": interrupt_state}
                 if interrupt_state is not None and _RUN_ACP_ACCEPTS_INTERRUPT_STATE

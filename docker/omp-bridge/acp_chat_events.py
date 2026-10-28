@@ -1804,9 +1804,10 @@ class ChatEventSink:
         self, directory: Optional[Path], session_id: str, task_id: Optional[str] = None
     ):
         """``task_id``: set for a TASK run (bridge serve loop), ``None`` for
-        the chat daemon. It lands in the session header as ``taskId``: every
-        attempt of a task (continue nudge, reflection retry) is a NEW ACP
-        session without the dispatch prompt, and the backend's todo ->
+        the chat daemon. It lands in the session header as ``taskId``: a
+        fresh retry of a task is a NEW ACP session (a continue nudge resumes
+        the previous one via ``session/load`` since 28.10.2026, or falls back
+        to a new one when the load fails), and the backend's todo ->
         checklist sync finds the task's plan by this tag — not by "newest
         session", which is the chat (live 12.10.2026)."""
         self._dir = directory
