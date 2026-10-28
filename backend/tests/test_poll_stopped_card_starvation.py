@@ -169,7 +169,7 @@ async def test_stop_wins_while_agent_is_in_turn_on_the_card(client: AsyncClient)
     """Stop pressed mid-turn: the heartbeat still reports a live turn (status
     working, fresh beat) and the agent holds no other card — the session must
     be ended first, the queued card waits for the next poll."""
-    agent_id, board_id, token = await _make_agent(status="working", last_seen_at=_now())
+    agent_id, board_id, token = await _make_agent(status="working", last_task_activity_at=_now())
     stopped_id = await _stopped_bench_card(board_id, agent_id, age_minutes=0.1)
     await _fresh_dispatch(board_id, agent_id)
 
@@ -196,7 +196,7 @@ async def test_stop_wins_while_pointer_names_the_card(client: AsyncClient):
 async def test_stale_working_heartbeat_does_not_hold_the_stop(client: AsyncClient):
     """'working' with a dead heartbeat proves nothing (dispatch Guard 3 rule)."""
     agent_id, board_id, token = await _make_agent(
-        status="working", last_seen_at=_now() - dt.timedelta(minutes=10),
+        status="working", last_task_activity_at=_now() - dt.timedelta(minutes=10),
     )
     await _stopped_bench_card(board_id, agent_id)
     new_id = await _fresh_dispatch(board_id, agent_id)
@@ -211,7 +211,7 @@ async def test_stale_working_heartbeat_does_not_hold_the_stop(client: AsyncClien
 async def test_agent_working_on_another_card_reports_working(client: AsyncClient):
     """The agent already runs card B: an old stopped card A must not answer
     'stopped' (poll.sh would ESC + /clear B's session)."""
-    agent_id, board_id, token = await _make_agent(status="working", last_seen_at=_now())
+    agent_id, board_id, token = await _make_agent(status="working", last_task_activity_at=_now())
     await _stopped_bench_card(board_id, agent_id)
     running_id = await _make_task(
         board_id, agent_id, title="Running card", status="in_progress",
