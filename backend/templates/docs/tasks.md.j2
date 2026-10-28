@@ -69,7 +69,8 @@ work". Use `mc checklist skip <id> --reason "..."` for out-of-role items.
 The browser runs in a separate container: `file://` and `localhost` do not
 reach your files. Serve the folder over http
 (`python3 -m http.server 8765 -d <folder>`) and open
-`http://<your IP>:8765/` (IP: `hostname -i`); stop the server afterwards.
+`http://<your IP>:8765/` (IP: `hostname -i` in a container,
+`ipconfig getifaddr en0` on a Mac); stop the server afterwards.
 
 ## Progress & recovery
 

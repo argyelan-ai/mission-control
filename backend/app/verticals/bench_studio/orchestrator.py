@@ -811,7 +811,14 @@ async def salvage_incomplete_page(session: AsyncSession, entry: BenchEntry, task
     out_dir = entry_dir(entry)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "index.html"
-    shutil.copyfile(src, out_path)
+    # O_NOFOLLOW: the file cannot be swapped for a link between the check
+    # above and this copy (the agent may still be writing when a stop failed).
+    try:
+        fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False
+    with os.fdopen(fd, "rb") as fh, open(out_path, "wb") as out:
+        shutil.copyfileobj(fh, out, length=_SALVAGE_MAX_BYTES)
     entry.artifact_path = str(out_path)
     entry.metrics = {
         **(entry.metrics or {}),
