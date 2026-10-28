@@ -180,3 +180,30 @@ async def test_vision_edit_noop_does_not_propagate(async_session, auth_client):
     assert agent.pending_runtime_sync is False
     inval.assert_not_awaited()
     emit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("before,after,flagged", [(False, True, True), (True, False, True), (True, True, False)])
+async def test_reasoning_edit_flags_agents(async_session, auth_client, before, after, flagged):
+    """supports_reasoning decides omp's thinking cap (models.yml
+    compat.extraBody.thinking_budget). Toggling it is how the operator turns
+    the cap on or off for one runtime, so the edit must reach the bound
+    agents like a vision edit does; a no-op edit flags nobody."""
+    rt = await _mk_rt(async_session)
+    rt.supports_reasoning = before
+    async_session.add(rt)
+    await async_session.commit()
+    agent = await _mk_agent(async_session, rt)
+
+    with (
+        patch("app.routers.runtimes.invalidate_cached_model", new=AsyncMock()),
+        patch("app.routers.runtimes.activity.emit_event", new=AsyncMock()),
+    ):
+        resp = await auth_client.patch(
+            f"/api/v1/runtimes/db/{rt.slug}",
+            json={"supports_reasoning": after},
+        )
+
+    assert resp.status_code == 200, resp.text
+    await async_session.refresh(agent)
+    assert agent.pending_runtime_sync is flagged

@@ -74,6 +74,49 @@ def omp_max_output_tokens(context_window: int, *, local: bool) -> int:
     return min(LOCAL_MAX_OUTPUT_TOKENS, max(context_window // 8, cloud))
 
 
+#: Env key that carries omp's thinking cap into models.yml
+#: (``compat.extraBody.thinking_budget``, docker/omp-bridge/render-omp-config.sh
+#: and host_provisioning.render_omp_host_models_yml).
+THINKING_BUDGET_ENV = "OMP_THINKING_BUDGET"
+#: Smallest room a reply keeps for its text and tool calls once thinking is
+#: capped. Only binds for small answer budgets; from 16384 up half the budget
+#: is larger.
+MIN_ANSWER_ROOM_TOKENS = 8192
+#: Below this no cap is sent: a model that may think only a few hundred tokens
+#: answers worse than one that is not capped at all.
+MIN_THINKING_BUDGET_TOKENS = 1024
+
+
+def omp_thinking_budget(max_output_tokens: int, *, local: bool, reasoning: bool) -> int | None:
+    """How many of a reply's ``max_output_tokens`` the model may spend thinking.
+
+    Without a cap a reasoning model can think through the whole answer budget
+    and stop at ``finish=length`` with no text and no tool call (live
+    28.10.2026: seven bench turns in a row at effort "high", 32768 tokens of
+    thinking each, about 8.5 min per turn). Raising the answer budget is no
+    fix on an engine that reserves prompt + budget in one shared pool.
+
+    The cap is half the answer budget, so the other half stays for the reply:
+    text plus tool calls. A single-file write of about 35 KB is about 11k
+    tokens; with today's 32768 budget a reply keeps 16384. The answer room
+    never drops below 8192; with nothing above 1024 left to think, ``None``.
+
+    Only for a LOCAL runtime that REASONS (``supports_reasoning``): the field
+    goes out as ``thinking_budget`` on every request (omp ``compat.extraBody``).
+    Engines that know it close the think block themselves and then answer
+    (TensorFold, live). Self-hosted engines that do not know it ignore an
+    unknown field (vLLM logs and drops it, SGLang's request model ignores
+    extras, llama.cpp reads only the fields it knows). A managed cloud API may
+    refuse an unknown field, so cloud runtimes never get it. Model- and
+    harness-neutral: reads the runtime row only.
+    """
+    if not (local and reasoning):
+        return None
+    answer_room = max(max_output_tokens // 2, MIN_ANSWER_ROOM_TOKENS)
+    budget = max_output_tokens - answer_room
+    return budget if budget >= MIN_THINKING_BUDGET_TOKENS else None
+
+
 #: The bound runtime's context window, for EVERY OpenAI-protocol harness.
 #: omp has always had its own ``OMP_CONTEXT_WINDOW`` (kept, its entrypoint
 #: reads it); this is the harness-neutral twin. Hermes reads it via
@@ -245,6 +288,20 @@ async def build_runtime_env(
             tokens["OMP_MAX_TOKENS"] = str(
                 omp_max_output_tokens(_ctx_window, local=_is_local_runtime)
             )
+
+        # Thinking cap (omp_thinking_budget), sized from the answer budget omp
+        # will actually use: MC's value above, or the renderers' 32768
+        # fallback when the row has no window. Always written, "" for "none":
+        # the host agent.env sync merges over the old file and would keep a
+        # previous runtime's cap after a runtime switch.
+        _thinking_budget = omp_thinking_budget(
+            omp_max_output_tokens(_ctx_window, local=_is_local_runtime)
+            if _ctx_window
+            else CLOUD_MAX_OUTPUT_TOKENS,
+            local=_is_local_runtime,
+            reasoning=bool(runtime.supports_reasoning),
+        )
+        tokens[THINKING_BUDGET_ENV] = str(_thinking_budget) if _thinking_budget else ""
 
         # Vision-Fähigkeit (W3, 06.09.2026): omp entscheidet PRO MODELL anhand
         # der ``input``-Liste in models.yml, ob es bildfähig ist — fehlt sie,

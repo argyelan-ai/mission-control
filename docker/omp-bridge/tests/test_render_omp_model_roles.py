@@ -544,7 +544,10 @@ class H(BaseHTTPRequestHandler):
         # A subagent SESSION carries the `yield` tool; the parent's one-line
         # task labeler quotes the same assignment text but has no tools.
         print(json.dumps({"kind": kind, "agent": agent, "model": req.get("model"),
-                          "session": "yield" in tools}), flush=True)
+                          "session": "yield" in tools,
+                          "thinking_budget": req.get("thinking_budget"),
+                          "max_completion_tokens": req.get("max_completion_tokens"),
+                          "reasoning_effort": req.get("reasoning_effort")}), flush=True)
         call, text = None, "DONE"
         if kind == "main" and n_results == 0 and "task" in tools:
             call = ("task", SPAWN)
@@ -765,3 +768,19 @@ def test_container_a_runtime_switch_moves_subagents_without_a_restart():
     roles up live. Still nothing for a built-in provider."""
     _, log, _ = _scenario({"RELOAD_TO": "fake-model-next"})
     assert _reached(log) == {a: {"fake-model-next"} for a in SUBAGENTS}, log
+
+
+@container
+def test_container_every_request_carries_the_thinking_cap():
+    """(c4) Thinking cap (OMP_THINKING_BUDGET -> models.yml
+    compat.extraBody.thinking_budget, backend omp_thinking_budget): the ACP
+    main session AND every subagent session send it on every request, next to
+    an untouched max_completion_tokens. Without the env var nothing is sent."""
+    _, log, _ = _scenario({"OMP_THINKING_BUDGET": "16384", "OMP_MAX_TOKENS": "32768"})
+    assert set(_reached(log)) >= SUBAGENTS, log
+    assert any(e["kind"] == "main" for e in log), log
+    assert all(e["thinking_budget"] == 16384 for e in log), log
+    assert all(isinstance(e["max_completion_tokens"], int) for e in log), log
+
+    _, log, _ = _scenario()
+    assert all(e["thinking_budget"] is None for e in log), log
