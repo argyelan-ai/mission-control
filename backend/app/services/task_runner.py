@@ -161,6 +161,34 @@ def active_waiting_seconds(
 TIER3_DISPATCH_TIMEOUT_SECONDS = 90
 
 
+#: How long a live turn signal may hold off the stale check, as a multiple of
+#: the agent's idle threshold (60 min -> 4 h without a comment/message).
+TURN_SIGNAL_SHIELD_FACTOR = 4
+
+
+def _turn_signal_on_task(agent, task, now) -> bool:
+    """Is `agent` demonstrably mid-turn on `task` right now?
+
+    The turn signal dispatch Guard 3 ("agent_in_turn") and the ACK ladder
+    already use: ``agent.status == "working"`` with a heartbeat younger than
+    TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS — scoped to the card the heartbeat
+    names (``agent.current_task_id``, synced by the heartbeat endpoint).
+    False when the kill switch ``settings.host_turn_signal_enabled`` is off.
+    """
+    from app.config import settings as _settings
+
+    if not _settings.host_turn_signal_enabled:
+        return False
+    if getattr(agent, "status", None) != "working":
+        return False
+    if getattr(agent, "current_task_id", None) != task.id:
+        return False
+    seen = getattr(agent, "last_seen_at", None)
+    if seen is None:
+        return False
+    return (now - ensure_aware(seen)).total_seconds() < TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS
+
+
 def _idle_threshold_for(agent) -> int:
     """Idle threshold for an agent.
 
@@ -1632,6 +1660,31 @@ class TaskRunnerService:
             )
             if structural_activity is not None and structural_activity > last_activity:
                 last_activity = structural_activity
+
+            # Turn signal (live 27./28.10.2026): a local model can think for
+            # 8+ minutes per turn and post no comment for over an hour while
+            # it demonstrably works. The heartbeat then reports status
+            # "working" on THIS card (current_task_id) every 30 s — the same
+            # signal dispatch Guard 3 and the ACK ladder trust ("agent_in_turn":
+            # status working + heartbeat younger than
+            # TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS). It counts as activity, so
+            # tiered recovery never re-prepares the workspace of a running turn
+            # nor raises a false "recovery failed" alarm. A real stall stays
+            # detectable: once the heartbeat goes stale (bridge/process dead)
+            # or the turn moves to another card, the old clock applies again.
+            # Runtime-free; settings.host_turn_signal_enabled is the rollback.
+            # Upper bound (review): "working" only proves the heartbeat thread
+            # lives, not that the turn moves. After TURN_SIGNAL_SHIELD_FACTOR x
+            # the idle threshold without a real activity, recovery runs anyway.
+            _silent_minutes = (now - last_activity).total_seconds() / 60
+            if (
+                _turn_signal_on_task(agent, task, now)
+                and agent.last_seen_at is not None
+                and _silent_minutes < TURN_SIGNAL_SHIELD_FACTOR * _idle_threshold_for(agent)
+            ):
+                _seen = ensure_aware(agent.last_seen_at)
+                if _seen > last_activity:
+                    last_activity = _seen
 
             # Still need the last comment specifically for resolution
             # auto-promote detection below. The run's last comment: a chat
