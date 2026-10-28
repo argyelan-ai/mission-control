@@ -24,7 +24,7 @@ function App({ locale, testId }: { locale: "en" | "de"; testId: string }) {
     () => new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } }),
   );
   return (
-    <NextIntlClientProvider locale={locale} messages={(locale === "de" ? de : en) as never} timeZone="Europe/Zurich">
+    <NextIntlClientProvider locale={locale} messages={(locale === "de" ? de : en) as never} timeZone="UTC">
       <QueryClientProvider client={qc}>
         <main className="min-h-[100dvh] p-4 lg:p-8" style={{ background: "var(--color-bg-deep)" }}>
           <ResultView testId={testId} />
