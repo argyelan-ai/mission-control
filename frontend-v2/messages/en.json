@@ -383,6 +383,7 @@
         "review_safeguard_correction": "Status corrected by MC to fit the flow",
         "manual_update": "Moved by hand",
         "manual_stop": "Stopped by hand",
+        "system_stop": "Stopped automatically",
         "manual_resume": "Resumed by hand",
         "reorder": "Order changed",
         "ask_blocking": "Agent asked a question and waits for the answer",

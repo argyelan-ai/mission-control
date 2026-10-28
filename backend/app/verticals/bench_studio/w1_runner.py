@@ -703,28 +703,40 @@ async def _end_agent_run_at_time_limit(session: AsyncSession, entry: BenchEntry,
     """The 2 h limit is up: keep what the agent built (incomplete, unranked),
     record what can still be known, and stop the task as the SYSTEM — an
     automatic stop is nobody's click (live findings 28.10.2026)."""
-    from . import orchestrator as orch
+    from app.models.task import Task
 
-    try:
-        if await orch.salvage_incomplete_page(session, entry, task):
-            await session.commit()
-    except Exception:  # noqa: BLE001 — the run is over either way
-        logger.warning("bench W1: no incomplete page kept for entry %s", entry.id, exc_info=True)
-        await session.rollback()
-    try:
-        await _record_agent_effort(session, entry, task)
-        await finish_agent_metrics(session, entry)
-        await session.commit()
-    except Exception:  # noqa: BLE001
-        logger.info("bench W1: agent numbers of entry %s not harvested", entry.id, exc_info=True)
-        await session.rollback()
+    # Plain ids first: a rollback expires the loaded rows, so every step
+    # below re-reads them instead of touching an expired instance.
+    entry_id, task_id = entry.id, task.id
+    # Stop first: the agent must not keep writing while its page is copied,
+    # and the stop must happen even when a later step fails.
     try:
         from app.services.operations import stop_task_run
 
-        await stop_task_run(session, task.id, "system", reason="bench time limit", changed_by="system")
+        await stop_task_run(session, task_id, "system", reason="bench time limit", changed_by="system")
         await session.commit()
     except Exception:  # noqa: BLE001 — the run is over either way
-        logger.info("bench W1: task %s not stopped at the time limit", task.id)
+        logger.info("bench W1: task %s not stopped at the time limit", task_id)
+        await session.rollback()
+
+    async def fresh():
+        return await session.get(BenchEntry, entry_id), await session.get(Task, task_id)
+
+    try:
+        e, t = await fresh()
+        if e is not None and t is not None and await orch.salvage_incomplete_page(session, e, t):
+            await session.commit()
+    except Exception:  # noqa: BLE001 — a missing page is a state, not a crash
+        logger.warning("bench W1: no incomplete page kept for entry %s", entry_id, exc_info=True)
+        await session.rollback()
+    try:
+        e, t = await fresh()
+        if e is not None and t is not None:
+            await _record_agent_effort(session, e, t)
+            await finish_agent_metrics(session, e)
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        logger.info("bench W1: agent numbers of entry %s not harvested", entry_id, exc_info=True)
         await session.rollback()
 
 

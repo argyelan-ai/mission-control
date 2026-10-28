@@ -383,6 +383,7 @@
         "review_safeguard_correction": "Status von MC korrigiert, passend zum Ablauf",
         "manual_update": "Von Hand verschoben",
         "manual_stop": "Von Hand gestoppt",
+        "system_stop": "Automatisch gestoppt",
         "manual_resume": "Von Hand fortgesetzt",
         "reorder": "Reihenfolge geändert",
         "ask_blocking": "Agent hat eine Frage gestellt und wartet auf die Antwort",

@@ -716,6 +716,30 @@ _SALVAGE_MAX_DEPTH = 4
 _SALVAGE_MAX_FILES = 5000
 
 
+def _inside(path: Path, root: Path) -> bool:
+    """``path`` (symlinks followed) stays inside ``root`` and is no symlink
+    itself — the guard for every agent-written path the backend reads."""
+    try:
+        return not path.is_symlink() and path.resolve().is_relative_to(root.resolve())
+    except OSError:
+        return False
+
+
+def _is_bench_workspace(ws: Path, agent, task_id) -> bool:
+    """Only the task's own bench folder is searched — never a scratch-repo
+    worktree with unrelated pages (e.g. a task dispatched before the bench
+    workspace provider existed, or one whose provider fell back)."""
+    base = getattr(agent, "workspace_path", None)
+    if not base:
+        return False
+    expected = Path(base) / BENCH_WORKSPACE_DIR / str(task_id)
+    return ws == expected and _inside(ws, Path(base))
+
+
+def _safe_page(path: Path, root: Path) -> bool:
+    return path.is_file() and _inside(path, root)
+
+
 def _html_candidates(root: Path, source: str) -> list[tuple[Path, str]]:
     """Every *.html below ``root`` (bounded depth/count, no VCS or package
     folders, no symlinks out of it)."""
@@ -748,30 +772,30 @@ def _html_candidates(root: Path, source: str) -> list[tuple[Path, str]]:
 async def salvage_incomplete_page(session: AsyncSession, entry: BenchEntry, task) -> bool:
     """Keep the newest page the agent wrote before its run was stopped.
 
-    Looked at: the deliverables folder the brief names, pages the agent
-    registered, and the task's working folder. The newest one (by file
-    time; ``index.html`` wins a tie) is copied into the entry's own folder.
-    The entry stays ``failed`` — it is never ranked like a finished run —
-    but carries ``metrics.incomplete_page`` so the result page can offer it,
-    clearly marked incomplete. Returns True when a page was kept."""
+    Looked at: the task's deliverables folder (the one the brief names) and
+    its bench working folder. The newest page (by file time; ``index.html``
+    wins a tie) is copied into the entry's own folder. The entry stays
+    ``failed`` — it is never ranked like a finished run — but carries
+    ``metrics.incomplete_page`` so the result page can offer it, clearly
+    marked incomplete. Returns True when a page was kept.
+
+    Agent-written paths are untrusted: a symlinked task folder or file that
+    points out of the agent's own deliverables root / bench folder is never
+    followed (it could expose any file the backend can read)."""
     from app.models.agent import Agent
-    from app.models.deliverable import TaskDeliverable
-    from app.services.fs_service import resolve_deliverable
 
     agent = await session.get(Agent, entry.agent_id) if entry.agent_id else None
     candidates: list[tuple[Path, str]] = []
     if agent is not None:
         _agent_path, backend = await deliverable_target(session, agent, task.id)
         if backend is not None:
-            candidates += _html_candidates(backend.parent, "deliverables")
-    rows = (await session.exec(select(TaskDeliverable).where(TaskDeliverable.task_id == task.id))).all()
-    for d in rows:
-        if d.path and d.path.lower().endswith((".html", ".htm")):
-            resolved = await resolve_deliverable(d, session, target="container")
-            if resolved and Path(resolved).is_file():
-                candidates.append((Path(resolved), "deliverables"))
-    if getattr(task, "workspace_path", None):
-        candidates += _html_candidates(Path(task.workspace_path), "workspace")
+            folder = backend.parent
+            # The agent owns <root>/<task id>/ but not <root> itself.
+            if _inside(folder, folder.parent):
+                candidates += _html_candidates(folder, "deliverables")
+    ws = getattr(task, "workspace_path", None)
+    if ws and agent is not None and _is_bench_workspace(Path(ws), agent, task.id):
+        candidates += _html_candidates(Path(ws), "workspace")
 
     best: tuple[float, int, Path, str] | None = None
     for path, source in candidates:
@@ -1099,7 +1123,8 @@ async def on_task_done(session: AsyncSession, task) -> None:
         agent = await session.get(Agent, entry.agent_id) if entry.agent_id else None
         if agent is not None:
             _agent_path, backend = await deliverable_target(session, agent, task.id)
-            if backend is not None and backend.is_file():
+            # Untrusted path: no symlink out of the agent's deliverables root.
+            if backend is not None and _safe_page(backend, backend.parent.parent):
                 html_src = backend
 
     if html_src is None:

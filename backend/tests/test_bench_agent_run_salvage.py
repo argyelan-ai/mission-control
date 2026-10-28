@@ -56,12 +56,27 @@ def deliv_root(tmp_path, monkeypatch):
     return root
 
 
-async def _agent_test(session, fleet, *, workspace: Path | None = None, started_min_ago=None):
+def bench_ws(agent_ws: Path, task_id) -> Path:
+    return agent_ws / orch.BENCH_WORKSPACE_DIR / str(task_id)
+
+
+async def _agent_test(session, fleet, *, agent_ws: Path | None = None, workspace: Path | None = None,
+                      started_min_ago=None, task_id=None):
+    """A running omp agent entry. ``agent_ws`` = the agent's workspace; the
+    task works in its bench folder below it unless ``workspace`` says else."""
     ch = await w1_tests.create_test(
         session, picks=[{"runtime_id": fleet["slot"].id, "harness": "omp", "efforts": ["default"]}],
         preset="standard", trigger="runtimes", user_id=str(uuid.uuid4()))
     e = (await session.exec(select(BenchEntry).where(BenchEntry.challenge_id == ch.id))).first()
-    task = Task(title="[Bench] x", board_id=fleet["board"].id, status="in_progress",
+    task_id = task_id or uuid.uuid4()
+    if agent_ws is not None:
+        agent = await session.get(Agent, fleet["omp_agent"].id)
+        agent.workspace_path = str(agent_ws)
+        session.add(agent)
+        if workspace is None:
+            workspace = bench_ws(agent_ws, task_id)
+            workspace.mkdir(parents=True, exist_ok=True)
+    task = Task(id=task_id, title="[Bench] x", board_id=fleet["board"].id, status="in_progress",
                 assigned_agent_id=fleet["omp_agent"].id,
                 auto_reason=f"bench_studio challenge {ch.id}",
                 workspace_path=str(workspace) if workspace else None)
@@ -92,11 +107,12 @@ def _write(path: Path, text: str, age_s: float = 0) -> Path:
 async def test_time_limit_keeps_the_newest_page_of_the_worktree_as_incomplete(
         session, engines, world, deliv_root, tmp_path):
     fleet = await seed_fleet(session)
-    ws = tmp_path / "ws"
+    tid = uuid.uuid4()
+    ws = bench_ws(tmp_path / "agent-ws", tid)
     _write(ws / "draft" / "old.html", "<html>old</html>", age_s=600)
     _write(ws / "index.html", PARTIAL, age_s=5)
     _write(ws / ".git" / "x.html", "<html>git internals are never a page</html>")
-    ch, e, _task = await _agent_test(session, fleet, workspace=ws)
+    ch, e, _task = await _agent_test(session, fleet, agent_ws=tmp_path / "agent-ws", task_id=tid)
 
     ok = await w1_runner.run_agent_contestant(factory, ch.id, ch.plan["contestants"][0], e.id, sleep=no_sleep)
 
@@ -120,9 +136,9 @@ async def test_time_limit_keeps_the_newest_page_of_the_worktree_as_incomplete(
 async def test_time_limit_prefers_the_newer_page_in_the_deliverables_folder(
         session, engines, world, deliv_root, tmp_path):
     fleet = await seed_fleet(session)
-    ws = tmp_path / "ws"
-    _write(ws / "index.html", "<html>older worktree copy</html>", age_s=300)
-    ch, e, task = await _agent_test(session, fleet, workspace=ws)
+    tid = uuid.uuid4()
+    _write(bench_ws(tmp_path / "agent-ws", tid) / "index.html", "<html>older copy</html>", age_s=300)
+    ch, e, task = await _agent_test(session, fleet, agent_ws=tmp_path / "agent-ws", task_id=tid)
     _write(deliv_root / str(task.id) / "index.html", PARTIAL, age_s=1)
 
     await w1_runner.run_agent_contestant(factory, ch.id, ch.plan["contestants"][0], e.id, sleep=no_sleep)
@@ -135,7 +151,7 @@ async def test_time_limit_prefers_the_newer_page_in_the_deliverables_folder(
 @pytest.mark.asyncio
 async def test_time_limit_without_any_page_stays_a_plain_failure(session, engines, world, deliv_root, tmp_path):
     fleet = await seed_fleet(session)
-    ch, e, _task = await _agent_test(session, fleet, workspace=tmp_path / "empty")
+    ch, e, _task = await _agent_test(session, fleet, agent_ws=tmp_path / "agent-ws")
 
     await w1_runner.run_agent_contestant(factory, ch.id, ch.plan["contestants"][0], e.id, sleep=no_sleep)
 
@@ -145,6 +161,89 @@ async def test_time_limit_without_any_page_stays_a_plain_failure(session, engine
     await session.refresh(ch)
     d = s.BenchTestDetail.model_validate(await w1_tests.test_detail(session, ch))
     assert d.blocks[-1].contestants[0].runs[0].incomplete_page is False
+
+
+@pytest.mark.asyncio
+async def test_a_scratch_repo_worktree_is_never_searched(session, engines, world, deliv_root, tmp_path):
+    """Only the task's own bench folder counts — a worktree of the shared
+    scratch repo holds unrelated pages that are not this run's."""
+    fleet = await seed_fleet(session)
+    scratch = tmp_path / "agent-ws" / "projects" / "mc-workspace" / ".worktrees" / "bench"
+    _write(scratch / "index.html", "<html>someone else's page</html>")
+    ch, e, _task = await _agent_test(session, fleet, agent_ws=tmp_path / "agent-ws", workspace=scratch)
+
+    await w1_runner.run_agent_contestant(factory, ch.id, ch.plan["contestants"][0], e.id, sleep=no_sleep)
+
+    await session.refresh(e)
+    assert e.artifact_path is None and not e.metrics.get("incomplete_page")
+
+
+@pytest.mark.asyncio
+async def test_a_symlinked_page_is_never_followed_out_of_the_agent_folder(
+        session, engines, world, deliv_root, tmp_path):
+    """Agent-written paths are untrusted: a link to a backend file must not
+    end up copied and served as the agent's page."""
+    fleet = await seed_fleet(session)
+    secret = _write(tmp_path / "backend-only" / "secret.html", "<html>SECRET</html>")
+    tid = uuid.uuid4()
+    ws = bench_ws(tmp_path / "agent-ws", tid)
+    ws.mkdir(parents=True)
+    (ws / "index.html").symlink_to(secret)
+    (deliv_root / str(tid)).symlink_to(secret.parent, target_is_directory=True)
+    ch, e, task = await _agent_test(session, fleet, agent_ws=tmp_path / "agent-ws", task_id=tid)
+
+    await w1_runner.run_agent_contestant(factory, ch.id, ch.plan["contestants"][0], e.id, sleep=no_sleep)
+
+    await session.refresh(e)
+    assert e.artifact_path is None, "a symlinked page was copied"
+
+    # The collector's brief-path fallback refuses a linked file too.
+    (deliv_root / str(tid)).unlink()
+    (deliv_root / str(tid)).mkdir()
+    (deliv_root / str(tid) / "index.html").symlink_to(secret)
+    e.status = "generating"
+    session.add(e)
+    task.status = "done"
+    session.add(task)
+    await session.commit()
+    await orch.on_task_done(session, task)
+    await session.refresh(e)
+    assert e.status == "failed" and e.artifact_path is None
+
+
+@pytest.mark.asyncio
+async def test_the_stop_happens_even_when_keeping_the_page_breaks(session, engines, world, deliv_root,
+                                                                 tmp_path, monkeypatch):
+    fleet = await seed_fleet(session)
+    ch, e, task = await _agent_test(session, fleet, agent_ws=tmp_path / "agent-ws")
+
+    async def broken(*_a, **_k):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(orch, "salvage_incomplete_page", broken)
+    await w1_runner.run_agent_contestant(factory, ch.id, ch.plan["contestants"][0], e.id, sleep=no_sleep)
+
+    async with factory() as s2:
+        t = await s2.get(Task, task.id)
+        assert t.run_control == "stopped" and t.status == "blocked"
+        row = await s2.get(BenchEntry, e.id)
+        assert row.metrics["error_code"] == "time_limit" and row.metrics.get("harvested_at")
+
+
+@pytest.mark.asyncio
+async def test_brief_path_and_collector_path_meet_for_every_runtime(session, engines):
+    """No seam patched: the brief's path and the path the backend reads
+    are the same file — container agents (slug folder) and host workers."""
+    fleet = await seed_fleet(session)
+    agent = await session.get(Agent, fleet["omp_agent"].id)
+    tid = uuid.uuid4()
+    agent_path, backend = await orch.deliverable_target(session, agent, tid)
+    assert agent_path == f"/deliverables/{tid}/index.html"
+    assert str(backend) == f"/deliverables/{agent.slug}/{tid}/index.html"
+    agent.agent_runtime = "host"
+    agent_path, backend = await orch.deliverable_target(session, agent, tid)
+    assert agent_path == f"~/.mc/deliverables/{tid}/index.html"
+    assert str(backend) == f"/deliverables/{tid}/index.html"
 
 
 def test_legacy_rerender_never_promotes_an_incomplete_page():
