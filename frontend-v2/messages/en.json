@@ -4309,7 +4309,8 @@
         "composing": "building the video",
         "done": "done"
       },
-      "tokensApprox": "≈ {n} tok"
+      "tokensApprox": "≈ {n} tok",
+      "effortRow": "Effort"
     },
     "blockerAsleep": "Start works once it is awake.",
     "wakeBox": "Wake the box",
@@ -4517,7 +4518,9 @@
       "archive": "Archive",
       "delete": "Delete",
       "openPage": "Open page of run {i}",
-      "openPageOf": "Open page: {name}, run {i}"
+      "openPageOf": "Open page: {name}, run {i}",
+      "openIncomplete": "Open incomplete page of run {i}",
+      "openIncompleteOf": "Open incomplete page: {name}, run {i}"
     },
     "notify": {
       "harvestStarted": "Loading the numbers — the result updates itself.",
@@ -4615,7 +4618,9 @@
       "thoughtLine": "thought {v}",
       "writtenLine": "wrote {v}",
       "page": "wrote a page",
-      "notStarted": "did not start"
+      "notStarted": "did not start",
+      "incomplete": "incomplete page kept, not ranked",
+      "openIncomplete": "Open incomplete page"
     },
     "receipt": {
       "title": "Receipt · all settings",

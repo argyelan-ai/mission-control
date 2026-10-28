@@ -60,9 +60,16 @@ broken `main` costs a lot.
 ## Checklist — mandatory before the first work step
 
 Create a checklist as the very first thing via `mc checklist add "..."` per
-step. Mark each completed step done only when the work is physically
+step — several at once work too: `mc checklist add "Step one" "Step two"`. Mark each completed step done only when the work is physically
 complete and you've verified the result yourself — never "will probably
 work". Use `mc checklist skip <id> --reason "..."` for out-of-role items.
+
+## Checking a web page you built
+
+The browser runs in a separate container: `file://` and `localhost` do not
+reach your files. Serve the folder over http
+(`python3 -m http.server 8765 -d <folder>`) and open
+`http://<your IP>:8765/` (IP: `hostname -i`); stop the server afterwards.
 
 ## Progress & recovery
 

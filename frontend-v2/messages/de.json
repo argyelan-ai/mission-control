@@ -4309,7 +4309,8 @@
         "composing": "baut das Video",
         "done": "fertig"
       },
-      "tokensApprox": "≈ {n} tok"
+      "tokensApprox": "≈ {n} tok",
+      "effortRow": "Effort"
     },
     "blockerAsleep": "Start geht, sobald sie wach ist.",
     "wakeBox": "Box wecken",
@@ -4517,7 +4518,9 @@
       "archive": "Archivieren",
       "delete": "Löschen",
       "openPage": "Seite von Lauf {i} öffnen",
-      "openPageOf": "Seite öffnen: {name}, Lauf {i}"
+      "openPageOf": "Seite öffnen: {name}, Lauf {i}",
+      "openIncomplete": "Unfertige Seite von Lauf {i} öffnen",
+      "openIncompleteOf": "Unfertige Seite öffnen: {name}, Lauf {i}"
     },
     "notify": {
       "harvestStarted": "Zahlen werden nachgeladen — das Ergebnis aktualisiert sich selbst.",
@@ -4615,7 +4618,9 @@
       "thoughtLine": "{v} gedacht",
       "writtenLine": "{v} geschrieben",
       "page": "hat eine Seite geschrieben",
-      "notStarted": "nicht gestartet"
+      "notStarted": "nicht gestartet",
+      "incomplete": "unfertige Seite behalten, nicht gewertet",
+      "openIncomplete": "Unfertige Seite öffnen"
     },
     "receipt": {
       "title": "Quittung · alle Einstellungen",

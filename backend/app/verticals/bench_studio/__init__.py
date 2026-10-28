@@ -8,7 +8,8 @@ from here (W1 kill list).
 
 Strippable: delete this directory and the app boots unchanged. Coupling into
 core exclusively via app.verticals.hooks (task_review_hooks + task_done_hooks
-+ completion_callback_skip_hooks + background_loops). Core NEVER imports
++ completion_callback_skip_hooks + task_workspace_providers +
+background_loops). Core NEVER imports
 this package.
 """
 from __future__ import annotations
@@ -43,3 +44,9 @@ def register(app) -> None:
         hooks.task_done_hooks.append(on_task_done)
     if owns_completion_followup not in hooks.completion_callback_skip_hooks:
         hooks.completion_callback_skip_hooks.append(owns_completion_followup)
+    # A bench agent task starts in an empty folder of its own, never in a
+    # worktree of the shared ad-hoc scratch repo (live finding 28.10.2026).
+    from .orchestrator import bench_task_workspace  # noqa: PLC0415
+
+    if bench_task_workspace not in hooks.task_workspace_providers:
+        hooks.task_workspace_providers.append(bench_task_workspace)

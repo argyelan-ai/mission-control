@@ -454,3 +454,19 @@ def test_groupchat_doc_topic_teaches_room_contract():
     ctx = build_agent_context(_make_agent("Worker"), agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
     assert "--attach" not in soul
+
+
+def test_tasks_doc_says_the_browser_runs_in_its_own_container():
+    """Live finding 28.10.2026: an agent opened its page with file:// in the
+    browser. The browser is a separate container — every harness reads:
+    serve the page over http; file:// and localhost do not reach your files."""
+    content = generate_reference_docs({"operator_name": "Mark"})["tasks"]
+    assert "separate container" in content
+    assert "python3 -m http.server" in content
+    assert "file://" in content
+    assert "hostname -i" in content
+
+
+def test_tasks_doc_teaches_several_checklist_items_in_one_call():
+    content = generate_reference_docs({"operator_name": "Mark"})["tasks"]
+    assert 'mc checklist add "Step one" "Step two"' in content

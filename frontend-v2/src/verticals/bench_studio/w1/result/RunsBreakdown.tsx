@@ -5,6 +5,7 @@
 // tokens thought vs. written, and the outcome in plain words ("stopped at the
 // token limit before any page"). From the detail's runs, nothing new asked.
 // Phone: one short block per run; from 1024 px a table on the column's width.
+import { ExternalLink } from "lucide-react";
 import { C } from "@/lib/colors";
 import type { BenchTestDetail, ContestantResult, RunView } from "../types";
 import { formatTime, formatTokens } from "./format";
@@ -18,6 +19,8 @@ interface Row {
   written: string | null;
   outcome: string | null;
   failed: boolean;
+  /** A page kept when the time limit stopped the run (never ranked). */
+  incomplete: boolean;
 }
 
 function rowsOf(test: BenchTestDetail, words: BenchWords): { contestant: ContestantResult; rows: Row[] }[] {
@@ -46,15 +49,40 @@ function rowsOf(test: BenchTestDetail, words: BenchWords): { contestant: Contest
           // Without the engine's split, the whole output stands as "written".
           thought: thought !== null ? formatTokens(thought, words.locale) : null,
           written: written !== null ? formatTokens(written, words.locale) : out !== null ? formatTokens(out, words.locale) : null,
-          outcome,
+          outcome: r.state === "failed" && r.incomplete_page && outcome ? `${outcome} · ${t("runs.incomplete")}` : outcome,
           failed: r.state === "failed",
+          incomplete: r.state === "failed" && r.incomplete_page,
         };
       });
     return { contestant: c, rows };
   });
 }
 
-export function RunsBreakdown({ test, words }: { test: BenchTestDetail; words: BenchWords }) {
+/** "Open incomplete page" — quiet, beside the outcome it belongs to. */
+function OpenIncomplete({ entryId, label, onOpen }: { entryId: string; label: string; onOpen: (id: string) => void }) {
+  return (
+    <button
+      type="button"
+      data-testid="result-run-open-incomplete"
+      onClick={() => onOpen(entryId)}
+      className="inline-flex items-center gap-1.5 min-h-11 -ml-2 px-2 rounded-md text-sm cursor-pointer self-start"
+      style={{ color: C.textSecondary }}
+    >
+      <ExternalLink size={14} aria-hidden />
+      {label}
+    </button>
+  );
+}
+
+export function RunsBreakdown({
+  test,
+  words,
+  onOpenPage,
+}: {
+  test: BenchTestDetail;
+  words: BenchWords;
+  onOpenPage?: (entryId: string) => void;
+}) {
   const t = words.tr;
   const groups = rowsOf(test, words).filter((g) => g.rows.length > 0);
   if (groups.length === 0) return null;
@@ -103,6 +131,9 @@ export function RunsBreakdown({ test, words }: { test: BenchTestDetail; words: B
                     {r.outcome}
                   </span>
                 )}
+                {r.incomplete && onOpenPage && (
+                  <OpenIncomplete entryId={r.key} label={t("runs.openIncomplete")} onOpen={onOpenPage} />
+                )}
               </li>
             ))}
           </ul>
@@ -141,6 +172,11 @@ export function RunsBreakdown({ test, words }: { test: BenchTestDetail; words: B
                   </td>
                   <td className="py-3 first-letter:uppercase" style={{ color: r.failed ? C.textMuted : C.textSecondary }}>
                     {r.outcome}
+                    {r.incomplete && onOpenPage && (
+                      <div>
+                        <OpenIncomplete entryId={r.key} label={t("runs.openIncomplete")} onOpen={onOpenPage} />
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

@@ -174,12 +174,14 @@ export function receiptRows(c: ContestantResult, r: Receipt, words: BenchWords):
         ),
       });
     }
-    const observed = (r.effort_observed ?? {}) as Record<string, unknown>;
-    if (typeof observed.level === "string" && r.harness) {
+    const session = r.harness
+      ? words.sessionEffort(r.harness, { requested: "default", default_level: null, sent: null, observed: r.effort_observed })
+      : null;
+    if (session) {
       rows.push({
         key: "effort",
         label: words.tr("receipt.effort"),
-        value: words.tr("effort.session", { harness: r.harness, level: words.level(observed.level) ?? observed.level }),
+        value: session,
         sub: words.tr("receipt.observedNotSet"),
       });
     }

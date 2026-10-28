@@ -204,6 +204,17 @@ async def setup_git_workspace_for_dispatch(
     if task.dispatch_intent == "review_handoff":
         return await _setup_review_workspace_for_dispatch(task, agent, session)
 
+    # A vertical may own the workspace of its tasks (hooks.task_workspace_
+    # providers) — e.g. a bench task starts in an empty folder, never in a
+    # worktree of the shared scratch repo. None = the normal path below.
+    from app.verticals.hooks import provide_task_workspace
+    provided = await provide_task_workspace(session, task, agent)
+    if provided:
+        task.workspace_path = provided
+        session.add(task)
+        await session.commit()
+        return True
+
     # Lazy import: dispatch.py contains is_backend_writable_path + _BACKEND_MOUNTED_ROOTS
     # (Pitfall D inseparable triple stays in dispatch.py per CONTEXT D-07 + ADR-025).
     from app.services.dispatch import is_backend_writable_path, _BACKEND_MOUNTED_ROOTS

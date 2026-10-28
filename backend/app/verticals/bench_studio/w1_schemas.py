@@ -294,6 +294,9 @@ class RunView(BaseModel):
     wait: Reason | None = None                # WaitCode while waiting
     error: Reason | None = None
     is_video_run: bool = False
+    # A failed run (time limit) whose newest page was kept: it can be opened,
+    # marked incomplete, and is never ranked (live finding 28.10.2026).
+    incomplete_page: bool = False
 
 
 class Summary(BaseModel):

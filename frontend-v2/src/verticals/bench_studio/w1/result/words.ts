@@ -9,13 +9,14 @@ import { useMemo } from "react";
 import type {
   ContestantResult,
   Effort,
+  EffortRecord,
   GateReason,
   Harness,
   Money,
   Reason,
   RunClass,
 } from "../types";
-import { isDirectApi } from "../types";
+import { isDirectApi, observedSessionLevel } from "../types";
 import { formatClockTime, formatUsd, numLocale } from "./format";
 
 type Params = Record<string, unknown>;
@@ -67,15 +68,22 @@ export function useBenchWords() {
     const level = (l: string | null | undefined): string | null =>
       l ? (ts.has(`level.${l}`) ? ts(`level.${l}`) : l) : null;
 
+    /** An agent session's level as it really ran: "omp session: high
+     *  (default)" when nobody chose it — the honest word for "default"
+     *  (live finding 28.10.2026). Null when the level was not read. */
+    const sessionEffort = (h: Harness, e: EffortRecord): string | null => {
+      const s = observedSessionLevel(e);
+      if (!s) return null;
+      const word = level(s.level) ?? s.level;
+      return tr("effort.session", { harness: h, level: s.isDefault ? ts("levelIsDefault", { level: word }) : word });
+    };
+
     /** The effort as the run had it: API = requested (+ thinking observed),
      *  agent = the session level it ran with (D5: shown, never set). */
     const effort = (c: ContestantResult): string | null => {
       const observed = (c.effort.observed ?? {}) as Params;
       const observedLevel = typeof observed.level === "string" ? (observed.level as string) : null;
-      if (c.harness && !isDirectApi(c.harness)) {
-        if (!observedLevel) return null;
-        return tr("effort.session", { harness: c.harness, level: level(observedLevel) ?? observedLevel });
-      }
+      if (c.harness && !isDirectApi(c.harness)) return sessionEffort(c.harness, c.effort);
       const requested: Effort = c.effort.requested;
       let word: string;
       if (requested === "default") {
@@ -120,7 +128,7 @@ export function useBenchWords() {
         ? tr("lane.threeLocal", { lib: c.receipt?.libraries_provided?.[0] ?? "three.js" })
         : null;
 
-    return { reason, gateReason, harness, runClass, level, effort, money, lane, locale, ts, tr };
+    return { reason, gateReason, harness, runClass, level, effort, sessionEffort, money, lane, locale, ts, tr };
   }, [ts, tr, locale]);
 }
 

@@ -51,7 +51,8 @@
               "truncated": false,
               "wait": null,
               "error": null,
-              "is_video_run": true
+              "is_video_run": true,
+              "incomplete_page": false
             },
             {
               "entry_id": "e0000000-0000-4000-8000-000000000012",
@@ -68,7 +69,8 @@
               "truncated": false,
               "wait": null,
               "error": null,
-              "is_video_run": false
+              "is_video_run": false,
+              "incomplete_page": false
             },
             {
               "entry_id": "e0000000-0000-4000-8000-000000000013",
@@ -85,7 +87,8 @@
               "truncated": false,
               "wait": null,
               "error": null,
-              "is_video_run": false
+              "is_video_run": false,
+              "incomplete_page": false
             }
           ],
           "summary": {
