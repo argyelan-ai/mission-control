@@ -58,7 +58,8 @@
               "truncated": false,
               "wait": null,
               "error": null,
-              "is_video_run": true
+              "is_video_run": true,
+              "incomplete_page": false
             }
           ],
           "summary": {

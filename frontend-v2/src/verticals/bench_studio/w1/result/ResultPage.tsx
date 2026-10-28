@@ -54,6 +54,7 @@ import { XKitSheet } from "../kit/XKitSheet";
 import { TestList } from "../list/TestList";
 import { LiveRun } from "../live/LiveRun";
 import type { BenchTestDetail, ContestantResult, OverlayAction } from "../types";
+import { isDirectApi } from "../types";
 import { apiErrorText, apiStatus } from "./errors";
 import { formatClockTime, formatDay, formatTime, formatTokens, statText } from "./format";
 import { GateChecks, GateLine } from "./GateView";
@@ -241,7 +242,12 @@ function AbortedFacts({ test, words }: { test: BenchTestDetail; words: BenchWord
       key: c.key,
       label: t("aborted.contestant"),
       value: c.display_name,
-      sub: words.harness(c.harness),
+      // The effort as it really ran: an agent's line already names its
+      // harness ("omp session: high (default)"); the API path adds its level.
+      sub:
+        c.harness && !isDirectApi(c.harness)
+          ? (words.effort(c) ?? words.harness(c.harness))
+          : [words.harness(c.harness), words.effort(c)].filter(Boolean).join(" · ") || null,
     })),
   ];
   return (
@@ -480,8 +486,11 @@ export function ResultView({ testId }: ResultPageProps) {
   const pages = openablePages(test);
   const pageItems: OverflowAction[] = pages.map((p) => ({
     id: `page-${p.entryId}`,
-    label:
-      pages.length > 1
+    label: p.incomplete
+      ? pages.length > 1
+        ? t("menu.openIncompleteOf", { name: p.contestant.display_name, i: p.run })
+        : t("menu.openIncomplete", { i: p.run })
+      : pages.length > 1
         ? t("menu.openPageOf", { name: p.contestant.display_name, i: p.run })
         : t("menu.openPage", { i: p.run }),
     icon: ExternalLink,
@@ -682,9 +691,9 @@ export function ResultView({ testId }: ResultPageProps) {
             )}
           </section>
 
-          {aborted && (
+          {(aborted || pages.some((p) => p.incomplete)) && (
             <section data-region="result-runs" className="order-4 lg:order-none min-w-0">
-              <RunsBreakdown test={test} words={words} />
+              <RunsBreakdown test={test} words={words} onOpenPage={(id) => void openPage(id)} />
             </section>
           )}
 

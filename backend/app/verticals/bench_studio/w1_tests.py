@@ -132,6 +132,8 @@ def run_view(pc: dict[str, Any], e: BenchEntry, *, wait: dict | None) -> dict[st
         view["wait"] = wait
     if state == "failed":
         view["error"] = {"code": m.get("error_code") or "run_failed", "params": {}}
+        # A page kept at a stop (time limit): openable, never ranked.
+        view["incomplete_page"] = bool(m.get("incomplete_page") and e.artifact_path)
     return view
 
 
@@ -476,7 +478,7 @@ async def _resolve_contestants(
     stale sheet never freezes a wrong model). Returns (contestant plans,
     total money, blockers)."""
 
-    from .orchestrator import AGENT_BRIEF_TEMPLATE
+    from .orchestrator import BRIEF_PATH_PLACEHOLDER, agent_brief
 
     views = await w1_plan.load_views(session)
     prices = await w1_plan.load_prices(session)
@@ -565,7 +567,7 @@ async def _resolve_contestants(
             agent = w1_plan.agent_for(view, harness)
             money = w1_plan.money_for(view, prices, history[view.key], n_runs=1, run_class="B")
             moneys.append(money)
-            brief = AGENT_BRIEF_TEMPLATE.format(prompt=prompt_text)
+            brief = agent_brief(prompt_text, BRIEF_PATH_PLACEHOLDER, c.AGENT_TIME_LIMIT_MIN)
             pcs_b.append({**base, "key": f"{view.runtime.id}:{harness}", "harness": harness, "run_class": "B",
                           "effort": "default", "n_runs": 1, "money": money, "price": price_d,
                           "agent_id": str(agent.id) if agent else None, "brief_sha": c.sha256_text(brief),

@@ -618,16 +618,217 @@ async def _generate_spark_entry(
 
 AGENT_BRIEF_TEMPLATE = """One-shot benchmark task (Benchmark Studio).
 
-Build EXACTLY ONE self-contained `index.html` for the prompt below, then
-register it as a deliverable on this task (deliverable_type "file", path
-pointing at the index.html). Hard requirements:
+Build EXACTLY ONE self-contained `index.html` for the prompt below.
+
+Write it to exactly this path — the bench collects the page from here and
+nowhere else:
+    {deliverable_path}
+Then register it: `mc deliverable --title "index.html" --path {deliverable_path}`
+and set the task status to review.
+
+Hard requirements:
 - A single complete HTML document, all CSS/JS inline, no external requests.
 - One shot: do NOT ask clarifying questions, do NOT create subtasks.
-- After registering the deliverable, set the task status to review.
+- Your working folder starts empty on purpose — there is nothing to read,
+  clone or commit.
+- Time limit: {time_limit_min} min. Write the file early and improve it in
+  place: when the time is up, the newest version at that path is kept and
+  shown as an incomplete result.
 
 PROMPT:
 {prompt}
 """
+
+#: The path placeholder the brief checksum is taken over — the same brief for
+#: every task ("same brief (sha …)" on the card), whatever its task id.
+BRIEF_PATH_PLACEHOLDER = "<deliverables>/index.html"
+
+
+def agent_brief(prompt: str, deliverable_path: str, time_limit_min: int) -> str:
+    return AGENT_BRIEF_TEMPLATE.format(
+        prompt=prompt, deliverable_path=deliverable_path, time_limit_min=time_limit_min,
+    )
+
+
+async def _backend_view(session: AsyncSession, agent, agent_path: str) -> str | None:
+    """The backend's path of a file the agent writes at ``agent_path`` —
+    through fs_service, the one runtime-aware resolver (slug injection for
+    containerized agents, the host form for host workers)."""
+    from types import SimpleNamespace
+
+    from app.services.fs_service import resolve_deliverable
+
+    return await resolve_deliverable(
+        SimpleNamespace(path=agent_path, agent_id=getattr(agent, "id", None)), session, target="container",
+    )
+
+
+async def deliverable_target(session: AsyncSession, agent, task_id: uuid.UUID) -> tuple[str, Path | None]:
+    """(agent view, backend view) of the ONE index.html the brief names and
+    the collector reads — so the agent's output is always found."""
+    from app.services.deliverable_paths import agent_deliverable_dir
+
+    agent_path = f"{agent_deliverable_dir(agent, task_id)}/index.html"
+    backend = await _backend_view(session, agent, agent_path)
+    return agent_path, (Path(backend) if backend else None)
+
+
+def _plan_time_limit_min(challenge: BenchChallenge, entry: BenchEntry) -> int:
+    from .w1_common import AGENT_TIME_LIMIT_MIN
+
+    for pc in (challenge.plan or {}).get("contestants") or []:
+        if pc.get("position") == entry.position and pc.get("time_limit_min"):
+            return int(pc["time_limit_min"])
+    return AGENT_TIME_LIMIT_MIN
+
+
+#: Folder (under the agent's workspace) that holds one empty folder per
+#: bench task — see bench_task_workspace.
+BENCH_WORKSPACE_DIR = "bench"
+
+
+async def bench_task_workspace(session: AsyncSession, task, agent) -> str | None:
+    """hooks.task_workspace_providers: a bench task starts in an EMPTY
+    folder of its own, ``<agent workspace>/bench/<task id>/`` — never in a
+    worktree of the shared ad-hoc scratch repo, whose unrelated files
+    distract the agent and make runs unfair (live finding 28.10.2026).
+
+    Self-filtering on the bench auto_reason (never the title). Idempotent:
+    a re-dispatch of the same task gets the same folder with its work kept.
+    No agent workspace → None, the core's normal path decides."""
+    from .callbacks import BENCH_AUTO_REASON_PREFIX
+
+    if not (getattr(task, "auto_reason", None) or "").startswith(BENCH_AUTO_REASON_PREFIX):
+        return None
+    base = getattr(agent, "workspace_path", None)
+    if not base:
+        return None
+    folder = Path(base) / BENCH_WORKSPACE_DIR / str(task.id)
+    folder.mkdir(parents=True, exist_ok=True)
+    return str(folder)
+
+
+# ── Incomplete page on a time-limit stop ─────────────────────────────────
+
+_SALVAGE_MAX_BYTES = 5 * 1024 * 1024
+_SALVAGE_SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__", ".next", "dist", "build"}
+_SALVAGE_MAX_DEPTH = 4
+_SALVAGE_MAX_FILES = 5000
+
+
+def _inside(path: Path, root: Path) -> bool:
+    """``path`` (symlinks followed) stays inside ``root`` and is no symlink
+    itself — the guard for every agent-written path the backend reads."""
+    try:
+        return not path.is_symlink() and path.resolve().is_relative_to(root.resolve())
+    except OSError:
+        return False
+
+
+def _is_bench_workspace(ws: Path, agent, task_id) -> bool:
+    """Only the task's own bench folder is searched — never a scratch-repo
+    worktree with unrelated pages (e.g. a task dispatched before the bench
+    workspace provider existed, or one whose provider fell back)."""
+    base = getattr(agent, "workspace_path", None)
+    if not base:
+        return False
+    expected = Path(base) / BENCH_WORKSPACE_DIR / str(task_id)
+    return ws == expected and _inside(ws, Path(base))
+
+
+def _safe_page(path: Path, root: Path) -> bool:
+    return path.is_file() and _inside(path, root)
+
+
+def _html_candidates(root: Path, source: str) -> list[tuple[Path, str]]:
+    """Every *.html below ``root`` (bounded depth/count, no VCS or package
+    folders, no symlinks out of it)."""
+    out: list[tuple[Path, str]] = []
+    if not root.is_dir():
+        return out
+    base = root.resolve()
+    seen = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_depth = len(Path(dirpath).relative_to(root).parts)
+        dirnames[:] = [d for d in dirnames if d not in _SALVAGE_SKIP_DIRS and rel_depth < _SALVAGE_MAX_DEPTH]
+        for name in filenames:
+            seen += 1
+            if seen > _SALVAGE_MAX_FILES:
+                return out
+            if not name.lower().endswith((".html", ".htm")):
+                continue
+            p = Path(dirpath) / name
+            try:
+                if p.is_symlink() or not p.resolve().is_relative_to(base):
+                    continue
+                if p.stat().st_size > _SALVAGE_MAX_BYTES:
+                    continue
+            except OSError:
+                continue
+            out.append((p, source))
+    return out
+
+
+async def salvage_incomplete_page(session: AsyncSession, entry: BenchEntry, task) -> bool:
+    """Keep the newest page the agent wrote before its run was stopped.
+
+    Looked at: the task's deliverables folder (the one the brief names) and
+    its bench working folder. The newest page (by file time; ``index.html``
+    wins a tie) is copied into the entry's own folder. The entry stays
+    ``failed`` — it is never ranked like a finished run — but carries
+    ``metrics.incomplete_page`` so the result page can offer it, clearly
+    marked incomplete. Returns True when a page was kept.
+
+    Agent-written paths are untrusted: a symlinked task folder or file that
+    points out of the agent's own deliverables root / bench folder is never
+    followed (it could expose any file the backend can read)."""
+    from app.models.agent import Agent
+
+    agent = await session.get(Agent, entry.agent_id) if entry.agent_id else None
+    candidates: list[tuple[Path, str]] = []
+    if agent is not None:
+        _agent_path, backend = await deliverable_target(session, agent, task.id)
+        if backend is not None:
+            folder = backend.parent
+            # The agent owns <root>/<task id>/ but not <root> itself.
+            if _inside(folder, folder.parent):
+                candidates += _html_candidates(folder, "deliverables")
+    ws = getattr(task, "workspace_path", None)
+    if ws and agent is not None and _is_bench_workspace(Path(ws), agent, task.id):
+        candidates += _html_candidates(Path(ws), "workspace")
+
+    best: tuple[float, int, Path, str] | None = None
+    for path, source in candidates:
+        try:
+            key = (path.stat().st_mtime, 1 if path.name.lower() == "index.html" else 0)
+        except OSError:
+            continue
+        if best is None or key > best[:2]:
+            best = (key[0], key[1], path, source)
+    if best is None:
+        return False
+    _mtime, _is_index, src, source = best
+    out_dir = entry_dir(entry)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "index.html"
+    # O_NOFOLLOW: the file cannot be swapped for a link between the check
+    # above and this copy (the agent may still be writing when a stop failed).
+    try:
+        fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False
+    with os.fdopen(fd, "rb") as fh, open(out_path, "wb") as out:
+        shutil.copyfileobj(fh, out, length=_SALVAGE_MAX_BYTES)
+    entry.artifact_path = str(out_path)
+    entry.metrics = {
+        **(entry.metrics or {}),
+        "incomplete_page": True,
+        "incomplete_source": source,
+        # Not "html_bytes": that key means a finished page in the receipt.
+        "incomplete_bytes": out_path.stat().st_size,
+    }
+    session.add(entry)
+    return True
 
 
 async def dispatch_agent_entry(
@@ -651,11 +852,14 @@ async def dispatch_agent_entry(
         await session.commit()
         return
 
+    task_id = uuid.uuid4()
+    deliverable_path, _backend = await deliverable_target(session, agent, task_id)
     task = Task(
-        id=uuid.uuid4(),
+        id=task_id,
         board_id=agent.board_id,
         title=f"[Bench] {challenge.title} — {entry_display_label(entry)}"[:200],
-        description=AGENT_BRIEF_TEMPLATE.format(prompt=challenge.prompt_text),
+        description=agent_brief(challenge.prompt_text, deliverable_path,
+                                _plan_time_limit_min(challenge, entry)),
         status="inbox",
         priority="medium",
         assigned_agent_id=agent.id,
@@ -918,6 +1122,17 @@ async def on_task_done(session: AsyncSession, task) -> None:
                     break
             if html_src:
                 break
+    if html_src is None:
+        # Not registered, but written where the brief said: the brief and
+        # the collector name the same file (live finding 28.10.2026).
+        from app.models.agent import Agent
+
+        agent = await session.get(Agent, entry.agent_id) if entry.agent_id else None
+        if agent is not None:
+            _agent_path, backend = await deliverable_target(session, agent, task.id)
+            # Untrusted path: no symlink out of the agent's deliverables root.
+            if backend is not None and _safe_page(backend, backend.parent.parent):
+                html_src = backend
 
     if html_src is None:
         entry.status = "failed"
@@ -1878,6 +2093,9 @@ async def rerender_challenge(challenge_id: uuid.UUID) -> None:
                     e
                     for e in entries
                     if e.artifact_path and e.status in ("generated", "rendered", "failed")
+                    # A page kept at a time-limit stop is incomplete — it
+                    # must never be promoted to "generated" (ranked) here.
+                    and not (e.metrics or {}).get("incomplete_page")
                 ]
                 if not candidates:
                     challenge.status = "failed"

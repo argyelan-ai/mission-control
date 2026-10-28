@@ -37,6 +37,20 @@ def accepted_path_prefixes(task_id: uuid.UUID) -> tuple[str, ...]:
     )
 
 
+def agent_deliverable_dir(agent, task_id: uuid.UUID) -> str:
+    """The deliverables folder of ``task_id`` as the AGENT writes it.
+
+    Host workers (launchd, no Docker) cannot write ``/deliverables`` — their
+    root filesystem is read-only — so they get the host form
+    ``~/.mc/deliverables/<task_id>``; every containerized agent gets the
+    container form ``/deliverables/<task_id>`` (ADR-022). One source for the
+    dispatch prompt and every brief that names an exact output path.
+    """
+    if getattr(agent, "agent_runtime", None) == "host":
+        return f"~/.mc/deliverables/{task_id}"
+    return f"/deliverables/{task_id}"
+
+
 def validate_deliverable_path(
     path: str | None,
     content: str | None,

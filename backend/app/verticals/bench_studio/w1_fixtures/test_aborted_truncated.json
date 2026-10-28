@@ -57,7 +57,8 @@
                 "code": "no_html_truncated",
                 "params": {}
               },
-              "is_video_run": true
+              "is_video_run": true,
+              "incomplete_page": false
             },
             {
               "entry_id": "e0000000-0000-4000-8000-000000000032",
@@ -77,7 +78,8 @@
                 "code": "no_html_truncated",
                 "params": {}
               },
-              "is_video_run": false
+              "is_video_run": false,
+              "incomplete_page": false
             },
             {
               "entry_id": "e0000000-0000-4000-8000-000000000033",
@@ -97,7 +99,8 @@
                 "code": "no_html_truncated",
                 "params": {}
               },
-              "is_video_run": false
+              "is_video_run": false,
+              "incomplete_page": false
             }
           ],
           "summary": {

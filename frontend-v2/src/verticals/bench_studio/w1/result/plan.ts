@@ -46,14 +46,33 @@ export function menuIds(test: BenchTestDetail, primary: Primary): MenuId[] {
   return out;
 }
 
-/** The finished video run of each contestant — its page can be opened. */
-export function openablePages(test: BenchTestDetail): { contestant: ContestantResult; entryId: string; run: number }[] {
-  if (isLive(test) || test.state === "aborted") return [];
-  const out: { contestant: ContestantResult; entryId: string; run: number }[] = [];
+export interface OpenablePage {
+  contestant: ContestantResult;
+  entryId: string;
+  run: number;
+  /** A page kept when the time limit stopped the run — never a finished one. */
+  incomplete: boolean;
+}
+
+/** The finished video run of each contestant — its page can be opened.
+ *  A contestant without a finished page offers the incomplete page its
+ *  stopped run left behind (time limit), marked as such; a stopped test
+ *  offers only those. */
+export function openablePages(test: BenchTestDetail): OpenablePage[] {
+  if (isLive(test)) return [];
+  const aborted = test.state === "aborted";
+  const out: OpenablePage[] = [];
   for (const block of test.blocks)
     for (const c of block.contestants) {
-      const run = c.runs.find((r) => r.is_video_run && r.state === "done") ?? c.runs.find((r) => r.state === "done");
-      if (run) out.push({ contestant: c, entryId: run.entry_id, run: run.repeat_idx });
+      const run = aborted
+        ? undefined
+        : (c.runs.find((r) => r.is_video_run && r.state === "done") ?? c.runs.find((r) => r.state === "done"));
+      if (run) {
+        out.push({ contestant: c, entryId: run.entry_id, run: run.repeat_idx, incomplete: false });
+        continue;
+      }
+      const kept = c.runs.find((r) => r.state === "failed" && r.incomplete_page);
+      if (kept) out.push({ contestant: c, entryId: kept.entry_id, run: kept.repeat_idx, incomplete: true });
     }
   return out;
 }

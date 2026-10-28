@@ -64,6 +64,38 @@ async def completion_callback_skipped_by(session: Any, task: Any) -> str | None:
     return None
 
 
+# Async providers asked before a task's workspace is prepared for dispatch
+# (task_context_builder.setup_git_workspace_for_dispatch and its cli-bridge
+# twin cli_bridge_runner._resolve_workspace). Signature:
+#   async (session, task, agent) -> str | None
+# A str = the HOST path of a folder the vertical prepared for this task; the
+# core then uses it as task.workspace_path and skips its git/worktree setup.
+# None = not mine (self-filtering), the normal path runs. Used by bench_studio
+# so a benchmark starts in an empty folder instead of a worktree of the
+# shared ad-hoc scratch repo (fairness, live finding 28.10.2026). A raising
+# provider is logged and counts as None — the normal path runs.
+task_workspace_providers: list[Callable[..., Awaitable[str | None]]] = []
+
+
+async def provide_task_workspace(session: Any, task: Any, agent: Any) -> str | None:
+    """First workspace a provider prepared for ``task``, or None."""
+    import logging
+
+    logger = logging.getLogger("mc.verticals.hooks")
+    for provider in task_workspace_providers:
+        try:
+            path = await provider(session, task, agent)
+        except Exception:
+            logger.exception(
+                "task_workspace provider %s failed — normal workspace setup runs",
+                getattr(provider, "__name__", provider),
+            )
+            continue
+        if path:
+            return path
+    return None
+
+
 # Async hooks, called when a task lands in status=review, before the generic
 # "wait for a human reviewer" flow runs (task_lifecycle.handle_human_review_
 # handoff). Signature: async (session, task) -> bool. Return True when the

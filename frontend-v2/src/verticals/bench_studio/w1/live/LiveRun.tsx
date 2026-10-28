@@ -16,6 +16,7 @@ import { Check, Clock, Loader2, Square, X } from "lucide-react";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { benchW1Api, benchW1Keys } from "../api";
 import type { BenchTestDetail, ContestantResult, ResultBlock, RunView } from "../types";
+import { observedSessionLevel } from "../types";
 import { runDuration, stopwatch, tokPerSec, tokenCount } from "./format";
 import { useBenchWords } from "./words";
 
@@ -336,6 +337,9 @@ function AgentCard({
     }
     if (run.tokens_out != null) rows.push({ k: t("tokensRow"), v: tokenCount(run.tokens_out, locale) });
   }
+  // The level the session really runs on, once its session file says so
+  // ("high (default)") — never a bare "Default" that hides it, never a guess.
+  if (observedSessionLevel(c.effort)) rows.push({ k: t("effortRow"), v: w.effort(c.effort) });
 
   return (
     <article data-testid="bench-live-card" className="rounded-lg p-4" style={cardStyle}>

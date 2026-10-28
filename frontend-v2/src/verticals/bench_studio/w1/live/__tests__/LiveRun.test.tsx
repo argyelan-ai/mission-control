@@ -77,6 +77,20 @@ describe("LiveRun — running", () => {
     expect(cardB.textContent).not.toMatch(/tok\/s/);
   });
 
+  it("class B card: the session's resolved effort, never a bare 'Default' (28.10.)", () => {
+    const t = clone(testRunningFixture);
+    const b = t.blocks[1].contestants[0];
+    // Not read yet: no effort row at all — no guessed level.
+    const first = renderLive(t);
+    expect(within(first.region).getAllByTestId("bench-live-card")[1]).not.toHaveTextContent("Effort");
+    first.unmount();
+    b.effort.observed = { source: "omp_session", level: "high", configured: null };
+    const { region } = renderLive(t);
+    const cardB = within(region).getAllByTestId("bench-live-card")[1];
+    expect(cardB).toHaveTextContent("Effort");
+    expect(within(cardB).getByText("high (default)")).toBeInTheDocument();
+  });
+
   it("a cut-off run is named privately in the live card", () => {
     const t = clone(testRunningFixture);
     const r = t.blocks[0].contestants[0].runs[1];

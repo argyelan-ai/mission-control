@@ -5,6 +5,7 @@
 // (K10). Machine codes the catalog does not know fall back to the code, so
 // a new backend value is visible instead of silently blank.
 import { useLocale, useTranslations } from "next-intl";
+import { observedSessionLevel } from "../types";
 import type { Effort, EffortOption, EffortRecord, Harness, Reason } from "../types";
 import { clockTime } from "./format";
 
@@ -25,11 +26,19 @@ export function useBenchWords() {
   };
 
   /** The effort a run had, in the sheet's words: "hoch (Standard)" when
-   *  the probe knew what the server default maps to (K10: one name). */
-  const effort = (e: EffortRecord) =>
-    e.requested === "default" && e.default_level
-      ? t("levelIsDefault", { level: level(e.default_level) })
-      : level(e.requested);
+   *  the probe knew what the server default maps to (K10: one name). An
+   *  agent session says what it resolved to once its session file is read
+   *  ("high (default)" for omp) — never a bare "Default" that hides it. */
+  const effort = (e: EffortRecord) => {
+    if (e.requested !== "default") return level(e.requested);
+    if (e.default_level) return t("levelIsDefault", { level: level(e.default_level) });
+    const session = observedSessionLevel(e);
+    if (session) {
+      const lv = level(session.level as Effort);
+      return session.isDefault ? t("levelIsDefault", { level: lv }) : lv;
+    }
+    return level("default");
+  };
 
   /** A wait reason in words. ISO times become a clock time, and the
    *  backend's `until` fills the `{time}` the sentences ask for — a missing

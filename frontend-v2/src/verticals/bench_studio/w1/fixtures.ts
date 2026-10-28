@@ -444,7 +444,8 @@ export const testRunningFixture: BenchTestDetail = {
               "truncated": false,
               "wait": null,
               "error": null,
-              "is_video_run": true
+              "is_video_run": true,
+              "incomplete_page": false
             },
             {
               "entry_id": "e0000000-0000-4000-8000-000000000002",
@@ -461,7 +462,8 @@ export const testRunningFixture: BenchTestDetail = {
               "truncated": false,
               "wait": null,
               "error": null,
-              "is_video_run": false
+              "is_video_run": false,
+              "incomplete_page": false
             },
             {
               "entry_id": "e0000000-0000-4000-8000-000000000003",
@@ -478,7 +480,8 @@ export const testRunningFixture: BenchTestDetail = {
               "truncated": false,
               "wait": null,
               "error": null,
-              "is_video_run": false
+              "is_video_run": false,
+              "incomplete_page": false
             }
           ],
           "summary": {
@@ -570,7 +573,8 @@ export const testRunningFixture: BenchTestDetail = {
                 }
               },
               "error": null,
-              "is_video_run": true
+              "is_video_run": true,
+              "incomplete_page": false
             }
           ],
           "summary": {
@@ -692,7 +696,8 @@ export const testDoneGreenFixture: BenchTestDetail = {
               "truncated": false,
               "wait": null,
               "error": null,
-              "is_video_run": true
+              "is_video_run": true,
+              "incomplete_page": false
             },
             {
               "entry_id": "e0000000-0000-4000-8000-000000000012",
@@ -709,7 +714,8 @@ export const testDoneGreenFixture: BenchTestDetail = {
               "truncated": false,
               "wait": null,
               "error": null,
-              "is_video_run": false
+              "is_video_run": false,
+              "incomplete_page": false
             },
             {
               "entry_id": "e0000000-0000-4000-8000-000000000013",
@@ -726,7 +732,8 @@ export const testDoneGreenFixture: BenchTestDetail = {
               "truncated": false,
               "wait": null,
               "error": null,
-              "is_video_run": false
+              "is_video_run": false,
+              "incomplete_page": false
             }
           ],
           "summary": {
@@ -955,7 +962,8 @@ export const testDoneTruncatedFixture: BenchTestDetail = {
               "truncated": false,
               "wait": null,
               "error": null,
-              "is_video_run": true
+              "is_video_run": true,
+              "incomplete_page": false
             },
             {
               "entry_id": "e0000000-0000-4000-8000-000000000022",
@@ -972,7 +980,8 @@ export const testDoneTruncatedFixture: BenchTestDetail = {
               "truncated": true,
               "wait": null,
               "error": null,
-              "is_video_run": false
+              "is_video_run": false,
+              "incomplete_page": false
             },
             {
               "entry_id": "e0000000-0000-4000-8000-000000000023",
@@ -989,7 +998,8 @@ export const testDoneTruncatedFixture: BenchTestDetail = {
               "truncated": false,
               "wait": null,
               "error": null,
-              "is_video_run": false
+              "is_video_run": false,
+              "incomplete_page": false
             }
           ],
           "summary": {
@@ -1241,7 +1251,8 @@ export const testAbortedTruncatedFixture: BenchTestDetail = {
                 "code": "no_html_truncated",
                 "params": {}
               },
-              "is_video_run": true
+              "is_video_run": true,
+              "incomplete_page": false
             },
             {
               "entry_id": "e0000000-0000-4000-8000-000000000032",
@@ -1261,7 +1272,8 @@ export const testAbortedTruncatedFixture: BenchTestDetail = {
                 "code": "no_html_truncated",
                 "params": {}
               },
-              "is_video_run": false
+              "is_video_run": false,
+              "incomplete_page": false
             },
             {
               "entry_id": "e0000000-0000-4000-8000-000000000033",
@@ -1281,7 +1293,8 @@ export const testAbortedTruncatedFixture: BenchTestDetail = {
                 "code": "no_html_truncated",
                 "params": {}
               },
-              "is_video_run": false
+              "is_video_run": false,
+              "incomplete_page": false
             }
           ],
           "summary": {
@@ -1366,6 +1379,138 @@ export const testAbortedTruncatedFixture: BenchTestDetail = {
   "overlay_actions": []
 };
 
+export const testAbortedTimeLimitFixture: BenchTestDetail = {
+  "id": "a0000000-0000-4000-8000-000000000007",
+  "title": "Pagoda Garden",
+  "created_at": "2026-10-28T13:10:00Z",
+  "trigger": "runtimes",
+  "preset": "standard",
+  "protocol_version": "v1",
+  "state": "aborted",
+  "section": "needs_look",
+  "state_reason": {
+    "code": "all_runs_failed",
+    "params": {}
+  },
+  "prompt": {
+    "template_id": "66666666-6666-4666-8666-666666666666",
+    "title": "Pagoda Garden",
+    "sha256": "d6e0ea9000000000000000000000000000000000000000000000000000000000"
+  },
+  "blocks": [
+    {
+      "run_class": "B",
+      "contestants": [
+        {
+          "key": "11111111-1111-4111-8111-111111111111:omp",
+          "runtime_id": "11111111-1111-4111-8111-111111111111",
+          "served_model_id": "DeepSeek-V4.1-Flash-1017",
+          "display_name": "DeepSeek-V4.1-Flash-1017",
+          "alias": null,
+          "locality": "local",
+          "device_name": "DGX Spark ×2",
+          "harness": "omp",
+          "effort": {
+            "requested": "default",
+            "default_level": null,
+            "sent": null,
+            "observed": {
+              "source": "omp_session",
+              "level": "high",
+              "configured": null
+            }
+          },
+          "runs": [
+            {
+              "entry_id": "e0000000-0000-4000-8000-000000000041",
+              "repeat_idx": 1,
+              "attempt_no": 1,
+              "state": "failed",
+              "phase": "done",
+              "elapsed_ms": 7200000,
+              "tokens_out": null,
+              "tokens_reasoning": null,
+              "decode_tok_s": null,
+              "ttft_ms": null,
+              "finish_reason": null,
+              "truncated": false,
+              "wait": null,
+              "error": {
+                "code": "time_limit",
+                "params": {}
+              },
+              "is_video_run": false,
+              "incomplete_page": true
+            }
+          ],
+          "summary": {
+            "time": {
+              "measured": false,
+              "median": null,
+              "min": null,
+              "max": null,
+              "n": 0,
+              "reason": {
+                "code": "all_runs_failed",
+                "params": {}
+              }
+            },
+            "time_kind": "active_ms",
+            "wait_ms": null,
+            "tokens_out": {
+              "measured": false,
+              "median": null,
+              "min": null,
+              "max": null,
+              "n": 0,
+              "reason": {
+                "code": "all_runs_failed",
+                "params": {}
+              }
+            },
+            "tokens_reasoning": null,
+            "tokens_cache_read": null,
+            "decode_tok_s": null,
+            "ttft_ms": null,
+            "cost": {
+              "cost_kind": "local",
+              "usd": null,
+              "hypothetical_usd": null,
+              "price_source": null,
+              "price_date": null,
+              "needs_confirmation": false,
+              "second_confirmation": false,
+              "reason": null
+            },
+            "page_check": null,
+            "tie_with": []
+          },
+          "receipt": null,
+          "lib_track": "none",
+          "receipt_version": null,
+          "receipt_checksum": null
+        }
+      ],
+      "starts_after": null
+    }
+  ],
+  "gate": {
+    "status": "pending",
+    "reasons": [],
+    "checksum": null
+  },
+  "verdict": null,
+  "video": null,
+  "truncation": null,
+  "rerun_of": null,
+  "allowed": [
+    "rerun",
+    "archive",
+    "delete"
+  ],
+  "overlay_actions": []
+};
+
 export const testNeedsLookRedFixture: BenchTestDetail = {
   "id": "a0000000-0000-4000-8000-000000000004",
   "title": "Shot Sequence",
@@ -1426,7 +1571,8 @@ export const testNeedsLookRedFixture: BenchTestDetail = {
               "truncated": false,
               "wait": null,
               "error": null,
-              "is_video_run": true
+              "is_video_run": true,
+              "incomplete_page": false
             }
           ],
           "summary": {

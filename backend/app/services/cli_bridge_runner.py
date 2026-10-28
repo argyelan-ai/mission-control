@@ -166,6 +166,15 @@ async def _resolve_workspace(task: Task, agent: Agent, session: AsyncSession):
             agent.name, default_workspace,
         )
 
+    # Same vertical hook as task_context_builder.setup_git_workspace_for_dispatch
+    # — both paths must hand the agent the SAME folder (a bench task's empty
+    # folder must not be swapped for a scratch-repo worktree here).
+    from app.verticals.hooks import provide_task_workspace
+
+    provided = await provide_task_workspace(session, task, agent)
+    if provided:
+        return provided, None, False
+
     agent_base = agent.workspace_path
     workspace = agent_base
     worktree_path = None

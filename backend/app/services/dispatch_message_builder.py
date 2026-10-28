@@ -1100,13 +1100,23 @@ For large tasks (website, app, feature with multiple steps):
             # instead of the generic "create a feature branch", matching
             # the project branch above.
             _adhoc_task_slug = _slugify_project_adhoc(task.title)
-            git_section = (
-                f"{_repo_line}"
-                f"**Working directory:** `{_ws_view}/`\n"
-                f"Change into it FIRST: `cd {_ws_view}`\n\n"
-                f"**Git:** you're already on `task/{_adhoc_task_slug}` — never commit directly to main.\n"
-                "Commit after every major step. Push to GitHub."
-            )
+            if os.path.isdir(_ws_host) and not os.path.exists(os.path.join(_ws_host, ".git")):
+                # A plain folder (e.g. a bench task's empty workspace from a
+                # vertical's task_workspace_provider): no branch to be on and
+                # nothing to push — never send the agent looking for a repo.
+                git_section = (
+                    f"**Working directory:** `{_ws_view}/`\n"
+                    f"Change into it FIRST: `cd {_ws_view}`\n\n"
+                    "It is a plain folder, not a git repository — nothing to commit or push."
+                )
+            else:
+                git_section = (
+                    f"{_repo_line}"
+                    f"**Working directory:** `{_ws_view}/`\n"
+                    f"Change into it FIRST: `cd {_ws_view}`\n\n"
+                    f"**Git:** you're already on `task/{_adhoc_task_slug}` — never commit directly to main.\n"
+                    "Commit after every major step. Push to GitHub."
+                )
             if task.workspace_port:
                 git_section += (
                     f"\n**Dev server port:** {task.workspace_port} (use this port, NOT the default)\n"
@@ -1185,18 +1195,21 @@ For large tasks (website, app, feature with multiple steps):
         # ${HOME}/.mc into the backend at the same path, so host-path
         # deliverables are fully servable. cli-bridge agents keep the
         # container-absolute form (unchanged, ADR-022).
+        from app.services.deliverable_paths import agent_deliverable_dir
+
         _is_host_agent = agent.agent_runtime == "host"
+        _deliv_dir = agent_deliverable_dir(agent, task.id)
         if _is_host_agent:
             _deliverable_hint = (
                 f'Register a deliverable: `mc deliverable --title "..." --path '
-                f"~/.mc/deliverables/{task.id}/<file>` (host path — /deliverables "
+                f"{_deliv_dir}/<file>` (host path — /deliverables "
                 "is not writable on the host) — or inline: "
                 '`mc deliverable --type document --title "..." --content "..."`'
             )
         else:
             _deliverable_hint = (
                 f'Register a deliverable: `mc deliverable --title "..." --path '
-                f'/deliverables/{task.id}/<file>`  (absolute container path, ADR-022)'
+                f'{_deliv_dir}/<file>`  (absolute container path, ADR-022)'
             )
 
         # ── Host-only reflection contract (2026-07-11) ──────────────────────

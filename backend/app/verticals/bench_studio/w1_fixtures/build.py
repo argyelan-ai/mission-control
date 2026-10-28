@@ -39,6 +39,7 @@ T_TRUNC = "a0000000-0000-4000-8000-000000000003"
 T_RED = "a0000000-0000-4000-8000-000000000004"
 T_AUTO = "a0000000-0000-4000-8000-000000000005"
 T_CUT = "a0000000-0000-4000-8000-000000000006"
+T_LIMIT = "a0000000-0000-4000-8000-000000000007"
 RT_SWITCHING = "77777777-7777-4777-8777-777777777777"
 E = "e0000000-0000-4000-8000-0000000000{:02d}".format
 
@@ -335,6 +336,37 @@ def test_aborted_truncated() -> s.BenchTestDetail:
     })
 
 
+def test_aborted_time_limit() -> s.BenchTestDetail:
+    """An omp agent run stopped at the 2 h limit (live run 28.10.2026): the
+    newest page it wrote is kept as an INCOMPLETE result — openable, never
+    ranked — and the session's effort shows what it resolved to."""
+    run = _run(1, 41, state="failed", elapsed_ms=7_200_000, finish_reason=None, is_video_run=False,
+               error={"code": "time_limit", "params": {}}, incomplete_page=True)
+    return s.BenchTestDetail.model_validate({
+        "id": T_LIMIT, "title": "Pagoda Garden", "created_at": "2026-10-28T13:10:00Z",
+        "trigger": "runtimes", "preset": "standard", "protocol_version": "v1",
+        "state": "aborted", "section": "needs_look",
+        "state_reason": {"code": "all_runs_failed", "params": {}},
+        "prompt": PAGODA,
+        "blocks": [{"run_class": "B", "contestants": [{
+            "key": f"{RT_SPARK}:omp", "runtime_id": RT_SPARK, "served_model_id": MODEL,
+            "display_name": MODEL, "locality": "local", "device_name": "DGX Spark ×2",
+            "harness": "omp",
+            "effort": {"requested": "default",
+                       "observed": {"source": "omp_session", "level": "high", "configured": None}},
+            "runs": [run],
+            "summary": {
+                "time": {"measured": False, "n": 0, "reason": {"code": "all_runs_failed"}},
+                "time_kind": "active_ms",
+                "tokens_out": {"measured": False, "n": 0, "reason": {"code": "all_runs_failed"}},
+                "cost": {"cost_kind": "local"},
+            },
+        }]}],
+        "gate": {"status": "pending"},
+        "allowed": ["rerun", "archive", "delete"],
+    })
+
+
 def test_needs_look_red() -> s.BenchTestDetail:
     return s.BenchTestDetail.model_validate({
         "id": T_RED, "title": "Shot Sequence", "created_at": "2026-10-21T20:21:40Z",
@@ -515,6 +547,7 @@ FIXTURES = {
     "test_done_green": (test_done_green, "BenchTestDetail"),
     "test_done_truncated": (test_done_truncated, "BenchTestDetail"),
     "test_aborted_truncated": (test_aborted_truncated, "BenchTestDetail"),
+    "test_aborted_time_limit": (test_aborted_time_limit, "BenchTestDetail"),
     "test_needs_look_red": (test_needs_look_red, "BenchTestDetail"),
     "test_list": (test_list, "BenchTestList"),
     "kit_green": (kit_green, "XKit"),

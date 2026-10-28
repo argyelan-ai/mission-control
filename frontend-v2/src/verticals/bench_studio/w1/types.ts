@@ -258,6 +258,19 @@ export interface RunView {
   wait: Reason | null;
   error: Reason | null;
   is_video_run: boolean;
+  /** A failed run (time limit) whose newest page was kept: openable,
+   *  marked incomplete, never ranked. */
+  incomplete_page: boolean;
+}
+
+/** The level an agent session really ran on, read from its own session
+ *  file (`observed.level`), and whether nobody chose it (`configured: null`
+ *  = the harness's own default, e.g. omp's "high"). Null when not known —
+ *  never a guessed level. */
+export function observedSessionLevel(e: EffortRecord): { level: string; isDefault: boolean } | null {
+  const o = (e.observed ?? {}) as Record<string, unknown>;
+  if (typeof o.level !== "string" || !o.level) return null;
+  return { level: o.level, isDefault: "configured" in o && o.configured === null };
 }
 
 /** Class B has no tempo: decode_tok_s / ttft_ms are null — omit the row. */

@@ -244,8 +244,13 @@ async def stop_task_run(
     reason: str = "",
     actor_user_id: uuid.UUID | None = None,
     actor_label: str | None = None,
+    changed_by: str = "user",
 ) -> Task:
-    """Stop an active task run. Only for tasks with an active run."""
+    """Stop an active task run. Only for tasks with an active run.
+
+    ``changed_by="system"`` for an automatic stop (e.g. a time limit): the
+    audit trail then names the system, never a person (live finding
+    28.10.2026 — a bench time-limit stop was recorded as the operator's)."""
     task = await session.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -300,7 +305,7 @@ async def stop_task_run(
     # TODO Phase 30: drop spawn_session_key column.
 
     # 2. Update task
-    task, old_status = await lock_and_set(session, task.id, "blocked", actor="user")
+    task, old_status = await lock_and_set(session, task.id, "blocked", actor=changed_by)
     task.run_control = "stopped"
     task.dispatched_at = None
     task.ack_at = None
@@ -340,7 +345,7 @@ async def stop_task_run(
     # 5. Audit Trail
     await record_task_event(
         session, task.id, old_status, "blocked",
-        changed_by="user", reason="manual_stop",
+        changed_by=changed_by, reason="manual_stop" if changed_by == "user" else "system_stop",
         actor_user_id=actor_user_id, actor_label=actor_label,
     )
 

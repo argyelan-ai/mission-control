@@ -383,6 +383,7 @@
         "review_safeguard_correction": "Status von MC korrigiert, passend zum Ablauf",
         "manual_update": "Von Hand verschoben",
         "manual_stop": "Von Hand gestoppt",
+        "system_stop": "Automatisch gestoppt",
         "manual_resume": "Von Hand fortgesetzt",
         "reorder": "Reihenfolge geändert",
         "ask_blocking": "Agent hat eine Frage gestellt und wartet auf die Antwort",
@@ -4309,7 +4310,8 @@
         "composing": "baut das Video",
         "done": "fertig"
       },
-      "tokensApprox": "≈ {n} tok"
+      "tokensApprox": "≈ {n} tok",
+      "effortRow": "Effort"
     },
     "blockerAsleep": "Start geht, sobald sie wach ist.",
     "wakeBox": "Box wecken",
@@ -4517,7 +4519,9 @@
       "archive": "Archivieren",
       "delete": "Löschen",
       "openPage": "Seite von Lauf {i} öffnen",
-      "openPageOf": "Seite öffnen: {name}, Lauf {i}"
+      "openPageOf": "Seite öffnen: {name}, Lauf {i}",
+      "openIncomplete": "Unfertige Seite von Lauf {i} öffnen",
+      "openIncompleteOf": "Unfertige Seite öffnen: {name}, Lauf {i}"
     },
     "notify": {
       "harvestStarted": "Zahlen werden nachgeladen — das Ergebnis aktualisiert sich selbst.",
@@ -4615,7 +4619,9 @@
       "thoughtLine": "{v} gedacht",
       "writtenLine": "{v} geschrieben",
       "page": "hat eine Seite geschrieben",
-      "notStarted": "nicht gestartet"
+      "notStarted": "nicht gestartet",
+      "incomplete": "unfertige Seite behalten, nicht gewertet",
+      "openIncomplete": "Unfertige Seite öffnen"
     },
     "receipt": {
       "title": "Quittung · alle Einstellungen",

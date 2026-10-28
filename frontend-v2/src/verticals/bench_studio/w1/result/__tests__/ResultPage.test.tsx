@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { BenchTestDetail } from "../../types";
 import {
+  testAbortedTimeLimitFixture,
   testAbortedTruncatedFixture,
   testDoneGreenFixture,
   testDoneTruncatedFixture,
@@ -714,6 +715,50 @@ describe("ResultPage — lane lib:three-local (MC served three.js)", () => {
     renderView(green);
     await screen.findByTestId("numbers-list");
     expect(screen.queryByText(/from MC$/)).toBeNull();
+  });
+});
+
+describe("ResultPage — time limit keeps an incomplete page (28.10.)", () => {
+  it("names the kept page in the run, marked incomplete and unranked, and opens it", async () => {
+    const user = userEvent.setup();
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    renderView(testAbortedTimeLimitFixture);
+    const runs = await screen.findByTestId("result-runs");
+    expect(runs).toHaveTextContent("time limit reached · incomplete page kept, not ranked");
+    // No finished page: no verdict, no numbers table that could rank it.
+    expect(screen.queryByTestId("result-verdict")).toBeNull();
+    expect(screen.queryByTestId("result-numbers")).toBeNull();
+    const [button] = within(runs).getAllByTestId("result-run-open-incomplete");
+    expect(button).toHaveTextContent("Open incomplete page");
+    await user.click(button);
+    const entryId = testAbortedTimeLimitFixture.blocks[0].contestants[0].runs[0].entry_id;
+    await waitFor(() =>
+      expect(benchApi.entries.viewToken).toHaveBeenCalledWith(testAbortedTimeLimitFixture.id, entryId),
+    );
+    open.mockRestore();
+  });
+
+  it("offers the kept page in the menu under its own name", async () => {
+    const user = userEvent.setup();
+    renderView(testAbortedTimeLimitFixture);
+    const menu = await openMenu(user);
+    expect(within(menu).getByRole("menuitem", { name: "Open incomplete page of run 1" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "Open page of run 1" })).toBeNull();
+  });
+
+  it("a stopped run without a kept page offers nothing to open", async () => {
+    const t: BenchTestDetail = JSON.parse(JSON.stringify(testAbortedTimeLimitFixture));
+    t.blocks[0].contestants[0].runs[0].incomplete_page = false;
+    renderView(t);
+    const runs = await screen.findByTestId("result-runs");
+    expect(runs).toHaveTextContent("time limit reached");
+    expect(runs).not.toHaveTextContent("incomplete page");
+    expect(within(runs).queryByTestId("result-run-open-incomplete")).toBeNull();
+  });
+
+  it("names the effort the agent session resolved to, not a bare default", async () => {
+    renderView(testAbortedTimeLimitFixture);
+    expect(await screen.findByText("omp session: high (default)")).toBeInTheDocument();
   });
 });
 

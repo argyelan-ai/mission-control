@@ -1569,7 +1569,10 @@ def _cmd_checklist(args, client, cfg):
     action = args.action or "list"
 
     if action == "add":
-        body = {"items": [{"title": args.title, "sort_order": args.order}]}
+        # Several titles in one call (`mc checklist add "A" "B"`) go out as
+        # ONE bulk request, in order; one title is unchanged.
+        titles = args.title if isinstance(args.title, list) else [args.title]
+        body = {"items": [{"title": t, "sort_order": args.order + i} for i, t in enumerate(titles)]}
         resp = client.request("POST", base, body=body)
         _emit(resp)
     elif action == "done":
@@ -1606,8 +1609,8 @@ def _cmd_checklist(args, client, cfg):
 
 def _add_checklist_args(p):
     sub = p.add_subparsers(dest="action", required=False)
-    p_add = sub.add_parser("add", help="Item hinzufügen")
-    p_add.add_argument("title")
+    p_add = sub.add_parser("add", help="Item(s) hinzufügen — mehrere Titel = mehrere Items")
+    p_add.add_argument("title", nargs="+")
     p_add.add_argument("--order", type=int, default=0)
     p_done = sub.add_parser("done", help="Item als erledigt markieren")
     p_done.add_argument("item_id")
