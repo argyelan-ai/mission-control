@@ -95,7 +95,7 @@ import sys, json
 try:
     d = json.load(sys.stdin)
     for k, v in d.items():
-        if k in ("MC_AGENT_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GH_TOKEN", "AGENT_RECYCLER_ENABLED", "OMP_TURN_IDLE_TIMEOUT", "OMP_TASK_DEADLINE", "OMP_CONTEXT_WINDOW", "OMP_MAX_TOKENS", "OMP_MODEL_INPUT"):
+        if k in ("MC_AGENT_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GH_TOKEN", "AGENT_RECYCLER_ENABLED", "OMP_TURN_IDLE_TIMEOUT", "OMP_TASK_DEADLINE", "OMP_CONTEXT_WINDOW", "OMP_MAX_TOKENS", "OMP_THINKING_BUDGET", "OMP_MODEL_INPUT"):
             print(f"{k}={v}")
 except Exception:
     sys.exit(1)
@@ -131,6 +131,10 @@ except Exception:
         [ -n "$_NEW_CTX_WINDOW" ] && export OMP_CONTEXT_WINDOW="$_NEW_CTX_WINDOW"
         _NEW_MAX_TOKENS=$(echo "$_EXPORTS" | grep '^OMP_MAX_TOKENS=' | cut -d= -f2-)
         [ -n "$_NEW_MAX_TOKENS" ] && export OMP_MAX_TOKENS="$_NEW_MAX_TOKENS"
+        # Thinking cap for models.yml compat.extraBody (backend: omp_thinking_budget).
+        # Empty from MC = no cap for this runtime (cloud / non-reasoning).
+        _NEW_THINKING_BUDGET=$(echo "$_EXPORTS" | grep '^OMP_THINKING_BUDGET=' | cut -d= -f2-)
+        [ -n "$_NEW_THINKING_BUDGET" ] && export OMP_THINKING_BUDGET="$_NEW_THINKING_BUDGET"
         # Vision-Fähigkeit (W3, 06.09.2026): "text" oder "text,image" — siehe
         # render-omp-config.sh für die models.yml/config.yml-Wirkung.
         _NEW_MODEL_INPUT=$(echo "$_EXPORTS" | grep '^OMP_MODEL_INPUT=' | cut -d= -f2-)

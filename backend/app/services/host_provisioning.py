@@ -160,6 +160,16 @@ def render_omp_host_models_yml(slug: str, env: dict[str, str], *, home: Path | N
         f"        contextWindow: {context_window}\n"
         f"        maxTokens: {max_tokens}\n"
     )
+    # Thinking cap (routers/internal.py, omp_thinking_budget): omp sends
+    # compat.extraBody verbatim on every request. Same rule as
+    # render-omp-config.sh: only a positive integer from MC, else no block.
+    thinking_budget = (env.get("OMP_THINKING_BUDGET") or "").strip()
+    if re.fullmatch(r"[0-9]+", thinking_budget) and int(thinking_budget) > 0:
+        models_yml += (
+            "        compat:\n"
+            "          extraBody:\n"
+            f"            thinking_budget: {int(thinking_budget)}\n"
+        )
     models_path = models_dir / "models.yml"
     # 0600 like agent.env — apiKey may be rendered inline above.
     write_owner_only_file(models_path, models_yml)

@@ -128,7 +128,8 @@ import sys, json
 try:
     d = json.load(sys.stdin)
     for k in ("OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY",
-              "OMP_CONTEXT_WINDOW", "OMP_MAX_TOKENS", "OMP_MODEL_INPUT"):
+              "OMP_CONTEXT_WINDOW", "OMP_MAX_TOKENS", "OMP_THINKING_BUDGET",
+              "OMP_MODEL_INPUT"):
         v = d.get(k)
         if v not in (None, ""):
             print(f"{k}={v}")
@@ -136,6 +137,11 @@ except Exception:
     sys.exit(1)
 ' 2>/dev/null) || return 1
     [ -n "$_exports" ] || return 1
+    # MC sends the thinking cap empty for a runtime without one (cloud,
+    # non-reasoning) and the loop above skips empty values. Bootstrap is the
+    # truth for a reload: drop any cap still in this shell, so a switch onto
+    # such a runtime does not keep the previous runtime's cap.
+    unset OMP_THINKING_BUDGET
     while IFS= read -r _line; do
         [ -n "$_line" ] || continue
         export "${_line%%=*}=${_line#*=}"
@@ -222,6 +228,21 @@ fi
 # most 32768. Do not cap or recompute it here, or the two places drift. The
 # 262144/32768 fallback applies only when MC knows no window for the runtime:
 # unknown model, so the cautious old pair, never a guessed larger budget.
+# Thinking cap (backend/app/routers/internal.py, omp_thinking_budget): omp
+# 18.10.1 sends a model's compat.extraBody verbatim on every request, at every
+# thinking level (checked in a throwaway container). Engines that know
+# `thinking_budget` close the think block and still answer; self-hosted
+# engines that do not know it ignore it. MC sends it only for local reasoning
+# runtimes. Anything but a positive integer means: no block, no field.
+_COMPAT_YAML=""
+case "${OMP_THINKING_BUDGET:-}" in
+    ""|*[!0-9]*|??????????*) ;;  # empty, not a number, or absurdly long
+    *)
+        if [ "$((10#${OMP_THINKING_BUDGET}))" -gt 0 ]; then
+            _COMPAT_YAML=$(printf '\n        compat:\n          extraBody:\n            thinking_budget: %d' "$((10#${OMP_THINKING_BUDGET}))")
+        fi
+        ;;
+esac
 # 600: die Datei trägt den API-Schlüssel (apiKey).
 _atomic_write "${MODELS_DIR}/models.yml" 600 <<YAML
 providers:
@@ -241,7 +262,7 @@ ${_AUTH_LINE}
         maxTokens: ${OMP_MAX_TOKENS:-32768}
         # Vision-Fähigkeit (W3, 06.09.2026): siehe Kommentar oben bei
         # OMP_MODEL_INPUT. [text] ist der sichere Standard.
-        input: ${_MODEL_INPUT_YAML}
+        input: ${_MODEL_INPUT_YAML}${_COMPAT_YAML}
 YAML
 
 # ── omp.env ──────────────────────────────────────────────────────────────────
