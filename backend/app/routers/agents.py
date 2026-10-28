@@ -3338,7 +3338,7 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
 
 
 # rule: R-run-end-signal-never-starves - a stopped/failed card ends its own session, never the agent's queue
-def _run_end_signal_binds(agent: Agent, task: Task) -> bool:
+async def _run_end_signal_binds(session: AsyncSession, agent: Agent, task: Task) -> bool:
     """Does the ``cancelled``/``stopped`` answer for `task` still have a
     session to end?
 
@@ -3347,7 +3347,9 @@ def _run_end_signal_binds(agent: Agent, task: Task) -> bool:
     (``current_task_id``) names it, or it has no pointer at all and the
     heartbeat shows a live turn (``status == "working"``, refreshed within
     dispatch Guard 3's TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS; the stop clears
-    the pointer, so that turn can only be the stopped card's).
+    the pointer) that no other delivered card of the agent can explain — a
+    review turn runs without a pointer too, and must not be ended by an old
+    stopped card.
     Freshness is read from ``last_task_activity_at`` — the working heartbeat
     stamps it on every beat — not ``last_seen_at``: agent auth bumps that on
     every request, this poll included, so it would always look fresh here.
@@ -3365,7 +3367,17 @@ def _run_end_signal_binds(agent: Agent, task: Task) -> bool:
     from app.utils import ensure_aware, utcnow
 
     age = (utcnow() - ensure_aware(agent.last_task_activity_at)).total_seconds()
-    return age < TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS
+    if age >= TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS:
+        return False
+    other_delivered = (await session.exec(
+        select(Task.id)
+        .where(Task.assigned_agent_id == agent.id)
+        .where(Task.id != task.id)
+        .where(Task.status.in_(["in_progress", "review", "waiting"]))  # type: ignore[union-attr]
+        .where(Task.ack_at.is_not(None))  # type: ignore[union-attr]
+        .limit(1)
+    )).first()
+    return other_delivered is None
 
 
 @router.get("/agent/me/poll")
@@ -3464,7 +3476,7 @@ async def agent_poll(
         if _end_task is None:
             continue
         _answer = {"state": _end_state, "task_id": str(_end_task.id)}
-        if _run_end_signal_binds(agent, _end_task):
+        if await _run_end_signal_binds(session, agent, _end_task):
             return {**_answer, **_poll_extra}
         if _run_end_answer is None:
             _run_end_answer = _answer
@@ -3477,6 +3489,9 @@ async def agent_poll(
         .where(Task.assigned_agent_id == agent.id)
         .where(Task.status == "inbox")
         .where(Task.delegation_type == "phase_approval")
+        # A stopped approval card is not deliverable work (reachable since a
+        # non-binding stop answer falls through, see above).
+        .where(Task.run_control.is_distinct_from("stopped"))  # type: ignore[union-attr]
         .order_by(Task.created_at.asc())
         .limit(1)
     )

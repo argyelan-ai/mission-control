@@ -273,3 +273,80 @@ async def test_old_failed_card_does_not_shadow_new_dispatched_card(client: Async
 
     assert body["state"] == "new_task", body
     assert _card(body) == str(new_id), body
+
+
+@pytest.mark.asyncio
+async def test_failed_card_under_the_pointer_still_answers_cancelled(client: AsyncClient):
+    agent_id, board_id, token = await _make_agent(status="idle")
+    failed_id = await _make_task(board_id, agent_id, title="Failing", status="failed")
+    await _set_agent(agent_id, current_task_id=failed_id)
+    await _fresh_dispatch(board_id, agent_id)
+
+    body = await _poll(client, token)
+
+    assert body["state"] == "cancelled", body
+    assert _card(body) == str(failed_id), body
+
+
+# ── review findings ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_review_turn_without_pointer_is_not_ended_by_old_stop(client: AsyncClient):
+    """A review turn runs with no pointer (the heartbeat only points at
+    in_progress cards). A live 'working' beat there belongs to the review
+    card, not to an old stopped card."""
+    agent_id, board_id, token = await _make_agent(status="working", last_task_activity_at=_now())
+    await _stopped_bench_card(board_id, agent_id)
+    review_id = await _make_task(
+        board_id, agent_id, title="Review card", status="review",
+        dispatched_at=_now(), ack_at=_now(),
+    )
+
+    body = await _poll(client, token)
+
+    assert body["state"] == "working", body
+    assert _card(body) == str(review_id), body
+
+
+@pytest.mark.asyncio
+async def test_stopped_phase_approval_card_is_not_delivered(client: AsyncClient):
+    agent_id, board_id, token = await _make_agent(status="idle")
+    await _make_task(
+        board_id, agent_id, title="Stopped approval", status="inbox",
+        delegation_type="phase_approval", run_control="stopped",
+    )
+    new_id = await _fresh_dispatch(board_id, agent_id)
+
+    body = await _poll(client, token)
+
+    assert body["state"] == "new_task", body
+    assert _card(body) == str(new_id), body
+
+
+@pytest.mark.asyncio
+async def test_real_stop_then_poll_ends_the_run_then_delivers_the_queue(client: AsyncClient):
+    """End to end through stop_task_run: mid-turn the stop wins; once the
+    heartbeat reports the session idle, the queued card follows."""
+    from app.services.operations import stop_task_run
+
+    agent_id, board_id, token = await _make_agent(status="working", last_task_activity_at=_now())
+    run_id = await _make_task(
+        board_id, agent_id, title="Bench run", status="in_progress",
+        dispatched_at=_now(), ack_at=_now(), started_at=_now(),
+    )
+    await _set_agent(agent_id, current_task_id=run_id)
+    async with _session() as s:
+        await stop_task_run(s, run_id, "system", reason="bench time limit", changed_by="system")
+        await s.commit()
+    new_id = await _fresh_dispatch(board_id, agent_id)
+
+    first = await _poll(client, token)
+    assert first["state"] == "stopped", first
+    assert _card(first) == str(run_id), first
+
+    # The bridge ended the session; its next heartbeat says idle.
+    await _set_agent(agent_id, status="idle")
+    second = await _poll(client, token)
+    assert second["state"] == "new_task", second
+    assert _card(second) == str(new_id), second
