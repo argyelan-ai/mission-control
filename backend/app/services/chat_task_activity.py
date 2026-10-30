@@ -200,11 +200,11 @@ async def task_activity(session: AsyncSession, agent: Any) -> dict[str, Any]:
         "events": events,
         "preview": preview,
         "queued": int(queued or 0),
-        "context": await _task_context(session, agent),
+        "context": await task_context(session, agent),
     }
 
 
-async def _task_context(session: AsyncSession, agent: Any) -> dict[str, int] | None:
+async def task_context(session: AsyncSession, agent: Any) -> dict[str, int] | None:
     """The running task's context fill: ``{"tokens", "max"}`` or ``None``.
 
     Live 30.10.2026: the only context figure in the chat was the composer

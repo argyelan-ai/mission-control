@@ -1250,3 +1250,46 @@ async def test_task_stubs_carry_the_auto_reason(
     by_title = {t["title"]: t for t in body["tasks"]}
     assert by_title["[Bench] Pagoda"]["autoReason"] == f"bench_studio challenge {test_id}"
     assert by_title["Plain"]["autoReason"] is None
+
+
+@pytest.mark.asyncio
+async def test_task_stubs_carry_the_running_tasks_context_only(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
+):
+    """Live 30.10.2026: a new bench task ran in a fresh session at 3 % while
+    the chat showed only its own ring (29 %). The section of the RUNNING task
+    names the task's fill — the agent's heartbeat figure, same numbers as the
+    agent page — from the stubs poll that already draws it. Another live
+    task, a finished card and an unknown figure carry null (never "0 %")."""
+    from app.models.agent import Agent
+    from tests.conftest import test_engine
+
+    board, agent, _root = await _agent_and_board(make_agent, make_board, tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    running = await make_task(board.id, title="Running", status="in_progress", assigned_agent_id=agent.id,
+                              started_at=_utc(now - timedelta(minutes=4)))
+    await make_task(board.id, title="Waiting", status="waiting", assigned_agent_id=agent.id,
+                    started_at=_utc(now - timedelta(minutes=30)))
+    await make_task(board.id, title="Done", status="done", assigned_agent_id=agent.id,
+                    started_at=_utc(now - timedelta(hours=2)))
+
+    async def _set(**fields):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            row = await s.get(Agent, agent.id)
+            for k, v in fields.items():
+                setattr(row, k, v)
+            s.add(row)
+            await s.commit()
+
+    await _set(current_task_id=running.id, context_tokens=10_224, context_max=393_216)
+    body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/tasks")).json()
+    by_title = {t["title"]: t for t in body["tasks"]}
+    page = (await auth_client.get(f"/api/v1/agents/{agent.id}")).json()
+    assert by_title["Running"]["context"] == {"tokens": page["context_tokens"], "max": page["context_max"]}
+    assert by_title["Running"]["context"] == {"tokens": 10_224, "max": 393_216}
+    assert by_title["Waiting"]["context"] is None
+    assert by_title["Done"]["context"] is None
+
+    await _set(context_tokens=None)  # the heartbeat's "unknown"
+    body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/tasks")).json()
+    assert {t["title"]: t for t in body["tasks"]}["Running"]["context"] is None

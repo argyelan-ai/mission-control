@@ -59,7 +59,6 @@ function circleOf(label: string): HTMLElement {
 vi.mock("@/hooks/useChatStream", () => ({ useChatStream: vi.fn() }));
 // The task block (20.10.2026) asks the backend on its own — stubbed, so these
 // tests keep running without a QueryClientProvider.
-vi.mock("@/hooks/useTaskActivity", () => ({ useTaskActivity: vi.fn(() => null) }));
 // Task sections (spec A) ask the backend through react-query — stubbed here
 // (no agent in this file is an omp agent; ChatView.tasks.test.tsx covers them
 // with a real QueryClient).
@@ -1437,7 +1436,7 @@ describe("ChatView", () => {
     );
   });
 
-  // The old "From the task" block (TaskActivityBlock) is no longer rendered:
+  // The old "From the task" block is gone (unmounted since #937, removed):
   // spec A shows the task's steps as sections in the timeline instead —
   // covered by ChatView.tasks.test.tsx ("never renders the old task block").
 

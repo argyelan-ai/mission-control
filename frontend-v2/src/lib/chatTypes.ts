@@ -390,30 +390,6 @@ export interface PreviewEvent {
   startedAt?: string;
 }
 
-/** `GET /agents/{id}/chat/task-activity` — what the agent's RUNNING task does,
- *  for the chat's task block. Since #898 the chat shows the chat session only;
- *  an ACP task runs in a session of its own. `applies: false` = no task, or
- *  the harness runs the task inside the chat (then the chat shows it). */
-export type TaskActivity =
-  | { applies: false }
-  | {
-      applies: true;
-      taskId: string;
-      /** A session file of the task exists (the run has started writing). */
-      hasSession: boolean;
-      deliveredAt: string | null;
-      /** The task session's newest timeline events (tool/thinking/assistant message). */
-      events: TimelineChatEvent[];
-      /** The task session's live preview — a running thought or answer — or null. */
-      preview: PreviewEvent | null;
-      /** More tasks of this agent waiting in the inbox. */
-      queued: number;
-      /** The running task's context fill — the agent's heartbeat figure, the
-       *  same numbers the agent page shows. `null` = nothing reported. Absent
-       *  on an older backend. */
-      context?: { tokens: number; max: number } | null;
-    };
-
 // ── Task steps in the agent chat (spec A, variant A) ────────────────────────
 // `GET /agents/{id}/chat/tasks`, `…/tasks/{task_id}/steps`, `…/steps/{row_id}`
 // (backend `services/chat_task_steps.py`). Read-only; a task's work stands at
@@ -452,6 +428,10 @@ export interface ChatTaskStub {
    *  <test id>" and its card leads to the benchmark result. Absent on an
    *  older backend = a plain task. */
   autoReason?: string | null;
+  /** The RUNNING task's own context fill (the agent's heartbeat figure, as
+   *  on the agent page) — only on the task the agent runs now; null/absent =
+   *  unknown or another task (never "0 %"). */
+  context?: { tokens: number; max: number } | null;
 }
 
 export type ChatTasksResponse =
