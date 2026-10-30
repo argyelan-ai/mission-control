@@ -200,3 +200,59 @@ async def test_list_says_no_poster_for_a_known_blank_page(auth_client, session, 
     assert item(await auth_client.get(f"{BASE}/tests"))["poster"] is True   # not known yet
     assert (await auth_client.get(f"{BASE}/tests/{ch.id}/poster")).status_code == 404
     assert item(await auth_client.get(f"{BASE}/tests"))["poster"] is False  # now known
+
+
+@pytest.mark.asyncio
+async def test_a_blank_video_run_hands_the_picture_to_a_run_that_drew_something(
+    auth_client, session, engines, tmp_path, monkeypatch
+):
+    """30.10.: the gallery must show a picture whenever any run has one. The
+    video run's page stayed blank (a scene that never started) but another
+    run drew the scene — that run's page is the test's picture."""
+    monkeypatch.setattr(orch, "SHARED_DELIVERABLES", tmp_path)
+    fleet = await seed_fleet(session)
+    ch, entries = await _test_with_entries(session, fleet)
+    video_run = next(e for e in entries if (e.repeat_idx or 1) == c_video_index())
+    other = next(e for e in entries if e is not video_run)
+    blank = _png(tmp_path / f"bench-{ch.id}" / "run-v" / "screenshot.png", 1440, 810, (0, 0, 0))
+    drawn = _noisy_png(tmp_path / f"bench-{ch.id}" / "run-o" / "screenshot.png", 1280, 720)
+    video_run.screenshot_path = str(blank)
+    other.screenshot_path = str(drawn)
+    session.add(video_run)
+    session.add(other)
+    await session.commit()
+
+    resp = await auth_client.get(f"{BASE}/tests/{ch.id}/poster")
+    assert resp.status_code == 200
+    assert resp.content == w1_kit.poster_webp(str(drawn))
+    # The list keeps saying "picture" once the video run is known blank.
+    item = next(i for i in (await auth_client.get(f"{BASE}/tests")).json()["items"] if i["id"] == str(ch.id))
+    assert item["poster"] is True
+
+
+def test_poster_entries_order_video_run_first_then_the_rest():
+    a = BenchEntry(challenge_id=None, repeat_idx=2, screenshot_path="/x/2.png")  # type: ignore[arg-type]
+    b = BenchEntry(challenge_id=None, repeat_idx=1, screenshot_path="/x/1.png")  # type: ignore[arg-type]
+    c = BenchEntry(challenge_id=None, repeat_idx=3, screenshot_path=None)  # type: ignore[arg-type]
+    assert w1_tests.poster_entries([a, b, c]) == [b, a]
+    assert w1_tests.poster_entries([c]) == []
+
+
+def c_video_index() -> int:
+    from app.verticals.bench_studio import w1_common as c
+
+    return c.VIDEO_RUN_INDEX
+
+
+def test_a_broken_screenshot_hands_over_too(tmp_path, monkeypatch):
+    """A truncated file on the video run must not cost the test its picture
+    (nor answer 500): the next run that drew something stands in."""
+    monkeypatch.setattr(orch, "SHARED_DELIVERABLES", tmp_path)
+    broken = tmp_path / "bench-1" / "run-v" / "screenshot.png"
+    broken.parent.mkdir(parents=True)
+    broken.write_bytes(b"\x89PNG\r\n\x1a\nnot really a png")
+    drawn = _noisy_png(tmp_path / "bench-1" / "run-o" / "screenshot.png", 1280, 720)
+    v = BenchEntry(challenge_id=None, repeat_idx=c_video_index(), screenshot_path=str(broken))  # type: ignore[arg-type]
+    o = BenchEntry(challenge_id=None, repeat_idx=c_video_index() + 1, screenshot_path=str(drawn))  # type: ignore[arg-type]
+    assert w1_tests.poster_bytes([v, o]) == w1_kit.poster_webp(str(drawn))
+    assert w1_tests.poster_bytes([v]) is None

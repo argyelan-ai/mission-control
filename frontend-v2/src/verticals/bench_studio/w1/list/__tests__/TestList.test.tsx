@@ -149,13 +149,30 @@ describe("TestList — sections and rows (P7)", () => {
       expect(rows.className).toMatch(/(^|\s)grid-cols-1(\s|$)/);
       expect(rows.className).toMatch(/@4xl:grid-cols-\[repeat\(auto-fill,minmax\(19rem,1fr\)\)\]/);
     }
-    // Every row carries its picture slot, shown only in the wide shape.
+    // Every row carries its picture slot in BOTH shapes (30.10.: on the phone
+    // and in the pane beside a result no test showed its picture): a 16:9
+    // thumbnail beside the text when narrow, the card's header when wide.
     const rows = screen.getAllByTestId("bench-test-row");
     for (const row of rows) {
       const poster = within(row).getByTestId("bench-row-poster");
-      expect(poster.className).toMatch(/(^|\s)hidden(\s|$)/);
-      expect(poster.className).toMatch(/(^|\s)@4xl:flex(\s|$)/);
+      expect(poster.className).not.toMatch(/(^|\s)hidden(\s|$)/);
+      expect(poster.className).toMatch(/(^|\s)flex(\s|$)/);
       expect(poster.className).toMatch(/(^|\s)aspect-video(\s|$)/);
+      expect(poster.className).toMatch(/(^|\s)w-24(\s|$)/);
+      expect(poster.className).toMatch(/(^|\s)shrink-0(\s|$)/);
+      expect(poster.className).toMatch(/(^|\s)@4xl:w-full(\s|$)/);
+    }
+  });
+
+  it("a picture slot is never an empty box: before its picture arrives it already shows a frame with a sign", async () => {
+    // No IntersectionObserver fires here: nothing has loaded yet.
+    renderList();
+    const rows = await screen.findAllByTestId("bench-test-row");
+    for (const [i, item] of testListFixture.items.entries()) {
+      const poster = within(rows[i]).getByTestId("bench-row-poster");
+      expect(poster.querySelector("img")).toBeNull();
+      expect(poster.querySelector("svg")).not.toBeNull();
+      expect(poster.getAttribute("data-poster-state")).toBe(item.poster ? "loading" : item.state === "running" || item.state === "waiting" ? "not-yet" : "none");
     }
   });
 
@@ -302,6 +319,32 @@ describe("TestList — filters", () => {
       expect(list).toHaveBeenCalledWith(expect.objectContaining({ harness: "omp" })),
     );
     expect(screen.getByTestId("bench-filter-harness")).toHaveTextContent("Harness: omp");
+  });
+
+  it("on a phone every filter stays in view: the row wraps, never scrolls sideways; chips are compact below sm, desktop size from sm", async () => {
+    // 30.10. (operator, phone): "Klasse" was cut off, the rest hidden in a
+    // sideways strip.
+    vi.spyOn(benchW1Api.tests, "list").mockResolvedValue(testListFixture);
+    renderList();
+    await screen.findAllByTestId("bench-test-row");
+    const group = screen.getByRole("group", { name: "Filter" });
+    expect(group.className).toMatch(/(^|\s)flex-wrap(\s|$)/);
+    expect(group.className).not.toMatch(/overflow-x-(auto|scroll)/);
+    expect(group.className).not.toMatch(/(^|\s)-mx-\d/);
+    await userEvent.selectOptions(screen.getByLabelText("Harness"), "omp");
+    const chips = group.querySelectorAll('[data-testid^="bench-filter-"]');
+    expect(chips.length).toBeGreaterThanOrEqual(3);
+    for (const chip of chips) {
+      // compact on the phone, the desktop chip from 640 px
+      expect(chip.className).toMatch(/(^|\s)h-9(\s|$)/);
+      expect(chip.className).toMatch(/(^|\s)sm:h-11(\s|$)/);
+      // an active chip with a long value never pushes past the screen edge
+      expect(chip.className).toMatch(/(^|\s)max-w-full(\s|$)/);
+    }
+    // the clear button of the active chip follows the compact height
+    const clear = within(screen.getByTestId("bench-filter-harness")).getByRole("button");
+    expect(clear.className).toMatch(/(^|\s)h-9(\s|$)/);
+    expect(clear.className).toMatch(/(^|\s)sm:h-11(\s|$)/);
   });
 
   it("model options come from the tests, device options from the devices", async () => {

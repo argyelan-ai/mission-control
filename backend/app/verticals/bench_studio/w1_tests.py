@@ -374,20 +374,41 @@ async def overlay_actions(session: AsyncSession, challenge: BenchChallenge, entr
     return out
 
 
-def poster_entry(entries: list[BenchEntry]) -> BenchEntry | None:
-    """The run whose page screenshot stands for the test in the gallery:
-    the video run first (its page is the one in the video), else the first
-    run that has one. None = no picture (the list draws a placeholder)."""
+def poster_entries(entries: list[BenchEntry]) -> list[BenchEntry]:
+    """The runs whose page screenshot may stand for the test in the gallery,
+    best first: the video run (its page is the one in the video), then the
+    others in run order. Empty = no picture (the list draws a placeholder)."""
     shot = [e for e in entries if e.screenshot_path]
-    if not shot:
-        return None
     shot.sort(key=lambda e: ((e.repeat_idx or 1) != c.VIDEO_RUN_INDEX, e.repeat_idx or 1, e.attempt_no or 1))
-    return shot[0]
+    return shot
+
+
+def poster_entry(entries: list[BenchEntry]) -> BenchEntry | None:
+    """The first candidate of ``poster_entries`` (None = no picture)."""
+    shot = poster_entries(entries)
+    return shot[0] if shot else None
+
+
+def poster_bytes(entries: list[BenchEntry]) -> bytes | None:
+    """The test's picture: the first candidate whose page drew something. A
+    blank page (a scene that never started) hands over to the next run, so a
+    test has a picture whenever ANY run has one (30.10.). A file that cannot
+    be read as a picture (truncated, not an image) hands over the same way —
+    never a 500 for the whole gallery card."""
+    for e in poster_entries(entries):
+        try:
+            data = w1_kit.poster_webp(e.screenshot_path)
+        except Exception:  # noqa: BLE001 — a broken screenshot is "no picture", not an error
+            logger.warning("bench: unreadable screenshot skipped for the poster (%s)", e.id)
+            continue
+        if data is not None:
+            return data
+    return None
 
 
 def _has_poster(entries: list[BenchEntry]) -> bool:
-    e = poster_entry(entries)
-    return e is not None and not w1_kit.poster_known_blank(e.screenshot_path)
+    """Cheap (one stat per run): some candidate is not known to be blank."""
+    return any(not w1_kit.poster_known_blank(e.screenshot_path) for e in poster_entries(entries))
 
 
 async def list_tests(

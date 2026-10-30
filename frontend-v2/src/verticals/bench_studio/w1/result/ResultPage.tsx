@@ -195,7 +195,7 @@ function VideoBlock({ test, words }: { test: BenchTestDetail; words: BenchWords 
   const fmt = (v: number) => new Intl.NumberFormat(words.locale, { maximumFractionDigits: 1 }).format(v);
   return (
     <figure className="flex flex-col gap-2">
-      <VideoStage url={url} />
+      <VideoStage url={url} posterUrl={benchW1Api.tests.posterUrl(test.id)} />
       <figcaption className="text-xs" style={{ color: C.textMuted }}>
         {duration !== null && card !== null
           ? t("video.caption", { i: test.video.run_index, rec: fmt(duration - card), card: fmt(card) })
@@ -207,10 +207,15 @@ function VideoBlock({ test, words }: { test: BenchTestDetail; words: BenchWords 
 
 /** The video is the hero of a finished test: a 16:9 stage that holds its
  *  place while the bytes load (nothing jumps), the recording fills it. The
- *  column around it is sized so the stage never leaves the screen. */
-function VideoStage({ url }: { url: string }) {
+ *  column around it is sized so the stage never leaves the screen. Until it
+ *  plays it wears the test's picture (the list's poster): an iPhone draws no
+ *  first frame, and a scene that fades in from black would stay black
+ *  (30.10.). No picture (404) = the video as before. */
+function VideoStage({ url, posterUrl }: { url: string; posterUrl: string }) {
   const tf = useTranslations("filePreview");
   const { blobUrl, error } = useAuthBlob(url);
+  const poster = useAuthBlob(posterUrl);
+  const still = poster.blobUrl && !poster.error ? poster.blobUrl : undefined;
   return (
     <div
       data-testid="result-video-stage"
@@ -218,7 +223,7 @@ function VideoStage({ url }: { url: string }) {
       style={{ backgroundColor: C.bgDeep, border: `1px solid ${C.border}` }}
     >
       {blobUrl ? (
-        <video src={blobUrl} controls preload="metadata" className="absolute inset-0 w-full h-full object-contain" />
+        <video src={blobUrl} poster={still} controls preload="metadata" className="absolute inset-0 w-full h-full object-contain" />
       ) : error ? (
         <span className="text-sm" style={{ color: C.textMuted }}>
           {tf("loadFailed")}
