@@ -242,3 +242,17 @@ def c_video_index() -> int:
     from app.verticals.bench_studio import w1_common as c
 
     return c.VIDEO_RUN_INDEX
+
+
+def test_a_broken_screenshot_hands_over_too(tmp_path, monkeypatch):
+    """A truncated file on the video run must not cost the test its picture
+    (nor answer 500): the next run that drew something stands in."""
+    monkeypatch.setattr(orch, "SHARED_DELIVERABLES", tmp_path)
+    broken = tmp_path / "bench-1" / "run-v" / "screenshot.png"
+    broken.parent.mkdir(parents=True)
+    broken.write_bytes(b"\x89PNG\r\n\x1a\nnot really a png")
+    drawn = _noisy_png(tmp_path / "bench-1" / "run-o" / "screenshot.png", 1280, 720)
+    v = BenchEntry(challenge_id=None, repeat_idx=c_video_index(), screenshot_path=str(broken))  # type: ignore[arg-type]
+    o = BenchEntry(challenge_id=None, repeat_idx=c_video_index() + 1, screenshot_path=str(drawn))  # type: ignore[arg-type]
+    assert w1_tests.poster_bytes([v, o]) == w1_kit.poster_webp(str(drawn))
+    assert w1_tests.poster_bytes([v]) is None

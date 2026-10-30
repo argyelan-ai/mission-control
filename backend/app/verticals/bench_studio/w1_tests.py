@@ -392,9 +392,15 @@ def poster_entry(entries: list[BenchEntry]) -> BenchEntry | None:
 def poster_bytes(entries: list[BenchEntry]) -> bytes | None:
     """The test's picture: the first candidate whose page drew something. A
     blank page (a scene that never started) hands over to the next run, so a
-    test has a picture whenever ANY run has one (30.10.)."""
+    test has a picture whenever ANY run has one (30.10.). A file that cannot
+    be read as a picture (truncated, not an image) hands over the same way —
+    never a 500 for the whole gallery card."""
     for e in poster_entries(entries):
-        data = w1_kit.poster_webp(e.screenshot_path)
+        try:
+            data = w1_kit.poster_webp(e.screenshot_path)
+        except Exception:  # noqa: BLE001 — a broken screenshot is "no picture", not an error
+            logger.warning("bench: unreadable screenshot skipped for the poster (%s)", e.id)
+            continue
         if data is not None:
             return data
     return None
