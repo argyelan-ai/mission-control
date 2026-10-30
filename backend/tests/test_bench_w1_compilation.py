@@ -261,9 +261,9 @@ def test_input_model_rules():
 
 def test_a_private_word_stops_the_build():
     sources = three_builds()
-    sources[0]["title"] = "Sparky's hourglass"
+    sources[0]["title"] = "Alphabot's hourglass"
     with pytest.raises(ValueError, match="privacy"):
-        wc.build_spec(sources, energy=ENERGY, handle="", private_words=["Sparky"])
+        wc.build_spec(sources, energy=ENERGY, handle="", private_words=["Alphabot"])
 
 
 def test_no_paths_or_ids_in_the_public_words():
