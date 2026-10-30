@@ -58,6 +58,7 @@ from app.models.agent import Agent
 from app.models.deliverable import TaskDeliverable
 from app.models.task import Task, TaskComment, TaskEvent
 from app.services.chat_run_context import review_run_holds
+from app.services.chat_task_activity import task_context
 from app.services.transcript_adapters import adapter_for
 from app.services.transcript_chat import preview_event, read_history
 
@@ -988,6 +989,14 @@ async def task_stubs(session: AsyncSession, agent: Agent, limit: int = 20) -> di
         )
     ).one()
 
+    # The running task's own context fill (live 30.10.2026: the chat showed
+    # only the composer ring — the CHAT session's 29 % — while the task's
+    # fresh session sat at 3 %). The agent's heartbeat figure belongs to the
+    # task it runs, so only that task's stub carries it; the 10 s poll that
+    # already draws the section brings it along (no extra request).
+    running = getattr(agent, "current_task_id", None)
+    running_ctx = await task_context(session, agent) if running in live_ids else None
+
     def stub(task: Task) -> dict[str, Any]:
         live = task.id in live_ids
         start = task.started_at or first_ip_of.get(task.id) or task.dispatched_at
@@ -1016,6 +1025,9 @@ async def task_stubs(session: AsyncSession, agent: Agent, limit: int = 20) -> di
             # Why the system made the card (e.g. "bench_studio challenge
             # <id>"): a bench run's card leads to its benchmark result.
             "autoReason": task.auto_reason,
+            # ``{"tokens", "max"}`` on the running task only; null = unknown
+            # or not the running one (never "0 %").
+            "context": running_ctx if task.id == running else None,
         }
 
     return {

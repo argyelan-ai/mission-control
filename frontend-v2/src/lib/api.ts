@@ -968,9 +968,6 @@ export const api = {
         `/api/v1/agents/${encodeURIComponent(agentId)}/chat/tasks/${encodeURIComponent(taskId)}/steps/${encodeURIComponent(rowId)}`,
         params.etag,
       ),
-    /** What the agent's running task does (chat task block, 20.10.2026). */
-    taskActivity: (agentId: string) =>
-      request<import("./chatTypes").TaskActivity>(`/api/v1/agents/${agentId}/chat/task-activity`),
     history: (agentId: string, params?: { limit?: number; beforeUuid?: string }) => {
       const qs = new URLSearchParams();
       if (params?.limit != null) qs.set("limit", String(params.limit));

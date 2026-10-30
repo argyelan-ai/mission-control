@@ -22,8 +22,14 @@ describe("context figures name their session", () => {
   });
 
   it("the chat ring says it is this chat and points at the agent page", () => {
-    expect(en.sessions.contextRingTooltip).toMatch(/^This chat: /);
-    expect(de.sessions.contextRingTooltip).toMatch(/^Dieser Chat: /);
+    // Live 30.10.2026: "Kontext 29 %" read as the running task's figure.
+    // Name and tooltip say it is the chat conversation's.
+    expect(en.sessions.contextUsed).toMatch(/^Chat context: /);
+    expect(de.sessions.contextUsed).toMatch(/^Chat-Kontext: /);
+    expect(en.sessions.contextRingTooltip).toMatch(/^Chat context \(this conversation\): /);
+    expect(de.sessions.contextRingTooltip).toMatch(/^Chat-Kontext \(dieses Gespräch\): /);
+    expect(en.sessions.contextRingTooltip).toMatch(/running task/);
+    expect(de.sessions.contextRingTooltip).toMatch(/laufende Aufgabe/);
     expect(en.sessions.contextRingTooltip).toMatch(/agent page/);
     expect(de.sessions.contextRingTooltip).toMatch(/Agent-Seite/);
   });

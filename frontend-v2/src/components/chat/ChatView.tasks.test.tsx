@@ -15,7 +15,6 @@ import type { ChatTasksResponse, MessageEvent, TaskStepRow, TaskStepsResponse } 
 import { at, stub, TASK_ID, TASK_ID_2 } from "./taskSteps/__tests__/fixtures";
 
 vi.mock("@/hooks/useChatStream", () => ({ useChatStream: vi.fn() }));
-vi.mock("@/hooks/useTaskActivity", () => ({ useTaskActivity: vi.fn(() => null) }));
 vi.mock("@/hooks/useHeadTranscript", () => ({
   useHeadTranscript: vi.fn(() => ({
     events: [], subagentRuns: [], state: null, usage: null, session: null, hasMore: false,

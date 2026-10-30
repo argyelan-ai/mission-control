@@ -500,7 +500,7 @@ describe("Composer", () => {
     );
     expect(screen.queryByTestId("context-panel")).not.toBeInTheDocument();
 
-    const trigger = screen.getByRole("button", { name: /^Context: \d+% used$/ });
+    const trigger = screen.getByRole("button", { name: /^Chat context: \d+% used$/ });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     await user.click(trigger);
 
@@ -515,13 +515,13 @@ describe("Composer", () => {
     const { rerender } = render(
       <Composer agentId="a1" usage={mkUsage({ usedPct: 15 })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.getByRole("button", { name: "Context: 15% used" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat context: 15% used" })).toBeInTheDocument();
 
     rerender(
       <Composer agentId="a1" usage={mkUsage({ usedPct: 92 })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.getByRole("button", { name: "Context: 92% used" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Context: 15% used" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat context: 92% used" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Chat context: 15% used" })).not.toBeInTheDocument();
   });
 
   it("keeps the ring itself a progressbar with its tooltip (quick glance stays)", () => {
@@ -1665,7 +1665,7 @@ describe("Composer", () => {
       "title",
       // Round-3 (t3 NICE-1): the ring says it measures THIS chat — the agent
       // page's figure is the agent's work session and may differ.
-      "This chat: ≈12k/200k used. Source: CLI. The agent page shows the last reported figure of its work session, the CLI status line what is left until auto-compaction — different session or basis, both correct."
+      "Chat context (this conversation): ≈12k/200k used. Source: CLI. A running task shows its own figure in its section. The agent page shows the last reported figure of its work session, the CLI status line what is left until auto-compaction — different session or basis, both correct."
     );
   });
 
