@@ -186,6 +186,32 @@ def test_tool_events_stamp_the_live_fill_without_any_usage_update():
         assert payload["context_pct"] == 37.9
 
 
+def test_a_finished_tool_rereads_past_the_throttle():
+    """Review finding: omp may flush the assistant line a moment AFTER the
+    tool_call event, so the read at tool start sees the previous call. The
+    tool's completion must read again even inside the 2 s throttle."""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        agent_dir = _agent_dir(tmp)
+        omp_file = _write_omp_session(agent_dir, str(HERE), PERM_SID, [
+            _assistant_line({"input": 39_321, "cacheRead": 0, "cacheWrite": 0}),  # 10.0 %
+        ])
+        beats = [0]
+
+        def late_flush() -> None:
+            beats[0] += 1
+            if beats[0] == 2:  # first tool_call_update: the new line lands now
+                with open(omp_file, "a", encoding="utf-8") as fh:
+                    fh.write(_assistant_line({"input": 196_608, "cacheRead": 0, "cacheWrite": 0}) + "\n")
+
+        fixture = _fixture_without_usage_update(tmp)
+        holder = bridge.ACPContextPct(0.0)
+        with _isolated_env(agent_dir):
+            taa.run_adapter(fixture, context_pct=holder, heartbeat=late_flush)
+        assert beats[0] >= 4
+        assert holder.get() == 50.0
+
+
 def test_turn_end_usage_update_still_has_the_last_word():
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
