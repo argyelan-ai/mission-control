@@ -278,6 +278,16 @@ def requires_runtime_binding(harness: str | None) -> bool:
 # Zeilen 20/33/43), mit vier gescheiterten Versuchen als Live-Evidenz.
 
 
+# omp aborts a model turn after 300 s without an SSE event. A local engine
+# that holds a tool call's arguments until complete (large file write) sends
+# nothing for minutes, so the turn died and its work was lost. 1 h; both names
+# are set because omp falls back from one to the other.
+OMP_STREAM_IDLE_TIMEOUT_ENV: dict[str, str] = {
+    "PI_OPENAI_STREAM_IDLE_TIMEOUT_MS": "3600000",
+    "PI_STREAM_IDLE_TIMEOUT_MS": "3600000",
+}
+
+
 def omp_driver_for(harness: str | None) -> str:
     """Which driver the omp bridge runs for this harness: ``"acp"`` | ``"native"``.
 
