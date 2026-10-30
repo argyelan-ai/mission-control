@@ -17,6 +17,7 @@ import re
 import textwrap
 
 from app.config import settings
+from app.services.harness_compat import OMP_STREAM_IDLE_TIMEOUT_ENV
 from app.services.compose_renderer import (
     OPENCLAUDE_IMAGE,
     OMP_IMAGE,
@@ -227,3 +228,56 @@ class TestEnsureAgentEnvOverrides:
         out = _ensure_agent_env_overrides(body, "omp")
         assert "    environment:" in out
         assert "      - OMP_DRIVER=acp" in out
+
+
+# ── stream idle timeout (omp aborts silent streams after 300 s by default) ───
+
+
+def _timeout_lines() -> list[str]:
+    assert set(OMP_STREAM_IDLE_TIMEOUT_ENV) == {
+        "PI_OPENAI_STREAM_IDLE_TIMEOUT_MS",
+        "PI_STREAM_IDLE_TIMEOUT_MS",
+    }
+    return [f"- {k}=3600000" for k in OMP_STREAM_IDLE_TIMEOUT_ENV]
+
+
+def test_omp_services_get_one_hour_stream_idle_timeout(monkeypatch):
+    _configure_driver(monkeypatch)
+    result = _rewrite_compose(_COMPOSE, {})
+    for slug in (OMP_SLUG, OTHER_OMP_SLUG):
+        block = _extract_service_block(result, slug)
+        for line in _timeout_lines():
+            assert block.count(line) == 1
+
+
+def test_non_omp_service_gets_no_stream_idle_timeout(monkeypatch):
+    _configure_driver(monkeypatch)
+    block = _extract_service_block(_rewrite_compose(_COMPOSE, {}), NON_OMP_SLUG)
+    assert "STREAM_IDLE_TIMEOUT" not in block
+
+
+def test_stream_idle_timeout_also_set_under_native_rollback(monkeypatch):
+    _configure_driver(monkeypatch, "native")
+    block = _extract_service_block(_rewrite_compose(_COMPOSE, {}), OMP_SLUG)
+    for line in _timeout_lines():
+        assert line in block
+
+
+def test_operator_stream_idle_timeout_survives_re_rendering(monkeypatch):
+    _configure_driver(monkeypatch)
+    content = _COMPOSE.replace(
+        f"      - AGENT_NAME={OMP_SLUG}",
+        f"      - AGENT_NAME={OMP_SLUG}\n      - PI_STREAM_IDLE_TIMEOUT_MS=120000",
+    )
+    block = _extract_service_block(_rewrite_compose(content, {}), OMP_SLUG)
+    assert "- PI_STREAM_IDLE_TIMEOUT_MS=120000" in block
+    assert "PI_STREAM_IDLE_TIMEOUT_MS=3600000" not in block
+
+
+def test_new_omp_agent_block_gets_stream_idle_timeout(monkeypatch):
+    _configure_driver(monkeypatch)
+    omp = _build_new_agent_block("fresh-agent", OMP_IMAGE, is_vault_writer=False)
+    for line in _timeout_lines():
+        assert line in omp
+    other = _build_new_agent_block("newagent", OPENCLAUDE_IMAGE, is_vault_writer=False)
+    assert "STREAM_IDLE_TIMEOUT" not in other

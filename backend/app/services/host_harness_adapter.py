@@ -619,7 +619,11 @@ async def sync_host_agent_model(
     if is_host_omp:
         from app.services.host_provisioning import omp_host_profile
 
+        from app.services.harness_compat import OMP_STREAM_IDLE_TIMEOUT_ENV
+
         existing.setdefault("OMP_PROFILE", omp_host_profile(slug))
+        for var, value in OMP_STREAM_IDLE_TIMEOUT_ENV.items():
+            existing.setdefault(var, value)
 
     changed = sorted(k for k in existing if before.get(k) != existing[k])
     if not write:

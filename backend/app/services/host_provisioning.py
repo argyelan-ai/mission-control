@@ -30,6 +30,7 @@ from app.routers.internal import build_runtime_env
 # agent.env, models.yml and .mcp.json can all carry secrets: one writer,
 # owner-only from the first byte (see agent_env_writer).
 from app.services.agent_env_writer import write_owner_only_file
+from app.services.harness_compat import OMP_STREAM_IDLE_TIMEOUT_ENV
 from app.services.mcp_sync import render_agent_mcp_json
 from app.services.template_renderer import render_agent_file
 
@@ -254,6 +255,8 @@ async def stage_host_agent_files(
     omp_models_path: str | None = None
     if harness == "omp":
         env["OMP_PROFILE"] = omp_host_profile(slug)
+        for var, value in OMP_STREAM_IDLE_TIMEOUT_ENV.items():
+            env.setdefault(var, value)
         omp_models_path = render_omp_host_models_yml(slug, env, home=home)
     write_owner_only_file(env_path, _format_env_file(env))
 
