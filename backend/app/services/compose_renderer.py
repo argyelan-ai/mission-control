@@ -695,20 +695,20 @@ def _agent_env_overrides(harness: str | None) -> dict[str, str]:
     per-service native line needed. Every other harness's environment
     stays untouched.
     """
-    if harness == "omp" and omp_driver_for(harness) != "acp":
+    if harness != "omp":
+        return {}
+    if omp_driver_for(harness) != "acp":
         return dict(OMP_STREAM_IDLE_TIMEOUT_ENV)
-    if harness == "omp":
-        # OMP_ACP_PERMISSIONS=yolo mirrors launch-omp.sh (`--approval-mode
-        # yolo`): the agent runs unattended, tool calls must not block on a
-        # human. The bridge still transcribes every permission decision as a
-        # chat event (ADR-081 "Freigabe als Event"). First ACP live probe
-        # 09.09.2026: the code default `ask` parked the run for 600 s.
-        return {
-            "OMP_DRIVER": "acp",
-            "OMP_ACP_PERMISSIONS": "yolo",
-            **OMP_STREAM_IDLE_TIMEOUT_ENV,
-        }
-    return {}
+    # OMP_ACP_PERMISSIONS=yolo mirrors launch-omp.sh (`--approval-mode
+    # yolo`): the agent runs unattended, tool calls must not block on a
+    # human. The bridge still transcribes every permission decision as a
+    # chat event (ADR-081 "Freigabe als Event"). First ACP live probe
+    # 09.09.2026: the code default `ask` parked the run for 600 s.
+    return {
+        "OMP_DRIVER": "acp",
+        "OMP_ACP_PERMISSIONS": "yolo",
+        **OMP_STREAM_IDLE_TIMEOUT_ENV,
+    }
 
 def _ensure_agent_env_overrides(body_lines: list[str], harness: str | None) -> list[str]:
     """Inject the per-harness env overrides (ADR-084) into the service body.
