@@ -824,7 +824,7 @@ BENCH_FRAME_VIEWPORT = {"width": 1920, "height": 1080}
 
 async def _screenshot_bench_card(
     html_text: str, out_png: Path, viewport: dict | None = None, scale: int = 2
-) -> None:
+) -> str:
     """Writes a filled bench template to a scratch dir alongside its shared
     assets (shared.css, fonts/ — referenced via relative href in the
     template) and screenshots it at the canonical 1920x1080 CSS viewport,
@@ -858,8 +858,12 @@ async def _screenshot_bench_card(
                 except Exception:  # noqa: BLE001 — a late fit is still a card
                     logger.warning("bench card: fit script did not finish, screenshot anyway")
                 await page.screenshot(path=str(out_png))
+                # Templates that measure their own fit (compilation.html)
+                # leave what overflowed in data-overflow; "" = all fits.
+                overflow = await page.evaluate("document.documentElement.dataset.overflow || ''")
             finally:
                 await browser.close()
+    return overflow or ""
 
 
 async def _render_branding_assets(branding: BrandingSpec, render_dir: Path) -> tuple[Path, Path]:
@@ -1415,12 +1419,22 @@ async def compilation(req: CompilationRequest):
     that scales each recording into the art rectangle, grows the racing
     bars and concatenates the parts. Inputs and output must be below
     /shared-deliverables."""
+    resolved_inputs: dict[str, str] = {}
     for raw in compilation_inputs(req.spec):
         resolved = _require_shared_path(raw, "art")
         if not resolved.is_file():
             raise HTTPException(422, f"Art nicht gefunden: {raw}")
+        resolved_inputs[raw] = str(resolved)
     out_path = _require_shared_path(req.output_path, "output_path")
+    if out_path.suffix != ".mp4" or str(out_path) in resolved_inputs.values():
+        raise HTTPException(422, "output_path muss ein neues .mp4 sein")
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # ffmpeg reads the RESOLVED paths (no symlink swap between check and encode).
+    spec = req.spec.model_copy(deep=True)
+    for part in spec.parts:
+        if part.art is not None:
+            part.art.path = resolved_inputs[part.art.path]
+        part.thumbs = [resolved_inputs[t] for t in part.thumbs]
     template = (BENCH_TEMPLATES_DIR / "compilation.html").read_text(encoding="utf-8")
     w, h = COMP_SIZE
     with tempfile.TemporaryDirectory() as render_tmp:
@@ -1429,9 +1443,13 @@ async def compilation(req: CompilationRequest):
         cmd_files: list[str | None] = []
         for i, part in enumerate(req.spec.parts):
             bg = render_dir / f"part{i}.png"
-            await _screenshot_bench_card(
-                render_compilation_html(template, part, req.spec), bg, {"width": w, "height": h}, 1
+            overflow = await _screenshot_bench_card(
+                render_compilation_html(template, part, spec), bg, {"width": w, "height": h}, 1
             )
+            if overflow:
+                # Never ship a cut word or a text over the art: the template
+                # measured what does not fit — the caller shortens it.
+                raise HTTPException(422, f"part {i} ({part.kind}): text does not fit: {overflow}")
             bgs.append(str(bg))
             text = comp_bar_commands(part, i)
             if text:
@@ -1440,8 +1458,8 @@ async def compilation(req: CompilationRequest):
                 cmd_files.append(str(cf))
             else:
                 cmd_files.append(None)
-        cmd = build_compilation_cmd(req.spec, bgs, cmd_files, str(out_path))
-        duration = compilation_duration_s(req.spec)
+        cmd = build_compilation_cmd(spec, bgs, cmd_files, str(out_path))
+        duration = compilation_duration_s(spec)
         timeout = compose_branded_timeout_s(duration, 0.0, floor_s=FFMPEG_TIMEOUT_S)
         await asyncio.to_thread(_run_ffmpeg, cmd, timeout)
     logger.info("compilation: %d parts, %.1f s -> %s", len(req.spec.parts), duration, out_path)

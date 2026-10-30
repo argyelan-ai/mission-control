@@ -330,6 +330,79 @@ def test_rated_table_keeps_five_columns_at_most():
     assert table["columns"] == ["#", "build", "rating", "time", "power"] and table["name_col"] == 1
 
 
+@pytest.mark.parametrize("status", [None, "red", "pending", "unknown"])
+def test_only_green_or_amber_gates_are_publishable(status):
+    sources = three_builds()
+    sources[0]["gate_status"] = status
+    with pytest.raises(ValueError, match="gate"):
+        wc.build_spec(sources, handle="")
+
+
+def test_a_run_without_measured_time_is_refused():
+    sources = three_builds()
+    sources[2]["time_ms"] = None
+    with pytest.raises(ValueError, match="time"):
+        wc.build_spec(sources, handle="")
+
+
+def test_ratio_hook_bars_show_only_the_compared_runs_and_metric():
+    sha = "f" * 64
+    sources = [_src("Pagoda", minutes=30, sha=sha, model="M-A", run_class="A", harness="api", decode=30),
+               _src("Pagoda", minutes=31, sha=sha, model="M-B", run_class="A", harness="api", decode=90),
+               _src("Lighthouse", minutes=5, model="M-C", run_class="A", harness="api")]
+    spec = wc.build_spec(sources, energy=ENERGY, handle="")
+    hook = spec["parts"][0]
+    assert hook["hero"]["value"] == "3.0" and hook["hero"]["label"] == "faster decode"
+    assert [b["label"] for b in hook["bars"]] == ["M-A", "M-B"]          # not the other brief
+    assert [b["value"] for b in hook["bars"]] == ["30 tok/s", "90 tok/s"]
+    assert [b["highlight"] for b in hook["bars"]] == [False, True]
+
+
+def test_mixed_cloud_and_power_column_says_cost():
+    sha = "9" * 64
+    sources = [_src("P", minutes=10, sha=sha, locality="cloud", cost_kind="api_price", cost_usd=1.5,
+                    harness="api", run_class="A"),
+               _src("P", minutes=30, sha=sha, harness="api", run_class="A")]
+    table = wc.build_spec(sources, energy=ENERGY, handle="")["parts"][-2]["table"]
+    assert table["columns"][-1] == "cost"
+    assert [r["cells"][-1] for r in table["rows"]] == ["$ 1.50", "CHF 0.07"]  # 2 × 240 W × 30 min × 0.29
+
+
+def test_unknown_locality_never_shows_a_dollar_or_cloud():
+    s = _src("P", minutes=10, locality=None, cost_kind="api_price", cost_usd=2.0)
+    s["locality"] = None
+    assert wc.money_stat(s, ENERGY) is None
+    assert wc.hardware_line(s) == "Setup not recorded"
+
+
+def test_rating_zero_ranks_below_rated_runs_but_above_unrated():
+    sources = three_builds()
+    ids = [s["test_id"] for s in sources]
+    table = wc.build_spec(sources, ratings={ids[0]: 0, ids[1]: 5}, energy=ENERGY, handle="")["parts"][-2]["table"]
+    assert [r["cells"][1] for r in table["rows"]] == [
+        "Lighthouse in a Storm", "Hourglass of Light Sand", "Ribbon Highway Autopilot"]
+    assert [r["cells"][2] for r in table["rows"]] == ["5/10", "0/10", "–"]
+
+
+def test_different_models_never_crowd_the_shared_header():
+    sha = "8" * 64
+    sources = [_src("P", minutes=10, sha=sha, model="Model-Alpha-Long-Name-1", harness="api", run_class="A"),
+               _src("P", minutes=30, sha=sha, model="Model-Beta-Long-Name-2", harness="api", run_class="A")]
+    spec = wc.build_spec(sources, energy=ENERGY, handle="")
+    assert spec["parts"][0]["header"]["model"] == "2 models"
+    assert spec["parts"][1]["header"]["model"] == "Model-Alpha-Long-Name-1"
+
+
+def test_a_new_rating_is_a_new_file(monkeypatch, tmp_path):
+    from app.verticals.bench_studio import orchestrator as orch
+
+    monkeypatch.setattr(orch, "SHARED_DELIVERABLES", tmp_path)
+    sources = three_builds()
+    a = wc.output_path(wc.build_spec(sources, energy=ENERGY, handle=""))
+    b = wc.output_path(wc.build_spec(sources, ratings={sources[0]["test_id"]: 9}, energy=ENERGY, handle=""))
+    assert a != b and a.endswith(".mp4") and "/bench-compilations/" in a
+
+
 def test_entry_caption_is_the_brief_title_whole():
     spec = wc.build_spec(three_builds(), energy=ENERGY, handle="")
     assert [p["caption"] for p in spec["parts"][1:4]] == [

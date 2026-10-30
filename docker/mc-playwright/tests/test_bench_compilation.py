@@ -403,6 +403,25 @@ def test_table_name_column_is_marked():
     assert '<tr class="hi">' in html
 
 
+def test_unsafe_command_file_path_is_refused():
+    spec = _spec()
+    bgs = [f"/tmp/bg{i}.png" for i in range(len(spec.parts))]
+    cmds = [("/tmp/x:y,z.cmd" if p.bars else None) for p in spec.parts]
+    with pytest.raises(ValueError, match="not safe"):
+        comp.build_compilation_cmd(spec, bgs, cmds, "/shared-deliverables/c/out.mp4")
+
+
+def test_template_reports_overflow_instead_of_shipping_a_cut_text():
+    """The renderer answers 422 with data-overflow — the template must
+    measure every single-line text, the header band and the text blocks."""
+    assert "dataset.overflow" in COMP
+    for sel in (".cap", ".meta", ".sub", ".bl", ".band-note", ".fl", ".st .l", ".hero .l", ".badge"):
+        assert sel in COMP.split("dataset.overflow")[0].split("Overflow check")[1], sel
+    for block in (".band-body", ".band-table", ".band-stats", ".band-hero"):
+        assert f"'{block}'" in COMP, block
+    assert "header taller than its band" in COMP
+
+
 def _rgb_at(video: Path, t: float, xy: tuple[int, int]) -> tuple[int, int, int]:
     raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", str(t), "-i", str(video), "-frames:v", "1",
                           "-vf", f"format=rgb24,crop=2:2:{xy[0]}:{xy[1]}", "-f", "rawvideo", "-pix_fmt", "rgb24",

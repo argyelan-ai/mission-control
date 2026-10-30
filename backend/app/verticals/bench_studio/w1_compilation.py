@@ -232,8 +232,10 @@ def device_base(device: Optional[str]) -> str:
 
 def hardware_line(s: dict[str, Any]) -> str:
     """'2× DGX Spark · 256 GB' (local) · 'Cloud · anthropic' (API)."""
-    if s.get("locality") != "local":
+    if s.get("locality") == "cloud":
         return f"Cloud · {s['provider']}" if s.get("provider") else "Cloud"
+    if s.get("locality") != "local":
+        return "Setup not recorded"
     base = device_base(s.get("device")) or "Local"
     nodes = int(s.get("nodes") or 1)
     line = f"{nodes}× {base}" if nodes > 1 else base
@@ -258,7 +260,8 @@ def kind_text(s: dict[str, Any]) -> str:
 def time_label(s: dict[str, Any]) -> str:
     if s.get("run_class") == "B":
         return "agent time"
-    return "compute time" + (f", median of {s['n_runs']}" if s.get("n_runs", 1) > 1 else "")
+    # "median of N" lives in the footnote: the stat label stays one short line.
+    return "compute time"
 
 
 def electricity(s: dict[str, Any], energy: Optional[EnergyConfig]) -> Optional[float]:
@@ -275,7 +278,7 @@ def money_stat(s: dict[str, Any], energy: Optional[EnergyConfig]) -> Optional[di
     if power is not None:
         return {"value": fmt_money(power), "unit": energy.currency, "unit_before": True,
                 "label": "power, at most", "measured": False}
-    if s.get("locality") != "local" and s.get("cost_kind") == "api_price" and s.get("cost_usd") is not None:
+    if s.get("locality") == "cloud" and s.get("cost_kind") == "api_price" and s.get("cost_usd") is not None:
         return {"value": fmt_money(s["cost_usd"]), "unit": "$", "unit_before": True,
                 "label": "API list price", "measured": True}
     return None
@@ -378,7 +381,8 @@ def _header(sources: list[dict[str, Any]]) -> dict[str, str]:
     meta = [x for x in (harness.pop() if len(harness) == 1 else "",
                         effort.pop() if len(effort) == 1 else "", date_span(sources)) if x]
     return {"hardware": hw.pop() if len(hw) == 1 else f"{len(sources)} setups, one video",
-            "model": models.pop() if len(models) == 1 else " vs ".join(sorted(models)),
+            # Several ids do not fit one header line — each segment names its own.
+            "model": models.pop() if len(models) == 1 else f"{len(models)} models",
             "meta": " · ".join(meta)}
 
 
@@ -394,6 +398,20 @@ def _rating_text(r: Optional[float]) -> Optional[str]:
     if r is None:
         return None
     return f"{r:g}/10"
+
+
+def hook_bars(sources: list[dict[str, Any]], hook: dict[str, Any]) -> list[dict[str, Any]]:
+    """The hook's bars show what the headline says: a ratio → that metric,
+    over the runs it compares only (never the other briefs); totals → time."""
+    if hook["kind"] != "ratio":
+        return time_bars(sources, None)
+    members, metric = hook["members"], hook["metric"]
+    top = max(m[metric] for m in members if m.get(metric)) or 1
+    fmt = {"time_ms": lambda v: f"{fmt_min(v)} min", "decode_tok_s": lambda v: f"{c.fmt_rate(v)} tok/s",
+           "tokens_out": lambda v: f"{c.fmt_tokens(v)} tok"}[metric]
+    return [{"label": _name(m, sources), "value": fmt(m[metric]) if m.get(metric) else "n/a",
+             "fraction": round((m.get(metric) or 0) / top, 4), "highlight": m is hook["winner"]}
+            for m in members[:4]]
 
 
 def time_bars(sources: list[dict[str, Any]], highlight: Optional[int]) -> list[dict[str, Any]]:
@@ -421,8 +439,11 @@ def build_spec(
     if not MIN_ENTRIES <= len(sources) <= MAX_ENTRIES:
         raise ValueError(f"a compilation shows {MIN_ENTRIES} to {MAX_ENTRIES} runs")
     for s in sources:
-        if s.get("gate_status") in ("red", "pending"):
+        # Allow-list like the W1 kit: only a green or amber gate is publishable.
+        if s.get("gate_status") not in ("green", "amber"):
             raise ValueError(f"{s['title']}: the gate is {s['gate_status']}, not publishable")
+        if not s.get("time_ms"):
+            raise ValueError(f"{s['title']}: no measured time")
         if not (s.get("video_path") or s.get("screenshot_path")):
             raise ValueError(f"{s['title']}: no recording and no screenshot")
     ratings = dict(ratings or {})
@@ -432,7 +453,7 @@ def build_spec(
     # The hook shows the winner of a ratio; otherwise the LAST run, so the
     # first segment does not open on the picture the hook just showed.
     hero_src = hook["winner"] if hook["kind"] == "ratio" else sources[-1]
-    parts = [_hook_part(sources, hook, energy, header, hero_src, time_bars(sources, None))]
+    parts = [_hook_part(sources, hook, energy, header, hero_src, hook_bars(sources, hook))]
     single = all(s.get("n_runs", 1) <= 1 for s in sources)
     for i, s in enumerate(sources):
         stats = [{"value": fmt_min(s["time_ms"]) or "n/a", "unit": "min", "label": time_label(s)},
@@ -467,13 +488,20 @@ def _ranking_part(sources, ratings, rating_word, pick_test_id, energy, header) -
     rated = bool(ratings)
     order = list(range(len(sources)))
     if rated:
-        order.sort(key=lambda i: (-(ratings.get(sources[i]["test_id"]) or -1), sources[i]["time_ms"] or 0))
+        def _r(i: int) -> float:
+            value = ratings.get(sources[i]["test_id"])
+            return -1.0 if value is None else float(value)
+
+        order.sort(key=lambda i: (-_r(i), sources[i]["time_ms"] or 0))
     has_money = any(money_stat(s, energy) for s in sources)
     cols = (["#"] if rated else []) + ["build" if all(s["run_class"] == "B" for s in sources) else "run"]
     # Five columns at most on 1080 px: a rated table trades the token
     # column (each segment shows it) for the rating.
     cols += (["rating", "time"] if rated else ["time", "tokens"])
-    cols += (["power" if energy and energy.price_per_kwh else "cost"] if has_money else [])
+    # "power" only when every money cell IS power; a cloud list price
+    # in the same column makes it "cost".
+    all_power = all(electricity(s, energy) is not None for s in sources)
+    cols += (["power" if all_power else "cost"] if has_money else [])
     rows = []
     for rank, i in enumerate(order, 1):
         s = sources[i]
@@ -613,7 +641,9 @@ async def build_for(session, req: CompilationIn, *, energy: Optional[EnergyConfi
 def output_path(spec: Mapping[str, Any]) -> str:
     from . import orchestrator as orch
 
-    return str(orch.SHARED_DELIVERABLES / COMPILATIONS_DIR / f"compilation-{(spec.get('checksum') or 'x')[:12]}.mp4")
+    # The whole payload names the file: a new rating or pick is a new file,
+    # never an overwrite of the earlier cut.
+    return str(orch.SHARED_DELIVERABLES / COMPILATIONS_DIR / f"compilation-{c.checksum(dict(spec))[:12]}.mp4")
 
 
 async def render(session, req: CompilationIn) -> dict[str, Any]:

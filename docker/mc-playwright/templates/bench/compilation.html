@@ -44,7 +44,8 @@
 .c .st .v u, .c .hero .v u { text-decoration:none; font:500 40px/1 'General Sans',sans-serif;
   color:var(--text2); letter-spacing:0; margin:0 8px; }
 .c .st .v.est, .c .hero .v.est { color:var(--text); }
-.c .st .l { font:500 32px/1.2 'General Sans',sans-serif; color:var(--text2); margin-top:8px; white-space:nowrap; }
+.c .st .l { font:500 32px/1.2 'General Sans',sans-serif; color:var(--text2); margin-top:8px; white-space:nowrap;
+  overflow:hidden; }
 
 /* hook: one huge number, its words beside it */
 .c .hero { display:flex; align-items:flex-end; gap:28px; }
@@ -113,6 +114,29 @@
       }
       if (el.scrollWidth > el.clientWidth) { el.style.whiteSpace = 'normal'; el.style.overflowWrap = 'anywhere'; }
     });
+    /* Overflow check: a cut word, a header taller than its band or a text
+       block running into the footer/footnote is reported, never shipped
+       (the renderer answers 422 with this list). */
+    var bad = [];
+    document.querySelectorAll('.cap, .meta, .sub, .bl, .bv, .band-note, .fl, .st .l, .hero .l, .hw, .mdl, .badge')
+      .forEach(function (el) { if (el.scrollWidth > el.clientWidth + 1) bad.push(el.className + ':' + el.textContent.slice(0, 40)); });
+    var top = document.querySelector('.band-top');
+    if (top && top.scrollHeight > top.clientHeight + 1) bad.push('header taller than its band');
+    var foot = document.querySelector('.band-foot');
+    var limit = foot ? foot.getBoundingClientRect().top - 4 : {{HEIGHT}};
+    var note = document.querySelector('.band-note');
+    ['.band-body', '.band-table', '.band-stats', '.band-hero'].forEach(function (sel) {
+      var el = document.querySelector(sel);
+      if (!el) return;
+      var bottom = el.getBoundingClientRect().bottom;
+      var stop = (note && sel !== '.band-body') ? Math.min(limit, note.getBoundingClientRect().top - 2) : limit;
+      if (sel === '.band-stats' || sel === '.band-hero') {
+        var bars = document.querySelector('.band-bars');
+        if (bars) stop = Math.min(stop, bars.getBoundingClientRect().top - 2);
+      }
+      if (bottom > stop) bad.push(sel + ' runs past ' + Math.round(stop) + 'px');
+    });
+    document.documentElement.dataset.overflow = bad.join(' | ');
     document.documentElement.dataset.fit = 'done';
   }
   (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(fit);

@@ -22,6 +22,7 @@ Like media.py: NO playwright/ffmpeg imports, unit-testable with pydantic only.
 from __future__ import annotations
 
 import html as _html
+import re
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -331,6 +332,11 @@ def render_compilation_html(template_text: str, part: CompPart, spec: Compilatio
     return out.replace("{{BODY}}", render_compilation_body(part, spec))
 
 
+#: The sendcmd file path is written into the filter graph — only plain
+#: path characters may reach it (no ':' ',' ';' quotes or spaces).
+_SAFE_GRAPH_PATH = re.compile(r"^[A-Za-z0-9_./-]+$")
+
+
 def build_compilation_cmd(
     spec: CompilationSpec,
     bg_pngs: List[str],
@@ -381,6 +387,8 @@ def build_compilation_cmd(
         if part.bars:
             if not cf:
                 raise ValueError(f"part {i} has bars but no command file")
+            if not _SAFE_GRAPH_PATH.match(cf):
+                raise ValueError(f"command file path not safe for the filter graph: {cf!r}")
             boxes = []
             for j, (bar, (bx, by, _bw, bh)) in enumerate(zip(part.bars, comp_bar_rects(len(part.bars)))):
                 colour = COMP_ACCENT if bar.highlight else COMP_BAR_MUTED
