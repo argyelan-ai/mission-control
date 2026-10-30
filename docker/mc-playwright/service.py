@@ -70,6 +70,16 @@ from media import (
     render_outro_html,
     resolve_contained_path,
 )
+from compilation import (
+    COMP_SIZE,
+    CompilationRequest,
+    CompilationResponse,
+    build_compilation_cmd,
+    comp_bar_commands,
+    compilation_duration_s,
+    compilation_inputs,
+    render_compilation_html,
+)
 from record_network import (
     LOCAL_LIBRARY_HEADERS,
     RecordNetworkGuard,
@@ -1395,6 +1405,50 @@ async def card(req: CardRequest):
     out_path.write_bytes(data)
     logger.info("card: %s (%dx%d, %d bytes)", out_path, req.width, req.height, len(data))
     return CardResponse(output_path=str(out_path), bytes=len(data), width=req.width, height=req.height)
+
+
+@app.post("/compilation", response_model=CompilationResponse)
+async def compilation(req: CompilationRequest):
+    """Bench compilation (phase 1): 2–4 finished runs in ONE 4:5 video.
+    Per part a background from compilation.html (header band above the art,
+    stats/bars/footnote below it — never over it), then one ffmpeg encode
+    that scales each recording into the art rectangle, grows the racing
+    bars and concatenates the parts. Inputs and output must be below
+    /shared-deliverables."""
+    for raw in compilation_inputs(req.spec):
+        resolved = _require_shared_path(raw, "art")
+        if not resolved.is_file():
+            raise HTTPException(422, f"Art nicht gefunden: {raw}")
+    out_path = _require_shared_path(req.output_path, "output_path")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    template = (BENCH_TEMPLATES_DIR / "compilation.html").read_text(encoding="utf-8")
+    w, h = COMP_SIZE
+    with tempfile.TemporaryDirectory() as render_tmp:
+        render_dir = Path(render_tmp)
+        bgs: list[str] = []
+        cmd_files: list[str | None] = []
+        for i, part in enumerate(req.spec.parts):
+            bg = render_dir / f"part{i}.png"
+            await _screenshot_bench_card(
+                render_compilation_html(template, part, req.spec), bg, {"width": w, "height": h}, 1
+            )
+            bgs.append(str(bg))
+            text = comp_bar_commands(part, i)
+            if text:
+                cf = render_dir / f"part{i}.cmd"
+                cf.write_text(text, encoding="utf-8")
+                cmd_files.append(str(cf))
+            else:
+                cmd_files.append(None)
+        cmd = build_compilation_cmd(req.spec, bgs, cmd_files, str(out_path))
+        duration = compilation_duration_s(req.spec)
+        timeout = compose_branded_timeout_s(duration, 0.0, floor_s=FFMPEG_TIMEOUT_S)
+        await asyncio.to_thread(_run_ffmpeg, cmd, timeout)
+    logger.info("compilation: %d parts, %.1f s -> %s", len(req.spec.parts), duration, out_path)
+    return CompilationResponse(
+        output_path=str(out_path), bytes=out_path.stat().st_size, duration_s=duration,
+        parts=len(req.spec.parts),
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
