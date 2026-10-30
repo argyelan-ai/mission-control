@@ -85,6 +85,7 @@ COPY policies/emudhra-distrust.json /etc/chromium/policies/managed/emudhra-distr
 RUN rm -rf /ms-playwright/chromium_headless_shell-*
 
 COPY media.py /app/media.py
+COPY compilation.py /app/compilation.py
 COPY service.py /app/service.py
 COPY deterministic_shim.js /app/deterministic_shim.js
 COPY record_network.py /app/record_network.py
