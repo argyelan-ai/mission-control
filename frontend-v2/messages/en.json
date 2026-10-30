@@ -1047,6 +1047,8 @@
     "thinkingTokens": "≈{count} tokens",
     "taskActivityLabel": "From the task",
     "taskDelivered": "Delivered {time}",
+    "taskContext": "Context {pct}",
+    "taskContextHint": "Context of the task session: ≈{used}/{win} used. The same figure as on the agent page; the ring below the chat measures this chat.",
     "taskQueued": "{count, plural, one {# more task waiting} other {# more tasks waiting}}",
     "backToSessions": "Back to chats",
     "chatOptions": "Chat options",

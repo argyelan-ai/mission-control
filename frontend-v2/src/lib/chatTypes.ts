@@ -408,6 +408,10 @@ export type TaskActivity =
       preview: PreviewEvent | null;
       /** More tasks of this agent waiting in the inbox. */
       queued: number;
+      /** The running task's context fill — the agent's heartbeat figure, the
+       *  same numbers the agent page shows. `null` = nothing reported. Absent
+       *  on an older backend. */
+      context?: { tokens: number; max: number } | null;
     };
 
 // ── Task steps in the agent chat (spec A, variant A) ────────────────────────
