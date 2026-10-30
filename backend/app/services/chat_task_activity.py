@@ -200,4 +200,36 @@ async def task_activity(session: AsyncSession, agent: Any) -> dict[str, Any]:
         "events": events,
         "preview": preview,
         "queued": int(queued or 0),
+        "context": await _task_context(session, agent),
     }
+
+
+async def _task_context(session: AsyncSession, agent: Any) -> dict[str, int] | None:
+    """The running task's context fill: ``{"tokens", "max"}`` or ``None``.
+
+    Live 30.10.2026: the only context figure in the chat was the composer
+    ring — the CHAT session's fill (idle for two days at 29 %), while the
+    task ran in a session of its own at 38 %. The task's fill is what the
+    bridge reports on its heartbeat (the agent's ``context_tokens`` /
+    ``context_max``, live from omp's own session file during the turn). This
+    is the SAME figure the agent page shows — same row, same window rule
+    (``runtime_window.shown_context`` against the bound runtime) — so the
+    two places can never disagree. ``None`` = nothing reported (unknown is
+    not 0 %). A display figure never breaks the block."""
+    tokens = getattr(agent, "context_tokens", None)
+    if tokens is None:
+        return None
+    try:
+        from app.models.runtime import Runtime
+        from app.services.runtime_window import agent_shown_window, shown_context
+
+        runtime_id = getattr(agent, "runtime_id", None)
+        runtime = await session.get(Runtime, runtime_id) if runtime_id else None
+        tokens, ctx_max = shown_context(
+            tokens, getattr(agent, "context_max", None), agent_shown_window(runtime)
+        )
+    except Exception:  # noqa: BLE001 — a display figure never breaks the block
+        return None
+    if tokens is None or not ctx_max:
+        return None
+    return {"tokens": int(tokens), "max": int(ctx_max)}

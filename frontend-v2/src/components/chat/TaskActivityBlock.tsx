@@ -22,7 +22,8 @@
 
 import { useLocale, useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
-import { timeAgo } from "@/lib/utils";
+import { contextPercent, formatContextPct, timeAgo } from "@/lib/utils";
+import { formatCompactTokens } from "@/lib/claudeCommands";
 import { useTaskActivity } from "@/hooks/useTaskActivity";
 import type { TimelineChatEvent } from "@/lib/chatTypes";
 import { LiveThinkingRow } from "./LiveThinkingRow";
@@ -68,6 +69,11 @@ export function TaskActivityBlock({
   if (!activity || !activity.applies) return null;
 
   const { preview, queued, deliveredAt } = activity;
+  // The task's OWN context fill (live 30.10.2026: the composer ring is the
+  // chat session's figure and sat at 29 % while the task ran at 38 %). Same
+  // numbers as the agent page; nothing reported -> no figure, never "0 %".
+  const ctx = activity.context;
+  const ctxPct = ctx ? contextPercent(ctx.tokens, ctx.max) : null;
   const events = detailLevel === "compact"
     ? activity.events.filter((ev) => ev.kind === "message")
     : activity.events;
@@ -81,11 +87,26 @@ export function TaskActivityBlock({
     >
       <div className="flex items-baseline justify-between gap-3 px-4 pb-1">
         <span className="label-sys" style={{ color: C.textMuted }}>{t("taskActivityLabel")}</span>
-        {deliveredAt && (
-          <span className="text-xs" style={{ color: C.textMuted }}>
-            {t("taskDelivered", { time: timeAgo(deliveredAt, locale) })}
-          </span>
-        )}
+        <span className="flex items-baseline gap-3">
+          {ctx && ctxPct !== null && (
+            <span
+              data-testid="task-activity-context"
+              className="text-xs tabular-nums"
+              style={{ color: C.textMuted }}
+              title={t("taskContextHint", {
+                used: formatCompactTokens(ctx.tokens),
+                win: formatCompactTokens(ctx.max),
+              })}
+            >
+              {t("taskContext", { pct: formatContextPct(ctx.tokens, ctx.max) })}
+            </span>
+          )}
+          {deliveredAt && (
+            <span className="text-xs" style={{ color: C.textMuted }}>
+              {t("taskDelivered", { time: timeAgo(deliveredAt, locale) })}
+            </span>
+          )}
+        </span>
       </div>
       {events.map((ev) => (
         <StepRow key={stepKey(ev)} ev={ev} detailLevel={detailLevel} />

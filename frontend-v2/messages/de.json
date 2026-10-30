@@ -1047,6 +1047,8 @@
     "thinkingTokens": "≈{count} Token",
     "taskActivityLabel": "Aus der Aufgabe",
     "taskDelivered": "Zugestellt {time}",
+    "taskContext": "Kontext {pct}",
+    "taskContextHint": "Kontext der Aufgaben-Sitzung: ≈{used}/{win} belegt. Dieselbe Zahl wie auf der Agentenseite; der Ring unter dem Chat misst diesen Chat.",
     "taskQueued": "{count, plural, one {# weitere Aufgabe wartet} other {# weitere Aufgaben warten}}",
     "backToSessions": "Zurück zu den Chats",
     "chatOptions": "Chat-Optionen",

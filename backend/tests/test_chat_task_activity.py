@@ -323,6 +323,63 @@ async def test_a_returned_delivery_still_clears_the_pointer(
     assert await _current_task_id(agent.id) is None
 
 
+async def _runtime(window: int):
+    from app.models.runtime import Runtime
+    from sqlmodel.ext.asyncio.session import AsyncSession
+    from tests.conftest import test_engine
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        rt = Runtime(slug=f"rt-{os.urandom(3).hex()}", display_name="rt",
+                     runtime_type="openai_compatible", endpoint="http://box.example.com:8000/v1",
+                     enabled=True, max_context_len=window)
+        s.add(rt)
+        await s.commit()
+        await s.refresh(rt)
+        return rt
+
+
+@pytest.mark.asyncio
+async def test_the_block_carries_the_running_tasks_context_same_figure_as_the_agent_page(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
+):
+    """Live 30.10.2026: the operator watched a long task and the only context
+    figure in the chat was the composer ring — the CHAT session's fill (idle
+    for two days, 29 %). The running task's fill is the agent's heartbeat
+    figure (the agent page). The task block shows THAT figure, the same
+    numbers ``GET /agents/{id}`` returns — one figure, two places. A value
+    stored against an older window keeps its percent (shown_context)."""
+    rt = await _runtime(393_216)
+    _board, agent, task, root, now = await _setup(
+        make_agent, make_board, make_task, tmp_path, monkeypatch,
+        runtime_id=rt.id, context_max=262_144, context_tokens=100_000,
+    )
+    _task_tree(root, str(task.id), now)
+    body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/task-activity")).json()
+    page = (await auth_client.get(f"/api/v1/agents/{agent.id}")).json()
+    assert body["context"] == {"tokens": page["context_tokens"], "max": page["context_max"]}
+    assert body["context"] == {"tokens": round(100_000 / 262_144 * 393_216), "max": 393_216}
+
+
+@pytest.mark.asyncio
+async def test_no_reported_context_is_no_figure(
+    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver
+):
+    from app.models.agent import Agent
+    from sqlmodel.ext.asyncio.session import AsyncSession
+    from tests.conftest import test_engine
+
+    _board, agent, task, root, now = await _setup(make_agent, make_board, make_task, tmp_path, monkeypatch)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        row = await s.get(Agent, agent.id)
+        row.context_tokens = None  # the heartbeat's "unknown" after 3 misses
+        s.add(row)
+        await s.commit()
+    _task_tree(root, str(task.id), now)
+    body = (await auth_client.get(f"/api/v1/agents/{agent.id}/chat/task-activity")).json()
+    assert body["applies"] is True
+    assert body["context"] is None
+
+
 @pytest.mark.asyncio
 async def test_an_older_attempt_of_another_task_is_never_shown(
     auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path, monkeypatch, acp_driver

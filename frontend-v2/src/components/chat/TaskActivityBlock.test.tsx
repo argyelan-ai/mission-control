@@ -89,6 +89,24 @@ describe("TaskActivityBlock", () => {
     expect(screen.getByTestId("chat-task-activity")).toHaveTextContent("$ mc ack d3e397c0");
   });
 
+  // Live 30.10.2026: the only context figure in the chat was the composer
+  // ring — the chat session's (29 %, idle for two days) — while the task ran
+  // in its own session at 38 %. The block names the task's own fill, the
+  // same figure the agent page shows.
+  it("shows the running task's own context fill", () => {
+    mockActivity.mockReturnValue(running({ context: { tokens: 151_089, max: 393_216 } }));
+    render(<TaskActivityBlock agentId="agent-1" />);
+    const ctx = screen.getByTestId("task-activity-context");
+    expect(ctx).toHaveTextContent("Context 38%");
+    expect(ctx).toHaveAttribute("title", expect.stringMatching(/151k.*393k/));
+  });
+
+  it("no reported fill -> no context figure (unknown is not 0 %)", () => {
+    mockActivity.mockReturnValue(running({ context: null }));
+    render(<TaskActivityBlock agentId="agent-1" />);
+    expect(screen.queryByTestId("task-activity-context")).not.toBeInTheDocument();
+  });
+
   it("renders nothing when the chat itself shows the task (or there is none)", () => {
     mockActivity.mockReturnValue({ applies: false });
     const { container } = render(<TaskActivityBlock agentId="agent-1" />);

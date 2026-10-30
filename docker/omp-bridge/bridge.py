@@ -5076,10 +5076,13 @@ def run_acp_once(
             # hook's tool_start does, so a long silent tool call is not
             # killed as idle.
             _heartbeat()
+            _refresh_live_fill()
         elif su == "tool_call_update":
             if str((upd.get("status") or "")).lower() in ("failed", "error"):
                 tool_error_flags[0] = True
             _heartbeat()
+            _refresh_live_fill(force=str((upd.get("status") or "")).lower()
+                               in ("completed", "failed", "error"))
         elif su == "usage_update":
             # G5 (parity audit #521): omp reports the context window here —
             # size = window in tokens, used = tokens in use (same numbers the
@@ -5092,8 +5095,7 @@ def run_acp_once(
             if (isinstance(size, int) and size > 0
                     and isinstance(used, int) and 0 <= used <= size):
                 if context_pct is not None:
-                    context_pct.set(round(used / size * 100.0, 1))
-        # Sessions chat stream: mapping is deliberately SEPARATE from the
+                    context_pct.set(round(used / size * 100.0, 1))        # Sessions chat stream: mapping is deliberately SEPARATE from the
         # classification bookkeeping above. Preview flushes go to their OWN
         # channel (the sibling preview file via emit_preview) — never the
         # transcript JSONL (Folge-PR zu #471: the volatile snapshots are out
@@ -5147,6 +5149,39 @@ def run_acp_once(
             return
         _stream_throttle["at"] = now
         _heartbeat()
+
+    # Live context fill (30.10.2026): omp 18.10.1 sends usage_update only at
+    # agent_end — ONCE per prompt turn. A task turn runs for tens of minutes
+    # and many model calls, so the holder sat on serve_loop's 0.0 reset the
+    # whole run (live: agent page 0 %, omp's own file 38 %). Every tool event
+    # follows a finished model call whose usage omp has just written to its
+    # own session file; read that call's prompt size and stamp used/window
+    # into the SAME holder. Window = the one MC rendered into omp's
+    # models.yml (the window omp itself divides by; no usage_update arrives
+    # before the turn ends). Throttled (a tool burst is one read) — except a
+    # FINISHED tool, which always reads: omp may flush the assistant line a
+    # moment after the tool_call event, so the start alone can read the
+    # previous call (review finding). Best-effort, never kills the run; the
+    # usage_update at turn end still has the last word.
+    _fill = {"at": -1e9}
+
+    def _refresh_live_fill(force: bool = False) -> None:
+        if context_pct is None or not outcome.session_id:
+            return
+        now = time.monotonic()
+        if not force and now - _fill["at"] < 2.0:
+            return
+        _fill["at"] = now
+        try:
+            folder = acp_chat_events.session_dir(cwd=cwd)
+            used = acp_chat_events.omp_prompt_tokens(
+                acp_chat_events.omp_own_session_file(folder, outcome.session_id))
+            window = acp_chat_events.configured_context_window()
+            if used is None or not window:
+                return
+            context_pct.set(round(min(used, window) / window * 100.0, 1))
+        except Exception:  # noqa: BLE001 — a display figure never kills the run
+            pass
 
     def make_client() -> "acp_client.ACPClient":
         if client_factory is not None:

@@ -411,6 +411,115 @@ def omp_tool_name(session_file: Optional[Path], tool_call_id: str) -> Optional[s
     return match.group(1) if match else None
 
 
+#: How much of omp's own session file the live context read takes (from the
+#: end): the last assistant call sits near the end, but a single tool result
+#: (a big file read, a long log) can push it back by a few hundred KB.
+_FILL_LOOKUP_TAIL_BYTES = 1024 * 1024
+
+
+def omp_own_session_file(folder: Optional[Path], session_id: Optional[str]) -> Optional[Path]:
+    """omp's OWN file of session ``session_id`` in session folder ``folder``
+    (``<ts>_<id>.jsonl``), never MC's display copy (``.mc/`` or, in a tree
+    not migrated yet, a file with MC's header next to it). Only regular
+    files — this runs during a turn, and opening a FIFO would stall it.
+    The newest by mtime when several match. Never raises."""
+    if folder is None or not session_id:
+        return None
+    suffix = f"_{session_id}.jsonl"
+    try:
+        candidates = [
+            p for p in Path(folder).iterdir()
+            if p.name.endswith(suffix) and p.is_file() and not is_mc_sink(p)
+        ]
+        return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+    except OSError:
+        return None
+
+
+def _nonneg_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value) if value >= 0 else None
+
+
+def omp_prompt_tokens(session_file: Optional[Path]) -> Optional[int]:
+    """The prompt size of the session's LAST model call, read from omp's own
+    session file — the live context fill while a turn is still running.
+
+    WHY: omp 18.10.1 sends ACP ``usage_update`` only at ``agent_end``, i.e.
+    once per prompt turn (``AcpAgent`` emits it after the turn, verified in
+    the shipped binary). A task turn runs for tens of minutes and hundreds of
+    model calls, so the context figure froze at the reset value for the
+    whole run (live 30.10.2026: heartbeat 0 %, real fill 38 %). omp writes
+    every assistant message with its usage as it ends, so the file has the
+    figure the moment a call returns.
+
+    Same anchor omp's own context meter uses (``getContextBreakdown``):
+    ``contextSnapshot.promptTokens`` minus ``historyRewriteTokensRemoved``;
+    without a snapshot ``usage.contextTokens``; else ``input + cacheRead +
+    cacheWrite``. omp adds an estimate of the messages after that call (tool
+    results); this does not — a slight underestimate, never an invented
+    number. ``None`` when there is no such line. Never raises."""
+    if session_file is None:
+        return None
+    try:
+        with open(session_file, "rb") as fh:
+            size = fh.seek(0, 2)
+            fh.seek(max(0, size - _FILL_LOOKUP_TAIL_BYTES))
+            chunk = fh.read()
+    except OSError:
+        return None
+    for raw in reversed(chunk.split(b"\n")):
+        if b'"assistant"' not in raw or b'"usage"' not in raw:
+            continue
+        try:
+            d = json.loads(raw.decode("utf-8", errors="replace"))
+        except ValueError:
+            continue  # the cut first line, or a line being written
+        msg = d.get("message") if isinstance(d, dict) else None
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        usage = msg.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        snap = msg.get("contextSnapshot")
+        if isinstance(snap, dict) and _nonneg_int(snap.get("promptTokens")) is not None:
+            removed = _nonneg_int(snap.get("historyRewriteTokensRemoved")) or 0
+            return max(0, int(snap["promptTokens"]) - removed)
+        ctx = _nonneg_int(usage.get("contextTokens"))
+        if ctx is not None:
+            return ctx
+        parts = [_nonneg_int(usage.get(k)) for k in ("input", "cacheRead", "cacheWrite")]
+        total = sum(p for p in parts if p is not None)
+        if total > 0:
+            return total
+        # A line without any prompt figure (an error turn): look further back.
+    return None
+
+
+_CONTEXT_WINDOW_RE = re.compile(r"^\s*contextWindow:\s*(\d+)\s*$", re.MULTILINE)
+
+
+def configured_context_window(agent_dir: Optional[str] = None) -> Optional[int]:
+    """The context window MC rendered into omp's ``models.yml``
+    (``render-omp-config.sh``: ``contextWindow: ${OMP_CONTEXT_WINDOW}``, from
+    the runtime row, re-rendered on a runtime switch) — the window omp itself
+    divides by. Read fresh on every call: a switch rewrites the file inside
+    the running container. ``None`` when unreadable. Never raises."""
+    base = agent_dir or _profile_agent_dir() or os.environ.get("PI_CODING_AGENT_DIR")
+    if not base:
+        return None
+    try:
+        text = (Path(base) / "models.yml").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = _CONTEXT_WINDOW_RE.search(text)
+    if not match:
+        return None
+    window = int(match.group(1))
+    return window if window > 0 else None
+
+
 def _now_iso() -> str:
     return (
         datetime.now(timezone.utc)
