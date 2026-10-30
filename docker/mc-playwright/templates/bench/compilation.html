@@ -64,6 +64,18 @@
 .c .brow.hi .bl, .c .brow.hi .bv { color:var(--text); }
 .c .track { position:absolute; background:var(--track); }
 
+/* facts row (solo): small label over its value */
+.c .facts { display:grid; column-gap:28px; }
+.c .facts.n1 { grid-template-columns:1fr; }
+.c .facts.n2 { grid-template-columns:1fr 1fr; }
+.c .facts.n3 { grid-template-columns:1fr 1fr 1.4fr; }
+.c .facts.n4 { grid-template-columns:repeat(4,1fr); }
+.c .fc { display:flex; flex-direction:column; min-width:0; border-top:2px solid var(--line); padding-top:8px; }
+.c .fk { font:500 32px/1.15 'JetBrains Mono',monospace; text-transform:uppercase; letter-spacing:.04em;
+  color:var(--muted); white-space:nowrap; overflow:hidden; }
+.c .fv { font:600 38px/1.1 'General Sans',sans-serif; color:var(--text); white-space:nowrap; overflow:hidden;
+  margin-top:2px; }
+
 /* ranking table */
 .c .tbl { width:100%; border-collapse:collapse; }
 .c .tbl th { font:500 32px/1 'JetBrains Mono',monospace; text-transform:uppercase; letter-spacing:.03em;
@@ -118,14 +130,14 @@
        block running into the footer/footnote is reported, never shipped
        (the renderer answers 422 with this list). */
     var bad = [];
-    document.querySelectorAll('.cap, .meta, .sub, .bl, .bv, .band-note, .fl, .st .l, .hero .l, .hw, .mdl, .badge')
+    document.querySelectorAll('.cap, .meta, .sub, .bl, .bv, .band-note, .fl, .st .l, .hero .l, .hw, .mdl, .badge, .fk, .fv')
       .forEach(function (el) { if (el.scrollWidth > el.clientWidth + 1) bad.push(el.className + ':' + el.textContent.slice(0, 40)); });
     var top = document.querySelector('.band-top');
     if (top && top.scrollHeight > top.clientHeight + 1) bad.push('header taller than its band');
     var foot = document.querySelector('.band-foot');
     var limit = foot ? foot.getBoundingClientRect().top - 4 : {{HEIGHT}};
     var note = document.querySelector('.band-note');
-    ['.band-body', '.band-table', '.band-stats', '.band-hero'].forEach(function (sel) {
+    ['.band-body', '.band-table', '.band-stats', '.band-hero', '.band-facts'].forEach(function (sel) {
       var el = document.querySelector(sel);
       if (!el) return;
       var bottom = el.getBoundingClientRect().bottom;

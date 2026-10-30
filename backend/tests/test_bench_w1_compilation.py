@@ -19,7 +19,8 @@ from app.verticals.bench_studio import w1_compilation as wc  # noqa: E402
 
 RENDERER_DIR = Path(__file__).resolve().parents[2] / "docker" / "mc-playwright"
 DS = "DeepSeek-V4.1-Flash-1017"  # model-catalog: allow (test data)
-ENERGY = wc.EnergyConfig(watts_per_node=240.0, price_per_kwh=0.29, currency="CHF")
+#: USD per kWh (every money figure in the video is USD).
+ENERGY = wc.EnergyConfig(watts_per_node=240.0, price_per_kwh=0.35)
 
 
 def _src(title, *, minutes, tokens=200_000, sha=None, harness="omp", run_class="B", model=DS,
@@ -72,8 +73,8 @@ def test_three_runs_last_between_29_and_40_seconds():
         assert 29 <= total <= 40, (n, total)
 
 
-@pytest.mark.parametrize("n", [1, 5])
-def test_two_to_four_runs_only(n):
+@pytest.mark.parametrize("n", [0, 5])
+def test_one_to_four_runs_only(n):
     sources = [_src(f"T{i}", minutes=10 + i) for i in range(n)]
     with pytest.raises(ValueError):
         wc.build_spec(sources, handle="")
@@ -137,10 +138,10 @@ def test_small_differences_are_not_a_headline():
 
 def test_electricity_is_the_plain_arithmetic():
     s = _src("H", minutes=79.488)
-    # 2 nodes × 240 W × 79.488 min × CHF 0.29 / kWh
-    expected = 2 * 0.240 * (79.488 / 60) * 0.29
+    # 2 nodes × 240 W × 79.488 min × $0.35 / kWh
+    expected = 2 * 0.240 * (79.488 / 60) * 0.35
     assert wc.electricity(s, ENERGY) == pytest.approx(expected)
-    assert wc.fmt_money(wc.electricity(s, ENERGY)) == "0.18"
+    assert wc.fmt_money(wc.electricity(s, ENERGY)) == "0.22"
 
 
 def test_no_price_configured_means_no_electricity_anywhere():
@@ -148,25 +149,27 @@ def test_no_price_configured_means_no_electricity_anywhere():
     assert energy.price_per_kwh is None and energy.watts_per_node == 240.0
     spec = wc.build_spec(three_builds(), energy=energy, handle="")
     words = " ".join(wc.public_strings(spec))
-    assert "power" not in words.lower() and "CHF" not in words
+    assert "power" not in words.lower() and "$" not in words
     assert spec["parts"][0]["hero"]["unit"] == "min"
 
 
 def test_energy_config_reads_the_env():
     e = wc.EnergyConfig.from_env({"MC_BENCH_POWER_W_PER_NODE": "200", "MC_BENCH_ENERGY_PRICE": "0.31",
                                   "MC_BENCH_ENERGY_CURRENCY": "EUR"})
-    assert (e.watts_per_node, e.price_per_kwh, e.currency) == (200.0, 0.31, "EUR")
+    # The currency setting is gone: every money figure is USD.
+    assert (e.watts_per_node, e.price_per_kwh) == (200.0, 0.31)
+    assert not hasattr(e, "currency")
     assert wc.EnergyConfig.from_env({"MC_BENCH_ENERGY_PRICE": "nonsense"}).price_per_kwh is None
 
 
 def test_electricity_is_labelled_arithmetic_in_segment_and_details():
     spec = wc.build_spec(three_builds(), energy=ENERGY, handle="")
     seg = spec["parts"][1]
-    power = [st for st in seg["stats"] if st.get("unit") == "CHF"]
+    power = [st for st in seg["stats"] if st.get("unit") == "$" and "power" in st["label"]]
     assert power and power[0]["measured"] is False and "at most" in power[0]["label"]
     assert "arithmetic" in seg["footnote"].lower()
     details = " ".join(spec["parts"][-1]["details"])
-    assert "240 W" in details and "0.29/kWh" in details and "not measured" in details
+    assert "240 W" in details and "$0.35/kWh (assumed)" in details and "not measured" in details
 
 
 def test_cloud_run_shows_list_price_local_run_never_a_dollar():
@@ -174,7 +177,7 @@ def test_cloud_run_shows_list_price_local_run_never_a_dollar():
     sources = [_src("P", minutes=10, sha=sha, locality="cloud", cost_kind="api_price", cost_usd=1.234,
                     harness="api", run_class="A"),
                _src("P", minutes=30, sha=sha, harness="api", run_class="A")]
-    spec = wc.build_spec(sources, energy=wc.EnergyConfig(240, None, "CHF"), handle="")
+    spec = wc.build_spec(sources, energy=wc.EnergyConfig(240, None), handle="")
     cloud, local = spec["parts"][1], spec["parts"][2]
     assert any(st.get("unit") == "$" and st["value"] == "1.23" for st in cloud["stats"])
     assert not any(st.get("unit") == "$" for st in local["stats"])
@@ -313,7 +316,7 @@ def test_closing_shows_every_screenshot_and_the_ranking_totals():
     assert [t.split("/")[-2] for t in closing["thumbs"]] == [
         "Hourglass of Light Sand", "Lighthouse in a Storm", "Ribbon Highway Autopilot"]
     assert ranking["footnote"].startswith("Total 232 min · ")
-    assert "CHF 0.54 power, arithmetic" in ranking["footnote"]
+    assert "$0.65 power, arithmetic" in ranking["footnote"]
 
 
 def test_hook_and_ranking_do_not_repeat_the_first_segment_picture():
@@ -365,7 +368,7 @@ def test_mixed_cloud_and_power_column_says_cost():
                _src("P", minutes=30, sha=sha, harness="api", run_class="A")]
     table = wc.build_spec(sources, energy=ENERGY, handle="")["parts"][-2]["table"]
     assert table["columns"][-1] == "cost"
-    assert [r["cells"][-1] for r in table["rows"]] == ["$ 1.50", "CHF 0.07"]  # 2 × 240 W × 30 min × 0.29
+    assert [r["cells"][-1] for r in table["rows"]] == ["$1.50", "$0.08"]  # 2 × 240 W × 30 min × $0.35
 
 
 def test_unknown_locality_never_shows_a_dollar_or_cloud():
@@ -407,3 +410,90 @@ def test_entry_caption_is_the_brief_title_whole():
     spec = wc.build_spec(three_builds(), energy=ENERGY, handle="")
     assert [p["caption"] for p in spec["parts"][1:4]] == [
         "Hourglass of Light Sand", "Lighthouse in a Storm", "Ribbon Highway Autopilot"]
+
+
+
+# ── USD only ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("n", [1, 3])
+def test_every_money_figure_is_usd(n):
+    spec = wc.build_spec(three_builds()[:n], energy=ENERGY, handle="")
+    words = " ".join(wc.public_strings(spec))
+    for other in ("CHF", "EUR", "€", "£"):
+        assert other not in words, other
+    units = [st.get("unit") for p in spec["parts"] for st in ([p["hero"]] if p.get("hero") else []) + p.get("stats", [])]
+    assert "$" in units
+
+
+# ── solo: one run ────────────────────────────────────────────────────────
+
+
+def solo(**kw):
+    s = _src("Hourglass of Light Sand", minutes=79.488, tokens=263_594)
+    s["time_limit_min"] = 120
+    return wc.build_spec([s], energy=ENERGY, handle="@h", **kw), s
+
+
+def test_solo_is_hook_build_details_without_ranking_and_validates():
+    spec, _ = solo()
+    assert [p["kind"] for p in spec["parts"]] == ["hook", "entry", "closing"]
+    total = sum(p["duration_s"] for p in spec["parts"])
+    assert 20 <= total <= 25, total
+    assert spec["parts"][1]["duration_s"] >= 12
+    _validate(spec)
+
+
+def test_solo_never_compares_with_nothing():
+    spec, _ = solo()
+    hook, build, closing = spec["parts"]
+    assert not hook.get("bars")
+    # the one bar is the run against its own time limit, not against other runs
+    assert build["bars"] == [{"label": "of its 120-min time limit", "value": "66%", "fraction": 0.6624,
+                              "highlight": True}]
+    words = " ".join(wc.public_strings(spec)).lower()
+    for word in ("ranking", " vs ", "faster", "different briefs", "race"):
+        assert word not in words, word
+
+
+def test_solo_hook_hero_is_the_power_cost_in_usd_marked_as_arithmetic():
+    spec, _ = solo()
+    hero = spec["parts"][0]["hero"]
+    assert (hero["value"], hero["unit"], hero["measured"]) == ("0.22", "$", False)
+    assert "at most" in hero["label"]
+    assert spec["parts"][0]["hero_sub"] == "79.5 min of agent work · 264k output tokens"
+    assert "arithmetic" in spec["parts"][0]["footnote"]
+
+
+def test_solo_without_price_leads_with_the_time():
+    s = _src("H", minutes=79.488)
+    spec = wc.build_spec([s], energy=wc.EnergyConfig(240, None), handle="")
+    assert spec["parts"][0]["hero"]["unit"] == "min" and "$" not in " ".join(wc.public_strings(spec))
+
+
+def test_solo_build_shows_time_tokens_power_effort_runs():
+    spec, _ = solo()
+    build = spec["parts"][1]
+    assert [st["label"] for st in build["stats"]] == ["agent time", "output tokens", "power, at most"]
+    assert {f["label"]: f["value"] for f in build["facts"]} == {"effort": "high", "runs": "1",
+                                                               "harness": "omp agent"}
+    assert build["footnote"] == "One run · power is arithmetic, not measured"
+
+
+def test_solo_rating_only_when_given_and_marked_example():
+    spec, s = solo()
+    assert not spec["parts"][1].get("badge") and "pick" not in spec["parts"][-1]
+    spec2, s2 = solo(ratings=None)
+    spec3 = wc.build_spec([s], energy=ENERGY, handle="", ratings={s["test_id"]: 8.5}, rating_is_example=True,
+                          pick_reason="Placeholder.")
+    assert spec3["parts"][1]["badge"] == "Example rating 8.5/10"
+    assert spec3["parts"][-1]["pick"] == "Example rating: 8.5/10"
+    assert spec3["parts"][-1]["pick_reason"] == "Placeholder."
+
+
+def test_solo_details_and_one_thumbnail():
+    spec, _ = solo()
+    closing = spec["parts"][-1]
+    assert len(closing["thumbs"]) == 1
+    assert not any("Different briefs" in d for d in closing["details"])
+    assert any("$0.35/kWh (assumed)" in d for d in closing["details"])

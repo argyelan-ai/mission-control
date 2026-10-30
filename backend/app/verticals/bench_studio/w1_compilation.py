@@ -1,10 +1,13 @@
-"""Bench compilation (phase 1, 30.10.2026) — 2–4 FINISHED bench runs in one
+"""Bench compilation (phase 1, 30.10.2026) — 1–4 FINISHED bench runs in one
 4:5 video. No new runs: only the recordings and the frozen receipts.
 
-Sequence (``build_spec``):
+Sequence (``build_spec``), 2–4 runs:
     hook (the one honest headline) → one segment per run (header band, the
     untouched recording, stats + racing bars + footnote below it) → the
     numbers / ranking → the details (pick + how it was measured).
+Solo (one run): hook (one hero number) → the build, longer (stats, the
+    share of its time limit, effort/runs/harness) → the details. No
+    comparison bars against nothing, no ranking of one.
 
 The renderer (mc-playwright ``POST /compilation``, docker/mc-playwright/
 compilation.py) only lays out and encodes — every public word is built
@@ -18,10 +21,12 @@ Honesty rules of this format:
 - Electricity is arithmetic, never a meter reading: nodes × the power
   supply rating × wall time × price per kWh, and it says so. Rating and
   price are configuration (``MC_BENCH_POWER_W_PER_NODE``,
-  ``MC_BENCH_ENERGY_PRICE``, ``MC_BENCH_ENERGY_CURRENCY``); without a price
-  no electricity number is printed at all.
-- A local run never shows a bare $ (W1 rule); the API list price of a
-  local run is comparison only and stays in the details.
+  ``MC_BENCH_ENERGY_PRICE`` in USD per kWh); without a price no
+  electricity number is printed at all.
+- Every money figure is USD (operator decision 30.10.2026): the power
+  estimate and a cloud run's API list price. The power figure is always
+  labelled "power, at most" + "arithmetic" — never a spent amount. The API
+  list price of a LOCAL run is comparison only and stays out of the video.
 - Output tokens of an agent build are the SUM of its model_usage_events
   (the receipt holds a snapshot taken at harvest time, which misses calls
   that land later); a direct API run keeps its receipt median.
@@ -43,13 +48,15 @@ from pydantic import BaseModel, Field, model_validator
 from . import w1_common as c
 from .w1_kit import EFFORT_WORDS, HARNESS_WORDS, footer
 
-MIN_ENTRIES = 2
+MIN_ENTRIES = 1
 MAX_ENTRIES = 4
 #: Seconds per part (the reference posts run 29–40 s; 3 runs = 35 s).
 HOOK_S = 3.5
 RANKING_S = 5.0
 CLOSING_S = 6.0
 ENTRY_S = {2: 8.5, 3: 7.0, 4: 6.0}
+#: Solo: hook 3.5 + the build 13 + details 6 = 22.5 s.
+SOLO_ENTRY_S = 13.0
 #: Where in the (20 s) recording each part starts — the hook and the
 #: ranking show a later moment than the run's own segment.
 ENTRY_ART_START_S = 1.0
@@ -60,10 +67,10 @@ MIN_HEADLINE_RATIO = 1.2
 
 POWER_ENV = "MC_BENCH_POWER_W_PER_NODE"
 PRICE_ENV = "MC_BENCH_ENERGY_PRICE"
-CURRENCY_ENV = "MC_BENCH_ENERGY_CURRENCY"
 #: DGX Spark: 240 W power supply (NVIDIA spec) — a ceiling, the box draws less.
 DEFAULT_POWER_W_PER_NODE = 240.0
-DEFAULT_CURRENCY = "CHF"
+#: Every money figure in the video is USD (operator decision 30.10.2026).
+USD = "$"
 
 #: Published unified memory per node, for the hardware line ("2× DGX Spark ·
 #: 256 GB"). A device not listed simply gets no memory figure.
@@ -107,8 +114,8 @@ class CompilationIn(BaseModel):
 @dataclass(frozen=True)
 class EnergyConfig:
     watts_per_node: float
+    #: USD per kWh.
     price_per_kwh: Optional[float]
-    currency: str
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "EnergyConfig":
@@ -125,7 +132,6 @@ class EnergyConfig:
         return cls(
             watts_per_node=num(POWER_ENV) or DEFAULT_POWER_W_PER_NODE,
             price_per_kwh=num(PRICE_ENV),
-            currency=(env.get(CURRENCY_ENV) or "").strip() or DEFAULT_CURRENCY,
         )
 
 
@@ -165,6 +171,7 @@ def source_from_rows(
         "effort_level": effort_obs.get("level") if isinstance(effort_obs, dict) else None,
         "n_runs": int(rec.get("n_runs") or 1),
         "time_ms": rec.get("time_median"),
+        "time_limit_min": rec.get("time_limit_min"),
         "tokens_out": tokens,
         "tokens_source": tokens_source,
         "decode_tok_s": rec.get("decode_tok_s_median"),
@@ -276,7 +283,7 @@ def electricity(s: dict[str, Any], energy: Optional[EnergyConfig]) -> Optional[f
 def money_stat(s: dict[str, Any], energy: Optional[EnergyConfig]) -> Optional[dict[str, Any]]:
     power = electricity(s, energy)
     if power is not None:
-        return {"value": fmt_money(power), "unit": energy.currency, "unit_before": True,
+        return {"value": fmt_money(power), "unit": USD, "unit_before": True,
                 "label": "power, at most", "measured": False}
     if s.get("locality") == "cloud" and s.get("cost_kind") == "api_price" and s.get("cost_usd") is not None:
         return {"value": fmt_money(s["cost_usd"]), "unit": "$", "unit_before": True,
@@ -353,7 +360,7 @@ def _hook_part(sources, hook, energy, header, art_src, bars) -> dict[str, Any]:
         single = all(s.get("n_runs", 1) <= 1 for s in hook["members"])
         note = "Same brief, same harness" + (" · single run each" if single else " · medians")
     elif hook["kind"] == "power_total":
-        hero = {"value": fmt_money(hook["power"]), "unit": energy.currency, "unit_before": True,
+        hero = {"value": fmt_money(hook["power"]), "unit": USD, "unit_before": True,
                 "label": f"power for all {n} {noun}, at most", "measured": False}
         sub = f"{fmt_min(hook['time_ms'])} min of work · {c.fmt_tokens(total_tokens)} output tokens"
         note = ("Different briefs: no race, just the bill · arithmetic" if not same_brief
@@ -435,7 +442,7 @@ def build_spec(
     handle: Optional[str] = None,
     private_words: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """The renderer payload (``compilation.CompilationSpec``) for 2–4 runs."""
+    """The renderer payload (``compilation.CompilationSpec``) for 1–4 runs."""
     if not MIN_ENTRIES <= len(sources) <= MAX_ENTRIES:
         raise ValueError(f"a compilation shows {MIN_ENTRIES} to {MAX_ENTRIES} runs")
     for s in sources:
@@ -448,6 +455,9 @@ def build_spec(
             raise ValueError(f"{s['title']}: no recording and no screenshot")
     ratings = dict(ratings or {})
     rating_word = "Example rating" if rating_is_example else "My rating"
+    if len(sources) == 1:
+        parts = _solo_parts(sources[0], ratings, rating_word, pick_reason, rating_is_example, energy)
+        return _finish(parts, sources, handle, private_words)
     header = _header(sources)
     hook = choose_hook(sources, energy)
     # The hook shows the winner of a ratio; otherwise the LAST run, so the
@@ -456,13 +466,7 @@ def build_spec(
     parts = [_hook_part(sources, hook, energy, header, hero_src, hook_bars(sources, hook))]
     single = all(s.get("n_runs", 1) <= 1 for s in sources)
     for i, s in enumerate(sources):
-        stats = [{"value": fmt_min(s["time_ms"]) or "n/a", "unit": "min", "label": time_label(s)},
-                 {"value": c.fmt_tokens(s["tokens_out"]) or "n/a", "label": "output tokens"}]
-        money = money_stat(s, energy)
-        if money:
-            stats.append(money)
-        elif s.get("decode_tok_s"):
-            stats.append({"value": c.fmt_rate(s["decode_tok_s"]), "label": "tok/s decode"})
+        stats, money = _entry_stats(s, energy)
         note = ["single run" if s.get("n_runs", 1) <= 1 else f"median of {s['n_runs']}"]
         if money and not money["measured"]:
             note.append("power is arithmetic, not measured")
@@ -475,6 +479,10 @@ def build_spec(
         })
     parts.append(_ranking_part(sources, ratings, rating_word, pick_test_id, energy, header))
     parts.append(_closing_part(sources, pick_test_id, pick_reason, rating_is_example, energy, header, single))
+    return _finish(parts, sources, handle, private_words)
+
+
+def _finish(parts, sources, handle, private_words) -> dict[str, Any]:
     spec = {"shape": "tall", "parts": parts, "footer": FOOTER_LINE,
             "handle": footer() if handle is None else handle,
             "checksum": c.checksum([s.get("checksum") for s in sources])}
@@ -482,6 +490,62 @@ def build_spec(
     if hits:
         raise ValueError(f"privacy: {', '.join(hits)} in the public words")
     return spec
+
+
+def _entry_stats(s: dict[str, Any], energy: Optional[EnergyConfig]) -> tuple[list[dict[str, Any]], Optional[dict]]:
+    stats = [{"value": fmt_min(s["time_ms"]) or "n/a", "unit": "min", "label": time_label(s)},
+             {"value": c.fmt_tokens(s["tokens_out"]) or "n/a", "label": "output tokens"}]
+    money = money_stat(s, energy)
+    if money:
+        stats.append(money)
+    elif s.get("decode_tok_s"):
+        stats.append({"value": c.fmt_rate(s["decode_tok_s"]), "label": "tok/s decode"})
+    return stats, money
+
+
+def _solo_parts(s, ratings, rating_word, pick_reason, example, energy) -> list[dict[str, Any]]:
+    """One run: hook → the build (longer) → details. Nothing is compared
+    with anything: the one bar is the run against its own time limit."""
+    header = _entry_header(s)
+    stats, money = _entry_stats(s, energy)
+    runs = "one run" if s.get("n_runs", 1) <= 1 else f"median of {s['n_runs']} runs"
+    power = electricity(s, energy)
+    if power is not None:
+        hero = {"value": fmt_money(power), "unit": USD, "unit_before": True,
+                "label": "power for the whole build, at most", "measured": False}
+        sub = f"{fmt_min(s['time_ms'])} min of {'agent work' if s['run_class'] == 'B' else 'compute'} · " \
+              f"{c.fmt_tokens(s['tokens_out'])} output tokens"
+        hook_note = f"{runs.capitalize()} · power is arithmetic, not measured"
+    else:
+        hero = {"value": fmt_min(s["time_ms"]), "unit": "min", "label": time_label(s) + ", one build"}
+        sub = f"{c.fmt_tokens(s['tokens_out'])} output tokens"
+        hook_note = runs.capitalize()
+    rating = _rating_text(ratings.get(s["test_id"]))
+    bars = []
+    limit = s.get("time_limit_min")
+    if limit and s.get("time_ms"):
+        share = min(1.0, s["time_ms"] / (limit * 60_000))
+        bars = [{"label": f"of its {limit:g}-min time limit", "value": f"{round(share * 100)}%",
+                 "fraction": round(share, 4), "highlight": True}]
+    facts = [{"label": "effort", "value": effort_text(s).removeprefix("effort ")},
+             {"label": "runs", "value": str(s.get("n_runs") or 1)},
+             {"label": "harness", "value": harness_text(s)}]
+    note = [runs.capitalize()]
+    if money and not money["measured"]:
+        note.append("power is arithmetic, not measured")
+    parts = [
+        {"kind": "hook", "duration_s": HOOK_S, "header": header, "art": _art(s, HOOK_ART_START_S),
+         "caption": f"{s['title']} · {kind_text(s)}", "hero": hero, "hero_sub": sub, "footnote": hook_note},
+        {"kind": "entry", "duration_s": SOLO_ENTRY_S, "header": header, "art": _art(s, ENTRY_ART_START_S),
+         "caption": s["title"], "badge": f"{rating_word} {rating}" if rating else None,
+         "stats": stats, "bars": bars, "facts": facts, "footnote": " · ".join(note)},
+    ]
+    closing = _closing_part([s], None, None, example, energy, header, s.get("n_runs", 1) <= 1)
+    if rating:
+        closing["pick"] = f"{rating_word}: {rating}"
+        closing["pick_reason"] = pick_reason or None
+    parts.append(closing)
+    return parts
 
 
 def _ranking_part(sources, ratings, rating_word, pick_test_id, energy, header) -> dict[str, Any]:
@@ -513,7 +577,7 @@ def _ranking_part(sources, ratings, rating_word, pick_test_id, energy, header) -
             cells.append(c.fmt_tokens(s["tokens_out"]) or "n/a")
         if has_money:
             m = money_stat(s, energy)
-            cells.append(f"{m['unit']} {m['value']}" if m else "–")
+            cells.append(f"{m['unit']}{m['value']}" if m else "–")
         rows.append({"cells": cells, "highlight": s["test_id"] == pick_test_id})
     pick = next((s for s in sources if s["test_id"] == pick_test_id), None)
     # The pick, else the top of the ranking, else a middle run (the hook
@@ -531,7 +595,7 @@ def _totals(sources, energy) -> str:
     bits = [f"Total {fmt_min(total_ms)} min", f"{c.fmt_tokens(sum(s['tokens_out'] or 0 for s in sources))} tokens"]
     powers = [electricity(s, energy) for s in sources]
     if powers and all(p is not None for p in powers):
-        bits.append(f"{energy.currency} {fmt_money(sum(powers))} power, arithmetic")
+        bits.append(f"{USD}{fmt_money(sum(powers))} power, arithmetic")
     return " · ".join(bits)
 
 
@@ -542,18 +606,20 @@ def _closing_part(sources, pick_test_id, pick_reason, example, energy, header, s
         s0 = sources[0]
         details.append(f"{s0['model']} · {harness_text(s0)} · {effort_text(s0)}.")
     if all(s["run_class"] == "B" for s in sources):
-        details.append("Time = active agent time of the run; tools allowed." + (" One run each." if single else ""))
+        one = " One run." if len(sources) == 1 else " One run each."
+        details.append("Time = active agent time of the run; tools allowed." + (one if single else ""))
     else:
         details.append("Time = compute time" + (", one run each." if single else ", median of the runs."))
     if any(s["tokens_source"] == "usage_events" for s in sources):
         details.append("Tokens = output tokens summed over every model call of the run.")
     if energy and energy.price_per_kwh and any(s.get("locality") == "local" for s in sources):
         details.append(f"Power = nodes × {energy.watts_per_node:g} W supply rating × time × "
-                       f"{energy.currency} {energy.price_per_kwh:g}/kWh (assumed). Arithmetic ceiling, not measured; "
+                       f"{USD}{energy.price_per_kwh:g}/kWh (assumed). Arithmetic ceiling, not measured; "
                        "hardware not counted.")
     if all(s.get("network_blocked") for s in sources):
-        details.append("Pages recorded from the saved files, network off.")
-    if not _same(sources, lambda s: s.get("prompt_sha")):
+        details.append("Page recorded from the saved file, network off." if len(sources) == 1
+                       else "Pages recorded from the saved files, network off.")
+    if len(sources) > 1 and not _same(sources, lambda s: s.get("prompt_sha")):
         details.append("Different briefs: the numbers describe each build, not a race.")
     part: dict[str, Any] = {"kind": "closing", "duration_s": CLOSING_S, "header": header,
                             "caption": "How this was measured", "details": details[:6],
@@ -576,6 +642,8 @@ def public_strings(spec: Mapping[str, Any]) -> list[str]:
             out += [st["value"], st["label"], st.get("unit") or ""]
         for b in p.get("bars") or []:
             out += [b["label"], b["value"]]
+        for f in p.get("facts") or []:
+            out += [f["label"], f["value"]]
         if p.get("table"):
             out += list(p["table"]["columns"])
             for r in p["table"]["rows"]:

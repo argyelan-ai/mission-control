@@ -1,9 +1,10 @@
 """Bench compilation (phase 1, 30.10.2026) — pure helpers for POST /compilation.
 
-2–4 FINISHED bench runs in one 4:5 video (1080×1350) — no new runs, only
+1–4 FINISHED bench runs in one 4:5 video (1080×1350) — no new runs, only
 their recordings and receipts:
 
     hook → one segment per run → the numbers (ranking) → the details
+    solo (one run): hook → the build → the details (no ranking of one)
 
 The artwork is never covered: every word, bar and box lives in the band
 ABOVE the art (hardware · model · settings) or BELOW it (stats, bars,
@@ -39,6 +40,8 @@ COMP_ART = (0, 216, 1080, 608)
 COMP_LOWER_TOP = COMP_ART[1] + COMP_ART[3] + 18
 #: Racing bars: label column | track | value, one row per run.
 COMP_BAR_TOP = 1064
+#: A part with a facts row (solo) lifts its bar to make room below.
+COMP_BAR_TOP_FACTS = 1048
 COMP_BAR_ROW = 44
 COMP_BAR_X = 472
 COMP_BAR_W = 388
@@ -52,6 +55,10 @@ COMP_NOTE_TOP = 1236
 #: then the pick, then the details (text flows down, pictures never move).
 COMP_THUMB_Y = COMP_HEADER_H + 24
 COMP_THUMB_GAP = 16
+#: One thumbnail alone is not a second artwork: capped width.
+COMP_THUMB_MAX_W = 640
+#: Facts row (solo: effort · runs · harness) under the bars.
+COMP_FACTS_H = 96
 COMP_CONTENT_X = 56
 COMP_CONTENT_W = COMP_SIZE[0] - 2 * COMP_CONTENT_X
 #: ffmpeg colours (0xRRGGBB) — the template's CSS tokens carry the same.
@@ -89,6 +96,11 @@ class CompArt(BaseModel):
     start_s: float = Field(default=0.0, ge=0, le=600)
 
 
+class CompFact(BaseModel):
+    label: str
+    value: str
+
+
 class CompTableRow(BaseModel):
     cells: List[str]
     highlight: bool = False
@@ -120,6 +132,7 @@ class CompPart(BaseModel):
     hero_sub: Optional[str] = None
     stats: List[CompStat] = Field(default_factory=list, max_length=3)
     bars: List[CompBar] = Field(default_factory=list, max_length=4)
+    facts: List[CompFact] = Field(default_factory=list, max_length=4)
     table: Optional[CompTable] = None
     pick: Optional[str] = None
     pick_reason: Optional[str] = None
@@ -144,7 +157,7 @@ class CompPart(BaseModel):
 
 class CompilationSpec(BaseModel):
     shape: Literal["tall"] = "tall"
-    parts: List[CompPart] = Field(min_length=4, max_length=8)
+    parts: List[CompPart] = Field(min_length=3, max_length=8)
     footer: str = ""
     handle: str = ""
     checksum: Optional[str] = None
@@ -152,8 +165,10 @@ class CompilationSpec(BaseModel):
     @model_validator(mode="after")
     def _check(self) -> "CompilationSpec":
         n = sum(1 for p in self.parts if p.kind == "entry")
-        if not 2 <= n <= 4:
-            raise ValueError("a compilation shows 2 to 4 runs")
+        if not 1 <= n <= 4:
+            raise ValueError("a compilation shows 1 to 4 runs")
+        if n == 1 and any(p.kind == "ranking" for p in self.parts):
+            raise ValueError("a single run has no ranking")
         return self
 
 
@@ -185,20 +200,33 @@ def compilation_duration_s(spec: CompilationSpec) -> float:
     return float(sum(p.duration_s for p in spec.parts))
 
 
-def comp_bar_rects(n: int) -> List[tuple[int, int, int, int]]:
+def comp_bar_rects(n: int, top: int = COMP_BAR_TOP) -> List[tuple[int, int, int, int]]:
     """Track rectangles (x, y, w, h) of n racing bars — the template draws
     the tracks here, ffmpeg grows the fills here."""
     pad = (COMP_BAR_ROW - COMP_BAR_H) // 2
-    return [(COMP_BAR_X, COMP_BAR_TOP + i * COMP_BAR_ROW + pad, COMP_BAR_W, COMP_BAR_H) for i in range(n)]
+    return [(COMP_BAR_X, top + i * COMP_BAR_ROW + pad, COMP_BAR_W, COMP_BAR_H) for i in range(n)]
+
+
+def comp_bar_top(part: "CompPart") -> int:
+    return COMP_BAR_TOP_FACTS if part.facts else COMP_BAR_TOP
+
+
+def part_bar_rects(part: "CompPart") -> List[tuple[int, int, int, int]]:
+    """The bar rectangles of THIS part (the one source for template + ffmpeg)."""
+    return comp_bar_rects(len(part.bars), comp_bar_top(part))
 
 
 def comp_thumb_rects(n: int) -> List[tuple[int, int, int, int]]:
     """n 16:9 thumbnails in one row at the top of the closing card."""
     if n <= 0:
         return []
-    w = int((COMP_CONTENT_W - COMP_THUMB_GAP * (n - 1)) / n) // 2 * 2
+    w = min(COMP_THUMB_MAX_W, int((COMP_CONTENT_W - COMP_THUMB_GAP * (n - 1)) / n) // 2 * 2)
     h = int(round(w * 9 / 16 / 2)) * 2
     return [(COMP_CONTENT_X + i * (w + COMP_THUMB_GAP), COMP_THUMB_Y, w, h) for i in range(n)]
+
+
+def comp_facts_top(part: CompPart) -> int:
+    return comp_bar_top(part) + len(part.bars) * COMP_BAR_ROW + (12 if part.bars else 0)
 
 
 def comp_bar_width(fraction: float, track_w: int) -> int:
@@ -217,7 +245,7 @@ def comp_bar_commands(part: CompPart, part_idx: int, fps: int = COMP_FPS) -> str
     one command per frame, staggered, ease-out. Empty without bars."""
     if not part.bars:
         return ""
-    rects = comp_bar_rects(len(part.bars))
+    rects = part_bar_rects(part)
     steps = max(1, int(round(COMP_BAR_GROW_S * fps)))
     times: dict[float, List[str]] = {}
     for i, (bar, (_x, _y, tw, _h)) in enumerate(zip(part.bars, rects)):
@@ -277,7 +305,7 @@ def render_compilation_body(part: CompPart, spec: CompilationSpec) -> str:
         out.append(_band("band-stats", lower + 60, f'<div class="stats n{len(part.stats)}">{cells}</div>'))
     if part.bars:
         rows = []
-        for (bx, by, bw, bh), bar in zip(comp_bar_rects(len(part.bars)), part.bars):
+        for (bx, by, bw, bh), bar in zip(part_bar_rects(part), part.bars):
             row_top = by - (COMP_BAR_ROW - COMP_BAR_H) // 2
             hi = " hi" if bar.highlight else ""
             rows.append(
@@ -285,8 +313,12 @@ def render_compilation_body(part: CompPart, spec: CompilationSpec) -> str:
                 f'<span class="bl">{_e(bar.label)}</span><span class="bv">{_e(bar.value)}</span></div>'
                 f'<div class="track" style="left:{bx}px;top:{by}px;width:{bw}px;height:{bh}px"></div>'
             )
-        out.append(_band("band-bars", COMP_BAR_TOP, "", len(part.bars) * COMP_BAR_ROW))
+        out.append(_band("band-bars", comp_bar_top(part), "", len(part.bars) * COMP_BAR_ROW))
         out.extend(rows)
+    if part.facts:
+        cells = "".join(f'<div class="fc"><span class="fk">{_e(f.label)}</span><span class="fv">{_e(f.value)}</span></div>'
+                        for f in part.facts)
+        out.append(_band("band-facts", comp_facts_top(part), f'<div class="facts n{len(part.facts)}">{cells}</div>'))
     if part.table is not None:
         nc = part.table.name_col
 
@@ -317,7 +349,12 @@ def render_compilation_body(part: CompPart, spec: CompilationSpec) -> str:
             inner += '<ul class="det">' + "".join(f"<li>{_e(d)}</li>" for d in part.details) + "</ul>"
         out.append(_band("band-body", body_top, inner))
     if part.footnote:
-        note_top = (COMP_BAR_TOP + len(part.bars) * COMP_BAR_ROW + 12) if part.bars else COMP_NOTE_TOP
+        if part.facts:
+            note_top = comp_facts_top(part) + COMP_FACTS_H + 12
+        elif part.bars:
+            note_top = comp_bar_top(part) + len(part.bars) * COMP_BAR_ROW + 12
+        else:
+            note_top = COMP_NOTE_TOP
         out.append(_band("band-note", note_top, f"<span>{_e(part.footnote)}</span>"))
     foot = f'<span class="fl">{_e(spec.footer)}</span>' if spec.footer else "<span></span>"
     brand = f'<span class="brand"><i></i>{_e(spec.handle)}</span>' if spec.handle else ""
@@ -390,7 +427,7 @@ def build_compilation_cmd(
             if not _SAFE_GRAPH_PATH.match(cf):
                 raise ValueError(f"command file path not safe for the filter graph: {cf!r}")
             boxes = []
-            for j, (bar, (bx, by, _bw, bh)) in enumerate(zip(part.bars, comp_bar_rects(len(part.bars)))):
+            for j, (bar, (bx, by, _bw, bh)) in enumerate(zip(part.bars, part_bar_rects(part))):
                 colour = COMP_ACCENT if bar.highlight else COMP_BAR_MUTED
                 start = COMP_BAR_DELAY_S + j * COMP_BAR_STAGGER_S
                 boxes.append(f"drawbox@p{i}b{j}=x={bx}:y={by}:w=2:h={bh}:color={colour}:t=fill"

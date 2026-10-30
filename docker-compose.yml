@@ -136,10 +136,9 @@ services:
       # value so both containers stay alike.
       MC_BENCH_FOOTER: ${MC_BENCH_FOOTER:-}
       # Bench compilation video: electricity = nodes × power rating ×
-      # time × price, printed as arithmetic. No price = no power number.
+      # time × price (USD per kWh), printed as arithmetic. No price = no power number.
       MC_BENCH_POWER_W_PER_NODE: ${MC_BENCH_POWER_W_PER_NODE:-}
       MC_BENCH_ENERGY_PRICE: ${MC_BENCH_ENERGY_PRICE:-}
-      MC_BENCH_ENERGY_CURRENCY: ${MC_BENCH_ENERGY_CURRENCY:-}
       # Beweis-Tor (services/proof_gate.py) — runs in the API process on every
       # agent status change to review/done. off | warn | enforce; the date
       # flips warn to enforce by itself once MIN_CHECKS transitions were checked.
@@ -512,10 +511,9 @@ services:
       # value so both containers stay alike.
       MC_BENCH_FOOTER: ${MC_BENCH_FOOTER:-}
       # Bench compilation video: electricity = nodes × power rating ×
-      # time × price, printed as arithmetic. No price = no power number.
+      # time × price (USD per kWh), printed as arithmetic. No price = no power number.
       MC_BENCH_POWER_W_PER_NODE: ${MC_BENCH_POWER_W_PER_NODE:-}
       MC_BENCH_ENERGY_PRICE: ${MC_BENCH_ENERGY_PRICE:-}
-      MC_BENCH_ENERGY_CURRENCY: ${MC_BENCH_ENERGY_CURRENCY:-}
       # W2 (Rex-Review PR #500): Migrationen macht der backend-Container
       # (depends_on: backend: service_healthy stellt die Reihenfolge sicher).
       # Ein zweiter alembic-Lauf hier waere ein Migrations-Wettlauf gegen

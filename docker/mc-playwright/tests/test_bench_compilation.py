@@ -42,7 +42,7 @@ def _spec(n_entries=3, *, closing_pick=True):
     parts = [{
         "kind": "hook", "duration_s": 3.5, "header": HEADER, "art": art(0, 10.0),
         "caption": "3 agent builds · same model · different briefs",
-        "hero": {"value": "0.54", "unit": "CHF", "unit_before": True, "label": "power for all 3 builds, at most",
+        "hero": {"value": "0.54", "unit": "$", "unit_before": True, "label": "power for all 3 builds, at most",
                  "measured": False},
         "hero_sub": "232 min of agent work · 645k output tokens",
         "bars": _bars(n_entries, hi=-1), "footnote": "Different briefs: no head-to-head.",
@@ -53,20 +53,20 @@ def _spec(n_entries=3, *, closing_pick=True):
             "caption": f"Build {i} · agent build", "badge": None,
             "stats": [{"value": "79.5", "unit": "min", "label": "agent time"},
                       {"value": "264k", "label": "output tokens"},
-                      {"value": "0.18", "unit": "CHF", "unit_before": True, "label": "power, at most",
+                      {"value": "0.18", "unit": "$", "unit_before": True, "label": "power, at most",
                        "measured": False}],
             "bars": _bars(n_entries, hi=i), "footnote": "Single run · power is arithmetic, not measured",
         })
     parts.append({
         "kind": "ranking", "duration_s": 5.0, "header": HEADER, "art": art(0, 14.0), "caption": "The numbers",
         "table": {"columns": ["build", "time", "tokens", "power"],
-                  "rows": [{"cells": [f"Build {i}", "79.5 min", "264k", "CHF 0.18"]} for i in range(n_entries)]},
+                  "rows": [{"cells": [f"Build {i}", "79.5 min", "264k", "$0.18"]} for i in range(n_entries)]},
     })
     parts.append({
         "kind": "closing", "duration_s": 5.5, "header": HEADER, "caption": "How this was measured",
         "pick": "Build 0" if closing_pick else None,
         "pick_reason": "The calmest scene for the least power." if closing_pick else None,
-        "details": ["Time = active agent time of the one run.", "Power = 2 × 240 W × time × CHF 0.29/kWh."],
+        "details": ["Time = active agent time of the one run.", "Power = 2 × 240 W × time × $0.35/kWh."],
     })
     return comp.CompilationSpec.model_validate({
         "parts": parts, "footer": "AI-generated pages, recorded from real runs", "handle": "@example_handle",
@@ -89,8 +89,8 @@ def test_spec_accepts_two_to_four_entries():
         assert sum(p.kind == "entry" for p in spec.parts) == n
 
 
-@pytest.mark.parametrize("n", [1, 5])
-def test_spec_refuses_fewer_than_two_or_more_than_four_entries(n):
+@pytest.mark.parametrize("n", [5])
+def test_spec_refuses_more_than_four_entries(n):
     with pytest.raises(Exception):
         _spec(n)
 
@@ -475,3 +475,81 @@ def test_encode_puts_the_art_in_its_rect_and_grows_the_bar_to_its_value(tmp_path
     tx, ty, tw, th = comp.comp_thumb_rects(2)[0]
     red = _rgb_at(out, len(spec.parts) * 2.0 - 0.5, (tx + tw // 2, ty + th // 2))
     assert red[0] > 150 and red[1] < 100, red
+
+
+
+# ── solo: one run ────────────────────────────────────────────────────────
+
+
+def _solo_spec(**over):
+    art = lambda s=1.0: {"path": "/shared-deliverables/bench-x/0/recording.mp4", "kind": "video", "start_s": s}
+    parts = [
+        {"kind": "hook", "duration_s": 3.5, "header": HEADER, "art": art(10.0), "caption": "Hourglass · agent build",
+         "hero": {"value": "0.22", "unit": "$", "unit_before": True, "label": "power for the whole build, at most",
+                  "measured": False}, "hero_sub": "79.5 min of agent work · 264k output tokens",
+         "footnote": "One run · power is arithmetic, not measured"},
+        {"kind": "entry", "duration_s": 13.0, "header": HEADER, "art": art(), "caption": "Hourglass",
+         "stats": [{"value": "79.5", "unit": "min", "label": "agent time"}, {"value": "264k", "label": "output tokens"},
+                   {"value": "0.22", "unit": "$", "unit_before": True, "label": "power, at most", "measured": False}],
+         "bars": [{"label": "of its 120-min time limit", "value": "66%", "fraction": 0.66, "highlight": True}],
+         "facts": [{"label": "effort", "value": "high"}, {"label": "runs", "value": "1"},
+                   {"label": "harness", "value": "omp agent"}],
+         "footnote": "One run · power is arithmetic, not measured"},
+        {"kind": "closing", "duration_s": 6.0, "header": HEADER, "caption": "How this was measured",
+         "details": ["Time = active agent time of the run."],
+         "thumbs": ["/shared-deliverables/bench-x/0/screenshot.png"]},
+    ]
+    raw = {"parts": parts, "footer": "AI-generated pages from real runs", "handle": "@h"}
+    raw.update(over)
+    return comp.CompilationSpec.model_validate(raw)
+
+
+def test_solo_spec_is_valid_with_three_parts():
+    spec = _solo_spec()
+    assert [p.kind for p in spec.parts] == ["hook", "entry", "closing"]
+    assert comp.compilation_duration_s(spec) == pytest.approx(22.5)
+
+
+def test_a_single_run_has_no_ranking():
+    raw = _solo_spec().model_dump()
+    raw["parts"].insert(2, {"kind": "ranking", "duration_s": 5.0, "header": HEADER,
+                            "art": {"path": "/shared-deliverables/x.mp4"},
+                            "table": {"columns": ["build", "time"], "rows": [{"cells": ["H", "79.5 min"]}]}})
+    with pytest.raises(Exception, match="no ranking"):
+        comp.CompilationSpec.model_validate(raw)
+
+
+def test_solo_facts_sit_below_the_bar_and_above_the_footnote_never_on_the_art():
+    spec = _solo_spec()
+    part = spec.parts[1]
+    html = comp.render_compilation_html(COMP, part, spec)
+    facts_top = int(re.search(r'class="band-facts" style="top:(\d+)px', html).group(1))
+    note_top = int(re.search(r'class="band-note" style="top:(\d+)px', html).group(1))
+    _bx, by, _bw, bh = comp.part_bar_rects(part)[0]
+    tracks = re.findall(r'class="track" style="left:(\d+)px;top:(\d+)px;width:(\d+)px;height:(\d+)px"', html)
+    assert [tuple(map(int, t)) for t in tracks] == comp.part_bar_rects(part)   # template == ffmpeg geometry
+    ax, ay, aw, ah = comp.COMP_ART
+    assert facts_top > by + bh and facts_top >= ay + ah
+    assert note_top >= facts_top + comp.COMP_FACTS_H
+    assert note_top + 40 <= comp.COMP_SIZE[1] - 58           # footnote line ends above the footer
+    assert '<span class="fk">effort</span><span class="fv">high</span>' in html
+
+
+def test_one_thumbnail_is_capped_not_a_second_artwork():
+    [(x, y, w, h)] = comp.comp_thumb_rects(1)
+    assert w == comp.COMP_THUMB_MAX_W and abs(w / h - 16 / 9) < 0.02
+
+
+def test_overflow_check_covers_the_facts():
+    assert "'.band-facts'" in COMP and ".fk, .fv" in COMP
+
+
+def test_solo_cmd_draws_the_bar_where_the_template_put_its_track():
+    spec = _solo_spec()
+    bgs = [f"/tmp/bg{i}.png" for i in range(len(spec.parts))]
+    cmds = [f"/tmp/p{i}.cmd" if p.bars else None for i, p in enumerate(spec.parts)]
+    graph = comp.build_compilation_cmd(spec, bgs, cmds, "/shared-deliverables/c/solo.mp4")
+    graph = graph[graph.index("-filter_complex") + 1]
+    bx, by, _bw, bh = comp.part_bar_rects(spec.parts[1])[0]
+    assert f"drawbox@p1b0=x={bx}:y={by}:" in graph
+    assert "concat=n=3:v=1:a=0" in graph
