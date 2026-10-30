@@ -321,6 +321,32 @@ describe("TestList — filters", () => {
     expect(screen.getByTestId("bench-filter-harness")).toHaveTextContent("Harness: omp");
   });
 
+  it("on a phone every filter stays in view: the row wraps, never scrolls sideways; chips are compact below sm, desktop size from sm", async () => {
+    // 30.10. (operator, phone): "Klasse" was cut off, the rest hidden in a
+    // sideways strip.
+    vi.spyOn(benchW1Api.tests, "list").mockResolvedValue(testListFixture);
+    renderList();
+    await screen.findAllByTestId("bench-test-row");
+    const group = screen.getByRole("group", { name: "Filter" });
+    expect(group.className).toMatch(/(^|\s)flex-wrap(\s|$)/);
+    expect(group.className).not.toMatch(/overflow-x-(auto|scroll)/);
+    expect(group.className).not.toMatch(/(^|\s)-mx-\d/);
+    await userEvent.selectOptions(screen.getByLabelText("Harness"), "omp");
+    const chips = group.querySelectorAll('[data-testid^="bench-filter-"]');
+    expect(chips.length).toBeGreaterThanOrEqual(3);
+    for (const chip of chips) {
+      // compact on the phone, the desktop chip from 640 px
+      expect(chip.className).toMatch(/(^|\s)h-9(\s|$)/);
+      expect(chip.className).toMatch(/(^|\s)sm:h-11(\s|$)/);
+      // an active chip with a long value never pushes past the screen edge
+      expect(chip.className).toMatch(/(^|\s)max-w-full(\s|$)/);
+    }
+    // the clear button of the active chip follows the compact height
+    const clear = within(screen.getByTestId("bench-filter-harness")).getByRole("button");
+    expect(clear.className).toMatch(/(^|\s)h-9(\s|$)/);
+    expect(clear.className).toMatch(/(^|\s)sm:h-11(\s|$)/);
+  });
+
   it("model options come from the tests, device options from the devices", async () => {
     vi.spyOn(benchW1Api.tests, "list").mockResolvedValue(testListFixture);
     renderList();

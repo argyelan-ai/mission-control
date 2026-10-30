@@ -326,15 +326,15 @@ function FilterChip({
   return (
     <div
       data-testid={`bench-filter-${id === "runClass" ? "class" : id}`}
-      className="relative inline-flex items-center shrink-0 h-11 rounded-full transition-colors hover:bg-[var(--color-bg-hover)]"
+      className="relative inline-flex items-center shrink-0 max-w-full h-9 sm:h-11 rounded-full transition-colors hover:bg-[var(--color-bg-hover)]"
       style={{
         background: on ? C.accentSubtle : "transparent",
         border: `1px solid ${on ? C.borderAccent : C.border}`,
         color: on ? C.textPrimary : C.textSecondary,
       }}
     >
-      <span className={`flex items-center gap-1 pl-4 text-sm pointer-events-none whitespace-nowrap ${on ? "pr-1" : "pr-3"}`}>
-        {on ? t("active", { label, value: valueLabel ?? value }) : label}
+      <span className={`flex items-center gap-1 min-w-0 pl-3 sm:pl-4 text-sm pointer-events-none whitespace-nowrap ${on ? "pr-1" : "pr-2 sm:pr-3"}`}>
+        <span className="truncate">{on ? t("active", { label, value: valueLabel ?? value }) : label}</span>
         {!on && <ChevronDown size={14} aria-hidden style={{ color: C.textMuted }} />}
       </span>
       {/* The native picker (wheel on the iPhone) — invisible over the chip. */}
@@ -356,7 +356,7 @@ function FilterChip({
           type="button"
           onClick={() => onChange(undefined)}
           aria-label={t("clear", { label })}
-          className="relative flex items-center justify-center w-9 h-11 rounded-full cursor-pointer"
+          className="relative flex shrink-0 items-center justify-center w-8 h-9 sm:w-9 sm:h-11 rounded-full cursor-pointer"
           style={{ color: C.textSecondary }}
         >
           <X size={14} aria-hidden />
@@ -529,8 +529,10 @@ export function TestList() {
         {header}
 
         {base.isSuccess && total > 0 && (
+          // Wraps at every width (30.10.: a sideways strip on the phone hid
+          // "Klasse" and everything after it); compact chips below sm.
           <div
-            className="flex gap-2 overflow-x-auto -mx-4 px-4 lg:mx-0 lg:px-0 lg:flex-wrap [scrollbar-width:none]"
+            className="flex flex-wrap gap-2"
             role="group"
             aria-label={t("filter.label")}
           >
