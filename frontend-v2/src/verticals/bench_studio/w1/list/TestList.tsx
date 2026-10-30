@@ -31,7 +31,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
-import { Archive, BookOpen, ChevronDown, FlaskConical, ImageOff, Server, X } from "lucide-react";
+import { Archive, BookOpen, ChevronDown, Clock, FlaskConical, Image as ImageIcon, ImageOff, Loader2, Server, X } from "lucide-react";
 import { useAuthBlob } from "@/hooks/useAuthBlob";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { Pill } from "@/components/shared/Pill";
@@ -139,9 +139,14 @@ function useRowStatus() {
   };
 }
 
-/** The test's picture for the gallery: fetched only once the card is on
- *  screen (a hidden poster — the narrow list — never loads), with the
- *  Bearer header like every file. No picture: a quiet, deliberate frame. */
+/** The test's picture, in both shapes of the row (30.10.: on the phone and
+ *  in the pane beside a result no test showed it): a 16:9 thumbnail beside
+ *  the text when the list is narrow, the card's header on the wide page.
+ *  Fetched only once the slot is on screen, with the Bearer header like
+ *  every file. Never an empty box: until the picture arrives — or when the
+ *  test has none (still running, stopped, failed, a page that stayed blank)
+ *  — the slot is a quiet frame with a sign; the card adds the word, the
+ *  thumbnail leaves it to the row's own state line. */
 function Poster({ item }: { item: BenchTestListItem }) {
   const t = useTranslations("benchHome");
   const ref = useRef<HTMLDivElement>(null);
@@ -163,23 +168,32 @@ function Poster({ item }: { item: BenchTestListItem }) {
   }, [item.poster, seen]);
   const { blobUrl, error } = useAuthBlob(seen ? benchW1Api.tests.posterUrl(item.id) : null);
   const live = item.state === "running" || item.state === "waiting";
-  const empty = !item.poster || error;
+  const shown = !!blobUrl && !error;
+  const state = shown ? "picture" : item.poster && !error ? "loading" : live ? "not-yet" : "none";
+  const Sign = state === "loading" ? ImageIcon : item.state === "running" ? Loader2 : item.state === "waiting" ? Clock : ImageOff;
   return (
     <div
       ref={ref}
       data-testid="bench-row-poster"
-      className="hidden @4xl:flex relative aspect-video items-center justify-center overflow-hidden"
-      style={{ backgroundColor: C.bgDeep, borderBottom: `1px solid ${C.border}` }}
+      data-poster-state={state}
+      className="relative flex shrink-0 w-24 aspect-video items-center justify-center overflow-hidden rounded-md border @4xl:w-full @4xl:rounded-none @4xl:border-0 @4xl:border-b"
+      style={{ backgroundColor: C.bgDeep, borderColor: C.border }}
     >
-      {blobUrl && !error ? (
-        // Decorative: the title below names the test.
+      {shown ? (
+        // Decorative: the title beside it names the test.
         <img src={blobUrl} alt="" className="absolute inset-0 w-full h-full object-cover object-top" />
-      ) : empty ? (
+      ) : (
         <span className="flex flex-col items-center gap-2 text-sm" style={{ color: C.textMuted }}>
-          <ImageOff size={18} aria-hidden />
-          {t(live ? "poster.notYet" : "poster.none")}
+          <Sign
+            size={18}
+            aria-hidden
+            className={state === "loading" ? "opacity-40" : item.state === "running" ? "animate-spin motion-reduce:animate-none" : undefined}
+          />
+          {state !== "loading" && (
+            <span className="hidden @4xl:inline">{t(state === "not-yet" ? "poster.notYet" : "poster.none")}</span>
+          )}
         </span>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -199,8 +213,9 @@ function TestRow({ item, current }: { item: BenchTestListItem; current: boolean 
     if (current) ref.current?.scrollIntoView?.({ block: "nearest" });
   }, [current]);
   return (
-    // One row, two shapes by the list's width (@container): a hairline row in
-    // a pane or on the phone; a card with the test's picture on the wide page.
+    // One row, two shapes by the list's width (@container): a hairline row
+    // with a picture thumbnail in a pane or on the phone; a card headed by
+    // the test's picture on the wide page.
     // The row hairline sits on the wrapper: on the rounded link it would
     // curve up at the ends.
     <div className="border-b @4xl:border-b-0" style={{ borderColor: C.borderSubtle }}>
@@ -217,7 +232,7 @@ function TestRow({ item, current }: { item: BenchTestListItem; current: boolean 
         // where the open test is marked) the box sits ON the list's edges —
         // a pane that scrolls clips what sticks out (25.10.) — and the focus
         // ring goes inside it for the same reason.
-        className={`group block -mx-2 px-2 py-3 rounded-lg border transition-colors focus-inset 2xl:mx-0 @4xl:mx-0 @4xl:p-0 @4xl:h-full @4xl:overflow-hidden @4xl:flex @4xl:flex-col ${
+        className={`group flex items-start gap-3 -mx-2 px-2 py-3 rounded-lg border transition-colors focus-inset 2xl:mx-0 @4xl:mx-0 @4xl:p-0 @4xl:gap-0 @4xl:h-full @4xl:overflow-hidden @4xl:flex-col @4xl:items-stretch ${
           current
             ? ""
             : "border-transparent @4xl:border-[var(--color-border)] @4xl:bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)]"
@@ -228,7 +243,7 @@ function TestRow({ item, current }: { item: BenchTestListItem; current: boolean 
         {/* Title and model wrap, never "…": beside a result the column is
             narrow, and a cut model name ("D.", 25.10.) says nothing. The tags
             and the state go to the next line when they do not fit. */}
-        <div className="@4xl:px-4 @4xl:pt-3 @4xl:pb-4 @4xl:flex @4xl:flex-col @4xl:flex-1">
+        <div className="flex-1 min-w-0 @4xl:px-4 @4xl:pt-3 @4xl:pb-4 @4xl:flex @4xl:flex-col">
           <div className="flex items-baseline justify-between gap-3">
             <span
               data-testid="bench-row-title"

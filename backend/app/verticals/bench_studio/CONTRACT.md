@@ -41,7 +41,7 @@ covers every code in EN + DE).
 | `POST /tests/{id}/seen` | `SeenResponse` | The result page of a FINISHED test was opened: resolves its Eingang item `bench_result` (no side effect, idempotent; a live test resolves nothing) |
 | `POST /tests/{id}/stop` | `BenchTestDetail` | |
 | `POST /tests/{id}/harvest` | `BenchTestDetail` | "Zahlen nachladen" → new receipt version + recompose |
-| `GET /tests/{id}/poster` | `image/webp` | The list gallery picture (25.10.2026): ≤ 800 px wide WebP of the video run's page screenshot (else the first run with one); 404 = no picture. `BenchTestListItem.poster` says it up front. Read-only, `Cache-Control: private` |
+| `GET /tests/{id}/poster` | `image/webp` | The list gallery picture (25.10.2026): ≤ 800 px wide WebP of the video run's page screenshot (else the first other run whose page drew something — a blank page hands over, 30.10.2026); 404 = no picture. `BenchTestListItem.poster` says it up front. Read-only, `Cache-Control: private` |
 | `GET /tests/{id}/kit` | `XKit` | English texts; red = preview only |
 | `POST /tests/{id}/kit/download-token` | `DownloadToken` | Resource-scoped, short-lived |
 | `GET /tests/{id}/kit/files/{video.mp4\|card.png\|kit.zip}?token=` | file | `Content-Disposition: attachment`; red gate → 409 |

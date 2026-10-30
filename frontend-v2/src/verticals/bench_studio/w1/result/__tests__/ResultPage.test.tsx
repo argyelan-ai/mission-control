@@ -33,7 +33,10 @@ vi.mock("@/verticals/bench_studio/w1/api", async () => {
     ...actual,
     LIVE_POLL_MS: 25,
     benchW1Api: {
-      tests: { get: vi.fn(), rerun: vi.fn(), harvest: vi.fn(), stop: vi.fn(), seen: vi.fn().mockResolvedValue({ resolved: 0 }) },
+      tests: {
+        get: vi.fn(), rerun: vi.fn(), harvest: vi.fn(), stop: vi.fn(), seen: vi.fn().mockResolvedValue({ resolved: 0 }),
+        posterUrl: (id: string) => `/bench/tests/${id}/poster`,
+      },
       kit: { get: vi.fn(), downloadToken: vi.fn(), fileUrl: vi.fn() },
     },
   };
@@ -526,6 +529,49 @@ describe("ResultPage — where the parts sit on the desktop", () => {
     expect(region(stage, "result-main")).not.toBeNull();
     // The stage keeps its 16:9 place while the bytes load: nothing jumps.
     expect(stage.className).toMatch(/(^|\s)aspect-video(\s|$)/);
+  });
+
+  it("the video wears the test's picture until it plays (an iPhone shows no first frame; a scene that starts black stays black)", async () => {
+    const posterBlob = new Blob(["p"], { type: "image/webp" });
+    const videoBlob = new Blob(["v"], { type: "video/mp4" });
+    const fetchSpy = vi.fn(async (url: string) =>
+      url.endsWith(`/bench/tests/${testDoneGreenFixture.id}/poster`)
+        ? ({ ok: true, status: 200, blob: async () => posterBlob } as unknown as Response)
+        : ({ ok: true, status: 200, blob: async () => videoBlob } as unknown as Response),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.spyOn(URL, "createObjectURL").mockImplementation((b) => ((b as Blob).type.startsWith("image/") ? "blob:poster" : "blob:video"));
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    try {
+      renderView(testDoneGreenFixture);
+      const stage = await screen.findByTestId("result-video-stage");
+      await waitFor(() => expect(stage.querySelector("video")?.getAttribute("poster")).toBe("blob:poster"), { timeout: 4_000 });
+      expect(stage.querySelector("video")?.getAttribute("src")).toBe("blob:video");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("no picture for the test: the video still plays, just without a still", async () => {
+    const videoBlob = new Blob(["v"], { type: "video/mp4" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.endsWith("/poster")
+          ? ({ ok: false, status: 404, blob: async () => new Blob() } as unknown as Response)
+          : ({ ok: true, status: 200, blob: async () => videoBlob } as unknown as Response),
+      ),
+    );
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:video");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    try {
+      renderView(testDoneGreenFixture);
+      const stage = await screen.findByTestId("result-video-stage");
+      await waitFor(() => expect(stage.querySelector("video")?.getAttribute("src")).toBe("blob:video"), { timeout: 4_000 });
+      expect(stage.querySelector("video")?.hasAttribute("poster")).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("stopped: the main column says run by run what happened — time, thought vs. written, outcome in words", async () => {

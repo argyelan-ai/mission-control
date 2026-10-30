@@ -241,11 +241,11 @@ async def test_poster(
     current_user=Depends(require_user),
 ):
     """The gallery picture of a test: a small WebP of the video run's page
-    screenshot (else the first run that has one). 404 = no picture; the list
+    screenshot (else the first other run whose page drew something). 404 =
+    no picture; the list
     item says so up front (``poster``). Read-only."""
     await w1_tests.get_or_404(session, test_id)
-    entry = w1_tests.poster_entry(await w1_tests.entries_of(session, test_id))
-    data = await asyncio.to_thread(w1_kit.poster_webp, entry.screenshot_path if entry else None)
+    data = await asyncio.to_thread(w1_tests.poster_bytes, await w1_tests.entries_of(session, test_id))
     if data is None:
         raise HTTPException(404, "No picture for this test")
     return Response(
