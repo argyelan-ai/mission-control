@@ -249,6 +249,21 @@ lesbar (als Protokoll v0, Unbekanntes ausgeschrieben).
 `tasks.effort`), ein Renderer (mc-playwright, neue Vorlagen + `RENDERER_FEATURES`
 `bench_card_v1`, `seeded_random`, `page_check`), keine X-API.
 
+### Nachtrag 30.10.2026 — Zusammenschnitt (Phase 1)
+
+2–4 **fertige** Tests in **einem** 4:5-Video (1080×1350), ohne neuen Lauf: Hook (eine
+ehrliche Schlagzeile) → je Lauf ein Segment → Zahlen/Rangliste → Details. Das Kunstwerk
+wird nie ueberdeckt: Hardware · Modell · Einstellungen im Band darueber, Zahlen,
+Balken und Fussnote darunter; die Aufnahme fuellt das Kunst-Rechteck in voller Breite.
+Regeln: ein Verhaeltnis ("2.4×") nur bei gleichem Auftrag, gleicher Laufklasse und
+gleichem Harness, sonst Summen; Strom nur als ausgewiesene Rechnung (Knoten ×
+Netzteil-Leistung × Zeit × Preis, `MC_BENCH_POWER_W_PER_NODE`, `MC_BENCH_ENERGY_PRICE`,
+`MC_BENCH_ENERGY_CURRENCY` — ohne Preis keine Stromzahl); Tokens eines Agenten-Baus =
+Summe der `model_usage_events`; Bewertung und Favorit sind Render-Eingabe (Phase 1 ohne
+Speicherung), fehlen sie, fehlen Abzeichen, Rang-Ordnung und Favorit; Platzhalter heissen
+"Example". Keine Cyan-Farbe. Renderer: `POST /compilation`, Feature
+`bench_compilation_v1`. Phase 2: Knopf auf der Bench-Seite + Bewertungs-Eingabe + Route.
+
 ## Referenzen
 
 - `backend/app/models/bench.py` — `BenchChallenge`, `BenchEntry` (SQLModel)
@@ -261,6 +276,8 @@ lesbar (als Protokoll v0, Unbekanntes ausgeschrieben).
   DraftDialog, NewChallengeDialog, ChallengeDetail, api.ts, types.ts
 - `frontend-v2/src/app/bench/page.tsx` — Route-Entry
 - `docker/mc-playwright/media.py` — `/record` + `/compose` Endpunkte
+- `docker/mc-playwright/compilation.py` + `templates/bench/compilation.html` — `/compilation` (Zusammenschnitt)
+- `backend/app/verticals/bench_studio/w1_compilation.py` — Zusammenschnitt: Daten, Schlagzeile, Texte
 - `docker/mc-playwright/service.py` — ffmpeg-Aufruf Grid-Komposition
 - `backend/app/services/x_publisher.py` — `post_media()` (Baustein 1, PR 1)
 - `backend/alembic/versions/0153_prompt_templates.py` — Prompt Library Migration
