@@ -234,6 +234,15 @@ omp config set startup.setupWizard false >/dev/null 2>&1 \
     && echo "[entrypoint] wizard skipped (startup.setupWizard=false, setupVersion=1)" \
     || echo "[entrypoint] WARN: omp config set failed — TUI may show the setup wizard"
 
+# ── 2c. Read the skills MC hands this agent ─────────────────────────────────
+# MC copies the agent's allowed skills (agents.cli_skills) into
+# ~/.claude/skills (plugin_manager.sync_agent_skills_to_disk). omp only reads
+# that folder with `skills.enableClaudeUser`, which ships OFF — without this
+# line every skill assigned in MC is silently invisible to omp agents.
+omp config set skills.enableClaudeUser true >/dev/null 2>&1 \
+    && echo "[entrypoint] skills: ~/.claude/skills enabled (skills.enableClaudeUser=true)" \
+    || echo "[entrypoint] WARN: omp config set skills.enableClaudeUser failed — MC skills stay invisible"
+
 # ── 3. tmux layout (~/.tmux.conf keeps a large scrollback for the pane SSE) ──
 # mouse on: the Sessions-page web terminal forwards wheel events as mouse CSI
 # sequences; tmux (mouse on) forwards them to the native omp TUI in Window 0 so
