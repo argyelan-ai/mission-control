@@ -938,6 +938,13 @@ export const api = {
      *  `thumb` = small WebP for the card, `full` = metadata-free original. */
     mediaUrl: (agentId: string, mediaId: string, variant: "thumb" | "full" = "thumb"): string =>
       `${BASE_URL}/api/v1/agents/${encodeURIComponent(agentId)}/chat/media/${encodeURIComponent(mediaId)}?variant=${variant}`,
+    /** Is the engine the agent is bound to answering a request right now?
+     *  Asked only while a live row is quiet; per ENGINE, not per agent.
+     *  `engine: null` = unknown (never read as busy). */
+    engine: (agentId: string) =>
+      request<import("./chatTypes").ChatEngineActivity>(
+        `/api/v1/agents/${encodeURIComponent(agentId)}/chat/engine`,
+      ),
     /** The tasks of this chat (spec A): live ones + the newest finished
      *  ones as cards. `null` = 304, keep the last answer. */
     tasks: (agentId: string, params: { limit?: number; etag?: string | null } = {}) =>

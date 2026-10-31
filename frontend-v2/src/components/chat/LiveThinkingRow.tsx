@@ -1,11 +1,12 @@
 "use client";
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { Brain, ChevronRight } from "lucide-react";
 import { C } from "@/lib/colors";
 import type { PreviewEvent } from "@/lib/chatTypes";
 import { formatSpan } from "@/lib/taskDetail/stateLine";
+import { useEngineBusy } from "@/hooks/useEngineActivity";
 import { estimateTokens, formatElapsed } from "./thinkingFormat";
 
 /**
@@ -20,6 +21,13 @@ import { estimateTokens, formatElapsed } from "./thinkingFormat";
  * stands in the history as a `ThinkingRow`.
  *
  * Nothing is invented: no start -> no clock, no size -> no token estimate.
+ *
+ * Quiet is not always dead (31.10.2026): a model writing a big tool call
+ * streams nothing until the call is complete. Once quiet, the row asks
+ * whether the agent's engine has a request in flight (`useEngineBusy`); if
+ * so it says "Working · model computing, no output yet" and the clock keeps
+ * counting. The clock never runs backwards: it holds the largest value it
+ * has shown and freezes there while the row is genuinely silent.
  */
 /** No new piece of the thought for this long = the row stops counting. */
 export const QUIET_AFTER_MS = 60_000;
@@ -47,22 +55,38 @@ export const LiveThinkingRow = memo(function LiveThinkingRow({
     return () => window.clearInterval(id);
   }, [startedMs]);
 
-  const tokens = typeof preview.chars === "number" && preview.chars > 0
-    ? t("thinkingTokens", { count: new Intl.NumberFormat(locale).format(estimateTokens(preview.chars)) })
-    : null;
   // A dead engine sends nothing more: the clock must not keep counting as if
   // the model were still at work (review finding). Past QUIET_AFTER_MS without
-  // a new snapshot the clock stops at the last one and the row says how long
-  // it has been quiet. Whether the model is reachable is the status line's job.
+  // a new snapshot the row asks the engine; busy -> it says so and counts on,
+  // otherwise the clock holds and the row says how long it has been quiet.
   const lastMs = Date.parse(preview.ts);
   const quietMs = Number.isNaN(lastMs) ? 0 : now - lastMs;
   const quiet = quietMs > QUIET_AFTER_MS;
-  const elapsed = Number.isNaN(startedMs)
-    ? null
-    : formatElapsed((quiet ? lastMs : now) - startedMs);
+  const engineBusy = useEngineBusy(quiet);
+  const counting = !quiet || engineBusy;
+
+  // Monotonic clock (31.10.2026: it read 3:21, then jumped back to the last
+  // snapshot's 2:22): the largest value shown for THIS thought, per start.
+  const shown = useRef<{ start: number; ms: number | null }>({ start: NaN, ms: null });
+  if (shown.current.start !== startedMs) shown.current = { start: startedMs, ms: null };
+  let elapsedMs: number | null = null;
+  if (!Number.isNaN(startedMs)) {
+    const held = shown.current.ms ?? (Number.isNaN(lastMs) ? now : lastMs) - startedMs;
+    elapsedMs = counting ? Math.max(held, now - startedMs) : held;
+    shown.current.ms = elapsedMs;
+  }
+  const elapsed = elapsedMs == null ? null : formatElapsed(elapsedMs);
+  // While the engine works the thought's size is old news — a frozen token
+  // count read as "dead" (31.10.2026); the row shows only what is true now.
+  const tokens = !engineBusy && typeof preview.chars === "number" && preview.chars > 0
+    ? t("thinkingTokens", { count: new Intl.NumberFormat(locale).format(estimateTokens(preview.chars)) })
+    : null;
   // K10: the repo's one form for "how long silent" — a span ("silent for
   // 2 min" / "still seit 2 min"), never a second m:ss clock (review UI-6).
-  const quietText = quiet ? t("thinkingQuiet", { span: formatSpan(quietMs / 1000, locale) ?? "" }) : null;
+  const quietText = engineBusy
+    ? t("thinkingEngineBusy")
+    : quiet ? t("thinkingQuiet", { span: formatSpan(quietMs / 1000, locale) ?? "" }) : null;
+  const label = engineBusy ? t("thinkingEngineWorking") : t("thinkingLive");
 
   // No live region around the ticking clock (review R4/UI-3: a screen reader
   // read "1:47", "1:48", … every second). One calm status says only
@@ -71,7 +95,7 @@ export const LiveThinkingRow = memo(function LiveThinkingRow({
   return (
     <div className="w-full px-4" data-testid="live-thinking">
       <span role="status" className="sr-only">
-        {quietText ? `${t("thinkingLive")} · ${quietText}` : t("thinkingLive")}
+        {quietText ? `${label} · ${quietText}` : label}
       </span>
       <button
         type="button"
@@ -81,14 +105,16 @@ export const LiveThinkingRow = memo(function LiveThinkingRow({
           onOpenChange?.(next);
         }}
         aria-expanded={open}
+        title={engineBusy ? t("thinkingEngineBusyHint") : undefined}
+        data-engine-busy={engineBusy ? "" : undefined}
         className="w-full min-h-11 flex items-center gap-2 text-left bg-transparent border-0 p-0 cursor-pointer text-xs"
       >
         {/* 13 px + gap-2 like ToolRow / ThinkingRow: one text edge (review UI-7). */}
         <span className={`shrink-0 flex justify-center ${wide ? "w-4" : ""}`} aria-hidden="true">
-          <Brain size={13} className={quiet ? "" : "animate-pulse motion-reduce:animate-none"} style={{ color: C.textMuted }} />
+          <Brain size={13} className={!counting ? "" : "animate-pulse motion-reduce:animate-none"} style={{ color: C.textMuted }} />
         </span>
         <span className="min-w-0 truncate">
-          <span style={{ color: C.textSecondary }}>{t("thinkingLive")}</span>
+          <span style={{ color: C.textSecondary }}>{label}</span>
           {tokens && <span className="tabular-nums" style={{ color: C.textMuted }}> · {tokens}</span>}
           {elapsed && <span className="tabular-nums" style={{ color: C.textMuted }}> · {elapsed}</span>}
           {quietText && (
