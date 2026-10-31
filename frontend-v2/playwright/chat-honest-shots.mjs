@@ -72,6 +72,11 @@ function scene(name) {
     liveRow = { block: "thinking", startedAt: ago(201), ts: ago(quiet ? 142 : 2), chars: 29_200, stale: false };
     if (name === "live-busy") engine = { busy: true, running: 1, checkedAt: ago(1) };
     if (name === "live-quiet") engine = { busy: false, running: 0, checkedAt: ago(1) };
+  } else if (name === "finished") {
+    // A finished task seen on (re)load: a card, then the chat goes on.
+    Object.assign(stub, { status: "done", live: false, endedAt: ago(300), outcome: "Game page delivered, 1 file.", deliverables: 1 });
+    events.push(msg("m3", 200, "user", "Danke — sieht gut aus."));
+    events.push(msg("m4", 190, "assistant", "Gern. Die Seite liegt bei den Ergebnissen."));
   } else {
     // dividers / header: chat question in the middle of the task, an answer from the chat, more task work
     rows = [...workRows(1700, 700, 12), ...workRows(500, 260, 3)];
@@ -79,7 +84,7 @@ function scene(name) {
     events.push(msg("m4", 590, "assistant", "Die Aufgabe läuft in ihrer eigenen Session — Szene steht, jetzt die Steuerung."));
   }
   const steps = {
-    applies: true, taskId: TASK_ID, status: "in_progress", live: true, hasSession: true,
+    applies: true, taskId: TASK_ID, status: stub.status, live: stub.live, hasSession: true,
     attempts: [{ n: 1, startedAt: ago(1800) }], rows, updated: [], cursor: `v1.${rowN}`, hasMore: false,
     reset: false, omitted: 0, liveRow,
   };
@@ -134,6 +139,7 @@ const SHOTS = [
   { scene: "live-normal", vp: "desk" }, { scene: "live-busy", vp: "desk" }, { scene: "live-quiet", vp: "desk" },
   { scene: "dividers", vp: "phone" }, { scene: "dividers", vp: "desk" },
   { scene: "header", vp: "phone" }, { scene: "header", vp: "desk" },
+  { scene: "finished", vp: "phone" }, { scene: "finished", vp: "desk" },
 ];
 const VIEWPORTS = {
   phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
@@ -168,7 +174,7 @@ for (const shot of SHOTS) {
   await page.goto(origin, { waitUntil: "load" });
   await page.waitForFunction(() => typeof window.__mountHonest === "function", { timeout: 30000 });
   await page.evaluate((l) => window.__mountHonest(l), LOCALE);
-  await page.waitForSelector('[data-testid="chat-task-segment"]', { timeout: 30000 });
+  await page.waitForSelector('[data-testid="chat-task-segment"], [data-testid="chat-task-card"]', { timeout: 30000 });
   await page.waitForTimeout(1500);
   let measure = null;
   if (shot.scene === "header") {

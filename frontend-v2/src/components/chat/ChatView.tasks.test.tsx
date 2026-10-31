@@ -769,13 +769,16 @@ describe("ChatView — session boundaries (31.10.2026)", () => {
     expect(segments).toHaveLength(2);
     const dividers = screen.getAllByTestId("chat-session-divider");
     expect(dividers.map((d) => d.dataset.kind)).toEqual(["start", "back"]);
-    expect(dividers[0]).toHaveAccessibleName("New task · own session");
+    expect(dividers[0]).toHaveTextContent("New task · own session");
+    // One element with the head: the line sits inside the first segment, right above its head.
+    expect(within(segments[0]).getByTestId("chat-session-divider")).toBe(dividers[0]);
+    expect(within(segments[1]).queryByTestId("chat-session-divider")).toBeNull();
     expect(dividers[1]).toHaveAccessibleName("Back in chat");
-    // Order: chat message → start → band 1 → back → question → band 2 (continues, no new start)
+    // Order: chat message → (start line + head of band 1) → back → question → band 2 (continues, no new start)
     const first = screen.getByText("Start the report");
     const question = screen.getByText("How far are you?");
     expect(first.compareDocumentPosition(dividers[0])).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(dividers[0].compareDocumentPosition(segments[0])).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(dividers[0].compareDocumentPosition(within(segments[0]).getByTestId("chat-task-head"))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(segments[0].compareDocumentPosition(dividers[1])).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(dividers[1].compareDocumentPosition(question)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
@@ -810,5 +813,35 @@ describe("ChatView — the sticky task head sits flush (31.10.2026)", () => {
     const timeline = screen.getByTestId("chat-timeline");
     expect(timeline.parentElement?.className).not.toMatch(/(^|\s)(pt|py|p)-/);
     expect(timeline.className).toMatch(/\bpt-2\b/);
+  });
+});
+
+describe("ChatView — only the task's head is marked, not the whole band (31.10.2026)", () => {
+  it("a running task: steps on the chat ground, the head with hairlines and a breathing icon", async () => {
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Start")]) });
+    mockStream.mockReturnValue(streamOf());
+    renderView();
+    const seg = await screen.findByTestId("chat-task-segment");
+    expect(seg.className).not.toMatch(/\bbg-deep\b/);
+    expect(seg.className).not.toMatch(/\bborder-y\b/);
+    const head = within(seg).getByTestId("chat-task-head");
+    expect(head.className).toMatch(/\bborder-y\b/);
+    expect(head).toHaveAttribute("data-live");
+    expect(head.querySelector("svg")).toHaveClass("animate-pulse");
+    expect(head.querySelector("svg")).toHaveClass("motion-reduce:animate-none");
+  });
+
+  it("a finished task: the same head, its icon still", async () => {
+    serve(
+      { applies: true, tasks: [stub({ status: "done", live: false, endedAt: at(20) })], queued: 0, hasMore: false },
+      { [TASK_ID]: steps([think(at(1), "Start")], { status: "done", live: false }) },
+    );
+    mockStream.mockReturnValue(streamOf());
+    renderView();
+    const card = await screen.findByTestId("chat-task-card");
+    expect(card.className).not.toMatch(/\bbg-deep\b/);
+    const head = card.querySelector('[data-region="chat-task-head"]')?.parentElement as HTMLElement;
+    expect(head.className).toMatch(/\bborder-y\b/);
+    expect(card.querySelector(".animate-pulse")).toBeNull();
   });
 });

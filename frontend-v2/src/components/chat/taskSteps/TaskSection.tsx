@@ -4,8 +4,13 @@
  * A task's work inside the agent chat (spec A, variant A): segments of a
  * section, and the collapsed card of a finished task.
  *
- * A segment is a band (`bg-deep`, hairline top and bottom) in the chat. Its
- * head is ONE sticky 44 px line — clipboard icon, the title (truncated), and
+ * A segment's steps stand on the chat's own ground, like the rest of the
+ * timeline (operator 31.10.2026: the dark band behind a whole task read as an
+ * island). Only the task's head is marked: hairlines above and below on the
+ * chat ground, its clipboard icon pulsing while the task runs (static when
+ * not, `motion-reduce` safe), and above a task's first head one muted line
+ * "New task · own session" — the head and that line are one element, no
+ * second divider. The head is ONE sticky 44 px line — clipboard icon, the title (truncated), and
  * a link by state ("View" / "Review" / "Answer") — the whole line opens the
  * task (K11/K12). The first segment adds the state line under it, which
  * scrolls away. A later segment's head follows the task's state there
@@ -54,7 +59,9 @@ export function headLink(stub: ChatTaskStub): { href: string; action: "view" | "
   return bench ? { href: bench, action: "bench" } : { href: taskHref(stub.taskId), action: linkAction(stub.status) };
 }
 
-const BAND = "bg-deep border-y";
+/** The head's mark: hairlines on the chat ground (opaque, it is sticky). */
+const HEAD = "border-y";
+const headStyle = { borderColor: C.border, background: C.bgSurface };
 const MARK = "\u0000";
 
 /** The one-line sticky head of a segment (S8). */
@@ -67,6 +74,7 @@ export function TaskSectionHeader({
   continuation?: boolean;
   sticky?: boolean;
 }) {
+  const live = stub.live;
   const t = useTranslations("sessions.taskSteps");
   // "{title} · continues": the title is drawn on its own (truncated), the
   // words around it stay whole — in whatever order the language puts them.
@@ -77,10 +85,17 @@ export function TaskSectionHeader({
       href={link.href}
       data-testid="chat-task-head"
       data-region="chat-task-head"
-      className={`${sticky ? "sticky top-0 z-[1]" : ""} bg-deep min-h-11 px-4 flex items-center gap-2 no-underline`}
+      data-live={live ? "" : undefined}
+      className={`${sticky ? "sticky top-0 z-[1]" : ""} ${HEAD} min-h-11 px-4 flex items-center gap-2 no-underline`}
+      style={headStyle}
     >
       <span className={SLOT} aria-hidden="true">
-        <ClipboardList size={16} style={{ color: C.textMuted }} />
+        {/* The calm live sign: the icon breathes while the task runs. */}
+        <ClipboardList
+          size={16}
+          className={live ? "animate-pulse motion-reduce:animate-none" : ""}
+          style={{ color: live ? C.textSecondary : C.textMuted }}
+        />
       </span>
       <span className="min-w-0 flex-1 flex items-baseline text-sm">
         {parts?.[0] && (
@@ -108,13 +123,27 @@ export function TaskSectionHeader({
 /**
  * Where the chat's session and a task's own session meet (31.10.2026: the
  * operator could not tell that a task runs in a fresh session, nor that the
- * chat goes on after it). A calm hairline with one muted phrase — no
- * colour, no surface (K6/K8): "New task · own session" above a task's
- * first band, "Back in chat" where chat lines follow a band.
+ * chat goes on after it). No colour, no surface (K6/K8).
+ *
+ * `SessionStart`: one muted line on the title's edge, right above a task's
+ * first head — part of the head, not a second divider.
  */
-export function SessionDivider({ kind }: { kind: "start" | "back" }) {
+function SessionStart() {
   const t = useTranslations("sessions.taskSteps");
-  const text = t(kind === "start" ? "sessionStart" : "sessionBack");
+  return (
+    <p data-testid="chat-session-divider" data-kind="start" className="m-0 px-4 pt-2 pb-1 flex gap-2 text-xs" style={{ color: C.textMuted }}>
+      <span className={SLOT} aria-hidden="true" />
+      <span className="min-w-0 truncate">{t("sessionStart")}</span>
+    </p>
+  );
+}
+
+/** "Back in chat": a hairline with one muted phrase where chat lines follow
+ *  a task's steps — now that the steps stand on the chat ground, this is
+ *  where the task's part ends. */
+export function SessionDivider({ kind }: { kind: "back" }) {
+  const t = useTranslations("sessions.taskSteps");
+  const text = t("sessionBack");
   return (
     <div
       role="separator"
@@ -166,9 +195,9 @@ export const TaskSegment = memo(function TaskSegment({
       data-first={entry.first}
       data-head={entry.head}
       aria-label={t("region", { title: stub.title })}
-      className={`${BAND} my-2`}
-      style={{ borderColor: C.border }}
+      className="my-2"
     >
+      {entry.first && <SessionStart />}
       <TaskSectionHeader stub={stub} continuation={entry.head === "continues"} />
       {entry.head === "full" && (
         <div data-region="chat-task-head">
@@ -239,10 +268,9 @@ export const TaskCard = memo(function TaskCard({
       data-region="chat-task-card"
       data-task-id={stub.taskId}
       aria-label={t("region", { title: stub.title })}
-      className={`${BAND} my-2`}
-      style={{ borderColor: C.border }}
+      className="my-2"
     >
-      <div ref={headRef} className={`${open ? "sticky top-0 z-[1]" : ""} bg-deep flex items-stretch`}>
+      <div ref={headRef} className={`${open ? "sticky top-0 z-[1]" : ""} ${HEAD} flex items-stretch`} style={headStyle}>
         <button
           type="button"
           aria-expanded={open}

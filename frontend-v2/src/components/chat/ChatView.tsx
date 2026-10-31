@@ -1678,12 +1678,10 @@ export function ChatView({
                     />
                   );
                 }
-                // A task's first band starts a session of its own.
+                // A task's first segment says itself that it starts a session
+                // of its own (TaskSection `SessionStart`).
                 return (
-                  <Fragment key={entry.key}>
-                    {entry.first && <SessionDivider kind="start" />}
-                    <TaskSegment entry={entry} stub={task.stub} detailLevel={detailLevel} queuedLabel={queuedLabel} />
-                  </Fragment>
+                  <TaskSegment key={entry.key} entry={entry} stub={task.stub} detailLevel={detailLevel} queuedLabel={queuedLabel} />
                 );
               })
             )}
