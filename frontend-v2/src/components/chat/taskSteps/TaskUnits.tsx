@@ -20,6 +20,7 @@ import type { ChatTaskStub, TaskStepDetail, TaskStepLiveDetail, ToolEvent } from
 import { formatDuration } from "@/lib/taskDetail/format";
 import { formatSpan } from "@/lib/taskDetail/stateLine";
 import { useNow } from "@/hooks/useNow";
+import { useEngineBusy } from "@/hooks/useEngineActivity";
 import { useTaskStepDetail } from "@/hooks/useTaskStepDetail";
 import type { DetailLevel } from "../chatOptions";
 import { ClampedContent } from "../ClampedContent";
@@ -436,11 +437,18 @@ export const TaskLiveRow = memo(function TaskLiveRow({
   taskId,
 }: { unit: Extract<TaskUnit, { u: "live" }>; taskId: string }) {
   const t = useTranslations("sessions.taskSteps");
+  const tSessions = useTranslations("sessions");
   const locale = useLocale();
   const now = useNow(60_000);
   const [open, setOpen] = useState(false);
   const live = unit.liveRow;
   const detail = useTaskStepDetail<TaskStepLiveDetail>(taskId, "live", open && live?.block === "thinking");
+  const lastMs = rowMs(live?.ts ?? unit.lastTs);
+  const quietMs = lastMs == null ? 0 : now - lastMs;
+  const stalled = live?.block !== "thinking" && ((live?.stale ?? false) || quietMs >= STALLED_AFTER_MS);
+  // A stalled task may still be at work: the engine can hold a tool call's
+  // arguments until they are complete (31.10.2026). Per engine, not per task.
+  const engineBusy = useEngineBusy(stalled);
   if (live && live.block === "thinking") {
     const text = detail.data?.liveRow && detail.data.liveRow.block === "thinking" ? detail.data.liveRow.text ?? "" : "";
     return (
@@ -462,10 +470,9 @@ export const TaskLiveRow = memo(function TaskLiveRow({
       </div>
     );
   }
-  const lastMs = rowMs(live?.ts ?? unit.lastTs);
-  const quietMs = lastMs == null ? 0 : now - lastMs;
-  if ((live?.stale ?? false) || quietMs >= STALLED_AFTER_MS) {
-    return <MetaRow unit="stalled">{t("noNewSteps", { span: formatSpan(quietMs / 1000, locale) ?? "" })}</MetaRow>;
+  if (stalled) {
+    const span = t("noNewSteps", { span: formatSpan(quietMs / 1000, locale) ?? "" });
+    return <MetaRow unit="stalled">{engineBusy ? `${span} · ${tSessions("thinkingEngineBusy")}` : span}</MetaRow>;
   }
   if (live && live.block === "text" && live.text.trim()) {
     return (

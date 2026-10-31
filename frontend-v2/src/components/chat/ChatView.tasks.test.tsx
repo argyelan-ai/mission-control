@@ -37,6 +37,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
         tasks: vi.fn(),
         taskSteps: vi.fn(),
         taskStepDetail: vi.fn(),
+        engine: vi.fn(),
       },
     },
   };
@@ -125,6 +126,7 @@ function serve(tasks: ChatTasksResponse, stepsByTask: Record<string, TaskStepsRe
   vi.mocked(api.chat.tasks).mockResolvedValue({ data: tasks, etag: '"t1"' });
   vi.mocked(api.chat.taskSteps).mockImplementation(async (_a, taskId) => ({ data: stepsByTask[taskId], etag: `"s-${taskId}"` }));
   vi.mocked(api.chat.taskStepDetail).mockResolvedValue({ data: { id: "1:1", ts: at(1), k: "think", text: "full" }, etag: '"d"' });
+  vi.mocked(api.chat.engine).mockResolvedValue({ engine: null });
 }
 
 function renderView(over: Partial<React.ComponentProps<typeof ChatView>> = {}) {
@@ -724,5 +726,33 @@ describe("ChatView — task state from the freshest source (round 3)", () => {
     const segs = await screen.findAllByTestId("chat-task-segment");
     const last = segs[segs.length - 1];
     expect(within(last).getByText(/Thinking/)).toBeInTheDocument();
+  });
+});
+
+describe("ChatView — a stalled task whose engine still works (31.10.2026)", () => {
+  const ago = (sec: number) => new Date(Date.now() - sec * 1000).toISOString();
+  function stalledTask() {
+    serve(
+      { applies: true, tasks: [stub({ startedAt: ago(1500), startKey: ago(1500), deliveredAt: ago(1505) })], queued: 0, hasMore: false },
+      { [TASK_ID]: steps([think(ago(1400), "Write the bench file")]) },
+    );
+    mockStream.mockReturnValue(streamOf({ state: { kind: "state", status: "task_working", prompt: null } }));
+  }
+
+  it("engine busy: 'no new steps' says the model is still computing", async () => {
+    stalledTask();
+    vi.mocked(api.chat.engine).mockResolvedValue({ engine: { busy: true, running: 1, checkedAt: ago(0) } });
+    renderView();
+    await screen.findByText("Write the bench file");
+    await waitFor(() => expect(screen.getByText(/No new steps for/)).toHaveTextContent("model computing, no output yet"));
+    expect(api.chat.engine).toHaveBeenCalledWith("agent-a");
+  });
+
+  it("engine idle or unknown: only 'no new steps'", async () => {
+    stalledTask();
+    renderView();
+    await screen.findByText("Write the bench file");
+    await waitFor(() => expect(api.chat.engine).toHaveBeenCalled());
+    expect(screen.getByText(/No new steps for/)).not.toHaveTextContent("model computing");
   });
 });
