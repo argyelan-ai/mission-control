@@ -105,6 +105,31 @@ export function TaskSectionHeader({
   );
 }
 
+/**
+ * Where the chat's session and a task's own session meet (31.10.2026: the
+ * operator could not tell that a task runs in a fresh session, nor that the
+ * chat goes on after it). A calm hairline with one muted phrase — no
+ * colour, no surface (K6/K8): "New task · own session" above a task's
+ * first band, "Back in chat" where chat lines follow a band.
+ */
+export function SessionDivider({ kind }: { kind: "start" | "back" }) {
+  const t = useTranslations("sessions.taskSteps");
+  const text = t(kind === "start" ? "sessionStart" : "sessionBack");
+  return (
+    <div
+      role="separator"
+      aria-label={text}
+      data-testid="chat-session-divider"
+      data-kind={kind}
+      className="px-4 pt-3 pb-1 flex items-center gap-3 text-xs"
+    >
+      <span aria-hidden="true" className="h-px flex-1" style={{ background: C.borderSubtle }} />
+      <span aria-hidden="true" className="shrink-0" style={{ color: C.textMuted }}>{text}</span>
+      <span aria-hidden="true" className="h-px flex-1" style={{ background: C.borderSubtle }} />
+    </div>
+  );
+}
+
 /** Tail first: the last units now, the rest one frame later (§6.3, S6). */
 function useTailFirst(count: number): number {
   const [all, setAll] = useState(count <= SEGMENT_FIRST_UNITS);

@@ -756,3 +756,59 @@ describe("ChatView — a stalled task whose engine still works (31.10.2026)", ()
     expect(screen.getByText(/No new steps for/)).not.toHaveTextContent("model computing");
   });
 });
+
+describe("ChatView — session boundaries (31.10.2026)", () => {
+  it("a task's first band says it runs in its own session; chat lines after a band say the chat goes on", async () => {
+    serve(
+      { applies: true, tasks: [stub()], queued: 0, hasMore: false },
+      { [TASK_ID]: steps([think(at(1), "Read the files first"), think(at(8), "Now build the page")]) },
+    );
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(-5), "Start the report"), msg(at(5), "How far are you?")] }));
+    renderView();
+    const segments = await screen.findAllByTestId("chat-task-segment");
+    expect(segments).toHaveLength(2);
+    const dividers = screen.getAllByTestId("chat-session-divider");
+    expect(dividers.map((d) => d.dataset.kind)).toEqual(["start", "back"]);
+    expect(dividers[0]).toHaveAccessibleName("New task · own session");
+    expect(dividers[1]).toHaveAccessibleName("Back in chat");
+    // Order: chat message → start → band 1 → back → question → band 2 (continues, no new start)
+    const first = screen.getByText("Start the report");
+    const question = screen.getByText("How far are you?");
+    expect(first.compareDocumentPosition(dividers[0])).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(dividers[0].compareDocumentPosition(segments[0])).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(segments[0].compareDocumentPosition(dividers[1])).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(dividers[1].compareDocumentPosition(question)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it("no 'back in chat' when nothing of the chat follows the band", async () => {
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Start")]) });
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(-5), "Go")] }));
+    renderView();
+    await screen.findByTestId("chat-task-segment");
+    expect(screen.getAllByTestId("chat-session-divider").map((d) => d.dataset.kind)).toEqual(["start"]);
+  });
+
+  it("the chat's pending echo after the newest band gets 'back in chat' too", async () => {
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Start")]) });
+    mockStream.mockReturnValue(streamOf({ pendingEchoes: [{ id: "e1", text: "Quick question", sentAt: Date.now(), status: "sending" }] as never }));
+    renderView();
+    await screen.findByTestId("chat-task-segment");
+    expect(screen.getAllByTestId("chat-session-divider").map((d) => d.dataset.kind)).toEqual(["start", "back"]);
+  });
+});
+
+describe("ChatView — the sticky task head sits flush (31.10.2026)", () => {
+  // A sticky head sticks at the scroller's PADDING edge: any top padding on
+  // the scroller leaves a strip where rows passing beneath peek out above the
+  // head. jsdom has no layout — `playwright/chat-honest-shots.mjs` measures
+  // the real gap (must be 0); this guards the cause.
+  it("the scroller has no top padding; the gap lives inside the timeline", async () => {
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Start")]) });
+    mockStream.mockReturnValue(streamOf());
+    renderView();
+    await screen.findByTestId("chat-task-segment");
+    const timeline = screen.getByTestId("chat-timeline");
+    expect(timeline.parentElement?.className).not.toMatch(/(^|\s)(pt|py|p)-/);
+    expect(timeline.className).toMatch(/\bpt-2\b/);
+  });
+});

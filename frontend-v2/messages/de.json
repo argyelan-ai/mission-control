@@ -1300,6 +1300,8 @@
         "bench": "Im Benchmark"
       },
       "continues": "{title} · läuft weiter",
+      "sessionStart": "Neue Aufgabe · eigene Session",
+      "sessionBack": "Zurück im Chat",
       "attempt": "Versuch {n} · {time}",
       "delivered": "Aufgabe zugestellt · {time}",
       "firstStepPending": "Wartet auf den ersten Schritt",
