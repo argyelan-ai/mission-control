@@ -67,6 +67,7 @@ from app.services.activity import emit_event
 from app.services.chat_changes import aggregate_changes
 from app.services.chat_diff import capture_texts
 from app.services.chat_reset_audit import CHAT_SESSION_RESET_EVENT, chat_input_event
+from app.services.chat_engine_activity import agent_engine_activity
 from app.services.chat_task_activity import task_activity
 from app.services.sse import _sse_generator, sse_response
 from app.services.runtime_window import agent_runtime_window
@@ -312,6 +313,22 @@ async def get_chat_task_activity(
     the task inside the chat itself. Reads only (files + one count)."""
     agent = await _load_agent_or_404(agent_id, session)
     return await task_activity(session, agent)
+
+
+@router.get("/agents/{agent_id}/chat/engine")
+async def get_chat_engine_activity(
+    agent_id: uuid.UUID,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Is the engine the agent is bound to answering a request right now?
+    The chat's live row asks this once it has gone quiet: a model that holds
+    a tool call's arguments streams nothing for minutes (``chat_engine_activity``).
+    ``{"engine": {busy, running, checkedAt}}`` — per ENGINE, not per agent —
+    or ``{"engine": null}`` when unknown (no/cloud runtime, probe failed).
+    Reads only; one probe per engine per few seconds."""
+    agent = await _load_agent_or_404(agent_id, session)
+    return await agent_engine_activity(session, agent)
 
 
 def _cached_json(answer: "chat_task_steps.Answer") -> Response:
