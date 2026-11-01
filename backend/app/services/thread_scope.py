@@ -101,6 +101,20 @@ async def message_threads_for_agent(agent: Agent, session: AsyncSession) -> list
         )
     )
     group_pairs = [(th, None) for th in group_res.all()]
+    # Session-to-session conversations (ADR-100): delivered through this same
+    # inbox. Writing into them goes only through POST /agent/comms/send (brake
+    # and limits) — the reply endpoint refuses kind "session" explicitly.
+    from app.models.comms import CommsConversation
+    ref = f"agent:{agent.id}"
+    session_res = await session.exec(
+        select(Thread)
+        .join(CommsConversation, CommsConversation.thread_id == Thread.id)  # type: ignore[arg-type]
+        .where(
+            (CommsConversation.a_ref == ref) | (CommsConversation.b_ref == ref),
+            Thread.closed_at.is_(None),  # type: ignore[union-attr]
+        )
+    )
+    group_pairs += [(th, None) for th in session_res.all()]
     # Offene Fragen AN den Lead (`mc ask --to boss`, Vorfall 10.09.2026): ein
     # Worker fragt auf dem Thread SEINER Karte; der Lead haelt nur den
     # Eltern-Task und sah den Thread nie — die Frage verschwand lautlos, der

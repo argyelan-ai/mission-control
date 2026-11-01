@@ -71,7 +71,7 @@ class Thread(SQLModel, table=True):
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    kind: str  # "task" | "side" | "dm" | "chat" | "group" (see comm_constants.THREAD_KINDS)
+    kind: str  # "task" | "side" | "dm" | "chat" | "group" | "session" (see comm_constants.THREAD_KINDS)
     # ondelete=SET NULL (mc-task-delete-guard): a thread survives its task's
     # deletion — same rationale as bench_entries.task_id — so a deleted task
     # never RESTRICTs against a thread that outlives it.
@@ -141,6 +141,12 @@ class Message(SQLModel, table=True):
     from_chat: bool = Field(
         default=False,
         sa_column=Column(Boolean, server_default=text("false"), nullable=False),
+    )
+    # Sender when sender_type == "session": a terminal session principal
+    # (ADR-100 §6 rule 1) — never a row in `agents`, so not sender_id. Set by
+    # the server from the token only (migration 0226).
+    sender_session_id: uuid.UUID | None = Field(
+        default=None, sa_column=Column(Uuid, nullable=True)
     )
     created_at: datetime = Field(
         default_factory=utcnow,

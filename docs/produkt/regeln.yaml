@@ -14,6 +14,20 @@ rules:
     status: active
     checked: 2026-11-01
 
+  - id: R-comms-send-enforced-tier
+    says: "Session conversations are written only through POST /agent/comms/send: sender from the token, no broadcast, 10 per minute, 50 open per inbox, duplicates refused, a non-listening receiver refused, and after 6 messages without the operator the conversation pauses behind an approval card. An approval raised after such a message names its sender."
+    source: "ADR-100 section 6 rule 4 (enforced tier)"
+    owner: backend/app/services/comms_send.py
+    applies_to: ["backend/app/services/comms_send.py", "backend/app/routers/agent_comms.py", "backend/app/routers/agent_scoped.py"]
+    enforced_by:
+      - {test: "backend/tests/test_comms_send.py::test_sender_comes_from_the_token_never_from_the_body"}
+      - {test: "backend/tests/test_comms_send.py::test_brake_after_six_replies_creates_an_approval_card"}
+      - {test: "backend/tests/test_comms_send.py::test_session_threads_cannot_be_written_around_the_send_path"}
+      - {test: "backend/tests/test_comms_send.py::test_rate_limit_ten_per_minute"}
+      - {test: "backend/tests/test_comms_send.py::test_approval_after_a_message_names_the_message_sender"}
+    status: active
+    checked: 2026-11-01
+
   - id: R-one-migration-head
     says: "Alembic has exactly one head; a new migration checks for a colliding revision first."
     source: "AGENTS.md (rules that bite)"

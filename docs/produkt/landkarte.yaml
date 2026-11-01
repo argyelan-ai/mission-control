@@ -829,6 +829,12 @@ internal:
   # in routers/agent_scoped.py and the agent-scoped endpoints).
   - "table:agent_task_comment_cursor"
   - "table:agent_thread_cursor"
+  # ADR-100: session-to-session conversations — participants and loop brake
+  # of a "session" thread, and the read position of principals without an
+  # agent_thread_cursor (terminal sessions). Agent API only until the inbox
+  # tab (stage 2d) shows them.
+  - "table:comms_conversations"
+  - "table:comms_cursors"
   # Skill packs: seeded for the playbook layer, which was removed in E5
   # (migration 0207); the rows stay, nothing reads them any more.
   - "table:skill_packs"

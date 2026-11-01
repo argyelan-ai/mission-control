@@ -2146,6 +2146,13 @@ async def agent_post_thread_message(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Thread nicht gefunden oder nicht deiner.",
         )
+    if thread.kind == "session":
+        # ADR-100 §6: session conversations are written only through the send
+        # path (brake, rate limit, inbox cap) — never around it.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Session conversations are answered with `mc send <address> \"…\"` (POST /api/v1/agent/comms/send).",
+        )
 
     # A reply must stay inside its own thread. `answer_clears_awaiting` matches
     # on message id alone, so without this guard a note in the DM thread could

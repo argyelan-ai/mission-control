@@ -2923,12 +2923,15 @@ def _stale_kind(message, *, thread_finished: bool, now) -> str | None:
 
     if message.sender_type == "user" or message.created_at is None:
         return None
-    if message.sender_type == "agent" and not thread_finished:
+    # A terminal session (ADR-100) is a peer like an agent: its message is
+    # held, never dropped as "final".
+    peer = message.sender_type in ("agent", "session")
+    if peer and not thread_finished:
         return None
     age = (now - ensure_aware(message.created_at)).total_seconds()
     if age <= _settings.agent_message_stale_after_seconds:
         return None
-    return "held" if message.sender_type == "agent" else "final"
+    return "held" if peer else "final"
 
 
 async def _pending_thread_messages(

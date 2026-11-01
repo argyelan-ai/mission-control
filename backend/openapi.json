@@ -501,6 +501,15 @@
         ]
       }
     },
+    "/api/v1/agent/comms/send": {
+      "post": {
+        "operationId": "send_api_v1_agent_comms_send_post",
+        "summary": "Send",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
     "/api/v1/agent/comms/who": {
       "get": {
         "operationId": "who_api_v1_agent_comms_who_get",

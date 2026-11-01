@@ -61,6 +61,7 @@ SKIP_CLI: dict[str, str] = {
     # ADR-100 stage 2a: the directory core. `mc hello` / `mc who` / `mc send`
     # arrive with the guest-card stage (2c), which maps this route.
     "POST /comms/presence": "CLI verb arrives with the guest-card stage (ADR-100 2c)",
+    "POST /comms/send": "CLI verb arrives with the guest-card stage (ADR-100 2c)",
     # Voice (ADR-082/follow-up) — Jarvis-only, called by voice_worker's
     # jarvis_core.mc_client, not a worker agent driving `mc` in a task loop.
     # No mc-CLI verb makes sense for a single-agent voice-binding refusal

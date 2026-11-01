@@ -103,6 +103,11 @@ async def _session_principals(session: AsyncSession) -> list[Principal]:
     return []
 
 
+async def session_address(session: AsyncSession, session_id: uuid.UUID) -> str | None:
+    """Address of a terminal session principal (guest-card stage); None before."""
+    return None
+
+
 async def list_principals(session: AsyncSession) -> list[Principal]:
     agents = (await session.exec(select(Agent).where(Agent.archived_at.is_(None)))).all()  # type: ignore[union-attr]
     out = [principal_for_agent(a) for a in agents if agent_may_talk(a)]
