@@ -278,3 +278,43 @@ async def test_reading_writes_nothing(client: AsyncClient, fake_redis, engine_lo
     assert {k: await fake_redis.get(k) for k in await fake_redis.keys("mc:runtime*")} == before
     refreshed = await session.get(Host, host.id)
     assert refreshed.autostart_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_head_listed_in_runtime_hosts_too_appears_once(client: AsyncClient, fake_redis, engine_load):
+    """Two-box recipes carry the head box in ``runtimes.host_id`` AND as a
+    ``runtime_hosts`` row with role head — the box must list the engine once."""
+    from app.models.runtime_host import RuntimeHost
+
+    head = await _host("box-k", autostart=True)
+    worker = await _host("box-kw", autostart=True)
+    rt = await _runtime("rt-k", head.id, endpoint="http://box-k:8000/v1", worker_id=worker.id)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(RuntimeHost(runtime_id=rt.id, host_id=head.id, role="head", node_rank=0))
+        await s.commit()
+    await _live(fake_redis, "rt-k", reachable=True, served_model="model-a")
+    engine_load["http://box-k:8000/v1"] = (0, None)
+
+    body = (await client.get(URL, headers=await _agent_headers(["tasks:read"]))).json()
+    assert [r["slug"] for r in _box(body, "box-k")["runtimes"]] == ["rt-k"]
+    assert [r["slug"] for r in _box(body, "box-kw")["runtimes"]] == ["rt-k"]
+
+
+@pytest.mark.asyncio
+async def test_recipe_whose_model_is_not_loaded_is_not_serving_and_does_not_block(
+    client: AsyncClient, fake_redis, engine_load
+):
+    """Two recipes share one endpoint; the endpoint answers for both, but only
+    the loaded model serves. The other recipe is ``not_loaded`` — it neither
+    claims "serving" nor turns the box into "not_serving"."""
+    host = await _host("box-l")
+    await _runtime("rt-l-on", host.id, endpoint="http://box-l:8000/v1", model="model-a")
+    await _runtime("rt-l-off", host.id, endpoint="http://box-l:8000/v1", model="model-b")
+    await _live(fake_redis, "rt-l-on", reachable=True, served_model="model-a")
+    await _live(fake_redis, "rt-l-off", reachable=True, served_model="model-a")
+    engine_load["http://box-l:8000/v1"] = (0, None)
+
+    box = _box((await client.get(URL, headers=await _agent_headers(["tasks:read"]))).json(), "box-l")
+    engines = {r["slug"]: r["engine"] for r in box["runtimes"]}
+    assert engines == {"rt-l-on": "serving", "rt-l-off": "not_loaded"}
+    assert box["verdict"] == "free"

@@ -51,8 +51,14 @@ async def _live_snapshot(redis, slug: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _engine_state(snapshot: dict | None) -> str:
-    """serving · switching · failed · not_serving · unknown (no fresh snapshot)."""
+def _engine_state(snapshot: dict | None, rt: Runtime) -> str:
+    """serving · not_loaded · switching · failed · not_serving · unknown (no fresh snapshot).
+
+    Recipes on one box share one endpoint, so "reachable" is true for every
+    one of them; only the recipe whose model the engine reports serves. The
+    others are ``not_loaded`` (same comparison as the bench plan). A slot row
+    follows whatever is loaded.
+    """
     if snapshot is None:
         return "unknown"
     status = snapshot.get("status")
@@ -60,7 +66,12 @@ def _engine_state(snapshot: dict | None) -> str:
         return "switching"
     if status == "failed":
         return "failed"
-    return "serving" if snapshot.get("reachable") else "not_serving"
+    if not snapshot.get("reachable"):
+        return "not_serving"
+    served = snapshot.get("served_model")
+    if served and not rt.is_slot and rt.model_identifier != served:
+        return "not_loaded"
+    return "serving"
 
 
 async def _lock_for(rt: Runtime) -> tuple[str, int | None, str | None]:
@@ -74,6 +85,8 @@ async def _lock_for(rt: Runtime) -> tuple[str, int | None, str | None]:
 
 
 def _verdict(runtimes: list[dict], head: dict | None, auto_recovery: bool) -> tuple[str, list[str]]:
+    # A recipe that is not loaded says nothing about the box.
+    runtimes = [r for r in runtimes if r["engine"] != "not_loaded"]
     reasons: list[str] = []
     if head is not None:
         reasons.append("head_working")
@@ -139,7 +152,7 @@ async def read_box_status(session: AsyncSession) -> dict:
             "display_name": rt.display_name,
             "model": rt.model_identifier,
             "served_model": (snap or {}).get("served_model"),
-            "engine": _engine_state(snap),
+            "engine": _engine_state(snap, rt),
             "checked_at": (snap or {}).get("last_probe_at"),
             "running_requests": running,
             "switch_lock": lock,
@@ -149,7 +162,8 @@ async def read_box_status(session: AsyncSession) -> dict:
                 if snap and snap.get("status") == "switching" else None
             ),
         }
-        for hid in runtime_host_ids(rt, members):
+        # A two-box recipe can list its head box twice (host_id + a head row).
+        for hid in dict.fromkeys(runtime_host_ids(rt, members)):
             role = "head" if hid == rt.host_id else "worker"
             per_box.setdefault(hid, []).append({**entry, "role": role})
 
