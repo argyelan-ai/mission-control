@@ -1278,7 +1278,9 @@
     "panels": {
       "diff": "Changes",
       "browser": "Browser",
-      "close": "Close panel"
+      "close": "Close panel",
+      "resize": "Resize panel",
+      "resizeHint": "Drag to resize · double-click resets"
     },
     "queueTakeBackFailed": "Couldn't take the queued messages back",
     "todo": {

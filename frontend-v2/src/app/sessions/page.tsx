@@ -22,6 +22,9 @@ import type { StateEvent } from "@/lib/chatTypes";
 import AppShell from "@/components/layout/AppShell";
 import { notify } from "@/lib/notify";
 import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
+import { useContainerSize } from "@/hooks/useContainerSize";
+import { PanelResizeHandle } from "@/components/chat/PanelResizeHandle";
+import { clampPanelWidth, defaultPanelWidth, loadPanelWidth, panelOverlays, savePanelWidth } from "@/lib/panelWidth";
 import { rememberChat } from "@/lib/recentChats";
 import { CHAT_ENTRY_PARAM, chatUrl, isPhoneViewport, takeDirectLoad, usePhoneViewport, type ChatKind } from "@/lib/chatHistory";
 import { useHeadRuns } from "@/components/heads/useHeadRuns";
@@ -183,6 +186,14 @@ function SessionsPageContent() {
   const [centerView, setCenterViewState] = useState<CenterView>("chat");
   const [sidebarCollapsed, setSidebarCollapsedState] = useState(false);
   const [restartTick, setRestartTick] = useState<Record<string, number>>({});
+  // Side panel width (ADR-099): `null` = the default (45 % of the island).
+  // The raw value is what the operator chose; what is drawn is always clamped
+  // to the island measured right now (lib/panelWidth.ts).
+  const [panelWidthChoice, setPanelWidthChoice] = useState<number | null>(null);
+  const { ref: islandRef, size: islandSize } = useContainerSize<HTMLDivElement>();
+  const islandWidth = islandSize?.width ?? 0;
+  const panelWidth = clampPanelWidth(panelWidthChoice ?? defaultPanelWidth(islandWidth), islandWidth);
+  const panelOverlay = panelOverlays(islandWidth);
 
   // Persisted state is read from localStorage after mount (SSR has no
   // window) — same pattern as loadLastAgentId's restore effect below.
@@ -191,6 +202,7 @@ function SessionsPageContent() {
     setDetailLevelState(loadDetailLevel());
     setCenterViewState(loadCenterView());
     setSidebarCollapsedState(loadSidebarCollapsed());
+    setPanelWidthChoice(loadPanelWidth());
   }, []);
 
   // Nie drei Inhaltsspalten gleichzeitig (Operator-Befund 22.08.2026).
@@ -761,7 +773,8 @@ function SessionsPageContent() {
               der Seitengrund (bewusst so entschieden, langes Lesen auf
               Fast-Schwarz war anstrengend). */}
           <div
-            className={`${onChatScreen || activePanel ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:flex-row md:rounded-xl md:border md:border-[var(--color-border)]`}
+            ref={islandRef}
+            className={`${onChatScreen || activePanel ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:flex-row md:relative md:rounded-xl md:border md:border-[var(--color-border)]`}
             data-testid="chat-island"
           >
           <div
@@ -862,11 +875,31 @@ function SessionsPageContent() {
               // statt eines zweiten Rahmens — der äussere Rahmen umfasst Chat
               // und Panel zusammen (sonst stünden vier gerahmte Kästen
               // nebeneinander, Operator-Befund 22.08.2026).
-              className={`fixed inset-x-0 bottom-0 z-40 flex flex-col overflow-hidden md:static md:inset-auto md:z-auto md:w-[45%] md:max-w-[720px] md:border-l ${
-                onChatScreen ? "top-[var(--mobile-chat-topbar-h)]" : "top-[var(--mobile-appbar-h)]"
-              }`}
-              style={{ background: C.bgSurface, borderColor: C.border }}
+              //
+              // Breite (ADR-099): ziehbar ueber den Griff an der linken Kante,
+              // als CSS-Variable, die nur die md-Klasse liest — das Handy-Blatt
+              // bleibt randlos. Passen Chat (400) und Panel (320) nicht
+              // nebeneinander, legt sich das Panel ueber den Chat statt ihn
+              // zusammenzudruecken (heute unter ~1100 px Fensterbreite).
+              data-testid="side-panel"
+              data-overlay={panelOverlay || undefined}
+              className={`fixed inset-x-0 bottom-0 z-40 flex flex-col overflow-hidden md:inset-auto md:w-(--panel-w) md:shrink-0 ${
+                panelOverlay
+                  ? "md:absolute md:inset-y-0 md:right-0 md:z-30 md:shadow-[var(--shadow-elevated)]"
+                  : "md:relative md:z-auto"
+              } ${onChatScreen ? "top-[var(--mobile-chat-topbar-h)]" : "top-[var(--mobile-appbar-h)]"}`}
+              style={{ background: C.bgSurface, ["--panel-w" as string]: `${panelWidth}px` }}
             >
+              <PanelResizeHandle
+                width={panelWidth}
+                islandWidth={islandWidth}
+                onResize={setPanelWidthChoice}
+                onCommit={savePanelWidth}
+                onReset={() => {
+                  setPanelWidthChoice(null);
+                  savePanelWidth(null);
+                }}
+              />
               <div
                 className="flex md:hidden items-center justify-between px-4 py-3 border-b shrink-0"
                 style={{ borderColor: C.border }}

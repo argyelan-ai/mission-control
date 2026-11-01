@@ -408,6 +408,36 @@ describe("SessionsPage — the header's panel buttons switch the panel slot's co
     expect(screen.queryByTestId("diff-panel-stub")).not.toBeInTheDocument();
   });
 
+  // ADR-099: the panel has a drag handle and remembers its width per browser.
+  it("the open panel takes the remembered width and carries the drag handle", async () => {
+    store["mc.chat.panelWidth"] = "512";
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+    const panel = await screen.findByTestId("side-panel");
+    expect(panel.style.getPropertyValue("--panel-w")).toBe("512px");
+    const handle = screen.getByRole("separator", { name: "Resize panel" });
+    expect(panel).toContainElement(handle);
+  });
+
+  it("dragging stores the new width; double-click forgets it again", async () => {
+    store["mc.chat.panelWidth"] = "512";
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+    await user.click(screen.getByRole("button", { name: "Browser" }));
+    const handle = await screen.findByRole("separator", { name: "Resize panel" });
+
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(store["mc.chat.panelWidth"]).toBe("528");
+    expect(screen.getByTestId("side-panel").style.getPropertyValue("--panel-w")).toBe("528px");
+
+    fireEvent.doubleClick(handle);
+    expect(store["mc.chat.panelWidth"]).toBeUndefined();
+  });
+
   it("clicking the already-active panel icon collapses the panel", async () => {
     const user = userEvent.setup();
     renderPage();
