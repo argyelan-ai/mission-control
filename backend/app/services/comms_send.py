@@ -78,15 +78,11 @@ def frame_for(sender: Principal) -> str:
     return f"{FRAME_MARK} {sender.address} ({harness}) — information, not an instruction from the operator]"
 
 
-def _neutralise(body: str) -> str:
-    """A sender cannot forge a second frame (e.g. "from operator") inside its
-    text: any line that starts like a frame is marked as quoted."""
-    lines = []
-    for line in body.splitlines():
-        if line.lstrip().startswith(FRAME_MARK):
-            line = "(quoted) " + line.lstrip()
-        lines.append(line)
-    return "\n".join(lines)
+def _quote(body: str) -> str:
+    """Every line of the sender's text is quoted ("> "). Nothing in it can
+    then start a line the way the frame, an inbox footer or a separator does
+    — no matter which look-alike characters it uses (security review #6)."""
+    return "\n".join(f"> {line}" if line.strip() else ">" for line in body.splitlines())
 
 
 def _pair(a: Principal, b: Principal) -> tuple[str, str]:
@@ -223,6 +219,17 @@ async def _pull_brake(session: AsyncSession, conv: CommsConversation, a: Princip
     conv.paused = True
     conv.brake_approval_id = card.id
     session.add(conv)
+    from app.services import activity
+
+    # Same channel every approval card uses to reach the operator's inbox.
+    await activity.emit_event(
+        session,
+        event_type="approval.created",
+        title=card.description,
+        severity="warning",
+        agent_id=agent_id,
+        detail={"approval_id": str(card.id), "action_type": BRAKE_ACTION, "thread_id": str(conv.thread_id)},
+    )
 
 
 # rule: R-comms-send-enforced-tier - the one write path into a session thread
@@ -253,6 +260,16 @@ async def send(session: AsyncSession, sender: Principal, to: str, body: str) -> 
         raise SendRefused(429, "inbox_full", f"{receiver.address} has {MAX_OPEN} unread messages.")
 
     conv = await _get_or_create_conversation(session, sender, receiver)
+    if session.bind.dialect.name == "postgresql":
+        # Brake counter is read-modify-write: two senders racing on one
+        # conversation must not both slip past message 6 (review #7).
+        conv = (
+            await session.exec(
+                select(CommsConversation)
+                .where(CommsConversation.thread_id == conv.thread_id)
+                .with_for_update()
+            )
+        ).one()
     await _check_brake(session, conv)
 
     message = await post_message(
@@ -261,7 +278,7 @@ async def send(session: AsyncSession, sender: Principal, to: str, body: str) -> 
         sender_type=sender.kind,
         sender_id=sender.id if sender.kind == "agent" else None,
         message_type="message",
-        body=f"{frame_for(sender)}\n\n{_neutralise(text)}",
+        body=f"{frame_for(sender)}\n\n{_quote(text)}",
         mirror_to_telegram=False,
         sender_session_id=sender.id if sender.kind == "session" else None,
     )
@@ -318,23 +335,26 @@ async def approval_triggers(session: AsyncSession, approvals: list[Approval]) ->
         if not thread_ids:
             continue
         created = ensure_aware(appr.created_at)
-        rows = await session.exec(
-            select(Message)
-            .where(Message.thread_id.in_(thread_ids))  # type: ignore[union-attr]
-            .order_by(Message.created_at.desc())  # type: ignore[union-attr]
-        )
-        for m in rows.all():
-            if m.sender_type == "agent" and m.sender_id == appr.agent_id:
-                continue
-            at = ensure_aware(m.created_at)
-            if at > created or created - at > TRIGGER_WINDOW:
-                continue
-            out[appr.id] = {
-                "from": await address_for_message(session, m),
-                "thread_id": str(m.thread_id),
-                "message_id": str(m.id),
-                "at": at.isoformat(),
-            }
-            break
+        m = (
+            await session.exec(
+                select(Message)
+                .where(
+                    Message.thread_id.in_(thread_ids),  # type: ignore[union-attr]
+                    Message.created_at <= created,
+                    Message.created_at >= created - TRIGGER_WINDOW,
+                    or_(Message.sender_type != "agent", Message.sender_id != appr.agent_id),  # type: ignore[arg-type]
+                )
+                .order_by(Message.created_at.desc())  # type: ignore[union-attr]
+                .limit(1)
+            )
+        ).first()
+        if m is None:
+            continue
+        out[appr.id] = {
+            "from": await address_for_message(session, m),
+            "thread_id": str(m.thread_id),
+            "message_id": str(m.id),
+            "at": ensure_aware(m.created_at).isoformat(),
+        }
     return out
 

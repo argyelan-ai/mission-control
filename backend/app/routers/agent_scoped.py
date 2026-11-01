@@ -2140,18 +2140,20 @@ async def agent_post_thread_message(
     from app.services.messaging import answer_clears_awaiting, post_message
     from app.services.task_lifecycle import apply_ack_handshake
 
-    thread = await thread_agent_may_write_to(session, agent, thread_id)
-    if thread is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Thread nicht gefunden oder nicht deiner.",
-        )
-    if thread.kind == "session":
+    from app.models.thread import Thread as _Thread
+    _target = await session.get(_Thread, thread_id)
+    if _target is not None and _target.kind == "session":
         # ADR-100 §6: session conversations are written only through the send
         # path (brake, rate limit, inbox cap) — never around it.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Session conversations are answered with `mc send <address> \"…\"` (POST /api/v1/agent/comms/send).",
+        )
+    thread = await thread_agent_may_write_to(session, agent, thread_id)
+    if thread is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Thread nicht gefunden oder nicht deiner.",
         )
 
     # A reply must stay inside its own thread. `answer_clears_awaiting` matches

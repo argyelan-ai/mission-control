@@ -196,7 +196,10 @@ async def thread_agent_may_write_to(
     """
     for thread, _task in await message_threads_for_agent(agent, session):
         if thread.id == thread_id:
-            return thread
+            # Session conversations (ADR-100) are delivered here but written
+            # only through POST /agent/comms/send (brake, limits, frame) —
+            # never a reply target, a task origin or a report target.
+            return None if thread.kind == "session" else thread
     # Board lead (review #496 B3): the WRITE right must not hang on an open
     # question — the lead's first "moment, schaue ich" post closed the question
     # implicitly and thereby removed the thread from its own scope; the real

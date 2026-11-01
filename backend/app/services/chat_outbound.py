@@ -199,7 +199,15 @@ async def mirror_message_to_all(
     """Spiegle in JEDEN aktiven Kanal (der Operator darf mehrere gleichzeitig
     fahren). Gibt die Zahl der erfolgten Sendeversuche zurueck. Kein aktiver
     Kanal = 0, still, kein Fehler."""
+    from app.models.thread import Thread
     from app.services.chat_adapter import sendable_chat_adapters
+
+    # Session-to-session conversations (ADR-100) never reach the operator's
+    # chat channels: a foreign agent's text must not look like the operator's
+    # own conversation, whatever path posted it.
+    thread = await session.get(Thread, message.thread_id)
+    if thread is not None and thread.kind == "session":
+        return 0
 
     sent = 0
     for adapter in sendable_chat_adapters():

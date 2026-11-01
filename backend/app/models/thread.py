@@ -144,7 +144,7 @@ class Message(SQLModel, table=True):
     )
     # Sender when sender_type == "session": a terminal session principal
     # (ADR-100 §6 rule 1) — never a row in `agents`, so not sender_id. Set by
-    # the server from the token only (migration 0226).
+    # the server from the token only (migration 0225_session_conversations).
     sender_session_id: uuid.UUID | None = Field(
         default=None, sa_column=Column(Uuid, nullable=True)
     )

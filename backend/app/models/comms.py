@@ -23,7 +23,7 @@ class CommsConversation(SQLModel, table=True):
     __tablename__ = "comms_conversations"
     __table_args__ = (
         # One conversation per pair; a_ref < b_ref (sorted), so the pair has
-        # exactly one spelling. Must match migration 0226.
+        # exactly one spelling. Must match migration 0225_session_conversations.
         UniqueConstraint("a_ref", "b_ref", name="uq_comms_conversations_pair"),
     )
 

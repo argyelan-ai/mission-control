@@ -10,14 +10,14 @@
 Thread kind "session" needs no schema change (threads.kind is free text,
 validated in app.comm_constants). Additive only; downgrade drops all three.
 
-Revision ID: 0226_session_conversations
-Revises: 0225_comms_talk_scope
+Revision ID: 0225_session_conversations
+Revises: 0224_bench_w1_schema
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0226_session_conversations"
-down_revision = "0225_comms_talk_scope"
+revision = "0225_session_conversations"
+down_revision = "0224_bench_w1_schema"
 branch_labels = None
 depends_on = None
 
