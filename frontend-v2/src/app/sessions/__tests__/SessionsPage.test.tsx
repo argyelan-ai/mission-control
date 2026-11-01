@@ -423,10 +423,10 @@ describe("SessionsPage — the header's panel buttons switch the panel slot's co
   });
 
   it("caps a remembered width to the island it is drawn in (chat keeps 400 px)", async () => {
-    // Live finding 01.11.2026: the island only mounts after AppShell's auth
-    // check, a mount-time measurement never saw it, and the panel could be
-    // dragged to 2320 px over a 1038 px island. jsdom has no layout, so the
-    // island's width is given here.
+    // jsdom has no layout, so the island's width is given here. (The late
+    // attach that broke this in the real browser — AppShell renders the
+    // island only after its auth check — is covered by useElementWidth's own
+    // test; AppShell is a stub in this file.)
     const real = HTMLElement.prototype.getBoundingClientRect;
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       if (this.dataset.testid === "chat-island") return { width: 1000, height: 800, top: 0, left: 0, right: 1000, bottom: 800, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
