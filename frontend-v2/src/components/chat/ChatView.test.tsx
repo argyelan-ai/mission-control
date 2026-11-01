@@ -35,6 +35,7 @@ import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import type { AgentWithState } from "./TerminalPanel";
 import type { MessageEvent, PreviewEvent, SubagentRun, ThinkingEvent, TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
+import { C } from "@/lib/colors";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,8 +51,15 @@ const GLOBALS_CSS = readFileSync(
 );
 
 /** Der sichtbare Kreis IM Knopf (der Knopf selbst ist die Trefferflaeche). */
+/** The PHONE header button with this label. Since ADR-099 the desktop
+ *  header has its own ⋯ ("Chat options") next to it in the DOM; the two never
+ *  show at once (`md:hidden` / `hidden md:flex`). */
+function phoneLabeled(label: string): HTMLElement {
+  const all = screen.getAllByLabelText(label);
+  return all.find((el) => el.className.includes("md:hidden")) ?? all[0];
+}
 function circleOf(label: string): HTMLElement {
-  const el = screen.getByLabelText(label).firstElementChild;
+  const el = phoneLabeled(label).firstElementChild;
   if (!(el instanceof HTMLElement)) throw new Error(`kein Kreis in "${label}"`);
   return el;
 }
@@ -281,6 +289,7 @@ const THINKING: ThinkingEvent = {
 };
 
 const noop = () => {};
+const LIVE_LABEL = "Live — working right now";
 
 // ── Grouping logic ─────────────────────────────────────────────────────────
 // Pure function, tested directly: the render tests below only need to prove
@@ -655,14 +664,11 @@ describe("ChatView", () => {
     expect(screen.queryByRole("button", { name: "Compact" })).not.toBeInTheDocument();
   });
 
-  it("shows the detail-level switcher in chat mode", () => {
-    // Seit 19.08.2026 ist der Umschalter EIN Knopf mit Klappliste statt drei
-    // Segmenten (Operator-Wunsch, Kopfzeile entlasten). Die Stufen sind erst
-    // nach dem Klick da — die Abdeckung dafuer steht in
-    // "Desktop-Kopfzeile — Detailgrad eingeklappt".
+  it("offers the detail level behind the desktop ⋯ in chat mode, not in the header (ADR-099 E1)", () => {
     mockUseChatStream.mockReturnValue(mkStream());
     renderChatView({ centerView: "chat" });
-    expect(screen.getByTestId("detail-level-trigger")).toBeInTheDocument();
+    expect(screen.queryByTestId("detail-level-trigger")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-options-desktop")).toBeInTheDocument();
   });
 
   it("no-transcript agents force terminal mode and disable the Chat segment", () => {
@@ -747,8 +753,8 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ onDetailLevelChange: onChange });
 
-    await user.click(screen.getByTestId("detail-level-trigger"));
-    await user.click(screen.getByRole("option", { name: "Verbose" }));
+    await user.click(screen.getByTestId("chat-options-desktop"));
+    await user.click(screen.getByRole("menuitemradio", { name: "Verbose" }));
     expect(onChange).toHaveBeenCalledWith("verbose");
   });
 
@@ -1261,7 +1267,7 @@ describe("ChatView", () => {
     renderChatView();
 
     expect(screen.queryByTestId("chat-options-sheet")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Chat options" }));
+    await user.click(phoneLabeled("Chat options"));
     expect(screen.getByTestId("chat-options-sheet")).toBeInTheDocument();
   });
 
@@ -1270,7 +1276,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ hasTranscript: false, centerView: "chat" });
 
-    await user.click(screen.getByRole("button", { name: "Chat options" }));
+    await user.click(phoneLabeled("Chat options"));
     expect(screen.getByRole("radio", { name: /Chat/ })).toBeDisabled();
     expect(screen.getByRole("radio", { name: /Terminal/ })).toHaveAttribute("aria-checked", "true");
   });
@@ -1899,14 +1905,21 @@ describe("ChatView", () => {
 
   // ── Session badge semantics ───────────────────────────────────────────────
 
-  it('shows the "live" badge for an active session', () => {
+  it('shows an active session as a green dot before the name, not the word "live" (ADR-099)', () => {
     mockUseChatStream.mockReturnValue(
       mkStream({ session: { sessionId: "s1", live: true, startedAt: null, aliveness: "active" } })
     );
     renderChatView();
     const badge = screen.getByTestId("session-badge");
     expect(badge).toHaveAttribute("data-aliveness", "active");
-    expect(badge).toHaveTextContent("live");
+    // No word — the meaning lives in the spoken label and the tooltip (i18n).
+    expect(badge).toHaveTextContent("");
+    expect(badge).toHaveAttribute("aria-label", LIVE_LABEL);
+    expect(badge).toHaveAttribute("title", LIVE_LABEL);
+    expect(badge.style.background).toBe(C.online);
+    // It belongs to the name, not to the button group on the right.
+    expect(screen.getByTestId("chat-header-title")).toContainElement(badge);
+    expect(screen.queryByText("live")).not.toBeInTheDocument();
   });
 
   it("shows no alarming word for an IDLE session — only a quiet dot", () => {
@@ -1917,15 +1930,18 @@ describe("ChatView", () => {
     const badge = screen.getByTestId("session-badge");
     expect(badge).toHaveAttribute("data-aliveness", "idle");
     expect(badge).toHaveTextContent("");
-    expect(screen.queryByText("beendet")).not.toBeInTheDocument();
+    expect(screen.queryByText("ended")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-header-title")).toContainElement(badge);
   });
 
-  it('keeps "beendet" for a session the server actually calls ended', () => {
+  it('keeps "ended" as a word for a session the server actually calls ended — from the catalog', () => {
     mockUseChatStream.mockReturnValue(
       mkStream({ session: { sessionId: "s1", live: false, startedAt: null, aliveness: "ended" } })
     );
     renderChatView();
-    expect(screen.getByTestId("session-badge")).toHaveTextContent("beendet");
+    // A warning stays a word (ADR-099); it used to be hard-wired German.
+    expect(screen.getByTestId("session-badge")).toHaveTextContent("ended");
+    expect(screen.getByTestId("chat-header-title")).not.toContainElement(screen.getByTestId("session-badge"));
     expect(
       screen.getByText("Session ended — a new message starts the next session")
     ).toBeInTheDocument();
@@ -1939,7 +1955,7 @@ describe("ChatView", () => {
     );
     renderChatView();
     expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "idle");
-    expect(screen.queryByText("beendet")).not.toBeInTheDocument();
+    expect(screen.queryByText("ended")).not.toBeInTheDocument();
   });
 
   it('says "live" only while the chat works — "Bereit" in the status line means the quiet dot (r1 NICE-2)', () => {
@@ -1965,7 +1981,7 @@ describe("ChatView", () => {
     );
     renderChatView();
     expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "active");
-    expect(screen.getByTestId("session-badge")).toHaveTextContent("live");
+    expect(screen.getByTestId("session-badge")).toHaveAttribute("aria-label", LIVE_LABEL);
   });
 
   it('says "live" while a task turn runs, though the chat transcript is quiet (round-4 t1 NICE-4)', () => {
@@ -1977,7 +1993,7 @@ describe("ChatView", () => {
     );
     renderChatView();
     expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "active");
-    expect(screen.getByTestId("session-badge")).toHaveTextContent("live");
+    expect(screen.getByTestId("session-badge")).toHaveAttribute("aria-label", LIVE_LABEL);
   });
 
   it('opens with a neutral "Loading…" until the first state — never "check the terminal" (round-4 t1 NICE-2)', () => {
@@ -2010,7 +2026,7 @@ describe("ChatView", () => {
     );
     renderChatView();
     expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "ended");
-    expect(screen.getByTestId("session-badge")).toHaveTextContent("beendet");
+    expect(screen.getByTestId("session-badge")).toHaveTextContent("ended");
   });
 
   it("offers a Send (not a Stop) on an idle session — the morph follows the agent, not the session", () => {
@@ -2105,88 +2121,108 @@ describe("ChatView", () => {
   // ══════════════════════════════════════════════════════════════════════════
 
 
-  describe("Desktop-Kopfzeile — Detailgrad eingeklappt", () => {
+  describe("Desktop-Kopfzeile — Detailgrad im ⋯-Menü (ADR-099 E1)", () => {
     beforeEach(() => {
       mockUseChatStream.mockReturnValue(mkStream());
     });
 
-    it("zeigt statt drei Segmenten einen Knopf mit dem aktuellen Wert", () => {
-      // Operator-Wunsch 19.08.2026: "diese viele buttons und switche rechts
-      // oben irgendwie verpacken". Der Detailgrad wird einmal eingestellt und
-      // selten angefasst — Chat/Terminal dagegen staendig, das bleibt offen.
-      renderChatView({ detailLevel: "normal" });
-      const trigger = screen.getByTestId("detail-level-trigger");
-      expect(trigger.textContent).toContain("Normal");
-      // Die anderen Stufen sind erst nach dem Klick da.
-      expect(screen.queryByRole("option", { name: "Compact" })).toBeNull();
-    });
-
-    it("beschriftet Knopf und Liste aus dem Katalog, nicht deutsch fest verdrahtet", async () => {
-      // Der Review-Befund zu PR #331: `aria-label="Detailgrad"` stand deutsch
-      // in der englischen Standard-Oberflaeche. Vorleseprogramme lesen genau
-      // dieses Label vor — es muss durch t() laufen wie jeder andere UI-Text
-      // (docs/i18n.md). Der Test rendert gegen messages/en.json.
+    it("steht nicht mehr im Kopf; ⋯ öffnet ihn, die Stufen erst nach dem Klick", async () => {
       const user = userEvent.setup();
-      renderChatView({ detailLevel: "verbose" });
-
-      expect(screen.getByTestId("detail-level-trigger")).toHaveAttribute(
-        "aria-label",
-        "Detail level: Verbose"
-      );
-      await user.click(screen.getByTestId("detail-level-trigger"));
-      expect(screen.getByRole("listbox")).toHaveAttribute("aria-label", "Detail level");
+      renderChatView({ detailLevel: "normal" });
+      expect(screen.queryByTestId("detail-level-trigger")).toBeNull();
+      expect(screen.queryByRole("menuitemradio", { name: "Compact" })).toBeNull();
+      const more = screen.getByTestId("chat-options-desktop");
+      expect(more).toHaveAttribute("aria-label", "Chat options");
+      expect(more).toHaveAttribute("aria-expanded", "false");
+      await user.click(more);
+      expect(more).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByRole("menu")).toHaveAccessibleName("Chat options");
+      expect(screen.getByRole("group", { name: "Detail level" })).toBeInTheDocument();
     });
 
-    it("oeffnet die Liste erst auf Klick und meldet die Wahl", async () => {
+    it("meldet die Wahl und schliesst das Menü", async () => {
       const onDetailLevelChange = vi.fn();
       const user = userEvent.setup();
       renderChatView({ detailLevel: "normal", onDetailLevelChange });
-
-      await user.click(screen.getByTestId("detail-level-trigger"));
-      await user.click(screen.getByRole("option", { name: "Verbose" }));
-
+      await user.click(screen.getByTestId("chat-options-desktop"));
+      await user.click(screen.getByRole("menuitemradio", { name: "Verbose" }));
       expect(onDetailLevelChange).toHaveBeenCalledWith("verbose");
+      expect(screen.queryByRole("menu")).toBeNull();
     });
 
     it("markiert die aktive Stufe fuer Vorleseprogramme", async () => {
       const user = userEvent.setup();
       renderChatView({ detailLevel: "compact" });
-
-      await user.click(screen.getByTestId("detail-level-trigger"));
-
-      expect(screen.getByRole("option", { name: "Compact" })).toHaveAttribute("aria-selected", "true");
-      expect(screen.getByRole("option", { name: "Normal" })).toHaveAttribute("aria-selected", "false");
+      await user.click(screen.getByTestId("chat-options-desktop"));
+      expect(screen.getByRole("menuitemradio", { name: "Compact" })).toHaveAttribute("aria-checked", "true");
+      expect(screen.getByRole("menuitemradio", { name: "Normal" })).toHaveAttribute("aria-checked", "false");
     });
 
-    it("lässt den Hover der Einträge wirklich durch", async () => {
-      // Inline-Stil schlaegt jede Klasse, auch `hover:`. Mit
-      // `backgroundColor: "transparent"` an jedem Eintrag war
-      // `hover:bg-[var(--color-bg-hover)]` ein Nichts — im Browser
-      // gegengeprueft: gehovert meldet getComputedStyle rgba(0,0,0,0) statt
-      // der Hover-Farbe, ohne Inline-Stil dagegen die Farbe.
-      // jsdom rechnet keine Kaskade, also wird hier die URSACHE geprueft:
-      // nicht gewaehlte Eintraege tragen gar keine Inline-Flaeche.
-      const user = userEvent.setup();
-      renderChatView({ detailLevel: "normal" });
-      await user.click(screen.getByTestId("detail-level-trigger"));
+    it("zeigt am ⋯ einen kleinen Punkt nur, wenn nicht Normal eingestellt ist", () => {
+      const { unmount } = renderChatView({ detailLevel: "normal" });
+      expect(screen.queryByTestId("detail-level-dot")).toBeNull();
+      unmount();
+      renderChatView({ detailLevel: "verbose" });
+      expect(screen.getByTestId("detail-level-dot")).toBeInTheDocument();
+      // The ⋯ says why it carries a dot.
+      expect(screen.getByTestId("chat-options-desktop")).toHaveAttribute("title", "Detail level: Verbose");
+    });
 
-      const gewaehlt = screen.getByRole("option", { name: "Normal" });
-      const andere = screen.getByRole("option", { name: "Compact" });
-      expect(andere.style.backgroundColor).toBe("");
-      // Die Auswahl muss dagegen immer sichtbar bleiben.
-      expect(gewaehlt.style.backgroundColor).not.toBe("");
+    it("schliesst mit Escape und Klick daneben", async () => {
+      const user = userEvent.setup();
+      renderChatView({});
+      await user.click(screen.getByTestId("chat-options-desktop"));
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).toBeNull();
+      await user.click(screen.getByTestId("chat-options-desktop"));
+      fireEvent.pointerDown(document.body);
+      expect(screen.queryByRole("menu")).toBeNull();
     });
 
     it("gibt es im Terminal-Modus gar nicht", () => {
-      // Der Detailgrad betrifft nur die geparste Chat-Ansicht.
+      // Der Detailgrad betrifft nur die geparste Chat-Ansicht — ein leeres
+      // Menü wäre ein Knopf ohne Wirkung.
       renderChatView({ centerView: "terminal" });
-      expect(screen.queryByTestId("detail-level-trigger")).toBeNull();
+      expect(screen.queryByTestId("chat-options-desktop")).toBeNull();
     });
 
     it("laesst Chat/Terminal sichtbar", () => {
       renderChatView({});
       expect(screen.getByRole("button", { name: "Terminal" })).toBeTruthy();
       expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy();
+    });
+  });
+
+  describe("Desktop-Kopfzeile — Änderungen und Browser (ADR-099)", () => {
+    beforeEach(() => {
+      mockUseChatStream.mockReturnValue(mkStream());
+    });
+
+    it("trägt die Panel-Knöpfe, wenn die Seite Panels anbietet", async () => {
+      const onTogglePanel = vi.fn();
+      const user = userEvent.setup();
+      renderChatView({ activePanel: null, onTogglePanel });
+      const header = screen.getByTestId("chat-header");
+      const changes = screen.getByRole("button", { name: "Changes" });
+      expect(header).toContainElement(changes);
+      expect(changes).toHaveAttribute("aria-pressed", "false");
+      await user.click(changes);
+      expect(onTogglePanel).toHaveBeenCalledWith("diff");
+    });
+
+    it("zeigt das offene Panel gedrückt; erneuter Klick schliesst es", async () => {
+      const onTogglePanel = vi.fn();
+      const user = userEvent.setup();
+      renderChatView({ activePanel: "browser", onTogglePanel });
+      const browser = screen.getByRole("button", { name: "Browser" });
+      expect(browser).toHaveAttribute("aria-pressed", "true");
+      await user.click(browser);
+      expect(onTogglePanel).toHaveBeenCalledWith(null);
+    });
+
+    it("ohne Panels (Kopf eines Aufrufers ohne Panel-Spalte) keine Knöpfe", () => {
+      renderChatView({});
+      expect(screen.queryByTestId("header-panel-buttons")).toBeNull();
     });
   });
 
@@ -2238,14 +2274,18 @@ describe("ChatView", () => {
       expect(r.right).toBeGreaterThan(56);
     });
 
-    it("gibt den Platz wieder frei, wenn das Abzeichen schrumpft", () => {
+    it("gibt den Platz wieder frei: Punkte stehen am Namen, rechts nur noch \"beendet\"", () => {
+      // ADR-099: "live" is a dot now, and like the idle dot it sits before the
+      // name — the right group keeps only mic + ⋯ (+ the "ended" word).
       const ended = headerSideReservation({ hasBack: true, badge: "ended" });
+      const live = headerSideReservation({ hasBack: true, badge: "live" });
       const dot = headerSideReservation({ hasBack: true, badge: "dot" });
       const none = headerSideReservation({ hasBack: true, badge: "none" });
-      expect(dot.right).toBeLessThan(ended.right);
-      expect(none.right).toBeLessThan(dot.right);
-      // Ohne Abzeichen bleiben genau Mikrofon + "…" plus Polster.
-      expect(none.right).toBe(M.headerPaddingRight + M.control + M.gap + M.control);
+      const bare = M.headerPaddingRight + M.control + M.gap + M.control;
+      expect(none.right).toBe(bare);
+      expect(dot.right).toBe(bare);
+      expect(live.right).toBe(bare);
+      expect(ended.right).toBeGreaterThan(live.right);
     });
 
     it("reserviert links nur, was der Zurück-Pfeil braucht", () => {
@@ -2352,7 +2392,7 @@ describe("ChatView", () => {
       // aus globals.css, der Kreis liegt als Kind mittig darin.
       renderChatView({ onBack: vi.fn() });
       for (const label of ["Back to chats", "Chat options"]) {
-        const btn = screen.getByLabelText(label);
+        const btn = phoneLabeled(label);
         expect(btn.className).toContain("min-w-touch");
         expect(btn.className).toContain("min-h-touch");
       }
@@ -2372,7 +2412,7 @@ describe("ChatView", () => {
       // gewachsen, bliebe unter dem Blatt ein Streifen Gespraech stehen.
       renderChatView({ onBack: vi.fn() });
       for (const label of ["Back to chats", "Chat options"]) {
-        expect(screen.getByLabelText(label).className).toContain("-m-1");
+        expect(phoneLabeled(label).className).toContain("-m-1");
       }
       expect(GLOBALS_CSS).toContain(
         "--mobile-chat-topbar-h: calc(env(safe-area-inset-top) + 3.0625rem)"

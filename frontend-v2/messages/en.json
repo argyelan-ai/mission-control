@@ -1054,6 +1054,8 @@
     "backToSessions": "Back to chats",
     "chatOptions": "Chat options",
     "sessionWaitingAtPrompt": "Session running, waiting at the prompt",
+    "sessionLive": "Live — working right now",
+    "sessionEnded": "ended",
     "detailLevel": "Detail level",
     "detailLevelCurrent": "Detail level: {level}",
     "detailCompact": "Compact",

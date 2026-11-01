@@ -92,8 +92,12 @@ vi.mock("@/components/chat/ChatView", () => ({
     onBack,
     workingOn,
     voiceOnScreen,
+    activePanel,
+    onTogglePanel,
   }: {
     voiceOnScreen?: boolean;
+    activePanel?: string | null;
+    onTogglePanel?: (panel: string | null) => void;
     agent: { name: string } | null;
     head?: { run_id: string; title: string | null } | null;
     hasTranscript: boolean;
@@ -129,6 +133,20 @@ vi.mock("@/components/chat/ChatView", () => ({
           Stub Back
         </button>
       )}
+      {/* The header's panel buttons (ADR-099) are ChatView's — covered by
+          ChatView.test.tsx and PanelButtons.test.tsx. What the PAGE owes is
+          the wiring: which panel is open, and a toggle that opens/closes it. */}
+      {onTogglePanel &&
+        (["diff", "browser"] as const).map((k) => (
+          <button
+            key={k}
+            type="button"
+            aria-pressed={activePanel === k}
+            onClick={() => onTogglePanel(activePanel === k ? null : k)}
+          >
+            {k === "diff" ? "Changes" : "Browser"}
+          </button>
+        ))}
     </div>
   ),
   // Gleiche Form wie chatOptions.ts: Katalog-Schluessel, keine fertigen
@@ -325,7 +343,7 @@ describe("SessionsPage — last-selected-agent restore", () => {
   });
 });
 
-describe("SessionsPage — panel rail switches the panel slot's content (Diff/Browser only)", () => {
+describe("SessionsPage — the header's panel buttons switch the panel slot's content (Diff/Browser only)", () => {
   let store: Record<string, string>;
 
   beforeEach(() => {
@@ -357,6 +375,11 @@ describe("SessionsPage — panel rail switches the panel slot's content (Diff/Br
   it("no panel is open by default, and Terminal is no longer one of the rail's options", async () => {
     renderPage();
     await screen.findAllByText("Agent One");
+
+    // ADR-099: the strip right of the chat is gone — its buttons live in the
+    // chat header now (the stub renders them only from ChatView's props).
+    expect(screen.queryByRole("toolbar", { name: "Panels" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Changes" })).toHaveAttribute("aria-pressed", "false");
 
     expect(screen.queryByRole("button", { name: "Terminal" })).not.toBeInTheDocument();
     expect(screen.queryByTestId("browser-live-view-stub")).not.toBeInTheDocument();

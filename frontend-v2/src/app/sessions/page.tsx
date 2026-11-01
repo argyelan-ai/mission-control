@@ -12,7 +12,7 @@ import { BrowserLiveView } from "@/components/shared/BrowserLiveView";
 import { SessionSidebar } from "@/components/chat/SessionSidebar";
 import { ChatView, type CenterView, type DetailLevel, CENTER_VIEWS, DETAIL_LEVELS } from "@/components/chat/ChatView";
 import { DiffPanel } from "@/components/chat/DiffPanel";
-import { PanelRail, type PanelKind } from "@/components/chat/PanelRail";
+import type { PanelKind } from "@/components/chat/PanelButtons";
 import { agentIsRunning, type AgentWithState } from "@/components/chat/TerminalPanel";
 import { GroupChatView } from "@/components/groupchat/GroupChatView";
 import { CreateGroupModal } from "@/components/groupchat/CreateGroupModal";
@@ -829,30 +829,17 @@ function SessionsPageContent() {
                 onBack={backToList}
                 workingOn={selectedWorkingOn}
                 onOpenPanel={setActivePanel}
+                activePanel={activePanel}
+                onTogglePanel={setActivePanel}
               />
             )}
           </div>
 
-          {/* Panel rail — desktop only, its own slim island next to the chat.
-              On mobile the same panels are reached from the chat header's
-              options sheet; the rail used to be a `fixed bottom-0` bar there,
-              which covered the app's own bottom tab bar. */}
-          {/* Bei einer Gruppe hätte die Schiene GENAU einen Knopf — und
-              denselben Knopf trägt der Gruppen-Kopf bereits. Sie wäre eine
-              Navigationsleiste ohne Navigation: 58px breit, null Information,
-              und sie stand als loser Balken zwischen Chat und Panel
-              (Operator-Befund 22.08.2026). Für Agenten bleibt sie: dort führt
-              sie zu Diff UND Browser, also trägt sie eine echte Wahl. */}
-          {/* A head has neither a Diff nor a Browser panel either (ADR-085
-              Nachtrag §4: files only) — same reasoning as the group case
-              right above. */}
-          {!selectedGroupId && !selectedHeadId && (
-            <PanelRail
-              active={activePanel}
-              onSelect={setActivePanel}
-              only={["diff", "browser"]}
-            />
-          )}
+          {/* Die Panel-Schiene rechts vom Chat ist weg (ADR-099, Operator
+              01.11.2026): Änderungen und Browser sind Knöpfe im Chat-Kopf
+              (`onTogglePanel` oben). Gruppen öffnen ihr Ergebnis-Dokument über
+              den eigenen Kopf-Knopf (`onOpenResult`), Heads haben kein Panel
+              (ADR-085 Nachtrag §4) — beide bekommen keine Panel-Knöpfe. */}
 
           {/* Panel content — desktop: its own island column; mobile: full-
               screen overlay with its own close button (single markup block,

@@ -59,7 +59,7 @@ const FILES = [
   // Oberflaeche — die Datei stand nie auf dieser Liste) samt Panel-Schiene,
   // Sessions-Seite und der geteilten Diff-Darstellung.
   "DiffPanel.tsx",
-  "PanelRail.tsx",
+  "PanelButtons.tsx",
   "../git/GitDiffView.tsx",
   "../../app/sessions/page.tsx",
   // Das Kontext-Panel hinter dem Ring im Composer: stand bis zum Fund fest

@@ -2,26 +2,27 @@
 
 /**
  * ChatView — Task B6 (revised). Composes the chat timeline over an agent's
- * Claude Code transcript: header (name, live/beendet badge, detail-level
- * toggle, Chat/Terminal center-view toggle), a scroll-locked event list, the
+ * Claude Code transcript: header (state dot + name, "ended" word, Chat/Terminal
+ * center-view toggle, the changes/browser panel buttons and a ⋯ menu with the
+ * detail level — ADR-099), a scroll-locked event list, the
  * approval card (only while a permission prompt is open), the truthful
  * status line, and the composer.
  *
- * Terminal used to be a side panel (PanelRail); it's now a CENTER-VIEW
- * toggle right next to the detail-level switcher — selecting it swaps the
+ * Terminal used to be a side panel; it's now a CENTER-VIEW
+ * toggle in the header — selecting it swaps the
  * whole body (timeline+composer) for `TerminalPanel` full-size instead of
  * splitting the screen. No-transcript agents (Hermes/Jarvis, or a runtime
  * 404 despite `hasTranscript` saying otherwise) force terminal mode: there's
  * no chat to show, so the "Chat" segment is disabled rather than presenting
  * a dead-end empty-state screen.
  *
- * Owns nothing about the Diff/Browser side panel — that's PanelRail's job,
- * orthogonal to this toggle.
+ * Owns no panel state: the page holds which side panel is open and hands it
+ * in (`activePanel`, `onTogglePanel`); the header only shows the buttons.
  */
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
-import { ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
 import { C, alpha } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -69,7 +70,8 @@ import { VoiceButton } from "@/components/voice/VoiceWidget";
 import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
 import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
-import type { PanelKind } from "./PanelRail";
+import { HeaderPanelButtons, type PanelKind } from "./PanelButtons";
+import { PopoverPortal, anchoredBoxStyle, useAnchoredPosition } from "@/lib/anchoredPopover";
 import { useChatTasks } from "@/hooks/useChatTasks";
 import { headerAliveness, observedStub, statusLineState } from "./taskSteps/observedState";
 import { useTaskSteps, type TaskStepsSpec } from "@/hooks/useTaskSteps";
@@ -138,9 +140,7 @@ export const MOBILE_HEADER_METRICS = {
   headerPaddingRight: 8, // pr-2
   control: 36, // Zurueck, Mikrofon, "…"
   gap: 8, // gap-2
-  badgeDot: 6, // w-1.5
-  badgeLive: 38, // "live"
-  badgeEnded: 56, // "beendet"
+  badgeEnded: 56, // "beendet" (das laengere der beiden Woerter)
 } as const;
 
 export type HeaderBadge = "none" | "dot" | "live" | "ended";
@@ -167,17 +167,13 @@ export function headerSideReservation(opts: {
   badge: HeaderBadge;
 }): { left: number; right: number } {
   const M = MOBILE_HEADER_METRICS;
-  const badgeWidth =
-    opts.badge === "ended"
-      ? M.badgeEnded
-      : opts.badge === "live"
-        ? M.badgeLive
-        : opts.badge === "dot"
-          ? M.badgeDot
-          : 0;
+  // ADR-099: "live" und "wartet" sind Punkte VOR dem Namen (sie stehen im
+  // Titel-Block, kosten rechts nichts). Rechts bleibt nur das Wort "beendet" —
+  // eine Warnung bleibt ein Wort.
+  const badgeWidth = opts.badge === "ended" ? M.badgeEnded : 0;
   return {
     left: M.headerPaddingLeft + (opts.hasBack ? M.control : 0),
-    // Mikrofon + "…" stehen immer, das Abzeichen nur manchmal.
+    // Mikrofon + "…" stehen immer, "beendet" nur manchmal.
     right:
       M.headerPaddingRight +
       M.control +
@@ -360,9 +356,14 @@ interface ChatViewProps {
    *  the old task line under the agent name: the same fact twice would
    *  break K3. */
   workingOn?: WorkingOn | null;
-  /** Lets the mobile options sheet open the side panels the desktop rail
-   *  owns. Omitted = no Panels section in the sheet. */
+  /** Lets the mobile options sheet open the side panels. Omitted = no Panels
+   *  section in the sheet. */
   onOpenPanel?: (panel: PanelKind) => void;
+  /** The side panel open next to the chat (desktop header buttons, ADR-099). */
+  activePanel?: PanelKind | null;
+  /** Present = the desktop header shows the changes / browser buttons; the
+   *  page passes it only where a panel column exists (agent chats). */
+  onTogglePanel?: (panel: PanelKind | null) => void;
   /** The run that superseded `head`'s own `needs_you` question (a later run
    *  on the same task, `lib/heads.ts::newerHeadRunIdFor`) — when set,
    *  `HeadChatFooter` shows a link to it instead of the answer field
@@ -390,6 +391,8 @@ export function ChatView({
   onBack,
   workingOn = null,
   onOpenPanel,
+  activePanel = null,
+  onTogglePanel,
   newerHeadRunId = null,
   onSelectHeadRun,
 }: ChatViewProps) {
@@ -413,8 +416,16 @@ export function ChatView({
   const [optionsOpen, setOptionsOpen] = useState(false);
   /** Text eines zurueckgeholten Steers, der noch einmal bearbeitet werden soll. */
   const [composerPrefill, setComposerPrefill] = useState<{ text: string; at: number } | null>(null);
+  /** Desktop ⋯ menu (detail level, ADR-099 E1). Rendered through a portal
+   *  so the chat column's `overflow-hidden` cannot clip it. */
   const [detailOpen, setDetailOpen] = useState(false);
   const detailBoxRef = useRef<HTMLDivElement | null>(null);
+  const detailMenuRef = useRef<HTMLDivElement | null>(null);
+  const detailMenuStyle = useAnchoredPosition(detailOpen, detailBoxRef, detailMenuRef, {
+    side: "bottom",
+    align: "end",
+    offset: 4,
+  });
   // Chunked first paint: a full Boss transcript is ~200 events of ReactMarkdown,
   // and rendering all of it in one commit blocked the main thread long enough
   // that the page stopped answering (measured: repeated >5s stalls, 741ms LCP
@@ -425,13 +436,14 @@ export function ChatView({
   const [renderAll, setRenderAll] = useState(false);
 
   const streamEnabled = hasTranscript && !!agent && !head;
-  // Klick daneben oder Escape schliesst die Detailgrad-Liste. Ohne das bliebe
-  // sie offen stehen, waehrend man laengst woanders arbeitet — dasselbe Muster
+  // Klick daneben oder Escape schliesst das ⋯-Menue. Ohne das bliebe es
+  // offen stehen, waehrend man laengst woanders arbeitet — dasselbe Muster
   // wie beim Modell-Waehler im Composer.
   useEffect(() => {
     if (!detailOpen) return;
     function onPointerDown(e: PointerEvent) {
-      if (!detailBoxRef.current?.contains(e.target as Node)) setDetailOpen(false);
+      const target = e.target as Node;
+      if (!detailBoxRef.current?.contains(target) && !detailMenuRef.current?.contains(target)) setDetailOpen(false);
     }
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") setDetailOpen(false);
@@ -1380,11 +1392,29 @@ export function ChatView({
                      md:static md:inset-auto md:px-0 md:flex-1 md:min-w-0 md:flex-row md:items-baseline
                      md:gap-2 md:pointer-events-auto"
         >
-          <span
-            className="text-[15px] md:text-[13px] font-semibold md:font-medium truncate max-w-full md:shrink-0"
-            style={{ color: C.textPrimary }}
-          >
-            {agent.name}
+          {/* Zustandspunkt VOR dem Namen (ADR-099, Operator 01.11.2026): das
+              Wort "live" kostete 38 px und sagte nichts, was ein Punkt nicht
+              sagt. Gruen = arbeitet, grau = wartet am Prompt. Farbe traegt nie
+              allein: Vorlesetext und Tooltip kommen aus i18n. "beendet" ist
+              eine Warnung und bleibt ein Wort (rechte Gruppe). */}
+          <span className="flex items-center gap-1.5 max-w-full min-w-0 md:shrink-0">
+            {(headerBadge === "live" || headerBadge === "dot") && (
+              <span
+                data-testid="session-badge"
+                data-aliveness={headerBadge === "live" ? "active" : "idle"}
+                role="img"
+                aria-label={headerBadge === "live" ? t("sessionLive") : t("sessionWaitingAtPrompt")}
+                title={headerBadge === "live" ? t("sessionLive") : t("sessionWaitingAtPrompt")}
+                className="w-1.5 h-1.5 rounded-full shrink-0 pointer-events-auto"
+                style={{ background: headerBadge === "live" ? C.online : C.textDim }}
+              />
+            )}
+            <span
+              className="text-[15px] md:text-[13px] font-semibold md:font-medium truncate min-w-0"
+              style={{ color: C.textPrimary }}
+            >
+              {agent.name}
+            </span>
           </span>
         </div>
 
@@ -1393,35 +1423,21 @@ export function ChatView({
             aufteilen und das Badge in die Naehe der Mitte schieben — genau
             dorthin, wo der Titel liegt. */}
         <div className="ml-auto flex items-center gap-2 shrink-0">
-        {/* Three states, three treatments — and only ONE of them is a claim
-            about the session being over. The old two-way badge read `live`,
-            which is mtime-based and therefore false for any CLI that is running
-            but idle at its prompt; the header then announced "beendet" at a
-            session sitting right there. `idle` now gets a quiet dot with no
-            word at all: nothing is happening, and nothing is wrong. */}
-        {headerBadge === "live" || headerBadge === "ended" ? (
+        {/* Only ONE of the three states is a claim about the session being
+            over, and only that one is a word. The old two-way badge read
+            `live`, which is mtime-based and therefore false for any CLI that
+            is running but idle at its prompt; the header then announced
+            "ended" at a session sitting right there. Active and idle are dots
+            before the name (above); "ended" stays a word here. */}
+        {headerBadge === "ended" && (
           <span
             data-testid="session-badge"
-            data-aliveness={badgeAliveness}
+            data-aliveness="ended"
             className="relative z-10 text-[10px] font-medium px-1.5 py-0.5 rounded-sm font-mono shrink-0"
-            style={{
-              background: headerBadge === "live" ? alpha(C.online, 0.1) : C.bgHover,
-              color: headerBadge === "live" ? C.online : C.textMuted,
-              border: `1px solid ${headerBadge === "live" ? alpha(C.online, 0.2) : C.border}`,
-            }}
+            style={{ background: C.bgHover, color: C.textMuted, border: `1px solid ${C.border}` }}
           >
-            {headerBadge === "live" ? "live" : "beendet"}
+            {t("sessionEnded")}
           </span>
-        ) : null}
-        {headerBadge === "dot" && (
-          <span
-            data-testid="session-badge"
-            data-aliveness="idle"
-            title={t("sessionWaitingAtPrompt")}
-            className="relative z-10 w-1.5 h-1.5 rounded-full shrink-0"
-            style={{ background: C.textDim }}
-            aria-label={t("sessionWaitingAtPrompt")}
-          />
         )}
 
         {/* Sprachbedienung. Auf dem Chat-Schirm gibt es die App-Leiste nicht
@@ -1462,80 +1478,6 @@ export function ChatView({
         </div>
 
         <div className="hidden md:flex items-center gap-2 shrink-0">
-          {/* Detailgrad: EIN Knopf mit Klappliste statt drei Segmenten
-              (Operator-Wunsch 19.08.2026: "diese viele buttons und switche
-              rechts oben irgendwie verpacken"). Die Wahl der Bedienform folgt
-              der Benutzungshaeufigkeit — den Detailgrad stellt man einmal ein,
-              Chat/Terminal schaltet man staendig. Darum klappt genau dieser
-              ein und der Umschalter daneben bleibt offen. */}
-          {effectiveView === "chat" && (
-            <div className="relative" ref={detailBoxRef}>
-              <button
-                type="button"
-                data-testid="detail-level-trigger"
-                aria-haspopup="listbox"
-                aria-expanded={detailOpen}
-                aria-label={t("detailLevelCurrent", { level: currentDetailLabel })}
-                onClick={() => setDetailOpen((v) => !v)}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[10px] font-medium rounded-md cursor-pointer transition-colors whitespace-nowrap"
-                style={{
-                  border: `1px solid ${C.border}`,
-                  background: detailOpen ? C.bgHover : "transparent",
-                  color: detailOpen ? C.textPrimary : C.textMuted,
-                }}
-              >
-                {currentDetailLabel}
-                <ChevronDown
-                  size={10}
-                  className="transition-transform duration-150"
-                  style={{ transform: detailOpen ? "rotate(180deg)" : undefined }}
-                />
-              </button>
-              {detailOpen && (
-                <div
-                  role="listbox"
-                  aria-label={t("detailLevel")}
-                  className="absolute top-full right-0 mt-1 w-32 rounded-lg overflow-hidden z-20 p-1"
-                  style={{
-                    backgroundColor: C.bgElevated,
-                    border: `1px solid ${C.border}`,
-                    boxShadow: "var(--shadow-elevated)",
-                  }}
-                >
-                  {DETAIL_LEVELS.map(({ key, labelKey }) => (
-                    <button
-                      key={key}
-                      type="button"
-                      role="option"
-                      aria-selected={detailLevel === key}
-                      onClick={() => {
-                        onDetailLevelChange(key);
-                        setDetailOpen(false);
-                      }}
-                      className="w-full text-left px-2 py-1.5 text-[11px] rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
-                      // Die Flaeche der NICHT gewaehlten Eintraege bleibt
-                      // bewusst ohne Inline-Stil. Ein Inline-Stil schlaegt
-                      // jede Klasse, auch `hover:` — mit
-                      // `backgroundColor: "transparent"` war der Hover ein
-                      // Nichts (im Browser gegengeprueft: gehovert meldet
-                      // getComputedStyle rgba(0,0,0,0) statt der Hover-Farbe).
-                      // Genau die Falle, vor der der Kaskaden-Hinweis in
-                      // globals.css warnt.
-                      style={{
-                        color: detailLevel === key ? C.accent : C.textPrimary,
-                        ...(detailLevel === key
-                          ? { backgroundColor: C.accentSubtle }
-                          : null),
-                      }}
-                    >
-                      {t(labelKey)}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
           {!headlessChat && (
           <div
             className="flex items-center rounded-md overflow-hidden"
@@ -1563,6 +1505,90 @@ export function ChatView({
               );
             })}
           </div>
+          )}
+
+          {/* Änderungen + Browser (ADR-099): vorher ein eigener 58-px-Streifen
+              rechts vom Chat. Nur wo die Seite eine Panel-Spalte hat. */}
+          {onTogglePanel && <HeaderPanelButtons active={activePanel} onToggle={onTogglePanel} />}
+
+          {/* ⋯ am Desktop: hier wohnt der Detailgrad (ADR-099 E1, verschoben,
+              nicht geloescht). Den stellt man einmal ein; im Kopf stand er als
+              "Normal ▾" dauernd im Blick. Ein kleiner Punkt am ⋯ sagt, dass
+              NICHT Normal eingestellt ist — sonst wuerde eine kompakte Ansicht
+              still Zeilen verschlucken. Nur in der Chat-Ansicht: im Terminal
+              waere das Menue leer. */}
+          {effectiveView === "chat" && (
+            <div className="relative" ref={detailBoxRef}>
+              <button
+                type="button"
+                data-testid="chat-options-desktop"
+                aria-haspopup="menu"
+                aria-expanded={detailOpen}
+                aria-label={t("chatOptions")}
+                title={detailLevel === "normal" ? t("chatOptions") : t("detailLevelCurrent", { level: currentDetailLabel })}
+                onClick={() => setDetailOpen((v) => !v)}
+                className="relative flex items-center justify-center w-8 h-8 rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+                style={{
+                  color: detailOpen ? C.textPrimary : C.textMuted,
+                  ...(detailOpen ? { background: C.bgHover } : null),
+                }}
+              >
+                <MoreHorizontal size={16} />
+                {detailLevel !== "normal" && (
+                  <span
+                    data-testid="detail-level-dot"
+                    aria-hidden="true"
+                    className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full"
+                    style={{ background: C.accent }}
+                  />
+                )}
+              </button>
+              {detailOpen && (
+                <PopoverPortal>
+                  <div
+                    ref={detailMenuRef}
+                    role="menu"
+                    aria-label={t("chatOptions")}
+                    className="w-44 rounded-lg overflow-hidden z-50 p-1"
+                    style={{
+                      ...anchoredBoxStyle(detailMenuStyle),
+                      backgroundColor: C.bgElevated,
+                      border: `1px solid ${C.border}`,
+                      boxShadow: "var(--shadow-elevated)",
+                    }}
+                  >
+                    <div role="group" aria-label={t("detailLevel")}>
+                      <div className="label-sys px-2 pt-1 pb-1" style={{ color: C.textMuted }}>
+                        {t("detailLevel")}
+                      </div>
+                      {DETAIL_LEVELS.map(({ key, labelKey }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={detailLevel === key}
+                          onClick={() => {
+                            onDetailLevelChange(key);
+                            setDetailOpen(false);
+                          }}
+                          className="w-full flex items-center gap-2 text-left px-2 py-1.5 text-[12px] rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+                          // Nicht gewaehlte Eintraege ohne Inline-Flaeche: ein
+                          // Inline-Stil schluege auch `hover:` (siehe
+                          // globals.css, Kaskaden-Hinweis).
+                          style={{
+                            color: detailLevel === key ? C.accent : C.textPrimary,
+                            ...(detailLevel === key ? { backgroundColor: C.accentSubtle } : null),
+                          }}
+                        >
+                          <span className="flex-1">{t(labelKey)}</span>
+                          {detailLevel === key && <Check size={13} aria-hidden="true" />}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </PopoverPortal>
+              )}
+            </div>
           )}
         </div>
       </div>
