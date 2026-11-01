@@ -64,6 +64,9 @@ vi.mock("@/hooks/useChatStream", () => ({ useChatStream: vi.fn() }));
 // with a real QueryClient).
 vi.mock("@/hooks/useChatTasks", () => ({ useChatTasks: vi.fn(() => ({ data: null, settled: false, error: false })) }));
 vi.mock("@/hooks/useTaskSteps", () => ({ useTaskSteps: vi.fn(() => new Map()) }));
+// The live thinking row asks the engine once it is quiet (31.10.2026) —
+// stubbed "not busy"; LiveThinkingRow.test.tsx covers it with a real client.
+vi.mock("@/hooks/useEngineActivity", () => ({ useEngineBusy: vi.fn(() => false) }));
 // Heads-in-Chats (PR 2) branch: no test in this file passes a `head` prop
 // (that's ChatView.head.test.tsx's job), but every render still calls this
 // hook unconditionally (rules of hooks) — mocked the same way

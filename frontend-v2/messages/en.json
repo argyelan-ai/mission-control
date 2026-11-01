@@ -1044,6 +1044,9 @@
     "thinkingLive": "Thinking",
     "thinkingDone": "Thought",
     "thinkingQuiet": "silent for {span}",
+    "thinkingEngineWorking": "Working",
+    "thinkingEngineBusy": "model computing, no output yet",
+    "thinkingEngineBusyHint": "The engine this agent runs on is answering a request. Its output appears once it is complete — e.g. a long file in one tool call. Another agent on the same engine would count too.",
     "thinkingTokens": "≈{count} tokens",
     "taskContext": "Context {pct}",
     "taskContextHint": "Context of the task session: ≈{used}/{win} used. The same figure as on the agent page; the ring below the chat measures this chat.",
@@ -1297,6 +1300,8 @@
         "bench": "In Benchmark"
       },
       "continues": "{title} · continues",
+      "sessionStart": "New task · own session",
+      "sessionBack": "Back in chat",
       "attempt": "Attempt {n} · {time}",
       "delivered": "Task delivered · {time}",
       "firstStepPending": "Waiting for the first step",

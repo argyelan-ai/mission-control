@@ -95,6 +95,7 @@
     "GET /api/v1/agents/{agent_id}/chat/changes",
     "GET /api/v1/agents/{agent_id}/chat/commit/draft",
     "GET /api/v1/agents/{agent_id}/chat/diff",
+    "GET /api/v1/agents/{agent_id}/chat/engine",
     "GET /api/v1/agents/{agent_id}/chat/history",
     "GET /api/v1/agents/{agent_id}/chat/media/{media_id}",
     "GET /api/v1/agents/{agent_id}/chat/pr/draft",

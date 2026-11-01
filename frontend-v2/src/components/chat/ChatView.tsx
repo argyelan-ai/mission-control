@@ -77,7 +77,7 @@ import { TaskStepsAgentContext } from "@/hooks/useTaskStepDetail";
 import { ScrollAnchorContext, type ScrollAnchor } from "./useScrollAnchor";
 import { mergeTimeline, type MergeResult, type MergeTask } from "./taskSteps/mergeTimeline";
 import { rowMs } from "./taskSteps/buildTaskUnits";
-import { TaskCard, TaskSegment } from "./taskSteps/TaskSection";
+import { SessionDivider, TaskCard, TaskSegment } from "./taskSteps/TaskSection";
 import { TaskStepsRetryContext } from "./taskSteps/TaskUnits";
 
 // Re-exported from their own module so ChatOptionsSheet can use them without
@@ -1616,9 +1616,13 @@ export function ChatView({
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
-            className="flex-1 min-h-0 overflow-y-auto scroll-quiet flex flex-col pt-2 pb-3"
+            className="flex-1 min-h-0 overflow-y-auto scroll-quiet flex flex-col pb-3"
           >
-          <div ref={timelineRef} data-testid="chat-timeline" className="flex flex-col flex-1">
+          {/* The top gap lives INSIDE the timeline, not on the scroller: a
+              sticky task head sticks at the scroller's padding edge, and an
+              8 px scroller padding let the rows passing beneath it peek out
+              above the head (phone, 31.10.2026). */}
+          <div ref={timelineRef} data-testid="chat-timeline" className="flex flex-col flex-1 pt-2">
             {!gateReady ? (
               <TimelineSkeleton />
             ) : merged.entries.length === 0 && stream.pendingEchoes.length === 0 ? (
@@ -1641,10 +1645,20 @@ export function ChatView({
                 </div>
               )
             ) : (
-              visibleEntries.map((entry) => {
+              visibleEntries.map((entry, i) => {
                 // The merge's own key: a task row can split a chat tool group,
                 // and both halves would share renderChatItem's turn-uuid key.
-                if (entry.kind === "chat") return <Fragment key={entry.key}>{renderChatItem(entry.item)}</Fragment>;
+                if (entry.kind === "chat") {
+                  // Chat lines right after a task band: the chat's own session
+                  // goes on here, not the task's (31.10.2026).
+                  const back = i > 0 && visibleEntries[i - 1].kind === "segment";
+                  return (
+                    <Fragment key={entry.key}>
+                      {back && <SessionDivider kind="back" />}
+                      {renderChatItem(entry.item)}
+                    </Fragment>
+                  );
+                }
                 const task = taskById.get(entry.taskId);
                 if (!task) return null;
                 if (entry.kind === "card") {
@@ -1664,11 +1678,17 @@ export function ChatView({
                     />
                   );
                 }
+                // A task's first segment says itself that it starts a session
+                // of its own (TaskSection `SessionStart`).
                 return (
                   <TaskSegment key={entry.key} entry={entry} stub={task.stub} detailLevel={detailLevel} queuedLabel={queuedLabel} />
                 );
               })
             )}
+            {/* The newest band is followed by the chat's own echo or live
+                preview — the same session boundary as above. */}
+            {visibleEntries.length > 0 && visibleEntries[visibleEntries.length - 1].kind === "segment" &&
+              (stream.pendingEchoes.length > 0 || stream.preview?.source === "acp") && <SessionDivider kind="back" />}
 
             {/* Locally-echoed sends, always last: they are by definition the
                 newest thing in the conversation, and they disappear the moment

@@ -1146,6 +1146,15 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/chat/engine": {
+      "get": {
+        "operationId": "get_chat_engine_activity_api_v1_agents__agent_id__chat_engine_get",
+        "summary": "Get Chat Engine Activity",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/chat/history": {
       "get": {
         "operationId": "get_chat_history_api_v1_agents__agent_id__chat_history_get",

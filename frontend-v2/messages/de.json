@@ -1044,6 +1044,9 @@
     "thinkingLive": "Denkt nach",
     "thinkingDone": "Hat nachgedacht",
     "thinkingQuiet": "still seit {span}",
+    "thinkingEngineWorking": "Arbeitet",
+    "thinkingEngineBusy": "Modell rechnet, noch ohne Ausgabe",
+    "thinkingEngineBusyHint": "Die Engine dieses Agenten beantwortet gerade eine Anfrage. Die Ausgabe erscheint, sobald sie fertig ist – z. B. eine lange Datei in einem Werkzeugaufruf. Ein anderer Agent auf derselben Engine würde auch zählen.",
     "thinkingTokens": "≈{count} Token",
     "taskContext": "Kontext {pct}",
     "taskContextHint": "Kontext der Aufgaben-Sitzung: ≈{used}/{win} belegt. Dieselbe Zahl wie auf der Agentenseite; der Ring unter dem Chat misst diesen Chat.",
@@ -1297,6 +1300,8 @@
         "bench": "Im Benchmark"
       },
       "continues": "{title} · läuft weiter",
+      "sessionStart": "Neue Aufgabe · eigene Session",
+      "sessionBack": "Zurück im Chat",
       "attempt": "Versuch {n} · {time}",
       "delivered": "Aufgabe zugestellt · {time}",
       "firstStepPending": "Wartet auf den ersten Schritt",

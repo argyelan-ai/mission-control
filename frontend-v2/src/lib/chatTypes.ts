@@ -390,6 +390,15 @@ export interface PreviewEvent {
   startedAt?: string;
 }
 
+/** `GET /agents/{id}/chat/engine` (backend `services/chat_engine_activity.py`):
+ *  whether the engine the agent is bound to has a request in flight. A model
+ *  can work for minutes without streaming anything (a tool call's arguments
+ *  arrive only when complete). Per ENGINE: another agent on the same engine
+ *  counts too. `null` = unknown — never busy. */
+export interface ChatEngineActivity {
+  engine: { busy: boolean; running: number; checkedAt: string } | null;
+}
+
 // ── Task steps in the agent chat (spec A, variant A) ────────────────────────
 // `GET /agents/{id}/chat/tasks`, `…/tasks/{task_id}/steps`, `…/steps/{row_id}`
 // (backend `services/chat_task_steps.py`). Read-only; a task's work stands at

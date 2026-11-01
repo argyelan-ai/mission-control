@@ -37,6 +37,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
         tasks: vi.fn(),
         taskSteps: vi.fn(),
         taskStepDetail: vi.fn(),
+        engine: vi.fn(),
       },
     },
   };
@@ -125,6 +126,7 @@ function serve(tasks: ChatTasksResponse, stepsByTask: Record<string, TaskStepsRe
   vi.mocked(api.chat.tasks).mockResolvedValue({ data: tasks, etag: '"t1"' });
   vi.mocked(api.chat.taskSteps).mockImplementation(async (_a, taskId) => ({ data: stepsByTask[taskId], etag: `"s-${taskId}"` }));
   vi.mocked(api.chat.taskStepDetail).mockResolvedValue({ data: { id: "1:1", ts: at(1), k: "think", text: "full" }, etag: '"d"' });
+  vi.mocked(api.chat.engine).mockResolvedValue({ engine: null });
 }
 
 function renderView(over: Partial<React.ComponentProps<typeof ChatView>> = {}) {
@@ -724,5 +726,122 @@ describe("ChatView — task state from the freshest source (round 3)", () => {
     const segs = await screen.findAllByTestId("chat-task-segment");
     const last = segs[segs.length - 1];
     expect(within(last).getByText(/Thinking/)).toBeInTheDocument();
+  });
+});
+
+describe("ChatView — a stalled task whose engine still works (31.10.2026)", () => {
+  const ago = (sec: number) => new Date(Date.now() - sec * 1000).toISOString();
+  function stalledTask() {
+    serve(
+      { applies: true, tasks: [stub({ startedAt: ago(1500), startKey: ago(1500), deliveredAt: ago(1505) })], queued: 0, hasMore: false },
+      { [TASK_ID]: steps([think(ago(1400), "Write the bench file")]) },
+    );
+    mockStream.mockReturnValue(streamOf({ state: { kind: "state", status: "task_working", prompt: null } }));
+  }
+
+  it("engine busy: 'no new steps' says the model is still computing", async () => {
+    stalledTask();
+    vi.mocked(api.chat.engine).mockResolvedValue({ engine: { busy: true, running: 1, checkedAt: ago(0) } });
+    renderView();
+    await screen.findByText("Write the bench file");
+    await waitFor(() => expect(screen.getByText(/No new steps for/)).toHaveTextContent("model computing, no output yet"));
+    expect(api.chat.engine).toHaveBeenCalledWith("agent-a");
+  });
+
+  it("engine idle or unknown: only 'no new steps'", async () => {
+    stalledTask();
+    renderView();
+    await screen.findByText("Write the bench file");
+    await waitFor(() => expect(api.chat.engine).toHaveBeenCalled());
+    expect(screen.getByText(/No new steps for/)).not.toHaveTextContent("model computing");
+  });
+});
+
+describe("ChatView — session boundaries (31.10.2026)", () => {
+  it("a task's first band says it runs in its own session; chat lines after a band say the chat goes on", async () => {
+    serve(
+      { applies: true, tasks: [stub()], queued: 0, hasMore: false },
+      { [TASK_ID]: steps([think(at(1), "Read the files first"), think(at(8), "Now build the page")]) },
+    );
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(-5), "Start the report"), msg(at(5), "How far are you?")] }));
+    renderView();
+    const segments = await screen.findAllByTestId("chat-task-segment");
+    expect(segments).toHaveLength(2);
+    const dividers = screen.getAllByTestId("chat-session-divider");
+    expect(dividers.map((d) => d.dataset.kind)).toEqual(["start", "back"]);
+    expect(dividers[0]).toHaveTextContent("New task · own session");
+    // One element with the head: the line sits inside the first segment, right above its head.
+    expect(within(segments[0]).getByTestId("chat-session-divider")).toBe(dividers[0]);
+    expect(within(segments[1]).queryByTestId("chat-session-divider")).toBeNull();
+    expect(dividers[1]).toHaveAccessibleName("Back in chat");
+    // Order: chat message → (start line + head of band 1) → back → question → band 2 (continues, no new start)
+    const first = screen.getByText("Start the report");
+    const question = screen.getByText("How far are you?");
+    expect(first.compareDocumentPosition(dividers[0])).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(dividers[0].compareDocumentPosition(within(segments[0]).getByTestId("chat-task-head"))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(segments[0].compareDocumentPosition(dividers[1])).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(dividers[1].compareDocumentPosition(question)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it("no 'back in chat' when nothing of the chat follows the band", async () => {
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Start")]) });
+    mockStream.mockReturnValue(streamOf({ events: [msg(at(-5), "Go")] }));
+    renderView();
+    await screen.findByTestId("chat-task-segment");
+    expect(screen.getAllByTestId("chat-session-divider").map((d) => d.dataset.kind)).toEqual(["start"]);
+  });
+
+  it("the chat's pending echo after the newest band gets 'back in chat' too", async () => {
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Start")]) });
+    mockStream.mockReturnValue(streamOf({ pendingEchoes: [{ id: "e1", text: "Quick question", sentAt: Date.now(), status: "sending" }] as never }));
+    renderView();
+    await screen.findByTestId("chat-task-segment");
+    expect(screen.getAllByTestId("chat-session-divider").map((d) => d.dataset.kind)).toEqual(["start", "back"]);
+  });
+});
+
+describe("ChatView — the sticky task head sits flush (31.10.2026)", () => {
+  // A sticky head sticks at the scroller's PADDING edge: any top padding on
+  // the scroller leaves a strip where rows passing beneath peek out above the
+  // head. jsdom has no layout — `playwright/chat-honest-shots.mjs` measures
+  // the real gap (must be 0); this guards the cause.
+  it("the scroller has no top padding; the gap lives inside the timeline", async () => {
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Start")]) });
+    mockStream.mockReturnValue(streamOf());
+    renderView();
+    await screen.findByTestId("chat-task-segment");
+    const timeline = screen.getByTestId("chat-timeline");
+    expect(timeline.parentElement?.className).not.toMatch(/(^|\s)(pt|py|p)-/);
+    expect(timeline.className).toMatch(/\bpt-2\b/);
+  });
+});
+
+describe("ChatView — only the task's head is marked, not the whole band (31.10.2026)", () => {
+  it("a running task: steps on the chat ground, the head with hairlines and a breathing icon", async () => {
+    serve({ applies: true, tasks: [stub()], queued: 0, hasMore: false }, { [TASK_ID]: steps([think(at(1), "Start")]) });
+    mockStream.mockReturnValue(streamOf());
+    renderView();
+    const seg = await screen.findByTestId("chat-task-segment");
+    expect(seg.className).not.toMatch(/\bbg-deep\b/);
+    expect(seg.className).not.toMatch(/\bborder-y\b/);
+    const head = within(seg).getByTestId("chat-task-head");
+    expect(head.className).toMatch(/\bborder-y\b/);
+    expect(head).toHaveAttribute("data-live");
+    expect(head.querySelector("svg")).toHaveClass("animate-pulse");
+    expect(head.querySelector("svg")).toHaveClass("motion-reduce:animate-none");
+  });
+
+  it("a finished task: the same head, its icon still", async () => {
+    serve(
+      { applies: true, tasks: [stub({ status: "done", live: false, endedAt: at(20) })], queued: 0, hasMore: false },
+      { [TASK_ID]: steps([think(at(1), "Start")], { status: "done", live: false }) },
+    );
+    mockStream.mockReturnValue(streamOf());
+    renderView();
+    const card = await screen.findByTestId("chat-task-card");
+    expect(card.className).not.toMatch(/\bbg-deep\b/);
+    const head = card.querySelector('[data-region="chat-task-head"]')?.parentElement as HTMLElement;
+    expect(head.className).toMatch(/\bborder-y\b/);
+    expect(card.querySelector(".animate-pulse")).toBeNull();
   });
 });
