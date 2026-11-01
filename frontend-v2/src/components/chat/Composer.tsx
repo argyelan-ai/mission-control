@@ -24,6 +24,7 @@ import {
 } from "@/lib/chatTypes";
 import { CLAUDE_MODELS, SLASH_COMMANDS, formatCompactTokens, type SlashCommand } from "@/lib/claudeCommands";
 import { ContextPanel, cacheHitRateOf } from "./ContextPanel";
+import { PopoverPortal, anchoredBoxStyle, useAnchoredPosition } from "@/lib/anchoredPopover";
 import { harnessLabel } from "@/components/shared/HarnessIcon";
 import { formatShare } from "@/lib/usage";
 
@@ -273,6 +274,15 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const [modelOpen, setModelOpen] = useState(false);
   const modelBoxRef = useRef<HTMLDivElement | null>(null);
   const effortBoxRef = useRef<HTMLDivElement | null>(null);
+  /* The popovers render through a portal (lib/anchoredPopover) so the chat
+   * column's `overflow-hidden` can no longer cut them off. They are therefore
+   * no DOM children of their chips any more: the outside-click check below
+   * asks these refs as well. */
+  const modelListRef = useRef<HTMLDivElement | null>(null);
+  const effortPopRef = useRef<HTMLDivElement | null>(null);
+  const pillRef = useRef<HTMLDivElement | null>(null);
+  const paletteRef = useRef<HTMLDivElement | null>(null);
+  const contextTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
   /** Ties the locked chip to its reason popover (aria-controls). */
@@ -360,7 +370,13 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     if (!modelOpen && !effortOpen) return;
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Node;
-      if (modelBoxRef.current?.contains(t) || effortBoxRef.current?.contains(t)) return;
+      if (
+        modelBoxRef.current?.contains(t) ||
+        effortBoxRef.current?.contains(t) ||
+        modelListRef.current?.contains(t) ||
+        effortPopRef.current?.contains(t)
+      )
+        return;
       setDraftIndex(null);
       setModelOpen(false);
       setEffortOpen(false);
@@ -699,6 +715,15 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
       ? t("contextRingTooltip", { detail: tokenDetail, source: sourceLabel }) + cacheHint
       : undefined;
 
+  // Fixed coordinates for the portaled popovers. The palette spans the pill
+  // (the input) with the old 320 px floor; the model list starts at its chip;
+  // effort menu and reason end at the effort chip's right edge.
+  const paletteStyle = useAnchoredPosition(paletteVisible, pillRef, paletteRef, { matchWidth: true, minWidth: 320 });
+  const modelListStyle = useAnchoredPosition(modelOpen && modelOptions.length > 0, modelBoxRef, modelListRef, {
+    offset: 6,
+  });
+  const effortPopStyle = useAnchoredPosition(effortOpen, effortBoxRef, effortPopRef, { align: "end", offset: 6 });
+
   return (
     <div
       data-testid={`composer-${agentId}`}
@@ -720,28 +745,25 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
       className={`relative px-3 pt-2 ${barBelow ? "pb-2" : "pb-safe-bottom"} md:pb-4 md:px-4`}
     >
       {paletteVisible && (
+        <PopoverPortal>
         <div
+          ref={paletteRef}
           data-testid="slash-palette"
-          // Anchored directly above the input: bottom edge sits on the
-          // composer container's top edge (= the textarea's top, since the
-          // palette itself is taken out of flow), same horizontal span as
-          // the textarea (left-3/right-3 mirror the container's own
-          // padding), with a 320px floor for narrow layouts.
+          // Anchored directly above the input (the pill), same width as the
+          // pill with a 320 px floor, through a portal with fixed
+          // coordinates (lib/anchoredPopover) — inside the chat column it was
+          // cut off by the column's `overflow-hidden`.
           //
-          // `position: "absolute"` is set INLINE, not just via the
+          // `position: "fixed"` is set INLINE (anchoredBoxStyle), not via a
           // Tailwind class: `.corner-ticks` in globals.css sets
           // `position: relative` unlayered (plain CSS, not `@layer
-          // utilities`), which beats Tailwind v4's own `.absolute` utility
+          // utilities`), which beats Tailwind v4's own position utilities
           // under CSS cascade-layer rules regardless of source order —
-          // silently downgrading this to an in-flow relative box, which is
-          // what made the palette render detached mid-screen instead of
-          // pinned to the input. Inline style always wins, so this can't
-          // regress again. (Note for whoever owns CommandPalette.tsx: the
-          // ⌘K palette combines `fixed` + `corner-ticks` the same way and
-          // likely has the identical latent bug — out of scope here.)
-          className="absolute bottom-full left-3 right-3 mb-2 min-w-[320px] rounded-md overflow-hidden corner-ticks z-20"
+          // that once made the palette render detached mid-screen. Inline
+          // style always wins, so this can't regress again.
+          className="rounded-md overflow-hidden corner-ticks z-50"
           style={{
-            position: "absolute",
+            ...anchoredBoxStyle(paletteStyle),
             backgroundColor: C.bgElevated,
             border: `1px solid ${C.border}`,
             boxShadow: "var(--shadow-elevated)",
@@ -769,6 +791,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             ))}
           </div>
         </div>
+        </PopoverPortal>
       )}
 
       {/* The pill: one container holding the input and its controls, so the
@@ -785,6 +808,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           against the pill — perceivable per WCAG 2.4.11 without being a halo,
           and unmistakably grey rather than white). */}
       <div
+        ref={pillRef}
         data-testid="composer-dropzone"
         onDragOver={handleDragOver}
         onDragLeave={() => setDragging(false)}
@@ -962,13 +986,16 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             </button>
             )}
             {modelOptions.length > 0 && modelOpen && (
+              <PopoverPortal>
               <div
+                ref={modelListRef}
                 role="listbox"
                 // Sized to the names: real model ids ("GLM-5.3-Flash-EXL3")
                 // are longer than the old aliases; max-w-72 still fits a
                 // 390 px phone from the chip's left edge.
-                className="absolute bottom-full left-0 mb-1.5 min-w-36 w-max max-w-72 rounded-lg overflow-hidden z-20 p-1"
+                className="min-w-36 w-max max-w-72 rounded-lg overflow-y-auto z-50 p-1"
                 style={{
+                  ...anchoredBoxStyle(modelListStyle),
                   backgroundColor: C.bgElevated,
                   border: `1px solid ${C.border}`,
                   boxShadow: "var(--shadow-elevated)",
@@ -1006,6 +1033,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   </button>
                 ))}
               </div>
+              </PopoverPortal>
             )}
           </div>
 
@@ -1013,9 +1041,10 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             // The ring stays the compact indicator and the tooltip stays the
             // quick glance; the click opens the breakdown — "how full" and
             // "with what" are two questions, and only the first fits in 18px.
-            // `relative` is what the desktop popover anchors to.
-            <div className="relative shrink-0">
+            // The box hangs on this button through a portal (ContextPanel).
+            <div className="shrink-0">
               <button
+                ref={contextTriggerRef}
                 type="button"
                 data-context-trigger
                 aria-haspopup="dialog"
@@ -1077,6 +1106,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   pct={pct}
                   pctSource={pctSource}
                   onClose={() => setContextOpen(false)}
+                  anchorRef={contextTriggerRef}
                 />
               )}
             </div>
@@ -1183,10 +1213,13 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                      Regler zeigt diese Ordnung, wo eine Liste sie nur behauptet.
                      Die Stufen kommen weiterhin ausschliesslich aus den
                      Capabilities des Harness, nichts davon steht hier fest. */
+                  <PopoverPortal>
                   <div
+                    ref={effortPopRef}
                     data-testid="effort-menu"
-                    className="absolute bottom-full right-0 mb-1.5 w-64 rounded-lg z-20 p-3"
+                    className="w-64 rounded-lg z-50 p-3"
                     style={{
+                      ...anchoredBoxStyle(effortPopStyle),
                       backgroundColor: C.bgElevated,
                       border: `1px solid ${C.border}`,
                       boxShadow: "var(--shadow-elevated)",
@@ -1272,6 +1305,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                       </button>
                     )}
                   </div>
+                  </PopoverPortal>
                 )}
               </div>
             ) : displayLevels.length > 0 || capabilities?.effortReason ? (
@@ -1331,12 +1365,15 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   </span>
                 </button>
                 {effortOpen && (
+                  <PopoverPortal>
                   <div
+                    ref={effortPopRef}
                     id={effortReasonId}
                     role="status"
                     data-testid="effort-reason"
-                    className="absolute bottom-full right-0 mb-2 w-64 rounded-lg z-20 p-3 text-xs"
+                    className="w-64 rounded-lg z-50 p-3 text-xs"
                     style={{
+                      ...anchoredBoxStyle(effortPopStyle),
                       backgroundColor: C.bgElevated,
                       border: `1px solid ${C.border}`,
                       boxShadow: "var(--shadow-elevated)",
@@ -1345,6 +1382,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   >
                     {effortReasonText(capabilities, currentModel, t)}
                   </div>
+                  </PopoverPortal>
                 )}
               </div>
             ) : (

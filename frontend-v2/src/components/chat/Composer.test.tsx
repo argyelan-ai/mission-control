@@ -1891,19 +1891,82 @@ describe("Composer", () => {
     });
   });
 
-  it("anchors the palette directly above the input via absolute positioning (bottom-full) with a 320px floor", async () => {
-    const user = userEvent.setup();
-    render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Message the agent/);
-    await user.type(textarea, "/");
-    const palette = screen.getByTestId("slash-palette");
-    // Inline style, not just the class — see the comment in Composer.tsx on
-    // why relying on the Tailwind class alone previously broke this.
-    expect(palette.style.position).toBe("absolute");
-    expect(palette.className).toContain("bottom-full");
-    expect(palette.className).toContain("left-3");
-    expect(palette.className).toContain("right-3");
-    expect(palette.className).toContain("min-w-[320px]");
+  /* ────────────────────────────────────────────────────────────────────────
+   * Chat workspace (ADR-099), PR "anchored popovers": the composer's popovers
+   * hung `absolute bottom-full` inside the chat column, and two ancestors in
+   * the sessions page carry `overflow-hidden` — with the side panel open the
+   * column got narrow and the context box was cut off. Every popover now
+   * renders through a portal at the end of <body> with `position: fixed`, so
+   * no ancestor can clip it.
+   * ──────────────────────────────────────────────────────────────────────── */
+  describe("popovers never sit inside a clipping ancestor", () => {
+    const CAPS6 = { effortLevels: ["low", "medium", "high", "xhigh", "max", "ultracode"], canSwitchEffort: true };
+    const renderClipped = (props: Partial<React.ComponentProps<typeof Composer>> = {}) =>
+      render(
+        <div data-testid="clip" style={{ overflow: "hidden" }}>
+          <Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} {...props} />
+        </div>
+      );
+    const expectUnclipped = (el: HTMLElement) => {
+      expect(screen.getByTestId("clip")).not.toContainElement(el);
+      expect(el.style.position).toBe("fixed");
+    };
+
+    it("slash palette", async () => {
+      const user = userEvent.setup();
+      renderClipped();
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
+      expectUnclipped(screen.getByTestId("slash-palette"));
+    });
+
+    it("model list", async () => {
+      const user = userEvent.setup();
+      renderClipped({ usage: mkUsage() });
+      await user.click(screen.getByTestId("model-chip"));
+      expectUnclipped(screen.getByRole("listbox"));
+    });
+
+    it("effort menu — and a click inside it keeps it open", async () => {
+      const user = userEvent.setup();
+      renderClipped({ usage: mkUsage({ effort: "high" }), capabilities: CAPS6 });
+      await user.click(screen.getByTestId("effort-chip"));
+      const menu = screen.getByTestId("effort-menu");
+      expectUnclipped(menu);
+      // The menu is no longer a DOM child of the chip's box; the outside-click
+      // check must still count it as inside.
+      fireEvent.pointerDown(screen.getByTestId("effort-slider"));
+      expect(screen.getByTestId("effort-menu")).toBeInTheDocument();
+      fireEvent.pointerDown(document.body);
+      expect(screen.queryByTestId("effort-menu")).not.toBeInTheDocument();
+    });
+
+    it("effort reason", async () => {
+      const user = userEvent.setup();
+      renderClipped({
+        usage: mkUsage({ effort: "high" }),
+        capabilities: { effortLevels: ["low", "high"], canSwitchEffort: false, effortReason: "no_pane" },
+      });
+      await user.click(screen.getByTestId("effort-chip-static"));
+      const reason = screen.getByTestId("effort-reason");
+      expect(screen.getByTestId("clip")).not.toContainElement(reason);
+      expect(reason.style.position).toBe("fixed");
+    });
+
+    it("context box", async () => {
+      const user = userEvent.setup();
+      renderClipped({
+        usage: mkUsage({ components: { input: 10_000, cacheRead: 38_000, cacheCreation: 2_000, output: 1_000 } }),
+      });
+      await user.click(screen.getByRole("button", { name: /^Chat context: \d+% used$/ }));
+      const panel = screen.getByTestId("context-panel");
+      expect(screen.getByTestId("clip")).not.toContainElement(panel);
+      // Phone: a bottom sheet (classes); desktop: fixed at the ring's
+      // coordinates, handed over as CSS variables so the sheet classes win
+      // below md.
+      expect(panel.className).toContain("fixed");
+      expect(panel.className).toContain("md:top-(--anchor-top)");
+      expect(panel.className).toContain("md:left-(--anchor-left)");
+    });
   });
 
   /* ────────────────────────────────────────────────────────────────────────
