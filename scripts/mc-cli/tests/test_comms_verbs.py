@@ -84,6 +84,43 @@ def test_hello_enrolls_with_the_card_and_writes_a_private_session_file(tmp_path,
 def test_hello_without_a_card_is_a_usage_error(tmp_path, monkeypatch):
     from mc_cli.errors import UsageError
     monkeypatch.delenv("MC_GUEST_CARD", raising=False)
+    monkeypatch.delenv("MC_GUEST_CARD_FILE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    args = _args(["hello", "--session-file", str(tmp_path / "s.json")])
+    with pytest.raises(UsageError):
+        commands._cmd_hello(args, MagicMock(), Config.from_env())
+
+
+def _default_card(tmp_path, monkeypatch, mode):
+    monkeypatch.delenv("MC_GUEST_CARD", raising=False)
+    monkeypatch.delenv("MC_GUEST_CARD_FILE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    card = tmp_path / ".mc" / "comms" / "guest-card"
+    card.parent.mkdir(parents=True)
+    card.write_text("mcg_default\n")
+    os.chmod(card, mode)
+    seen = {}
+
+    def fake_post(cfg, path, body, token):
+        seen["token"] = token
+        return {"token": "mcs_new", "address": "shell@desk:a", "expires_at": "x", "scopes": ["comms:talk"]}
+
+    monkeypatch.setattr(commands, "_post_with_token", fake_post)
+    return seen
+
+
+def test_hello_finds_the_card_where_the_readme_and_hook_put_it(tmp_path, monkeypatch):
+    """README + hook: the card lives in ~/.mc/comms/guest-card — `mc hello`
+    by hand must find it there too, not only the hook."""
+    seen = _default_card(tmp_path, monkeypatch, 0o600)
+    args = _args(["hello", "--session-file", str(tmp_path / "s.json")])
+    assert commands._cmd_hello(args, MagicMock(), Config.from_env()) == 0
+    assert seen["token"] == "mcg_default"
+
+
+def test_hello_refuses_a_default_card_others_can_read(tmp_path, monkeypatch):
+    from mc_cli.errors import UsageError
+    _default_card(tmp_path, monkeypatch, 0o644)
     args = _args(["hello", "--session-file", str(tmp_path / "s.json")])
     with pytest.raises(UsageError):
         commands._cmd_hello(args, MagicMock(), Config.from_env())

@@ -1980,9 +1980,18 @@ def _cmd_hello(args, client, cfg):
     written to --session-file (mode 0600). Address: harness@machine:folder.
     """
     card = args.card or os.environ.get("MC_GUEST_CARD", "")
-    if args.card_file:
+    card_file = args.card_file
+    if not card and not card_file:
+        # Same default as the hook and the README: ~/.mc/comms/guest-card.
+        default = os.environ.get("MC_GUEST_CARD_FILE") or os.path.join(
+            os.path.expanduser("~"), ".mc", "comms", "guest-card")
+        if os.path.isfile(default):
+            if os.stat(default).st_mode & 0o077:
+                raise UsageError(f"guest card {default} is readable by others: chmod 600 it")
+            card_file = default
+    if card_file:
         try:
-            card = pathlib.Path(args.card_file).read_text(encoding="utf-8").strip()
+            card = pathlib.Path(card_file).read_text(encoding="utf-8").strip()
         except OSError as e:
             raise UsageError(f"guest card file not readable: {e}")
     if not card:
