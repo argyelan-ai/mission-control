@@ -54,8 +54,8 @@ from app.services.decision_docs import (
 #   length or password characters; PR #962) — Accepted, confirmed on purpose.
 #   098 had been pencilled in for the "chats instead of fixed agents" ADR,
 #   which is not on main; that one takes the next free number when it lands.
-# +1 on 2026-11-01: ADR-099 (chat workspace: chat rail, header panel buttons,
-#   resizable side panel) — Accepted, operator decision of 2026-11-01.
+# +1 on 2026-11-01: ADR-099 (chat workspace: header panel buttons, resizable
+#   side panel) — Accepted, operator decision of 2026-11-01.
 EXPECTED_DECISION_DOCS = 98
 
 
