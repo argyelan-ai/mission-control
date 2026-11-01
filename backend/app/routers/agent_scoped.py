@@ -5177,6 +5177,22 @@ async def agent_get_credential(
     }
 
 
+@router.get("/boxes/status")
+async def agent_box_status(
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
+):
+    """Box facts for agents, read-only (ADR-100 §3 item 1): per GPU box the
+    engines, model, running requests, switch lock, a working head, whether MC
+    restarts a stopped engine there — and a strict verdict (never "free" for
+    an engine that does not serve). ``tasks:read`` because every role holds
+    it: reading box facts before planning work needs no new right, and a new
+    scope would need a grant migration for every existing agent."""
+    from app.services.box_status import read_box_status
+
+    return await read_box_status(session)
+
+
 @router.get("/operator")
 async def agent_get_operator(
     session: AsyncSession = Depends(get_session),

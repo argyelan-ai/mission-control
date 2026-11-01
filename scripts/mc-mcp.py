@@ -955,6 +955,51 @@ def mc_msg(body: str, thread_id: str = "", message_type: str = "message") -> str
     )
 
 
+@mcp.tool()
+def mc_box_status(box: str = "") -> str:
+    """Box facts, read-only (ADR-100): is a GPU box free?
+
+    Per box a verdict — free / busy / not_serving / unknown — with reasons,
+    whether MC restarts a stopped engine there (auto-recovery), a working
+    head, and per engine: model, engine state, running requests, switch lock.
+    `not_serving` is never "free": during a hand test the engine is stopped
+    by hand. Always the agent route with the agent's own token, never the
+    operator path (same as `mc box status`).
+
+    Args:
+        box: only this box (host slug); empty = all boxes
+    """
+    resp = _agent_call("GET", "/agent/boxes/status")
+    if _is_error(resp):
+        return f"Fehler: {resp['error']}"
+    boxes = (resp or {}).get("boxes") or []
+    if box:
+        boxes = [b for b in boxes if b.get("slug") == box]
+        if not boxes:
+            return f"Keine Box '{box}' (ohne Argument: alle Boxen)."
+    if not boxes:
+        return "Keine GPU-Box mit Engine in MC registriert."
+    blocks = []
+    for b in boxes:
+        recovery = "auto-recovery on" if b.get("auto_recovery") else "auto-recovery off"
+        lines = [
+            f"{b.get('slug')} ({b.get('display_name')}): {b.get('verdict')} — "
+            f"{', '.join(b.get('reasons') or []) or '-'} · {recovery}"
+        ]
+        head = b.get("head")
+        if head:
+            lines.append(f"  head working: run {head.get('run_id')} · {head.get('harness')}")
+        for rt in b.get("runtimes") or []:
+            running = rt.get("running_requests")
+            lines.append(
+                f"  - {rt.get('slug')} [{rt.get('role')}] model {rt.get('model') or '-'} · "
+                f"engine {rt.get('engine')} · running {'?' if running is None else running} · "
+                f"switch lock {rt.get('switch_lock')}"
+            )
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
 @_operator_tool
 def mc_complete_phase(project_id: str, phase_id: str) -> str:
     """Phase als abgeschlossen markieren.

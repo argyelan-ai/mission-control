@@ -425,3 +425,62 @@ def test_operator_mc_tasks_still_uses_admin_routes(operator_mod, monkeypatch):
     out = _unwrap(operator_mod.mc_tasks)(board_id=BOARD)
     assert ("GET", f"/boards/{BOARD}/tasks") in calls
     assert "Card one" in out
+
+
+# ── mc_box_status: box facts, read-only (ADR-100) ───────────────────────
+
+_BOXES = {
+    "boxes": [{
+        "slug": "box-a", "display_name": "Box A", "auto_recovery": False,
+        "head": None, "verdict": "not_serving",
+        "reasons": ["engine_not_serving", "manual_test_possible"],
+        "runtimes": [{
+            "slug": "rt-a", "model": "model-a", "served_model": None,
+            "engine": "not_serving", "running_requests": 0, "switch_lock": "open",
+            "role": "head", "switching": None, "load_unknown_reason": None,
+            "checked_at": "2026-11-01T10:00:00+00:00",
+        }],
+    }],
+    "generated_at": "2026-11-01T10:00:01+00:00",
+}
+
+
+def test_agent_mode_offers_mc_box_status(agent_mod):
+    assert "mc_box_status" in _tool_names(agent_mod)
+
+
+def test_agent_mc_box_status_reads_agent_route_only(agent_mod, monkeypatch):
+    fake = FakeMC(overrides={
+        ("GET", "/api/v1/agent/boxes/status"): (200, _BOXES),
+    }).install(agent_mod, monkeypatch)
+    out = _unwrap(agent_mod.mc_box_status)()
+    fake.assert_agent_only()
+    assert fake.paths() == ["/api/v1/agent/boxes/status"]
+    assert [c["method"] for c in fake.calls] == ["GET"]
+    assert "box-a" in out and "not_serving" in out and "manual_test_possible" in out
+    assert "rt-a" in out and "model-a" in out
+
+
+def test_agent_mc_box_status_one_box_and_unknown_slug(agent_mod, monkeypatch):
+    FakeMC(overrides={
+        ("GET", "/api/v1/agent/boxes/status"): (200, _BOXES),
+    }).install(agent_mod, monkeypatch)
+    assert "box-a" in _unwrap(agent_mod.mc_box_status)(box="box-a")
+    assert "nope" in _unwrap(agent_mod.mc_box_status)(box="nope")
+
+
+def test_agent_mc_box_status_403_is_reported(agent_mod, monkeypatch):
+    fake = FakeMC(overrides={
+        ("GET", "/api/v1/agent/boxes/status"): (403, {"detail": "Missing scopes: tasks:read"}),
+    }).install(agent_mod, monkeypatch)
+    out = _unwrap(agent_mod.mc_box_status)()
+    fake.assert_agent_only()
+    assert "403" in out
+
+
+def test_operator_mc_box_status_never_uses_admin_path(operator_mod, monkeypatch):
+    """No agent token in operator mode: an honest error, not an admin call."""
+    fake = FakeMC().install(operator_mod, monkeypatch)
+    out = _unwrap(operator_mod.mc_box_status)()
+    assert fake.calls == []
+    assert "Token" in out or "token" in out
