@@ -23,12 +23,6 @@ of the two fixed agents only inside a **closed feature list**. New header
 buttons and a resizable panel are not on that list. Without this ADR the PRs
 below would bypass both.
 
-**Out of scope:** the concept of the same day also proposed one chat rail on
-the chats page (chat list with pinned pages, activity grouping, all pages as a
-drawer). That part is **not** decided here — the operator parked it on
-2026-11-01 while MC's direction is being re-thought. The left side of the
-chats page stays as it is.
-
 ## Entscheidung
 
 The operator approved the header buttons and the resizable panel on
@@ -79,7 +73,6 @@ phone (K4); the panels open from the ⋯ sheet as before.
 |---|---|---|
 | ADR-090 §1 feature list | reliability, todo panel, cache rate, P1–P7, effort, automations | + header buttons changes / browser, resizable side panel (§1 above) |
 | ADR-085 §4 | Sessions chat frozen except ADR-089 / ADR-090 | unchanged for input, delivery and group chat behaviour; only the chat header and the panel column per §1 |
-| DESIGN.md "Navigation" | — | **unchanged** (the chat rail is not decided) |
 
 ## Alternativen
 
