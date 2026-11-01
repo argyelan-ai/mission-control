@@ -194,3 +194,23 @@ def test_only_the_directory_reads_or_writes_presence():
         if "mc:comms:presence" in text or "ALIVE_WINDOW_S" in text or "_read_presence" in text:
             offenders.append(str(path.relative_to(app_dir)))
     assert not offenders, f"presence computed outside comms_directory: {offenders}"
+
+
+@pytest.mark.asyncio
+async def test_comms_talk_must_be_granted_explicitly(client: AsyncClient, warm):
+    """Security review #11: an empty scope list means "all scopes" elsewhere,
+    but talking across harnesses is opt-in per agent — never implied."""
+    _, headers = await _agent("Implicit", scopes=[])
+    _, asker = await _agent("Asker")
+    assert (await client.get(WHO, headers=headers)).status_code == 403
+    addresses = {r["address"] for r in (await client.get(WHO, headers=asker)).json()["sessions"]}
+    assert "implicit" not in addresses
+
+
+@pytest.mark.asyncio
+async def test_an_archived_agent_cannot_talk(client: AsyncClient, warm):
+    """Security review #9: archiving keeps the token, so the comms routes
+    must check archived_at themselves."""
+    _, headers = await _agent("Retired", archived=True)
+    assert (await client.get(WHO, headers=headers)).status_code == 403
+    assert (await client.post(PRESENCE, headers=headers, json={})).status_code == 403

@@ -35,7 +35,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.redis_client import get_redis
-from app.scopes import Scope, get_agent_effective_scopes
+from app.scopes import Scope
 from app.utils import ensure_aware
 
 ALIVE_WINDOW_S = 90
@@ -74,7 +74,11 @@ def presence_key(kind: str, principal_id: uuid.UUID | str) -> str:
 
 
 def agent_may_talk(agent: Agent) -> bool:
-    return agent.archived_at is None and Scope.COMMS_TALK.value in get_agent_effective_scopes(agent)
+    """Explicit opt-in: comms:talk must be in the agent's stored scope list.
+    An empty list means "all scopes" elsewhere (backward compat) — not here:
+    a message is a new way in for prompt injection, so the operator grants
+    it per agent (security review, ADR-100 §6). Archived agents never talk."""
+    return agent.archived_at is None and Scope.COMMS_TALK.value in (agent.scopes or [])
 
 
 def agent_address(agent: Agent) -> str:
