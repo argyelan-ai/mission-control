@@ -301,6 +301,7 @@ Werkzeuge, keine Schmuckstücke: zurückhaltend im Ruhezustand, eindeutig im akt
 
 ### Navigation
 - **Sidebar (Desktop):** P2-bg, Einträge ~13px, Gruppen-Marken via `.label-sys`; aktiv = accent-subtle Fläche + heller Akzent-Text/Balken; inaktiv text-secondary, Hover bg-hover. Wordmark in Clash Display.
+- **Chat-Arbeitsplatz (Desktop, nur `/sessions`, ADR-099):** statt Sidebar + Chat-Liste genau **eine** Chat-Leiste: Wortmarke, Mikrofon, Zuklappen, Suche (⌘K), „+ Neuer Chat“, wenige angepinnte Seiten, „Alle Seiten ›“ öffnet die volle Sidebar als Schublade von links (Esc / ✕ / Klick daneben schliesst); darunter die Chats (Angepinnt, dann Heute / Gestern / Letzte 7 Tage / Älter nach letzter Aktivität); unten die Status-Fusszeile. Alle anderen Seiten behalten die Sidebar.
 - **Mobile:** Bottom-Tab-Bar in der Daumen-Zone, safe-area-aware; voller Nav-Tree als Drawer. Top-Bar trägt nur Wordmark + Voice — auf Detailseiten wird sie zur Kontextleiste (K12).
 
 ## Do's and Don'ts

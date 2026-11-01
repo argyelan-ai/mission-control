@@ -1,6 +1,7 @@
 # ADR-090 — The MC chat is the operator's remote control; the chat may grow again; omp stays the local harness
 
 **Status:** Accepted (2026-10-12) · amends ADR-085 §4 and ADR-089 §4 / §9 (the chat exception) and PRINCIPLES §2 rule 4 · touches ADR-084 (capability row for omp)
+**Amended by:** [ADR-099](099-chat-workspace.md) — §1 feature list gains the chat workspace (chat rail + activity grouping, header buttons changes / browser, resizable side panel); see the note at the end
 **Datum:** 2026-10-12
 **Scope:** Architecture/Direction · Frontend/Pages · Backend/Services · Docker/Agent-Images
 
@@ -213,6 +214,14 @@ profile. The unfreeze itself is undone by a new ADR.
 
 Nothing is removed. New features ship behind existing switches or at L3;
 installations that do nothing keep today's behaviour.
+
+## Note (2026-11-01) — amended by ADR-099
+
+[ADR-099 — Chat workspace](099-chat-workspace.md) adds three items to the
+closed feature list of §1, approved by the operator on 2026-11-01: the chat
+rail with activity grouping on the chats page, the changes / browser buttons
+in the chat header (detail level into ⋯), and a resizable side panel. Layout
+and navigation only; the text above is not rewritten.
 
 ## References
 
