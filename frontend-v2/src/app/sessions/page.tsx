@@ -899,8 +899,13 @@ function SessionsPageContent() {
                   savePanelWidth(null);
                 }}
               />
+              {/* Title bar with ✕: on the phone always; on the desktop only
+                  while the panel lies over the chat — then it covers the
+                  chat header, whose button would otherwise be the only way
+                  to close it (real-browser finding at 1024 px). */}
               <div
-                className="flex md:hidden items-center justify-between px-4 py-3 border-b shrink-0"
+                data-testid="side-panel-bar"
+                className={`flex ${panelOverlay ? "" : "md:hidden"} items-center justify-between px-4 py-3 border-b shrink-0`}
                 style={{ borderColor: C.border }}
               >
                 <span className="text-[14px] font-semibold" style={{ color: C.textPrimary }}>
