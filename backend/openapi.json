@@ -492,6 +492,24 @@
         ]
       }
     },
+    "/api/v1/agent/comms/presence": {
+      "post": {
+        "operationId": "post_presence_api_v1_agent_comms_presence_post",
+        "summary": "Post Presence",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
+    "/api/v1/agent/comms/who": {
+      "get": {
+        "operationId": "who_api_v1_agent_comms_who_get",
+        "summary": "Who",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
     "/api/v1/agent/config/soul_md": {
       "get": {
         "operationId": "agent_get_own_soul_api_v1_agent_config_soul_md_get",
