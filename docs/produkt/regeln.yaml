@@ -2,6 +2,18 @@
 # Every active rule names an existing guard test (`path::test_name`); a rule
 # without one is a `wish`. Code anchors: `# rule: R-... - why`.
 rules:
+  - id: R-one-presence-source
+    says: "Only services/comms_directory.py decides whether a principal is alive or listening; every reader asks it. Alive and listening stay apart, and the first 60 s after a backend or Redis restart say unknown."
+    source: "ADR-100 section 6 rule 2"
+    owner: backend/app/services/comms_directory.py
+    applies_to: ["backend/app/services/comms_*.py", "backend/app/routers/agent_comms.py"]
+    enforced_by:
+      - {test: "backend/tests/test_comms_directory.py::test_only_the_directory_reads_or_writes_presence"}
+      - {test: "backend/tests/test_comms_directory.py::test_alive_and_listening_are_kept_apart"}
+      - {test: "backend/tests/test_comms_directory.py::test_redis_restart_means_unknown_for_60s"}
+    status: active
+    checked: 2026-11-01
+
   - id: R-one-migration-head
     says: "Alembic has exactly one head; a new migration checks for a colliding revision first."
     source: "AGENTS.md (rules that bite)"
