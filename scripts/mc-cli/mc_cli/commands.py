@@ -1844,6 +1844,72 @@ def _cmd_inbox(args, client, cfg):
     return 0
 
 
+def _cmd_box(args, client, cfg):
+    """mc box status — box facts, read-only (ADR-100).
+
+    Answers "is box X free?" from MC itself: per GPU box a verdict
+    (free / busy / not_serving / unknown) with its reasons, then each engine
+    with model, running requests and switch lock. `not_serving` is never
+    "free": during a hand test the engine is stopped by hand.
+
+      mc box status            # all boxes
+      mc box status <slug>     # one box
+      mc box status --json     # the raw answer
+    """
+    resp = client.request("GET", "/api/v1/agent/boxes/status") or {}
+    boxes = resp.get("boxes") or []
+    slug = getattr(args, "slug", None)
+    if slug:
+        boxes = [b for b in boxes if b.get("slug") == slug]
+        if not boxes:
+            print(f"mc box status: no box '{slug}' (see `mc box status` for all boxes)")
+            return 1
+    if getattr(args, "json", False):
+        print(json.dumps(resp if not slug else {**resp, "boxes": boxes}, indent=2, default=str))
+        return 0
+    if not boxes:
+        print("No GPU box with an engine is registered in MC.")
+        return 0
+
+    blocks = []
+    for b in boxes:
+        reasons = ", ".join(b.get("reasons") or []) or "-"
+        recovery = "auto-recovery on" if b.get("auto_recovery") else "auto-recovery off"
+        lines = [f"{b.get('slug')} ({b.get('display_name')}): {b.get('verdict')} — {reasons} · {recovery}"]
+        head = b.get("head")
+        if head:
+            lines.append(f"  head working: run {head.get('run_id')} · {head.get('harness')} · task {head.get('task_id')}")
+        for rt in b.get("runtimes") or []:
+            running = rt.get("running_requests")
+            running_txt = "running ?" if running is None else f"running {running}"
+            lock = f"switch lock {rt.get('switch_lock')}"
+            if rt.get("load_unknown_reason"):
+                lock += f" ({rt['load_unknown_reason']})"
+            line = (
+                f"  - {rt.get('slug')} [{rt.get('role')}] model {rt.get('model') or '-'} · "
+                f"engine {rt.get('engine')} · {running_txt} · {lock}"
+            )
+            served = rt.get("served_model")
+            if served and served != rt.get("model"):
+                line += f" · serves {served}"
+            switching = rt.get("switching")
+            if switching:
+                line += f" · switching ({switching.get('phase')}, {switching.get('source')})"
+            if rt.get("checked_at"):
+                line += f" · checked {rt['checked_at']}"
+            lines.append(line)
+        blocks.append("\n".join(lines))
+    print("\n\n".join(blocks))
+    return 0
+
+
+def _add_box_args(p):
+    sub = p.add_subparsers(dest="action", required=False)
+    p_status = sub.add_parser("status", help="Box facts: engine, model, running requests, switch lock (read-only)")
+    p_status.add_argument("slug", nargs="?", default=None, help="Only this box (host slug)")
+    p_status.add_argument("--json", action="store_true", help="Print the raw answer")
+
+
 def _cmd_thread(args, client, cfg):
     """mc thread — den eigenen Task-Thread nachlesen (Kontext-Rekonstruktion).
 
@@ -3528,6 +3594,14 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="tasks:read",  # backend require_scope(Scope.TASKS_READ)
         handler=_cmd_thread,
         add_args=_add_thread_args,
+    ),
+    "box": CommandSpec(
+        name="box",
+        help="Box facts (read-only): `mc box status [slug]` — engine, model, running requests, switch lock",
+        endpoints=("GET /boxes/status",),
+        scope="tasks:read",  # backend require_scope(Scope.TASKS_READ) — ADR-100
+        handler=_cmd_box,
+        add_args=_add_box_args,
     ),
     "help": CommandSpec(
         name="help",

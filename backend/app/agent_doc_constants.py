@@ -98,6 +98,7 @@ CANONICAL_VERBS: dict[str, str] = {
     "remember": "Save something to the Vault (shortcut for vault-write).",
     "file-answer": "Save a research result as a Vault note.",
     "docs": "Read a local reference doc — no network call, works offline.",
+    "box": "Box facts, read-only: `mc box status [slug]` — verdict, engine, running requests, switch lock.",
 }
 
 
@@ -165,6 +166,7 @@ CANONICAL_VERB_SCOPES: dict[str, str | None] = {
     "remember": "vault:write",
     "file-answer": "vault:write",
     "docs": None,  # local file read, no network call, works offline
+    "box": "tasks:read",  # GET /agent/boxes/status — require_scope(TASKS_READ), ADR-100
 }
 
 

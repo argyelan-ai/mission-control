@@ -61,6 +61,7 @@
     "GET /api/v1/agent/boards/{board_id}/tasks/{task_id}/deliverables/{deliverable_id}",
     "GET /api/v1/agent/boards/{board_id}/tasks/{task_id}/detail",
     "GET /api/v1/agent/boards/{board_id}/tasks/{task_id}/events",
+    "GET /api/v1/agent/boxes/status",
     "GET /api/v1/agent/config/soul_md",
     "GET /api/v1/agent/consensus/{consensus_id}",
     "GET /api/v1/agent/deploy/credentials",

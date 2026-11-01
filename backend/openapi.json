@@ -483,6 +483,15 @@
         ]
       }
     },
+    "/api/v1/agent/boxes/status": {
+      "get": {
+        "operationId": "agent_box_status_api_v1_agent_boxes_status_get",
+        "summary": "Agent Box Status",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
     "/api/v1/agent/config/soul_md": {
       "get": {
         "operationId": "agent_get_own_soul_api_v1_agent_config_soul_md_get",
