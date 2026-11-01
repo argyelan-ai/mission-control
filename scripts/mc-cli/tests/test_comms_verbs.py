@@ -159,3 +159,24 @@ def test_inbox_in_session_mode_uses_the_session_inbox_and_acks(tmp_path, monkeyp
     assert "[Message from lead (omp)" in out and "mc send lead" in out
     assert ("POST", "/api/v1/agent/comms/inbox/ack", {"thread_id": "t1", "seq": 3}) in client.calls
     assert ("GET", "/api/v1/agent/me/inbox", None) not in client.calls
+
+
+def test_inbox_peek_in_session_mode_does_not_ack(tmp_path, monkeypatch, capsys):
+    f = tmp_path / "s.json"
+    f.write_text(json.dumps({"token": "mcs_abc", "address": "a@b:c"}))
+    monkeypatch.setenv("MC_COMMS_SESSION_FILE", str(f))
+    client = _client({("GET", "/api/v1/agent/comms/inbox"): {
+        "messages": [{"id": "m1", "thread_id": "t1", "seq": 3, "from": "lead", "body": "x"}],
+        "threads": {"t1": 3}}})
+    assert commands._cmd_inbox(_args(["inbox", "--peek"]), client, Config.from_env()) == 0
+    assert [c[0] for c in client.calls] == ["GET"]
+    assert "[thread t1" in capsys.readouterr().out
+
+
+def test_bye_ends_the_own_session(tmp_path, monkeypatch):
+    f = tmp_path / "s.json"
+    f.write_text(json.dumps({"token": "mcs_abc", "address": "a@b:c"}))
+    monkeypatch.setenv("MC_COMMS_SESSION_FILE", str(f))
+    client = _client({("POST", "/api/v1/agent/comms/bye"): {"ok": True, "address": "a@b:c"}})
+    assert commands._cmd_bye(_args(["bye"]), client, Config.from_env()) == 0
+    assert client.calls == [("POST", "/api/v1/agent/comms/bye", None)]

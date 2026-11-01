@@ -492,6 +492,15 @@
         ]
       }
     },
+    "/api/v1/agent/comms/bye": {
+      "post": {
+        "operationId": "bye_api_v1_agent_comms_bye_post",
+        "summary": "Bye",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
     "/api/v1/agent/comms/hello": {
       "post": {
         "operationId": "hello_api_v1_agent_comms_hello_post",

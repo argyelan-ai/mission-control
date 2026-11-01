@@ -1800,8 +1800,9 @@ def _session_mode(cfg) -> bool:
     return isinstance(getattr(cfg, "comms_session_file", None), str)
 
 
-def _session_inbox(client) -> int:
-    """`mc inbox` for a terminal session (ADR-100): its own inbox, then ack."""
+def _session_inbox(client, *, peek: bool = False) -> int:
+    """`mc inbox` for a terminal session (ADR-100): its own inbox, then ack.
+    `--peek` shows without acking (the hook counts what waits this way)."""
     resp = client.request("GET", "/api/v1/agent/comms/inbox") or {}
     messages = resp.get("messages") or []
     if not messages:
@@ -1815,6 +1816,8 @@ def _session_inbox(client) -> int:
             f" · antworten: mc send {sender} \"…\"]"
         )
     print("\n\n---\n\n".join(blocks))
+    if peek:
+        return 0
     for tid, max_seq in (resp.get("threads") or {}).items():
         try:
             client.request("POST", "/api/v1/agent/comms/inbox/ack", body={"thread_id": tid, "seq": max_seq})
@@ -1834,7 +1837,7 @@ def _cmd_inbox(args, client, cfg):
     Nachricht server-seitig (kein Bildschirm-Heuristik-Ack mehr).
     """
     if _session_mode(cfg):
-        return _session_inbox(client)
+        return _session_inbox(client, peek=bool(getattr(args, "peek", False)))
     resp = client.request("GET", "/api/v1/agent/me/inbox") or {}
     messages = resp.get("messages") or []
     threads = resp.get("threads") or {}
@@ -2034,6 +2037,14 @@ def _add_hello_args(p):
     p.add_argument("--session-file", default=None, help="Where to store the session token (0600)")
     p.add_argument("--keepalive-pid", type=int, default=None,
                    help="Send a sign of life every 30 s while this process lives")
+
+
+def _cmd_bye(args, client, cfg):
+    """mc bye — a terminal session ends its own token (the hook runs it when
+    the session closes)."""
+    resp = _require_result(client.request("POST", "/api/v1/agent/comms/bye"), verb="bye")
+    print(f"bye · {resp.get('address')}")
+    return 0
 
 
 def _cmd_who(args, client, cfg):
@@ -3834,7 +3845,10 @@ REGISTRY: dict[str, CommandSpec] = {
         # (agent_doc_constants.CANONICAL_VERB_SCOPES) can trust this field.
         scope="",
         handler=_cmd_inbox,
-        add_args=lambda p: None,
+        add_args=lambda p: p.add_argument(
+            "--peek", action="store_true",
+            help="Terminal session only: show without acking",
+        ),
     ),
     "thread": CommandSpec(
         name="thread",
@@ -3859,6 +3873,13 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="",  # guest-card token, not an agent scope
         handler=_cmd_hello,
         add_args=_add_hello_args,
+    ),
+    "bye": CommandSpec(
+        name="bye",
+        help="Terminal session: end the own session token (ADR-100)",
+        endpoints=("POST /comms/bye",),
+        scope="comms:talk",
+        handler=_cmd_bye,
     ),
     "who": CommandSpec(
         name="who",

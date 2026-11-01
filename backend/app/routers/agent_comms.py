@@ -146,3 +146,15 @@ async def session_inbox_ack(
     if out is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="thread not in this session's conversations")
     return out
+
+
+@router.post("/bye")
+async def bye(
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(require_comms_principal),
+):
+    """A terminal session ends its own token (the hook calls this when the
+    session closes), so a left-behind session file is worth nothing."""
+    _session_only(principal)
+    await comms_guest.revoke_session(session, principal.id)
+    return {"ok": True, "address": principal.address}

@@ -30,6 +30,7 @@ from app.utils import ensure_aware, utcnow
 CARD_PREFIX = "mcg_"
 SESSION_PREFIX = "mcs_"
 MAX_TTL_HOURS = 168
+MAX_SESSIONS_PER_CARD = 5
 DEFAULT_TTL_HOURS = 12
 NAME_PART = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
 
@@ -103,16 +104,28 @@ async def hello(session: AsyncSession, card: CommsGuestCard, *, harness: str, ma
                                 _check_part("folder", folder))
     address = f"{harness}@{machine}:{folder}"
     now = utcnow()
+    from app.services import comms_directory
+
     holders = (
         await session.exec(select(CommsSession).where(CommsSession.address == address,
                                                       CommsSession.revoked_at.is_(None)))  # type: ignore[union-attr]
     ).all()
+    replaced = []
     for old in holders:
         if not _live(old, now):
             continue
         if old.card_id != card.id:
             raise GuestRefused(409, "address_taken", f"{address} is held by a session of another guest card.")
-        # Same card, same place: the terminal restarted — the old session ends.
+        state = await comms_directory.state_of(comms_directory.principal_for_session(old))
+        if state["alive"] != "no":
+            # A living (or not yet known) session is never kicked out — a
+            # second terminal in the same folder stays outside (review #5).
+            raise GuestRefused(409, "address_taken", f"{address} is held by a session that is still alive.")
+        replaced.append(old)  # crashed terminal: no sign of life for 90 s
+    live_of_card = [r for r in await live_sessions(session) if r.card_id == card.id and r not in replaced]
+    if len(live_of_card) >= MAX_SESSIONS_PER_CARD:
+        raise GuestRefused(429, "card_full", f"This guest card already has {MAX_SESSIONS_PER_CARD} live sessions.")
+    for old in replaced:
         old.revoked_at = now
         session.add(old)
     raw = _new_token(SESSION_PREFIX)
@@ -127,10 +140,20 @@ async def hello(session: AsyncSession, card: CommsGuestCard, *, harness: str, ma
 
 
 async def live_sessions(session: AsyncSession) -> list[CommsSession]:
+    """Sessions whose own token and whose card are both live — in SQL, so
+    revoked and expired rows never load (security review #8)."""
     now = utcnow()
-    rows = (await session.exec(select(CommsSession).where(CommsSession.revoked_at.is_(None)))).all()  # type: ignore[union-attr]
-    cards = {c.id: c for c in (await session.exec(select(CommsGuestCard))).all()}
-    return [r for r in rows if _live(r, now) and r.card_id in cards and _live(cards[r.card_id], now)]
+    rows = await session.exec(
+        select(CommsSession)
+        .join(CommsGuestCard, CommsGuestCard.id == CommsSession.card_id)  # type: ignore[arg-type]
+        .where(
+            CommsSession.revoked_at.is_(None),  # type: ignore[union-attr]
+            CommsSession.expires_at > now,
+            CommsGuestCard.revoked_at.is_(None),  # type: ignore[union-attr]
+            CommsGuestCard.expires_at > now,
+        )
+    )
+    return list(rows.all())
 
 
 async def revoke_card(session: AsyncSession, card_id: uuid.UUID) -> bool:

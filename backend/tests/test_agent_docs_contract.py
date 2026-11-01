@@ -151,7 +151,7 @@ def test_registry_verbs_all_documented_or_intentionally_absent():
         "worker-restart",
         # Terminal-session plumbing (ADR-100): run by the session hook, not
         # by agents in a task loop.
-        "hello", "presence",
+        "hello", "presence", "bye",
     }
     unexpected = undocumented - intentionally_absent
     assert not unexpected, (

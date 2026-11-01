@@ -116,11 +116,16 @@ async def resolve(session: AsyncSession, to: str, sender: Principal) -> Principa
 
 
 async def _rate_limited(redis, sender: Principal) -> bool:
-    key = f"mc:comms:rate:{sender.ref}"
-    count = await redis.incr(key)
-    if count == 1:
-        await redis.expire(key, 60)
-    return count > RATE_PER_MINUTE
+    """10 per minute per sender — and per guest card, so sessions enrolled
+    with one card cannot multiply the limit (security review #4)."""
+    limited = False
+    for ref in filter(None, (sender.ref, sender.group)):
+        key = f"mc:comms:rate:{ref}"
+        count = await redis.incr(key)
+        if count == 1:
+            await redis.expire(key, 60)
+        limited = limited or count > RATE_PER_MINUTE
+    return limited
 
 
 def _dedupe_key(sender: Principal, receiver: Principal, body: str) -> str:

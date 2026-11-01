@@ -8,14 +8,14 @@
 
 Additive only; downgrade drops both tables.
 
-Revision ID: 0227_comms_guest_cards
-Revises: 0226_session_conversations
+Revision ID: 0226_comms_guest_cards
+Revises: 0225_session_conversations
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0227_comms_guest_cards"
-down_revision = "0226_session_conversations"
+revision = "0226_comms_guest_cards"
+down_revision = "0225_session_conversations"
 branch_labels = None
 depends_on = None
 

@@ -159,9 +159,16 @@ async def test_an_address_held_by_another_card_is_refused(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_hello_again_from_the_same_card_replaces_the_old_session(client: AsyncClient):
+async def test_hello_again_replaces_a_session_that_stopped_living(client: AsyncClient, fake_redis):
+    """A crashed terminal (no sign of life for 90 s) may be replaced by the
+    same card; its old token ends."""
+    from app.models.comms import CommsSession
+    from app.services import comms_directory
     card, _ = await _card(client)
     old = (await _hello(client, card["token"])).json()["token"]
+    async with AsyncSession(test_engine) as s:
+        row = (await s.exec(select(CommsSession))).one()
+    await fake_redis.delete(comms_directory.presence_key("session", row.id))
     new = (await _hello(client, card["token"])).json()["token"]
     assert (await client.get(WHO, headers={"Authorization": f"Bearer {old}"})).status_code == 401
     assert (await client.get(WHO, headers={"Authorization": f"Bearer {new}"})).status_code == 200
@@ -290,3 +297,58 @@ async def test_card_token_on_a_comms_route_says_it_only_enrolls(client: AsyncCli
     r = await client.get(WHO, headers={"Authorization": f"Bearer {card['token']}"})
     assert r.status_code == 401
     assert "only enrolls" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_one_card_enrolls_at_most_five_live_sessions(client: AsyncClient):
+    """Security review #4: one card must not multiply into unlimited principals."""
+    card, _ = await _card(client)
+    for i in range(5):
+        assert (await _hello(client, card["token"], folder=f"f{i}")).status_code == 201
+    r = await _hello(client, card["token"], folder="f5")
+    assert r.status_code == 429 and r.json()["detail"]["code"] == "card_full"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_counts_per_card_not_per_session(client: AsyncClient, monkeypatch):
+    """Security review #4: five sessions of one card share the 10/min."""
+    from app.services import comms_send
+    monkeypatch.setattr(comms_send, "MAX_REPLIES", 100)
+    card, _ = await _card(client)
+    await _agent("Boss")
+    tokens = [(await _hello(client, card["token"], folder=f"f{i}")).json()["token"] for i in range(5)]
+    codes = []
+    for i in range(12):
+        h = {"Authorization": f"Bearer {tokens[i % 5]}"}
+        codes.append((await client.post(SEND, headers=h, json={"to": "boss", "body": f"m{i}"})).status_code)
+    assert codes.count(201) == 10
+    assert codes[-1] == 429
+
+
+@pytest.mark.asyncio
+async def test_a_live_session_cannot_be_kicked_out_by_a_new_hello(client: AsyncClient):
+    """Security review #5: a second hello for an address whose session is
+    alive is refused — also from the same card."""
+    card, _ = await _card(client)
+    old = (await _hello(client, card["token"])).json()["token"]
+    r = await _hello(client, card["token"])
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "address_taken"
+    assert (await client.get(WHO, headers={"Authorization": f"Bearer {old}"})).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_bye_revokes_the_own_session(client: AsyncClient):
+    """Security review #10: a session ends its own token when it closes."""
+    card, _ = await _card(client)
+    tok = (await _hello(client, card["token"])).json()["token"]
+    h = {"Authorization": f"Bearer {tok}"}
+    assert (await client.post("/api/v1/agent/comms/bye", headers=h)).status_code == 200
+    assert (await client.get(WHO, headers=h)).status_code == 401
+    # The address is free again for a new session of the same card.
+    assert (await _hello(client, card["token"])).status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_bye_is_for_sessions_only(client: AsyncClient):
+    _, a_h = await _agent("Asker")
+    assert (await client.post("/api/v1/agent/comms/bye", headers=a_h)).status_code == 409

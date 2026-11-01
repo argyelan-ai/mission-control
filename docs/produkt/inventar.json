@@ -397,6 +397,7 @@
     "POST /api/v1/agent/boards/{board_id}/tasks/{task_id}/release",
     "POST /api/v1/agent/boards/{board_id}/tasks/{task_id}/review",
     "POST /api/v1/agent/boards/{board_id}/tasks/{task_id}/review-note",
+    "POST /api/v1/agent/comms/bye",
     "POST /api/v1/agent/comms/hello",
     "POST /api/v1/agent/comms/inbox/ack",
     "POST /api/v1/agent/comms/presence",

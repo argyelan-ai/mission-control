@@ -62,6 +62,9 @@ class Principal:
     label: str
     harness: str | None = None
     machine: str | None = None
+    # Shared limits: every session enrolled with one guest card counts as one
+    # sender for the rate limit ("card:<id>"); None for agents.
+    group: str | None = None
     agent: Agent | None = field(default=None, compare=False, hash=False, repr=False)
 
     @property
@@ -106,6 +109,7 @@ def principal_for_session(row) -> Principal:
         label=row.folder,
         harness=row.harness,
         machine=row.machine,
+        group=f"card:{row.card_id}",
     )
 
 
