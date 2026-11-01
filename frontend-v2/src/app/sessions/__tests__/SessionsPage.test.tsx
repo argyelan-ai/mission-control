@@ -408,6 +408,86 @@ describe("SessionsPage — the header's panel buttons switch the panel slot's co
     expect(screen.queryByTestId("diff-panel-stub")).not.toBeInTheDocument();
   });
 
+  // ADR-099: the panel has a drag handle and remembers its width per browser.
+  it("the open panel takes the remembered width and carries the drag handle", async () => {
+    store["mc.chat.panelWidth"] = "512";
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+    const panel = await screen.findByTestId("side-panel");
+    expect(panel.style.getPropertyValue("--panel-w")).toBe("512px");
+    const handle = screen.getByRole("separator", { name: "Resize panel" });
+    expect(panel).toContainElement(handle);
+  });
+
+  it("caps a remembered width to the island it is drawn in (chat keeps 400 px)", async () => {
+    // jsdom has no layout, so the island's width is given here. (The late
+    // attach that broke this in the real browser — AppShell renders the
+    // island only after its auth check — is covered by useElementWidth's own
+    // test; AppShell is a stub in this file.)
+    const real = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testid === "chat-island") return { width: 1000, height: 800, top: 0, left: 0, right: 1000, bottom: 800, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+      return real.call(this);
+    });
+    store["mc.chat.panelWidth"] = "5000";
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+    const panel = await screen.findByTestId("side-panel");
+    // min(70 % of 1000, 1000 − 400) = 600
+    expect(panel.style.getPropertyValue("--panel-w")).toBe("600px");
+    expect(screen.getByRole("separator")).toHaveAttribute("aria-valuemax", "600");
+  });
+
+  it("lies over the chat when both do not fit, and then carries its own close button on the desktop too", async () => {
+    // Real-browser finding (1024 px): the overlaid panel covered the chat
+    // header, i.e. the very button that closes it.
+    const real = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testid === "chat-island") return { width: 620, height: 700, top: 0, left: 0, right: 620, bottom: 700, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+      return real.call(this);
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+    const panel = await screen.findByTestId("side-panel");
+    expect(panel).toHaveAttribute("data-overlay", "true");
+    expect(panel.className).toContain("md:absolute");
+    const bar = screen.getByTestId("side-panel-bar");
+    expect(bar.className).not.toContain("md:hidden");
+    await user.click(within(bar).getByRole("button", { name: "Close panel" }));
+    expect(screen.queryByTestId("side-panel")).not.toBeInTheDocument();
+  });
+
+  it("side by side, the panel's own title bar stays phone-only (the header buttons close it)", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+    expect(await screen.findByTestId("side-panel-bar")).toHaveClass("md:hidden");
+  });
+
+  it("dragging stores the new width; double-click forgets it again", async () => {
+    store["mc.chat.panelWidth"] = "512";
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+    await user.click(screen.getByRole("button", { name: "Browser" }));
+    const handle = await screen.findByRole("separator", { name: "Resize panel" });
+
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(store["mc.chat.panelWidth"]).toBe("528");
+    expect(screen.getByTestId("side-panel").style.getPropertyValue("--panel-w")).toBe("528px");
+
+    fireEvent.doubleClick(handle);
+    expect(store["mc.chat.panelWidth"]).toBeUndefined();
+  });
+
   it("clicking the already-active panel icon collapses the panel", async () => {
     const user = userEvent.setup();
     renderPage();

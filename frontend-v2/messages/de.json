@@ -1278,7 +1278,9 @@
     "panels": {
       "diff": "Änderungen",
       "browser": "Browser",
-      "close": "Panel schliessen"
+      "close": "Panel schliessen",
+      "resize": "Panelbreite ändern",
+      "resizeHint": "Ziehen ändert die Breite · Doppelklick setzt zurück"
     },
     "queueTakeBackFailed": "Eingereihte Nachrichten konnten nicht zurückgeholt werden",
     "todo": {
