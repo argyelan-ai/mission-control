@@ -300,7 +300,12 @@ async def list_approvals(
     result = await session.exec(
         select(Approval).where(Approval.status == "pending").order_by(Approval.created_at.desc())  # type: ignore[attr-defined]
     )
-    return result.all()
+    approvals = list(result.all())
+    # ADR-100 §6: a card raised soon after a session message names that
+    # message's sender ("triggered by a message from X").
+    from app.services.comms_send import approval_triggers
+    triggers = await approval_triggers(session, approvals)
+    return [{**a.model_dump(), "triggered_by": triggers.get(a.id)} for a in approvals]
 
 
 @router.get("/approvals/stream")

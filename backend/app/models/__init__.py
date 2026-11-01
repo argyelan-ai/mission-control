@@ -5,6 +5,7 @@ from app.models.approval import Approval
 from app.models.board import Board, PlannerMessage, Project
 from app.models.install_log import InstallLog
 from app.models.chat import ChatMessage
+from app.models.comms import CommsConversation, CommsCursor  # noqa: F401
 from app.models.content import ContentPipeline
 from app.models.credential import Credential
 from app.models.deploy_history import DeployHistory

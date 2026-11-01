@@ -5,4 +5,5 @@ QUESTION_PRIORITIES: tuple[str, ...] = ("low", "medium", "high", "critical")
 QUESTION_TARGETS: tuple[str, ...] = ("mark", "boss", "agent")
 WAITING_TIMEOUT_SECONDS: int = 7200
 SIDE_THREAD_ROUND_LIMIT: int = 10
-THREAD_KINDS: tuple[str, ...] = ("task", "side", "dm", "chat", "group")
+# "session": a conversation between two principals across harnesses (ADR-100).
+THREAD_KINDS: tuple[str, ...] = ("task", "side", "dm", "chat", "group", "session")

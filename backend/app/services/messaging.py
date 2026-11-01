@@ -190,6 +190,7 @@ async def post_message(
     mirror_to_telegram: bool = True,
     attachment=None,
     from_chat: bool = False,
+    sender_session_id: uuid.UUID | None = None,
 ) -> Message:
     """Post a message onto a thread, allocating its seq atomically.
 
@@ -231,6 +232,7 @@ async def post_message(
         mentions=mentions if mentions is not None else [],
         question_meta=question_meta,
         from_chat=from_chat,
+        sender_session_id=sender_session_id,
     )
     session.add(message)
     await session.commit()
