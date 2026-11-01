@@ -91,7 +91,7 @@ def test_hello_without_a_card_is_a_usage_error(tmp_path, monkeypatch):
 
 def test_hello_sanitises_default_name_parts():
     assert commands._name_part("My Mac.local") == "my-mac.local"
-    assert commands._name_part("/Users/x/Mission Control") == "mission-control"
+    assert commands._name_part("/home/x/Mission Control") == "mission-control"
     assert commands._name_part("") == "unknown"
 
 
