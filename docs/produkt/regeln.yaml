@@ -28,6 +28,20 @@ rules:
     status: active
     checked: 2026-11-01
 
+  - id: R-terminal-session-own-principal
+    says: "A terminal session talks only as its own principal: enrolled with an admin-issued guest card, it gets a session token with only comms:talk and an expiry no later than its card. The token works only on the comms routes; the card token only enrolls; no row in agents is created; revoking the card ends its sessions."
+    source: "ADR-100 section 6 rule 1"
+    owner: backend/app/services/comms_guest.py
+    applies_to: ["backend/app/services/comms_guest.py", "backend/app/comms_auth.py", "backend/app/routers/comms.py"]
+    enforced_by:
+      - {test: "backend/tests/test_comms_guest_card.py::test_hello_makes_its_own_principal_not_an_agent_row"}
+      - {test: "backend/tests/test_comms_guest_card.py::test_session_token_reaches_only_comms_routes"}
+      - {test: "backend/tests/test_comms_guest_card.py::test_card_token_only_enrolls"}
+      - {test: "backend/tests/test_comms_guest_card.py::test_an_expired_card_ends_its_sessions_too"}
+      - {test: "backend/tests/test_comms_guest_card.py::test_only_an_admin_issues_a_card"}
+    status: active
+    checked: 2026-11-01
+
   - id: R-one-migration-head
     says: "Alembic has exactly one head; a new migration checks for a colliding revision first."
     source: "AGENTS.md (rules that bite)"

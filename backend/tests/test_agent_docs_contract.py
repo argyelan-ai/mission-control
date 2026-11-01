@@ -149,6 +149,9 @@ def test_registry_verbs_all_documented_or_intentionally_absent():
     intentionally_absent = {
         "plugin-list", "plugin-show", "plugin-assign", "plugin-unassign",
         "worker-restart",
+        # Terminal-session plumbing (ADR-100): run by the session hook, not
+        # by agents in a task loop.
+        "hello", "presence", "bye",
     }
     unexpected = undocumented - intentionally_absent
     assert not unexpected, (

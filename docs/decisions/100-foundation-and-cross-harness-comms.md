@@ -239,3 +239,28 @@ new ADR.
 - Related ADRs: ADR-016 (MCP registry), ADR-075 (group chat, stays frozen),
   ADR-085 (head per job, build stop), ADR-086 (harness × runtime),
   ADR-089 (lead agent, two fixed agents), ADR-090 (chat as remote control)
+
+## Nachtrag (2026-11-01) — security review of stage 2 (2a–2c)
+
+A fresh security review of the directory, sending and guest-card PRs led
+to four tightenings. The text above is not rewritten.
+
+1. **comms:talk is an explicit opt-in per agent.** It counts only when
+   listed in the agent's stored scopes; the empty-list "all scopes"
+   fallback does not grant it, and no migration grants it. Reason: the
+   agents that hold every scope can also read deploy tokens and credentials
+   without an approval card, so an automatic grant would open a prompt-
+   injection path straight to them. Granting it to such an agent is the
+   operator's decision.
+2. **Terminal sessions have no enforced tier for local actions.** A
+   coding-CLI terminal runs with the operator's local rights; MC's approval
+   gate covers only what goes through MC. So the session hook never puts
+   foreign text into the operator's own turn (a one-line notice only) and
+   reads messages on its own only when the operator opts in.
+3. **One guest card is one sender for the limits.** At most 5 live
+   sessions per card, and they share the 10-per-minute limit. A living
+   session's address is never taken over; a session ends its own token when
+   it closes (`mc bye`).
+4. **No second write path.** A session thread is never a reply target, task
+   origin or report target, and is never mirrored into the operator's chat
+   channels; the sender's text is quoted line by line under the frame.

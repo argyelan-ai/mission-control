@@ -116,11 +116,16 @@ async def resolve(session: AsyncSession, to: str, sender: Principal) -> Principa
 
 
 async def _rate_limited(redis, sender: Principal) -> bool:
-    key = f"mc:comms:rate:{sender.ref}"
-    count = await redis.incr(key)
-    if count == 1:
-        await redis.expire(key, 60)
-    return count > RATE_PER_MINUTE
+    """10 per minute per sender — and per guest card, so sessions enrolled
+    with one card cannot multiply the limit (security review #4)."""
+    limited = False
+    for ref in filter(None, (sender.ref, sender.group)):
+        key = f"mc:comms:rate:{ref}"
+        count = await redis.incr(key)
+        if count == 1:
+            await redis.expire(key, 60)
+        limited = limited or count > RATE_PER_MINUTE
+    return limited
 
 
 def _dedupe_key(sender: Principal, receiver: Principal, body: str) -> str:
@@ -358,3 +363,52 @@ async def approval_triggers(session: AsyncSession, approvals: list[Approval]) ->
         }
     return out
 
+
+
+async def session_inbox(session: AsyncSession, principal: Principal) -> dict[str, Any]:
+    """Unacked messages for a terminal session (agents use their own inbox).
+    Same rows, same frame; only the cursor table differs (comms_cursors)."""
+    messages: list[dict] = []
+    threads: dict[str, int] = {}
+    for conv in await _conversation_threads(session, principal.ref):
+        acked = await _acked_seq(session, principal, conv.thread_id)
+        rows = await session.exec(
+            select(Message)
+            .where(Message.thread_id == conv.thread_id, Message.seq > acked)
+            .order_by(Message.seq.asc())  # type: ignore[union-attr]
+        )
+        window = list(rows.all())
+        shown = [m for m in window if not _is_from(m, principal)]
+        if not shown:
+            continue
+        for m in shown:
+            messages.append({
+                "id": str(m.id),
+                "thread_id": str(m.thread_id),
+                "seq": m.seq,
+                "from": await address_for_message(session, m),
+                "body": m.body,
+                "created_at": ensure_aware(m.created_at).isoformat() if m.created_at else None,
+            })
+        threads[str(conv.thread_id)] = max(m.seq for m in window)
+    return {"messages": messages, "threads": threads}
+
+
+async def session_ack(session: AsyncSession, principal: Principal, thread_id: uuid.UUID, seq: int) -> dict | None:
+    """Move a session's cursor forward — only on its own conversations,
+    never past the thread's last message. None = not its thread."""
+    if not any(c.thread_id == thread_id for c in await _conversation_threads(session, principal.ref)):
+        return None
+    from sqlalchemy import func
+
+    top = (
+        await session.exec(select(func.coalesce(func.max(Message.seq), 0)).where(Message.thread_id == thread_id))
+    ).one()
+    cur = await session.get(CommsCursor, (principal.ref, thread_id))
+    if cur is None:
+        cur = CommsCursor(principal_ref=principal.ref, thread_id=thread_id, last_acked_seq=0)
+    cur.last_acked_seq = max(cur.last_acked_seq, min(seq, top))
+    cur.updated_at = utcnow()
+    session.add(cur)
+    await session.commit()
+    return {"thread_id": str(thread_id), "last_acked_seq": cur.last_acked_seq}

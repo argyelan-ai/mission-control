@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -1795,6 +1796,36 @@ def _add_msg_args(p):
     )
 
 
+def _session_mode(cfg) -> bool:
+    return isinstance(getattr(cfg, "comms_session_file", None), str)
+
+
+def _session_inbox(client, *, peek: bool = False) -> int:
+    """`mc inbox` for a terminal session (ADR-100): its own inbox, then ack.
+    `--peek` shows without acking (the hook counts what waits this way)."""
+    resp = client.request("GET", "/api/v1/agent/comms/inbox") or {}
+    messages = resp.get("messages") or []
+    if not messages:
+        print("Keine neuen Nachrichten.")
+        return 0
+    blocks = []
+    for m in messages:
+        sender = m.get("from") or "?"
+        blocks.append(
+            f"{m.get('body') or ''}\n\n[thread {m.get('thread_id')} · seq {m.get('seq')} · von {sender}"
+            f" · antworten: mc send {sender} \"…\"]"
+        )
+    print("\n\n---\n\n".join(blocks))
+    if peek:
+        return 0
+    for tid, max_seq in (resp.get("threads") or {}).items():
+        try:
+            client.request("POST", "/api/v1/agent/comms/inbox/ack", body={"thread_id": tid, "seq": max_seq})
+        except Exception as e:  # noqa: BLE001 — best-effort ack, next pull redelivers
+            print(f"mc inbox: ack fuer thread {tid} fehlgeschlagen: {e}", file=sys.stderr)
+    return 0
+
+
 def _cmd_inbox(args, client, cfg):
     """mc inbox — Nudge+Pull: neue Thread-Nachrichten abholen + acken (W2.1).
 
@@ -1805,6 +1836,8 @@ def _cmd_inbox(args, client, cfg):
     hoechste gelieferte seq — erst der POST /me/inbox/ack konsumiert die
     Nachricht server-seitig (kein Bildschirm-Heuristik-Ack mehr).
     """
+    if _session_mode(cfg):
+        return _session_inbox(client, peek=bool(getattr(args, "peek", False)))
     resp = client.request("GET", "/api/v1/agent/me/inbox") or {}
     messages = resp.get("messages") or []
     threads = resp.get("threads") or {}
@@ -1908,6 +1941,233 @@ def _add_box_args(p):
     p_status = sub.add_parser("status", help="Box facts: engine, model, running requests, switch lock (read-only)")
     p_status.add_argument("slug", nargs="?", default=None, help="Only this box (host slug)")
     p_status.add_argument("--json", action="store_true", help="Print the raw answer")
+
+
+# ── Talking across harnesses (ADR-100) ────────────────────────────────────
+
+_NAME_CLEAN = re.compile(r"[^a-z0-9._-]+")
+
+
+def _name_part(raw: str) -> str:
+    """A safe address part: last path segment, lower case, letters / digits /
+    . _ - only, at most 40 characters."""
+    base = (raw or "").rstrip("/").split("/")[-1].strip().lower()
+    clean = _NAME_CLEAN.sub("-", base).strip("-.")[:40]
+    return clean or "unknown"
+
+
+def _post_with_token(cfg, path: str, body: dict, token: str):
+    from dataclasses import replace
+    return Client(replace(cfg, agent_token=token)).request("POST", path, body=body)
+
+
+def _write_session_file(path: str, data: dict) -> None:
+    folder = os.path.dirname(os.path.abspath(path))
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    tmp = f"{path}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def _cmd_hello(args, client, cfg):
+    """mc hello — enroll this terminal session with a guest card (ADR-100).
+
+    The operator issues the card in MC. The card only enrolls; MC answers
+    with this session's own token (only comms:talk, expires with the card),
+    written to --session-file (mode 0600). Address: harness@machine:folder.
+    """
+    card = args.card or os.environ.get("MC_GUEST_CARD", "")
+    if args.card_file:
+        try:
+            card = pathlib.Path(args.card_file).read_text(encoding="utf-8").strip()
+        except OSError as e:
+            raise UsageError(f"guest card file not readable: {e}")
+    if not card:
+        raise UsageError("no guest card: --card-file <file>, --card <token> or MC_GUEST_CARD")
+    session_file = args.session_file or os.environ.get("MC_COMMS_SESSION_FILE")
+    if not session_file:
+        raise UsageError("no session file: --session-file <path> or MC_COMMS_SESSION_FILE")
+    import socket
+    body = {
+        "harness": _name_part(args.harness),
+        "machine": _name_part(args.machine or socket.gethostname().split(".")[0]),
+        "folder": _name_part(args.folder or os.getcwd()),
+    }
+    from .config import read_session_file
+
+    resp = _require_result(_post_with_token(cfg, "/api/v1/agent/comms/hello", body, card), verb="hello")
+    _write_session_file(session_file, {
+        "token": resp["token"],
+        "address": resp["address"],
+        "expires_at": resp.get("expires_at"),
+        "api_url": cfg.api_url,
+        "state": {"listening": True, "busy": False, "task": None, "accept": "accept"},
+    })
+    print(f"{resp['address']} · expires {resp.get('expires_at')}")
+    if args.keepalive_pid:
+        loop_pid = _spawn_keepalive(session_file, args.keepalive_pid)
+        data = read_session_file(session_file)
+        _write_session_file(session_file, {**data, "keepalive_pid": loop_pid})
+    return 0
+
+
+def _spawn_keepalive(session_file: str, pid: int) -> int:
+    """Background sign of life every 30 s while the owning process lives."""
+    import subprocess
+    pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = {**os.environ, "MC_COMMS_SESSION_FILE": session_file,
+           "PYTHONPATH": pkg_parent + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "mc_cli", "presence", "--loop", "--pid", str(pid)],
+        env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return proc.pid
+
+
+def _add_hello_args(p):
+    p.add_argument("--card-file", default=None, help="File with the guest card token")
+    p.add_argument("--card", default=None, help="Guest card token (prefer --card-file)")
+    p.add_argument("--harness", default="claude")
+    p.add_argument("--machine", default=None, help="Default: this host's short name")
+    p.add_argument("--folder", default=None, help="Default: the current folder's name")
+    p.add_argument("--session-file", default=None, help="Where to store the session token (0600)")
+    p.add_argument("--keepalive-pid", type=int, default=None,
+                   help="Send a sign of life every 30 s while this process lives")
+
+
+def _cmd_bye(args, client, cfg):
+    """mc bye — a terminal session ends its own token (the hook runs it when
+    the session closes)."""
+    resp = _require_result(client.request("POST", "/api/v1/agent/comms/bye"), verb="bye")
+    print(f"bye · {resp.get('address')}")
+    return 0
+
+
+def _cmd_who(args, client, cfg):
+    """mc who — who is reachable: alive and listening, kept apart."""
+    resp = client.request("GET", "/api/v1/agent/comms/who") or {}
+    if getattr(args, "json", False):
+        print(json.dumps(resp, indent=2, default=str))
+        return 0
+    rows = resp.get("sessions") or []
+    if resp.get("warming_up"):
+        print("(MC started less than 60 s ago — 'unknown' means not reported yet)")
+    if not rows:
+        print("Nobody may talk right now.")
+        return 0
+    def _yn(v):
+        return "unknown" if v is None else ("yes" if v else "no")
+    for r in rows:
+        line = (f"{r.get('address')} · {r.get('kind')} · {r.get('harness') or '-'} · "
+                f"alive {r.get('alive')} · listening {_yn(r.get('listening'))}")
+        if r.get("busy"):
+            line += " · busy"
+        if r.get("accept") and r.get("accept") != "accept":
+            line += f" · {r['accept']}"
+        if r.get("task"):
+            line += f" · {r['task']}"
+        if r.get("address") == resp.get("me"):
+            line += " · (you)"
+        print(line)
+    return 0
+
+
+def _add_who_args(p):
+    p.add_argument("--json", action="store_true")
+
+
+def _cmd_send(args, client, cfg):
+    """mc send <to> <text|-> — a message to one named session. Information
+    only: it never grants a right; risky actions still go through MC's
+    approval cards."""
+    text = resolve_text_arg(args.text, verb="send")
+    resp = _require_result(
+        client.request("POST", "/api/v1/agent/comms/send", body={"to": args.to, "body": text}),
+        verb="send",
+    )
+    line = f"sent to {resp.get('to')} · {resp.get('delivery')}"
+    if resp.get("paused"):
+        line += " · conversation paused — waits for the operator's approval card"
+    print(line)
+    return 0
+
+
+def _add_send_args(p):
+    p.add_argument("to", help="Address from `mc who` (or a unique short name)")
+    p.add_argument("text", help="Message text, or - for stdin")
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _cmd_presence(args, client, cfg):
+    """mc presence — sign of life + listening / busy / task / accept mode.
+    In a terminal session the state is kept in the session file, so the
+    keepalive loop (--loop --pid) reports what the hooks last set."""
+    session_file = getattr(cfg, "comms_session_file", None)
+    session_file = session_file if isinstance(session_file, str) else None
+    from .config import read_session_file
+
+    if args.loop:
+        if not args.pid:
+            raise UsageError("--loop needs --pid <process to follow>")
+        while _pid_alive(args.pid):
+            state = (read_session_file(session_file).get("state") if session_file else None) or {}
+            body = {"listening": state.get("listening", True), "busy": bool(state.get("busy")),
+                    "task": state.get("task"), "accept": state.get("accept", "accept")}
+            try:
+                client.request("POST", "/api/v1/agent/comms/presence", body=body)
+            except Exception as e:  # noqa: BLE001
+                if "401" in str(e):
+                    return 0  # session revoked or expired: stop quietly
+            time.sleep(args.interval)
+        return 0
+
+    data = read_session_file(session_file) if session_file else {}
+    state = dict(data.get("state") or {"listening": True, "busy": False, "task": None, "accept": "accept"})
+    if args.busy:
+        state["busy"] = True
+    if args.idle:
+        state["busy"] = False
+    if args.task is not None:
+        state["task"] = args.task or None
+    if args.not_listening:
+        state["listening"] = False
+    if args.listening:
+        state["listening"] = True
+    if args.accept:
+        state["accept"] = args.accept
+    body = {"listening": state.get("listening", True), "busy": bool(state.get("busy")),
+            "task": state.get("task"), "accept": state.get("accept", "accept")}
+    client.request("POST", "/api/v1/agent/comms/presence", body=body)
+    if session_file and data:
+        _write_session_file(session_file, {**data, "state": body})
+    return 0
+
+
+def _add_presence_args(p):
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--busy", action="store_true")
+    g.add_argument("--idle", action="store_true")
+    lg = p.add_mutually_exclusive_group()
+    lg.add_argument("--listening", action="store_true")
+    lg.add_argument("--not-listening", action="store_true")
+    p.add_argument("--task", default=None)
+    p.add_argument("--accept", choices=("accept", "hold", "refuse"), default=None)
+    p.add_argument("--loop", action="store_true", help="Keep reporting until --pid ends")
+    p.add_argument("--pid", type=int, default=None)
+    p.add_argument("--interval", type=float, default=30.0)
 
 
 def _cmd_thread(args, client, cfg):
@@ -3576,7 +3836,7 @@ REGISTRY: dict[str, CommandSpec] = {
     "inbox": CommandSpec(
         name="inbox",
         help="Neue Thread-Nachrichten abholen + pro Thread acken (Nudge+Pull, auf 📬-Weckruf)",
-        endpoints=("GET /me/inbox", "POST /me/inbox/ack"),
+        endpoints=("GET /me/inbox", "POST /me/inbox/ack", "GET /comms/inbox", "POST /comms/inbox/ack"),
         # Verified 2026-07-28 (Card-verb-scope contract, PR card-verbs-by-scope):
         # routers/agents.py "/agent/me/inbox" and "/agent/me/inbox/ack" both
         # hang only on Depends(require_agent) — no require_scope. Was
@@ -3585,7 +3845,10 @@ REGISTRY: dict[str, CommandSpec] = {
         # (agent_doc_constants.CANONICAL_VERB_SCOPES) can trust this field.
         scope="",
         handler=_cmd_inbox,
-        add_args=lambda p: None,
+        add_args=lambda p: p.add_argument(
+            "--peek", action="store_true",
+            help="Terminal session only: show without acking",
+        ),
     ),
     "thread": CommandSpec(
         name="thread",
@@ -3602,6 +3865,45 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="tasks:read",  # backend require_scope(Scope.TASKS_READ) — ADR-100
         handler=_cmd_box,
         add_args=_add_box_args,
+    ),
+    "hello": CommandSpec(
+        name="hello",
+        help="Terminal session: enroll with a guest card (ADR-100) — writes its own session token",
+        endpoints=("POST /comms/hello",),
+        scope="",  # guest-card token, not an agent scope
+        handler=_cmd_hello,
+        add_args=_add_hello_args,
+    ),
+    "bye": CommandSpec(
+        name="bye",
+        help="Terminal session: end the own session token (ADR-100)",
+        endpoints=("POST /comms/bye",),
+        scope="comms:talk",
+        handler=_cmd_bye,
+    ),
+    "who": CommandSpec(
+        name="who",
+        help="Who is reachable across harnesses — alive and listening, kept apart (ADR-100)",
+        endpoints=("GET /comms/who",),
+        scope="comms:talk",
+        handler=_cmd_who,
+        add_args=_add_who_args,
+    ),
+    "send": CommandSpec(
+        name="send",
+        help="Message to one named session (information only, never a permission; ADR-100)",
+        endpoints=("POST /comms/send",),
+        scope="comms:talk",
+        handler=_cmd_send,
+        add_args=_add_send_args,
+    ),
+    "presence": CommandSpec(
+        name="presence",
+        help="Sign of life + listening/busy/task (terminal-session hooks; ADR-100)",
+        endpoints=("POST /comms/presence",),
+        scope="comms:talk",
+        handler=_cmd_presence,
+        add_args=_add_presence_args,
     ),
     "help": CommandSpec(
         name="help",

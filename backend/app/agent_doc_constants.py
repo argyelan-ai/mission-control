@@ -99,6 +99,8 @@ CANONICAL_VERBS: dict[str, str] = {
     "file-answer": "Save a research result as a Vault note.",
     "docs": "Read a local reference doc — no network call, works offline.",
     "box": "Box facts, read-only: `mc box status [slug]` — verdict, engine, running requests, switch lock.",
+    "who": "Who is reachable across harnesses (alive / listening).",
+    "send": "Message one session: `mc send <address> \"…\"` — info, never a permission.",
 }
 
 
@@ -167,6 +169,8 @@ CANONICAL_VERB_SCOPES: dict[str, str | None] = {
     "file-answer": "vault:write",
     "docs": None,  # local file read, no network call, works offline
     "box": "tasks:read",  # GET /agent/boxes/status — require_scope(TASKS_READ), ADR-100
+    "who": "comms:talk",  # GET /agent/comms/who — require_comms_principal, ADR-100
+    "send": "comms:talk",  # POST /agent/comms/send — require_comms_principal, ADR-100
 }
 
 
