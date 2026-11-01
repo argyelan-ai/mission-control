@@ -835,6 +835,11 @@ internal:
   # tab (stage 2d) shows them.
   - "table:comms_conversations"
   - "table:comms_cursors"
+  # ADR-100 guest cards for terminal sessions: admin API (issue, list,
+  # revoke, revoke-all, sessions). No page yet — the phone view is stage 2d.
+  - "endpoint:* /api/v1/comms/*"
+  - "table:comms_guest_cards"
+  - "table:comms_sessions"
   # Skill packs: seeded for the playbook layer, which was removed in E5
   # (migration 0207); the rows stay, nothing reads them any more.
   - "table:skill_packs"

@@ -12,9 +12,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.comms_auth import require_comms_principal
+import uuid
+
+from app.comms_auth import require_comms_principal, require_guest_card
+from app.models.comms import CommsGuestCard
 from app.database import get_session
-from app.services import comms_directory, comms_send
+from app.services import comms_directory, comms_guest, comms_send
 from app.services.comms_directory import Principal
 
 router = APIRouter(prefix="/api/v1/agent/comms", tags=["agent-comms"])
@@ -74,3 +77,72 @@ async def send(
         return await comms_send.send(session, principal, payload.to, payload.body)
     except comms_send.SendRefused as refused:
         raise HTTPException(status_code=refused.status, detail=refused.detail())
+
+
+class HelloBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    harness: str = Field(pattern=comms_guest.NAME_PART.pattern)
+    machine: str = Field(pattern=comms_guest.NAME_PART.pattern)
+    folder: str = Field(pattern=comms_guest.NAME_PART.pattern)
+
+
+@router.post("/hello", status_code=status.HTTP_201_CREATED)
+async def hello(
+    body: HelloBody,
+    session: AsyncSession = Depends(get_session),
+    card: CommsGuestCard = Depends(require_guest_card),
+):
+    """Enroll a terminal session with a guest card (ADR-100 §6 rule 1).
+    Returns the session's own token (only comms:talk, expires with the card)
+    and its address `harness@machine:folder`. The card token is not a session
+    token and stays good only for this call."""
+    try:
+        row, raw = await comms_guest.hello(
+            session, card, harness=body.harness, machine=body.machine, folder=body.folder,
+        )
+    except comms_guest.GuestRefused as refused:
+        raise HTTPException(status_code=refused.status, detail=refused.detail())
+    await comms_directory.record_presence(comms_directory.principal_for_session(row))
+    return {
+        "token": raw,
+        "address": row.address,
+        "expires_at": row.expires_at.isoformat(),
+        "scopes": ["comms:talk"],
+    }
+
+
+def _session_only(principal: Principal) -> None:
+    if principal.kind != "session":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Agents read session messages in their own inbox (GET /api/v1/agent/me/inbox, `mc inbox`).",
+        )
+
+
+@router.get("/inbox")
+async def session_inbox(
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(require_comms_principal),
+):
+    """A terminal session's unread messages (pull at rest; nothing is pushed)."""
+    _session_only(principal)
+    return await comms_send.session_inbox(session, principal)
+
+
+class AckBody(BaseModel):
+    thread_id: uuid.UUID
+    seq: int = Field(ge=0)
+
+
+@router.post("/inbox/ack")
+async def session_inbox_ack(
+    body: AckBody,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(require_comms_principal),
+):
+    _session_only(principal)
+    out = await comms_send.session_ack(session, principal, body.thread_id, body.seq)
+    if out is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="thread not in this session's conversations")
+    return out

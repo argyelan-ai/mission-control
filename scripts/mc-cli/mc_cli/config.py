@@ -30,6 +30,18 @@ def context_env_path() -> str:
 SESSION_ROLE_CHAT = "chat"
 
 
+def read_session_file(path: str) -> dict:
+    """The session file `mc hello` wrote; {} when missing or unreadable."""
+    import json
+
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _session_role(raw: str | None) -> str | None:
     """MC_SESSION_ROLE as the CLI sends it: only the known role, else None
     (a typo must never become a header the server reads differently)."""
@@ -50,6 +62,9 @@ class Config:
     # X-MC-Session-Role; the server then refuses writes to the run state of
     # the agent's own task (round-1 user test t1, MUST-1). None = run session.
     session_role: str | None = None
+    # ADR-100: a terminal session enrolled with a guest card speaks with its
+    # own session token from this file (written by `mc hello`, mode 0600).
+    comms_session_file: str | None = None
 
     def __post_init__(self) -> None:
         # Attempt-Header und Task-Kontext gehoeren zusammen: der Header in
@@ -88,9 +103,20 @@ class Config:
             # erst über X-Dispatch-Attempt-Id Hint möglich.
             return file_ctx.get(key) or os.environ.get(key) or None
 
+        api_url = os.environ.get("MC_API_URL", "http://localhost:8000").rstrip("/")
+        token = os.environ.get("MC_AGENT_TOKEN", "")
+        session_file = os.environ.get("MC_COMMS_SESSION_FILE") or None
+        if session_file:
+            sess = read_session_file(session_file)
+            # An explicit session file wins: in that terminal the CLI is the
+            # session, never an agent.
+            token = sess.get("token") or ""
+            api_url = (sess.get("api_url") or api_url).rstrip("/")
+
         return cls(
-            api_url=os.environ.get("MC_API_URL", "http://localhost:8000").rstrip("/"),
-            agent_token=os.environ.get("MC_AGENT_TOKEN", ""),
+            api_url=api_url,
+            agent_token=token,
+            comms_session_file=session_file,
             task_id=_resolve("TASK_ID"),
             board_id=_resolve("BOARD_ID"),
             dispatch_attempt_id=_resolve("X_DISPATCH_ATTEMPT_ID"),

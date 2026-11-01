@@ -484,3 +484,59 @@ def test_operator_mc_box_status_never_uses_admin_path(operator_mod, monkeypatch)
     out = _unwrap(operator_mod.mc_box_status)()
     assert fake.calls == []
     assert "Token" in out or "token" in out
+
+
+# ── mc_who / mc_send, and session mode (ADR-100 2c) ─────────────────────
+
+
+def test_agent_mode_offers_who_and_send(agent_mod):
+    names = _tool_names(agent_mod)
+    assert {"mc_who", "mc_send"} <= names
+
+
+def test_agent_mc_send_posts_to_and_body_as_the_agent(agent_mod, monkeypatch):
+    fake = FakeMC(overrides={
+        ("POST", "/api/v1/agent/comms/send"): (201, {"to": "claude@desk:runtimes", "delivery": "next_rest",
+                                                     "thread_id": "t", "message_id": "m", "paused": False}),
+    }).install(agent_mod, monkeypatch)
+    out = _unwrap(agent_mod.mc_send)(to="runtimes", body="When are you done?")
+    fake.assert_agent_only()
+    [call] = fake.calls
+    assert call["json"] == {"to": "runtimes", "body": "When are you done?"}
+    assert "claude@desk:runtimes" in out and "next_rest" in out
+
+
+def test_agent_mc_who_lists_alive_and_listening(agent_mod, monkeypatch):
+    fake = FakeMC(overrides={
+        ("GET", "/api/v1/agent/comms/who"): (200, {"me": "lead", "warming_up": False, "sessions": [
+            {"address": "local", "kind": "agent", "harness": "omp", "alive": "yes", "listening": False,
+             "busy": False, "task": None, "accept": "accept"}]}),
+    }).install(agent_mod, monkeypatch)
+    out = _unwrap(agent_mod.mc_who)()
+    fake.assert_agent_only()
+    assert "local" in out and "alive yes" in out and "listening no" in out
+
+
+@pytest.fixture
+def session_mod(monkeypatch, tmp_path):
+    f = tmp_path / "session.json"
+    f.write_text('{"token": "mcs_sessiontoken", "address": "claude@desk:runtimes"}')
+    monkeypatch.delenv("MC_AGENT_TOKEN", raising=False)
+    monkeypatch.delenv("MC_AGENT_ENV_FILE", raising=False)
+    monkeypatch.setenv("MC_COMMS_SESSION_FILE", str(f))
+    return _load(tmp_path)
+
+
+def test_session_mode_is_agent_mode_with_the_session_token(session_mod, monkeypatch):
+    assert not (_tool_names(session_mod) & OPERATOR_ONLY)
+    assert "JWT_SECRET_KEY" not in session_mod.ENV
+    fake = FakeMC(overrides={
+        ("GET", "/api/v1/agent/comms/inbox"): (200, {"messages": [
+            {"id": "m1", "thread_id": "t1", "seq": 2, "from": "lead", "body": "[Message from lead (omp) — x]\n\nhi"}],
+            "threads": {"t1": 2}}),
+        ("POST", "/api/v1/agent/comms/inbox/ack"): (200, {"ok": True}),
+    }).install(session_mod, monkeypatch)
+    out = _unwrap(session_mod.mc_inbox)()
+    assert "[Message from lead" in out
+    assert all(c["headers"]["Authorization"] == "Bearer mcs_sessiontoken" for c in fake.calls)
+    assert [c["path"] for c in fake.calls] == ["/api/v1/agent/comms/inbox", "/api/v1/agent/comms/inbox/ack"]

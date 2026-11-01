@@ -97,15 +97,30 @@ def principal_for_agent(agent: Agent) -> Principal:
     )
 
 
+def principal_for_session(row) -> Principal:
+    """A terminal session enrolled with a guest card (ADR-100 §6 rule 1)."""
+    return Principal(
+        kind="session",
+        id=row.id,
+        address=row.address,
+        label=row.folder,
+        harness=row.harness,
+        machine=row.machine,
+    )
+
+
 async def _session_principals(session: AsyncSession) -> list[Principal]:
-    """Terminal sessions with a live guest card (filled in by the guest-card
-    stage); none before that."""
-    return []
+    """Terminal sessions whose session and guest card are both live."""
+    from app.services.comms_guest import live_sessions
+
+    return [principal_for_session(r) for r in await live_sessions(session)]
 
 
 async def session_address(session: AsyncSession, session_id: uuid.UUID) -> str | None:
-    """Address of a terminal session principal (guest-card stage); None before."""
-    return None
+    from app.models.comms import CommsSession
+
+    row = await session.get(CommsSession, session_id)
+    return row.address if row else None
 
 
 async def list_principals(session: AsyncSession) -> list[Principal]:

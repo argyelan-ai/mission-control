@@ -492,6 +492,33 @@
         ]
       }
     },
+    "/api/v1/agent/comms/hello": {
+      "post": {
+        "operationId": "hello_api_v1_agent_comms_hello_post",
+        "summary": "Hello",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
+    "/api/v1/agent/comms/inbox": {
+      "get": {
+        "operationId": "session_inbox_api_v1_agent_comms_inbox_get",
+        "summary": "Session Inbox",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
+    "/api/v1/agent/comms/inbox/ack": {
+      "post": {
+        "operationId": "session_inbox_ack_api_v1_agent_comms_inbox_ack_post",
+        "summary": "Session Inbox Ack",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
     "/api/v1/agent/comms/presence": {
       "post": {
         "operationId": "post_presence_api_v1_agent_comms_presence_post",
@@ -2670,6 +2697,58 @@
         "summary": "Update Cli Tool",
         "tags": [
           "cli-tools"
+        ]
+      }
+    },
+    "/api/v1/comms/guest-cards": {
+      "get": {
+        "operationId": "list_cards_api_v1_comms_guest_cards_get",
+        "summary": "List Cards",
+        "tags": [
+          "comms"
+        ]
+      },
+      "post": {
+        "operationId": "issue_card_api_v1_comms_guest_cards_post",
+        "summary": "Issue Card",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
+    "/api/v1/comms/guest-cards/revoke-all": {
+      "post": {
+        "operationId": "revoke_all_cards_api_v1_comms_guest_cards_revoke_all_post",
+        "summary": "Revoke All Cards",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
+    "/api/v1/comms/guest-cards/{card_id}/revoke": {
+      "post": {
+        "operationId": "revoke_card_api_v1_comms_guest_cards__card_id__revoke_post",
+        "summary": "Revoke Card",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
+    "/api/v1/comms/sessions": {
+      "get": {
+        "operationId": "list_sessions_api_v1_comms_sessions_get",
+        "summary": "List Sessions",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
+    "/api/v1/comms/sessions/{session_id}/revoke": {
+      "post": {
+        "operationId": "revoke_session_api_v1_comms_sessions__session_id__revoke_post",
+        "summary": "Revoke Session",
+        "tags": [
+          "comms"
         ]
       }
     },

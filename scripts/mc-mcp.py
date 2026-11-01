@@ -37,7 +37,15 @@ def _agent_mode_from_env() -> bool:
     return bool(
         os.environ.get("MC_AGENT_TOKEN", "").strip()
         or os.environ.get("MC_AGENT_ENV_FILE", "").strip()
+        or _session_file()
     )
+
+
+def _session_file() -> str:
+    """ADR-100: a terminal session enrolled with a guest card (`mc hello`)
+    acts with its own session token from this file — agent mode, never the
+    operator path."""
+    return os.environ.get("MC_COMMS_SESSION_FILE", "").strip()
 
 
 # Decided once at start: controls which tools are registered. A process that
@@ -115,6 +123,13 @@ def _api(method: str, path: str, **kwargs) -> dict:
 # token rotations without a process restart.
 
 def _agent_token() -> str:
+    session_file = _session_file()
+    if session_file:
+        try:
+            with open(session_file, encoding="utf-8") as fh:
+                return str(json.load(fh).get("token") or "").strip()
+        except (OSError, ValueError, AttributeError):
+            return ""
     token = os.environ.get("MC_AGENT_TOKEN", "").strip()
     if token:
         return token
@@ -862,6 +877,8 @@ def mc_inbox() -> str:
     Danach IMMER mit mc_msg in den Thread aus dem [thread ... · seq ...]-Footer
     antworten — sonst bleibt die Nachricht eine Einbahnstrasse.
     """
+    if _session_file():
+        return _session_inbox()
     resp = _api_agent("GET", "/agent/me/inbox")
     if resp is None:
         return "Fehler: kein Agent-Token verfuegbar (MC_AGENT_TOKEN fehlt)."
@@ -998,6 +1015,73 @@ def mc_box_status(box: str = "") -> str:
             )
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
+
+
+def _session_inbox() -> str:
+    """mc_inbox for a terminal session (ADR-100): its own inbox, then ack."""
+    resp = _agent_call("GET", "/agent/comms/inbox")
+    if _is_error(resp):
+        return f"Fehler: {resp['error']}"
+    messages = (resp or {}).get("messages") or []
+    if not messages:
+        return "Keine neuen Nachrichten."
+    blocks = [
+        f"{m.get('body') or ''}\n\n[thread {m.get('thread_id')} · seq {m.get('seq')} · von {m.get('from')}"
+        f" · antworten: mc_send(to=\"{m.get('from')}\")]"
+        for m in messages
+    ]
+    for tid, max_seq in ((resp or {}).get("threads") or {}).items():
+        _agent_call("POST", "/agent/comms/inbox/ack", json={"thread_id": tid, "seq": max_seq})
+    return "\n\n---\n\n".join(blocks)
+
+
+@mcp.tool()
+def mc_who() -> str:
+    """Who is reachable across harnesses (ADR-100) — "alive" and "listening"
+    are shown apart: a paused agent can be alive but not listening."""
+    resp = _agent_call("GET", "/agent/comms/who")
+    if _is_error(resp):
+        return f"Fehler: {resp['error']}"
+    rows = (resp or {}).get("sessions") or []
+    if not rows:
+        return "Niemand darf gerade sprechen."
+    def _yn(v):
+        return "unknown" if v is None else ("yes" if v else "no")
+    lines = []
+    if (resp or {}).get("warming_up"):
+        lines.append("(MC ist frisch gestartet — 'unknown' heisst: noch nicht gemeldet)")
+    for r in rows:
+        line = (f"{r.get('address')} · {r.get('kind')} · {r.get('harness') or '-'} · "
+                f"alive {r.get('alive')} · listening {_yn(r.get('listening'))}")
+        if r.get("busy"):
+            line += " · busy"
+        if r.get("task"):
+            line += f" · {r['task']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def mc_send(to: str, body: str) -> str:
+    """Send a message to ONE named session (address from mc_who) — ADR-100.
+
+    Information only, never a permission: the receiver sees it framed as
+    foreign text, and anything risky still needs the operator's approval
+    card. MC refuses broadcasts, a receiver that does not listen, more than
+    10 per minute, duplicates, and pauses a conversation after 6 messages
+    without the operator.
+
+    Args:
+        to: address (e.g. "claude@desk:runtimes") or a unique short name
+        body: the message text
+    """
+    resp = _agent_call("POST", "/agent/comms/send", json={"to": to, "body": body})
+    if _is_error(resp):
+        return f"Fehler: {resp['error']}"
+    line = f"gesendet an {resp.get('to')} · {resp.get('delivery')}"
+    if resp.get("paused"):
+        line += " · Gespraech pausiert, wartet auf die Freigabe des Operators"
+    return line
 
 
 @_operator_tool
