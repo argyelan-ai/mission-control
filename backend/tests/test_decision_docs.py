@@ -56,7 +56,9 @@ from app.services.decision_docs import (
 #   which is not on main; that one takes the next free number when it lands.
 # +1 on 2026-11-01: ADR-099 (chat workspace: header panel buttons, resizable
 #   side panel) — Accepted, operator decision of 2026-11-01.
-EXPECTED_DECISION_DOCS = 98
+# +1 on 2026-11-01: ADR-100 (MC is the foundation under every harness;
+#   talking across harnesses) — Accepted, operator decision of 2026-11-01.
+EXPECTED_DECISION_DOCS = 99
 
 
 def _repo_root() -> Path:

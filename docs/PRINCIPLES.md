@@ -9,7 +9,8 @@ The decisions behind the current direction:
 [ADR-085 — Head per job](decisions/085-head-per-job.md), amended by
 [ADR-086 — Harness and runtime freely switchable, local first](decisions/086-harness-runtime-cross-switch.md),
 [ADR-089 — The lead agent is the operator's single right hand, with hands](decisions/089-lead-agent-with-hands.md)
-and [ADR-090 — The MC chat is the operator's remote control](decisions/090-chat-as-remote-control.md).
+[ADR-090 — The MC chat is the operator's remote control](decisions/090-chat-as-remote-control.md)
+and [ADR-100 — MC is the foundation under every harness](decisions/100-foundation-and-cross-harness-comms.md).
 
 ---
 
@@ -43,7 +44,9 @@ their knowledge, their hardware and their evidence.
    chat and group chat get safety and operations fixes only — no features
    (ADR-085 §4). Exception: the chat of the two fixed agents — the lead
    agent and the local omp agent — the operator's remote control away from
-   the desk, inside a closed feature list (ADR-089, ADR-090).
+   the desk, inside a closed feature list (ADR-089, ADR-090). Second
+   exception: session-to-session conversation across harnesses, inside the
+   closed list of ADR-100 §3.
 5. **Reversible first.** Persistent agents are paused, not deleted. Code is
    deleted only after two weeks of measured non-use, in themed PRs
    (ADR-085 §5).
@@ -224,7 +227,8 @@ the rules every UI change is checked against. Visual rules:
    of the coding CLI's official background mode or of omp over ACP, on either
    brain, and acts only through MC's gates.
 3. No own harness driver, agent loop or MCP server for heads — a CLI script is
-   enough; an admin token is never handed to a head.
+   enough; an admin token is never handed to a head. Exception: MCP tools that
+   carry only the scope `comms:talk` and read-only facts (ADR-100 §2).
 4. No new task columns, statuses or "head" run type; the task core is frozen.
 5. No model gateway or proxy in front of the coding CLI — so Claude Code on
    a local model stays unavailable until an own ADR decides otherwise; the
