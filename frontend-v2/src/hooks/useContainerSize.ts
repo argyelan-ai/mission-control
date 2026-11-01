@@ -56,9 +56,6 @@ export function useContainerSize<T extends HTMLElement>(): {
     };
     measure();
 
-    // Engines without ResizeObserver (jsdom in tests): the seed above is all
-    // there is — no crash, just no live updates.
-    if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) return;

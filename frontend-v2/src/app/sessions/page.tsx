@@ -22,7 +22,7 @@ import type { StateEvent } from "@/lib/chatTypes";
 import AppShell from "@/components/layout/AppShell";
 import { notify } from "@/lib/notify";
 import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
-import { useContainerSize } from "@/hooks/useContainerSize";
+import { useElementWidth } from "@/hooks/useElementWidth";
 import { PanelResizeHandle } from "@/components/chat/PanelResizeHandle";
 import { clampPanelWidth, defaultPanelWidth, loadPanelWidth, panelOverlays, savePanelWidth } from "@/lib/panelWidth";
 import { rememberChat } from "@/lib/recentChats";
@@ -190,8 +190,7 @@ function SessionsPageContent() {
   // The raw value is what the operator chose; what is drawn is always clamped
   // to the island measured right now (lib/panelWidth.ts).
   const [panelWidthChoice, setPanelWidthChoice] = useState<number | null>(null);
-  const { ref: islandRef, size: islandSize } = useContainerSize<HTMLDivElement>();
-  const islandWidth = islandSize?.width ?? 0;
+  const [islandRef, islandWidth] = useElementWidth<HTMLDivElement>();
   const panelWidth = clampPanelWidth(panelWidthChoice ?? defaultPanelWidth(islandWidth), islandWidth);
   const panelOverlay = panelOverlays(islandWidth);
 
