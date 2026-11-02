@@ -101,7 +101,7 @@ function ConversationRow({ conv, onOpen }: { conv: Conversation; onOpen: () => v
           <BrakePill conv={conv} />
         </div>
       </div>
-      <ChevronRight size={16} className="shrink-0 mt-0.5" style={{ color: C.textMuted }} aria-hidden />
+      <ChevronRight size={16} className="shrink-0 mt-1" style={{ color: C.textMuted }} aria-hidden />
     </button>
   );
 }

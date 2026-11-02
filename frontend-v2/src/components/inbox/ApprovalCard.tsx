@@ -87,7 +87,7 @@ function TriggerLine({ approval }: { approval: Approval }) {
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs" style={{ color: C.textMuted }}>
       {trigger && (
-        <span data-testid="approval-triggered-by" className="flex items-center gap-1.5 min-w-0">
+        <span data-testid="approval-triggered-by" className="flex items-center gap-2 min-w-0">
           <MessageSquare size={12} className="shrink-0" aria-hidden />
           <span className="min-w-0 break-words">
             {trigger.from ? t("triggeredBy", { from: trigger.from }) : t("triggeredByUnknown")}

@@ -113,11 +113,11 @@ function InboxView() {
   const t = useTranslations("inbox");
   const params = useSearchParams();
   const [{ tab, conv }, setLocation] = useState(() => readLocation(params));
-  // Back/forward and links that change the query land here.
+  // Back/forward and links that change the query land here (keyed on the
+  // query string: the params object itself is new on every render).
   const paramsKey = params?.toString() ?? "";
   useEffect(() => {
-    setLocation(readLocation(params));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the query string
+    setLocation(readLocation(new URLSearchParams(paramsKey)));
   }, [paramsKey]);
   const go = useCallback((next: InboxTab, nextConv: string | null = null) => {
     setLocation({ tab: next, conv: next === "agents" ? nextConv : null });

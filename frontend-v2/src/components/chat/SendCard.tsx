@@ -33,11 +33,11 @@ export function SendCard({ ev, call }: { ev: ToolEvent; call: SendCall }) {
       : null;
 
   return (
-    <div className="w-full px-4 md:px-5 py-1">
+    <div className="w-full px-4 py-1">
       <div
         data-testid="send-card"
         data-outcome={outcome.kind}
-        className="rounded-lg px-4 py-3 flex flex-col gap-1.5"
+        className="rounded-lg px-4 py-3 flex flex-col gap-2"
         style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}
       >
         <div className="flex items-center gap-2 min-w-0">
