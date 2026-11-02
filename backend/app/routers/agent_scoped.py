@@ -4543,6 +4543,11 @@ async def agent_visual_verify(
                 422,
                 f"Credential ist type='{cred.credential_type}' — nur 'login' wird fuer visual-verify unterstuetzt.",
             )
+        from app.services.comms_credential_brake import guard_credential_read
+
+        await guard_credential_read(
+            session, agent, target=str(cred.id), label=f"the credential '{cred.name}' (visual-verify login)"
+        )
         decrypted = safe_decrypt(cred.encrypted_data)
         data = _json.loads(decrypted) if decrypted else {}
         username = data.get("username")
@@ -5120,6 +5125,9 @@ async def agent_list_credentials(
     from app.services.encryption import safe_decrypt
     from app.routers.credentials import _mask_data
 
+    from app.services.comms_credential_brake import TARGET_LIST, guard_credential_read
+
+    await guard_credential_read(session, agent, target=TARGET_LIST, label="the credential list")
     result = await session.exec(select(Credential).order_by(Credential.name))
     credentials = result.all()
 
@@ -5172,6 +5180,11 @@ async def agent_get_credential(
     if not credential:
         raise HTTPException(status_code=404, detail="Credential not found")
 
+    from app.services.comms_credential_brake import guard_credential_read
+
+    await guard_credential_read(
+        session, agent, target=str(credential.id), label=f"the credential '{credential.name}'"
+    )
     decrypted = safe_decrypt(credential.encrypted_data)
     data = json.loads(decrypted) if decrypted else {}
     data = redact_never_exposed_fields(data)
