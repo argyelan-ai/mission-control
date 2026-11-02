@@ -264,3 +264,24 @@ to four tightenings. The text above is not rewritten.
 4. **No second write path.** A session thread is never a reply target, task
    origin or report target, and is never mirrored into the operator's chat
    channels; the sender's text is quoted line by line under the frame.
+
+## Nachtrag (2026-11-02) — credential brake after a cross-agent message
+
+Every agent may now hold `comms:talk`, so the prompt-injection path from
+Nachtrag 2026-11-01 point 1 is closed in code instead of by withholding the
+scope. An agent that received a session message within the last 30 minutes
+(the same lookup as "triggered by a message from X",
+`comms_send.trigger_message`) gets no credential directly: the credential
+list, a single credential, a visual-verify `credential_id` and the deploy
+tokens answer `409 credential_read_needs_approval`, and the operator gets one
+approval card (`credential_read`) per agent and target, reused on repeat.
+An approved card lets that agent read that one target for 30 minutes, until
+a newer message arrives; a rejected card refuses it (`403
+credential_read_rejected`). Without a recent message nothing changes. Not
+braked, on purpose: the voice worker's vault keys (`/agent/voice/credentials`
+is called by fixed worker code at the start of every call, the keys go into
+its env and never into the model's context; braking it would only silence
+voice calls) and credentials the operator bound to a task (they arrive with
+the dispatch, not on the agent's request). A terminal session token reaches
+none of these routes. Code: `backend/app/services/comms_credential_brake.py`,
+rule `R-comms-credential-brake`.

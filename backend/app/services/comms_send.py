@@ -344,6 +344,39 @@ async def address_for_message(session: AsyncSession, message: Message) -> str | 
     return None
 
 
+async def trigger_message(session: AsyncSession, agent_id: uuid.UUID, at) -> Message | None:
+    """The session message that most recently reached this agent within
+    `TRIGGER_WINDOW` before `at` — or None. The agent's own messages do not
+    count. The one lookup behind both "triggered by a message from X" on an
+    approval card and the credential brake (`comms_credential_brake`)."""
+    thread_ids = [c.thread_id for c in await _conversation_threads(session, f"agent:{agent_id}")]
+    if not thread_ids:
+        return None
+    at = ensure_aware(at)
+    return (
+        await session.exec(
+            select(Message)
+            .where(
+                Message.thread_id.in_(thread_ids),  # type: ignore[union-attr]
+                Message.created_at <= at,
+                Message.created_at >= at - TRIGGER_WINDOW,
+                or_(Message.sender_type != "agent", Message.sender_id != agent_id),  # type: ignore[arg-type]
+            )
+            .order_by(Message.created_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )
+    ).first()
+
+
+async def describe_trigger(session: AsyncSession, m: Message) -> dict:
+    return {
+        "from": await address_for_message(session, m),
+        "thread_id": str(m.thread_id),
+        "message_id": str(m.id),
+        "at": ensure_aware(m.created_at).isoformat(),
+    }
+
+
 async def approval_triggers(session: AsyncSession, approvals: list[Approval]) -> dict[uuid.UUID, dict | None]:
     """For each approval: the session message that most recently reached its
     agent within 30 minutes before the approval was raised — or None.
@@ -355,34 +388,10 @@ async def approval_triggers(session: AsyncSession, approvals: list[Approval]) ->
         out[appr.id] = None
         if appr.agent_id is None or appr.action_type == BRAKE_ACTION or appr.created_at is None:
             continue
-        ref = f"agent:{appr.agent_id}"
-        thread_ids = [c.thread_id for c in await _conversation_threads(session, ref)]
-        if not thread_ids:
-            continue
-        created = ensure_aware(appr.created_at)
-        m = (
-            await session.exec(
-                select(Message)
-                .where(
-                    Message.thread_id.in_(thread_ids),  # type: ignore[union-attr]
-                    Message.created_at <= created,
-                    Message.created_at >= created - TRIGGER_WINDOW,
-                    or_(Message.sender_type != "agent", Message.sender_id != appr.agent_id),  # type: ignore[arg-type]
-                )
-                .order_by(Message.created_at.desc())  # type: ignore[union-attr]
-                .limit(1)
-            )
-        ).first()
-        if m is None:
-            continue
-        out[appr.id] = {
-            "from": await address_for_message(session, m),
-            "thread_id": str(m.thread_id),
-            "message_id": str(m.id),
-            "at": ensure_aware(m.created_at).isoformat(),
-        }
+        m = await trigger_message(session, appr.agent_id, appr.created_at)
+        if m is not None:
+            out[appr.id] = await describe_trigger(session, m)
     return out
-
 
 
 async def session_inbox(session: AsyncSession, principal: Principal) -> dict[str, Any]:

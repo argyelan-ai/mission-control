@@ -5,6 +5,7 @@
 - [ ] Frontend tests green (`cd frontend-v2 && npm run test:run`)
 - [ ] Model changed → Alembic migration included
 - [ ] Architecture changed → `docs/ARCHITECTURE.md` + ADR updated
+- [ ] Harness behaviour changed → `docs/harness-matrix.json` updated + `python3 tools/render-harness-matrix.py`
 - [ ] No secrets, personal data, or machine-specific absolute paths
       (use env vars — see `docs/decisions/043-open-source-release-contract.md`)
 

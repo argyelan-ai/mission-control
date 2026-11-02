@@ -27,6 +27,19 @@ rules:
       - {test: "backend/tests/test_comms_send.py::test_approval_after_a_message_names_the_message_sender"}
     status: active
     checked: 2026-11-01
+  - id: R-comms-credential-brake
+    says: "An agent that received a session message within the last 30 minutes gets no credential directly (credential list, single credential, visual-verify credential_id, deploy tokens): 409 credential_read_needs_approval plus one approval card per agent and target. An approved card lets that agent read that target for 30 minutes until a newer message arrives; a rejected card refuses it. The voice worker's vault keys are not braked (fixed code, not the model)."
+    source: "ADR-100 Nachtrag 2026-11-02"
+    owner: backend/app/services/comms_credential_brake.py
+    applies_to: ["backend/app/services/comms_credential_brake.py", "backend/app/routers/agent_scoped.py", "backend/app/routers/deploy.py"]
+    enforced_by:
+      - {test: "backend/tests/test_comms_credential_brake.py::test_recent_message_refuses_and_raises_one_card"}
+      - {test: "backend/tests/test_comms_credential_brake.py::test_approved_card_serves_that_agent_that_credential"}
+      - {test: "backend/tests/test_comms_credential_brake.py::test_no_message_means_credentials_are_served"}
+      - {test: "backend/tests/test_comms_credential_brake.py::test_a_message_older_than_30_minutes_does_not_brake"}
+      - {test: "backend/tests/test_comms_credential_brake.py::test_session_token_cannot_read_credentials_at_all"}
+    status: active
+    checked: 2026-11-02
 
   - id: R-terminal-session-own-principal
     says: "A terminal session talks only as its own principal: enrolled with an admin-issued guest card, it gets a session token with only comms:talk and an expiry no later than its card. The token works only on the comms routes; the card token only enrolls; no row in agents is created; revoking the card ends its sessions."
@@ -170,6 +183,20 @@ rules:
       - {test: "backend/tests/test_agent_harness_switch.py::test_incompatible_harness_raises"}
     status: active
     checked: 2026-10-01
+
+  - id: R-harness-matrix-current
+    says: "docs/harness-matrix.json is the one source of harness capabilities (matrix + dev ring). Every harness known in code has a column, the generated docs/harness-matrix.md equals the renderer output, and every cited evidence path and line range exists."
+    source: "AGENTS.md (rules that bite: harness facts)"
+    owner: tools/render-harness-matrix.py
+    applies_to: ["docs/harness-matrix.json", "docs/harness-matrix.md", "backend/app/services/harness_compat.py", "backend/app/services/host_harness_adapter.py", "backend/app/services/compose_renderer.py"]
+    enforced_by:
+      - {test: "backend/tests/test_harness_matrix.py::test_every_harness_known_in_code_has_a_column"}
+      - {test: "backend/tests/test_harness_matrix.py::test_every_harness_column_is_a_known_harness"}
+      - {test: "backend/tests/test_harness_matrix.py::test_generated_doc_matches_source"}
+      - {test: "backend/tests/test_harness_matrix.py::test_cell_shape_and_evidence"}
+      - {test: "backend/tests/test_harness_dev_ring.py::test_stale_exceptions_container_images"}
+    status: active
+    checked: 2026-11-02
 
   - id: R-github-vault-before-env
     says: "GitHub owner and token resolve through one central resolver (services/github_config.py) with Vault before Env."
