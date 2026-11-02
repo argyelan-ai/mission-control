@@ -90,9 +90,15 @@ async def agent_get_credentials(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.DEPLOY_EXECUTE)),
 ):
-    """Fetch deployment credentials for external services."""
+    """Fetch deployment credentials for external services.
+
+    Braked after a cross-agent message like every other credential read
+    (ADR-100 Nachtrag 2026-11-02, services/comms_credential_brake.py)."""
     from app.models.secret import Secret
+    from app.services.comms_credential_brake import TARGET_DEPLOY, guard_credential_read
     from app.services.encryption import safe_decrypt
+
+    await guard_credential_read(session, agent, target=TARGET_DEPLOY, label="the deploy tokens")
 
     keys = ["vercel_token", "cloudflare_token", "cloudflare_zone_id", "supabase_token"]
     result = {}
