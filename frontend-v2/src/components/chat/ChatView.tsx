@@ -123,7 +123,7 @@ const GESTURE_TTL_MS = 2500;
  * negative Aussenmass zieht den 44px-Knopf auf ein Aussenmass von 36px zurueck,
  * die Trefferflaeche ragt in die Polsterung der Kopfzeile hinein statt sie
  * aufzublaehen. Der Kopf bleibt damit bei
- * safe + 6px + 36px + 6px + 1px Linie = safe + 3.0625rem — genau der Wert von
+ * safe + 16px + 36px + 6px + 1px Linie = safe + 3.6875rem — genau der Wert von
  * `--mobile-chat-topbar-h`, an dem die Handy-Blaetter (Optionen, Kontext) ihre
  * Oberkante ausrichten. Waechst der Kopf, bleibt unter dem Blatt ein Streifen
  * Gespraech stehen. Horizontal gilt dasselbe: der Kreis sitzt exakt dort, wo
