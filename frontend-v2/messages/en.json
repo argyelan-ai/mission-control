@@ -909,7 +909,9 @@
     "triggeredBy": "Triggered by a message from {from}",
     "triggeredByUnknown": "Triggered by a message from another session",
     "viewConversation": "View conversation",
-    "typeCommsContinue": "Conversation brake"
+    "typeCommsContinue": "Conversation brake",
+    "typeCredentialRead": "Credential access",
+    "typeConfigChange": "Config change"
   },
   "sessions": {
     "groups": {

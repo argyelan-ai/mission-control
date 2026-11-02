@@ -8,6 +8,8 @@ import { motion } from "framer-motion";
 import {
   CheckCircle, XCircle, AlertTriangle, ShieldAlert,
   Image as ImageIcon, ExternalLink, HelpCircle, MessageSquare, PauseCircle,
+  KeyRound,
+  Settings,
 } from "lucide-react";
 import Link from "next/link";
 import { cn, timeAgo } from "@/lib/utils";
@@ -63,6 +65,17 @@ const APPROVAL_TYPE_CONFIG: Record<string, { labelKey: string; color: string; ic
     labelKey: "typeCommsContinue",
     color: C.warning,
     icon: PauseCircle,
+  },
+  // ADR-100 credential brake: an agent wants a secret right after a session message.
+  credential_read: {
+    labelKey: "typeCredentialRead",
+    color: C.warning,
+    icon: KeyRound,
+  },
+  config_change: {
+    labelKey: "typeConfigChange",
+    color: C.warning,
+    icon: Settings,
   },
 };
 

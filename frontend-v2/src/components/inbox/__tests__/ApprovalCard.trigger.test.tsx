@@ -69,4 +69,13 @@ describe("ApprovalCard — triggered by a message", () => {
       "/inbox?tab=agents&c=th-4",
     );
   });
+
+  it.each([
+    ["credential_read", "Credential access"],
+    ["config_change", "Config change"],
+  ])("%s cards show a readable label, not the raw type", (actionType, label) => {
+    render(<ApprovalCard approval={mk({ action_type: actionType })} onResolve={vi.fn()} />);
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.queryByText(actionType)).toBeNull();
+  });
 });

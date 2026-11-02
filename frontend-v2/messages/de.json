@@ -909,7 +909,9 @@
     "triggeredBy": "Anlass: eine Nachricht von {from}",
     "triggeredByUnknown": "Anlass: eine Nachricht einer anderen Session",
     "viewConversation": "Gespräch ansehen",
-    "typeCommsContinue": "Gesprächsbremse"
+    "typeCommsContinue": "Gesprächsbremse",
+    "typeCredentialRead": "Zugriff auf Zugangsdaten",
+    "typeConfigChange": "Konfigurationsänderung"
   },
   "sessions": {
     "groups": {
