@@ -13,6 +13,7 @@ Read this first; it points to the rest. Human contributors: see
 | Architecture, "where do I change what" | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Product and design | [PRODUCT.md](PRODUCT.md) · [DESIGN.md](DESIGN.md) + [docs/design/ui-craft.md](docs/design/ui-craft.md) |
 | Product map, rule register, known gaps (checked by `kz check`) | [docs/produkt/README.md](docs/produkt/README.md) |
+| What each harness can do in MC, and how mature it is | [docs/harness-matrix.md](docs/harness-matrix.md) (generated from `docs/harness-matrix.json`) |
 
 - **Where decisions live:** a decision that changes direction or replaces an
   older one is a new ADR in `docs/decisions/` (the old one gets marked, never
@@ -86,6 +87,12 @@ MC UI; a new provider/harness/recipe as a registry entry, not a special case.
   `backend/tests/test_alembic_chain_integrity.py`); check for a colliding revision first.
 - **Templates are the source** for agent files (ADR-006): edit `backend/templates/`,
   never patch rendered output or DB copies.
+- **Harness facts** live in `docs/harness-matrix.json` (matrix + dev ring). Change
+  anything harness-related (a registry in `harness_compat` / `host_harness_adapter` /
+  `compose_renderer`, a bridge, an image, chat or comms support) → update that
+  file and run `python3 tools/render-harness-matrix.py`. The guard
+  `backend/tests/test_harness_matrix.py` fails on a missing column, a stale
+  generated doc or evidence that no longer exists.
 - **Runtime switches** go through `backend/app/services/agent_runtime_switch.py`; never set
   `agent.runtime_id` directly. Hosts resolve via `backend/app/services/host_resolver.py`.
 - **Secrets vs credentials** (ADR-033): system tokens in `secrets`, task logins in

@@ -171,6 +171,20 @@ rules:
     status: active
     checked: 2026-10-01
 
+  - id: R-harness-matrix-current
+    says: "docs/harness-matrix.json is the one source of harness capabilities (matrix + dev ring). Every harness known in code has a column, the generated docs/harness-matrix.md equals the renderer output, and every cited evidence path and line range exists."
+    source: "AGENTS.md (rules that bite: harness facts)"
+    owner: tools/render-harness-matrix.py
+    applies_to: ["docs/harness-matrix.json", "docs/harness-matrix.md", "backend/app/services/harness_compat.py", "backend/app/services/host_harness_adapter.py", "backend/app/services/compose_renderer.py"]
+    enforced_by:
+      - {test: "backend/tests/test_harness_matrix.py::test_every_harness_known_in_code_has_a_column"}
+      - {test: "backend/tests/test_harness_matrix.py::test_every_harness_column_is_a_known_harness"}
+      - {test: "backend/tests/test_harness_matrix.py::test_generated_doc_matches_source"}
+      - {test: "backend/tests/test_harness_matrix.py::test_cell_shape_and_evidence"}
+      - {test: "backend/tests/test_harness_dev_ring.py::test_stale_exceptions_container_images"}
+    status: active
+    checked: 2026-11-02
+
   - id: R-github-vault-before-env
     says: "GitHub owner and token resolve through one central resolver (services/github_config.py) with Vault before Env."
     source: "ADR-055 decision"
