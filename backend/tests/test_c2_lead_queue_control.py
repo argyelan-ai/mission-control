@@ -165,11 +165,13 @@ async def test_hold_survives_answered_blocker_escalation(client: AsyncClient, as
     with a pending blocker_decision approval (both can coexist — hold is an
     orthogonal lead-side control). The operator approves the blocker via the
     REAL /api/v1/approvals/{id} endpoint (approvals.py resolve_approval).
-    That path resets status blocked -> inbox and clears dispatch_attempt_id,
-    but must NEVER touch run_control. Sabotage probe run manually (see PR
-    description): removing the `Task.run_control.is_(None)` filter added to
-    the /me/poll inbox-candidates query turns this test red because the
-    poll assertion below starts returning new_task for the held card.
+    That path must NEVER touch run_control. Since 2026-11-02 it also refuses
+    (409) instead of moving the held card blocked -> inbox: that move left
+    the card stranded in inbox (redispatch skips run_control) — the hold is
+    released via Resume/release, not via a blocker answer. Sabotage: drop the
+    stopped/held refusal in approvals.py (_blocker_card_is_stopped) — the
+    status code and status assertions turn red. The /me/poll inbox filter
+    (`Task.run_control.is_(None)`) is pinned by test_hold_prevents_poll_claim.
     """
     board, lead, lead_token, worker, worker_token, _o, _ot, task = await _setup(
         async_session, task_status="blocked"
@@ -179,6 +181,10 @@ async def test_hold_survives_answered_blocker_escalation(client: AsyncClient, as
         t = await s.get(Task, task.id)
         t.run_control = "manual_hold"
         t.hold_reason = "Lead haelt die Karte waehrend des Deploy-Fensters"
+        # A blocked card was ACKed by its agent before it blocked (ack_at set);
+        # with ack_at NULL the poll's "prompt never delivered" branch would
+        # treat the blocked card as undelivered work.
+        t.ack_at = dt.datetime.utcnow()
         s.add(t)
         await s.commit()
 
@@ -201,14 +207,13 @@ async def test_hold_survives_answered_blocker_escalation(client: AsyncClient, as
             f"/api/v1/approvals/{approval_id}",
             json={"status": "approved", "resolver_note": "Loesung ist klar, weiter."},
         )
-    assert resolve.status_code == 200, resolve.text
+    assert resolve.status_code == 409, resolve.text
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         refreshed = await s.get(Task, task.id)
-        # The approval path did its normal job...
-        assert refreshed.status == "inbox"
-        assert refreshed.dispatch_attempt_id is None
-        # ...but the hold survives it.
+        # The approval path refused: the card is not stranded in inbox...
+        assert refreshed.status == "blocked"
+        # ...and the hold survives it.
         assert refreshed.run_control == "manual_hold", (
             "Hold wurde von der Blocker-Eskalation faelschlich aufgehoben"
         )
