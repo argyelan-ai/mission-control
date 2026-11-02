@@ -43,7 +43,7 @@ THE LIMIT (not closed here)
   a follow-up outside this script; c1 below proves the lock for the profile
   layer only.
 
-omp bump: the provider and role lists come from the omp 18.10.1 binary. The
+omp bump: the provider and role lists come from the omp 18.14.2 binary. The
 script names that version (``_OMP_LOCK_CHECKED``); a CI test ties it to the
 manifest pin in docker/cli-versions.json, and the script warns at runtime when
 a different omp is installed (the in-product CLI update skips CI).
@@ -75,11 +75,12 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 SCRIPT = ROOT / "render-omp-config.sh"
 
-# Chat roles of omp 18.10.1 (CHAT_MODEL_ROLE_IDS in the binary) without
+# Chat roles of omp 18.14.2 (CHAT_MODEL_ROLE_IDS in the binary) without
 # `vision`, plus `judge` (the effort judge for task spawns). `vision` follows
 # the runtime's image flag; image/web/speech/dictation are not chat roles.
+# `widget` is new in omp 18.12.3 (background job widgets, falls back to smol).
 ROLES = ("default", "smol", "slow", "plan", "commit", "tiny", "memory",
-         "task", "advisor", "judge")
+         "task", "advisor", "widget", "judge")
 
 # Built-in providers that must never be reachable for an MC agent — a sample
 # across the kinds: env-keyed clouds, OAuth logins, keyless local discovery.
@@ -88,6 +89,8 @@ MUST_BE_DISABLED = {
     "deepseek", "azure", "azure-openai-responses", "github-copilot",
     "openai-codex", "ollama", "ollama-cloud", "vllm", "zenmux",
     "huggingface", "together", "fireworks",
+    # new in omp 18.14.2's catalog (env-keyed clouds)
+    "inception", "sambanova",
     # keyless local discovery outside the auth catalog: omp probes
     # 127.0.0.1:8080 (LLAMA_CPP_BASE_URL) and lists whatever answers there
     "llama.cpp",
@@ -118,7 +121,7 @@ KNOWN = {
 }
 args = sys.argv[1:]
 if args == ["--version"]:
-    print("omp/" + os.environ.get("FAKE_OMP_VERSION", "18.10.1"))
+    print("omp/" + os.environ.get("FAKE_OMP_VERSION", "18.14.2"))
     sys.exit(0)
 if len(args) < 2 or args[0] != "config":
     sys.exit(1)
@@ -334,7 +337,7 @@ def test_a_runtime_switch_moves_every_role_to_the_new_model(tmp_path):
 
 IMAGE = os.environ.get("MC_OMP_IMAGE", "")
 
-# Every env var omp 18.10.1's provider catalog reads a key from — with all of
+# Every env var omp 18.14.2's provider catalog reads a key from — with all of
 # them set, every env-keyed built-in provider would be "available".
 CATALOG_ENV_VARS = (
     "ABLITERATION_API_KEY ABLIT_KEY AIAND_API_KEY AIMLAPI_API_KEY AI_GATEWAY_API_KEY "
@@ -346,16 +349,16 @@ CATALOG_ENV_VARS = (
     "CORAL_API_KEY COREWEAVE_API_KEY DEEPINFRA_API_KEY DEEPSEEK_API_KEY "
     "DEVIN_API_KEY FIREPASS_API_KEY FIREWORKS_API_KEY FUGU_API_KEY GEMINI_API_KEY "
     "GITLAB_TOKEN GMI_API_KEY GROQ_API_KEY HELMCODE_API_KEY HF_TOKEN "
-    "HUGGINGFACE_HUB_TOKEN HYPER_API_KEY KILO_API_KEY KIMI_API_KEY LITELLM_API_KEY "
-    "LM_STUDIO_API_KEY META_API_KEY MINIMAX_API_KEY MINIMAX_CODE_API_KEY "
+    "HUGGINGFACE_HUB_TOKEN HYPER_API_KEY INCEPTION_API_KEY KILO_API_KEY KIMI_API_KEY LITELLM_API_KEY "
+    "LLAMA_CPP_API_KEY LM_STUDIO_API_KEY META_API_KEY MINIMAX_API_KEY MINIMAX_CODE_API_KEY "
     "MINIMAX_CODE_CN_API_KEY MISTRAL_API_KEY MODEL_API_KEY MOONSHOT_API_KEY "
     "NANO_GPT_API_KEY NOVITA_API_KEY NVIDIA_API_KEY OLLAMA_API_KEY "
     "OLLAMA_CLOUD_API_KEY OPENAI_API_KEY OPENAI_CODEX_OAUTH_TOKEN OPENCODE_API_KEY "
     "OPENROUTER_API_KEY QIANFAN_API_KEY QWEN_OAUTH_TOKEN QWEN_PORTAL_API_KEY "
-    "SAKANA_API_KEY SILICONFLOW_API_KEY SILICONFLOW_CN_API_KEY "
+    "SAKANA_API_KEY SAMBANOVA_API_KEY SILICONFLOW_API_KEY SILICONFLOW_CN_API_KEY "
     "SINGULARITYAPI_DEV_API_KEY SINGULARITYAPI_TECH_API_KEY SNOWFLAKE_PAT "
     "STEPFUN_API_KEY SYNTHETIC_API_KEY TOGETHER_API_KEY TYPESAFE_API_KEY "
-    "UMANS_AI_CODING_PLAN_API_KEY VENICE_API_KEY VLLM_API_KEY "
+    "UMANS_AI_CODING_PLAN_API_KEY VENICE_API_KEY VERCEL_AI_GATEWAY_API_KEY VLLM_API_KEY "
     "WAFER_SERVERLESS_API_KEY WANDB_API_KEY XAI_API_KEY XAI_OAUTH_TOKEN "
     "XIAOMI_API_KEY XIAOMI_TOKEN_PLAN_AMS_API_KEY XIAOMI_TOKEN_PLAN_CN_API_KEY "
     "XIAOMI_TOKEN_PLAN_SGP_API_KEY YOLO_AUTO_API_KEY ZAI_API_KEY ZENMUX_API_KEY "
@@ -541,10 +544,12 @@ class H(BaseHTTPRequestHandler):
             agent = everything.split("SUBAGENT-MARKER agent=", 1)[1].split()[0]
         else:
             kind = "other"
-        # A subagent SESSION carries the `yield` tool; the parent's one-line
-        # task labeler quotes the same assignment text but has no tools.
+        # A subagent SESSION carries tools; the parent's one-line task labeler
+        # quotes the same assignment text but has none. (Not `yield`: since omp
+        # 18.10.2 a task subagent gets it only with task.structured on, and
+        # otherwise answers in plain text — the DONE below ends it.)
         print(json.dumps({"kind": kind, "agent": agent, "model": req.get("model"),
-                          "session": "yield" in tools,
+                          "session": bool(tools),
                           "thinking_budget": req.get("thinking_budget"),
                           "max_completion_tokens": req.get("max_completion_tokens"),
                           "reasoning_effort": req.get("reasoning_effort")}), flush=True)

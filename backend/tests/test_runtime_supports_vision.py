@@ -436,7 +436,7 @@ async def test_patch_runtime_sets_supports_vision(async_session, auth_client):
 # ── 5. render-omp-config.sh — models.yml `input:` ────────────────────────────
 
 
-def _run_render_script(tmp_path: Path, *, model_input: str | None) -> Path:
+def _run_render_script(tmp_path: Path, *, model_input: str | None, extra_env: dict | None = None) -> Path:
     if not RENDER_SCRIPT.is_file():
         pytest.fail(f"render-omp-config.sh nicht gefunden unter {RENDER_SCRIPT}")
 
@@ -462,6 +462,7 @@ def _run_render_script(tmp_path: Path, *, model_input: str | None) -> Path:
         env["OMP_MODEL_INPUT"] = model_input
     else:
         env.pop("OMP_MODEL_INPUT", None)
+    env.update(extra_env or {})
 
     result = subprocess.run(
         [str(RENDER_SCRIPT), "--no-bootstrap"],
@@ -490,6 +491,48 @@ def test_render_script_writes_input_text_only_when_flag_explicitly_text(tmp_path
     models_yml = _run_render_script(tmp_path, model_input="text")
     content = models_yml.read_text()
     assert "input: [text]" in content
+
+
+def _model_entry(models_yml: Path) -> dict:
+    import yaml
+
+    data = yaml.safe_load(models_yml.read_text())
+    (model,) = data["providers"]["mc-openai"]["models"]
+    return model
+
+
+def test_render_script_lifts_the_image_count_budget_for_a_vision_runtime(tmp_path):
+    """omp (18.11.3+) caps a request at 5 images for a provider its catalog
+    does not know — mc-openai. From the 6th screenshot on it dropped the
+    oldest image every turn, the history changed and the engine's prefix
+    cache missed: every later screenshot turn prefilled everything again."""
+    model = _model_entry(_run_render_script(tmp_path, model_input="text,image"))
+    assert model["input"] == ["text", "image"]
+    assert model["imageCountBudget"] == 200
+
+
+def test_render_script_sets_no_image_count_budget_for_a_text_runtime(tmp_path):
+    """Sabotage-Probe: a text runtime sends no images — no budget line."""
+    model = _model_entry(_run_render_script(tmp_path, model_input="text"))
+    assert model["input"] == ["text"]
+    assert "imageCountBudget" not in model
+
+
+def test_render_script_takes_an_engines_own_image_limit(tmp_path):
+    """An engine started with fewer images per prompt (vLLM
+    --limit-mm-per-prompt) sets its own budget."""
+    model = _model_entry(_run_render_script(
+        tmp_path, model_input="text,image", extra_env={"OMP_IMAGE_COUNT_BUDGET": "4"}))
+    assert model["imageCountBudget"] == 4
+
+
+@pytest.mark.parametrize("bad", ["0", "-3", "abc", "07", "4.5"])
+def test_render_script_falls_back_to_200_for_a_budget_omp_would_reject(tmp_path, bad):
+    """Sabotage-Probe: omp answers a non-positive budget by turning off every
+    custom provider — mc-openai included. The script must never write one."""
+    model = _model_entry(_run_render_script(
+        tmp_path, model_input="text,image", extra_env={"OMP_IMAGE_COUNT_BUDGET": bad}))
+    assert model["imageCountBudget"] == 200
 
 
 def test_render_script_never_touches_inherited_omp_env_file(tmp_path, monkeypatch):
