@@ -218,7 +218,9 @@ jobs:
     # bridge, and the start routine that resumes an interrupted run.
     # No Docker, no network.
     name: mc-update engine (py${{ matrix.python }})
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04 (2026-11), which has no Python 3.9
+    # build for setup-python. 24.04 still does; macOS still ships 3.9.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -252,7 +254,7 @@ jobs:
     # hundred end-to-end runs: its own job, on the oldest python the engine
     # supports (macOS ships 3.9).
     name: mc-update crash matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Python 3.9 — see the mc-update job above
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
