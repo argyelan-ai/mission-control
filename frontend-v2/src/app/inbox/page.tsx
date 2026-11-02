@@ -19,6 +19,7 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
 import { useInbox } from "@/hooks/useInbox";
 import { chatEntryHref } from "@/lib/chatHistory";
+import { resolveErrorKey } from "@/lib/inbox";
 
 export default function InboxPage() {
   const t = useTranslations("inbox");
@@ -62,7 +63,7 @@ export default function InboxPage() {
       qc.invalidateQueries({ queryKey: ["review-tasks"] });
       notify.success(status === "approved" ? t("approvedNotify") : t("rejectedNotify"));
     },
-    onError: () => notify.error(t("resolveFailed")),
+    onError: (err) => notify.error(t(resolveErrorKey(err))),
   });
 
   const reviewMutation = useMutation({

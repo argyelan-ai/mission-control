@@ -829,6 +829,7 @@
     "approvedNotify": "Genehmigt",
     "rejectedNotify": "Abgelehnt",
     "resolveFailed": "Freigabe konnte nicht gespeichert werden",
+    "resolveStopped": "Diese Aufgabe ist gestoppt. Öffne sie und nutze „Fortsetzen“ – die Freigabe startet sie nicht neu.",
     "reviewSaved": "Review-Entscheidung gespeichert",
     "reviewSaveFailed": "Review-Entscheidung konnte nicht gespeichert werden",
     "yourReview": "Dein Review",
