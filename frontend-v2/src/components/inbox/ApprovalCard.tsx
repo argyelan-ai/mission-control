@@ -7,8 +7,9 @@ import { useLocale, useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import {
   CheckCircle, XCircle, AlertTriangle, ShieldAlert,
-  Image as ImageIcon, ExternalLink, HelpCircle,
+  Image as ImageIcon, ExternalLink, HelpCircle, MessageSquare, PauseCircle,
 } from "lucide-react";
+import Link from "next/link";
 import { cn, timeAgo } from "@/lib/utils";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
@@ -57,7 +58,54 @@ const APPROVAL_TYPE_CONFIG: Record<string, { labelKey: string; color: string; ic
     color: C.accent,
     icon: HelpCircle,
   },
+  // ADR-100 §6: two sessions exchanged 6 messages without the operator.
+  comms_continue: {
+    labelKey: "typeCommsContinue",
+    color: C.warning,
+    icon: PauseCircle,
+  },
 };
+
+/** The session conversation behind a card: the message that triggered it,
+ *  or — for the brake card itself — the paused conversation. */
+function conversationOf(approval: Approval): string | null {
+  if (approval.triggered_by?.thread_id) return approval.triggered_by.thread_id;
+  if (approval.action_type === "comms_continue") {
+    const id = (approval.payload as { thread_id?: unknown } | null)?.thread_id;
+    return typeof id === "string" && id ? id : null;
+  }
+  return null;
+}
+
+/** "Triggered by a message from X" (ADR-100 §6) + the way to that
+ *  conversation. Quiet on purpose: a source, not an alarm. */
+function TriggerLine({ approval }: { approval: Approval }) {
+  const t = useTranslations("inbox");
+  const threadId = conversationOf(approval);
+  const trigger = approval.triggered_by;
+  if (!trigger && !threadId) return null;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs" style={{ color: C.textMuted }}>
+      {trigger && (
+        <span data-testid="approval-triggered-by" className="flex items-center gap-1.5 min-w-0">
+          <MessageSquare size={12} className="shrink-0" aria-hidden />
+          <span className="min-w-0 break-words">
+            {trigger.from ? t("triggeredBy", { from: trigger.from }) : t("triggeredByUnknown")}
+          </span>
+        </span>
+      )}
+      {threadId && (
+        <Link
+          href={`/inbox?tab=agents&c=${encodeURIComponent(threadId)}`}
+          className="inline-flex items-center min-h-11 sm:min-h-0 font-medium underline underline-offset-2"
+          style={{ color: C.textSecondary }}
+        >
+          {t("viewConversation")}
+        </Link>
+      )}
+    </div>
+  );
+}
 
 const AUTONOMY_COLORS: Record<string, string> = {
   L1: C.online,
@@ -181,6 +229,8 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
             <div className="text-sm mt-2.5 prose-comment text-[var(--color-text-primary)]">
               <ReactMarkdown remarkPlugins={[remarkBreaks]}>{approval.description}</ReactMarkdown>
             </div>
+
+            <TriggerLine approval={approval} />
 
             {/* Blocker details */}
             {isBlocker && approval.payload && (() => {
