@@ -129,7 +129,7 @@ try:
     d = json.load(sys.stdin)
     for k in ("OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY",
               "OMP_CONTEXT_WINDOW", "OMP_MAX_TOKENS", "OMP_THINKING_BUDGET",
-              "OMP_MODEL_INPUT"):
+              "OMP_MODEL_INPUT", "OMP_IMAGE_COUNT_BUDGET"):
         v = d.get(k)
         if v not in (None, ""):
             print(f"{k}={v}")
@@ -211,14 +211,22 @@ fi
 # names — mc-openai — gets 5. From the 6th screenshot on omp drops the oldest
 # image every turn, so the request history changes mid-way and the engine's
 # prefix (KV) cache misses: every later screenshot turn prefills the whole
-# history again. The self-hosted engines MC binds have no such cap; 200 is
-# the budget omp's own catalog gives openai and google. omp sets no byte cap
-# for a host its catalog does not know, so the context window stays the real
-# limit. Vision runtimes only: a text runtime sends no images
-# (images.blockImages, below).
+# history again. 200 is the budget omp's own catalog gives openai and google;
+# an engine that takes fewer images per prompt (vLLM --limit-mm-per-prompt)
+# sets OMP_IMAGE_COUNT_BUDGET to its own limit. omp sets no byte cap for a
+# host its catalog does not know, so the context window stays the real limit.
+# Vision runtimes only: a text runtime sends no images (images.blockImages,
+# below). A value omp rejects turns off every custom provider (mc-openai
+# included), so anything but a positive integer falls back to 200, loudly.
 _IMAGE_BUDGET_YAML=""
 if [ "$_SUPPORTS_VISION" = "1" ]; then
-    _IMAGE_BUDGET_YAML=$(printf '\n        imageCountBudget: 200')
+    _IMAGE_BUDGET="${OMP_IMAGE_COUNT_BUDGET:-200}"
+    case "$_IMAGE_BUDGET" in
+        ''|*[!0-9]*|0*)
+            echo "[render-omp-config] WARN: OMP_IMAGE_COUNT_BUDGET='${_IMAGE_BUDGET}' is not a positive integer — using 200" >&2
+            _IMAGE_BUDGET=200 ;;
+    esac
+    _IMAGE_BUDGET_YAML=$(printf '\n        imageCountBudget: %s' "$_IMAGE_BUDGET")
 fi
 
 # ── models.yml ───────────────────────────────────────────────────────────────
