@@ -2352,6 +2352,11 @@ describe("ChatView", () => {
         .find((chunk) => chunk.includes(".pt-safe-top"));
       expect(mobileBlock).toBeDefined();
       expect(mobileBlock).toMatch(/padding-top:\s*calc\(env\(safe-area-inset-top\)/);
+      // At least 1rem below the status bar: iOS fades content right under
+      // it, and with 6px the name read grey (operator, 02.11.2026).
+      const gap = mobileBlock!.match(/\.pt-safe-top\s*\{\s*padding-top:\s*calc\(env\(safe-area-inset-top\)\s*\+\s*([\d.]+)rem\)/);
+      expect(gap).not.toBeNull();
+      expect(parseFloat(gap![1])).toBeGreaterThanOrEqual(1);
     });
 
     it("malt die eigene Fläche deckend und mit, nicht neben, dem Notch-Streifen", () => {
@@ -2410,7 +2415,7 @@ describe("ChatView", () => {
     it("macht den Kopf durch die grössere Trefferfläche nicht höher", () => {
       // Die 44px ragen ueber `-m-1` (je 4px) in die Polsterung der Kopfzeile
       // hinein: Aussenmass bleibt 36px, der Kopf also
-      // safe + 6px + 36px + 6px + 1px Linie = safe + 3.0625rem.
+      // safe + 16px + 36px + 6px + 1px Linie = safe + 3.6875rem.
       // Genau diesen Wert fuehrt --mobile-chat-topbar-h, und daran haengen die
       // Handy-Blaetter (Optionen/Kontext) ihre Oberkante. Waere der Kopf
       // gewachsen, bliebe unter dem Blatt ein Streifen Gespraech stehen.
@@ -2419,7 +2424,7 @@ describe("ChatView", () => {
         expect(phoneLabeled(label).className).toContain("-m-1");
       }
       expect(GLOBALS_CSS).toContain(
-        "--mobile-chat-topbar-h: calc(env(safe-area-inset-top) + 3.0625rem)"
+        "--mobile-chat-topbar-h: calc(env(safe-area-inset-top) + 3.6875rem)"
       );
     });
 

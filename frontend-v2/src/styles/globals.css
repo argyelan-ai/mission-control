@@ -242,13 +242,13 @@
      Das +1px ist die border-bottom der Kopfleiste — ohne sie bleibt eine
      1px-Lichtkante zwischen Leiste und Overlay stehen (live nachgemessen). */
   --mobile-appbar-h: calc(env(safe-area-inset-top) + 4rem + 1px);
-  /* Hoehe des CHAT-Kopfes (Safe-Area + 6px + 36px Knopf + 6px + 1px Linie).
+  /* Hoehe des CHAT-Kopfes (Safe-Area + 16px + 36px Knopf + 6px + 1px Linie).
      Die Handy-Blaetter im Chat (Optionen, Kontext) richten sich hieran aus und
      NICHT mehr an --mobile-appbar-h: auf dem Chat-Bildschirm gibt es die
      App-Leiste nicht mehr (AppShell `mobileChromeless`), dort ist der Chat-Kopf
      die einzige Leiste. Mit dem alten Wert blieb ueber dem Blatt ein Streifen
      Gespraech sichtbar, der zu nichts gehoerte. */
-  --mobile-chat-topbar-h: calc(env(safe-area-inset-top) + 3.0625rem);
+  --mobile-chat-topbar-h: calc(env(safe-area-inset-top) + 3.6875rem);
 
   /* ==== Colour tokens — DARK (default) ====================================
      Single source for every UI colour (lib/colors.ts only holds var() names).
@@ -1081,8 +1081,12 @@ option {
    direkt in die Regel gebaut: unterhalb von md, sonst gar nicht — ueber md
    gibt es weder Notch noch Home-Balken. */
 @media (max-width: 767px) {
+  /* +1rem, not +0.375rem (operator finding 02.11.2026, iPhone screenshot:
+     "header zu weit oben, halb durchsichtig"): iOS fades whatever sits right
+     under the status bar. With 6px the visible buttons started inside that
+     fade and the name read grey. 16px clears it. */
   .pt-safe-top {
-    padding-top: calc(env(safe-area-inset-top) + 0.375rem);
+    padding-top: calc(env(safe-area-inset-top) + 1rem);
   }
 
   .pb-safe-bottom {
