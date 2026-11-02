@@ -829,6 +829,7 @@
     "approvedNotify": "Approved",
     "rejectedNotify": "Rejected",
     "resolveFailed": "Failed to resolve approval",
+    "resolveStopped": "This task is stopped. Open it and use Resume — approving does not restart it.",
     "reviewSaved": "Review decision saved",
     "reviewSaveFailed": "Failed to save review decision",
     "yourReview": "Your review",

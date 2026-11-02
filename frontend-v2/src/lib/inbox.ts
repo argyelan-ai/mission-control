@@ -110,3 +110,11 @@ export function badgeLabel(count: number): string | null {
   if (!Number.isFinite(count) || count <= 0) return null;
   return count > 99 ? "99+" : String(count);
 }
+
+/** Which toast a failed approval resolve gets. The backend refuses to
+ *  approve a blocker on a stopped/held card (409 naming run_control):
+ *  the operator must Resume the task, not retry the approval. */
+export function resolveErrorKey(err: unknown): "resolveStopped" | "resolveFailed" {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return msg.startsWith("API 409") && msg.includes("run_control") ? "resolveStopped" : "resolveFailed";
+}

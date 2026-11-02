@@ -21,6 +21,7 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { useInbox } from "@/hooks/useInbox";
 import { BetweenAgents, useConversations } from "@/components/inbox/BetweenAgents";
 import { chatEntryHref } from "@/lib/chatHistory";
+import { resolveErrorKey } from "@/lib/inbox";
 
 type InboxTab = "you" | "agents";
 
@@ -164,7 +165,7 @@ function InboxView() {
       qc.invalidateQueries({ queryKey: ["review-tasks"] });
       notify.success(status === "approved" ? t("approvedNotify") : t("rejectedNotify"));
     },
-    onError: () => notify.error(t("resolveFailed")),
+    onError: (err) => notify.error(t(resolveErrorKey(err))),
   });
 
   const reviewMutation = useMutation({

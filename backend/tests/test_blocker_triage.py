@@ -485,6 +485,44 @@ async def test_watchdog_skips_callback_waits(fake_redis):
     tg.assert_not_awaited()
 
 
+@pytest.mark.parametrize("run_control", ["stopped", "manual_hold"])
+@pytest.mark.asyncio
+async def test_watchdog_skips_stopped_or_held_tasks(fake_redis, run_control):
+    """A card stopped on purpose (stop_task_run, e.g. a bench time limit with
+    changed_by="system") or held (mc hold) sits in "blocked" with run_control
+    set. That is not an agent blocker: no triage payload, no blocker comment.
+    The watchdog must not escalate it — the old path built an empty
+    "Kein Blocker-Kommentar" blocker_decision from the comment fallback.
+    The operator releases these cards via resume, not via a blocker card."""
+    board_id, worker, _, _, _ = await _make_board_with_agents(triage_minutes=15)
+    task = await _make_task(board_id, status="blocked", assigned_agent_id=worker.id)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import Task
+        t = await s.get(Task, task.id)
+        t.run_control = run_control
+        t.updated_at = _naive_utcnow() - timedelta(minutes=20)
+        t.blocked_at = _naive_utcnow() - timedelta(minutes=20)
+        s.add(t)
+        await s.commit()
+
+    from app.services.watchdog.core import WatchdogService
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        with patch("app.services.watchdog.task_monitor.get_redis",
+                   AsyncMock(return_value=fake_redis)), \
+             patch("app.services.watchdog.task_monitor.utcnow", _naive_utcnow), \
+             _patch_triage_redis(fake_redis), \
+             patch("app.services.blocker_triage.utcnow", _naive_utcnow), \
+             patch("app.services.blocker_triage.emit_event", new_callable=AsyncMock), \
+             _patch_telegram() as tg:
+            svc = WatchdogService()
+            await svc._check_blocked_tasks(s)
+
+    assert await _approvals_for(task.id) == []
+    tg.assert_not_awaited()
+
+
 # ── Stufe 2: explizite Lead-Eskalation ──────────────────────────────────
 
 

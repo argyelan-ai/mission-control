@@ -45,6 +45,31 @@ _CORE_HANDLED_ACTION_TYPES = {
 }
 
 
+STOPPED_BLOCKER_DETAIL = (
+    "Task is stopped (run_control set) — approving the blocker would not "
+    "restart it. Use Resume on the task instead."
+)
+
+
+async def _blocker_card_is_stopped(session: AsyncSession, approval: Approval) -> bool:
+    """True when approving this blocker_decision would hit a stopped/held card.
+
+    The approve path moves the task blocked → inbox and schedules
+    redispatch_after_blocker_answer — whose guard (task_still_reactivatable)
+    skips any task with run_control set. The card then sat in inbox with no
+    run (live finding 2026-11-02, a system time-limit stop). Same rule as the
+    Telegram button path (telegram_bot._resolve_approval, "task_held"):
+    approving a blocker never releases a stop or hold — Resume does. The
+    callers refuse before touching anything, so the approval stays pending
+    and approval_cleanup supersedes it once the card leaves "blocked".
+    """
+    if approval.action_type != "blocker_decision" or not approval.task_id:
+        return False
+    from app.models.task import Task as TaskModel
+    task = await session.get(TaskModel, approval.task_id)
+    return task is not None and task.status == "blocked" and task.run_control is not None
+
+
 async def _post_install_callback(
     session: AsyncSession,
     approval: Approval,
@@ -328,6 +353,9 @@ async def resolve_approval(
         raise HTTPException(status_code=404, detail="Approval not found")
     if approval.status != "pending":
         raise HTTPException(status_code=400, detail="Approval already resolved")
+
+    if payload.status == "approved" and await _blocker_card_is_stopped(session, approval):
+        raise HTTPException(status_code=409, detail=STOPPED_BLOCKER_DETAIL)
 
     approval.status = payload.status
     approval.resolved_at = utcnow()
@@ -911,6 +939,10 @@ async def quick_resolve_confirm(
     if approval.status != "pending":
         return _quick_html("Bereits erledigt",
             f"<h1>Bereits erledigt</h1><p>Status: <b>{approval.status}</b></p>")
+
+    if status == "approved" and await _blocker_card_is_stopped(session, approval):
+        return _quick_html("Task stopped",
+            f"<h1>Task stopped</h1><p>{STOPPED_BLOCKER_DETAIL}</p>", 409)
 
     # Resolve approval
     approval.status = status
