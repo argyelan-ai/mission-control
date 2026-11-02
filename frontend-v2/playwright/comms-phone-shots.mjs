@@ -201,7 +201,7 @@ const browser = await chromium.launch();
 const report = [];
 
 for (const shot of SHOTS) {
-  const ctx = await browser.newContext({ ...VIEWPORTS[shot.vp ?? "phone"], locale: shot.locale === "de" ? "de-CH" : "en-GB", timezoneId: "Europe/Zurich" });
+  const ctx = await browser.newContext({ ...VIEWPORTS[shot.vp ?? "phone"], locale: shot.locale === "de" ? "de-DE" : "en-GB", timezoneId: "UTC" });
   await ctx.addInitScript(() => {
     localStorage.setItem("mc_auth_token", "shot");
     localStorage.setItem("mc_user", JSON.stringify({ id: "u1", email: "op@example.invalid", name: "Operator", role: "admin" }));

@@ -55,7 +55,7 @@ function Chat() {
 function App({ view, locale }: { view: "inbox" | "chat"; locale: "de" | "en" }) {
   const [qc] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }));
   return (
-    <NextIntlClientProvider locale={locale} messages={(locale === "de" ? de : en) as never} timeZone="Europe/Zurich">
+    <NextIntlClientProvider locale={locale} messages={(locale === "de" ? de : en) as never} timeZone="UTC">
       <QueryClientProvider client={qc}>{view === "inbox" ? <InboxPage /> : <Chat />}</QueryClientProvider>
     </NextIntlClientProvider>
   );
