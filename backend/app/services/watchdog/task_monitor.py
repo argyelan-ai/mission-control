@@ -889,6 +889,14 @@ class TaskMonitorMixin:
             # fuer Lead oder Operator.
             if task.blocked_by_task_id is not None:
                 continue
+            # Deliberately stopped/held (stop_task_run — e.g. a bench time
+            # limit with changed_by="system" — or mc hold): no agent blocker,
+            # no triage payload, no blocker comment. Escalating built an empty
+            # "Kein Blocker-Kommentar" blocker_decision from the comment
+            # fallback (live 2026-11-02). Resume releases these, not a
+            # blocker card.
+            if task.run_control is not None:
+                continue
 
             # W2-B review fix (B-1): key the escalation clock off the
             # dedicated blocked_at timestamp, NOT updated_at — updated_at is
