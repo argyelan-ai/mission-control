@@ -85,6 +85,26 @@ def _quote(body: str) -> str:
     return "\n".join(f"> {line}" if line.strip() else ">" for line in body.splitlines())
 
 
+def unframe(body: str) -> str:
+    """The sender's own text from a stored message: drop the frame line and
+    the quote marks `_quote` added. For the operator's read-only view only —
+    the receiver always gets the framed form."""
+    lines = (body or "").splitlines()
+    if lines and lines[0].startswith(FRAME_MARK):
+        lines = lines[1:]
+        if lines and not lines[0].strip():
+            lines = lines[1:]
+    out = []
+    for line in lines:
+        if line.startswith("> "):
+            out.append(line[2:])
+        elif line == ">":
+            out.append("")
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def _pair(a: Principal, b: Principal) -> tuple[str, str]:
     return tuple(sorted((a.ref, b.ref)))  # type: ignore[return-value]
 
