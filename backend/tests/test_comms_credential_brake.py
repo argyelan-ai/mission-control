@@ -303,8 +303,8 @@ async def test_voice_credentials_are_not_braked(client: AsyncClient, monkeypatch
     keys go into the worker's env, not into the model's context. Braking it
     would only silence voice calls (see ADR-100 Nachtrag 2026-11-02)."""
     _, s_h = await _agent("Sender")
-    _, j_h = await _agent("Jarvis", harness="jarvis", scopes=["comms:talk", "tasks:read"])
-    await _message(client, s_h, "jarvis")
+    _, j_h = await _agent("voice", harness="jarvis", scopes=["comms:talk", "tasks:read"])
+    await _message(client, s_h, "voice")
     r = await client.get("/api/v1/agent/voice/credentials", headers=j_h)
     assert r.status_code == 200, r.text
 
