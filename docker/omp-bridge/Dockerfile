@@ -121,8 +121,8 @@ ENV NPM_CONFIG_UPDATE_NOTIFIER=false \
 # installs the same binary. sha256 = the GitHub release asset digest of
 # omp-linux-arm64. Override at build:
 #   --build-arg OMP_VERSION=<ver> --build-arg OMP_SHA256=<sha>
-ARG OMP_VERSION=18.10.1
-ARG OMP_SHA256=5cad38a8edee60cec9c0ce91810eba38bda0efe349562157023810343dacb8d5
+ARG OMP_VERSION=18.14.2
+ARG OMP_SHA256=afbdf04be3ddbe34a07e91c913ddb6d335a3a0210f520ac5a197a245888ad63e
 RUN curl -fsSL \
         "https://github.com/can1357/oh-my-pi/releases/download/v${OMP_VERSION}/omp-linux-arm64" \
         -o /usr/local/bin/omp \

@@ -492,6 +492,31 @@ def test_render_script_writes_input_text_only_when_flag_explicitly_text(tmp_path
     assert "input: [text]" in content
 
 
+def _model_entry(models_yml: Path) -> dict:
+    import yaml
+
+    data = yaml.safe_load(models_yml.read_text())
+    (model,) = data["providers"]["mc-openai"]["models"]
+    return model
+
+
+def test_render_script_lifts_the_image_count_budget_for_a_vision_runtime(tmp_path):
+    """omp (18.11.3+) caps a request at 5 images for a provider its catalog
+    does not know — mc-openai. From the 6th screenshot on it dropped the
+    oldest image every turn, the history changed and the engine's prefix
+    cache missed: every later screenshot turn prefilled everything again."""
+    model = _model_entry(_run_render_script(tmp_path, model_input="text,image"))
+    assert model["input"] == ["text", "image"]
+    assert model["imageCountBudget"] == 200
+
+
+def test_render_script_sets_no_image_count_budget_for_a_text_runtime(tmp_path):
+    """Sabotage-Probe: a text runtime sends no images — no budget line."""
+    model = _model_entry(_run_render_script(tmp_path, model_input="text"))
+    assert model["input"] == ["text"]
+    assert "imageCountBudget" not in model
+
+
 def test_render_script_never_touches_inherited_omp_env_file(tmp_path, monkeypatch):
     """Sabotage-Probe (Vorfall 07.09.2026): laeuft die Suite in einem omp-Agenten-
     Container, steht OMP_ENV_FILE auf dessen ECHTER omp.env. Der Helfer darf

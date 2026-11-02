@@ -206,6 +206,20 @@ if [ "$_SUPPORTS_VISION" = "1" ]; then
 else
     _MODEL_INPUT_YAML="[text]"
 fi
+# Image count (omp 18.11.3+, models.yml `imageCountBudget`): omp caps the
+# images one request carries per provider, and a provider no catalog rule
+# names — mc-openai — gets 5. From the 6th screenshot on omp drops the oldest
+# image every turn, so the request history changes mid-way and the engine's
+# prefix (KV) cache misses: every later screenshot turn prefills the whole
+# history again. The self-hosted engines MC binds have no such cap; 200 is
+# the budget omp's own catalog gives openai and google. omp sets no byte cap
+# for a host its catalog does not know, so the context window stays the real
+# limit. Vision runtimes only: a text runtime sends no images
+# (images.blockImages, below).
+_IMAGE_BUDGET_YAML=""
+if [ "$_SUPPORTS_VISION" = "1" ]; then
+    _IMAGE_BUDGET_YAML=$(printf '\n        imageCountBudget: 200')
+fi
 
 # ── models.yml ───────────────────────────────────────────────────────────────
 # omp löst Modelle PROFIL-ZUERST auf: mit OMP_PROFILE=mc-agent liest es
@@ -262,7 +276,7 @@ ${_AUTH_LINE}
         maxTokens: ${OMP_MAX_TOKENS:-32768}
         # Vision-Fähigkeit (W3, 06.09.2026): siehe Kommentar oben bei
         # OMP_MODEL_INPUT. [text] ist der sichere Standard.
-        input: ${_MODEL_INPUT_YAML}${_COMPAT_YAML}
+        input: ${_MODEL_INPUT_YAML}${_IMAGE_BUDGET_YAML}${_COMPAT_YAML}
 YAML
 
 # ── omp.env ──────────────────────────────────────────────────────────────────
@@ -324,9 +338,10 @@ fi
 #     Kept enabled: `web` (web_search backends, no model route), `local`
 #     (in-container tiny models), `cursor` (the same id is omp's .cursor
 #     rules source, the setting is shared; the model provider needs a cursor
-#     login MC never has). Source: the provider catalog of the omp 18.10.1
+#     login MC never has). Source: the provider catalog of the omp 18.14.2
 #     binary plus `llama.cpp`, a keyless discovery provider outside it (omp
-#     probes 127.0.0.1:8080, LLAMA_CPP_BASE_URL, and lists what answers).
+#     probes 127.0.0.1:8080, LLAMA_CPP_BASE_URL — since 18.13 also :9931 —
+#     and lists what answers).
 #     ONE keyless discovery provider stays enabled on purpose: `lm-studio`
 #     (loopback :1234/v1/models, no key). omp refreshes its model registry —
 #     re-reads models.yml — for a model it does not know only while some
@@ -337,7 +352,9 @@ fi
 #     llama.cpp: 8080 is the common dev-server port, and llama.cpp re-probes
 #     on every refresh; lm-studio caches its probe for 24 h.
 #   * modelRoles: every chat role + judge → the bound model; vision only on a
-#     vision runtime (else images.blockImages, below). A record setting is
+#     vision runtime (else images.blockImages, below). `widget` (omp
+#     18.12.3+) designs background job widgets and resolves like `smol` when
+#     unset; it is pinned like every other chat role. A record setting is
 #     written whole: omp 18.10.1 answers `modelRoles.vision` with "Unknown
 #     setting" (the old vision branch never set the role). Writing it whole
 #     also drops a stale vision role after a switch.
@@ -350,13 +367,13 @@ fi
 # switch that turns project settings off. The structural fix is to keep
 # OPENAI_API_KEY out of every omp child environment (models.yml already
 # carries the key for mc-openai) — outside this script, still open.
-# omp bump: both lists come from the omp 18.10.1 binary. _OMP_LOCK_CHECKED
+# omp bump: both lists come from the omp 18.14.2 binary. _OMP_LOCK_CHECKED
 # names that version: a CI test ties it to the pin in docker/cli-versions.json,
 # and a different installed omp (the in-product CLI update skips CI) gets a
 # WARN below. Re-check with tests/test_render_omp_model_roles.py and
 # MC_OMP_IMAGE=<image>: part c shows every new, still open provider or role.
-_OMP_LOCK_CHECKED=18.10.1
-_MODEL_ROLES="default smol slow plan commit tiny memory task advisor judge"
+_OMP_LOCK_CHECKED=18.14.2
+_MODEL_ROLES="default smol slow plan commit tiny memory task advisor widget judge"
 if [ "$_SUPPORTS_VISION" = "1" ]; then
     _MODEL_ROLES="${_MODEL_ROLES} vision"
 fi
@@ -366,10 +383,10 @@ baseten bedrock-mantle cerebras charm-hyper cline-pass cloudflare-ai-gateway
 cloudflare-workers-ai commandcode coralbricks coreweave deepinfra deepseek devin
 factory-droid firepass fireworks github-copilot gitlab-duo gitlab-duo-agent
 gmi-cloud google google-antigravity google-gemini-cli google-vertex groq helmcode
-huggingface kilo kimi-code litellm llama.cpp meta minimax minimax-code
+huggingface inception kilo kimi-code litellm llama.cpp meta minimax minimax-code
 minimax-code-cn mistral moonshot muse-code nanogpt novita nvidia ollama
 ollama-cloud openai openai-codex opencode-go opencode-zen openrouter qianfan
-sakana siliconflow siliconflow-cn singularityapi-dev
+sakana sambanova siliconflow siliconflow-cn singularityapi-dev
 singularityapi-tech snowflake stepfun synthetic together typesafe umans venice
 vercel-ai-gateway vllm wafer-serverless xai xai-oauth xiaomi
 xiaomi-token-plan-ams xiaomi-token-plan-cn xiaomi-token-plan-sgp yolo-auto zai
