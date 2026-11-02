@@ -1,8 +1,13 @@
-"""Guest cards for terminal sessions — operator routes (ADR-100 §6 rule 1).
+"""Talking across harnesses — operator routes (ADR-100).
 
-Admin only, like every credential (ADR-098). The card token is shown once at
-issue; lists never contain a token or a hash. Revoking a card ends every
-session it enrolled; `revoke-all` switches every guest off at once.
+Guest cards for terminal sessions (§6 rule 1): admin only, like every
+credential (ADR-098). The card token is shown once at issue; lists never
+contain a token or a hash. Revoking a card ends every session it enrolled;
+`revoke-all` switches every guest off at once.
+
+The phone view (§4, stage 2d): the directory and the session conversations,
+read-only, for a signed-in operator. Agent and session tokens never reach
+these routes (`require_role` accepts only users).
 """
 from __future__ import annotations
 
@@ -16,7 +21,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import Role, require_role
 from app.database import get_session
 from app.models.comms import CommsGuestCard, CommsSession
-from app.services import comms_guest
+from app.services import comms_directory, comms_guest, comms_view
 
 router = APIRouter(prefix="/api/v1/comms", tags=["comms"])
 
@@ -111,3 +116,38 @@ async def revoke_session(
     if not await comms_guest.revoke_session(session, session_id):
         raise HTTPException(status_code=404, detail="session not found")
     return {"ok": True}
+
+
+# ── Phone view (ADR-100 §4) — read-only ─────────────────────────────────────
+
+
+@router.get("/directory")
+async def directory(
+    session: AsyncSession = Depends(get_session),
+    user=Depends(require_role(Role.OPERATOR)),
+):
+    """Who is reachable — from the one presence source (§6 rule 2), the same
+    rows `GET /agent/comms/who` gives an agent."""
+    return await comms_directory.directory(session)
+
+
+@router.get("/conversations")
+async def list_conversations(
+    session: AsyncSession = Depends(get_session),
+    user=Depends(require_role(Role.OPERATOR)),
+):
+    """Every session-to-session conversation, newest first: who with whom,
+    the last message (sender's text without the frame), brake state."""
+    return {"conversations": await comms_view.list_conversations(session)}
+
+
+@router.get("/conversations/{thread_id}/messages")
+async def conversation_messages(
+    thread_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    user=Depends(require_role(Role.OPERATOR)),
+):
+    out = await comms_view.conversation_messages(session, thread_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return out

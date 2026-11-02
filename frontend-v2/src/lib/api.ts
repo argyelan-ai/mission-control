@@ -1,3 +1,4 @@
+import type { Directory as CommsDirectory, Conversation as CommsConversation, CommsMessage } from "./comms";
 import type {
   ActivityEvent,
   ClaudeAccountStatus,
@@ -1452,6 +1453,17 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify({ status, resolver_note: note }),
       }),
+  },
+
+  // ── Talking across harnesses (ADR-100 §4) — operator, read-only ─────────────
+  comms: {
+    directory: () => request<CommsDirectory>("/api/v1/comms/directory"),
+    conversations: () =>
+      request<{ conversations: CommsConversation[] }>("/api/v1/comms/conversations"),
+    messages: (threadId: string) =>
+      request<{ conversation: CommsConversation; messages: CommsMessage[] }>(
+        `/api/v1/comms/conversations/${encodeURIComponent(threadId)}/messages`,
+      ),
   },
 
   // ── Install Requests ────────────────────────────────────────────────────────

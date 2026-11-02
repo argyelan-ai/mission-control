@@ -14,7 +14,7 @@
  * TerminalPanel's xterm/WebSocket machinery is out of scope here (it's a
  * verbatim move covered by its own future test surface / manual live-gate).
  */
-import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -75,6 +75,10 @@ vi.mock("@/hooks/useTaskSteps", () => ({ useTaskSteps: vi.fn(() => new Map()) })
 // The live thinking row asks the engine once it is quiet (31.10.2026) —
 // stubbed "not busy"; LiveThinkingRow.test.tsx covers it with a real client.
 vi.mock("@/hooks/useEngineActivity", () => ({ useEngineBusy: vi.fn(() => false) }));
+// The header's "N reachable" (ADR-100 2d) asks the directory through
+// react-query — stubbed "unknown" (nothing shown); one test below sets rows.
+const directoryMock = vi.hoisted(() => ({ data: undefined as unknown, isError: false }));
+vi.mock("@/hooks/useCommsDirectory", () => ({ useCommsDirectory: vi.fn(() => directoryMock) }));
 // Heads-in-Chats (PR 2) branch: no test in this file passes a `head` prop
 // (that's ChatView.head.test.tsx's job), but every render still calls this
 // hook unconditionally (rules of hooks) — mocked the same way
@@ -2850,5 +2854,54 @@ describe("ChatView — one header on the phone", () => {
     expect(container.querySelector("[data-testid='detail-action-bar']")).toBeNull();
     expect(screen.queryByRole("button", { name: /^reply$|antworten/i })).toBeNull();
     expect(screen.getAllByRole("button", { name: /back|zurück/i }).length).toBe(1);
+  });
+});
+
+describe("ChatView — talking across harnesses (ADR-100 2d)", () => {
+  afterEach(() => {
+    directoryMock.data = undefined;
+  });
+
+  it("the header says how many are reachable and opens the directory sheet", () => {
+    directoryMock.data = {
+      warming_up: false,
+      sessions: [
+        { address: "lead", kind: "agent", label: "Lead", harness: "omp", machine: null, alive: "yes",
+          listening: true, busy: false, accept: "accept", task: null, last_seen: null },
+        { address: "helper", kind: "agent", label: "Helper", harness: "omp", machine: null, alive: "yes",
+          listening: false, busy: false, accept: "accept", task: null, last_seen: null },
+      ],
+    };
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    const btn = screen.getByTestId("reachable-button");
+    expect(screen.getByTestId("chat-header-title")).toContainElement(btn);
+    expect(btn).toHaveTextContent("1 reachable");
+    expect(screen.queryByTestId("directory-sheet")).toBeNull();
+    fireEvent.click(btn);
+    expect(screen.getByTestId("directory-sheet")).toBeInTheDocument();
+    expect(screen.getAllByTestId("directory-row")).toHaveLength(2);
+  });
+
+  it("no directory (loading, or not allowed): no number in the header", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    expect(screen.queryByTestId("reachable-button")).toBeNull();
+  });
+
+  it("an `mc send` tool call renders as a send card, not a tool row", () => {
+    const send = {
+      kind: "tool" as const, uuid: "s1", ts: "2026-10-12T09:00:01.000Z", name: "Bash",
+      title: "mc send worker", detail: { command: 'mc send worker "Is box one free?"' },
+      toolUseId: "tu-send", result: "sent to worker · next_rest", status: "done" as const,
+      stats: null, sidechain: false,
+    };
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG, send] }));
+    renderChatView();
+    const card = screen.getByTestId("send-card");
+    expect(card).toHaveTextContent("worker");
+    expect(card).toHaveTextContent("Is box one free?");
+    expect(card).toHaveTextContent("info only");
+    expect(screen.queryByText("mc send worker")).toBeNull();
   });
 });
