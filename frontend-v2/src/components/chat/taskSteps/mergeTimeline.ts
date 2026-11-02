@@ -185,7 +185,7 @@ function evKey(ev: TimelineChatEvent): string {
 }
 
 function itemEvents(item: TimelineItem): TimelineChatEvent[] {
-  return item.kind === "single" || item.kind === "agent" ? [item.event] : item.events;
+  return item.kind === "single" || item.kind === "agent" || item.kind === "send" ? [item.event] : item.events;
 }
 
 export function mergeTimeline(input: MergeInput): MergeResult {

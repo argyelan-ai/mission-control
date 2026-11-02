@@ -2709,6 +2709,33 @@
         ]
       }
     },
+    "/api/v1/comms/conversations": {
+      "get": {
+        "operationId": "list_conversations_api_v1_comms_conversations_get",
+        "summary": "List Conversations",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
+    "/api/v1/comms/conversations/{thread_id}/messages": {
+      "get": {
+        "operationId": "conversation_messages_api_v1_comms_conversations__thread_id__messages_get",
+        "summary": "Conversation Messages",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
+    "/api/v1/comms/directory": {
+      "get": {
+        "operationId": "directory_api_v1_comms_directory_get",
+        "summary": "Directory",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
     "/api/v1/comms/guest-cards": {
       "get": {
         "operationId": "list_cards_api_v1_comms_guest_cards_get",

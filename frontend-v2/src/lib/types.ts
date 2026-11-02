@@ -918,6 +918,18 @@ export interface Approval {
   failure_reason: string | null;
   expires_at: string | null;
   created_at: string;
+  /** ADR-100 §6: the session message that most recently reached this
+   *  agent before the card was raised — "triggered by a message from X".
+   *  Absent on older backends, null when no message came first. */
+  triggered_by?: ApprovalTrigger | null;
+}
+
+export interface ApprovalTrigger {
+  /** Sender address; null when the sender row is gone. */
+  from: string | null;
+  thread_id: string;
+  message_id: string;
+  at: string;
 }
 
 export interface VisualReviewPayload {

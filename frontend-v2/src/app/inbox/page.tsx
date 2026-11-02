@@ -1,6 +1,8 @@
 "use client";
 
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { useQueryClient, useMutation } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import AppShell from "@/components/layout/AppShell";
 import { motion, AnimatePresence } from "framer-motion";
@@ -16,13 +18,113 @@ import { useHeadRuns } from "@/components/heads/useHeadRuns";
 import { ApprovalCard } from "@/components/inbox/ApprovalCard";
 import { ReviewTaskRow } from "@/components/inbox/ReviewTaskRow";
 import { GlassCard } from "@/components/shared/GlassCard";
-import { Pill } from "@/components/shared/Pill";
 import { useInbox } from "@/hooks/useInbox";
+import { BetweenAgents, useConversations } from "@/components/inbox/BetweenAgents";
 import { chatEntryHref } from "@/lib/chatHistory";
 import { resolveErrorKey } from "@/lib/inbox";
 
+type InboxTab = "you" | "agents";
+
+/** `?tab=agents&c=<thread>` — a link (e.g. from an approval card) opens a
+ *  conversation directly, and the phone's back gesture walks back out. */
+function readLocation(params: URLSearchParams | null): { tab: InboxTab; conv: string | null } {
+  const conv = params?.get("c") || null;
+  const tab: InboxTab = params?.get("tab") === "agents" || conv ? "agents" : "you";
+  return { tab, conv: tab === "agents" ? conv : null };
+}
+
+function locationHref(tab: InboxTab, conv: string | null): string {
+  if (tab === "you") return "/inbox";
+  return conv ? `/inbox?tab=agents&c=${encodeURIComponent(conv)}` : "/inbox?tab=agents";
+}
+
+// useSearchParams needs a Suspense boundary in the app router (same as
+// sessions/page.tsx).
 export default function InboxPage() {
+  return (
+    <Suspense fallback={null}>
+      <InboxView />
+    </Suspense>
+  );
+}
+
+function InboxTabs({
+  tab,
+  onChange,
+  forYou,
+  between,
+}: {
+  tab: InboxTab;
+  onChange: (tab: InboxTab) => void;
+  forYou: number;
+  between: number | null;
+}) {
   const t = useTranslations("inbox");
+  const tabs: { key: InboxTab; label: string }[] = [
+    { key: "you", label: t("tabForYou") },
+    { key: "agents", label: t("tabBetweenAgents") },
+  ];
+  return (
+    <div role="tablist" aria-label={t("tabsLabel")} className="flex items-center gap-1" data-testid="inbox-tabs">
+      {tabs.map(({ key, label }) => {
+        const active = tab === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            id={`inbox-tab-${key}`}
+            aria-selected={active}
+            aria-controls={`inbox-panel-${key}`}
+            onClick={() => onChange(key)}
+            data-testid={`inbox-tab-${key}`}
+            className="flex items-center gap-2 min-h-11 px-3 rounded-md text-sm font-medium cursor-pointer transition-colors"
+            style={{
+              background: active ? C.bgElevated : "transparent",
+              color: active ? C.textPrimary : C.textMuted,
+            }}
+          >
+            {label}
+            {/* Only "For you" carries the badge look — the one tab that
+                waits on the operator, the same number as the tab bar's
+                badge (ADR-100 §4). The other count is plain text:
+                something to read, not to answer. */}
+            {key === "you" && forYou > 0 && (
+              <span
+                data-testid="inbox-tab-you-count"
+                className="min-w-5 h-5 px-1 rounded-full flex items-center justify-center text-xs tabular-nums font-semibold"
+                style={{ background: C.accent, color: C.onAccent }}
+              >
+                {forYou}
+              </span>
+            )}
+            {key === "agents" && between != null && between > 0 && (
+              <span data-testid="inbox-tab-agents-count" className="text-xs tabular-nums" style={{ color: C.textMuted }}>
+                {between}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function InboxView() {
+  const t = useTranslations("inbox");
+  const params = useSearchParams();
+  const [{ tab, conv }, setLocation] = useState(() => readLocation(params));
+  // Back/forward and links that change the query land here (keyed on the
+  // query string: the params object itself is new on every render).
+  const paramsKey = params?.toString() ?? "";
+  useEffect(() => {
+    setLocation(readLocation(new URLSearchParams(paramsKey)));
+  }, [paramsKey]);
+  const go = useCallback((next: InboxTab, nextConv: string | null = null) => {
+    setLocation({ tab: next, conv: next === "agents" ? nextConv : null });
+    window.history.pushState(null, "", locationHref(next, nextConv));
+  }, []);
+  const conversations = useConversations();
   const tHeads = useTranslations("heads");
   const qc = useQueryClient();
   const { activeBoardId } = useAppStore();
@@ -90,33 +192,27 @@ export default function InboxPage() {
   return (
     <AppShell>
     <div className="flex flex-col gap-6 max-w-2xl">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="label-sys mb-2">{t("approvalsInbox")}</div>
-          <h1 className="display text-2xl font-semibold text-[var(--color-text-primary)]">
-            {t("title")}
-          </h1>
-          {totalCount > 0 && (
-            <p className="text-[13px] mt-1">
-              <span
-                className="font-semibold"
-                style={{
-                  color: C.warning,
-                }}
-              >
-                {totalCount}
-              </span>
-              <span className="text-[var(--color-text-secondary)]"> {t("pending")}</span>
-            </p>
-          )}
-        </div>
-        {totalCount > 0 && (
-          <Pill color={C.warning} size="md">
-            {t("openCount", { count: totalCount })}
-          </Pill>
-        )}
+      {/* Header: the title and the two tabs. The eyebrow and the "N pending"
+          line + pill left (K2/K3, K7): the "For you" tab carries that number
+          now, exactly once. */}
+      <div className="flex flex-col gap-3">
+        <h1 className="display text-2xl font-semibold text-[var(--color-text-primary)]">
+          {t("title")}
+        </h1>
+        <InboxTabs
+          tab={tab}
+          onChange={(next) => go(next)}
+          forYou={totalCount}
+          between={conversations.data ? conversations.data.length : null}
+        />
       </div>
+
+      {tab === "agents" ? (
+        <div role="tabpanel" id="inbox-panel-agents" aria-labelledby="inbox-tab-agents">
+          <BetweenAgents openThreadId={conv} onOpen={(id) => go("agents", id)} onGoForYou={() => go("you")} />
+        </div>
+      ) : (
+      <div role="tabpanel" id="inbox-panel-you" aria-labelledby="inbox-tab-you" className="flex flex-col gap-6">
 
       {/* Head questions — a head stopped and asks the operator. Answered on
           the task detail (HeadStateCard: answer field + continue). */}
@@ -304,6 +400,8 @@ export default function InboxPage() {
             </div>
           </GlassCard>
         </motion.div>
+      )}
+      </div>
       )}
     </div>
     </AppShell>

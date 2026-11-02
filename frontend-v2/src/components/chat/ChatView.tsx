@@ -66,6 +66,9 @@ import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { TerminalPanel, type AgentWithState } from "./TerminalPanel";
 import { ChatOptionsSheet } from "./ChatOptionsSheet";
+import { SendCard } from "./SendCard";
+import { DirectorySheet, ReachableButton } from "./DirectorySheet";
+import { useCommsDirectory } from "@/hooks/useCommsDirectory";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
 import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
 import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
@@ -414,6 +417,9 @@ export function ChatView({
     setStickToBottom(value);
   }, []);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  // ADR-100 §4: "N reachable" in the header opens the directory sheet.
+  const [directoryOpen, setDirectoryOpen] = useState(false);
+  const directory = useCommsDirectory(!!agent && !head);
   /** Text eines zurueckgeholten Steers, der noch einmal bearbeitet werden soll. */
   const [composerPrefill, setComposerPrefill] = useState<{ text: string; at: number } | null>(null);
   /** Desktop ⋯ menu (detail level, ADR-099 E1). Rendered through a portal
@@ -1252,6 +1258,9 @@ export function ChatView({
                     />
                   );
                 }
+                if (item.kind === "send") {
+                  return <SendCard key={item.event.toolUseId ?? item.event.uuid} ev={item.event} call={item.call} />;
+                }
                 if (item.kind === "sidechain") {
                   return <SubagentGroup key={`sidechain-${item.events[0].uuid}`} events={item.events} />;
                 }
@@ -1416,6 +1425,16 @@ export function ChatView({
               {agent.name}
             </span>
           </span>
+          {/* Who can be talked to across harnesses (ADR-100 §4): a quiet
+              second line under the name on the phone, next to it on the
+              desktop — a state that opens a sheet, not another header
+              action beside ⋯ (K4). The ::before widens the finger target
+              without making the header taller (K11). */}
+          <ReachableButton
+            directory={directory.data}
+            onOpen={() => setDirectoryOpen(true)}
+            className="relative pointer-events-auto md:shrink-0 before:absolute before:content-[''] before:-inset-x-2 before:-inset-y-3"
+          />
         </div>
 
         {/* Rechte Gruppe: EIN ml-auto buendelt Badge und "…" am rechten Rand.
@@ -1887,6 +1906,15 @@ export function ChatView({
             </>
           )}
         </>
+      )}
+
+      {!head && (
+        <DirectorySheet
+          open={directoryOpen}
+          onClose={() => setDirectoryOpen(false)}
+          directory={directory.data}
+          error={directory.isError}
+        />
       )}
 
       {!head && (

@@ -203,6 +203,11 @@ features:
       - "* /api/v1/approvals"
       - "* /api/v1/approvals/{approval_id}"
       - "GET /api/v1/approvals/stream"
+      # ADR-100 2d: tab "Between agents" (read-only session conversations)
+      # and the chat header's directory sheet.
+      - "GET /api/v1/comms/directory"
+      - "GET /api/v1/comms/conversations"
+      - "GET /api/v1/comms/conversations/{thread_id}/messages"
     status: active
     source: "ROADMAP UI wave 2 (pages that stay)"
     tables:
