@@ -66,6 +66,7 @@ import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { TerminalPanel, type AgentWithState } from "./TerminalPanel";
 import { ChatOptionsSheet } from "./ChatOptionsSheet";
+import { SendCard } from "./SendCard";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
 import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
 import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
@@ -1251,6 +1252,9 @@ export function ChatView({
                       agentId={agent?.id ?? ""}
                     />
                   );
+                }
+                if (item.kind === "send") {
+                  return <SendCard key={item.event.toolUseId ?? item.event.uuid} ev={item.event} call={item.call} />;
                 }
                 if (item.kind === "sidechain") {
                   return <SubagentGroup key={`sidechain-${item.events[0].uuid}`} events={item.events} />;
