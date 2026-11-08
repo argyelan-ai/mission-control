@@ -56,9 +56,10 @@ FRESH_MIN = 15
 BUSY_WINDOW_S = 120
 QUIET_WAIT_MAX_S = 600
 
-#: Class B (agent builds): one run, a time limit printed on the receipt —
-#: the same limit as a direct run.
-AGENT_TIME_LIMIT_MIN = RUN_TIME_LIMIT_MIN
+#: Class B (agent builds): one run, a time limit printed on the receipt.
+#: 4 h, not the 2 h of a direct run (operator decision 08.11.2026): a local
+#: agent was still improving its page when the 2 h stop came.
+AGENT_TIME_LIMIT_MIN = 240
 
 #: D4: above this a paid test asks a second time.
 COST_CAP_USD = 1.0

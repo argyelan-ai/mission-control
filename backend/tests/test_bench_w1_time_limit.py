@@ -171,8 +171,8 @@ async def test_a_run_past_two_hours_fails_with_time_limit_and_is_not_retried(ses
     assert "truncat" not in (e.error or "")
 
 
-def test_one_limit_for_direct_and_agent_runs():
-    assert c.RUN_TIME_LIMIT_MIN == 120 == c.AGENT_TIME_LIMIT_MIN
+def test_direct_runs_2h_agent_builds_4h():
+    assert c.RUN_TIME_LIMIT_MIN == 120 and c.AGENT_TIME_LIMIT_MIN == 240
     assert orch.SPARK_TIMEOUT_S == orch.GENERATION_TIME_LIMIT_S == 2 * 60 * 60
     assert "time_limit" in w1_runner.NO_RETRY
 

@@ -347,7 +347,7 @@ async def test_brief_names_the_exact_deliverable_path_of_the_task(session, engin
     task = await session.get(Task, e.task_id)
     want = f"/deliverables/{task.id}/index.html"
     assert want in task.description
-    assert f"mc deliverable" in task.description and "120 min" in task.description
+    assert f"mc deliverable" in task.description and "240 min" in task.description
     # The brief checksum stays the same for every task ("same brief").
     assert ch.plan["contestants"][0]["brief_sha"] == c.sha256_text(
         orch.agent_brief(ch.prompt_text, orch.BRIEF_PATH_PLACEHOLDER, c.AGENT_TIME_LIMIT_MIN))
