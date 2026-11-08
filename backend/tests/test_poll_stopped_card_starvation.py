@@ -22,6 +22,7 @@ from unittest.mock import patch
 
 import pytest
 from httpx import AsyncClient
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from tests.conftest import test_engine
@@ -336,9 +337,21 @@ async def test_real_stop_then_poll_ends_the_run_then_delivers_the_queue(client: 
         dispatched_at=_now(), ack_at=_now(), started_at=_now(),
     )
     await _set_agent(agent_id, current_task_id=run_id)
+    from app.models.task import Task
+
+    async with _session() as s:
+        t = await s.get(Task, run_id)
+        t.dispatch_attempt_id = str(uuid.uuid4())
+        s.add(t)
+        await s.commit()
     async with _session() as s:
         await stop_task_run(s, run_id, "system", reason="bench time limit", changed_by="system")
         await s.commit()
+    # A time limit is nobody's click: the audit names the system.
+    from app.models.task_attempt_audit import TaskAttemptAudit
+    async with _session() as s:
+        rows = (await s.exec(select(TaskAttemptAudit).where(TaskAttemptAudit.task_id == run_id))).all()
+    assert [(r.caller, r.reason) for r in rows] == [("system_stop", "bench time limit")], rows
     new_id = await _fresh_dispatch(board_id, agent_id)
 
     first = await _poll(client, token)
