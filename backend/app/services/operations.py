@@ -311,8 +311,12 @@ async def stop_task_run(
     task.ack_at = None
     # Invalidates all pending agent updates (audit trail).
     from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+    # A time limit is nobody's click: the audit names the system as well.
+    system = changed_by == "system"
     await clear_dispatch_attempt_id(
-        session, task, caller="user_stop", reason="manual_stop",
+        session, task,
+        caller="system_stop" if system else "user_stop",
+        reason=(reason or "system_stop")[:256] if system else "manual_stop",
     )
     task.review_decision = None  # Old review decision is irrelevant after stop
     task.review_decided_at = None
