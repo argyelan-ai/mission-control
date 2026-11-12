@@ -730,6 +730,15 @@ def test_finish_requires_the_reflection_sections(worker_mod, board, monkeypatch)
     assert board.card["status"] == "in_progress"
 
 
+def test_finish_checks_the_reflection_before_it_looks_for_a_card(worker_mod, board, monkeypatch):
+    # No card held: the text is still checked first, without a single call to MC.
+    _use_cli(worker_mod, monkeypatch)
+    out = _unwrap(worker_mod.mc_finish)("All done, everything works as expected, nothing to add here at all.")
+    assert out.startswith("Error:")
+    assert "## What was done" in out
+    assert board.calls == []
+
+
 def test_finish_posts_no_second_reflection_within_the_window(worker_mod, board, monkeypatch):
     _use_cli(worker_mod, monkeypatch)
     _accept(worker_mod, board)
@@ -946,6 +955,13 @@ def test_vault_read_returns_frontmatter_and_content(worker_mod, board):
     assert "The report expects ISO dates." in out
     assert board.calls[0]["path"] == "/api/v1/agent/vault/note/knowledge/export-notes.md"
     board.assert_agent_only()
+
+
+@pytest.mark.parametrize("path", ["../secrets.md", "knowledge/../../etc/passwd", "/.."])
+def test_vault_read_refuses_a_path_that_climbs_out(worker_mod, board, path):
+    out = _unwrap(worker_mod.mc_vault_read)(path)
+    assert out.startswith("Error:") and "'..'" in out
+    assert board.calls == []
 
 
 def test_vault_read_reports_a_missing_note(worker_mod, board):
