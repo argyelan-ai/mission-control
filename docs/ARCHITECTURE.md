@@ -1595,6 +1595,7 @@ Alle ADRs in `docs/decisions/`:
 | Agent-Config-Content | `backend/templates/*.j2` | Reprovision der Agents nötig |
 | Host-Agent-Staging (`.plist`/`run.sh`/`agent.env`) | `backend/app/services/host_provisioning.py` | ADR-063 — nur für generische Host-Agenten (nicht Hermes, das bleibt `bootstrap_hermes_agent`); `launchctl`-Load hinter `settings.host_agent_autoload_enabled` |
 | Dispatch-Verhalten | `backend/app/services/dispatch.py` | Watchdog + Task Runner ggf. anpassen |
+| MCP tools for agents (worker flow, vault, comms) | `scripts/mc-mcp.py` | ADR-085 §4, ADR-100 §2, ADR-101 — thin layer over the `/agent/...` routes; finishing reuses `scripts/mc-cli` (`_cmd_finish`); tool sets per mode are pinned in `backend/tests/test_mc_mcp_worker_flow.py`; matrix row `mc-mcp` in `docs/harness-matrix.json` |
 | Neue Task-Status / Workflow | `backend/app/models/task.py` + Routers + Frontend types | Watchdog + Task Lifecycle |
 | Runtime-Wechsel pro Agent | `backend/app/services/agent_runtime_switch.py` (atomic) | Tests + UI-Modal in `RuntimeSwitchModal.tsx` |
 | Runtime-Drift-Probing / -Intervall | `backend/app/services/runtime_watcher.py` (`settings.runtime_watcher_interval`/`_enabled`) | ADR-054 — 2-Probe-Confirm, `/runtimes/live-status` |
@@ -1656,6 +1657,16 @@ Alle ADRs in `docs/decisions/`:
   for up to five minutes after `POST /agents/{id}/reset-token`. No route, no migration;
   entries in the old format are verified again once. Guard:
   `backend/tests/test_agent_token_cache_revocation.py`.
+- **2026-11-12** — **Worker flow over MCP (ADR-101).** `scripts/mc-mcp.py` in agent mode with
+  `MC_MCP_WORKER=1` lets a registered agent work its cards without a bridge and without the `mc`
+  command in a shell: `mc_next_task` (poll + accept with the dispatch attempt id, takes over the
+  fresh id on re-delivery), `mc_progress`, `mc_finish` (runs `mc finish` in-process — one finish
+  logic, ADR-037), `mc_handbook`, plus `mc_vault_search` / `mc_vault_read` / `mc_vault_write`.
+  The server tells the model how MC works: MCP `instructions` on connect, the handbook on demand,
+  the next step in every tool answer. While a card is held the server sends the agent heartbeat;
+  it stops after 20 minutes without a tool call, so it proves "process alive and recently in
+  touch", not model output. No new route, table, scope or status. A guest session (ADR-100 §2)
+  gets none of these tools. Setup: `docs/setup/mcp-worker.md`.
 - **2026-10-23** — **Wake helper: a real heartbeat instead of a leftover file (round-7 L5).**
   `scripts/porsche-wake-watcher.py` (stdlib, Python 3.9 — launchd runs the Mac's `/usr/bin/python3`)
   touches `~/.mc/wake-requests/watcher.alive` on every run

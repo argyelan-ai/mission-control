@@ -7,7 +7,7 @@
  "columns": [
   {"id": "claude", "kind": "harness", "label": "Claude Code", "places": ["container", "host"], "last_verified": "2026-11-02", "maturity": {"level": "stable", "reason": "the lead agent runs on it (host) and heads are offered; dev ring complete except ssh-push"}},
   {"id": "openclaude", "kind": "harness", "label": "OpenClaude", "places": ["container", "host"], "last_verified": "2026-11-02", "maturity": {"level": "experimental", "reason": "no live agent; head run unproven; host binary far behind the pinned version"}},
-  {"id": "omp", "kind": "harness", "label": "omp", "places": ["container", "host"], "last_verified": "2026-11-02", "maturity": {"level": "stable", "reason": "the local-model agent (container, ACP chat with thinking, tools, resume); pinned 18.14.2"}},
+  {"id": "omp", "kind": "harness", "label": "omp", "places": ["container", "host"], "last_verified": "2026-11-13", "maturity": {"level": "stable", "reason": "the local-model agent (container, ACP chat with thinking, tools, resume); pinned 18.14.2"}},
   {"id": "kimi", "kind": "harness", "label": "Kimi Code", "places": ["container", "host"], "last_verified": "2026-11-02", "maturity": {"level": "frozen", "reason": "task loop wired, but no live agent, no MC chat, cloud only, not offered as head (needs --yolo)"}},
   {"id": "hermes", "kind": "harness", "label": "Hermes", "places": ["host"], "last_verified": "2026-11-02", "maturity": {"level": "frozen", "reason": "agent paused since quiet mode (ADR-085); MC chat kept until its own app is stable (ADR-100 §5)"}},
   {"id": "grok", "kind": "harness", "label": "Grok Build", "places": ["host"], "last_verified": "2026-11-02", "maturity": {"level": "frozen", "reason": "agent paused since quiet mode (ADR-085); xAI cloud only; no MC chat; not offered as head"}},
@@ -97,7 +97,7 @@
    {"id": "mc-mcp", "label": "MC tools over MCP (mc-mcp)", "cells": {
     "claude": {"status": "no", "note": "no mc-mcp entry is rendered for claude agents (MCP servers come from the per-agent registry)", "since": "2026-11-02", "recheck": "an mc-mcp entry in mcp_sync's rendered mcpServers", "evidence": ["backend/app/services/mcp_sync.py:39-66"]},
     "openclaude": {"status": "no", "note": "same as claude — no mc-mcp entry rendered", "since": "2026-11-02", "recheck": "an mc-mcp entry in mcp_sync's rendered mcpServers", "evidence": ["backend/app/services/mcp_sync.py:39-66"]},
-    "omp": {"status": "no", "note": "omp does not use mc-mcp; it talks to MC through the `mc` CLI and the bridge", "since": "2026-11-02", "recheck": "the chat-over-ACP spec registers mc-mcp for omp", "evidence": ["docs/specs/chat-over-acp.md:604"]},
+    "omp": {"status": "partial", "note": "MC renders no mc-mcp entry for its omp agents (they use the `mc` CLI and the bridge); an omp process registered by hand works cards through the worker flow (ADR-101) — needs tool discovery off, see docs/setup/mcp-worker.md", "evidence": ["docs/specs/chat-over-acp.md:604", "live:2026-11-13 omp 16.2.13 (print mode, local model, only the mc server): handbook, next task, checklist, progress, vault write, finish refused on an open checklist item, then card done in 69 s"]},
     "kimi": {"status": "open", "note": "no kimi MCP config for mc-mcp found"},
     "hermes": {"status": "yes", "note": "the config patcher registers `mcp_servers.mc` in agent mode", "evidence": ["scripts/hermes-config-patch.py:76-84", "scripts/mc-mcp.py:1-16"]},
     "grok": {"status": "open", "note": "no mc-mcp reference in the grok bridge"},
