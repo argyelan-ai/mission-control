@@ -62,3 +62,44 @@ Flow bei Agent-Request:
 - Code: `backend/app/auth.py` (`verify_agent_token()`, `_cache_agent_token()`)
 - Redis-Keys: `backend/app/redis_client.py` (`RedisKeys` Helper)
 - Verwandt: ADR-009 (Agent-Scoped Router), [OWASP Password Storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
+
+## Nachtrag (2026-11-13) — a replaced token is refused at once
+
+The decision above accepted that a cache entry of a replaced token "simply
+expires" — up to five minutes in which the **old** token still worked. That
+trade-off is withdrawn. Resetting the token is the only way to cut an agent's
+access for good (ADR-101 names it as the way back for a worker on a machine
+MC does not manage), so "reset" has to mean "gone now".
+
+**What changed.** The cache value is no longer the agent id alone:
+
+```
+Key:   mc:agent-auth:{SHA256(token)}
+Value: {agent_id}:{first 32 hex chars of SHA256(stored token hash)}
+TTL:   300 seconds (unchanged)
+```
+
+A cache hit counts only while the agent's stored hash still produces the same
+fingerprint. After a reset (or any other path that replaces the hash —
+re-provision, bootstrap, terminal re-key) the entry no longer matches: it is
+deleted and the token is verified with PBKDF2 again, which refuses it.
+
+- **No explicit invalidation.** The reset route does not know the old raw
+  token and so cannot name its cache key; binding the entry to the hash needs
+  no knowledge of the old token and covers every path that replaces a hash,
+  including ones added later.
+- **Cost:** none on the hot path. A hit already loaded the agent row; the
+  check adds one SHA256 over a short string. PBKDF2 still runs once per token
+  per five minutes.
+- **What Redis holds:** still neither the token nor the stored hash — only a
+  one-way fingerprint of the stored hash.
+- **Entries in the old format** (agent id only) fail the check and are
+  verified again once. No migration, no flush at deploy.
+- **Not changed:** a *paused* agent's token keeps working on the agent
+  routes; pausing stops the delivery of cards, not the access.
+
+The key name in "Entscheidung" above (`mc:agent:token:…`) and the function
+names in "Referenzen" were never the ones in the code. The code is
+`_agent_token_cache_key`, `_agent_token_cache_value` and
+`_resolve_agent_from_token` in `backend/app/auth.py`; the guard is
+`backend/tests/test_agent_token_cache_revocation.py`.

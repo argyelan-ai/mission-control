@@ -130,7 +130,7 @@ zeigt, hat eine Definition: die SQL-Funktion `update_running_work()`
 
 **Auth-System (3-Tier):**
 1. **User JWT (HS256)** — Login via `auth/login` (gültig 7 Tage, `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`), localStorage-Storage, `token_version` für Logout-Invalidierung (auch Passwortwechsel: alle anderen Sitzungen abgemeldet, die eigene bekommt einen neuen Token)
-2. **Agent PBKDF2 (200k iter)** — `POST /agents` erzeugt Token einmalig, Redis-Cache `SHA256(token) → agent_id` (5min TTL) verhindert N×200ms Hash pro Request
+2. **Agent PBKDF2 (200k iter)** — `POST /agents` erzeugt Token einmalig, Redis-Cache `SHA256(token) → agent_id` + Fingerabdruck des gespeicherten Hashes (5min TTL) verhindert N×200ms Hash pro Request; ein ersetzter Token (Reset) wird sofort abgelehnt
 3. **Legacy LOCAL_AUTH_TOKEN** — nur falls explizit gesetzt, Fallback
 
 **Step-up (erneute Passwort-Bestätigung, ADR-094 §9):** gefährliche Admin-Aktionen hängen `Depends(require_recent_auth())` aus `services/step_up.py` an. `POST /api/v1/auth/step-up` prüft das Passwort (gleiche Bremse wie Login, plus pro Konto) und gibt einen Einmal-Token, 5 Min gültig, an Benutzer + `token_version` gebunden; der Client schickt ihn im Header `X-MC-Step-Up`. Abgelehnt: `LOCAL_AUTH_TOKEN` und der MCP-Dienst-Token, Konten ohne Passwort, Cookie/`?token=`. Fehlt der Token → **403** `step_up_required` (nie 401 — das würde die UI abmelden). `GET /api/v1/auth/step-up` sagt der UI, ob der Knopf möglich ist. Welche Anmeldung eine Anfrage trug, steht in `request.state.mc_auth_method` (`app/auth.py`).
@@ -1558,7 +1558,7 @@ Alle ADRs in `docs/decisions/`:
 - **ADR-007** — Structured Dispatch Messages (Curl-Callbacks self-contained statt TOOLS.md-Lookup)
 - **ADR-008** — Phase-Completion via Watchdog (zentral orchestriert, nicht Agent-getriggert)
 - **ADR-009** — Agent-Scoped Router separat (`agent_scoped.py` vs `agents.py`, Scopes statt User-Rollen)
-- **ADR-010** — Redis-Cache für PBKDF2 (`SHA256(token) → agent_id`, 5min TTL)
+- **ADR-010** — Redis-Cache für PBKDF2 (`SHA256(token) → agent_id` + Hash-Fingerabdruck, 5min TTL; Nachtrag 2026-11-13: ersetzter Token sofort ungültig)
 - **ADR-011** — HTTP-Polling für Docker-Agents (statt Push/Webhooks)
 - **ADR-012** — `use_alter=True` ForeignKeys für Agent↔Task / Board↔Project Zyklus-Break
 - **ADR-013** — Settings.json als echte Kopie (kein Symlink) im Docker-Mount
@@ -1649,6 +1649,13 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-11-13** — **A replaced agent token is refused at once (ADR-010 Nachtrag).**
+  The Redis token cache (`mc:agent-auth:{SHA256(token)}`) now stores the agent id plus a
+  fingerprint of the stored token hash; `_resolve_agent_from_token` (`backend/app/auth.py`)
+  accepts a hit only while the agent still has that hash. Before, an old token kept working
+  for up to five minutes after `POST /agents/{id}/reset-token`. No route, no migration;
+  entries in the old format are verified again once. Guard:
+  `backend/tests/test_agent_token_cache_revocation.py`.
 - **2026-10-23** — **Wake helper: a real heartbeat instead of a leftover file (round-7 L5).**
   `scripts/porsche-wake-watcher.py` (stdlib, Python 3.9 — launchd runs the Mac's `/usr/bin/python3`)
   touches `~/.mc/wake-requests/watcher.alive` on every run
