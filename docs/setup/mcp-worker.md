@@ -166,8 +166,7 @@ the model to call `mc_next_task` again after each card.
   ```
 
   The answer contains the new token; do not hand it out to lock the worker
-  out. MC remembers a checked token for up to five minutes (ADR-010); until
-  the cache fix lands, the old token can still be accepted for that long.
+  out. The old token is refused from the next call on (ADR-010 Nachtrag).
 - **Pause is not a cut.** *Pause* on the agent page stops MC's own dispatch
   and recovery for the agent, but the worker's poll still fetches cards that
   are assigned to it. To stop it for a while, unassign its cards or reset the

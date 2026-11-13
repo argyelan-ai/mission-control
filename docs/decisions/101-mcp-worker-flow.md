@@ -215,9 +215,8 @@ token for a head.
 
 - A worker's scopes, board and runtime are fields of its agent row and are
   changed with the existing agent routes. Resetting its token
-  (`POST /agents/{id}/reset-token`) cuts the access. MC remembers a checked
-  token for up to five minutes (ADR-010); until the cache fix of that ADR's
-  amendment lands, the cut takes effect within that time, not at once.
+  (`POST /agents/{id}/reset-token`) cuts the access at once: the token cache
+  no longer outlives a reset (ADR-010 Nachtrag).
 - The switch and the two heartbeat values are environment variables of the
   worker's own MCP entry — they belong to the harness config on the worker's
   machine, not to MC's `.env`.
@@ -255,9 +254,8 @@ token for a head.
 ### Rückweg
 
 Remove `MC_MCP_WORKER` from the worker's MCP entry: the tools are gone at the
-next start. Reset the agent's token in MC: the access is gone (within the
-five minutes of the token cache until the ADR-010 fix lands). The code is one section at the end of `scripts/mc-mcp.py` and reverts
-on its own.
+next start. Reset the agent's token in MC: the access is gone at once. The
+code is one section at the end of `scripts/mc-mcp.py` and reverts on its own.
 
 ## Referenzen
 
