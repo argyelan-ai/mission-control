@@ -58,7 +58,7 @@ from app.services.decision_docs import (
 #   side panel) — Accepted, operator decision of 2026-11-01.
 # +1 on 2026-11-01: ADR-100 (MC is the foundation under every harness;
 #   talking across harnesses) — Accepted, operator decision of 2026-11-01.
-EXPECTED_DECISION_DOCS = 99
+EXPECTED_DECISION_DOCS = 100
 
 
 def _repo_root() -> Path:

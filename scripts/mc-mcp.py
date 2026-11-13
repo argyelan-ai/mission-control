@@ -15,20 +15,36 @@ tool):
   401/403 is reported as is — never retried as the operator. Operator-only
   tools (task creation, phase completion, worker restart, logs, system
   status) are not registered at all, so they are absent from the tool list.
+
+Worker flow (ADR-101): an agent-mode process started with MC_MCP_WORKER=1 also
+gets the tools to work cards (mc_next_task, mc_progress, mc_finish,
+mc_handbook) and the server instructions that explain the loop.
 """
 
+import argparse
+import contextlib
+import io
 import json
 import os
 import subprocess
+import sys
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 from fastmcp import FastMCP
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-MC_BASE = "http://localhost/api/v1"
+# MC_API_URL is the variable the `mc` CLI uses (base without /api/v1): a worker
+# on another machine points both at the same MC. Default: this machine.
+MC_BASE = (
+    os.environ.get("MC_API_URL", "").strip().rstrip("/").removesuffix("/api/v1")
+    or "http://localhost"
+) + "/api/v1"
 BRIDGE_URL = "http://localhost:18792"
 PROJECT_DIR = Path(__file__).parent.parent
 
@@ -1106,6 +1122,979 @@ def mc_complete_phase(project_id: str, phase_id: str) -> str:
     if activated:
         lines.append(f"Neue aktive Phasen: {len(activated)}")
     return "\n".join(lines)
+
+
+# ── Worker flow (ADR-101) ─────────────────────────────────────────────────────
+#
+# A registered agent without a bridge of its own (own token, own scopes) works
+# its cards through these tools. They are a thin layer over the agent routes the
+# `mc` command uses; finishing runs the command's own `mc finish`, so the
+# pre-finish checks exist exactly once.
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _worker_mode_from_env() -> bool:
+    """Opt-in: MC_MCP_WORKER=1 next to an agent token. A harness with its own
+    bridge (it polls and sends heartbeats itself) and a guest session (ADR-100,
+    scope comms:talk only) never get the worker tools."""
+    return (
+        AGENT_MODE
+        and not _session_file()
+        and os.environ.get("MC_MCP_WORKER", "").strip().lower() in _TRUTHY
+    )
+
+
+# Decided once at start, like AGENT_MODE.
+WORKER_MODE = _worker_mode_from_env()
+# ADR-100 §2: a guest session gains neither worker nor vault tools.
+GUEST_MODE = bool(_session_file())
+
+
+def _worker_tool(fn):
+    """Register a tool only for a worker (MC_MCP_WORKER=1 in agent mode)."""
+    return mcp.tool()(fn) if WORKER_MODE else fn
+
+
+def _vault_tool(agent_only: bool = False):
+    """Register a vault tool: never for a guest session; `agent_only` tools
+    (writing) not for the operator either."""
+    def register(fn):
+        if GUEST_MODE or (agent_only and not AGENT_MODE):
+            return fn
+        return mcp.tool()(fn)
+    return register
+
+
+_NO_CARD = "no active card. Call mc_next_task first."
+_NOTE_CAP = 20000
+_CLI_DIR = Path(__file__).parent / "mc-cli"
+
+# The card this process works on: task_id, board_id, attempt_id, title, status.
+_card_lock = threading.RLock()
+_card: dict = {}
+# Highest message seq shown per thread — sent as acked_seq on the next poll.
+_shown_seq: dict[str, int] = {}
+# (state, task_id) of run-end answers already reported; MC repeats them.
+_reported_ends: set[tuple[str, str]] = set()
+_last_call = time.monotonic()
+_hb_thread: threading.Thread | None = None
+_hb_stop = threading.Event()
+_beat_lock = threading.Lock()
+# mc_finish redirects stdout/stderr and may change the folder: one at a time.
+_finish_lock = threading.Lock()
+
+
+def _held_card() -> dict | None:
+    with _card_lock:
+        return dict(_card) if _card.get("task_id") else None
+
+
+def _remember_card(card: dict) -> None:
+    with _card_lock:
+        _card.clear()
+        _card.update(card)
+
+
+def _forget_card() -> None:
+    with _card_lock:
+        _card.clear()
+
+
+def _label(card: dict) -> str:
+    short = str(card.get("task_id") or "")[:8]
+    title = str(card.get("title") or "").strip()
+    return f"{title} ({short})" if title else short
+
+
+def _touch() -> None:
+    global _last_call
+    _last_call = time.monotonic()
+
+
+def _en(err) -> str:
+    """Error text of a shared helper without its German 'Fehler: ' prefix."""
+    return str(err).removeprefix("Fehler: ")
+
+
+def _attempt_header(attempt_id: str) -> dict:
+    return {"X-Dispatch-Attempt-Id": attempt_id} if attempt_id else {}
+
+
+# ── Heartbeat ─────────────────────────────────────────────────────────────────
+#
+# The beat tells MC that this process is alive and was used recently. It does
+# NOT prove that the model behind it is producing work — hence the quiet window.
+
+def _env_number(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(os.environ.get(name, "").strip() or default))
+    except ValueError:
+        return default
+
+
+def _heartbeat_interval() -> float:
+    """Seconds between beats; 0 switches the beat off. Capped at 60 so a beat
+    is always younger than the 90 s the turn signal accepts."""
+    return min(_env_number("MC_MCP_HEARTBEAT_SECONDS", 30), 60)
+
+
+def _quiet() -> bool:
+    """True when no MC tool was called for longer than the quiet window."""
+    minutes = _env_number("MC_MCP_HEARTBEAT_QUIET_MINUTES", 20)
+    return minutes > 0 and time.monotonic() - _last_call > minutes * 60
+
+
+def _beat() -> None:
+    # The card check and the send happen under one lock, and the idle beat
+    # takes the same lock: a `working` beat can never land after `idle`.
+    with _beat_lock:
+        card = _held_card()
+        if not card:
+            return
+        body = {"status": "working", "task_id": card["task_id"]}
+        if card.get("attempt_id"):
+            body["attempt_id"] = card["attempt_id"]
+        _api_agent("POST", "/agent/me/heartbeat", json=body)
+
+
+def _heartbeat_tick() -> None:
+    if _heartbeat_interval() > 0 and _held_card() and not _quiet():
+        _beat()
+
+
+def _heartbeat_loop(stop: threading.Event, interval: float) -> None:
+    while not stop.wait(interval):
+        _heartbeat_tick()
+
+
+def _start_heartbeat() -> None:
+    global _hb_thread, _hb_stop
+    interval = _heartbeat_interval()
+    if interval <= 0:
+        return
+    _beat()
+    with _card_lock:
+        if _hb_thread is not None and _hb_thread.is_alive():
+            return
+        _hb_stop = threading.Event()
+        _hb_thread = threading.Thread(
+            target=_heartbeat_loop, args=(_hb_stop, interval),
+            name="mc-mcp-heartbeat", daemon=True,
+        )
+        _hb_thread.start()
+
+
+def _stop_heartbeat(send_idle: bool = True) -> None:
+    """Stop the loop and send one `idle` beat. Callers drop the card first, so
+    a beat that starts after this point finds no card and sends nothing.
+    Never call it while holding _card_lock: the beat thread takes _card_lock
+    inside _beat_lock, and this waits for _beat_lock."""
+    global _hb_thread
+    with _card_lock:
+        thread = _hb_thread
+        _hb_stop.set()
+        _hb_thread = None
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(timeout=15)
+    if send_idle and thread is not None and _heartbeat_interval() > 0:
+        with _beat_lock:
+            _api_agent("POST", "/agent/me/heartbeat", json={"status": "idle"})
+
+
+# ── Cards ─────────────────────────────────────────────────────────────────────
+
+def _load_card(task_id: str, board_id: str = "") -> tuple[dict | None, str]:
+    """Read a card of the own board as MC has it now -> (card, error)."""
+    if not str(task_id or "").strip():
+        return None, "no card id given"
+    task_id, board_id, err = _resolve_task_board(str(task_id).strip(), board_id)
+    if err:
+        return None, _en(err)
+    detail = _agent_call("GET", f"/agent/boards/{board_id}/tasks/{task_id}/detail")
+    if _is_error(detail):
+        return None, str(detail["error"])
+    return {
+        "task_id": str(detail.get("id") or task_id),
+        "board_id": str(detail.get("board_id") or board_id),
+        "attempt_id": detail.get("dispatch_attempt_id") or "",
+        "title": detail.get("title") or "",
+        "status": detail.get("status") or "",
+    }, ""
+
+
+def _active_card(task_id: str = "") -> tuple[dict | None, str]:
+    """The card a tool call is about -> (card, error). Order: the card this
+    process holds, a card named by id, then the card MC lists as the agent's
+    current one (so a restarted server finds its card again)."""
+    task_id = str(task_id or "").strip()
+    held = _held_card()
+    if held and (not task_id or held["task_id"].startswith(task_id)):
+        return held, ""
+    if task_id:
+        return _load_card(task_id, held["board_id"] if held else "")
+    me = _agent_call("GET", "/agent/me")
+    if _is_error(me):
+        return None, str(me["error"])
+    current = me.get("current_task") or {}
+    if not current.get("id"):
+        return None, _NO_CARD
+    card, err = _load_card(
+        str(current["id"]), str(current.get("board_id") or me.get("board_id") or "")
+    )
+    if card and card["status"] == "in_progress":
+        _remember_card(card)
+        _start_heartbeat()
+    return card, err
+
+
+def _poll_notes(resp: dict) -> list[str]:
+    """Comments and messages a poll delivered. MC shows comments only once, so
+    every answer of mc_next_task passes them on."""
+    notes = []
+    comments = resp.get("new_comments") or []
+    if comments:
+        lines = ["New comments on your cards (MC shows them only once):"]
+        for c in comments:
+            lines.append(
+                f"- [{c.get('comment_type') or 'message'}] on {c.get('task_title') or 'card'}"
+                f" ({str(c.get('task_id') or '')[:8]}): {c.get('content') or ''}"
+            )
+        notes.append("\n".join(lines))
+    messages = resp.get("new_messages") or []
+    if messages:
+        lines = ["New messages:"]
+        for m in messages:
+            lines.append(
+                f"- {m.get('sender') or 'unknown'} ({m.get('message_type') or 'message'}):"
+                f" {m.get('body') or ''}"
+            )
+            thread, seq = str(m.get("thread_id") or ""), m.get("seq")
+            if thread and isinstance(seq, int):
+                _shown_seq[thread] = max(_shown_seq.get(thread, 0), seq)
+        notes.append("\n".join(lines))
+    return notes
+
+
+_IDLE = (
+    "No card for you right now.\n"
+    "Next step: call mc_next_task again in about a minute (once a minute is enough)."
+)
+
+_HOLD_FLAGS = (
+    ("system_halted", "the system is halted"),
+    ("system_draining", "the system is draining"),
+    ("update_drain", "an MC update is running"),
+    ("runtime_not_ready", "your model runtime is not ready"),
+)
+
+_VERB_MAP = """The brief was written for the `mc` command line. Over MCP use these tools instead:
+- mc ack -> already done, the card is accepted; skip it
+- mc comment -> mc_progress
+- mc checklist add / list / done -> mc_checklist_add / mc_checklist / mc_checklist_done
+- mc finish, mc done, mc review -> mc_finish
+- mc vault-search / mc vault-write -> mc_vault_search / mc_vault_write (read a note: mc_vault_read)
+- mc deliverable -> mc_register_deliverable
+- mc task-get -> mc_task_detail
+- mc inbox -> mc_inbox, mc msg -> mc_msg
+Any other mc command has no tool here: do not guess, say what you needed in an mc_progress note.
+Paths in the brief are paths on the MC host."""
+
+
+# The poll also hands out an assigned card in review or blocked (once — it
+# stamps ack_at itself). Accepting such a card would pull it out of review or
+# past its blocker, so only these are accepted; a missing status is the old
+# poll answer and is accepted as before.
+_ACCEPT_FROM = {"", "inbox", "in_progress"}
+
+_WAITS_FOR = {
+    "review": "It waits for the review decision.",
+    "blocked": "It waits for the operator or the board lead to clear the blocker.",
+}
+
+
+def _shown_not_accepted(task: dict, card: dict, status: str) -> str:
+    task_id = card["task_id"]
+    return "\n".join([
+        f"Card {_label(card)} is in status '{status}'. MC shows it to you once; it is "
+        "not yours to work on now.",
+        _WAITS_FOR.get(status, "It waits for someone else."),
+        "It was NOT accepted and its status was NOT changed.",
+        f"Card id: {task_id}  ·  board: {card['board_id']}",
+        "",
+        "--- BRIEF (from Mission Control) ---",
+        str(task.get("prompt") or "").strip(),
+        "--- END OF BRIEF ---",
+        "",
+        "Next step: do not change its status and do not call mc_finish for it. To add "
+        f'something, post an mc_progress note with task_id="{task_id}". Then call '
+        "mc_next_task again in a few minutes.",
+    ])
+
+
+def _on_new_task(resp: dict) -> str:
+    task = resp.get("task") or {}
+    task_id, board_id = str(task.get("id") or ""), str(task.get("board_id") or "")
+    if not task_id or not board_id:
+        return (
+            "Error: MC answered new_task without a card id.\n"
+            "Next step: call mc_next_task again."
+        )
+    attempt = str(task.get("dispatch_attempt_id") or "")
+    card = {
+        "task_id": task_id, "board_id": board_id, "attempt_id": attempt,
+        "title": str(task.get("title") or ""), "status": "in_progress",
+    }
+    held = _held_card()
+    status = str(task.get("status") or "").strip().lower()
+    if status not in _ACCEPT_FROM:
+        if held and held["task_id"] == task_id:
+            _forget_card()
+            _stop_heartbeat()
+        return _shown_not_accepted(task, card, status)
+    again = bool(resp.get("orphaned_run_redispatched")) or bool(
+        held and held["task_id"] == task_id
+    )
+    # Accept the card (ACK). MC delivers a card it gave out before with a fresh
+    # attempt id; the same call accepts it again.
+    ack = _agent_call(
+        "PATCH", f"/agent/boards/{board_id}/tasks/{task_id}",
+        json={"status": "in_progress"},
+        **({"extra_headers": _attempt_header(attempt)} if attempt else {}),
+    )
+    if _is_error(ack) and str(ack["error"]).count("In Progress") < 2:
+        return (
+            f"Error: MC delivered card {_label(card)} but accepting it failed: {ack['error']}\n"
+            "Next step: call mc_next_task again."
+        )
+    _remember_card(card)
+    for key in [k for k in _reported_ends if k[1] == task_id]:
+        _reported_ends.discard(key)
+    _start_heartbeat()
+
+    if again:
+        lines = [
+            f"This is your card again (MC re-delivered it): {card['title']}",
+            "Continue where you stopped, do not start over. Do not create the "
+            "checklist again — check it with mc_checklist.",
+        ]
+    else:
+        lines = [f"New card accepted: {card['title']}"]
+    lines.append(f"Card id: {task_id}  ·  board: {board_id}")
+    if task.get("workspace_path"):
+        lines.append(f"Workspace on the MC host: {task['workspace_path']}")
+    lines += [
+        "",
+        "--- BRIEF (from Mission Control) ---",
+        str(task.get("prompt") or "").strip(),
+        "--- END OF BRIEF ---",
+        "",
+        _VERB_MAP,
+        "",
+        "Next step: do the work. If the brief asks for a checklist, create it once "
+        "with mc_checklist_add. Send an mc_progress note at least every 15 minutes. "
+        "When the work is done call mc_finish with your reflection.",
+    ]
+    return "\n".join(lines)
+
+
+def _on_working(resp: dict) -> str:
+    task_id = str(resp.get("task_id") or "")
+    if not task_id:
+        return (
+            "MC says you are working on a card but did not name it.\n"
+            "Next step: call mc_next_task again in about a minute."
+        )
+    held = _held_card()
+    mine = bool(held and held["task_id"] == task_id)
+    card, err = _load_card(task_id, held["board_id"] if mine else "")
+    if not card:
+        return (
+            f"MC lists card {task_id[:8]} as your active card, but reading it failed: {err}\n"
+            "Next step: call mc_next_task again in about a minute."
+        )
+    if card["status"] == "in_progress":
+        _remember_card(card)
+        _start_heartbeat()
+        return (
+            f"You are already working on card {_label(card)}.\n"
+            "Next step: continue it; send mc_progress notes at least every 15 minutes "
+            "and call mc_finish when the work is done."
+        )
+    if mine:
+        _forget_card()
+        _stop_heartbeat()
+    if card["status"] == "review":
+        return (
+            f"Card {_label(card)} is waiting for the review decision. "
+            "Nothing to do for you now.\n"
+            "Next step: call mc_next_task again in a few minutes."
+        )
+    return (
+        f"Card {_label(card)} is in status '{card['status']}'. Nothing to do for you now.\n"
+        "Next step: call mc_next_task again in a few minutes."
+    )
+
+
+def _on_run_end(state: str, resp: dict) -> str:
+    task_id = str(resp.get("task_id") or "")
+    key = (state, task_id)
+    held = _held_card()
+    if held and held["task_id"] == task_id:
+        label = _label(held)
+        _forget_card()
+        _stop_heartbeat()
+    elif key in _reported_ends:
+        # MC repeats an end answer while nothing else is to deliver.
+        return _IDLE
+    else:
+        label = task_id[:8]
+    _reported_ends.add(key)
+    if state == "cancelled":
+        return (
+            f"Card {label} was cancelled. Stop working on it; do not finish it.\n"
+            "Next step: call mc_next_task for your next card."
+        )
+    return (
+        f"Card {label} was stopped by the operator. Stop working on it now; "
+        "MC delivers it again if the operator resumes it.\n"
+        "Next step: call mc_next_task for your next card."
+    )
+
+
+def _on_idle(resp: dict) -> str:
+    held = _held_card()
+    for flag, reason in _HOLD_FLAGS:
+        if resp.get(flag):
+            detail = str(resp.get("detail") or "").strip().rstrip(".")
+            lines = [f"MC is holding new work ({reason})" + (f": {detail}." if detail else ".")]
+            if held:
+                lines.append(f"Card {_label(held)} is still yours.")
+                lines.append(
+                    "Next step: continue your card; call mc_next_task again in a few minutes."
+                )
+            else:
+                lines.append("Next step: call mc_next_task again in a few minutes.")
+            return "\n".join(lines)
+    if held:
+        _forget_card()
+        _stop_heartbeat()
+        return (
+            f"MC no longer lists card {_label(held)} as your active card — stop working on it.\n"
+            + _IDLE
+        )
+    return _IDLE
+
+
+@_worker_tool
+def mc_next_task() -> str:
+    """Fetch your next card from Mission Control and accept it.
+
+    Call it when you start and after every finished card. The answer holds the
+    brief of the card and names the next step. No card: call it again in about a
+    minute. It also passes on new comments and messages for you.
+    """
+    kwargs = {"params": {"acked_seq": json.dumps(_shown_seq)}} if _shown_seq else {}
+    resp = _agent_call("GET", "/agent/me/poll", **kwargs)
+    if not isinstance(resp, dict) or _is_error(resp):
+        error = resp["error"] if isinstance(resp, dict) else f"unexpected answer: {resp!r}"
+        return (
+            f"Error: {error}\n"
+            "Next step: fix the connection or token, then call mc_next_task again."
+        )
+    notes = _poll_notes(resp)
+    state = resp.get("state")
+    if state == "new_task":
+        body = _on_new_task(resp)
+    elif state == "working":
+        body = _on_working(resp)
+    elif state in ("cancelled", "stopped"):
+        body = _on_run_end(state, resp)
+    elif state == "idle":
+        body = _on_idle(resp)
+    else:
+        body = (
+            f"MC answered with a state this server does not know: {state!r}.\n"
+            "Next step: call mc_next_task again in about a minute."
+        )
+    return "\n\n".join([*notes, body])
+
+
+@_worker_tool
+def mc_progress(note: str, task_id: str = "") -> str:
+    """Save a short progress note on the card you are working on.
+
+    Send one at least every 15 minutes and whenever something is worth knowing
+    (a decision, a problem, a part that is done). The operator reads these notes.
+
+    Args:
+        note: What you did or found, in plain words.
+        task_id: Only for a card other than the one you hold (id or 8-char prefix).
+    """
+    note = (note or "").strip()
+    if not note:
+        return "Error: the note is empty. Say in one or two sentences what you did or found."
+    card, err = _active_card(task_id)
+    if not card:
+        return f"Error: {err}"
+    result = _agent_call(
+        "POST", f"/agent/boards/{card['board_id']}/tasks/{card['task_id']}/comments",
+        json={"content": note, "comment_type": "progress"},
+        **({"extra_headers": _attempt_header(card["attempt_id"])} if card.get("attempt_id") else {}),
+    )
+    if _is_error(result):
+        return (
+            f"Error: {result['error']}\n"
+            "Hint: if MC no longer knows the card as yours, call mc_next_task."
+        )
+    return (
+        f"Progress note saved on card {_label(card)}.\n"
+        "Next step: continue the work; call mc_finish when it is done."
+    )
+
+
+# ── Finishing: the CLI's own `mc finish` ──────────────────────────────────────
+
+def _mc_cli():
+    """The `mc` command's modules (commands, config, errors), or None when the
+    CLI is not next to this script. Lazy and stdlib-only: nothing is imported in
+    operator or plain agent mode."""
+    if not (_CLI_DIR / "mc_cli" / "commands.py").is_file():
+        return None
+    if str(_CLI_DIR) not in sys.path:
+        sys.path.insert(0, str(_CLI_DIR))
+    try:
+        from mc_cli import commands, config, errors
+    except Exception:
+        return None
+    return commands, config, errors
+
+
+class _CliClient:
+    """What `mc finish` needs from the CLI's client (`request` and `cfg`), sent
+    through this server's HTTP path and as the agent."""
+
+    def __init__(self, cfg, errors):
+        self.cfg = cfg
+        self._errors = errors
+
+    def request(self, method, path, body=None, query=None, allow_empty=False):
+        headers = {
+            "Authorization": f"Bearer {self.cfg.require_token()}",
+            **_attempt_header(self.cfg.dispatch_attempt_id or ""),
+        }
+        params = {k: v for k, v in (query or {}).items() if v is not None} or None
+        url = f"{MC_BASE}{path.removeprefix('/api/v1')}"
+        try:
+            with httpx.Client(timeout=30) as c:
+                r = c.request(method, url, headers=headers, params=params, json=body)
+        except Exception as e:
+            raise self._errors.ServerError(f"{method} {path}: {e}") from e
+        if r.status_code >= 500:
+            raise self._errors.ServerError(f"HTTP {r.status_code} {method} {path}: {r.text[:400]}")
+        if r.status_code >= 400:
+            raise self._errors.ClientError(f"HTTP {r.status_code} {method} {path}: {r.text[:400]}")
+        if not (r.text or "").strip():
+            if allow_empty:
+                return None
+            raise self._errors.ServerError(f"HTTP {r.status_code} {method} {path}: empty answer")
+        return r.json()
+
+
+_REFLECTION_HINT = (
+    "Hint: the reflection needs these four sections, each with a real line break "
+    "after the heading, at least 80 characters in total:\n"
+    "## What was done\n## What worked\n## What was unclear\n## Lesson for agent memory"
+)
+
+
+def _finish_error(text: str, reflection: bool = False, saved: bool = False) -> str:
+    """An error of `mc finish` plus what to do about it over MCP. The CLI's own
+    retry advice names shell commands, so it is not passed on."""
+    hints = []
+    if saved:
+        hints.append(
+            "Hint: the reflection was saved, but the status change failed. Fix what MC "
+            "names and call mc_finish again with the same text (no second reflection is "
+            "posted within 5 minutes)."
+        )
+    if "Checklist-Item" in text:
+        hints.append(
+            "Hint: list the open items with mc_checklist, close each with "
+            "mc_checklist_done, then call mc_finish again."
+        )
+    if reflection or "Reflexion" in text or "Pflichtfelder" in text:
+        hints.append(_REFLECTION_HINT)
+    if "Stale dispatch_attempt_id" in text or "Fehlender X-Dispatch-Attempt-Id" in text:
+        hints.append(
+            "Hint: MC gave this card out again in the meantime. Call mc_next_task, "
+            "then mc_finish again."
+        )
+    elif "HTTP 422" in text:
+        hints.append(
+            "Hint: MC refused the status change. Fix what it names, then call "
+            "mc_finish again."
+        )
+    if "run_control=manual_hold" in text:
+        hints.append(
+            "Hint: the lead or the operator holds this card. Do not finish it now; "
+            "call mc_next_task in a few minutes."
+        )
+    elif "run_control=" in text or "Updates nicht erlaubt" in text:
+        hints.append(
+            "Hint: MC stopped or cancelled this card. Stop working on it and call "
+            "mc_next_task."
+        )
+    if "Task-Status ist" in text:
+        hints.append(
+            "Hint: the card is not in progress or in review any more. Call mc_next_task."
+        )
+    if not hints:
+        hints.append("Hint: fix what the message names, then call mc_finish again.")
+    return "\n".join([f"Error: {text}", *hints])
+
+
+def _cli_notes(out: str, err: str) -> list[str]:
+    """What `mc finish` told the agent on the side: '#' lines on stdout and
+    everything on stderr (the JSON receipt on stdout is not a note)."""
+    lines = [ln for ln in out.splitlines() if ln.startswith("#")] + err.splitlines()
+    return [ln.lstrip("#").strip() for ln in lines if ln.lstrip("#").strip()]
+
+
+@_worker_tool
+def mc_finish(message: str, review: bool = False, task_id: str = "", workdir: str = "") -> str:
+    """Finish the card you are working on. This is the only way to finish a card.
+
+    MC checks first: every checklist item must be closed and the reflection must
+    be complete. MC may set 'review' instead of 'done' (a human or a reviewer
+    decides then) and it can refuse — the answer names the reason.
+
+    Args:
+        message: Your reflection with the four sections '## What was done',
+            '## What worked', '## What was unclear', '## Lesson for agent memory'
+            (at least 80 characters, real line breaks).
+        review: True hands the card to review instead of marking it done.
+        task_id: Only for a card other than the one you hold (id or 8-char prefix).
+        workdir: Folder of your git checkout, if the work is code — MC records
+            the commit and branch from there.
+    """
+    cli = _mc_cli()
+    if cli is None:
+        return (
+            "Error: the mc command line (scripts/mc-cli) is not next to this server, "
+            "so the pre-finish checks cannot run. Nothing was finished.\n"
+            "Hint: start mc-mcp.py from a complete Mission Control checkout."
+        )
+    commands, config, errors = cli
+    try:
+        commands._validate_reflection(message)
+    except errors.CLIError as e:
+        return _finish_error(str(e), reflection=True)
+    workdir = (workdir or "").strip()
+    if workdir and not Path(workdir).expanduser().is_dir():
+        return f"Error: workdir '{workdir}' is not a folder.\nHint: pass the folder of your checkout, or leave it empty."
+    card, err = _active_card(task_id)
+    if not card:
+        return f"Error: {err}"
+    # `mc finish` also allows review -> done. A worker must never approve its
+    # own review card, and a held card may have been moved meanwhile: read the
+    # status MC has now.
+    now, err = _load_card(card["task_id"], card["board_id"])
+    if not now:
+        return (
+            f"Error: reading card {_label(card)} failed: {err}\n"
+            "Hint: nothing was finished. Call mc_finish again in a minute."
+        )
+    if now["status"] != "in_progress":
+        held = _held_card()
+        if held and held["task_id"] == card["task_id"]:
+            _forget_card()
+            _stop_heartbeat()
+        if now["status"] == "done":
+            return (
+                f"Card {_label(card)} is already done — nothing to finish.\n"
+                "Next step: call mc_next_task."
+            )
+        why = (
+            "It waits for the review decision (perhaps your earlier mc_finish went "
+            "through); a worker never finishes a card in review."
+            if now["status"] == "review" else "Only a card in progress can be finished."
+        )
+        return (
+            f"Error: card {_label(card)} is in status '{now['status']}', not in progress. "
+            f"Nothing was finished. {why}\n"
+            "Next step: call mc_next_task."
+        )
+
+    cfg = config.Config(
+        api_url=MC_BASE.removesuffix("/api/v1"),
+        agent_token=_agent_token(),
+        task_id=card["task_id"],
+        board_id=card["board_id"],
+        dispatch_attempt_id=card.get("attempt_id") or None,
+    )
+    args = argparse.Namespace(message=message, review=bool(review))
+    out, errs = io.StringIO(), io.StringIO()
+    failure = ""
+    with _finish_lock:
+        before = os.getcwd()
+        try:
+            if workdir:
+                os.chdir(Path(workdir).expanduser())
+            # The CLI prints its receipt and notes; printed straight to stdout
+            # they would corrupt the stdio protocol stream.
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(errs):
+                commands._cmd_finish(args, _CliClient(cfg, errors), cfg)
+        except errors.CLIError as e:
+            failure = _finish_error(
+                str(e), saved="Reflexion wurde gepostet" in errs.getvalue()
+            )
+        except (Exception, SystemExit) as e:
+            failure = _finish_error(f"{type(e).__name__}: {e}")
+        finally:
+            os.chdir(before)
+    if failure:
+        return failure
+
+    detail = _agent_call(
+        "GET", f"/agent/boards/{card['board_id']}/tasks/{card['task_id']}/detail"
+    )
+    notes = _cli_notes(out.getvalue(), errs.getvalue())
+    tail = ["MC notes (from the mc command line):", *[f"- {n}" for n in notes]] if notes else []
+    if _is_error(detail):
+        # "Finished" is never said without MC's word; the card stays held.
+        return "\n".join([
+            f"mc finish ran for card {_label(card)}, but MC could not read the card "
+            f"afterwards: {detail['error']}",
+            *tail,
+            "Next step: check its status with mc_task_detail. Still in progress: call "
+            "mc_finish again with the same text (no second reflection is posted within "
+            "5 minutes). Done or review: call mc_next_task.",
+        ])
+    status = str(detail.get("status") or "unknown")
+    if status == "in_progress":
+        return "\n".join([
+            f"Card {_label(card)} is still in progress — MC did not change its status.",
+            *tail,
+            "Next step: read the notes, fix what they name, then call mc_finish again.",
+        ])
+    held = _held_card()
+    if held and held["task_id"] == card["task_id"]:
+        _forget_card()
+        _stop_heartbeat()
+    return "\n".join([
+        f"Card finished: {_label(card)} — status is now {status}.",
+        *tail,
+        "Next step: call mc_next_task for your next card.",
+    ])
+
+
+# ── Vault ─────────────────────────────────────────────────────────────────────
+
+def _vault_call(method: str, path: str, **kwargs):
+    """Agent: the agent's vault routes (scopes vault:read / vault:write).
+    Operator: the admin routes."""
+    if _is_agent():
+        return _agent_call(method, f"/agent{path}", **kwargs)
+    return _api(method, path, **kwargs)
+
+
+@_vault_tool()
+def mc_vault_search(q: str, limit: int = 10, type: str = "", agent: str = "") -> str:
+    """Search the vault (Mission Control's shared knowledge: notes, lessons, decisions).
+
+    Search before you start a card — someone may have solved it before.
+
+    Args:
+        q: Search text.
+        limit: Number of hits, 1-50.
+        type: Only this note type (note | knowledge | lesson | reference | journal).
+        agent: Only notes written by this agent.
+    """
+    q = (q or "").strip()
+    if not q:
+        return "Error: the search text is empty."
+    params = {"q": q, "limit": max(1, min(int(limit or 10), 50))}
+    if type.strip():
+        params["type"] = type.strip()
+    if agent.strip():
+        params["agent"] = agent.strip()
+    result = _vault_call("GET", "/vault/search", params=params)
+    if _is_error(result):
+        return f"Error: {result['error']}"
+    hits = result.get("hits") or []
+    if not hits:
+        return f"No notes for '{q}'.\nNext step: try other words, or go on without a note."
+    lines = [f"{len(hits)} notes for '{q}':"]
+    for h in hits:
+        meta = " · ".join(str(h[k]) for k in ("type", "agent", "date") if h.get(k))
+        lines.append(f"- {h.get('title') or '(no title)'} — {h.get('path')}" + (f" [{meta}]" if meta else ""))
+        excerpt = " ".join(str(h.get("content") or "").split())
+        if excerpt:
+            lines.append(f"  {excerpt[:200]}{'…' if len(excerpt) > 200 else ''}")
+    lines.append("Next step: read a note in full with mc_vault_read(path).")
+    return "\n".join(lines)
+
+
+@_vault_tool()
+def mc_vault_read(path: str) -> str:
+    """Read one vault note in full.
+
+    Args:
+        path: Path of the note as mc_vault_search shows it, e.g. 'knowledge/x.md'.
+    """
+    path = (path or "").strip().lstrip("/")
+    if not path:
+        return "Error: the path is empty."
+    if ".." in path.split("/"):
+        return "Error: the path must not contain '..'."
+    result = _vault_call("GET", f"/vault/note/{quote(path, safe='/')}")
+    if _is_error(result):
+        return f"Error: {result['error']}"
+    lines = [f"{k}: {v}" for k, v in (result.get("frontmatter") or {}).items()]
+    content = str(result.get("content") or "")
+    if len(content) > _NOTE_CAP:
+        content = content[:_NOTE_CAP] + f"\n\n[cut after {_NOTE_CAP} characters — the note is longer]"
+    return "\n".join([*lines, "", content]) if lines else content
+
+
+@_vault_tool(agent_only=True)
+def mc_vault_write(
+    title: str, content: str, type: str = "note", tags: list[str] | None = None,
+    task_id: str = "", related_notes: list[str] | None = None,
+) -> str:
+    """Write a note into the vault so the next agent can find it.
+
+    Write what is worth keeping beyond this card: a lesson, a fact about a
+    system, a decision with its reason. MC files the note in the background.
+
+    Args:
+        title: 3-80 characters.
+        content: The note in Markdown, at least 10 characters.
+        type: note | knowledge | lesson | reference | journal.
+        tags: Up to 8 tags.
+        task_id: Card the note belongs to (default: the card you hold).
+        related_notes: Paths of up to 8 related notes.
+    """
+    body: dict = {"title": (title or "").strip(), "content": content, "type": (type or "note").strip()}
+    if tags:
+        body["tags"] = list(tags)
+    held = _held_card()
+    task_id = (task_id or "").strip() or (held["task_id"] if held else "")
+    if task_id:
+        body["task_id"] = task_id
+    if related_notes:
+        body["related_notes"] = list(related_notes)
+    result = _vault_call("POST", "/vault/note", json=body)
+    if _is_error(result):
+        return f"Error: {result['error']}"
+    target = result.get("expected_target") or "the vault"
+    return (
+        f"Note accepted. MC files it in the background as {target}; "
+        "it can take a moment until mc_vault_search finds it."
+    )
+
+
+# ── Handbook and connect instructions ─────────────────────────────────────────
+
+_HANDBOOK = """# Mission Control — handbook for workers
+
+Mission Control (MC) is a task board for AI agents. The operator (a human) and a
+lead put work on the board as cards. You are a registered worker: MC gives you one
+card at a time, you do the work and report back through these tools.
+
+## The loop
+1. mc_next_task — fetches your next card and accepts it. The answer holds the
+   brief and names the next step. No card: wait about a minute, call it again.
+2. Do what the brief says. Before you start, mc_vault_search may show that the
+   problem was solved before.
+3. mc_progress — a short note at least every 15 minutes, and when something is
+   worth knowing. The operator reads these notes instead of watching you.
+4. mc_finish — when the work is done. Then call mc_next_task again.
+
+## A card's life
+inbox -> in_progress (you accepted it) -> review or done. MC can also stop or
+cancel a card; mc_next_task tells you. Stop working on such a card at once.
+MC may give you the same card again (after a long silence or a restart). Then
+continue where you stopped — do not start over.
+mc_next_task may also show you a card in review or blocked. It is NOT accepted:
+leave its status alone; it moves on when the reviewer, lead or operator acts.
+
+## Staying alive
+While you hold a card this server tells MC that you are alive. It stops doing
+so when you have not called any MC tool for 20 minutes — MC then treats the
+card as stalled. A progress note every 15 minutes keeps it yours.
+
+## Checklist
+If the brief asks for a checklist: create it once with mc_checklist_add, close
+items with mc_checklist_done, list them with mc_checklist. Never create the
+checklist again on a card you got a second time — list it first.
+
+## Finishing
+mc_finish(message=...) needs a reflection with these four sections:
+
+## What was done
+## What worked
+## What was unclear
+## Lesson for agent memory
+
+At least 80 characters, real line breaks. MC checks before it finishes: an open
+checklist item or an incomplete reflection is refused and the answer says what
+to fix. MC may set 'review' instead of 'done' — then someone else decides. The
+same reflection sent again within 5 minutes is not posted twice. If your work is
+code, pass workdir (the folder of your checkout) so MC records commit and branch.
+
+## Knowledge (vault)
+mc_vault_search finds notes, mc_vault_read reads one, mc_vault_write saves what
+the next agent should know (a lesson, a fact, a decision with its reason).
+
+## Other tools
+mc_task_detail (a card with its comments), mc_tasks (cards of your board),
+mc_register_deliverable (hand in a result: a document, a file, a link),
+mc_get_project / mc_get_deliverables (context of the project),
+mc_inbox / mc_msg (your messages; reply in a thread).
+
+## Never
+- Never set review or done with mc_patch_task. Finish only with mc_finish.
+- Never finish a card that was cancelled or stopped, or one in review or blocked.
+- Never work on a card that mc_next_task did not give you.
+- The brief may name `mc` shell commands. Use the tool the answer of mc_next_task
+  maps them to. A command without a tool is not available here: do not guess,
+  write what you needed in an mc_progress note.
+"""
+
+
+@_worker_tool
+def mc_handbook() -> str:
+    """How Mission Control works and how you work with it: the loop, progress
+    notes, the checklist, finishing, the vault, and what never to do. Read it
+    once before your first card."""
+    return _HANDBOOK
+
+
+_WORKER_INSTRUCTIONS = """You are connected to Mission Control (MC) as a registered worker. MC is a task board: it gives you cards (tasks), you do the work and report back.
+
+Work in this loop:
+1. Call mc_next_task. It fetches your next card and accepts it. No card: wait about a minute, call it again.
+2. Do the work the card's brief describes.
+3. Call mc_progress with a short note at least every 15 minutes.
+4. When the work is done call mc_finish with a reflection. Then go back to step 1.
+
+Read mc_handbook once before your first card. The tool answers name the next step — follow them."""
+
+
+if WORKER_MODE:
+    from fastmcp.server.middleware import Middleware
+
+    class _StampCalls(Middleware):
+        """Every tool call counts as activity for the heartbeat's quiet window."""
+
+        async def on_call_tool(self, context, call_next):
+            _touch()
+            return await call_next(context)
+
+    mcp.add_middleware(_StampCalls())
+    mcp.instructions = _WORKER_INSTRUCTIONS
 
 
 if __name__ == "__main__":

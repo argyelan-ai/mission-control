@@ -227,8 +227,10 @@ the rules every UI change is checked against. Visual rules:
    of the coding CLI's official background mode or of omp over ACP, on either
    brain, and acts only through MC's gates.
 3. No own harness driver, agent loop or MCP server for heads — a CLI script is
-   enough; an admin token is never handed to a head. Exception: MCP tools that
-   carry only the scope `comms:talk` and read-only facts (ADR-100 §2).
+   enough; an admin token is never handed to a head. Exceptions: MCP tools
+   that carry only the scope `comms:talk` and read-only facts (ADR-100 §2);
+   and the worker flow, in which a registered agent with its own token and an
+   explicit scope list works its cards over MCP (ADR-101).
 4. No new task columns, statuses or "head" run type; the task core is frozen.
 5. No model gateway or proxy in front of the coding CLI — so Claude Code on
    a local model stays unavailable until an own ADR decides otherwise; the
