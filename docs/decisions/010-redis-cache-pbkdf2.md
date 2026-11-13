@@ -53,7 +53,7 @@ Flow bei Agent-Request:
 - **Graceful Degradation**: Redis down → Fallback zu DB+PBKDF2 (langsamer aber funktional)
 
 ### Negativ
-- **5min Token-Invalidation-Lag**: Nach Token-Reset hat alter Cache-Eintrag bis zu 5min Gültigkeit — **Trade-off akzeptabel** (Token-Resets sind selten, zusätzlich würde explizites Invalidate komplexer)
+- **5min Token-Invalidation-Lag**: Nach Token-Reset hat alter Cache-Eintrag bis zu 5min Gültigkeit — **Trade-off akzeptabel** (Token-Resets sind selten, zusätzlich würde explizites Invalidate komplexer) — *superseded 2026-11-13, see Nachtrag: a reset now takes effect at once.*
 - **Redis-Abhängigkeit**: Wenn Redis down, Performance bricht ein (aber System funktioniert)
 - **Cache-Miss-Storm möglich**: Wenn viele Agents gleichzeitig nach Redis-Restart pollen, alle DB+PBKDF2 gleichzeitig → potential für CPU-Spike (bisher nicht beobachtet)
 
