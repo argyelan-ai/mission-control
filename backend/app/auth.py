@@ -581,12 +581,27 @@ def _agent_token_cache_key(raw_token: str) -> str:
     return f"mc:agent-auth:{sha}"
 
 
+def _agent_token_cache_value(agent_id: uuid.UUID, token_hash: str) -> str:
+    """Cache value: the agent id plus a fingerprint of the stored token hash.
+
+    The fingerprint binds the entry to the hash the token was verified
+    against. When the hash is replaced (token reset, re-provision) the entry
+    no longer matches and the old token is refused at once instead of living
+    on until the entry expires. It is a SHA256 prefix of the stored hash —
+    neither the token nor the stored hash itself goes to Redis.
+    """
+    fingerprint = hashlib.sha256(token_hash.encode()).hexdigest()[:32]
+    return f"{agent_id}:{fingerprint}"
+
+
 async def _resolve_agent_from_token(token: str, session: AsyncSession) -> "Agent | None":
     """
     Resolve agent via token — Redis cache first, then PBKDF2 fallback.
 
-    Cache: SHA256(token) → agent_id (TTL 5min)
+    Cache: SHA256(token) → agent_id + fingerprint of the stored hash (TTL 5min)
     This means: only one PBKDF2 call needed instead of N (for N agents) per request.
+    A hit counts only while the agent still has the hash the token was
+    verified against (ADR-010, amended 2026-11-13).
     """
     from app.models.agent import Agent
     from app.redis_client import get_redis
@@ -598,11 +613,19 @@ async def _resolve_agent_from_token(token: str, session: AsyncSession) -> "Agent
         redis = await get_redis()
         cached = await redis.get(cache_key)
         if cached:
-            agent_id = uuid.UUID(cached.decode() if isinstance(cached, bytes) else cached)
-            agent = await session.get(Agent, agent_id)
-            if agent and agent.agent_token_hash:
+            cached = cached.decode() if isinstance(cached, bytes) else cached
+            agent_id_raw, _, _ = cached.partition(":")
+            agent = await session.get(Agent, uuid.UUID(agent_id_raw))
+            if (
+                agent
+                and agent.agent_token_hash
+                and hmac.compare_digest(
+                    cached, _agent_token_cache_value(agent.id, agent.agent_token_hash)
+                )
+            ):
                 return agent
-            # Cache entry invalid (agent deleted or token changed)
+            # Entry no longer valid: agent deleted, token replaced, or an entry
+            # in the old format (agent id only). Drop it and verify again.
             await redis.delete(cache_key)
     except Exception:
         pass  # Redis unavailable — fall back to PBKDF2
@@ -618,7 +641,11 @@ async def _resolve_agent_from_token(token: str, session: AsyncSession) -> "Agent
             # Cache the result (5min TTL)
             try:
                 redis = await get_redis()
-                await redis.set(cache_key, str(agent.id), ex=300)
+                await redis.set(
+                    cache_key,
+                    _agent_token_cache_value(agent.id, agent.agent_token_hash),
+                    ex=300,
+                )
             except Exception:
                 pass
             return agent
