@@ -1180,6 +1180,7 @@ _reported_ends: set[tuple[str, str]] = set()
 _last_call = time.monotonic()
 _hb_thread: threading.Thread | None = None
 _hb_stop = threading.Event()
+_beat_lock = threading.Lock()
 # mc_finish redirects stdout/stderr and may change the folder: one at a time.
 _finish_lock = threading.Lock()
 
@@ -1245,13 +1246,16 @@ def _quiet() -> bool:
 
 
 def _beat() -> None:
-    card = _held_card()
-    if not card:
-        return
-    body = {"status": "working", "task_id": card["task_id"]}
-    if card.get("attempt_id"):
-        body["attempt_id"] = card["attempt_id"]
-    _api_agent("POST", "/agent/me/heartbeat", json=body)
+    # The card check and the send happen under one lock, and the idle beat
+    # takes the same lock: a `working` beat can never land after `idle`.
+    with _beat_lock:
+        card = _held_card()
+        if not card:
+            return
+        body = {"status": "working", "task_id": card["task_id"]}
+        if card.get("attempt_id"):
+            body["attempt_id"] = card["attempt_id"]
+        _api_agent("POST", "/agent/me/heartbeat", json=body)
 
 
 def _heartbeat_tick() -> None:
@@ -1282,13 +1286,18 @@ def _start_heartbeat() -> None:
 
 
 def _stop_heartbeat(send_idle: bool = True) -> None:
+    """Stop the loop and send one `idle` beat. Callers drop the card first, so
+    a beat that starts after this point finds no card and sends nothing."""
     global _hb_thread
     with _card_lock:
-        running = _hb_thread is not None
+        thread = _hb_thread
         _hb_stop.set()
         _hb_thread = None
-    if send_idle and running and _heartbeat_interval() > 0:
-        _api_agent("POST", "/agent/me/heartbeat", json={"status": "idle"})
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(timeout=15)
+    if send_idle and thread is not None and _heartbeat_interval() > 0:
+        with _beat_lock:
+            _api_agent("POST", "/agent/me/heartbeat", json={"status": "idle"})
 
 
 # ── Cards ─────────────────────────────────────────────────────────────────────
@@ -1385,8 +1394,40 @@ _VERB_MAP = """The brief was written for the `mc` command line. Over MCP use the
 - mc vault-search / mc vault-write -> mc_vault_search / mc_vault_write (read a note: mc_vault_read)
 - mc deliverable -> mc_register_deliverable
 - mc task-get -> mc_task_detail
+- mc inbox -> mc_inbox, mc msg -> mc_msg
 Any other mc command has no tool here: do not guess, say what you needed in an mc_progress note.
 Paths in the brief are paths on the MC host."""
+
+
+# The poll also hands out an assigned card in review or blocked (once — it
+# stamps ack_at itself). Accepting such a card would pull it out of review or
+# past its blocker, so only these are accepted; a missing status is the old
+# poll answer and is accepted as before.
+_ACCEPT_FROM = {"", "inbox", "in_progress"}
+
+_WAITS_FOR = {
+    "review": "It waits for the review decision.",
+    "blocked": "It waits for the operator or the board lead to clear the blocker.",
+}
+
+
+def _shown_not_accepted(task: dict, card: dict, status: str) -> str:
+    task_id = card["task_id"]
+    return "\n".join([
+        f"Card {_label(card)} is in status '{status}'. MC shows it to you once; it is "
+        "not yours to work on now.",
+        _WAITS_FOR.get(status, "It waits for someone else."),
+        "It was NOT accepted and its status was NOT changed.",
+        f"Card id: {task_id}  ·  board: {card['board_id']}",
+        "",
+        "--- BRIEF (from Mission Control) ---",
+        str(task.get("prompt") or "").strip(),
+        "--- END OF BRIEF ---",
+        "",
+        "Next step: do not change its status and do not call mc_finish for it. To add "
+        f'something, post an mc_progress note with task_id="{task_id}". Then call '
+        "mc_next_task again in a few minutes.",
+    ])
 
 
 def _on_new_task(resp: dict) -> str:
@@ -1403,6 +1444,12 @@ def _on_new_task(resp: dict) -> str:
         "title": str(task.get("title") or ""), "status": "in_progress",
     }
     held = _held_card()
+    status = str(task.get("status") or "").strip().lower()
+    if status not in _ACCEPT_FROM:
+        if held and held["task_id"] == task_id:
+            _forget_card()
+            _stop_heartbeat()
+        return _shown_not_accepted(task, card, status)
     again = bool(resp.get("orphaned_run_redispatched")) or bool(
         held and held["task_id"] == task_id
     )
@@ -1686,6 +1733,11 @@ def _finish_error(text: str, reflection: bool = False, saved: bool = False) -> s
             "Hint: MC refused the status change. Fix what it names, then call "
             "mc_finish again."
         )
+    if "run_control=" in text or "Updates nicht erlaubt" in text:
+        hints.append(
+            "Hint: MC stopped or cancelled this card. Stop working on it and call "
+            "mc_next_task."
+        )
     if "Task-Status ist" in text:
         hints.append(
             "Hint: the card is not in progress or in review any more. Call mc_next_task."
@@ -1737,6 +1789,29 @@ def mc_finish(message: str, review: bool = False, task_id: str = "", workdir: st
     card, err = _active_card(task_id)
     if not card:
         return f"Error: {err}"
+    # `mc finish` also allows review -> done. A worker must never approve its
+    # own review card, and a held card may have been moved meanwhile: read the
+    # status MC has now.
+    now, err = _load_card(card["task_id"], card["board_id"])
+    if not now:
+        return (
+            f"Error: reading card {_label(card)} failed: {err}\n"
+            "Hint: nothing was finished. Call mc_finish again in a minute."
+        )
+    if now["status"] != "in_progress":
+        held = _held_card()
+        if held and held["task_id"] == card["task_id"]:
+            _forget_card()
+            _stop_heartbeat()
+        why = (
+            "It waits for the review decision; a worker never finishes a card in review."
+            if now["status"] == "review" else "Only a card in progress can be finished."
+        )
+        return (
+            f"Error: card {_label(card)} is in status '{now['status']}', not in progress. "
+            f"Nothing was finished. {why}\n"
+            "Next step: call mc_next_task."
+        )
 
     cfg = config.Config(
         api_url=MC_BASE.removesuffix("/api/v1"),
@@ -1771,9 +1846,19 @@ def mc_finish(message: str, review: bool = False, task_id: str = "", workdir: st
     detail = _agent_call(
         "GET", f"/agent/boards/{card['board_id']}/tasks/{card['task_id']}/detail"
     )
-    status = "unknown" if _is_error(detail) else str(detail.get("status") or "unknown")
     notes = _cli_notes(out.getvalue(), errs.getvalue())
     tail = ["MC notes (from the mc command line):", *[f"- {n}" for n in notes]] if notes else []
+    if _is_error(detail):
+        # "Finished" is never said without MC's word; the card stays held.
+        return "\n".join([
+            f"mc finish ran for card {_label(card)}, but MC could not read the card "
+            f"afterwards: {detail['error']}",
+            *tail,
+            "Next step: check its status with mc_task_detail. Still in progress: call "
+            "mc_finish again with the same text (no second reflection is posted within "
+            "5 minutes). Done or review: call mc_next_task.",
+        ])
+    status = str(detail.get("status") or "unknown")
     if status == "in_progress":
         return "\n".join([
             f"Card {_label(card)} is still in progress — MC did not change its status.",

@@ -19,6 +19,8 @@ import asyncio
 import importlib.util
 import json
 import shutil
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -162,6 +164,11 @@ class Board:
         self.poll_error: tuple[int, dict] | None = None
         self.me_current_task: dict | None = None
         self.heartbeats: list[dict] = []
+        # Slow `working` beats (seconds) — to catch a beat landing after `idle`.
+        self.working_beat_delay = 0.0
+        self.working_beat_sent = threading.Event()
+        # Set as detail_error once a PATCH went through (the read after finish).
+        self.detail_error_after_patch: tuple[int, dict] | None = None
         self.vault_hits: list[dict] = []
         self.notes: dict[str, dict] = {}
         self.vault_writes: list[dict] = []
@@ -197,6 +204,9 @@ class Board:
             return 200, {"id": AGENT, "name": "worker", "board_id": BOARD,
                          "current_task": self.me_current_task}
         if (method, path) == ("POST", f"{agent}/me/heartbeat"):
+            if body.get("status") == "working" and self.working_beat_delay:
+                self.working_beat_sent.set()
+                time.sleep(self.working_beat_delay)
             self.heartbeats.append(body)
             return 200, {"ok": True}
         if (method, path) == ("GET", f"{task}/detail"):
@@ -220,6 +230,8 @@ class Board:
             if self.patch_error:
                 return self.patch_error
             self.card["status"] = body["status"]
+            if self.detail_error_after_patch:
+                self.detail_error = self.detail_error_after_patch
             return 200, dict(self.card)
         if (method, path) == ("GET", f"{agent}/boards/{BOARD}/tasks"):
             return 200, [dict(self.card)]
@@ -421,6 +433,49 @@ def test_next_task_accepts_the_card_and_names_the_next_step(worker_mod, board):
     assert board.card["status"] == "in_progress"
     assert worker_mod._held_card()["task_id"] == TASK
     board.assert_agent_only()
+
+
+@pytest.mark.parametrize("status,waits_for", [
+    ("review", "review decision"),
+    ("blocked", "operator or the board lead"),
+])
+def test_next_task_shows_a_review_or_blocked_card_without_accepting_it(
+    worker_mod, board, status, waits_for
+):
+    """The poll also hands out an assigned card in review or blocked — once
+    (it stamps ack_at itself). Accepting it would pull it out of review or past
+    the blocker. The worker sees the brief, the card keeps its status."""
+    board.card["status"] = status
+    board.polls = [board.new_task()]
+    out = _unwrap(worker_mod.mc_next_task)()
+
+    assert "New card accepted" not in out
+    assert f"is in status '{status}'" in out and waits_for in out
+    assert "NOT accepted" in out and "status was NOT changed" in out
+    assert "--- BRIEF (from Mission Control) ---" in out
+    assert "Export the report as CSV." in out
+    assert "already done, the card is accepted" not in out
+    assert f'task_id="{TASK}"' in out
+    assert "Next step:" in out and "mc_next_task" in out
+    assert board.of("PATCH", f"/tasks/{TASK}") == []
+    assert board.card["status"] == status
+    assert worker_mod._held_card() is None
+    assert board.heartbeats == []
+
+
+def test_a_held_card_shown_in_review_is_dropped(worker_mod, board):
+    _accept(worker_mod, board)
+    board.card["status"] = "review"
+    board.polls = [board.new_task(orphaned_run_redispatched=True)]
+    out = _unwrap(worker_mod.mc_next_task)()
+    assert "NOT accepted" in out
+    assert len(board.of("PATCH", f"/tasks/{TASK}")) == 1  # only the first accept
+    assert worker_mod._held_card() is None
+
+
+def test_verb_map_names_the_message_tools(worker_mod, board):
+    out = _accept(worker_mod, board)
+    assert "mc inbox -> mc_inbox" in out and "mc msg -> mc_msg" in out
 
 
 def test_next_task_without_attempt_id_sends_no_attempt_header(worker_mod, board):
@@ -674,8 +729,9 @@ def test_finish_runs_the_cli_finish_and_reports_the_real_status(worker_mod, boar
     assert worker_mod._held_card() is None
 
     seq = [(c["method"], c["path"].rsplit("/", 1)[-1]) for c in board.calls]
-    assert seq[:5] == [("GET", "detail"), ("GET", "checklist"), ("GET", "comments"),
-                       ("POST", "comments"), ("PATCH", TASK)]
+    # first the server's own status read, then the CLI's checks
+    assert seq[:6] == [("GET", "detail"), ("GET", "detail"), ("GET", "checklist"),
+                       ("GET", "comments"), ("POST", "comments"), ("PATCH", TASK)]
     reflection = board.of("POST", f"/tasks/{TASK}/comments")[0]["json"]
     assert reflection["comment_type"] == "reflection"
     patch = board.of("PATCH", f"/tasks/{TASK}")[0]
@@ -772,6 +828,53 @@ def test_finish_refused_by_the_proof_gate_keeps_the_card(worker_mod, board, monk
     assert out.startswith("Error:") and "HTTP 422" in out
     assert "Hint:" in out
     assert worker_mod._held_card()["task_id"] == TASK
+
+
+@pytest.mark.parametrize("status", ["review", "blocked", "done"])
+def test_finish_refuses_a_card_that_is_not_in_progress(worker_mod, board, monkeypatch, status):
+    """`mc finish` itself allows review -> done. A worker must not approve its
+    own review card, so the server reads the status first and refuses."""
+    _use_cli(worker_mod, monkeypatch)
+    _accept(worker_mod, board)
+    board.card["status"] = status  # moved by the lead in the meantime
+    out = _unwrap(worker_mod.mc_finish)(REFLECTION)
+    assert out.startswith("Error:")
+    assert f"status '{status}'" in out
+    assert "mc_next_task" in out
+    assert board.of("PATCH", f"/tasks/{TASK}")[1:] == []  # only the accept
+    assert not board.of("POST", f"/tasks/{TASK}/comments")
+    assert board.card["status"] == status
+    assert worker_mod._held_card() is None
+
+
+def test_finish_refuses_a_review_card_named_by_id(worker_mod, board, monkeypatch):
+    _use_cli(worker_mod, monkeypatch)
+    board.card["status"] = "review"
+    out = _unwrap(worker_mod.mc_finish)(REFLECTION, task_id=TASK)
+    assert out.startswith("Error:") and "status 'review'" in out
+    assert board.of("PATCH", f"/tasks/{TASK}") == []
+    assert board.card["status"] == "review"
+
+
+def test_finish_keeps_the_card_when_the_status_read_afterwards_fails(worker_mod, board, monkeypatch):
+    _use_cli(worker_mod, monkeypatch)
+    _accept(worker_mod, board)
+    board.detail_error_after_patch = (502, {"detail": "bad gateway"})
+    out = _unwrap(worker_mod.mc_finish)(REFLECTION)
+    assert not out.startswith("Card finished:")
+    assert "could not read" in out
+    assert "mc_task_detail" in out
+    assert worker_mod._held_card()["task_id"] == TASK
+
+
+def test_finish_on_a_stopped_card_says_stop(worker_mod, board, monkeypatch):
+    _use_cli(worker_mod, monkeypatch)
+    _accept(worker_mod, board)
+    board.patch_error = (409, {"detail": "Task run_control=stopped — Updates nicht erlaubt"})
+    out = _unwrap(worker_mod.mc_finish)(REFLECTION)
+    assert out.startswith("Error:")
+    assert "stopped or cancelled" in out
+    assert "Stop working on it" in out
 
 
 def test_finish_without_the_cli_finishes_nothing(worker_mod, board):
@@ -892,6 +995,28 @@ def test_finishing_stops_the_heartbeat_with_an_idle_beat(monkeypatch, beating):
     board.heartbeats.clear()
     mod._heartbeat_tick()
     assert board.heartbeats == []
+
+
+def test_no_working_beat_lands_after_the_idle_beat(monkeypatch, tmp_path):
+    """The real loop: a `working` beat still on the wire when the card is
+    dropped must not arrive after `idle` — MC would show the worker busy."""
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("MC_AGENT_TOKEN", AGENT_TOKEN)
+    monkeypatch.setenv("MC_MCP_WORKER", "1")
+    monkeypatch.setenv("MC_MCP_HEARTBEAT_SECONDS", "0.02")
+    mod = _load(tmp_path)
+    board = Board().install(mod, monkeypatch)
+    try:
+        _accept(mod, board)  # first beat is synchronous and fast
+        board.working_beat_delay = 0.3
+        board.working_beat_sent.clear()
+        assert board.working_beat_sent.wait(2), "the loop sent no beat"
+        mod._forget_card()
+        mod._stop_heartbeat()
+        time.sleep(0.5)
+        assert board.heartbeats[-1] == {"status": "idle"}
+    finally:
+        mod._stop_heartbeat(send_idle=False)
 
 
 def test_heartbeat_off_sends_no_beat_at_all(worker_mod, board, monkeypatch):
