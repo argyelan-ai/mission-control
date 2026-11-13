@@ -661,8 +661,15 @@ class TaskRunnerService:
             # so the first poll after it delivers the card before a ladder
             # reads its old dispatched_at. A genuinely lost card still
             # escalates once that window has run out.
+            # rule: R-paused-holds-poll - a card waiting on a paused agent is not "not ACKed"
+            # Same for the agent's own pause (ADR-089 Nachtrag 2026-11-13):
+            # the poll holds the card until the operator sets it active.
             hold_key = RedisKeys.dispatch_system_hold(str(task.id))
-            if update_drained or system_mode_refusal(system_mode, task):
+            if (
+                update_drained
+                or system_mode_refusal(system_mode, task)
+                or (agent.operational_mode or "active") == "paused"
+            ):
                 await redis.set(
                     hold_key, "1",
                     ex=int((_get_ack_timeout_minutes(agent) + RESUME_SUPPRESS_MARGIN_MINUTES) * 60),

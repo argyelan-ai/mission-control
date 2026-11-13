@@ -3272,6 +3272,12 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
     # after the halt restarts it.
     if await _system_mode_hold(session, agent, task) is not None:
         return None
+    # rule: R-paused-holds-poll - no restart pushed into a paused agent
+    # A restart hands the full prompt out again: new work. While the
+    # operator has the agent paused (often because it hangs) the poll keeps
+    # reporting `working` and the first poll after "active" restarts it.
+    if (agent.operational_mode or "active") == "paused":
+        return None
 
     redis = await get_redis()
     if not await try_claim_heal(redis, str(task.id)):
@@ -3726,6 +3732,8 @@ async def agent_poll(
                 # rule: R-paused-holds-poll - a paused agent's poll claims no fresh card
                 # Then the operator's switch for this one agent, before the
                 # update drain and the runtime probe: pause is the reason.
+                # (Push dispatch asks the drain first, check_dispatch_allowed
+                # step 1.5 before 3; both hold, only the named reason differs.)
                 _held = await _paused_hold(agent, task)
                 if _held is not None:
                     return {**_held, **_poll_extra}

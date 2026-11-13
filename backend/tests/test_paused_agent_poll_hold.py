@@ -16,6 +16,10 @@ These tests pin the line:
   dispatched card whose prompt never arrived, not only a fresh one;
 - a card already in flight (delivered, no ACK yet) keeps its answer;
 - running work (an ACKed card) is still reported as ``working``;
+- the restart of an orphaned run waits (the poll keeps saying ``working``);
+- pull dispatch answers 204;
+- the ACK and pending ladders neither retry nor escalate a waiting card;
+- under DRAINING the answer names the pause;
 - the undispatched-card watcher does not prepare a paused agent's card;
 - the poll never takes an unassigned or foreign card.
 
@@ -38,7 +42,9 @@ from tests.test_poll_respects_system_halt import (  # noqa: F401 — _no_update_
     _poll,
     _seed_agent,
     _session,
+    _set_mode,
 )
+from tests.test_system_mode_holds_every_path import _ago, _events, _set, _tick
 
 
 async def _set_paused(agent_id, paused: bool) -> None:
@@ -264,3 +270,127 @@ async def test_undispatched_watcher_leaves_a_paused_agents_card(
     prepared = await _watch()
     assert prepared.await_count == 1
     assert (await _card(card.id)).dispatched_at is not None
+
+
+@pytest.mark.asyncio
+async def test_paused_poll_does_not_restart_an_orphaned_run(
+    client, make_board, make_agent, make_task,
+):
+    """A restart hands the full prompt out again: new work. While paused
+    the poll keeps reporting ``working`` and changes nothing; active again,
+    the next poll restarts the run."""
+    stale = datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(seconds=900)
+    board, agent, token = await _seed_agent(
+        make_board, make_agent, operational_mode="paused", last_task_activity_at=stale,
+    )
+    card = await make_task(
+        board_id=board.id, title="orphaned run", status="in_progress",
+        assigned_agent_id=agent.id, ack_at=stale, dispatched_at=stale,
+        dispatch_attempt_id="attempt-before-pause",
+    )
+
+    body = await _poll(client, token)
+    assert body["state"] == "working" and body["task_id"] == str(card.id), body
+    held = await _card(card.id)
+    assert held.ack_at is not None and held.dispatch_attempt_id == "attempt-before-pause"
+
+    await _set_paused(agent.id, False)
+    body = await _poll(client, token)
+    assert body["state"] == "new_task" and body.get("orphaned_run_redispatched") is True, body
+
+
+@pytest.mark.asyncio
+async def test_pull_dispatch_hands_a_paused_agent_nothing(
+    client, make_board, make_agent, make_task,
+):
+    """``GET /agent/boards/{id}/tasks/next`` is in every TOOLS.md with
+    tasks:read — it must not be a way around the pause. (A lead takes root
+    cards by pull; a worker only continuation flows.)"""
+    board, agent, token = await _seed_agent(
+        make_board, make_agent, operational_mode="paused", is_board_lead=True,
+    )
+    card = await make_task(
+        board_id=board.id, title="pull me", status="inbox", assigned_agent_id=agent.id,
+    )
+
+    async def _pull():
+        return await client.get(
+            f"/api/v1/agent/boards/{board.id}/tasks/next",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    resp = await _pull()
+    assert resp.status_code == 204, f"pull dispatch handed a paused agent a card: {resp.text}"
+    row = await _card(card.id)
+    assert row.status == "inbox" and row.ack_at is None
+
+    await _set_paused(agent.id, False)
+    resp = await _pull()
+    assert resp.status_code == 200 and resp.json()["task"]["id"] == str(card.id), resp.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stamped", [False, True], ids=["pending", "ack"])
+async def test_ladders_do_not_escalate_a_card_waiting_on_a_paused_agent(
+    make_board, make_agent, make_task, stamped,
+):
+    """The card waits because the operator paused the agent, not because the
+    agent fails to react: no "has not reacted" escalation (an approval and a
+    phone push), no silent retry, no model-wait return."""
+    board = await make_board(name="Ladder", slug=f"ladder-{__import__('uuid').uuid4().hex[:8]}")
+    agent = await make_agent(
+        name="paused-dev", board_id=board.id, role="developer",
+        agent_runtime="cli-bridge", operational_mode="paused",
+    )
+    card = await make_task(
+        board_id=board.id, title="waits on a paused agent", status="inbox",
+        assigned_agent_id=agent.id,
+        dispatched_at=_ago(16) if stamped else None,
+        dispatch_attempt_id="attempt-before-pause" if stamped else None,
+    )
+    await _set(card.id, updated_at=_ago(30))
+
+    escalate, model_wait = await _tick()
+
+    assert escalate.await_count == 0, "operator escalation for a card that waits on a pause"
+    assert model_wait.await_count == 0
+    assert await _events(card.id, "task.dispatch_pending") == []
+    assert (await _card(card.id)).dispatch_attempt_id == (
+        "attempt-before-pause" if stamped else None
+    ), "the ladder rotated the attempt of a card that waits on a pause"
+
+
+@pytest.mark.asyncio
+async def test_under_draining_the_pause_is_named(
+    client, make_board, make_agent, make_task,
+):
+    """Both hold a fresh root card. The fresh-card gates ask HALTED, then the
+    pause, then DRAINING last (its gate sits at the end of the poll): the
+    answer names the pause, the operator's own switch for this agent."""
+    board, agent, token = await _seed_agent(make_board, make_agent, operational_mode="paused")
+    await make_task(
+        board_id=board.id, title="root work", status="inbox", assigned_agent_id=agent.id,
+    )
+
+    await _set_mode("draining")
+    try:
+        body = await _poll(client, token)
+    finally:
+        await _set_mode("active")
+    _assert_paused_hold(body, agent.name)
+    assert "system_draining" not in body, body
+
+
+@pytest.mark.asyncio
+async def test_paused_reviewer_gets_no_undelivered_review_card(
+    client, make_board, make_agent, make_task,
+):
+    """An unacked review card is handed out once to its reviewer — not while
+    the reviewer is paused."""
+    board, agent, token = await _seed_agent(make_board, make_agent, operational_mode="paused")
+    card = await make_task(
+        board_id=board.id, title="please review", status="review", assigned_agent_id=agent.id,
+    )
+
+    _assert_paused_hold(await _poll(client, token), agent.name)
+    assert (await _card(card.id)).ack_at is None
