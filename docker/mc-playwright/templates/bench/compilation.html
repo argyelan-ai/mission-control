@@ -1,0 +1,157 @@
+<!doctype html><html class="c kind-{{KIND}}"><head><meta charset="utf-8">
+<!-- Bench compilation, one 1080×1350 background per part (30.10.2026).
+     The art rectangle stays EMPTY: ffmpeg scales the recording into it
+     (compilation.COMP_ART); nothing here may reach into it. The racing bar
+     fills are drawn by ffmpeg on the .track rectangles (comp_bar_rects).
+     Floor {{FLOOR}} px for every text. Own colour tokens — warm off-black,
+     one amber accent; never cyan, so shared.css (cyan tokens) is not loaded. -->
+<link rel="stylesheet" href="fonts/embedded-fonts.css">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+:root { --bg:#0E0D0B; --text:#EEE9DF; --text2:#ABA49A; --muted:#7D766D; --line:#2B2723;
+  --track:#1F1C19; --accent:#E9A23B; }
+.c, .c body { width:{{WIDTH}}px; height:{{HEIGHT}}px; overflow:hidden; background:var(--bg); color:var(--text);
+  font-family:'General Sans',sans-serif; }
+.c body { position:relative; font-size:32px; }
+.c [class^="band-"] { position:absolute; left:56px; right:56px; }
+.c .num, .c .v, .c .bv, .c td { font-variant-numeric:tabular-nums; }
+
+/* header band: hardware is the loudest line, then model, then settings */
+.c .band-top { padding-top:24px; }
+.c .hw { font:600 76px/1 'Clash Display','General Sans',sans-serif; text-transform:uppercase;
+  letter-spacing:-.015em; white-space:nowrap; overflow:hidden; }
+.c .mdl { font:600 42px/1.1 'General Sans',sans-serif; margin-top:12px; white-space:nowrap; overflow:hidden; }
+.c .meta { font:500 32px/1.2 'General Sans',sans-serif; color:var(--text2); margin-top:6px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.c .rule { position:absolute; left:0; right:0; bottom:0; height:2px; background:var(--line); }
+.c .art, .c .thumb { position:absolute; background:var(--track); }
+
+/* caption line under the art + the rating badge */
+.c .band-cap { display:flex; justify-content:space-between; align-items:center; gap:24px; height:40px; }
+.c .cap { font:500 32px/1.2 'JetBrains Mono',monospace; text-transform:uppercase; letter-spacing:.04em;
+  color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.c .badge { flex:none; font:500 32px/1 'JetBrains Mono',monospace; color:var(--accent); white-space:nowrap;
+  border:2px solid var(--accent); padding:6px 12px 4px; }
+
+/* stats row: up to three numbers */
+.c .stats { display:grid; column-gap:28px; }
+.c .stats.n1 { grid-template-columns:1fr; }
+.c .stats.n2 { grid-template-columns:1fr 1fr; }
+.c .stats.n3 { grid-template-columns:1.1fr 1fr 1fr; }
+.c .st { display:flex; flex-direction:column; min-width:0; }
+.c .st .v { font:600 88px/1 'Clash Display','General Sans',sans-serif; color:var(--accent);
+  letter-spacing:-.02em; white-space:nowrap; }
+.c .st .v u, .c .hero .v u { text-decoration:none; font:500 40px/1 'General Sans',sans-serif;
+  color:var(--text2); letter-spacing:0; margin:0 8px; }
+.c .st .v.est, .c .hero .v.est { color:var(--text); }
+.c .st .l { font:500 32px/1.2 'General Sans',sans-serif; color:var(--text2); margin-top:8px; white-space:nowrap;
+  overflow:hidden; }
+
+/* hook: one huge number, its words beside it */
+.c .hero { display:flex; align-items:flex-end; gap:28px; }
+.c .hero .v { font:600 120px/.9 'Clash Display','General Sans',sans-serif; color:var(--accent);
+  letter-spacing:-.02em; white-space:nowrap; flex:none; }
+.c .hero .l { font:500 32px/1.15 'General Sans',sans-serif; color:var(--text); padding-bottom:4px; }
+.c .sub { font:500 32px/1.2 'General Sans',sans-serif; color:var(--text2); margin-top:12px; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
+
+/* racing bars: label | track (fill drawn by ffmpeg) | value */
+.c .brow { position:absolute; left:56px; right:56px; height:44px; display:flex; align-items:center; }
+.c .brow .bl { width:400px; font:500 32px/1 'General Sans',sans-serif; color:var(--muted); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
+.c .brow .bv { position:absolute; right:0; font:500 32px/1 'JetBrains Mono',monospace; color:var(--muted);
+  white-space:nowrap; }
+.c .brow.hi .bl, .c .brow.hi .bv { color:var(--text); }
+.c .track { position:absolute; background:var(--track); }
+
+/* facts row (solo): small label over its value */
+.c .facts { display:grid; column-gap:28px; }
+.c .facts.n1 { grid-template-columns:1fr; }
+.c .facts.n2 { grid-template-columns:1fr 1fr; }
+.c .facts.n3 { grid-template-columns:1fr 1fr 1.4fr; }
+.c .facts.n4 { grid-template-columns:repeat(4,1fr); }
+.c .fc { display:flex; flex-direction:column; min-width:0; border-top:2px solid var(--line); padding-top:8px; }
+.c .fk { font:500 32px/1.15 'JetBrains Mono',monospace; text-transform:uppercase; letter-spacing:.04em;
+  color:var(--muted); white-space:nowrap; overflow:hidden; }
+.c .fv { font:600 38px/1.1 'General Sans',sans-serif; color:var(--text); white-space:nowrap; overflow:hidden;
+  margin-top:2px; }
+
+/* ranking table */
+.c .tbl { width:100%; border-collapse:collapse; }
+.c .tbl th { font:500 32px/1 'JetBrains Mono',monospace; text-transform:uppercase; letter-spacing:.03em;
+  color:var(--muted); text-align:right; padding:0 0 14px 16px; border-bottom:2px solid var(--line); white-space:nowrap; }
+.c .tbl td { font:500 34px/1 'JetBrains Mono',monospace; text-align:right; padding:16px 0 14px 16px;
+  border-bottom:2px solid var(--line); white-space:nowrap; }
+.c .tbl .rk { text-align:left; padding-left:0; width:56px; }
+.c .tbl .nm { text-align:left; width:99%; }
+.c .tbl tr > :first-child { padding-left:0; }
+.c .tbl td.nm { font:600 34px/1.05 'General Sans',sans-serif; white-space:normal; }
+.c .tbl tr.hi td { color:var(--accent); }
+
+/* closing: the pick, then how it was measured */
+.c .pick { margin-bottom:36px; }
+.c .pk { font:600 56px/1.05 'Clash Display','General Sans',sans-serif; letter-spacing:-.02em; color:var(--accent); }
+.c .why { font:500 36px/1.3 'General Sans',sans-serif; color:var(--text); margin-top:14px; }
+.c .dl { display:block; margin-bottom:12px; }
+.c .det { list-style:none; border-top:2px solid var(--line); }
+.c .det li { font:500 32px/1.25 'General Sans',sans-serif; color:var(--text2); padding:12px 0;
+  border-bottom:2px solid var(--line); }
+
+/* footnote + footer */
+.c .band-note { font:500 32px/1.15 'General Sans',sans-serif; color:var(--muted); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
+.c .band-foot { display:flex; justify-content:space-between; align-items:center; gap:24px;
+  font:500 32px/1 'General Sans',sans-serif; color:var(--muted); }
+.c .band-foot .fl { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.c .brand { display:flex; align-items:center; gap:12px; flex:none; font:500 32px/1 'JetBrains Mono',monospace;
+  color:var(--text2); }
+.c .brand i { display:block; width:18px; height:18px; background:var(--accent); }
+</style></head><body>
+{{BODY}}
+<script>
+/* Fit the hardware line and the model name AFTER the fonts are loaded:
+   shrink to at most 60 % of the design size (never below the floor), then
+   wrap — a served model id is printed whole, never cut. The renderer waits
+   for data-fit="done" before the screenshot. */
+(function () {
+  var floor = {{FLOOR}};
+  function fit() {
+    document.querySelectorAll('[data-fit]').forEach(function (el) {
+      var design = parseFloat(getComputedStyle(el).fontSize);
+      var min = Math.max(floor, Math.round(design * 0.6));
+      var size = design;
+      while (el.scrollWidth > el.clientWidth && size > min) {
+        size = Math.max(min, size - 2);
+        el.style.fontSize = size + 'px';
+      }
+      if (el.scrollWidth > el.clientWidth) { el.style.whiteSpace = 'normal'; el.style.overflowWrap = 'anywhere'; }
+    });
+    /* Overflow check: a cut word, a header taller than its band or a text
+       block running into the footer/footnote is reported, never shipped
+       (the renderer answers 422 with this list). */
+    var bad = [];
+    document.querySelectorAll('.cap, .meta, .sub, .bl, .bv, .band-note, .fl, .st .l, .hero .l, .hw, .mdl, .badge, .fk, .fv')
+      .forEach(function (el) { if (el.scrollWidth > el.clientWidth + 1) bad.push(el.className + ':' + el.textContent.slice(0, 40)); });
+    var top = document.querySelector('.band-top');
+    if (top && top.scrollHeight > top.clientHeight + 1) bad.push('header taller than its band');
+    var foot = document.querySelector('.band-foot');
+    var limit = foot ? foot.getBoundingClientRect().top - 4 : {{HEIGHT}};
+    var note = document.querySelector('.band-note');
+    ['.band-body', '.band-table', '.band-stats', '.band-hero', '.band-facts'].forEach(function (sel) {
+      var el = document.querySelector(sel);
+      if (!el) return;
+      var bottom = el.getBoundingClientRect().bottom;
+      var stop = (note && sel !== '.band-body') ? Math.min(limit, note.getBoundingClientRect().top - 2) : limit;
+      if (sel === '.band-stats' || sel === '.band-hero') {
+        var bars = document.querySelector('.band-bars');
+        if (bars) stop = Math.min(stop, bars.getBoundingClientRect().top - 2);
+      }
+      if (bottom > stop) bad.push(sel + ' runs past ' + Math.round(stop) + 'px');
+    });
+    document.documentElement.dataset.overflow = bad.join(' | ');
+    document.documentElement.dataset.fit = 'done';
+  }
+  (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(fit);
+})();
+</script>
+</body></html>
