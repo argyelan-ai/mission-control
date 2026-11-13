@@ -1,9 +1,10 @@
 """Round-7 re-check t1 NICE-2: "Request changes" tells what really happens.
 
-The case: the builder is paused. A paused agent gets no push, but its own
-poll still takes a card assigned to it by name (rule
-R-paused-poll-takes-assigned, test_paused_agent_poll_claim.py). Live on
-23.10. the builder took the rework 2 s after the click. The system note said
+The case: the builder is paused. Until 2026-11-13 a paused agent's own poll
+still took a card assigned to it by name; live on 23.10. the builder took the
+rework 2 s after the click. Since ADR-089 Nachtrag 2026-11-13 (rule
+R-paused-holds-poll, test_paused_agent_poll_hold.py) the card waits in the
+inbox until the operator sets the builder active. The system note said
 "Dispatch not allowed ... waits in the inbox", the activity said "blocked",
 and the status event read ``in_progress → inbox`` although the card stood in
 ``review`` (the review decision sets a provisional in_progress first).
@@ -12,8 +13,8 @@ Now:
 - the event names the real step, ``review → inbox``, in every outcome of the
   operator's review decision;
 - a paused builder gets its own reason (``review_rejection_agent_paused``)
-  and a note that says it takes the card itself — no "blocked", no raw
-  ``PAUSED``;
+  and a note that says the card waits until the builder is active again —
+  no "blocked", no raw ``PAUSED``;
 - any other refusal (held card, halted system, ...) keeps the honest
   "not allowed right now, waits in the inbox" note.
 """
@@ -81,7 +82,7 @@ async def _events_and_notes(task):
 
 
 @pytest.mark.asyncio
-async def test_paused_builder_note_says_it_takes_the_card_itself(
+async def test_paused_builder_note_says_the_card_waits_until_active(
     fake_redis, make_board, make_task, make_agent,
 ):
     board, dev, task = await _review_card_with_builder(make_board, make_task, make_agent, paused=True)
@@ -94,7 +95,8 @@ async def test_paused_builder_note_says_it_takes_the_card_itself(
     assert event.reason == "review_rejection_agent_paused"
 
     [note] = notes
-    assert "Builder" in note and "pausiert" in note and "holt" in note
+    assert "Builder" in note and "pausiert" in note and "wartet" in note and "aktiv" in note
+    assert "holt" not in note, note
     for wrong in ("nicht erlaubt", "blockiert", "PAUSED", "fuer"):
         assert wrong not in note, note
 

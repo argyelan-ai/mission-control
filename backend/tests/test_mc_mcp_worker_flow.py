@@ -548,6 +548,7 @@ def test_idle_names_the_wait(worker_mod, board):
     ("system_draining", "the system is draining"),
     ("update_drain", "an MC update is running"),
     ("runtime_not_ready", "your model runtime is not ready"),
+    ("agent_paused", "the operator paused you"),
 ])
 def test_idle_hold_names_the_reason(worker_mod, board, flag, reason):
     board.polls = [{"state": "idle", flag: True, "detail": "back in a few minutes"}]

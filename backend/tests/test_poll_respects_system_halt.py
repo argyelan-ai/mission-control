@@ -324,13 +324,12 @@ async def test_normal_mode_poll_hands_out_the_card(client, make_board, make_agen
 
 
 @pytest.mark.asyncio
-async def test_paused_agent_still_takes_its_assigned_card_in_normal_mode(
+async def test_paused_agent_is_held_by_halted_first_then_by_its_pause(
     client, make_board, make_agent, make_task,
 ):
-    """ADR-089 §4 Nachtrag (PR #911, R-paused-poll-takes-assigned): paused
-    is an agent rule and stays out of the system-mode gate. A paused agent
-    takes a card assigned to it by name in normal mode — but not while the
-    whole system is HALTED."""
+    """HALTED comes first, as in push dispatch (check_dispatch_allowed step 1
+    before step 3). In normal mode the agent's own pause holds the card
+    (ADR-089 Nachtrag 2026-11-13, R-paused-holds-poll)."""
     from app.services.operations import SYSTEM_HALTED_REASON
 
     board, agent, token = await _seed_agent(make_board, make_agent, operational_mode="paused")
@@ -341,10 +340,12 @@ async def test_paused_agent_still_takes_its_assigned_card_in_normal_mode(
     await _set_mode("halted")
     body = await _poll(client, token)
     _assert_held(body, "system_halted", "system_draining", SYSTEM_HALTED_REASON)
+    assert "agent_paused" not in body, body
 
     await _set_mode("active")
     body = await _poll(client, token)
-    assert body["state"] == "new_task" and body["task"]["id"] == str(card.id), body
+    assert body["state"] == "idle" and body.get("agent_paused") is True, body
+    assert (await _card(card.id)).dispatched_at is None
     assert (await _agent(agent.id)).operational_mode == "paused"
 
 

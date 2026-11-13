@@ -149,7 +149,8 @@ the model to call `mc_next_task` again after each card.
 - **"no card" for ever.** The card is not assigned to this worker, it is not
   in the inbox, its dependencies are not met, or it is held or stopped. If
   the answer names a reason ("your model runtime is not ready", "an MC update
-  is running", "the system is halted"), that is the reason.
+  is running", "the system is halted", "the operator paused you"), that is
+  the reason.
 - **A card is shown but "NOT accepted".** It is in review or blocked. The
   worker leaves it as it is; the card moves on when the reviewer, the lead or
   the operator acts.
@@ -167,10 +168,11 @@ the model to call `mc_next_task` again after each card.
 
   The answer contains the new token; do not hand it out to lock the worker
   out. The old token is refused from the next call on (ADR-010 Nachtrag).
-- **Pause is not a cut.** *Pause* on the agent page stops MC's own dispatch
-  and recovery for the agent, but the worker's poll still fetches cards that
-  are assigned to it. To stop it for a while, unassign its cards or reset the
-  token.
+- **For a while:** *Pause* on the agent page. The worker gets no new card
+  (`mc_next_task` says "the operator paused you"); a card it already
+  accepted runs to its end. *Active* again, and the next call fetches the
+  waiting card. Pause does not lock the token: the worker can still read
+  and comment.
 - **The tools only:** remove `MC_MCP_WORKER` from the MCP entry; they are gone
   at the next start.
 

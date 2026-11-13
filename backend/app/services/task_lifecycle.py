@@ -2086,24 +2086,23 @@ async def handle_review_rejection(
         task.dispatched_at = None
         task.ack_at = None
         session.add(task)
-        # A paused builder is no dead end: no push, but its own poll takes a
-        # card assigned to it by name (rule R-paused-poll-takes-assigned,
-        # tests/test_paused_agent_poll_claim.py). Live on 23.10. it took the
-        # rework 2 s later while the note said "blocked, waits" (round-7
-        # re-check t1 NICE-2). The note says what happens, in words.
+        # A paused builder gets no card at all, not even by its own poll
+        # (rule R-paused-holds-poll, ADR-089 Nachtrag 2026-11-13): the card
+        # waits in its inbox until the operator sets it active. The note says
+        # that in words, not "blocked" or a raw PAUSED (round-7 NICE-2).
         # The refusal text of operations.check_dispatch_allowed step 3 — the
         # test drives the real check, so a reworded refusal goes red there.
         paused_pull = reason == f"Agent {original_dev.name} PAUSED"
         if paused_pull:
             note = (
                 f"Änderungen angefordert — zurück an {original_dev.name}. "
-                f"{original_dev.name} ist pausiert und holt die Karte bei der "
-                "nächsten Abfrage selbst ab (MC stellt sie nicht von selbst zu)."
+                f"{original_dev.name} ist pausiert: Die Karte wartet in der Inbox "
+                "und geht los, sobald du den Agenten wieder aktiv schaltest."
             )
             event_reason = "review_rejection_agent_paused"
             activity = (
                 f"Review abgelehnt: '{task.title}' — zurück an {original_dev.name} "
-                "(pausiert, holt die Karte selbst ab)"
+                "(pausiert, wartet bis zur Aktivierung)"
             )
         else:
             note = (

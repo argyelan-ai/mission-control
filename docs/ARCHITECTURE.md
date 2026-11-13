@@ -1650,6 +1650,13 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-11-13** — **Pause holds the poll too (ADR-089 Nachtrag 2026-11-13).** `agent_poll`
+  (`_paused_hold` in `backend/app/routers/agents.py`) hands a paused agent no card — fresh,
+  phase approval or undelivered — and answers `idle` + `agent_paused`; a card in flight keeps
+  its answer and running work is still reported. The undispatched-card watcher skips a paused
+  agent's card. Before, a paused agent's poll still claimed any card assigned to it, so *Pause*
+  could not stop an MCP worker (ADR-101). Rule `R-paused-holds-poll` replaces
+  `R-paused-poll-takes-assigned`; guard `backend/tests/test_paused_agent_poll_hold.py`.
 - **2026-11-13** — **A replaced agent token is refused at once (ADR-010 Nachtrag).**
   The Redis token cache (`mc:agent-auth:{SHA256(token)}`) now stores the agent id plus a
   fingerprint of the stored token hash; `_resolve_agent_from_token` (`backend/app/auth.py`)

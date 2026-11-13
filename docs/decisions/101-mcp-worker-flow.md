@@ -58,10 +58,11 @@ the board has auto-dispatch on. Its runtime must be ready, or the poll hands
 out no fresh card. An admin token is never handed to a worker (unchanged), and
 no token is shared between two workers.
 
-*Pause* does not cut a worker off: pausing stops MC's own dispatch, task
-runner and watchdog for the agent, but the agent poll does not read the
-operational mode, so a paused worker still fetches cards assigned to it. The
-reliable cut is resetting its token (see "Später ändern").
+*Pause* stops a worker from getting new cards: since ADR-089 Nachtrag
+2026-11-13 the agent poll holds every card for a paused agent
+(`agent_paused`), and the card waits until the operator sets it active. A
+card it already accepted runs on. The cut for good is resetting its token
+(see "Später ändern").
 
 `scopes = []` means all scopes in MC. A worker therefore gets an explicit
 list. The flow needs `tasks:read`, `tasks:write`, `vault:read` and
@@ -181,14 +182,14 @@ token for a head.
   like for every agent. The agent wizard also creates the row, but then
   provisions a host agent — a new token and service files a worker does not
   use. Cutting a worker off needs the token reset, which is an API call
-  today; *pause* is a button but does not stop the worker's own poll (§1).
+  today; *pause* stops new cards (§1, ADR-089 Nachtrag 2026-11-13).
   The steps are in `docs/setup/mcp-worker.md`. A worker option in the wizard
   with the connect snippet, and a reset button, are visible changes and go to
   the operator first.
 - **No change to dispatch or the poll.** The poll claims a worker's assigned
-  card without a dispatch step and without reading the agent's pause; both
-  are existing behaviour and stay as they are here (build stop). A pause gate
-  in the poll is the operator's decision.
+  card without a dispatch step; that is existing behaviour and stays as it is
+  here (build stop). The pause gate in the poll came later, on the
+  operator's decision (ADR-089 Nachtrag 2026-11-13).
 - **No message tools beyond the existing comms tools.** `mc_inbox` and
   `mc_msg` are the existing agent-mode tools; only `mc blocked` has no tool.
   The verb table says so.

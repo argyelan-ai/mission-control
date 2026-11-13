@@ -1386,6 +1386,7 @@ _HOLD_FLAGS = (
     ("system_draining", "the system is draining"),
     ("update_drain", "an MC update is running"),
     ("runtime_not_ready", "your model runtime is not ready"),
+    ("agent_paused", "the operator paused you"),
 )
 
 _VERB_MAP = """The brief was written for the `mc` command line. Over MCP use these tools instead:

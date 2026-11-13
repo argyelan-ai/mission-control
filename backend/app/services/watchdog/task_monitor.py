@@ -2529,13 +2529,18 @@ class TaskMonitorMixin:
             # A card the system mode holds stays untouched: no workspace
             # preparation, no dispatched_at for the ACK ladder to count, no
             # "Nachdispatcht" note for auto_dispatch_task to refuse anyway.
-            # The first pass after the hold picks it up. Agent rules (paused)
-            # stay out (ADR-089 Nachtrag 2026-10-20 (b)).
+            # The first pass after the hold picks it up.
             if system_mode_refusal(system_mode, task):
                 continue
 
             agent = await session.get(Agent, task.assigned_agent_id)
             if not agent:
+                continue
+            # rule: R-paused-holds-poll - no preparation for a paused agent's card
+            # The poll holds it (ADR-089 Nachtrag 2026-11-13); preparing it
+            # now would show the agent as running. The first pass after the
+            # operator sets the agent active picks it up.
+            if (agent.operational_mode or "active") == "paused":
                 continue
 
             agent_runtime = getattr(agent, "agent_runtime", "openclaw")
