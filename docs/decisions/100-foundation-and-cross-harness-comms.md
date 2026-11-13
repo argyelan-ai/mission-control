@@ -29,7 +29,8 @@ What was established before this decision (checked against `origin/main` on
 - **Terminal sessions have no MC identity.** They do not appear anywhere in
   MC, so they cannot be named as a receiver.
 - **"Alive" is not "listening".** Paused agents keep sending heartbeats
-  (ADR-089 Nachtrag 2026-10-20: a paused agent's poller still claims cards).
+  (ADR-089 Nachtrag 2026-10-20; since the Nachtrag of 2026-11-13 its poll
+  gets no card while paused, but it keeps polling).
   One green dot would claim a session listens when it does not.
 - **Box facts must include a hand test.** During a manual test the operator
   stops the engine by hand; the engine then reports zero running requests.

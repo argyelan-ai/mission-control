@@ -341,7 +341,8 @@ paused agent, but only with a card that is already assigned to it:
 Delivery into the agent's session is always the poll.
 
 **(c) On while paused: any card assigned to it by name, fetched by its own
-poll.** `/agent/me/poll` (`agent_poll` in `backend/app/routers/agents.py`,
+poll.** *(Superseded 2026-11-13: pause holds the poll too — see the Nachtrag
+of that date.)* `/agent/me/poll` (`agent_poll` in `backend/app/routers/agents.py`,
 rule `R-paused-poll-takes-assigned`) does not read `operational_mode`. The
 next poll claims the card, whoever assigned it:
 
@@ -412,7 +413,9 @@ dispatch"), rule `R-paused-no-dispatch` and the ROADMAP E0 acceptance line
 all mean push dispatch through `check_dispatch_allowed`. The rule text and
 the ROADMAP line now say so.
 
-**(f) Pinned by tests.** `backend/tests/test_paused_agent_poll_claim.py`
+**(f) Pinned by tests.** *(Superseded 2026-11-13: the file is now
+`backend/tests/test_paused_agent_poll_hold.py` with the opposite
+expectations.)* `backend/tests/test_paused_agent_poll_claim.py`
 pins four things:
 
 - push refuses the paused agent and leaves the card assigned in the inbox;
@@ -529,6 +532,86 @@ through the API.
 with push dispatch, pool hygiene) and
 `backend/tests/test_system_mode_holds_every_path.py` (watcher, ladders,
 silent-mailbox alarm and its stage 2, pull dispatch, recovery not held).
+
+## Nachtrag (2026-11-13) — pause holds the poll too
+
+Decided on 2026-11-13 by the operator ("mache A"), on the development
+lead's recommendation. It supersedes point (c) of the Nachtrag "what
+automatic delivery covers" and the sentence "Paused stays an agent rule
+outside this one" in the system-mode Nachtrag. The rest of both notes stays
+as written; the text above is not rewritten.
+
+**Why.** ADR-101 lets a worker on a machine MC does not manage fetch cards
+over MCP. For such a worker *Pause* was no stop at all: the poll did not
+read `operational_mode`, so the only cut was a token reset (ADR-101 §1).
+Pause has to mean what the button says. The reason for (c) — the paused
+local omp agent getting small jobs before B4 — is gone: that agent is active
+again. On 2026-11-13 the live database had no enabled scheduled job for a
+paused agent, and the only paused agent with a card in 30 days was a test
+worker.
+
+**(a) What the pause holds.** `agent_poll` (`backend/app/routers/agents.py`,
+`_paused_hold`, rule `R-paused-holds-poll` in `docs/produkt/regeln.yaml`)
+hands a paused agent no card: a fresh inbox card, a phase approval, or a
+dispatched card whose prompt never arrived. The answer is `state=idle` with
+`agent_paused: true` and `detail: "Agent <name> PAUSED"` — the refusal text
+of `check_dispatch_allowed`. For a fresh card the pause is asked right after
+HALTED and before the update drain and the runtime probe: the operator's
+switch is the reason, not a model that happens to be down too.
+
+**(b) What it leaves alone.**
+- A card already in flight (the poll delivered it, no ACK yet) keeps its
+  `new_task` answer, for the same reason as under HALTED: an `idle` answer
+  makes the bridges drop the card and paste it again later.
+- Running work: an ACKed card is still reported as `working`. Pause stops
+  new cards, not the card the agent already took. The *restart* of an
+  orphaned run (a run without a live signal gets its full prompt again) is
+  new work, so it waits: the poll keeps reporting `working` and the first
+  poll after the agent is active again restarts it.
+- The card itself: it stays in the inbox, still assigned. The first poll
+  after the operator sets the agent active delivers it.
+
+**(b2) Every other path that hands a card to the agent.** Pull dispatch
+(`GET /api/v1/agent/boards/{id}/tasks/next` in
+`backend/app/routers/agent_task_status.py`) answers 204 for a paused agent,
+as for "no work". Push dispatch already refused it (`check_dispatch_allowed`).
+
+**(b3) No false alarm.** The ACK and pending ladders
+(`_check_dispatch_ack` in `backend/app/services/task_runner.py`) treat a card
+that waits on a paused agent like a card the system mode holds: no silent
+retry, no operator escalation ("has not reacted"), no model-wait return, and
+one ACK timeout of grace after the pause ends.
+
+**(c) The undispatched-card watcher** (`_check_undispatched_tasks` in
+`backend/app/services/watchdog/task_monitor.py`) skips a paused agent's
+card: no workspace preparation, no `dispatched_at`, no `run_state=running`.
+Its first pass after the agent is active again prepares it.
+
+**(d) Gaps of the earlier note that close.** (d) 1 (a card claimed at once
+without a prepared workspace) and (d) 3 (a paused agent shown as running)
+cannot happen any more for new cards: nothing reaches a paused agent before
+the push path, which prepares the workspace, runs again. (d) 2 (silent cards
+of paused agents are not watched) now only concerns a card the agent took
+before it was paused.
+
+**(e) The rework note.** When a review sends a card back to a paused
+builder, the system note says the card waits until the operator sets the
+builder active (`task_lifecycle.py`, `review_rejection_agent_paused`).
+
+**(f) MCP worker.** `mc_next_task` names the hold: "MC is holding new work
+(the operator paused you)".
+
+**Pinned by tests.** `backend/tests/test_paused_agent_poll_hold.py` (push
+and poll hold, active again delivers, phase approval, undelivered active
+card, in-flight card, running work, orphan restart, pull dispatch, the ACK
+and pending ladders, pause under DRAINING, an unacked review card, foreign
+cards, watcher) and
+`test_paused_agent_is_held_by_halted_first_then_by_its_pause` in
+`backend/tests/test_poll_respects_system_halt.py`.
+
+**Way back.** Remove the `R-paused-holds-poll` anchors (poll, orphan
+restart, pull dispatch, ladders, watcher); the tests above go red and this
+note changes with them.
 
 ## References
 

@@ -779,10 +779,14 @@ async def get_next_task(
     # This claim sets in_progress itself and never asks
     # check_dispatch_allowed, so it asks the system-wide gates itself: the
     # MC update drain (ADR-094) here, the system mode per candidate below.
-    # Agent rules stay out: it only ever takes cards assigned to this agent.
     from app.services import update_drain
     from app.services.operations import get_system_mode, system_mode_refusal
 
+    # rule: R-paused-holds-poll - pull dispatch hands a paused agent nothing
+    # The agent's own pause holds this claim like its poll (ADR-089
+    # Nachtrag 2026-11-13): 204, as for "no work".
+    if (agent.operational_mode or "active") == "paused":
+        return Response(status_code=204)
     if (await update_drain.current(session)).active:
         return Response(status_code=204)
     # Pool hygiene (incident 2026-09-14): the mode lives in Redis — release

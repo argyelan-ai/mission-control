@@ -3137,8 +3137,8 @@ async def _system_mode_hold(
 
     Returns the poll answer that holds the card, or None when the mode lets
     it through. A held card stays untouched, so the first poll after the
-    halt delivers it — nothing to catch up. Agent rules (paused) stay out:
-    a paused agent still takes a card assigned to it by name.
+    halt delivers it — nothing to catch up. The agent's own pause is a
+    separate gate (``_paused_hold``).
 
     A card already in flight (``_poll_in_flight``: delivered by the poll to
     this agent under this attempt, no ACK yet) keeps its answer: the same
@@ -3164,6 +3164,29 @@ async def _system_mode_hold(
     if await _poll_in_flight(agent, task):
         return None
     return {"state": "idle", _SYSTEM_MODE_POLL_FLAGS[mode]: True, "detail": reason}
+
+
+async def _paused_hold(agent: Agent, task: Task) -> dict | None:
+    """A paused agent gets no card from its own poll either (ADR-089
+    Nachtrag 2026-11-13, rule R-paused-holds-poll): pause is the operator's
+    stop for one agent, also for a worker on a machine MC does not manage.
+
+    Returns the poll answer that holds the card, or None. The card stays
+    untouched — still assigned, in its status — and the first poll after the
+    operator sets the agent active again delivers it. A card already in
+    flight (delivered by the poll, no ACK yet) keeps its answer for the same
+    reason as under HALTED (``_system_mode_hold``); an ACKed card is the
+    agent's running work and is not this gate's business.
+    """
+    if (agent.operational_mode or "active") != "paused":
+        return None
+    if await _poll_in_flight(agent, task):
+        return None
+    return {
+        "state": "idle",
+        "agent_paused": True,
+        "detail": f"Agent {agent.name} PAUSED",
+    }
 
 
 async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, task: Task) -> dict | None:
@@ -3248,6 +3271,12 @@ async def _maybe_redispatch_orphaned_run(session: AsyncSession, agent: Agent, ta
     # stays untouched — this check runs on every poll, so the first poll
     # after the halt restarts it.
     if await _system_mode_hold(session, agent, task) is not None:
+        return None
+    # rule: R-paused-holds-poll - no restart pushed into a paused agent
+    # A restart hands the full prompt out again: new work. While the
+    # operator has the agent paused (often because it hangs) the poll keeps
+    # reporting `working` and the first poll after "active" restarts it.
+    if (agent.operational_mode or "active") == "paused":
         return None
 
     redis = await get_redis()
@@ -3401,7 +3430,8 @@ async def agent_poll(
     - idle: nothing to do
 
     An `idle` answer may say why a card is held, with one flag plus `detail`:
-    `runtime_not_ready`, `update_drain`, `system_halted` or `system_draining`.
+    `runtime_not_ready`, `update_drain`, `system_halted`, `system_draining`
+    or `agent_paused`.
     The card stays untouched; a later poll delivers it. Under HALTED or
     DRAINING a card this poll already delivered (same agent, same attempt,
     no ACK yet) keeps its `new_task` answer instead.
@@ -3699,6 +3729,14 @@ async def agent_poll(
                     _held = await _system_mode_hold(session, agent, task, mode=_gate_mode)
                     if _held is not None:
                         return {**_held, **_poll_extra}
+                # rule: R-paused-holds-poll - a paused agent's poll claims no fresh card
+                # Then the operator's switch for this one agent, before the
+                # update drain and the runtime probe: pause is the reason.
+                # (Push dispatch asks the drain first, check_dispatch_allowed
+                # step 1.5 before 3; both hold, only the named reason differs.)
+                _held = await _paused_hold(agent, task)
+                if _held is not None:
+                    return {**_held, **_poll_extra}
                 # MC update drain (ADR-094 decision 7): this claim bypasses
                 # check_dispatch_allowed, so it asks the drain itself. The
                 # card stays inbox and is claimed by the first poll after the
@@ -3764,6 +3802,13 @@ async def agent_poll(
     # card (whose mode was read above, before its other gates). Same rule as
     # push dispatch; a card already in flight keeps its answer.
     _held = await _system_mode_hold(session, agent, task, mode=_gate_mode)
+    if _held is not None:
+        return {**_held, **_poll_extra}
+    # rule: R-paused-holds-poll - and no phase approval or undelivered card either
+    # Same for the other cards this poll hands out (phase approval, a
+    # dispatched card whose prompt never arrived); a fresh card was asked
+    # above already and passes here unchanged.
+    _held = await _paused_hold(agent, task)
     if _held is not None:
         return {**_held, **_poll_extra}
 

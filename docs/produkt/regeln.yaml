@@ -78,30 +78,34 @@ rules:
     checked: 2026-09-26
 
   - id: R-paused-no-dispatch
-    says: "A paused agent receives no push dispatch: check_dispatch_allowed refuses it, and a card assigned to it stays in its inbox, still assigned. Its own poll is R-paused-poll-takes-assigned."
+    says: "A paused agent receives no push dispatch: check_dispatch_allowed refuses it, and a card assigned to it stays in its inbox, still assigned. Its own poll is R-paused-holds-poll."
     source: "ADR-085 section 5 (quiet mode); ADR-089 Nachtrag 2026-10-20 (b), (e)"
     owner: backend/app/services/operations.py
     applies_to: ["backend/app/services/operations.py", "backend/app/services/task_runner.py"]
     enforced_by:
       - {test: "backend/tests/test_operations.py::test_check_dispatch_agent_paused"}
-      - {test: "backend/tests/test_paused_agent_poll_claim.py::test_paused_agent_gets_its_assigned_card_by_poll_after_push_refused"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_paused_agent_gets_no_card_until_set_active"}
     status: active
-    checked: 2026-10-20
+    checked: 2026-11-13
 
-  - id: R-paused-poll-takes-assigned
-    says: "The agent poll does not read operational_mode: a paused agent whose poller runs still claims a card assigned to it by name, never an unassigned or foreign one; the undispatched-card watcher prepares such a card."
-    source: "ADR-089 Nachtrag 2026-10-20 (b), (c), (e)"
+  - id: R-paused-holds-poll
+    says: "A paused agent gets no card from its own poll either: no fresh inbox card, no phase approval, no undelivered dispatched card, no restart of an orphaned run (state=idle + agent_paused, or working for the run). A card already in flight keeps its answer and running work is still reported. Pull dispatch answers 204; the undispatched-card watcher does not prepare the card; the ACK and pending ladders do not retry or escalate it. The card stays assigned in its inbox; the first poll after the agent is active again delivers it."
+    source: "ADR-089 Nachtrag 2026-11-13 (pause holds the poll too)"
     owner: backend/app/routers/agents.py
     applies_to: ["backend/app/routers/agents.py", "backend/app/services/watchdog/task_monitor.py"]
     enforced_by:
-      - {test: "backend/tests/test_paused_agent_poll_claim.py::test_paused_agent_gets_its_assigned_card_by_poll_after_push_refused"}
-      - {test: "backend/tests/test_paused_agent_poll_claim.py::test_paused_agent_poll_takes_only_cards_assigned_to_it"}
-      - {test: "backend/tests/test_paused_agent_poll_claim.py::test_undispatched_watcher_prepares_assigned_card_of_paused_agent"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_paused_agent_gets_no_card_until_set_active"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_paused_poll_holds_a_phase_approval_card"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_a_card_in_flight_keeps_its_answer_when_paused"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_undispatched_watcher_leaves_a_paused_agents_card"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_paused_poll_does_not_restart_an_orphaned_run"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_pull_dispatch_hands_a_paused_agent_nothing"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_ladders_do_not_escalate_a_card_waiting_on_a_paused_agent"}
     status: active
-    checked: 2026-10-20
+    checked: 2026-11-13
 
   - id: R-system-mode-holds-poll
-    says: "The system mode holds a card on every path that hands one out, not only push dispatch: the agent poll, the undispatched-card watcher and pull dispatch ask the same rule (HALTED holds every card, DRAINING every card but the continuation flows). A card the poll already delivered and that waits for its ACK keeps its answer. The ACK and pending ladders and the silent-mailbox alarm wait while a card is held and for one ACK timeout after the hold. Agent rules (paused) are not part of it."
+    says: "The system mode holds a card on every path that hands one out, not only push dispatch: the agent poll, the undispatched-card watcher and pull dispatch ask the same rule (HALTED holds every card, DRAINING every card but the continuation flows). A card the poll already delivered and that waits for its ACK keeps its answer. The ACK and pending ladders and the silent-mailbox alarm wait while a card is held and for one ACK timeout after the hold. The agent's own pause is a separate gate (R-paused-holds-poll)."
     source: "ADR-089 Nachtrag 2026-10-20, the system mode holds every path that hands a card out"
     owner: backend/app/services/operations.py
     applies_to: ["backend/app/services/operations.py", "backend/app/routers/agents.py", "backend/app/routers/agent_task_status.py", "backend/app/services/task_runner.py", "backend/app/services/watchdog/task_monitor.py"]
