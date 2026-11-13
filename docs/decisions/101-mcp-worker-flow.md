@@ -241,7 +241,7 @@ token for a head.
 - The heartbeat proves less than a bridge's turn signal (§6). A worker that
   hangs inside one long model turn is noticed only after the quiet window.
 - A worker counts as live in MC only while it calls MC. Between cards the
-  server sends no heartbeat; MC's "last seen" is the last poll.
+  server sends no heartbeat; MC's "last seen" is its last call to MC.
 - MC's recovery treats a worker as a host agent. Its restart step
   (`task_runner`, tier 2) finds no service for the worker, logs a warning and
   changes nothing: MC cannot restart a worker. Only re-delivery recovers a

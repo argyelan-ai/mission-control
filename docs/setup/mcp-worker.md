@@ -191,6 +191,6 @@ Do not delete the agent row — archive or pause it.
   gets a table that maps those verbs to its tools; only `mc blocked` has no
   tool.
 - A worker counts as live in MC only while it calls MC. Between cards no
-  heartbeat is sent; "last seen" is its last poll.
+  heartbeat is sent; "last seen" is its last call to MC.
 - The token lives on the worker's machine. Treat that machine like one that
   holds an agent's env file.

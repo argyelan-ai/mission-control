@@ -1287,7 +1287,9 @@ def _start_heartbeat() -> None:
 
 def _stop_heartbeat(send_idle: bool = True) -> None:
     """Stop the loop and send one `idle` beat. Callers drop the card first, so
-    a beat that starts after this point finds no card and sends nothing."""
+    a beat that starts after this point finds no card and sends nothing.
+    Never call it while holding _card_lock: the beat thread takes _card_lock
+    inside _beat_lock, and this waits for _beat_lock."""
     global _hb_thread
     with _card_lock:
         thread = _hb_thread
@@ -1733,7 +1735,12 @@ def _finish_error(text: str, reflection: bool = False, saved: bool = False) -> s
             "Hint: MC refused the status change. Fix what it names, then call "
             "mc_finish again."
         )
-    if "run_control=" in text or "Updates nicht erlaubt" in text:
+    if "run_control=manual_hold" in text:
+        hints.append(
+            "Hint: the lead or the operator holds this card. Do not finish it now; "
+            "call mc_next_task in a few minutes."
+        )
+    elif "run_control=" in text or "Updates nicht erlaubt" in text:
         hints.append(
             "Hint: MC stopped or cancelled this card. Stop working on it and call "
             "mc_next_task."
@@ -1803,8 +1810,14 @@ def mc_finish(message: str, review: bool = False, task_id: str = "", workdir: st
         if held and held["task_id"] == card["task_id"]:
             _forget_card()
             _stop_heartbeat()
+        if now["status"] == "done":
+            return (
+                f"Card {_label(card)} is already done — nothing to finish.\n"
+                "Next step: call mc_next_task."
+            )
         why = (
-            "It waits for the review decision; a worker never finishes a card in review."
+            "It waits for the review decision (perhaps your earlier mc_finish went "
+            "through); a worker never finishes a card in review."
             if now["status"] == "review" else "Only a card in progress can be finished."
         )
         return (

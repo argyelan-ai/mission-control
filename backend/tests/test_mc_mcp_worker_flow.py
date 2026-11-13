@@ -830,7 +830,26 @@ def test_finish_refused_by_the_proof_gate_keeps_the_card(worker_mod, board, monk
     assert worker_mod._held_card()["task_id"] == TASK
 
 
-@pytest.mark.parametrize("status", ["review", "blocked", "done"])
+def test_finish_on_a_card_already_done_says_nothing_to_do(worker_mod, board, monkeypatch):
+    """The retry after the status read failed: the first finish went through."""
+    _use_cli(worker_mod, monkeypatch)
+    _accept(worker_mod, board)
+    board.card["status"] = "done"
+    out = _unwrap(worker_mod.mc_finish)(REFLECTION)
+    assert out.startswith("Card Build the export (11111111) is already done — nothing to finish.")
+    assert board.of("PATCH", f"/tasks/{TASK}")[1:] == []
+    assert worker_mod._held_card() is None
+
+
+def test_finish_on_a_held_card_names_the_hold(worker_mod, board, monkeypatch):
+    _use_cli(worker_mod, monkeypatch)
+    _accept(worker_mod, board)
+    board.patch_error = (409, {"detail": "Task run_control=manual_hold — Updates nicht erlaubt"})
+    out = _unwrap(worker_mod.mc_finish)(REFLECTION)
+    assert "holds this card" in out and "stopped or cancelled" not in out
+
+
+@pytest.mark.parametrize("status", ["review", "blocked"])
 def test_finish_refuses_a_card_that_is_not_in_progress(worker_mod, board, monkeypatch, status):
     """`mc finish` itself allows review -> done. A worker must not approve its
     own review card, so the server reads the status first and refuses."""
