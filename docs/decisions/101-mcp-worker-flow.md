@@ -52,10 +52,16 @@ no route, no table and no second finish logic.**
 
 A worker is an agent registered in MC: it has its own row, its own token, its
 own scopes and its board. It is a normal agent row of the runtime kind `host`
-without a harness: MC delivers a card by marking it for the agent's own poll
-and starts nothing. It is paused and its token is reset like every other
-agent's. An admin token is never handed to a worker (unchanged), and no token
-is shared between two workers.
+without a harness: MC starts nothing; the worker's own poll claims the next
+card assigned to it (an inbox card whose dependencies are met), whether or not
+the board has auto-dispatch on. Its runtime must be ready, or the poll hands
+out no fresh card. An admin token is never handed to a worker (unchanged), and
+no token is shared between two workers.
+
+*Pause* does not cut a worker off: pausing stops MC's own dispatch, task
+runner and watchdog for the agent, but the agent poll does not read the
+operational mode, so a paused worker still fetches cards assigned to it. The
+reliable cut is resetting its token (see "Später ändern").
 
 `scopes = []` means all scopes in MC. A worker therefore gets an explicit
 list. The flow needs `tasks:read`, `tasks:write`, `vault:read` and
@@ -71,8 +77,8 @@ The worker tools exist only when all three hold at process start:
 
 Without the switch an agent-mode process is unchanged: a harness that has its
 own bridge keeps polling and sending heartbeats itself, and must not get a
-second poller. A guest session keeps exactly its comms tools — neither the
-worker tools nor the vault tools — even with the switch set.
+second poller. A guest session gains neither the worker tools nor the vault
+tools, even with the switch set; its tool list stays as it was.
 
 ### 3. The tools
 
@@ -118,6 +124,14 @@ over. When MC reports the worker as `working`, or after a restart of the
 process, the server reads the card and its current attempt id from MC instead
 of trusting its memory.
 
+Only a card in `inbox` or `in_progress` is accepted. The poll also hands out
+an assigned card in `review` or `blocked` — once, because it marks such a card
+as acknowledged itself. Accepting it would pull a card out of review or past
+its blocker, so the server shows it with its brief, says that it was not
+accepted, and changes nothing. For the same reason `mc_finish` reads the
+card's status first and finishes only a card in progress: `mc finish` itself
+allows review → done, and a worker must never approve its own review card.
+
 ### 6. Staying alive
 
 While a card is held and in progress, the server sends the agent heartbeat
@@ -162,19 +176,22 @@ token for a head.
 - **No new scope, route, column or status.** The task core stays frozen.
 - **No page in the MC UI for a worker.** The tested way to create one is a
   single call to the existing `POST /agents` route (runtime kind `host`,
-  explicit scopes); the token comes back once. The agent wizard also creates
-  the row, but then provisions a host agent — a new token and service files a
-  worker does not use. Of the three controls a worker needs, only *pause* is
-  a button today; the token reset and the board's auto-dispatch flag are API
-  calls. The steps are in `docs/setup/mcp-worker.md`. A worker option in the
-  wizard with the connect snippet is a visible change and goes to the
-  operator first.
-- **No change to dispatch.** A worker gets a card only on a board with
-  auto-dispatch on; on other boards the manual dispatch call answers
-  `dispatch_triggered` and delivers nothing. That is existing behaviour and
-  stays as it is here.
-- **No message tools beyond the existing comms tools.** `mc blocked`,
-  `mc inbox` and `mc msg` have no worker tool; the verb table says so.
+  explicit scopes). The plain token is in the answer, and MC also keeps it in
+  the agent's TOOLS.md (readable on the agent page) and as an agent secret,
+  like for every agent. The agent wizard also creates the row, but then
+  provisions a host agent — a new token and service files a worker does not
+  use. Cutting a worker off needs the token reset, which is an API call
+  today; *pause* is a button but does not stop the worker's own poll (§1).
+  The steps are in `docs/setup/mcp-worker.md`. A worker option in the wizard
+  with the connect snippet, and a reset button, are visible changes and go to
+  the operator first.
+- **No change to dispatch or the poll.** The poll claims a worker's assigned
+  card without a dispatch step and without reading the agent's pause; both
+  are existing behaviour and stay as they are here (build stop). A pause gate
+  in the poll is the operator's decision.
+- **No message tools beyond the existing comms tools.** `mc_inbox` and
+  `mc_msg` are the existing agent-mode tools; only `mc blocked` has no tool.
+  The verb table says so.
 
 ## Alternativen
 
@@ -197,10 +214,10 @@ token for a head.
 ## Später ändern (ADR-093)
 
 - A worker's scopes, board and runtime are fields of its agent row and are
-  changed with the existing agent routes. It is paused on the agent page.
-  Resetting its token (`POST /agents/{id}/reset-token`) cuts the access; MC
-  remembers a checked token for up to five minutes, so the cut takes effect
-  within that time, not at once.
+  changed with the existing agent routes. Resetting its token
+  (`POST /agents/{id}/reset-token`) cuts the access. MC remembers a checked
+  token for up to five minutes (ADR-010); until the cache fix of that ADR's
+  amendment lands, the cut takes effect within that time, not at once.
 - The switch and the two heartbeat values are environment variables of the
   worker's own MCP entry — they belong to the harness config on the worker's
   machine, not to MC's `.env`.
@@ -223,6 +240,8 @@ token for a head.
   because it reuses the same routes and the same finish command.
 - The heartbeat proves less than a bridge's turn signal (§6). A worker that
   hangs inside one long model turn is noticed only after the quiet window.
+- A worker counts as live in MC only while it calls MC. Between cards the
+  server sends no heartbeat; MC's "last seen" is the last poll.
 - MC's recovery treats a worker as a host agent. Its restart step
   (`task_runner`, tier 2) finds no service for the worker, logs a warning and
   changes nothing: MC cannot restart a worker. Only re-delivery recovers a
@@ -236,8 +255,8 @@ token for a head.
 ### Rückweg
 
 Remove `MC_MCP_WORKER` from the worker's MCP entry: the tools are gone at the
-next start. Reset the agent's token in MC: the access is gone within five
-minutes (the token cache). The code is one section at the end of `scripts/mc-mcp.py` and reverts
+next start. Reset the agent's token in MC: the access is gone (within the
+five minutes of the token cache until the ADR-010 fix lands). The code is one section at the end of `scripts/mc-mcp.py` and reverts
 on its own.
 
 ## Referenzen

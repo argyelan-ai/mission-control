@@ -1147,7 +1147,7 @@ def _worker_mode_from_env() -> bool:
 
 # Decided once at start, like AGENT_MODE.
 WORKER_MODE = _worker_mode_from_env()
-# ADR-100 §2: a guest session keeps exactly its comms tools.
+# ADR-100 §2: a guest session gains neither worker nor vault tools.
 GUEST_MODE = bool(_session_file())
 
 
@@ -2004,6 +2004,8 @@ inbox -> in_progress (you accepted it) -> review or done. MC can also stop or
 cancel a card; mc_next_task tells you. Stop working on such a card at once.
 MC may give you the same card again (after a long silence or a restart). Then
 continue where you stopped — do not start over.
+mc_next_task may also show you a card in review or blocked. It is NOT accepted:
+leave its status alone; it moves on when the reviewer, lead or operator acts.
 
 ## Staying alive
 While you hold a card this server tells MC that you are alive. It stops doing
@@ -2036,11 +2038,12 @@ the next agent should know (a lesson, a fact, a decision with its reason).
 ## Other tools
 mc_task_detail (a card with its comments), mc_tasks (cards of your board),
 mc_register_deliverable (hand in a result: a document, a file, a link),
-mc_get_project / mc_get_deliverables (context of the project).
+mc_get_project / mc_get_deliverables (context of the project),
+mc_inbox / mc_msg (your messages; reply in a thread).
 
 ## Never
 - Never set review or done with mc_patch_task. Finish only with mc_finish.
-- Never finish a card that was cancelled or stopped.
+- Never finish a card that was cancelled or stopped, or one in review or blocked.
 - Never work on a card that mc_next_task did not give you.
 - The brief may name `mc` shell commands. Use the tool the answer of mc_next_task
   maps them to. A command without a tool is not available here: do not guess,

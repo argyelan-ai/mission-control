@@ -42,40 +42,33 @@ curl -s -X POST "$MC_API_URL/api/v1/agents" \
 - **`scopes` must be an explicit list.** An empty list means *all* scopes.
   The four above are what the flow needs; add more only when the job needs
   them.
-- **`agent_runtime: host`** — MC then delivers a card by marking it for the
-  agent's own poll; it starts nothing.
-- **`runtime_id`** names the model runtime the worker uses. It is for MC's
-  records and cost numbers; the harness itself decides which model it calls.
-- The answer contains **`token`** once. MC keeps only a hash. Put it straight
-  into a file only the worker's user can read:
+- **`agent_runtime: host`** — MC starts nothing; the worker's own poll
+  fetches the cards assigned to it.
+- **`runtime_id`** names the model runtime the worker uses. MC uses it for its
+  records and cost numbers, and as a gate: while that runtime is not ready,
+  the poll hands out no fresh card. The harness itself decides which model it
+  calls.
+- The answer contains the plain **`token`**. Put it straight into a file only
+  the worker's user can read:
 
   ```bash
   umask 077 && printf 'MC_AGENT_TOKEN=%s\n' "<token>" > ~/.mc-worker.env
   ```
 
+  MC keeps the token too: in the agent's TOOLS.md (readable on the agent
+  page, tab *TOOLS.md*) and as an agent secret — the same as for every agent.
+  Anyone who can open the agent page can read it.
+
 The agent wizard in the UI also creates the row, but for a host agent it then
 runs "provision": that step issues a **new** token and stages service files
-that a worker does not use. The UI has no place to read a token afterwards —
-if you used the wizard, get a fresh one with the reset call under
-[Cutting the access](#cutting-the-access).
+that a worker does not use. If you used the wizard, take the current token
+from the agent's TOOLS.md tab.
 
-## 2. The board must deliver cards
+## 2. Give the worker a card
 
-A worker receives a card only after MC has dispatched it, and MC dispatches
-only on a board with **auto-dispatch on**. On a board with auto-dispatch off
-the card stays in the inbox and `mc_next_task` keeps answering "no card" —
-the manual dispatch call answers `dispatch_triggered` and still delivers
-nothing.
-
-The UI has no switch for this yet; it is one API call:
-
-```bash
-curl -s -X PATCH "$MC_API_URL/api/v1/boards/<board uuid>" \
-  -H "Authorization: Bearer $OPERATOR_JWT" -H "Content-Type: application/json" \
-  -d '{"auto_dispatch_enabled": true}'
-```
-
-A card reaches the worker when it is assigned to the worker on that board.
+Assign a card to the worker on its board and leave it in the inbox. The
+worker's own poll claims it — no dispatch step, and the board's auto-dispatch
+setting does not matter.
 
 ## 3. The MCP entry
 
@@ -153,8 +146,13 @@ the model to call `mc_next_task` again after each card.
 
 - **Only vault tools, no `mc_next_task`.** `MC_MCP_WORKER` is not set, or the
   process runs as a guest session.
-- **"no card" for ever.** The board has auto-dispatch off (step 2), the card
-  is not assigned to this worker, or the worker is paused.
+- **"no card" for ever.** The card is not assigned to this worker, it is not
+  in the inbox, its dependencies are not met, or it is held or stopped. If
+  the answer names a reason ("your model runtime is not ready", "an MC update
+  is running", "the system is halted"), that is the reason.
+- **A card is shown but "NOT accepted".** It is in review or blocked. The
+  worker leaves it as it is; the card moves on when the reviewer, the lead or
+  the operator acts.
 - **`mc_finish` says the `mc` command line is missing.** `scripts/mc-cli` is
   not next to `scripts/mc-mcp.py`.
 
@@ -167,12 +165,13 @@ the model to call `mc_next_task` again after each card.
     -H "Authorization: Bearer $OPERATOR_JWT"
   ```
 
-  The answer contains the new token once; throw it away to lock the worker
-  out. MC remembers a checked token for up to five minutes, so the old token
-  can still be accepted for that long.
-- **For a while:** pause the agent (*Pause* on the agent page). A paused
-  agent gets no cards; its token keeps working, so `mc_next_task` simply
-  answers "no card".
+  The answer contains the new token; do not hand it out to lock the worker
+  out. MC remembers a checked token for up to five minutes (ADR-010); until
+  the cache fix lands, the old token can still be accepted for that long.
+- **Pause is not a cut.** *Pause* on the agent page stops MC's own dispatch
+  and recovery for the agent, but the worker's poll still fetches cards that
+  are assigned to it. To stop it for a while, unassign its cards or reset the
+  token.
 - **The tools only:** remove `MC_MCP_WORKER` from the MCP entry; they are gone
   at the next start.
 
@@ -189,7 +188,9 @@ Do not delete the agent row — archive or pause it.
   output. A model that thinks longer than the quiet window without one tool
   call falls silent.
 - The brief of a card is written for agents with the `mc` command. The worker
-  gets a table that maps those verbs to its tools; `mc blocked`, `mc inbox`
-  and `mc msg` have no worker tool.
+  gets a table that maps those verbs to its tools; only `mc blocked` has no
+  tool.
+- A worker counts as live in MC only while it calls MC. Between cards no
+  heartbeat is sent; "last seen" is its last poll.
 - The token lives on the worker's machine. Treat that machine like one that
   holds an agent's env file.
