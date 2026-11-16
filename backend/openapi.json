@@ -4852,6 +4852,22 @@
         ]
       }
     },
+    "/api/v1/settings/agent-language": {
+      "get": {
+        "operationId": "get_agent_language_defaults_api_v1_settings_agent_language_get",
+        "summary": "Get Agent Language Defaults",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "operationId": "put_agent_language_defaults_api_v1_settings_agent_language_put",
+        "summary": "Put Agent Language Defaults",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
     "/api/v1/settings/autonomy": {
       "get": {
         "operationId": "get_autonomy_settings_api_v1_settings_autonomy_get",

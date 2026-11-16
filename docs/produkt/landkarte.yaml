@@ -312,9 +312,13 @@ features:
       # Autonomy levels (autonomy tab).
       - "GET /api/v1/settings/autonomy"
       - "PATCH /api/v1/settings/autonomy"
+      # Fleet default languages for NEW agents (Settings → Language,
+      # services/agent_language_defaults.py, app_settings rows).
+      - "GET /api/v1/settings/agent-language"
+      - "PUT /api/v1/settings/agent-language"
       # Generic per-user key/value preference store (routers/settings.py).
-      # Caller: the profile tab's "Voice language" select (VoiceLanguageField
-      # in page.tsx), which saves a {"language": "auto"|"de"|"en"} value
+      # Caller: the "Voice calls" row in Settings → Language
+      # (LanguageSection.tsx), which saves a {"language": "auto"|"de"|"en"} value
       # under key "voice_language" — read by voice session minting
       # (services/voice_live.py) to override the UI locale. GET /settings
       # (list) still has no caller (internal).

@@ -321,8 +321,9 @@ mc finish --review "{_reflection_skeleton}"
 # → status: review (code/API/security tasks — a reviewer looks at it before done)
 ```
 
-The reflection needs all {len(REFLECTION_REQUIRED_FIELDS)} headers verbatim (exact German
-text, `##` prefix) and at least {REFLECTION_MIN_CHARS} characters total — a one-line
+The reflection needs all {len(REFLECTION_REQUIRED_FIELDS)} headers (`##` prefix; the German
+names above or their English forms — `mc finish` rewrites English headers to the German
+ones) and at least {REFLECTION_MIN_CHARS} characters total — a one-line
 "done." is rejected. `mc finish --force` closes any still-open checklist items first
 (auto-marks them done) instead of blocking the pre-flight check; use `mc checklist skip
 <id> --reason "..."` beforehand instead if an item is genuinely out of your role rather
