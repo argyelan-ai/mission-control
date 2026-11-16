@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { useLocale, useTranslations } from "next-intl";
+import { AgentLanguageSheet, languageName, languageSummary } from "@/components/agents/AgentLanguageSheet";
 import AppShell from "@/components/layout/AppShell";
 import { NotFoundState } from "@/components/shared/NotFoundState";
 import { isMissingRecord } from "@/lib/apiStatus";
@@ -19,6 +20,7 @@ import {
   WifiOff, Undo2, Plus, Minus, CheckCircle, XCircle,
   Brain, Wrench, FileText, Play, Pause, Server,
   HardDrive, FolderArchive, RefreshCw, Package, Box,
+  Languages,
 } from "lucide-react";
 import { cn, contextPercent, contextColor, formatContextPct, timeAgo } from "@/lib/utils";
 import { agentStatusView } from "@/lib/agentStatus";
@@ -71,13 +73,6 @@ const HEARTBEAT_INTERVALS = [
   { value: "2m", label: "2m" },
   { value: "5m", label: "5m" },
   { value: "10m", label: "10m" },
-];
-
-// operator_language / work_language (Migration 0201) — the fleet only runs
-// these two codes today; extend here if a third is ever configured.
-const LANGUAGE_OPTIONS = [
-  { value: "en", label: "EN" },
-  { value: "de", label: "DE" },
 ];
 
 // ── Status Mapping ─────────────────────────────────────────────────────────────
@@ -1483,8 +1478,11 @@ export default function AgentDetailPage() {
     queryFn: () => api.agents.config.all(id),
   });
 
+  const tLang = useTranslations("settingsLanguage");
+  const [languageOpen, setLanguageOpen] = useState(false);
+
   const updateAgentMutation = useMutation({
-    mutationFn: (data: Partial<Pick<Agent, "name" | "role" | "heartbeat_config" | "operational_mode" | "operator_language" | "work_language">>) =>
+    mutationFn: (data: Partial<Pick<Agent, "name" | "role" | "heartbeat_config" | "operational_mode">>) =>
       api.agents.update(id, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent", id] });
@@ -1620,6 +1618,7 @@ export default function AgentDetailPage() {
 
   return (
     <AppShell>
+      <AgentLanguageSheet agent={agent} open={languageOpen} onClose={() => setLanguageOpen(false)} from="agent" />
       <div className="space-y-6 max-w-5xl">
         {/* Back */}
         <Link
@@ -1701,34 +1700,20 @@ export default function AgentDetailPage() {
                       ))}
                     </select>
                   </span>
-                  <span className="flex items-center gap-1" title={t("detail.operatorLanguageTitle")}>
-                    {t("detail.operatorLanguageLabel")}:{" "}
-                    <select
-                      value={agent.operator_language ?? "en"}
-                      onChange={(e) =>
-                        updateAgentMutation.mutate({ operator_language: e.target.value })
-                      }
-                      className="bg-transparent border-none text-sm cursor-pointer outline-none text-[var(--color-text-muted)]"
-                    >
-                      {LANGUAGE_OPTIONS.map((lo) => (
-                        <option key={lo.value} value={lo.value}>{lo.label}</option>
-                      ))}
-                    </select>
-                  </span>
-                  <span className="flex items-center gap-1" title={t("detail.workLanguageTitle")}>
-                    {t("detail.workLanguageLabel")}:{" "}
-                    <select
-                      value={agent.work_language ?? "en"}
-                      onChange={(e) =>
-                        updateAgentMutation.mutate({ work_language: e.target.value })
-                      }
-                      className="bg-transparent border-none text-sm cursor-pointer outline-none text-[var(--color-text-muted)]"
-                    >
-                      {LANGUAGE_OPTIONS.map((lo) => (
-                        <option key={lo.value} value={lo.value}>{lo.label}</option>
-                      ))}
-                    </select>
-                  </span>
+                  {/* Both languages live in Settings → Language; here one
+                      calm entry that opens the same sheet (16.11.2026). */}
+                  <button
+                    type="button"
+                    onClick={() => setLanguageOpen(true)}
+                    data-testid="agent-language-button"
+                    title={tLang("agentButtonTitle", {
+                      summary: languageSummary(tLang, agent.operator_language, agent.work_language),
+                    })}
+                    className="inline-flex items-center gap-1 min-h-11 cursor-pointer hover:text-[var(--color-text-secondary)] transition-colors"
+                  >
+                    <Languages size={14} aria-hidden />
+                    {tLang("agentButton", { lang: languageName(tLang, agent.operator_language) })}
+                  </button>
                   <span>{t("detail.lastSeenAgo", { ago: timeAgo(agent.last_seen_at, locale) })}</span>
                 </div>
 

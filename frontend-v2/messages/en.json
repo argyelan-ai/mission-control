@@ -65,16 +65,6 @@
     "displayNamePlaceholder": "Optional: how you'd like to be addressed",
     "timezone": "Timezone",
     "role": "Role",
-    "language": "Language",
-    "languageHint": "Interface language. Takes effect immediately.",
-    "languageEn": "English",
-    "languageDe": "Deutsch",
-    "voiceLanguage": "Voice language",
-    "voiceLanguageHint": "The language the voice agent speaks and listens for on a call. \"Automatic\" follows the interface language above.",
-    "voiceLanguageAuto": "Automatic (follow interface language)",
-    "voiceLanguageDe": "Deutsch",
-    "voiceLanguageEn": "English",
-    "voiceLanguageAria": "Select voice language",
     "title": "Profile",
     "description": "Your personal information.",
     "timezoneAria": "Select timezone",
@@ -759,10 +749,6 @@
       "reconfigureFailed": "Failed to reconfigure",
       "paused": "Paused",
       "restarting": "Restarting...",
-      "operatorLanguageLabel": "Op",
-      "operatorLanguageTitle": "Operator language — what this agent writes to the operator (mc report/msg/ask, chat replies)",
-      "workLanguageLabel": "Work",
-      "workLanguageTitle": "Work language — agent-to-agent traffic (task comments, reflections, handoffs, checklist items, deliverable text)",
       "lastSeenAgo": "Last seen: {ago}",
       "contextReportedLabel": "Context · last reported",
       "contextReportedHint": "Last reported by the agent, usually from its work session. The chat shows the figure of its own session — so the number there can differ.",
@@ -2087,7 +2073,8 @@
       "aiProviders": "AI providers",
       "nightShift": "Night shift",
       "appearance": "Appearance",
-      "claude": "Claude"
+      "claude": "Claude",
+      "language": "Language"
     },
     "security": {
       "title": "Security",
@@ -5355,5 +5342,43 @@
     "deliveryHeld": "held by the receiver",
     "conversationPaused": "Conversation paused — waits for you",
     "fromStdin": "Text from a file or pipe"
+  },
+  "settingsLanguage": {
+    "title": "Language",
+    "description": "What you see, what you hear, and what your agents write.",
+    "groupYou": "You",
+    "app": "App",
+    "appAria": "App language",
+    "appHint": "Takes effect immediately.",
+    "voice": "Voice calls",
+    "voiceAria": "Voice call language",
+    "voiceAuto": "Automatic",
+    "voiceHint": "The language the voice agent speaks and listens for on a call. Automatic follows the app language.",
+    "groupNew": "New agents",
+    "toYou": "Writes to you",
+    "amongAgents": "Among agents",
+    "toYouAria": "Language for new agents writing to you",
+    "amongAria": "Language for new agents among each other",
+    "newHint": "Used when an agent is created. Existing agents keep their own.",
+    "groupAgents": "Agents",
+    "agentsHint": "Reports, questions and chat replies go to you. Comments, reflections and handoffs stay among agents. Code and commits are always English.",
+    "agentsError": "Could not load the agents.",
+    "summary": "{toYou} to you · {among} among agents",
+    "summaryDefault": "Default · {lang}",
+    "name": {
+      "en": "English",
+      "de": "German"
+    },
+    "endonym": {
+      "en": "English",
+      "de": "Deutsch"
+    },
+    "sheetLabel": "Languages of {name}",
+    "sheetHint": "Applies from the agent's next task or chat message.",
+    "openAgent": "Open agent",
+    "allAgents": "All agents",
+    "done": "Done",
+    "agentButton": "{lang} to you",
+    "agentButtonTitle": "Language: {summary}"
   }
 }

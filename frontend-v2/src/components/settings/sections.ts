@@ -24,6 +24,7 @@ import {
   Bot,
   Moon,
   Palette,
+  Languages,
   type LucideIcon,
 } from "lucide-react";
 
@@ -49,6 +50,7 @@ export const SECTIONS: SettingsSection[] = [
   { id: "profile", labelKey: "sections.profile", icon: User, group: "account" },
   { id: "security", labelKey: "sections.security", icon: Shield, group: "account" },
   { id: "appearance", labelKey: "sections.appearance", icon: Palette, group: "account" },
+  { id: "language", labelKey: "sections.language", icon: Languages, group: "account" },
   { id: "shortcuts", labelKey: "sections.shortcuts", icon: Keyboard, group: "account" },
   { id: "autonomy", labelKey: "sections.autonomy", icon: SlidersHorizontal, group: "fleet", adminOnly: true },
   { id: "intelligence", labelKey: "sections.intelligence", icon: Zap, group: "fleet", adminOnly: true },
