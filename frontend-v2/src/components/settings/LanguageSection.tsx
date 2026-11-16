@@ -74,7 +74,7 @@ function Group({ id, label, hint, children }: { id: string; label: string; hint?
   const headingId = `settings-language-${id}`;
   return (
     <section className="pt-6 first:pt-0" data-region={`settings-language-${id}`}>
-      <h3 id={headingId} className="label-sys pb-1">{label}</h3>
+      <h3 id={headingId} className="text-sm font-medium pb-1" style={{ color: C.textSecondary }}>{label}</h3>
       <ul aria-labelledby={headingId}>{children}</ul>
       {hint && <p className="text-sm pt-1" style={{ color: C.textMuted }}>{hint}</p>}
     </section>
@@ -260,8 +260,8 @@ export function LanguageSection({ isAdmin }: { isAdmin: boolean }) {
   return (
     <div data-region="settings-language">
       <div className="mb-6">
-        <h2 className="text-base font-semibold" style={{ color: C.textPrimary }}>{t("title")}</h2>
-        <p className="text-sm mt-1" style={{ color: C.textMuted }}>{t("description")}</p>
+        <h2 className="display text-2xl font-semibold" style={{ color: C.textPrimary }}>{t("title")}</h2>
+        <p className="text-sm mt-2" style={{ color: C.textMuted }}>{t("description")}</p>
       </div>
 
       <Group id="you" label={t("groupYou")} hint={t("voiceHint")}>
