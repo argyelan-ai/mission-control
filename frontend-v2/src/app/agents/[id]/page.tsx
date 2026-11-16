@@ -20,7 +20,7 @@ import {
   WifiOff, Undo2, Plus, Minus, CheckCircle, XCircle,
   Brain, Wrench, FileText, Play, Pause, Server,
   HardDrive, FolderArchive, RefreshCw, Package, Box,
-  Languages,
+  Languages, ChevronRight,
 } from "lucide-react";
 import { cn, contextPercent, contextColor, formatContextPct, timeAgo } from "@/lib/utils";
 import { agentStatusView } from "@/lib/agentStatus";
@@ -1709,10 +1709,11 @@ export default function AgentDetailPage() {
                     title={tLang("agentButtonTitle", {
                       summary: languageSummary(tLang, agent.operator_language, agent.work_language),
                     })}
-                    className="inline-flex items-center gap-1 min-h-11 cursor-pointer hover:text-[var(--color-text-secondary)] transition-colors"
+                    className="inline-flex items-center gap-1 min-h-11 -my-2 cursor-pointer hover:text-[var(--color-text-secondary)] transition-colors"
                   >
                     <Languages size={14} aria-hidden />
                     {tLang("agentButton", { lang: languageName(tLang, agent.operator_language) })}
+                    <ChevronRight size={14} aria-hidden />
                   </button>
                   <span>{t("detail.lastSeenAgo", { ago: timeAgo(agent.last_seen_at, locale) })}</span>
                 </div>

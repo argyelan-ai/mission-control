@@ -297,6 +297,7 @@
     "GET /api/v1/secrets",
     "GET /api/v1/secrets/providers",
     "GET /api/v1/settings",
+    "GET /api/v1/settings/agent-language",
     "GET /api/v1/settings/autonomy",
     "GET /api/v1/settings/{key}",
     "GET /api/v1/skill-lab/candidates",
@@ -633,6 +634,7 @@
     "PUT /api/v1/night-shift/tasks/{task_id}",
     "PUT /api/v1/nodes/{host_id}/device-state",
     "PUT /api/v1/repos/github-config",
+    "PUT /api/v1/settings/agent-language",
     "PUT /api/v1/settings/{key}",
     "PUT /api/v1/skills/{skill_name}/content",
     "PUT /api/v1/system/mode"

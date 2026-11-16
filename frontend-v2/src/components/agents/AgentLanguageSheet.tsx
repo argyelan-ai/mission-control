@@ -181,7 +181,7 @@ export function AgentLanguageSheet({
             className="inline-flex items-center min-h-11 text-sm underline underline-offset-4"
             style={{ color: C.textSecondary }}
           >
-            {from === "settings" ? t("openAgent") : t("allAgents")}
+            {from === "settings" ? t("openAgent") : t("languageSettings")}
           </Link>
           <button
             type="button"

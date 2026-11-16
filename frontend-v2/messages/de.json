@@ -5355,7 +5355,7 @@
     "voiceAuto": "Automatisch",
     "voiceHint": "Die Sprache, in der der Voice-Agent bei einem Anruf spricht und zuhört. Automatisch folgt der App-Sprache.",
     "groupNew": "Neue Agenten",
-    "toYou": "Schreibt dir",
+    "toYou": "An dich",
     "amongAgents": "Unter Agenten",
     "toYouAria": "Sprache neuer Agenten an dich",
     "amongAria": "Sprache neuer Agenten untereinander",
@@ -5364,7 +5364,7 @@
     "agentsHint": "Berichte, Fragen und Chat-Antworten gehen an dich. Kommentare, Reflexionen und Übergaben bleiben unter Agenten. Code und Commits sind immer Englisch.",
     "agentsError": "Die Agenten konnten nicht geladen werden.",
     "summary": "{toYou} an dich · {among} unter Agenten",
-    "summaryDefault": "Standard · {lang}",
+    "summaryDefault": "Standard",
     "name": {
       "en": "Englisch",
       "de": "Deutsch"
@@ -5376,9 +5376,9 @@
     "sheetLabel": "Sprachen von {name}",
     "sheetHint": "Gilt ab der nächsten Aufgabe oder Chat-Nachricht des Agenten.",
     "openAgent": "Agent öffnen",
-    "allAgents": "Alle Agenten",
     "done": "Fertig",
     "agentButton": "{lang} an dich",
-    "agentButtonTitle": "Sprache: {summary}"
+    "agentButtonTitle": "Sprache: {summary}",
+    "languageSettings": "Sprach-Einstellungen"
   }
 }

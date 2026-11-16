@@ -5355,7 +5355,7 @@
     "voiceAuto": "Automatic",
     "voiceHint": "The language the voice agent speaks and listens for on a call. Automatic follows the app language.",
     "groupNew": "New agents",
-    "toYou": "Writes to you",
+    "toYou": "To you",
     "amongAgents": "Among agents",
     "toYouAria": "Language for new agents writing to you",
     "amongAria": "Language for new agents among each other",
@@ -5364,7 +5364,7 @@
     "agentsHint": "Reports, questions and chat replies go to you. Comments, reflections and handoffs stay among agents. Code and commits are always English.",
     "agentsError": "Could not load the agents.",
     "summary": "{toYou} to you · {among} among agents",
-    "summaryDefault": "Default · {lang}",
+    "summaryDefault": "Default",
     "name": {
       "en": "English",
       "de": "German"
@@ -5376,9 +5376,9 @@
     "sheetLabel": "Languages of {name}",
     "sheetHint": "Applies from the agent's next task or chat message.",
     "openAgent": "Open agent",
-    "allAgents": "All agents",
     "done": "Done",
     "agentButton": "{lang} to you",
-    "agentButtonTitle": "Language: {summary}"
+    "agentButtonTitle": "Language: {summary}",
+    "languageSettings": "Language settings"
   }
 }

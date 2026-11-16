@@ -28,8 +28,9 @@ import {
   languageSummary,
 } from "@/components/agents/AgentLanguageSheet";
 
-// One row shape for the whole section: label left, value right, 48 px.
-const rowClass = "relative flex items-center gap-4 min-h-12 px-1 rounded-lg transition-colors";
+// One row shape for the whole section: label left, value right, 48 px, on
+// the section's one left edge (K9).
+const rowClass = "relative flex items-center gap-4 min-h-12 rounded-lg transition-colors";
 
 /**
  * A settings row that opens the platform's own picker: the native <select>
@@ -73,9 +74,9 @@ function Group({ id, label, hint, children }: { id: string; label: string; hint?
   const headingId = `settings-language-${id}`;
   return (
     <section className="pt-6 first:pt-0" data-region={`settings-language-${id}`}>
-      <h3 id={headingId} className="label-sys px-1 pb-1">{label}</h3>
+      <h3 id={headingId} className="label-sys pb-1">{label}</h3>
       <ul aria-labelledby={headingId}>{children}</ul>
-      {hint && <p className="text-xs px-1 pt-1" style={{ color: C.textMuted }}>{hint}</p>}
+      {hint && <p className="text-sm pt-1" style={{ color: C.textMuted }}>{hint}</p>}
     </section>
   );
 }
@@ -203,7 +204,7 @@ function AgentRows({ defaults }: { defaults: { operator_language: string; work_l
   });
 
   if (isError) {
-    return <li className="text-sm px-1 py-2" style={{ color: C.textMuted }}>{t("agentsError")}</li>;
+    return <li className="text-sm py-2" style={{ color: C.textMuted }}>{t("agentsError")}</li>;
   }
   if (!agents) return null;
 
@@ -232,9 +233,7 @@ function AgentRows({ defaults }: { defaults: { operator_language: string; work_l
               <span className="flex-1 min-w-0">
                 <span className="block truncate text-base" style={{ color: C.textPrimary }}>{a.name}</span>
                 <span className="block truncate text-sm" style={{ color: plain ? C.textMuted : C.textSecondary }}>
-                  {plain
-                    ? t("summaryDefault", { lang: languageName(t, a.operator_language) })
-                    : languageSummary(t, a.operator_language, a.work_language)}
+                  {plain ? t("summaryDefault") : languageSummary(t, a.operator_language, a.work_language)}
                 </span>
               </span>
               <ChevronRight size={18} aria-hidden className="shrink-0" style={{ color: C.textMuted }} />

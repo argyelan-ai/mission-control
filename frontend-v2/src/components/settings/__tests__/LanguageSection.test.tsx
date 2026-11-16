@@ -93,7 +93,7 @@ describe("Settings → Language section", () => {
     expect(rows[0]).toHaveTextContent("Lead");
     expect(rows[0]).toHaveTextContent("German to you · English among agents");
     expect(rows[1]).toHaveTextContent("Backend");
-    expect(rows[1]).toHaveTextContent("Default · English");
+    expect(rows[1]).toHaveTextContent(/^.*Default$/);
   });
 
   it("saves the default for new agents", async () => {

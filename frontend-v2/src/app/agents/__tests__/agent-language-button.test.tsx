@@ -47,8 +47,8 @@ describe("Agent detail — language entry", () => {
 
     await userEvent.click(button);
     const sheet = await screen.findByRole("dialog", { name: "Languages of Lead" });
-    expect(within(sheet).getByRole("link", { name: "All agents" })).toHaveAttribute("href", "/settings?section=language");
-    const toYou = within(sheet).getByRole("radiogroup", { name: "Writes to you" });
+    expect(within(sheet).getByRole("link", { name: "Language settings" })).toHaveAttribute("href", "/settings?section=language");
+    const toYou = within(sheet).getByRole("radiogroup", { name: "To you" });
     await userEvent.click(within(toYou).getByRole("radio", { name: "English" }));
     expect(update).toHaveBeenCalledWith("a1", { operator_language: "en" });
   });
