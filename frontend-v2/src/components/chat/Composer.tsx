@@ -35,6 +35,21 @@ const MIN_ROWS = 2;
 // auto-grow ceiling lands on a whole row instead of clipping one mid-glyph.
 const LINE_HEIGHT_PX = 22;
 
+/** Pasted plain text from this size on (UTF-8 bytes) becomes a `.txt`
+ *  attachment instead of landing in the textarea. */
+export const LONG_PASTE_BYTES = 32 * 1024;
+
+export function isLongPaste(text: string): boolean {
+  // Cheap exit first: a UTF-8 character is at most 4 bytes.
+  if (text.length * 4 < LONG_PASTE_BYTES) return false;
+  return new TextEncoder().encode(text).length >= LONG_PASTE_BYTES;
+}
+
+function pastedTextFile(text: string): File {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*$/, "");
+  return new File([text], `pasted-text-${stamp}.txt`, { type: "text/plain;charset=utf-8" });
+}
+
 // Desktop-app-style context ring — compact circular indicator instead of a
 // bar, per the operator's ask to match the Claude Desktop app's look.
 const RING_SIZE = 18;
@@ -528,9 +543,19 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     // Dateien im Zwischenspeicher liegen — sonst bliebe normales Text-
     // Einfügen auf der Strecke.
     const files = Array.from(e.clipboardData?.files ?? []);
-    if (files.length === 0) return;
+    if (files.length > 0) {
+      e.preventDefault();
+      void addFiles(files);
+      return;
+    }
+    // Ein sehr langer Text (Log, ganze Datei) gehoert nicht ins Eingabefeld:
+    // er sprengt die Zeilen und reist sonst unsichtbar mit. Er wird zum
+    // Anhang — derselbe Weg wie eine gewaehlte Datei.
+    const pasted = e.clipboardData?.getData("text/plain") ?? "";
+    if (!isLongPaste(pasted)) return;
     e.preventDefault();
-    void addFiles(files);
+    void addFiles([pastedTextFile(pasted)]);
+    notify.info(t("pastedAsFile"));
   }
 
   function handleDrop(e: React.DragEvent) {

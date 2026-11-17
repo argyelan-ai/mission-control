@@ -1047,6 +1047,7 @@
     "removeAttachment": "Anhang {name} entfernen",
     "attachmentUploadingOne": "lädt…",
     "attachmentUploadingMany": "{count} laden…",
+    "pastedAsFile": "Langer Text eingefügt — als Datei angehängt",
     "attachmentFailed": "Anhang fehlgeschlagen",
     "attachmentExpandImage": "Bild {name} vergrössern",
     "attachmentCollapseImage": "Bild {name} verkleinern",
