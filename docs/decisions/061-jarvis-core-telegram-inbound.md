@@ -1,6 +1,6 @@
 # ADR-061 — jarvis_core (geteilte Persona/Tools/Brain) + Telegram-Inbound
 
-**Status:** Accepted · §2 (Telegram inbound) partially superseded by [ADR-085](085-head-per-job.md) (2026-09-22) — channels become output-only; inbound keeps running until re-routed
+**Status:** Accepted · §2 (Telegram inbound) partially superseded by [ADR-085](085-head-per-job.md) (2026-09-22) — channels become output-only; inbound keeps running until re-routed · partially superseded by [ADR-102](102-cockpit-direction.md) (2026-11-17) — the voice agent as its own assistant goes; voice becomes a function in every chat (stage 2 decides the parts)
 **Datum:** 2026-07-10
 **Scope:** Backend/Services · Backend/Config · Infra/Compose · voice_worker · Docs
 
