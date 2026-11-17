@@ -1231,6 +1231,8 @@
       "chatEmpty": "Dieser Chat hat noch keine Dateien geändert",
       "chatEmptyHint": "Dateien, die der Agent in diesem Chat bearbeitet, erscheinen hier — in jedem Ordner, mit oder ohne Git.",
       "chatFiles": "{count, plural, one {# Datei} other {# Dateien}}",
+      "inlineFiles": "{count, plural, one {# Datei in diesem Chat geändert} other {# Dateien in diesem Chat geändert}}",
+      "inlineOpen": "Diff öffnen",
       "chatEdits": "{count, plural, one {# Bearbeitung} other {# Bearbeitungen}}",
       "chatBack": "Alle Dateien",
       "chatLoadFailed": "Die Änderungen dieses Chats konnten nicht geladen werden.",

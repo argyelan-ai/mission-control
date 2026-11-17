@@ -1231,6 +1231,8 @@
       "chatEmpty": "No file changes in this chat yet",
       "chatEmptyHint": "Files the agent edits in this chat show up here — in any folder, with or without git.",
       "chatFiles": "{count, plural, one {# file} other {# files}}",
+      "inlineFiles": "{count, plural, one {# file changed in this chat} other {# files changed in this chat}}",
+      "inlineOpen": "Open diff",
       "chatEdits": "{count, plural, one {# edit} other {# edits}}",
       "chatBack": "All files",
       "chatLoadFailed": "Couldn't load this chat's changes.",

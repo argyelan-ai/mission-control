@@ -131,6 +131,14 @@ vi.mock("@/components/voice/VoiceWidget", () => ({
     </button>
   ),
 }));
+// The inline "files changed" row asks the backend through react-query —
+// stubbed here (ChatChangesInline.test.tsx covers it with a real client);
+// the stub keeps what ChatView decides: where it stands and what it gets.
+vi.mock("./ChatChangesInline", () => ({
+  ChatChangesInline: ({ working, onOpen }: { working: boolean; onOpen: () => void }) => (
+    <button type="button" data-testid="changes-inline-stub" data-working={String(working)} onClick={onOpen} />
+  ),
+}));
 vi.mock("./TerminalPanel", async () => {
   const actual = await vi.importActual<typeof import("./TerminalPanel")>("./TerminalPanel");
   return {
@@ -722,6 +730,40 @@ describe("ChatView", () => {
     expect(screen.queryByText("Let me look")).not.toBeInTheDocument();
     expect(screen.queryByTestId("tool-group")).not.toBeInTheDocument();
     expect(screen.queryByText("Read foo.py")).not.toBeInTheDocument();
+  });
+
+  it("puts the 'files changed' row under the latest answer only, and it opens the Changes panel", async () => {
+    const last = { ...MSG, uuid: "u9", text: "Fertig." };
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG, TOOL, last] }));
+    const onOpenPanel = vi.fn();
+    const user = userEvent.setup();
+    renderChatView({ onOpenPanel });
+
+    const rows = screen.getAllByTestId("changes-inline-stub");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveAttribute("data-working", "false");
+    // Directly below the last answer, not below the first one.
+    const answer = screen.getByText("Fertig.");
+    expect(answer.compareDocumentPosition(rows[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("Hallo!").compareDocumentPosition(rows[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("Read foo.py").compareDocumentPosition(rows[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await user.click(rows[0]);
+    expect(onOpenPanel).toHaveBeenCalledWith("diff");
+  });
+
+  it("tells the 'files changed' row while the agent is still working", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({ events: [MSG], state: { kind: "state", status: "working", prompt: null } }),
+    );
+    renderChatView({ onOpenPanel: vi.fn() });
+    expect(screen.getByTestId("changes-inline-stub")).toHaveAttribute("data-working", "true");
+  });
+
+  it("has no 'files changed' row where no Changes panel can open", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    expect(screen.queryByTestId("changes-inline-stub")).toBeNull();
   });
 
   it("Normal collapses a run of tool/thinking events into one group chip", async () => {

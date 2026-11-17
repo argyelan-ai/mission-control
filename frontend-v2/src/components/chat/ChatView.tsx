@@ -59,6 +59,7 @@ import { ChatResendContext, useResendableErrorUuid, type ChatResend } from "./ch
 import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
 import { filterByDetailLevel } from "./detailLevelFilter";
+import { ChatChangesInline } from "./ChatChangesInline";
 import { ElicitationCard } from "./ElicitationCard";
 import { ModeChip } from "./ModeChip";
 import { StatusLine } from "./StatusLine";
@@ -1162,6 +1163,12 @@ export function ChatView({
   }
   const modelBadges = modelBadgeUuids(visibleEvents);
   const liveUuid = liveEventUuid(visibleEvents, stream.state?.status ?? null);
+  // The inline "files changed" row stands under the latest answer only (its
+  // numbers are the whole chat's), and only where the Changes panel can open
+  // (`onOpenPanel`, checked where it renders). A head has no such panel.
+  const latestAnswerUuid = head
+    ? null
+    : [...visibleEvents].reverse().find((ev) => ev.kind === "message" && ev.role === "assistant" && !ev.sidechain)?.uuid ?? null;
   // Single source for how alive this session is — the LIVE state frame wins
   // over the history handshake, because the history query no longer refetches
   // on focus while the pane probe keeps publishing (see resolveSessionAliveness).
@@ -1273,11 +1280,22 @@ export function ChatView({
                     />
                   );
                 }
-                return renderTimelineEvent(
+                const row = renderTimelineEvent(
                   item.event,
                   detailLevel,
                   modelBadges.has(item.event.uuid),
                   item.event.uuid === liveUuid,
+                );
+                if (item.event.uuid !== latestAnswerUuid || !agent || !onOpenPanel) return row;
+                return (
+                  <Fragment key={item.event.uuid}>
+                    {row}
+                    <ChatChangesInline
+                      agentId={agent.id}
+                      working={stream.state?.status === "working"}
+                      onOpen={() => onOpenPanel("diff")}
+                    />
+                  </Fragment>
                 );
   }
 
