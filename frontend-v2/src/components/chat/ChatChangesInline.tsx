@@ -19,6 +19,7 @@ import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { Counts } from "./ChatChangesList";
 import { saveTab } from "./DiffPanel";
+import { TIMELINE_CARD_GUTTER } from "./timelineCard";
 
 export function ChatChangesInline({
   agentId,
@@ -41,7 +42,7 @@ export function ChatChangesInline({
   if (working || query.isError || !stats || stats.files === 0) return null;
 
   return (
-    <div className="w-full px-4 md:px-5 py-1">
+    <div className={TIMELINE_CARD_GUTTER}>
       <button
         type="button"
         data-testid="chat-changes-inline"
