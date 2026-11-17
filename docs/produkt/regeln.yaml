@@ -640,11 +640,6 @@ rules:
     checked: 2026-10-28
 
 rejected:
-  - id: X-own-control-room
-    idea: "An own control-room UI, job page or coordinator for heads"
-    why: "The coding-CLI vendor ships one; decided at stop 2. The launcher on the task form is not a control room."
-    source: "PRINCIPLES 8.1; ADR-085 decision 5; ADR-086 decision 5"
-    keywords: [control room, job page, coordinator, dashboard for heads]
   - id: X-head-run-type
     idea: "New task columns, statuses or a 'head' run type"
     why: "The task core is frozen."

@@ -178,11 +178,10 @@ compare. The chat's context ring shows the prompt cache hit rate.
 
 ## What is stable and what is not
 
-MC is changing direction ([ADR-085](docs/decisions/085-head-per-job.md),
-[ADR-089](docs/decisions/089-lead-agent-with-hands.md),
-[ADR-090](docs/decisions/090-chat-as-remote-control.md)): away from a
-permanent fleet of named agents, towards one lead agent, one local agent and
-the chat as remote control. Here is where each part stands.
+MC is changing direction ([ADR-102](docs/decisions/102-cockpit-direction.md)):
+MC becomes the cockpit for your AI — one chat, your models and devices, your
+knowledge — with chats instead of fixed agents and projects instead of the
+task page. That is a plan, not built yet; the table shows what exists today.
 
 | Status | What | How to get it |
 |---|---|---|
@@ -301,10 +300,11 @@ Full map and "where do I change what": [docs/ARCHITECTURE.md](docs/ARCHITECTURE.
 ## Where it's going
 
 No dates are promised; stages move when their acceptance check passes.
-Next in the chat: session list, resume and fork (P4), sending images,
-installing plugins, skills and MCP servers through an approval card. The
-lead agent's own merge and deploy gate is planned and not built yet. Full
-status: [docs/ROADMAP.md](docs/ROADMAP.md).
+Six stages: write down the direction (in progress), the chat as home,
+fewer pages with projects instead of tasks, models and devices in the core,
+a real product (one-step install on Mac, Windows and NAS, update by button,
+several users, modules), and an own phone app. Full status:
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Built in the open
 
