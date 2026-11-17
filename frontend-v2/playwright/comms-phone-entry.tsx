@@ -32,7 +32,7 @@ const agent = {
 } as unknown as AgentWithState;
 
 function Chat() {
-  const [detailLevel, setDetailLevel] = useState<"compact" | "normal" | "verbose">("normal");
+  const [detailLevel, setDetailLevel] = useState<"answer" | "compact" | "normal" | "verbose">("normal");
   const [centerView, setCenterView] = useState<"chat" | "terminal">("chat");
   return (
     <VoiceProvider>

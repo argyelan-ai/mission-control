@@ -713,6 +713,17 @@ describe("ChatView", () => {
     expect(screen.queryByTestId("tool-group")).not.toBeInTheDocument();
   });
 
+  it("Answer only shows the agent's last reply of the turn, no machinery", () => {
+    const first = { ...MSG, uuid: "u0", text: "Let me look" };
+    mockUseChatStream.mockReturnValue(mkStream({ events: [first, TOOL, THINKING, MSG] }));
+    renderChatView({ detailLevel: "answer" });
+
+    expect(screen.getByText("Hallo!")).toBeInTheDocument();
+    expect(screen.queryByText("Let me look")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tool-group")).not.toBeInTheDocument();
+    expect(screen.queryByText("Read foo.py")).not.toBeInTheDocument();
+  });
+
   it("Normal collapses a run of tool/thinking events into one group chip", async () => {
     mockUseChatStream.mockReturnValue(mkStream({ events: [MSG, TOOL, THINKING] }));
     const user = userEvent.setup();

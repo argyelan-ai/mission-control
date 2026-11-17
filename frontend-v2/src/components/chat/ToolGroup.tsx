@@ -29,6 +29,7 @@ import { ThinkingRow } from "./ThinkingRow";
 import { ToolImages } from "./ToolImages";
 import { useStreamingToolIds } from "./toolOutputStore";
 import { formatDuration, secondsBetween } from "@/lib/taskDetail/format";
+import type { DetailLevel } from "./chatOptions";
 
 export type ActivityEvent = ToolEvent | ThinkingEvent;
 
@@ -112,7 +113,7 @@ function leadingIcon(summary: ActivitySummary) {
   return Wrench;
 }
 
-function renderChild(ev: ActivityEvent, detailLevel: "compact" | "normal" | "verbose") {
+function renderChild(ev: ActivityEvent, detailLevel: DetailLevel) {
   return ev.kind === "tool" ? (
     <ToolRow key={ev.toolUseId ?? ev.uuid} ev={ev} detailLevel={detailLevel} />
   ) : (
@@ -126,7 +127,7 @@ export function ToolGroup({
   endTs = null,
 }: {
   events: ActivityEvent[];
-  detailLevel?: "compact" | "normal" | "verbose";
+  detailLevel?: DetailLevel;
   /** When the agent's next step began — the end of this work (optional). */
   endTs?: string | null;
 }) {

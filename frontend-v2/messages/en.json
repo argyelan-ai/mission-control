@@ -1070,6 +1070,7 @@
     "sessionEnded": "ended",
     "detailLevel": "Detail level",
     "detailLevelCurrent": "Detail level: {level}",
+    "detailAnswer": "Answer only",
     "detailCompact": "Compact",
     "detailNormal": "Normal",
     "detailVerbose": "Verbose",

@@ -58,6 +58,7 @@ import { ChatMediaContext } from "./chatMedia";
 import { ChatResendContext, useResendableErrorUuid, type ChatResend } from "./chatResend";
 import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
+import { filterByDetailLevel } from "./detailLevelFilter";
 import { ElicitationCard } from "./ElicitationCard";
 import { ModeChip } from "./ModeChip";
 import { StatusLine } from "./StatusLine";
@@ -184,20 +185,6 @@ export function headerSideReservation(opts: {
       M.control +
       (badgeWidth > 0 ? M.gap + badgeWidth : 0),
   };
-}
-
-function isVisibleAtLevel(ev: TimelineChatEvent, level: DetailLevel): boolean {
-  if (level !== "compact") return true;
-  /* Ein delegierter Auftrag ist Gespraechsstruktur, kein Werkzeug-Rauschen:
-     er sagt, WER hier gerade woran arbeitet. Ohne diese Ausnahme verschwaende
-     die Karte in "Kompakt" spurlos — samt dem einzigen Zugang zum Protokoll
-     des Subagenten. */
-  if (isAgentSpawn(ev)) return true;
-  // Kompakt: tool/thinking rows are noise for a quick skim — hide entirely
-  // rather than collapse (that's what Normal is for). Since no tool/thinking
-  // event survives this filter, `Kompakt` also produces no activity groups —
-  // the level's semantics are unchanged by the grouping layer.
-  return ev.kind === "message" || ev.kind === "command";
 }
 
 /** Timeline items mounted in the first commit — roughly a screenful, so the
@@ -524,7 +511,7 @@ export function ChatView({
      `visibleEvents`-Identitaet kommt aus dem Reducer (bei preview unveraendert),
      deshalb ist hier events die Abhaengigkeit, nicht das stream-Objekt. */
   const visibleEvents = useMemo(
-    () => stream.events.filter((ev) => isVisibleAtLevel(ev, detailLevel)),
+    () => filterByDetailLevel(stream.events, detailLevel),
     [stream.events, detailLevel],
   );
 

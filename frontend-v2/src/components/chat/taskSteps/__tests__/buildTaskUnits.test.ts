@@ -62,6 +62,9 @@ describe("buildTaskUnits (spec A §2.4, test 7)", () => {
     ];
     const { units } = buildTaskUnits(rows, ctx0(), { detailLevel: "compact" });
     expect(kinds(units)).toEqual(["text", "comment", "attempt"]);
+    // "Answer only" is at least as quiet as compact inside a task band.
+    const answer = buildTaskUnits(rows, ctx0(), { detailLevel: "answer" });
+    expect(kinds(answer.units)).toEqual(["text", "comment", "attempt"]);
   });
 
   it("merges a permission request with its decision into one system unit (N8)", () => {

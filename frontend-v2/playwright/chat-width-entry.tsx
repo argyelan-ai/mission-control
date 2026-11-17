@@ -39,7 +39,7 @@ const agent = {
 const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
 function App({ shell }: { shell: "sessions" | "app" }) {
-  const [detailLevel, setDetailLevel] = useState<"compact" | "normal" | "verbose">("verbose");
+  const [detailLevel, setDetailLevel] = useState<"answer" | "compact" | "normal" | "verbose">("verbose");
   const [centerView, setCenterView] = useState<"chat" | "terminal">("chat");
   // The real hook: the app mounts it in providers.tsx, and it is the only
   // writer of `--keyboard-inset`. The "app" shell carries `.app-shell-height`,
