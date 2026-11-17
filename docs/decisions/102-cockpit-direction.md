@@ -16,8 +16,8 @@ On 2026-11-17 the operator looked at the result in an interview and found:
 
 - **The product was hardly used by its own operator.** Daily work happened
   in other tools; MC was opened for single tasks.
-- **Too many pages.** The navigation grew page by page (tasks, boards,
-  office, loops, schedule, inbox, bench, repos and more). Which of them are
+- **Too many pages.** The navigation grew page by page (tasks, office,
+  loops, schedule, inbox, bench, repos and more). Which of them are
   opened at all was not measurable until the route beacon of ROADMAP E0
   (#692) started to record page views.
 - **Fixed agents.** Work is bound to named, long-running agents (the lead
