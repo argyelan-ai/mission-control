@@ -133,7 +133,10 @@ class RecordResponse(BaseModel):
 #:   uniform mid frame and no visible text = blank page).
 #: - three_local: /record serves a pinned three.js for CDN requests and
 #:   answers ``lib_track`` / ``libraries_provided`` (lane lib:three-local).
-RENDERER_FEATURES = ("branding_effort", "bench_card_v1", "seeded_random", "page_check", "three_local")
+#: - bench_compilation_v1: POST /compilation renders 2–4 finished runs into
+#:   one 4:5 video (hook, one segment per run, numbers, details).
+RENDERER_FEATURES = ("branding_effort", "bench_card_v1", "seeded_random", "page_check", "three_local",
+                     "bench_compilation_v1")
 
 
 class BrandingModelSpec(BaseModel):
