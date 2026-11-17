@@ -1270,6 +1270,7 @@ export function ChatView({
                       key={`activity-${item.events[0].uuid}`}
                       events={item.events}
                       detailLevel={detailLevel}
+                      endTs={item.endTs}
                     />
                   );
                 }

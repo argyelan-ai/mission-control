@@ -20,7 +20,7 @@
  * component the rest of the English UI never mixes languages in).
  */
 import { useEffect, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { AlertTriangle, Brain, ChevronRight, Terminal, Wrench } from "lucide-react";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import type { ThinkingEvent, ToolEvent } from "@/lib/chatTypes";
@@ -28,6 +28,7 @@ import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
 import { ToolImages } from "./ToolImages";
 import { useStreamingToolIds } from "./toolOutputStore";
+import { formatDuration, secondsBetween } from "@/lib/taskDetail/format";
 
 export type ActivityEvent = ToolEvent | ThinkingEvent;
 
@@ -90,6 +91,20 @@ export function toolGroupLabel(
   return joined.length > 0 ? joined.charAt(0).toUpperCase() + joined.slice(1) : t("toolGroup.activity");
 }
 
+/** How long the run took — from its first step to the agent's next step
+ *  (`endTs`, see `buildTimelineItems`). A finished duration starts at 1 min
+ *  (the task steps' rule); unknown, open or backwards spans say nothing. */
+export function activityDuration(
+  events: ActivityEvent[],
+  endTs: string | null | undefined,
+  locale: string,
+): string | null {
+  if (!endTs || events.length === 0) return null;
+  const seconds = secondsBetween(events[0].ts, endTs);
+  if (seconds == null || seconds < 60) return null;
+  return formatDuration(seconds, locale);
+}
+
 function leadingIcon(summary: ActivitySummary) {
   if (summary.hasError) return AlertTriangle;
   if (summary.tools === 0 && summary.commands === 0) return Brain;
@@ -108,11 +123,15 @@ function renderChild(ev: ActivityEvent, detailLevel: "compact" | "normal" | "ver
 export function ToolGroup({
   events,
   detailLevel = "normal",
+  endTs = null,
 }: {
   events: ActivityEvent[];
   detailLevel?: "compact" | "normal" | "verbose";
+  /** When the agent's next step began — the end of this work (optional). */
+  endTs?: string | null;
 }) {
   const t = useTranslations("sessions");
+  const locale = useLocale();
   const [expanded, setExpanded] = useState(detailLevel === "verbose");
   // Same re-sync as ToolRow/ThinkingRow (review finding I-3): useState reads
   // its initial value once, so a mounted group would never react to the
@@ -134,6 +153,7 @@ export function ToolGroup({
   const summary = summarizeActivity(events);
   const label = toolGroupLabel(summary, t);
   const Icon = leadingIcon(summary);
+  const duration = activityDuration(events, endTs, locale);
   // P2: the run's pictures stay visible below a COLLAPSED group — a
   // screenshot must not hide behind "12 tools used". Opened, every row
   // shows its own (never twice).
@@ -173,6 +193,12 @@ export function ToolGroup({
               button's accessible name without changing the visual line. */}
           {summary.hasError && <span className="sr-only"> — {t("toolGroup.errorIncluded")}</span>}
         </span>
+        {/* Its own span so a long label is cut before the duration is. */}
+        {duration && (
+          <span className="shrink-0 text-xs tabular-nums" style={{ color: C.textMuted }} data-testid="tool-group-duration">
+            · {duration}
+          </span>
+        )}
         <span
           className="shrink-0 font-mono text-[10px] font-medium tabular-nums"
           style={{ color: summary.hasError ? STATUS_TEXT.warning : C.textMuted }}
