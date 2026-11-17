@@ -4402,6 +4402,7 @@
   "chat": {
     "showMore": "Mehr anzeigen",
     "showLess": "Weniger anzeigen",
+    "quoteReply": "In der Antwort zitieren",
     "event": {
       "task": "Aufgabe",
       "correction": "Korrektur",

@@ -27,6 +27,7 @@ import { ContextPanel, cacheHitRateOf } from "./ContextPanel";
 import { PopoverPortal, anchoredBoxStyle, useAnchoredPosition } from "@/lib/anchoredPopover";
 import { harnessLabel } from "@/components/shared/HarnessIcon";
 import { formatShare } from "@/lib/usage";
+import { appendQuote } from "./chatQuote";
 
 const MAX_ROWS = 8;
 /** Rows of room the input holds at rest, before anything is typed. */
@@ -240,6 +241,9 @@ interface ComposerProps {
   /** Text the parent wants in the box (a withdrawn steer coming back for
    *  editing). `at` makes the same text re-applicable: a new stamp = apply. */
   prefill?: { text: string; at: number } | null;
+  /** A reply the operator quoted (`chatQuote`): appended to the draft as a
+   *  Markdown blockquote, never sent. `at` makes the same text re-applicable. */
+  quote?: { text: string; at: number } | null;
   /** Phone: the detail action bar sits below and owns the home-indicator
    *  strip, so the composer drops its own safe-area padding. */
   barBelow?: boolean;
@@ -275,7 +279,7 @@ interface ComposerProps {
  *  globals.css passen. */
 export const EFFORT_SETTLE_MS = 320;
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, quote = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
   const t = useTranslations("sessions");
   // One word per effort level, the same as the bench (round-2 Q2):
   // "High" / "Hoch" instead of the raw "high" the harness reports.
@@ -344,6 +348,21 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /** Where the caret goes once a quote has landed in the draft. */
+  const caretToEndRef = useRef(false);
+  useEffect(() => {
+    if (!quote || !quote.text.trim()) return;
+    caretToEndRef.current = true;
+    setText((draft) => appendQuote(draft, quote.text));
+  }, [quote]);
+  useEffect(() => {
+    if (!caretToEndRef.current) return;
+    caretToEndRef.current = false;
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(text.length, text.length);
+  }, [text]);
 
   const isWorking = state?.status === "working";
   const hasText = text.trim().length > 0;

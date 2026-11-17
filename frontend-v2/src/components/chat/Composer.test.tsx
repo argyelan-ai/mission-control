@@ -2256,3 +2256,33 @@ describe("Composer — long pasted text becomes a file", () => {
     expect((mockUpload.mock.calls[0][1] as File).name).toBe("foto.png");
   });
 });
+
+describe("Composer — quote a reply into the draft", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("appends the quote below the draft, cursor after it, nothing sent", () => {
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={onSend} onStop={vi.fn()} />,
+    );
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "my draft" } });
+
+    rerender(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={onSend} onStop={vi.fn()} quote={{ text: "one\ntwo", at: 1 }} />,
+    );
+
+    expect(textarea).toHaveValue("my draft\n\n> one\n> two\n\n");
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.selectionStart).toBe(textarea.value.length);
+    expect(textarea.selectionEnd).toBe(textarea.value.length);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("applies the same text again when it comes with a new stamp", () => {
+    const props = { agentId: "a1", usage: null, state: mkState("idle"), onSend: vi.fn(), onStop: vi.fn() };
+    const { rerender } = render(<Composer {...props} quote={{ text: "a", at: 1 }} />);
+    rerender(<Composer {...props} quote={{ text: "a", at: 2 }} />);
+    expect(screen.getByRole("textbox")).toHaveValue("> a\n\n> a\n\n");
+  });
+});
