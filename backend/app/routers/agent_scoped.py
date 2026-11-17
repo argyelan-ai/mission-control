@@ -79,6 +79,7 @@ from app.auth import require_agent
 from app.scopes import Scope, require_scope
 from app.database import get_session
 from app.models.agent import Agent
+from app.services.agent_language_defaults import apply_language_defaults
 from app.models.agent_template import AgentTemplate
 from app.models.approval import Approval
 from app.models.board import Board, Project
@@ -3954,6 +3955,7 @@ async def agent_create_custom(
         agent_token_hash=token_hash,
         provision_status="local",
     )
+    await apply_language_defaults(session, new_agent)  # Settings → Language: fleet default for new agents
     session.add(new_agent)
     await session.commit()
     await session.refresh(new_agent)

@@ -3294,3 +3294,15 @@ export interface TaskModelWait {
   runtime: string | null;
   reason: string | null;
 }
+
+// Settings → Language: the languages a NEW agent gets (app_settings rows,
+// services/agent_language_defaults.py). Codes, not names — names come from i18n.
+export interface AgentLanguageDefaults {
+  operator_language: string;
+  work_language: string;
+}
+
+export interface AgentLanguageDefaultsResponse {
+  defaults: AgentLanguageDefaults;
+  supported: string[];
+}

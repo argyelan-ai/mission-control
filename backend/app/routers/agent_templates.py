@@ -9,6 +9,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import require_user
 from app.database import get_session
 from app.models.agent import Agent
+from app.services.agent_language_defaults import apply_language_defaults
 from app.models.agent_template import AgentTemplate
 from app.services.provisioning import provision_agent_background as _provision_agent_background
 from app.utils import utcnow
@@ -172,6 +173,7 @@ async def _do_instantiate(
         runtime_id=resolved_runtime_id,
         harness=harness,
     )
+    await apply_language_defaults(session, agent)  # Settings → Language: fleet default for new agents
     session.add(agent)
     await session.commit()
     await session.refresh(agent)

@@ -171,6 +171,9 @@ their knowledge, their hardware and their evidence.
    vocabulary, faster runs. Existing installations keep the
    `operator_language` that migration 0201 copied from the old `language`
    field until the operator changes it.
+   Both are set in Settings → Language: one list of all agents, plus the
+   default a new agent gets (stored in `app_settings`, `en`/`en` until the
+   operator changes it; changing it never touches existing agents).
 3. **UI text only through i18n.** Every label has a key in
    `frontend-v2/messages/<locale>.json`; the backend sends codes, not
    sentences. More languages are added as catalogs, not as code

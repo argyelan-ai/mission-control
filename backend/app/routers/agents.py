@@ -15,6 +15,7 @@ from sqlmodel import select
 from app.auth import require_agent, require_control_plane, require_user, require_user_or_control_plane
 from app.database import get_session
 from app.models.agent import Agent, AgentMetrics
+from app.services.agent_language_defaults import apply_language_defaults
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
 from app.models.task import Task
 from app.services.activity import emit_event
@@ -231,6 +232,7 @@ async def create_agent(
         skill_filter=payload.skill_filter,
         cli_plugins=payload.cli_plugins,
     )
+    await apply_language_defaults(session, agent)  # Settings → Language: fleet default for new agents
     session.add(agent)
     await session.commit()
     await session.refresh(agent)
@@ -287,6 +289,7 @@ async def preview_soul(
         is_board_lead=payload.is_board_lead,
         scopes=payload.scopes,
     )
+    await apply_language_defaults(session, draft)  # Settings → Language: fleet default for new agents
     try:
         context = build_agent_context(draft, board_id=str(payload.board_id) if payload.board_id else None)
         soul = render_agent_file("SOUL.md.j2", context)
@@ -703,6 +706,7 @@ async def setup_specialized_agents(
             template_id=tmpl.id if tmpl else None,
             provision_status="local",
         )
+        await apply_language_defaults(session, agent)  # Settings → Language: fleet default for new agents
         session.add(agent)
         await session.commit()
         await session.refresh(agent)

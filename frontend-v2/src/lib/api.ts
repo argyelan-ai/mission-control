@@ -2005,6 +2005,15 @@ export const api = {
         method: "PUT",
         body: JSON.stringify({ value }),
       }),
+    // Fleet default languages for NEW agents (Settings → Language). Existing
+    // agents keep their own operator_language / work_language.
+    agentLanguage: () =>
+      request<import("./types").AgentLanguageDefaultsResponse>("/api/v1/settings/agent-language"),
+    setAgentLanguage: (data: Partial<import("./types").AgentLanguageDefaults>) =>
+      request<import("./types").AgentLanguageDefaultsResponse>("/api/v1/settings/agent-language", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
     autonomy: () =>
       request<import("./types").AutonomyConfig>("/api/v1/settings/autonomy"),
     updateAutonomy: (levels: Record<string, string>) =>
