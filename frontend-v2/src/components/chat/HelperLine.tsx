@@ -31,7 +31,8 @@ import {
 } from "./helpers";
 
 /** "3 working" while any works (plus failures, they matter); once all are
- *  finished "done", or "3 done, 1 failed". */
+ *  finished "done", or "3 done, 1 failed"; in an ended session helpers that
+ *  never reported are counted as "no report". */
 export function helperStateLabel(
   s: HelperSummary,
   t: (key: string, values?: Record<string, string | number | Date>) => string,
@@ -40,18 +41,20 @@ export function helperStateLabel(
   if (s.working > 0) {
     parts.push(t("helperLine.working", { count: s.working }));
     if (s.failed > 0) parts.push(t("helperLine.failed", { count: s.failed }));
-  } else if (s.failed === 0) {
+  } else if (s.failed === 0 && s.unknown === 0) {
     parts.push(t("helperLine.allDone"));
   } else {
     if (s.done > 0) parts.push(t("helperLine.done", { count: s.done }));
-    parts.push(t("helperLine.failed", { count: s.failed }));
+    if (s.failed > 0) parts.push(t("helperLine.failed", { count: s.failed }));
+    if (s.unknown > 0) parts.push(t("helperLine.unknown", { count: s.unknown }));
   }
   return parts.join(", ");
 }
 
 function lineState(s: HelperSummary): HelperState {
   if (s.working > 0) return "working";
-  return s.failed > 0 ? "failed" : "done";
+  if (s.failed > 0) return "failed";
+  return s.unknown > 0 ? "unknown" : "done";
 }
 
 /** A clock that ticks only while something is running — minute precision is
@@ -71,18 +74,25 @@ export function HelperLine({
   reports,
   runs,
   agentId,
+  sessionEnded = false,
 }: {
   events: ToolEvent[];
   reports: HelperReports;
   /** Claude subagent transcripts, by the call's toolUseId (`matchRuns`). */
   runs: Map<string, SubagentRun>;
   agentId: string;
+  /** The session is over: a helper without a report can no longer be
+   *  "working" (it shows "no report", and no clock runs). */
+  sessionEnded?: boolean;
 }) {
   const t = useTranslations("sessions");
   const locale = useLocale();
   const [expanded, setExpanded] = useState(false);
 
-  const helpers = useMemo(() => collectHelpers(events, reports), [events, reports]);
+  const helpers = useMemo(
+    () => collectHelpers(events, reports, { sessionEnded }),
+    [events, reports, sessionEnded],
+  );
   const summary = summarizeHelpers(helpers);
   const now = useTick(summary.working > 0);
   if (helpers.length === 0) return null;

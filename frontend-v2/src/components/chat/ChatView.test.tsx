@@ -1951,6 +1951,32 @@ describe("ChatView", () => {
     ).toBeInTheDocument();
   });
 
+  it("an ended session's helpers line says 'no report' for a helper that never reported, never 'working'", () => {
+    const spawn = {
+      kind: "tool", uuid: "sp1", ts: "2026-08-15T10:01:00Z", name: "Agent", title: "Agent: x",
+      detail: { description: "Scan the repo" }, toolUseId: "tu-sp1", result: "Async agent launched",
+      status: "done", stats: null, sidechain: false,
+      helpers: [{ id: "ag-sp1", name: null, agent: null, state: "working", durationMs: null }],
+    } as TimelineChatEvent;
+    mockUseChatStream.mockReturnValue(
+      mkStream({ events: [spawn], session: { sessionId: "s1", live: false, startedAt: null, aliveness: "ended" } })
+    );
+    renderChatView();
+    expect(screen.getByTestId("helper-line-label").textContent).toBe("1 helper · 1 no report");
+  });
+
+  it("a live session's helper without a report is still working", () => {
+    const spawn = {
+      kind: "tool", uuid: "sp1", ts: "2026-08-15T10:01:00Z", name: "Agent", title: "Agent: x",
+      detail: { description: "Scan the repo" }, toolUseId: "tu-sp1", result: "Async agent launched",
+      status: "done", stats: null, sidechain: false,
+      helpers: [{ id: "ag-sp1", name: null, agent: null, state: "working", durationMs: null }],
+    } as TimelineChatEvent;
+    mockUseChatStream.mockReturnValue(mkStream({ events: [spawn] }));
+    renderChatView();
+    expect(screen.getByTestId("helper-line-label").textContent).toBe("1 helper · 1 working");
+  });
+
   it('does NOT say "beendet" on a stale mtime alone (old backend)', () => {
     // The operator's actual complaint: `live: false` with no server aliveness
     // used to render the finished-session treatment at a running CLI.

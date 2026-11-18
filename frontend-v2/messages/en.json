@@ -1175,6 +1175,8 @@
       "stateWorking": "working",
       "stateDone": "done",
       "stateFailed": "failed",
+      "stateUnknown": "no report",
+      "unknown": "{count} no report",
       "expand": "Show helpers",
       "collapse": "Hide helpers"
     },

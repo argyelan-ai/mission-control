@@ -11,15 +11,20 @@
  *
  *   - a `notification` (Claude `<task-notification>`, omp `async-result`) —
  *     by tool id, or by the helper's own id (`taskId`);
- *   - for a Claude team member: its `idle_notification` teammate message.
+ *   - for a Claude team member: its `idle_notification` teammate message —
+ *     until it writes again (woken for a new job), then it works again.
  *
  * Rule: an end is only ever taken from an OBSERVATION. Nothing here turns "no
- * news for a while" into "done".
+ * news for a while" into "done". Only an ENDED session turns a helper that
+ * never reported into "unknown" — the one thing that is then certain is
+ * that it is not working any more.
  */
 import type { ChatEvent, HelperSpawn, MessageEvent, NotificationEvent, ToolEvent } from "@/lib/chatTypes";
 import { secondsBetween } from "@/lib/taskDetail/format";
 
-export type HelperState = HelperSpawn["state"];
+/** `unknown`: the session ended and this helper never reported — neither
+ *  "working" (nothing runs any more) nor "done" (that would be a guess). */
+export type HelperState = HelperSpawn["state"] | "unknown";
 
 /** A tool call that started helpers. Claude Code: `Agent` (older `Task`).
  *  omp: `task` — but only WITH the backend's helper data, since a lowercase
@@ -50,10 +55,18 @@ interface Report {
   durationMs: number | null;
 }
 
+/** One message of a team member: an idle notification or anything else it
+ *  wrote (a sign that it is working). */
+interface TeammateMark {
+  ts: string;
+  idle: boolean;
+}
+
 export interface HelperReports {
   byTool: Map<string, Report>;
   byTask: Map<string, Report>;
-  byTeammate: Map<string, Report>;
+  /** Every message per team member name, in stream order. */
+  byTeammate: Map<string, TeammateMark[]>;
 }
 
 const DONE = new Set(["completed", "done", "success"]);
@@ -69,16 +82,30 @@ function reportOf(ev: NotificationEvent): Report | null {
 
 /** A team member that went idle (Claude Code teams): its job is done until
  *  someone wakes it. The message text is JSON the CLI writes itself. */
-function idleOf(ev: MessageEvent): string | null {
-  if (ev.role !== "teammate" || !ev.teammate) return null;
+function isIdle(ev: MessageEvent): boolean {
   const text = ev.text.trim();
-  if (!text.startsWith("{") || !text.includes("idle_notification")) return null;
+  if (!text.startsWith("{") || !text.includes("idle_notification")) return false;
   try {
     const parsed = JSON.parse(text) as { type?: unknown };
-    return parsed.type === "idle_notification" ? ev.teammate : null;
+    return parsed.type === "idle_notification";
   } catch {
-    return null;
+    return false;
   }
+}
+
+/** A team member's state from its own messages AFTER it was started (a name
+ *  can be reused later in the same session). Last message an idle = done,
+ *  with the run time up to its FIRST idle (later idles follow re-wakes, the
+ *  span to them is not run time). A message after an idle = woken, working. */
+function teammateReport(marks: readonly TeammateMark[] | undefined, startedAt: string): Report | undefined {
+  if (!marks) return undefined;
+  const start = Date.parse(startedAt);
+  const own = marks.filter((m) => !(Date.parse(m.ts) < start));
+  const firstIdle = own.find((m) => m.idle);
+  if (!firstIdle) return undefined;
+  const last = own[own.length - 1];
+  if (!last.idle) return { state: "working", ts: last.ts, durationMs: null };
+  return { state: "done", ts: firstIdle.ts, durationMs: null };
 }
 
 /** Every observed end, once per stream. The LAST report wins — a job can
@@ -91,9 +118,10 @@ export function helperReports(events: readonly ChatEvent[]): HelperReports {
       if (!r) continue;
       if (ev.toolUseId) out.byTool.set(ev.toolUseId, r);
       if (ev.taskId) out.byTask.set(ev.taskId, r);
-    } else if (ev.kind === "message") {
-      const who = idleOf(ev);
-      if (who) out.byTeammate.set(who, { state: "done", ts: ev.ts, durationMs: null });
+    } else if (ev.kind === "message" && ev.role === "teammate" && ev.teammate) {
+      const marks = out.byTeammate.get(ev.teammate) ?? [];
+      marks.push({ ts: ev.ts, idle: isIdle(ev) });
+      out.byTeammate.set(ev.teammate, marks);
     }
   }
   return out;
@@ -110,7 +138,11 @@ function spanMs(start: string, end: string): number | null {
   return s == null || s < 0 ? null : s * 1000;
 }
 
-export function collectHelpers(spawns: readonly ToolEvent[], reports: HelperReports): HelperView[] {
+export function collectHelpers(
+  spawns: readonly ToolEvent[],
+  reports: HelperReports,
+  opts: { sessionEnded?: boolean } = {},
+): HelperView[] {
   const out: HelperView[] = [];
   for (const ev of spawns) {
     const listed: (HelperSpawn | null)[] = ev.helpers?.length ? ev.helpers : [null];
@@ -120,13 +152,14 @@ export function collectHelpers(spawns: readonly ToolEvent[], reports: HelperRepo
       const report =
         (spawned?.id ? reports.byTask.get(spawned.id) : undefined) ??
         (single && ev.toolUseId ? reports.byTool.get(ev.toolUseId) : undefined) ??
-        (spawned?.name ? reports.byTeammate.get(spawned.name) : undefined);
+        (spawned?.name ? teammateReport(reports.byTeammate.get(spawned.name), ev.ts) : undefined);
       const base = spawned?.state ?? legacyState(ev);
-      const state = report?.state ?? base;
+      const observed = report?.state ?? base;
+      const state: HelperState = observed === "working" && opts.sessionEnded ? "unknown" : observed;
       const durationMs =
         report?.durationMs ??
         (report ? spanMs(ev.ts, report.ts) : null) ??
-        (state !== "working" ? spawned?.durationMs ?? null : null);
+        (state === "done" || state === "failed" ? spawned?.durationMs ?? null : null);
       out.push({
         key: `${ev.toolUseId ?? ev.uuid}#${index}`,
         spawn: ev,
@@ -137,7 +170,7 @@ export function collectHelpers(spawns: readonly ToolEvent[], reports: HelperRepo
         agent: spawned?.agent ?? null,
         state,
         startedAt: ev.ts,
-        durationMs: state === "working" ? null : durationMs,
+        durationMs: state === "done" || state === "failed" ? durationMs : null,
       });
     });
   }
@@ -149,10 +182,11 @@ export interface HelperSummary {
   working: number;
   done: number;
   failed: number;
+  unknown: number;
 }
 
 export function summarizeHelpers(helpers: readonly HelperView[]): HelperSummary {
-  const s: HelperSummary = { total: helpers.length, working: 0, done: 0, failed: 0 };
+  const s: HelperSummary = { total: helpers.length, working: 0, done: 0, failed: 0, unknown: 0 };
   for (const h of helpers) s[h.state] += 1;
   return s;
 }

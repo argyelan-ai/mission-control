@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatEvent, HelperSpawn, MessageEvent, NotificationEvent, ToolEvent } from "@/lib/chatTypes";
 import {
   collectHelpers,
+  groupElapsedSeconds,
   helperElapsedSeconds,
   helperReports,
   isHelperSpawn,
@@ -35,6 +36,12 @@ function omp(helpers: HelperSpawn[]): ToolEvent {
 const h = (id: string, state: HelperSpawn["state"] = "working"): HelperSpawn => ({
   id, name: null, agent: "scout", state, durationMs: null,
 });
+
+const IDLE = '{"type":"idle_notification","from":"cfd","idleReason":"available"}';
+
+function teammate(name: string, ts: string, text: string): MessageEvent {
+  return { kind: "message", uuid: `m-${ts}`, ts, role: "teammate", teammate: name, text, model: null, sidechain: false };
+}
 
 describe("isHelperSpawn", () => {
   it("knows Claude Code's Agent/Task and omp's task tool", () => {
@@ -93,6 +100,50 @@ describe("collectHelpers", () => {
     expect(helper.durationMs).toBe(300000);
   });
 
+  it("a team member woken again after going idle works again until its next idle", () => {
+    const ev = spawn("t1", { helpers: [{ id: "acfd-1", name: "cfd", agent: null, state: "working", durationMs: null }] });
+    const events: ChatEvent[] = [
+      ev,
+      teammate("cfd", "2026-11-13T10:05:00Z", IDLE),
+      teammate("cfd", "2026-11-13T11:00:00Z", "found the second bug, fixing it now"),
+    ];
+    expect(collectHelpers([ev], helperReports(events))[0].state).toBe("working");
+    events.push(teammate("cfd", "2026-11-13T11:30:00Z", IDLE));
+    expect(collectHelpers([ev], helperReports(events))[0].state).toBe("done");
+  });
+
+  it("a team member's run time ends at its FIRST idle, not hours later at its last", () => {
+    const ev = spawn("t1", { helpers: [{ id: "acfd-1", name: "cfd", agent: null, state: "working", durationMs: null }] });
+    const events: ChatEvent[] = [
+      ev,
+      teammate("cfd", "2026-11-13T10:05:00Z", IDLE),
+      teammate("cfd", "2026-11-13T13:00:00Z", IDLE),
+    ];
+    expect(collectHelpers([ev], helperReports(events))[0].durationMs).toBe(300000);
+  });
+
+  it("an idle of an EARLIER team member with the same name never closes a later one", () => {
+    const later = spawn("t2", {
+      ts: "2026-11-13T12:00:00Z",
+      helpers: [{ id: "acfd-2", name: "cfd", agent: null, state: "working", durationMs: null }],
+    });
+    const events: ChatEvent[] = [teammate("cfd", "2026-11-13T10:05:00Z", IDLE), later];
+    expect(collectHelpers([later], helperReports(events))[0].state).toBe("working");
+  });
+
+  it("once the session has ended, a helper that never reported is 'unknown' — not working, no clock", () => {
+    const now = new Date("2026-12-24T10:00:00Z");
+    const a = launched("t1", "ag1");
+    const b = launched("t2", "ag2");
+    const events: ChatEvent[] = [a, b, note({ taskId: "ag1", durationMs: 60000 })];
+    const helpers = collectHelpers([a, b], helperReports(events), { sessionEnded: true });
+    expect(helpers.map((x) => x.state)).toEqual(["done", "unknown"]);
+    expect(helperElapsedSeconds(helpers[1], now)).toBeNull();
+    expect(groupElapsedSeconds(helpers, now)).toBeNull();
+    // A live session keeps the honest "working".
+    expect(collectHelpers([a, b], helperReports(events)).map((x) => x.state)).toEqual(["done", "working"]);
+  });
+
   it("omp: one call, several helpers, each closed by its own report", () => {
     const ev = omp([h("A"), h("B"), h("C")]);
     const events: ChatEvent[] = [
@@ -124,7 +175,7 @@ describe("summarizeHelpers + elapsed", () => {
   it("counts per state", () => {
     const ev = omp([h("A"), h("B", "done"), h("C", "failed"), h("D")]);
     expect(summarizeHelpers(collectHelpers([ev], helperReports([ev])))).toEqual({
-      total: 4, working: 2, done: 1, failed: 1,
+      total: 4, working: 2, done: 1, failed: 1, unknown: 0,
     });
   });
 

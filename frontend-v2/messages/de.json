@@ -1175,6 +1175,8 @@
       "stateWorking": "arbeitet",
       "stateDone": "fertig",
       "stateFailed": "fehlgeschlagen",
+      "stateUnknown": "ohne Rückmeldung",
+      "unknown": "{count} ohne Rückmeldung",
       "expand": "Helfer anzeigen",
       "collapse": "Helfer ausblenden"
     },

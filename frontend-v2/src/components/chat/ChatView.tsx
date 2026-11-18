@@ -1183,6 +1183,7 @@ export function ChatView({
   // over the history handshake, because the history query no longer refetches
   // on focus while the pane probe keeps publishing (see resolveSessionAliveness).
   const aliveness = resolveSessionAliveness(stream);
+  const helpersSessionEnded = aliveness === "ended" || (!!head && isHeadDone(head));
   const prompt = stream.state?.status === "permission_prompt" ? stream.state.prompt : null;
 
   /* "Send again" on a chat error card (S1-R7, chatResend.tsx): the card sends
@@ -1259,6 +1260,10 @@ export function ChatView({
                       // empty id just makes the "open subagent" affordance a
                       // harmless no-reply instead of crashing on `agent.id`.
                       agentId={agent?.id ?? ""}
+                      // An ended session (or a finished head) runs no helper
+                      // any more: one that never reported says so instead of
+                      // "working" with a clock that counts for weeks.
+                      sessionEnded={helpersSessionEnded}
                     />
                   );
                 }

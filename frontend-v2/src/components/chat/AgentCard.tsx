@@ -68,12 +68,14 @@ export const HELPER_DOT: Record<HelperState, string> = {
   working: STATUS_TEXT.info,
   done: C.textMuted,
   failed: STATUS_TEXT.warning,
+  unknown: C.textMuted,
 };
 
 const STATE_KEY: Record<HelperState, string> = {
   working: "helperLine.stateWorking",
   done: "helperLine.stateDone",
   failed: "helperLine.stateFailed",
+  unknown: "helperLine.stateUnknown",
 };
 
 export function AgentCard({

@@ -23,11 +23,17 @@ function done(id: string, durationMs: number): NotificationEvent {
   };
 }
 
-function wrap(events: ToolEvent[], all: ChatEvent[]) {
+function wrap(events: ToolEvent[], all: ChatEvent[], sessionEnded = false) {
   const qc = new QueryClient();
   return render(
     <QueryClientProvider client={qc}>
-      <HelperLine events={events} reports={helperReports(all)} runs={new Map()} agentId="a1" />
+      <HelperLine
+        events={events}
+        reports={helperReports(all)}
+        runs={new Map()}
+        agentId="a1"
+        sessionEnded={sessionEnded}
+      />
     </QueryClientProvider>,
   );
 }
@@ -74,5 +80,15 @@ describe("HelperLine", () => {
   it("one helper reads in the singular", () => {
     wrap([SPAWNS[0]], [SPAWNS[0]]);
     expect(screen.getByTestId("helper-line-label").textContent).toBe("1 helper · 1 working");
+  });
+
+  it("in an ended session a helper that never reported says 'no report' — no clock that runs for weeks", () => {
+    wrap(SPAWNS, [...SPAWNS, done("t1", 125_000)], true);
+    expect(screen.getByTestId("helper-line-label").textContent).toBe("4 helpers · 1 done, 3 no report");
+    expect(screen.queryByTestId("helper-line-duration")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /show helpers/i }));
+    const rows = screen.getAllByTestId("helper-row");
+    expect(rows[1].querySelector('[data-testid="helper-state"]')?.textContent).toBe("no report");
+    expect(rows[1].querySelector('[data-testid="helper-duration"]')).toBeNull();
   });
 });
