@@ -84,8 +84,7 @@ def test_async_result_becomes_one_notification_per_helper():
     parser = OmpLineParser()
     _tool(parser)
     parser(TASK_RESULT)
-    evs = parser(DONE_LINE)
-    assert [e["kind"] for e in evs] == ["notification", "notification"]
+    evs = [e for e in parser(DONE_LINE) if e["kind"] == "notification"]
     a, b = evs
     assert (a["taskId"], a["toolUseId"], a["status"], a["durationMs"]) == ("ScoutA", "call_1", "completed", 125965)
     assert (b["taskId"], b["status"], b["durationMs"]) == ("ScoutB", "failed", 3969)
@@ -94,7 +93,7 @@ def test_async_result_becomes_one_notification_per_helper():
 def test_async_result_without_the_call_in_view_still_names_the_helper():
     """A history page can start AFTER the call — then the job is matched by
     its id in the frontend; the tool id stays unknown, never invented."""
-    (a, b) = OmpLineParser()(DONE_LINE)
+    (a, b) = [e for e in OmpLineParser()(DONE_LINE) if e["kind"] == "notification"]
     assert a["taskId"] == "ScoutA" and a["toolUseId"] is None
 
 
@@ -118,5 +117,58 @@ def test_reset_forgets_the_job_map():
     parser = OmpLineParser()
     _tool(parser)
     parser.reset()
-    (a, _b) = parser(DONE_LINE)
+    (a, _b) = [e for e in parser(DONE_LINE) if e["kind"] == "notification"]
     assert a["toolUseId"] is None
+
+
+def test_helper_only_async_result_keeps_what_the_helpers_returned():
+    """omp has no subagent transcript to open — the async-result text IS the
+    only place the operator can read a helper's findings or failure reason.
+    The notifications close the helpers; the message with the output stays."""
+    evs = OmpLineParser()(DONE_LINE)
+    messages = [e for e in evs if e["kind"] == "message"]
+    assert len(messages) == 1
+    assert messages[0]["role"] == "teammate"
+    assert "found it" in messages[0]["text"] and "401" in messages[0]["text"]
+    assert [e["kind"] for e in evs].count("notification") == 2
+
+
+# The `job` tool (poll / await) — the other way an omp helper's end is
+# written: ``details.jobs[{id, type, status, durationMs, resultText}]`` (real
+# shape, omp 10/2026; neutral content). 10 of 72 real helpers ended ONLY here.
+def _job_result(jobs: list[dict], call_id: str = "call_job") -> str:
+    return json.dumps({
+        "type": "message", "id": "j1", "parentId": "r1", "timestamp": "2026-09-16T07:10:00.000Z",
+        "message": {"role": "toolResult", "toolCallId": call_id, "toolName": "job",
+                    "content": [{"type": "text", "text": "## Completed (1)"}],
+                    "details": {"jobs": jobs}, "isError": False, "timestamp": 1791105836524},
+    })
+
+
+def test_job_tool_result_closes_a_finished_helper():
+    parser = OmpLineParser()
+    _tool(parser)
+    evs = parser(_job_result([
+        {"id": "ScoutA", "type": "task", "status": "completed", "label": "ScoutA",
+         "durationMs": 415882, "resultText": "<task-result id=\"ScoutA\">ok</task-result>"},
+        {"id": "ScoutB", "type": "task", "status": "running", "label": "ScoutB"},
+        {"id": "bg_1", "type": "bash", "status": "completed"},
+    ]))
+    notes = [e for e in evs if e["kind"] == "notification"]
+    assert [(n["taskId"], n["toolUseId"], n["status"], n["durationMs"]) for n in notes] == [
+        ("ScoutA", "call_1", "completed", 415882),
+    ]
+    assert notes[0]["ts"] == "2026-09-16T07:10:00.000Z"
+    # The tool row itself (with its readable result text) is still there.
+    assert [e["kind"] for e in evs].count("_tool_result") == 1
+
+
+def test_job_tool_failed_helper_reports_failed():
+    evs = OmpLineParser()(_job_result([{"id": "ScoutB", "type": "task", "status": "failed", "durationMs": 9}]))
+    (n,) = [e for e in evs if e["kind"] == "notification"]
+    assert (n["taskId"], n["status"], n["toolUseId"]) == ("ScoutB", "failed", None)
+
+
+def test_job_tool_unknown_status_is_not_guessed():
+    evs = OmpLineParser()(_job_result([{"id": "ScoutB", "type": "task", "status": "teleporting"}]))
+    assert [e for e in evs if e["kind"] == "notification"] == []

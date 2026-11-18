@@ -59,10 +59,13 @@ FORMAT — eigenes, VERSIONIERTES Format (``{"type":"session","version":3}``).
 
 HELFER: omp startet Subagenten mit dem Werkzeug ``task`` — EIN Aufruf kann
   mehrere starten (``arguments.tasks``), das Ergebnis listet sie unter
-  ``details.progress``, und sie melden sich spaeter in einer
-  ``async-result``-Zeile (``details.jobs`` mit ``type: "task"``) zurueck.
+  ``details.progress``, und ihr Ende steht spaeter in einer
+  ``async-result``-Zeile (``details.jobs`` mit ``type: "task"``) ODER im
+  Ergebnis des ``job``-Werkzeugs (poll/await, ``details.jobs[].status``).
   Daraus werden ``helpers`` auf der Karte und je Helfer ein
-  ``notification``-Ereignis (siehe ``transcript_chat.clean_helpers``).
+  ``notification``-Ereignis (siehe ``transcript_chat.clean_helpers``). Der
+  ``async-result``-Systemhinweis bleibt stehen: er traegt die Antwort der
+  Helfer.
 
 WAS OMP NICHT HAT: Sidechains im Hauptstrom (``sidechain`` ist immer ``False``),
   In-Session-Slash-Kommandos im Transkript (kein ``command``-Ereignis) und
@@ -1097,6 +1100,13 @@ def _mention_source(name: str | None, content: str) -> dict[str, Any] | None:
 
 #: omps Werkzeug, das Helfer (Subagenten) startet.
 _HELPER_TOOL = "task"
+#: omps Werkzeug, mit dem der Agent Hintergrund-Jobs abfragt/abwartet.
+_JOB_TOOL = "job"
+#: Endzustaende eines Jobs im ``job``-Ergebnis (wie im Frontend, helpers.ts).
+_FINAL_JOB_STATES = {
+    "completed", "done", "success", "failed", "error", "killed", "aborted",
+    "cancelled", "stopped",
+}
 #: ``details.progress[].status`` -> Zustand. Unbekanntes verwirft die Liste.
 _PROGRESS_STATES = {
     "pending": "working", "queued": "working", "running": "working",
@@ -1287,7 +1297,7 @@ class OmpLineParser:
         if role == "assistant":
             return self._parse_assistant(entry_id, ts, message, observed_windows)
         if role == "toolResult":
-            return self._parse_tool_result(message)
+            return self._parse_tool_result(message, entry_id, ts)
         if role == "fileMention":
             return self._parse_file_mention(entry_id, ts, message)
         logger.debug("omp_chat: unbekannte Rolle %s, uebersprungen", role)
@@ -1646,7 +1656,9 @@ class OmpLineParser:
             return reported
         return resolve_context_window(model, observed_windows)
 
-    def _parse_tool_result(self, message: dict[str, Any]) -> list[dict[str, Any]]:
+    def _parse_tool_result(
+        self, message: dict[str, Any], entry_id: Any = None, ts: Any = None
+    ) -> list[dict[str, Any]]:
         """``role: toolResult`` -> internes ``_tool_result``-Ereignis.
 
         Verknuepft ueber ``toolCallId`` == ``toolCall.id`` — genau die
@@ -1710,7 +1722,49 @@ class OmpLineParser:
             if helpers is not None:
                 result["helpers"] = helpers
                 self._remember_jobs(helpers, tool_call_id)
+        if message.get("toolName") == _JOB_TOOL and isinstance(details, dict):
+            return [result] + self._job_tool_reports(details, entry_id, ts)
         return [result]
+
+    def _job_tool_reports(
+        self, details: dict[str, Any], entry_id: Any, ts: Any
+    ) -> list[dict[str, Any]]:
+        """``job``-Werkzeug (poll/await) -> je FERTIGEM Helfer ein ``notification``.
+
+        Der zweite Weg, auf dem omp das Ende eines Helfers schreibt:
+        ``details.jobs[{id, type: "task", status, durationMs}]`` (live 10/2026 —
+        10 von 72 echten Helfern endeten NUR hier). ``running`` und Unbekanntes
+        bleiben ohne Meldung: ein Ende nur aus einer Beobachtung."""
+        if not entry_id or not ts:
+            return []
+        jobs = details.get("jobs")
+        if not isinstance(jobs, list):
+            return []
+        events: list[dict[str, Any]] = []
+        for index, job in enumerate(jobs):
+            if not isinstance(job, dict) or job.get("type") != _HELPER_TOOL:
+                continue
+            job_id = job.get("id")
+            raw = str(job.get("status") or "").strip().lower()
+            status = raw.split()[0] if raw.split() else ""
+            if not isinstance(job_id, str) or not job_id or status not in _FINAL_JOB_STATES:
+                continue
+            duration = job.get("durationMs")
+            events.append(
+                {
+                    "kind": "notification",
+                    "uuid": f"{entry_id}#job{index}",
+                    "ts": ts,
+                    "taskId": job_id[:200],
+                    "toolUseId": self._helper_jobs.get(job_id),
+                    "status": status,
+                    "summary": None,
+                    "durationMs": duration
+                    if isinstance(duration, int) and not isinstance(duration, bool) and duration >= 0
+                    else None,
+                }
+            )
+        return events
 
     def _remember_jobs(self, helpers: list[dict[str, Any]], tool_call_id: Any) -> None:
         if not isinstance(tool_call_id, str) or not tool_call_id:
@@ -1721,18 +1775,19 @@ class OmpLineParser:
                     self._helper_jobs.clear()
                 self._helper_jobs[helper["id"]] = tool_call_id
 
-    def _helper_reports(self, d: dict[str, Any], ts: Any, content: str) -> tuple[list[dict[str, Any]], bool]:
+    def _helper_reports(self, d: dict[str, Any], ts: Any, content: str) -> list[dict[str, Any]]:
         """``async-result`` -> je Helfer-Job ein ``notification``-Ereignis.
 
-        Zweiter Wert: ``True``, wenn die Zeile NUR aus Helfer-Rueckmeldungen
-        besteht (dann ersetzen die Ereignisse den Systemhinweis). Ein
-        Hintergrund-Bash-Job daneben laesst den Hinweis stehen."""
+        Die Ereignisse kommen ZUSAETZLICH zum Systemhinweis, nie statt ihm:
+        der Hinweis traegt das ``<output>`` der Helfer, und omp hat kein
+        Subagenten-Protokoll zum Aufklappen — ohne ihn koennte niemand lesen,
+        was ein Helfer gefunden hat oder woran er scheiterte."""
         details = d.get("details") if isinstance(d.get("details"), dict) else {}
         jobs = details.get("jobs") if isinstance(details.get("jobs"), list) else []
         jobs = [j for j in jobs if isinstance(j, dict)]
         task_jobs = [j for j in jobs if j.get("type") == _HELPER_TOOL]
         if not task_jobs:
-            return [], False
+            return []
         statuses = {
             m.group("id"): m.group("status") for m in _TASK_RESULT_RE.finditer(content)
         }
@@ -1758,7 +1813,7 @@ class OmpLineParser:
                     else None,
                 }
             )
-        return events, bool(events) and len(task_jobs) == len(jobs)
+        return events
 
     def _parse_custom_message(self, d: dict[str, Any]) -> list[dict[str, Any]]:
         """Systemhinweis, den omp selbst ins Gespraech einspeist.
@@ -1794,9 +1849,7 @@ class OmpLineParser:
         custom_type = d.get("customType")
         helper_reports: list[dict[str, Any]] = []
         if custom_type == "async-result":
-            helper_reports, only_helpers = self._helper_reports(d, ts, content)
-            if only_helpers:
-                return helper_reports
+            helper_reports = self._helper_reports(d, ts, content)
         # Review #471 N3: ACP preview flushes (the bridge's streaming
         # snapshots) are VOLATILE — they ride the replace-me preview slot
         # (same channel the pane tailer broadcasts on), never the permanent
