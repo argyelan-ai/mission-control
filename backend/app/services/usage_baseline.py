@@ -24,7 +24,9 @@ overstated.
 
 Cost is the stored ``cost_usd`` — the list-price equivalent from
 ``model_prices`` at harvest time (subscriptions are not invoices). Rows
-without a price are counted in ``unpriced_events``.
+without a price are counted in ``unpriced_events``. ``local_cost_usd`` is the
+part of it from local rows, so cloud cost = ``cost_usd`` − ``local_cost_usd``
+(the Insights switch All · Cloud · Local).
 
 Days and weeks are counted in a zone (``tz``, IANA name). The query groups by
 UTC hour and each hour is moved into the zone here, so one code path serves
@@ -120,13 +122,14 @@ async def _lead_ids(session: AsyncSession) -> set:
 
 def _empty() -> dict:
     return {"events": 0, **{f: 0 for f in _TOKEN_FIELDS}, "total_tokens": 0,
-            "generated_tokens": 0, "cost_usd": 0.0, "unpriced_events": 0,
+            "generated_tokens": 0, "cost_usd": 0.0, "local_cost_usd": 0.0, "unpriced_events": 0,
             "local_tokens": 0, "local_output_tokens": 0, "local_generated_tokens": 0}
 
 
 def _finish(bucket: dict) -> dict:
     total, out = bucket["total_tokens"], bucket["output_tokens"]
     bucket["cost_usd"] = round(bucket["cost_usd"], 4)
+    bucket["local_cost_usd"] = round(bucket["local_cost_usd"], 4)
     bucket["local_share"] = bucket["local_tokens"] / total if total else None
     bucket["local_output_share"] = bucket["local_output_tokens"] / out if out else None
     return bucket
@@ -294,6 +297,7 @@ def _add(bucket: dict, local: bool, tokens: dict, r) -> None:
     bucket["cost_usd"] += float(r.cost or 0.0)
     bucket["unpriced_events"] += int(r.unpriced or 0)
     if local:
+        bucket["local_cost_usd"] += float(r.cost or 0.0)
         bucket["local_tokens"] += total
         bucket["local_output_tokens"] += tokens["output_tokens"]
         bucket["local_generated_tokens"] += generated

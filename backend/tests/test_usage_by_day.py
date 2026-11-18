@@ -102,6 +102,30 @@ async def test_generated_tokens_leave_cache_reads_out(session):
     assert day["top_source"] == "unattributed"  # 110 generated vs. the head's 100
 
 
+async def test_local_cost_is_split_off_so_cloud_cost_is_the_rest(session):
+    # The Insights switch (All · Cloud · Local) moves the cost at the top:
+    # cloud = cost_usd − local_cost_usd, in days and weeks alike.
+    ts = datetime(2026, 10, 27, 10, tzinfo=timezone.utc)
+    session.add_all([
+        _row(ts, cost=2.0),
+        _row(ts, harness="head-omp", locality="local", cost=0.25),
+        _row(ts, harness="head-omp", locality="local", cost=None),
+        _row(ts, harness="head-omp", locality="cloud", cost=0.5),
+    ])
+    await session.commit()
+
+    day = _days(await compute_daily_usage(session, days=2, now=NOW, tz=ZRH))["2026-10-27"]
+    assert day["cost_usd"] == pytest.approx(2.75)
+    assert day["local_cost_usd"] == pytest.approx(0.25)
+    assert _days(await compute_daily_usage(session, days=2, now=NOW, tz=ZRH))["2026-10-28"]["local_cost_usd"] == 0
+
+    week = (await compute_weekly_baseline(session, weeks=1, now=NOW, tz=ZRH))["weeks"][-1]
+    assert week["totals"]["local_cost_usd"] == pytest.approx(0.25)
+    by_source = {s["source"]: s["local_cost_usd"] for s in week["sources"]}
+    assert by_source["heads:local"] == pytest.approx(0.25)
+    assert by_source["heads:cloud"] == 0
+
+
 async def test_days_parameter_is_bounded(session):
     assert len((await compute_daily_usage(session, days=0, now=NOW, tz=ZRH))["days"]) == 1
     assert len((await compute_daily_usage(session, days=5000, now=NOW, tz=ZRH))["days"]) == MAX_DAYS
