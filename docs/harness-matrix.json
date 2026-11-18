@@ -126,6 +126,16 @@
     "jarvis": {"status": "no", "note": "not in the sessions chat; voice has its own channel (ADR-091)", "since": "2026-09-16", "recheck": "jarvis gets a chat input channel", "evidence": ["backend/app/services/agent_chat_input.py:651-656"]},
     "guest-session": {"status": "no", "note": "MC chat features for coding-CLI sessions are parked; the vendor's remote control covers the phone", "since": "2026-11-01", "recheck": "ADR-100 §5 revisited", "evidence": ["docs/decisions/100-foundation-and-cross-harness-comms.md:97-104"]}
    }},
+   {"id": "chat-helpers", "label": "Helpers (subagents) shown with their state", "cells": {
+    "claude": {"status": "yes", "note": "launch state from toolUseResult, end from the task notification; one helpers line per stretch", "evidence": ["backend/app/services/transcript_chat.py:1189-1212", "frontend-v2/src/components/chat/HelperLine.tsx"]},
+    "openclaude": {"status": "open", "note": "same parser as claude; never measured for openclaude"},
+    "omp": {"status": "yes", "note": "task tool: helpers from arguments/progress, one report per helper from async-result", "evidence": ["backend/app/services/omp_chat.py:1128-1146", "backend/app/services/omp_chat.py:1724"]},
+    "hermes": {"status": "open", "note": "shares the omp parser; not measured on a hermes transcript"},
+    "kimi": {"status": "no", "note": "no transcript adapter — the chat shows nothing", "since": "2026-11-18", "recheck": "kimi entry in transcript_adapters._BUILDERS", "evidence": ["backend/app/services/transcript_adapters.py:366-376"]},
+    "grok": {"status": "no", "note": "no transcript adapter", "since": "2026-11-18", "recheck": "grok in transcript_adapters._BUILDERS", "evidence": ["backend/app/services/transcript_adapters.py:343-353"]},
+    "jarvis": {"status": "no", "note": "voice worker, no task loop — no subagents", "since": "2026-11-18", "recheck": "jarvis gains a task loop", "evidence": ["backend/app/services/host_harness_adapter.py:363-375"]},
+    "guest-session": {"status": "no", "note": "MC chat features for coding-CLI sessions are parked", "since": "2026-11-18", "recheck": "ADR-100 §5 revisited", "evidence": ["docs/decisions/100-foundation-and-cross-harness-comms.md:97-104"]}
+   }},
    {"id": "chat-thinking", "label": "Thinking shown", "cells": {
     "claude": {"status": "no", "note": "Claude Code writes thinking encrypted (empty text) — the parser skips it", "since": "2026-09-01", "recheck": "transcript blocks carry readable thinking text", "evidence": ["backend/app/services/transcript_chat.py:643-660"]},
     "openclaude": {"status": "open", "note": "same parser as claude; never measured for openclaude"},
