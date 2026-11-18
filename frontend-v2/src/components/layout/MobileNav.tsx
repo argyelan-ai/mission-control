@@ -5,7 +5,8 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { NavVoiceButton } from "@/components/voice/live/NavVoiceButton";
 import { DrawerButton } from "./ChatDrawer";
-import { P2 } from "@/lib/colors";
+import { useTranslations } from "next-intl";
+import { C, P2 } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
 
@@ -60,6 +61,19 @@ export function MobileNavProvider({ children }: { children: React.ReactNode }) {
   }, [pathname]);
 
   // Prevent body scroll while the sheet is up — iOS-fest via Fixed-Position-Technik (MOBILE-SPEC M4)
+  // The drawer exists only below md. Widening the window with it open would
+  // leave an invisible drawer holding the scroll lock (shell review A4).
+  useEffect(() => {
+    if (!drawerOpen || typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(min-width: 768px)");
+    const onChange = () => {
+      if (mq.matches) setDrawerOpen(false);
+    };
+    onChange();
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, [drawerOpen]);
+
   useBodyScrollLock(quickOpen || drawerOpen);
   useEscapeKey(() => setDrawerOpen(false), drawerOpen);
 
@@ -92,22 +106,33 @@ export function useMobileNav(): MobileNavState {
 }
 
 /**
- * MobileNav — the phone's top app bar on every page but the chat: the chat
- * drawer's sidebar icon and the wordmark (→ the last chat) left, voice right.
- * Stays `fixed` (an overlay-like bar above the scrolling content). The menu
- * itself is the ⊕ sheet; this file only holds the bar and the shared state.
+ * MobileNav — the phone's top app bar on every page but the chat. Left: the
+ * chat drawer's sidebar icon, then either the page title (pages of the three
+ * tabs — the bar then reads like the chat header: icon · title · action) or
+ * the wordmark (→ the last chat). Right: the page's action, else voice.
+ * Stays `fixed` (an overlay-like bar above the scrolling content).
  */
-export default function MobileNav({ showBar = true }: {
+export default function MobileNav({
+  showBar = true,
+  title,
+  action,
+}: {
   /** false = a screen with its own top bar (task detail on the phone) hides
    *  the wordmark bar. */
   showBar?: boolean;
+  /** Page title in the bar, styled like the chat header's title. */
+  title?: string;
+  /** The page's one action in the bar (K4: at most one next to the icon). */
+  action?: React.ReactNode;
 } = {}) {
+  const t = useTranslations("cockpit");
   if (!showBar) return null;
   return (
     <>
-      {/* Top bar — Wordmark links (Home-Link), Voice rechts. pt-island hält
-          Inhalt unter der Dynamic Island; opak statt backdrop-blur (kein iOS Jank). */}
+      {/* pt-island hält Inhalt unter der Dynamic Island; opak statt
+          backdrop-blur (kein iOS Jank). */}
       <header
+        data-testid="mobile-app-bar"
         className="fixed top-0 left-0 right-0 z-40 flex items-end justify-between px-4 md:hidden pt-island"
         style={{
           paddingBottom: "0.5rem",
@@ -116,28 +141,39 @@ export default function MobileNav({ showBar = true }: {
           borderBottom: "1px solid var(--color-p2-line2)",
         }}
       >
-        <div className="flex items-center -ml-3">
-        <DrawerButton />
-        <Link
-          href="/"
-          className="flex items-center h-11 cursor-pointer"
-          aria-label="Home"
-          style={{
-            color: "var(--color-p2-txt)",
-            fontFamily: "var(--font-p2-display)",
-            fontWeight: 700,
-            fontSize: "15px",
-            letterSpacing: "0.02em",
-          }}
-        >
-          {BRAND_MAIN}
-          <span style={{ color: P2.amb }}>{BRAND_ACCENT}</span>
-        </Link>
+        <div className="flex items-center -ml-3 min-w-0">
+          <DrawerButton />
+          {title ? (
+            <h1
+              data-testid="mobile-app-bar-title"
+              className="text-base leading-tight font-semibold truncate"
+              style={{ color: C.textPrimary }}
+            >
+              {title}
+            </h1>
+          ) : (
+            <Link
+              href="/"
+              className="flex items-center h-11 cursor-pointer"
+              aria-label={t("openLastChat")}
+              style={{
+                color: "var(--color-p2-txt)",
+                fontFamily: "var(--font-p2-display)",
+                fontWeight: 700,
+                fontSize: "15px",
+                letterSpacing: "0.02em",
+              }}
+            >
+              {BRAND_MAIN}
+              <span style={{ color: P2.amb }}>{BRAND_ACCENT}</span>
+            </Link>
+          )}
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* The lead agent's live voice (voice PR 5); Jarvis when that is off. */}
-          <NavVoiceButton size={40} variant="header" />
+        <div className="flex items-center gap-2 shrink-0">
+          {/* The page's action, else the lead agent's live voice (voice PR 5;
+              Jarvis when that is off). */}
+          {action ?? <NavVoiceButton size={40} variant="header" />}
         </div>
       </header>
     </>

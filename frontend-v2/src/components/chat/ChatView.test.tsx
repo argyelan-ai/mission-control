@@ -2541,6 +2541,20 @@ describe("ChatView — headless chat", () => {
     navMock.params = new URLSearchParams();
   });
 
+  // Operator pictures 18.11.2026 (also on main): a stop square next to
+  // "Ready". ACP reports its own turn state, so idle is known there.
+  it("an idle headless (ACP) host agent offers Send, not Stop", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG], state: { kind: "state", status: "idle", prompt: null } }));
+    renderChatView({ agent: mkAgent({ headless_chat: true, agent_runtime: "host" }) });
+    expect(screen.queryByTestId("stop-button-prominent")).toBeNull();
+  });
+
+  it("a working headless agent still offers Stop", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG], state: { kind: "state", status: "working", prompt: null } }));
+    renderChatView({ agent: mkAgent({ headless_chat: true, agent_runtime: "host" }) });
+    expect(screen.getByTestId("stop-button-prominent")).toHaveAttribute("data-reason", "working");
+  });
+
   it("renders no Chat/Terminal toggle for a headless agent", () => {
     mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
     renderChatView({ agent: mkAgent({ headless_chat: true }) });

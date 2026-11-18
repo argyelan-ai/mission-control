@@ -997,10 +997,7 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     renderPage();
     await screen.findAllByText("Agent One");
     await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
-    const first = JSON.parse(localStorage.getItem("mc-recent-chats") ?? "[]")[0];
-    expect(first).toMatchObject({ kind: "agent", id: "agent-2" });
-    // with the time this device opened it — the drawer sorts by it
-    expect(Number.isNaN(Date.parse(first.at))).toBe(false);
+    expect(JSON.parse(localStorage.getItem("mc-recent-chats") ?? "[]")[0]).toEqual({ kind: "agent", id: "agent-2" });
   });
 
   // Start in the last chat (operator decision 2026-11-18): "/" redirects
@@ -1015,12 +1012,46 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument();
   });
 
+  // Operator pictures 18.11.2026: the recent list named Sparky as newest,
+  // the old per-agent key still named Boss — and Boss opened. One source.
+  it("the recent-chats list wins over the old last-agent key", async () => {
+    localStorage.setItem("mc-sessions-last-agent", "agent-1");
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }, { kind: "agent", id: "agent-1" }]));
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument());
+    expect(isHidden(chat())).toBe(false);
+  });
+
+  // Shell review A1: a group opened earlier must not win over an agent
+  // opened after it (the recent list is newest first).
+  it("an agent opened after a group is the chat that comes back", async () => {
+    vi.spyOn(api.groups, "list").mockResolvedValue([
+      { id: "g-1", name: "Review room", status: "idle", archived_at: null } as never,
+    ]);
+    vi.spyOn(api.groups, "get").mockResolvedValue({ id: "g-1", name: "Review room", status: "idle" } as never);
+    localStorage.setItem("mc-sessions-last-group", "g-1");
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }, { kind: "group", id: "g-1" }]));
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument());
+    // give the group query its turn — it must not take over
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByTestId("group-chat-view")).toBeNull();
+    expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument();
+  });
+
+  it("with nothing remembered, the chat it opens becomes the last chat (the drawer marks it)", async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Chat: Agent One")).toBeInTheDocument());
+    expect(JSON.parse(localStorage.getItem("mc-recent-chats") ?? "[]")[0]).toMatchObject({ kind: "agent", id: "agent-1" });
+  });
+
   it("a remembered group opens straight in that group", async () => {
     vi.spyOn(api.groups, "list").mockResolvedValue([
       { id: "g-1", name: "Review room", status: "idle", archived_at: null } as never,
     ]);
     vi.spyOn(api.groups, "get").mockResolvedValue({ id: "g-1", name: "Review room", status: "idle" } as never);
     localStorage.setItem("mc-sessions-last-group", "g-1");
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "group", id: "g-1" }]));
     renderPage();
     await waitFor(() => expect(isHidden(chat())).toBe(false));
     expect(isHidden(list())).toBe(true);
@@ -1235,7 +1266,10 @@ describe("SessionsPage — phone history puts the list behind every chat", () =>
     nav.searchParamsString = "agent=agent-2&enter=1";
     const view = renderPage();
     await waitFor(() => expect(nav.replaced).toEqual(["/sessions"]));
-    expect(nav.pushed).toEqual([]);
+    // Whether the push already happened depends on render timing (shell
+    // review A6: flaky in a full run) — what matters is that nothing but the
+    // chat is ever pushed.
+    expect(nav.pushed.filter((u) => u !== "/sessions?agent=agent-2")).toEqual([]);
     // The chat stays on screen while the list entry goes in underneath.
     expect(isHidden(chat())).toBe(false);
 

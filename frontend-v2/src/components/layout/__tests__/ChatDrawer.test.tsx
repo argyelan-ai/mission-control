@@ -8,9 +8,11 @@
  * column carries Chat · Models · Knowledge + More at its foot.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 vi.hoisted(() => {
   const mem: Record<string, string> = {};
@@ -62,8 +64,15 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
+const palette = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock("@/lib/store", () => {
-  const state = { activeBoardId: "board-1", currentUser: null, sidebarCollapsed: false, toggleSidebar: () => {} };
+  const state = {
+    activeBoardId: "board-1",
+    currentUser: null,
+    sidebarCollapsed: false,
+    toggleSidebar: () => {},
+    setCommandPaletteOpen: palette.open,
+  };
   return {
     useAppStore: Object.assign((sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state), {
       setState: () => {},
@@ -141,6 +150,15 @@ describe("chat drawer (phone)", () => {
     expect(within(drawer).getByRole("heading", { name: "Waiting for you" })).toBeInTheDocument();
   });
 
+  // Operator pictures 18.11.2026: the desktop had a Today section the phone
+  // did not — opening a chat on one device must not regroup it there.
+  it("opening an old chat on this device does not move it to Today", async () => {
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "a3" }]));
+    const drawer = await openDrawer();
+    await waitFor(() => expect(within(drawer).getByTestId("chat-section-earlier")).toBeInTheDocument());
+    expect(within(within(drawer).getByTestId("chat-section-earlier")).getByText("Cooling stand")).toBeInTheDocument();
+  });
+
   it("an older chat lands in Earlier", async () => {
     const drawer = await openDrawer();
     await waitFor(() => expect(within(drawer).getByTestId("chat-section-earlier")).toBeInTheDocument());
@@ -182,6 +200,53 @@ describe("chat drawer (phone)", () => {
     await waitFor(() => expect(screen.queryByTestId("chat-drawer")).toBeNull());
   });
 
+  // Shell review D1: a modal drawer takes focus, keeps it, gives it back.
+  it("moves focus into the drawer and gives it back to the icon on close", async () => {
+    await openDrawer();
+    expect(screen.getByTestId("chat-drawer")).toContainElement(document.activeElement as HTMLElement);
+    expect(document.activeElement).toHaveTextContent("New chat");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByTestId("chat-drawer")).toBeNull());
+    expect(document.activeElement).toBe(screen.getByTestId("drawer-button"));
+  });
+
+  it("Tab from the last control wraps to the first, never into the chat behind", async () => {
+    const drawer = await openDrawer();
+    const links = within(drawer).getAllByRole("link");
+    links[links.length - 1].focus();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(links[0]);
+    await userEvent.tab({ shift: true });
+    expect(document.activeElement).toBe(links[links.length - 1]);
+  });
+
+  it("is a dialog that holds its own navigation landmark", async () => {
+    const drawer = await openDrawer();
+    expect(drawer.tagName).toBe("DIV");
+    expect(within(drawer).getByRole("navigation")).toHaveTextContent("Settings");
+  });
+
+  // Shell review A4: widening the window past md with the drawer open.
+  it("closes when the window grows to the desktop layout", async () => {
+    const listeners: (() => void)[] = [];
+    let desktop = false;
+    const original = window.matchMedia;
+    window.matchMedia = ((q: string) => ({
+      get matches() { return desktop; },
+      media: q,
+      addEventListener: (_: string, fn: () => void) => listeners.push(fn),
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+    try {
+      await openDrawer();
+      desktop = true;
+      act(() => listeners.forEach((fn) => fn()));
+      await waitFor(() => expect(screen.queryByTestId("chat-drawer")).toBeNull());
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
   it("says so when there are no chats", async () => {
     data.hostAgents = [];
     const drawer = await openDrawer();
@@ -208,6 +273,24 @@ describe("chat column (desktop)", () => {
     data.approvals = [{ id: "p1", agent_id: "a3", status: "pending" }];
     wrap(<ChatSidebar />);
     await waitFor(() => expect(screen.getByTestId("chat-sidebar-badge")).toHaveTextContent("1"));
+  });
+
+  // Operator pictures 18.11.2026: search (⌘K) was missing in the column.
+  it("offers search (⌘K) and opens the command palette", async () => {
+    wrap(<ChatSidebar />);
+    const search = screen.getByTestId("chat-sidebar-search");
+    expect(search).toHaveTextContent("⌘K");
+    await userEvent.click(search);
+    expect(palette.open).toHaveBeenCalledWith(true);
+  });
+
+  // …and the last row was cut by the nav block without a fade.
+  it("fades the list out above the nav block instead of cutting a row", () => {
+    wrap(<ChatSidebar />);
+    expect(screen.getByTestId("chat-sidebar-scroll").className).toContain("fade-bottom");
+    // …and the class is real: a bottom mask plus as much end padding.
+    const css = readFileSync(resolve(__dirname, "../../../styles/globals.css"), "utf8");
+    expect(css).toMatch(/\.fade-bottom\s*\{[^}]*mask-image:\s*linear-gradient\(to bottom[^}]*padding-bottom:\s*32px/);
   });
 
   it("has no collapse button (the column cannot collapse)", () => {

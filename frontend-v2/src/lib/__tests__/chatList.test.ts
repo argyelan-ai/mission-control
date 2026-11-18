@@ -21,7 +21,6 @@ function input(over: Partial<ChatListInput> = {}): ChatListInput {
     groups: [{ id: "g1", name: "Review room", status: "idle", created_at: daysAgo(5), last_message: null }],
     headRuns: [],
     approvals: [],
-    recent: [],
     ...over,
   };
 }
@@ -64,10 +63,19 @@ describe("buildChatList", () => {
     ]);
   });
 
-  it("opening a chat on this device today moves it to today", () => {
-    const list = buildChatList(input({ recent: [{ kind: "group", id: "g1", at: today(14) }] }));
+  // Operator pictures 18.11.2026: the phone had no Today section while the
+  // desktop did — device-local data must not decide the grouping.
+  it("sorts from server facts only — no device-local input exists", () => {
+    const keys = Object.keys(input()).sort();
+    expect(keys).toEqual(["agents", "approvals", "groups", "headRuns"]);
+    expect(buildChatList(input()).find((e) => e.id === "a1")?.at).toBe(today(9));
+  });
+
+  it("a group's last message dates it", () => {
+    const list = buildChatList(
+      input({ groups: [{ id: "g1", name: "Room", status: "idle", created_at: daysAgo(5), last_message: { body: "x", sender: "y", created_at: today(14) } }] }),
+    );
     expect(list[0].key).toBe("group:g1");
-    expect(list[0].at).toBe(today(14));
   });
 
   it("every row opens its chat from outside the list", () => {
@@ -113,5 +121,14 @@ describe("chatRowTime", () => {
   });
   it("no time, no text", () => {
     expect(chatRowTime(null, "en", NOW)).toBeNull();
+  });
+});
+
+describe("chatListPollMs (shell review E1)", () => {
+  it("polls as before on the chat page, calmly everywhere else", async () => {
+    const { chatListPollMs } = await import("@/components/layout/useChatList");
+    expect(chatListPollMs("/sessions")).toBe(10_000);
+    expect(chatListPollMs("/runtimes")).toBe(60_000);
+    expect(chatListPollMs("/settings")).toBe(60_000);
   });
 });

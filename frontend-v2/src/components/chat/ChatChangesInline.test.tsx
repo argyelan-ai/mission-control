@@ -64,6 +64,14 @@ describe("ChatChangesInline", () => {
     expect(localStorage.getItem("mc.chat.changestab")).toBe("chat");
   });
 
+  // Operator pictures 18.11.2026: "1 Datei in diesem Chat geä…" at 390 px.
+  it("drops the 'Open diff' word on a phone so the file line is not cut", async () => {
+    changesMock.mockResolvedValue(changes(1, 521, 0));
+    renderInline();
+    const word = await screen.findByTestId("chat-changes-open-word");
+    expect(word.className.split(/\s+/)).toEqual(expect.arrayContaining(["hidden", "sm:inline"]));
+  });
+
   it("shows nothing when no file changed", async () => {
     changesMock.mockResolvedValue(changes(0, 0, 0));
     const { client } = renderInline();

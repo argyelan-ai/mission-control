@@ -2,10 +2,10 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { usePathname } from "next/navigation";
 import { api } from "@/lib/api";
 import { buildChatList, sectionChats, type ChatListSections } from "@/lib/chatList";
 import { useInbox } from "@/hooks/useInbox";
-import { useRecentChats } from "./MobileTabBar";
 
 /**
  * The chats of the drawer and the desktop column, loaded once. The query keys
@@ -15,24 +15,33 @@ import { useRecentChats } from "./MobileTabBar";
  * "Waiting for you" and the number on the Chat tab never disagree about
  * approvals and questions.
  */
+/**
+ * How often the chat list asks again: as before on the chat page, much
+ * calmer everywhere else (shell review E1 — the docker-sessions list inspects
+ * every container, and the desktop column now sits on every page).
+ */
+export function chatListPollMs(pathname: string): number {
+  return pathname.startsWith("/sessions") ? 10_000 : 60_000;
+}
+
 export function useChatList(): ChatListSections & { waitingCount: number; loaded: boolean } {
+  const poll = chatListPollMs(usePathname() ?? "/");
   const { data: dockerAgents, isSuccess: dockerLoaded } = useQuery({
     queryKey: ["agents", "docker-sessions"],
     queryFn: () => api.agents.listDockerSessions(),
-    refetchInterval: 10_000,
+    refetchInterval: poll,
   });
   const { data: hostAgents, isSuccess: hostLoaded } = useQuery({
     queryKey: ["agents", "host-sessions"],
     queryFn: () => api.agents.listHostSessions(),
-    refetchInterval: 10_000,
+    refetchInterval: poll,
   });
   const { data: groups } = useQuery({
     queryKey: ["groups"],
     queryFn: () => api.groups.list({ includeArchived: true }),
-    refetchInterval: 10_000,
+    refetchInterval: poll,
   });
   const inbox = useInbox();
-  const recent = useRecentChats();
 
   const sections = useMemo(
     () =>
@@ -42,10 +51,9 @@ export function useChatList(): ChatListSections & { waitingCount: number; loaded
           groups: (Array.isArray(groups) ? groups : []).filter((g) => !g.archived_at),
           headRuns: inbox.headQuestions,
           approvals: inbox.approvals,
-          recent,
         }),
       ),
-    [dockerAgents, hostAgents, groups, inbox.headQuestions, inbox.approvals, recent],
+    [dockerAgents, hostAgents, groups, inbox.headQuestions, inbox.approvals],
   );
 
   return { ...sections, waitingCount: inbox.count, loaded: dockerLoaded || hostLoaded };

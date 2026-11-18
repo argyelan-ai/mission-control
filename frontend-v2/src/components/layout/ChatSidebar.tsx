@@ -3,13 +3,15 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { LayoutGrid } from "lucide-react";
+import { LayoutGrid, Search } from "lucide-react";
+import { useAppStore } from "@/lib/store";
 import { C, P2 } from "@/lib/colors";
-import { activeTabFor, TAB_HREFS, TAB_ICONS, TAB_LABEL_KEYS, TAB_ORDER } from "@/lib/mobileNav";
+import { activeTabFor, chatTabHref, TAB_HREFS, TAB_ICONS, TAB_LABEL_KEYS, TAB_ORDER } from "@/lib/mobileNav";
 import { badgeLabel } from "@/lib/inbox";
 import { useInbox } from "@/hooks/useInbox";
 import { NavVoiceButton } from "@/components/voice/live/NavVoiceButton";
 import { ChatList } from "./ChatList";
+import { useRecentChats } from "./MobileTabBar";
 import SidebarFooter from "./SidebarFooter";
 
 // Wordmark (same env-driven logic as the phone app bar)
@@ -31,9 +33,12 @@ export const MORE_HREF = "/settings?section=more";
  */
 export function ChatSidebar() {
   const t = useTranslations("cockpit");
+  const tShell = useTranslations("shell");
+  const setCommandPaletteOpen = useAppStore((s) => s.setCommandPaletteOpen);
   const pathname = usePathname() ?? "/";
   const active = activeTabFor(pathname);
   const { count } = useInbox();
+  const recent = useRecentChats();
   const badge = badgeLabel(count);
 
   return (
@@ -55,7 +60,25 @@ export function ChatSidebar() {
         <NavVoiceButton size={30} variant="sidebar" enforceTouchTarget={false} />
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-3">
+      {/* Search (⌘K) — the command palette reaches every page and action,
+          the way the Shell v4 column offered it. */}
+      <div className="shrink-0 px-2 pb-2">
+        <button
+          type="button"
+          data-testid="chat-sidebar-search"
+          onClick={() => setCommandPaletteOpen(true)}
+          className="w-full flex items-center gap-3 min-h-10 px-3 rounded-lg text-sm cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+          style={{ color: C.textMuted }}
+        >
+          <Search size={17} strokeWidth={1.75} aria-hidden />
+          <span className="flex-1 text-left">{tShell("search")}</span>
+          <kbd className="text-xs font-mono" style={{ color: C.textMuted }}>
+            ⌘K
+          </kbd>
+        </button>
+      </div>
+
+      <div data-testid="chat-sidebar-scroll" className="fade-bottom flex-1 min-h-0 overflow-y-auto px-2">
         <ChatList />
       </div>
 
@@ -67,7 +90,7 @@ export function ChatSidebar() {
           return (
             <Link
               key={key}
-              href={TAB_HREFS[key]}
+              href={key === "chat" ? chatTabHref(recent) : TAB_HREFS[key]}
               data-tab={key}
               aria-current={on ? "page" : undefined}
               className="flex items-center gap-3 min-h-10 px-3 rounded-lg text-sm transition-colors hover:bg-[var(--color-bg-hover)]"

@@ -59,7 +59,10 @@ export function ChatChangesInline({
         </span>
         <Counts file={stats} />
         <span className="ml-auto shrink-0 flex items-center gap-1 text-sm" style={{ color: C.textMuted }}>
-          {t("inlineOpen")}
+          {/* The word gives way on a phone (operator pictures 18.11.2026:
+              "1 Datei in diesem Chat geä…" at 390 px) — the row itself is
+              the button, the chevron says where it goes. */}
+          <span data-testid="chat-changes-open-word" className="hidden sm:inline">{t("inlineOpen")}</span>
           <ChevronRight size={13} aria-hidden="true" />
         </span>
       </button>

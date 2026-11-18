@@ -72,7 +72,7 @@ import { ChatOptionsSheet } from "./ChatOptionsSheet";
 import { SendCard } from "./SendCard";
 import { DirectorySheet } from "./DirectorySheet";
 import { reachableCount } from "@/lib/comms";
-import { ChatHeaderSubline } from "./ChatHeaderSubline";
+import { ChatHeaderSubline, isTurnRunning } from "./ChatHeaderSubline";
 import { SpeedLine } from "./SpeedLine";
 import { DrawerButton } from "@/components/layout/ChatDrawer";
 import { useCommsDirectory } from "@/hooks/useCommsDirectory";
@@ -1405,7 +1405,6 @@ export function ChatView({
             </span>
           </span>
           <ChatHeaderSubline
-            model={stream.usage?.model ?? stream.capabilities?.model ?? agent.model ?? null}
             state={statusState}
             aliveness={aliveness}
             turnStartedAt={turnStartedAt}
@@ -1860,8 +1859,12 @@ export function ChatView({
                   sessionLive={aliveness !== "ended"}
                   /* Nur die Docker-tmux-Bruecke liefert echten Pane-Text; Host-Agenten
                    * (Boss/Hermes/Jarvis) haben diesen Kanal nicht — dort ist "arbeitet"
-                   * nie widerlegbar, also bleibt Stop erreichbar. */
-                  paneObservable={agent.agent_runtime === "cli-bridge"}
+                   * nie widerlegbar, also bleibt Stop erreichbar.
+                   * Ausnahme ACP (`headless_chat`): dort meldet das Protokoll
+                   * selbst, ob ein Zug laeuft — "Bereit" ist dann belegt, und
+                   * ein Stopp-Quadrat neben "Bereit" war falsch (Operator-
+                   * Bilder 18.11.2026, auch auf main). */
+                  paneObservable={agent.agent_runtime === "cli-bridge" || headlessChat}
                   capabilities={stream.capabilities}
                   modeSlot={
                     headlessChat ? (
@@ -1889,7 +1892,7 @@ export function ChatView({
                 <SpeedLine
                   runtimeId={agent.runtime_id ?? null}
                   model={stream.usage?.model ?? stream.capabilities?.model ?? agent.model ?? null}
-                  streaming={stream.state?.status === "working" || stream.state?.status === "task_working"}
+                  streaming={isTurnRunning(statusState, stream.awaitingResponse)}
                 />
               )}
             </>

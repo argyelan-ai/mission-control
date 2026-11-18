@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
@@ -58,6 +59,37 @@ export function ChatDrawer() {
   const { drawerOpen, setDrawerOpen } = useMobileNav();
   const reduce = useReducedMotion();
   const close = () => setDrawerOpen(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Focus (shell review D1): into the drawer on open, kept inside while it is
+  // open (Tab cycles), back to whatever opened it on close — a modal dialog
+  // must not let Tab wander into the chat behind the scrim.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const opener = document.activeElement as HTMLElement | null;
+    const focusables = () =>
+      [...(panelRef.current?.querySelectorAll<HTMLElement>("a[href], button:not([disabled])") ?? [])];
+    focusables()[0]?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const list = focusables();
+      if (list.length === 0) return;
+      const first = list[0];
+      const last = list[list.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      opener?.focus?.();
+    };
+  }, [drawerOpen]);
 
   return (
     <AnimatePresence>
@@ -74,7 +106,8 @@ export function ChatDrawer() {
             exit={{ opacity: 0 }}
             transition={{ duration: reduce ? 0 : 0.2 }}
           />
-          <motion.nav
+          <motion.div
+            ref={panelRef}
             id="chat-drawer"
             role="dialog"
             aria-modal="true"
@@ -90,12 +123,16 @@ export function ChatDrawer() {
             <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-3">
               <ChatList onNavigate={close} />
             </div>
-            <div className="shrink-0 px-3 pt-2 pb-3 flex flex-col" style={{ borderTop: "1px solid var(--color-p2-line2)" }}>
+            <nav
+              aria-label={t("mainNav")}
+              className="shrink-0 px-3 pt-2 pb-3 flex flex-col"
+              style={{ borderTop: "1px solid var(--color-p2-line2)" }}
+            >
               <FooterLink href={TAB_HREFS.models} icon={Gauge} label={t("tabModels")} onNavigate={close} />
               <FooterLink href={TAB_HREFS.knowledge} icon={BookOpen} label={t("tabKnowledge")} onNavigate={close} />
               <FooterLink href="/settings" icon={Settings} label={t("settings")} onNavigate={close} />
-            </div>
-          </motion.nav>
+            </nav>
+          </motion.div>
         </div>
       )}
     </AnimatePresence>

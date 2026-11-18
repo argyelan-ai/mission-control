@@ -3843,7 +3843,7 @@
       "emptyConnectByAddress": "Connect by address",
       "emptyPickProviderModel": "Pick a provider model",
       "tabFleet": "Fleet",
-      "tabModels": "Models",
+      "tabModels": "Library",
       "tabInfra": "Infrastructure",
       "tabCloud": "Cloud",
       "registerTitle": "Runtime register",
@@ -5407,15 +5407,16 @@
     "stateWorking": "working",
     "more": "More",
     "settings": "Settings",
-    "opening": "Opening your last chat…",
     "pickTitle": "Who do you want to chat with?",
     "knowledge": {
       "title": "Knowledge",
       "lead": "What MC knows and what it can do.",
       "memoryTitle": "Memory",
-      "memoryHint": "Notes, lessons and references",
+      "memoryHint": "What the agents wrote down: notes, lessons, references",
       "skillsTitle": "Skills",
-      "skillsHint": "Skills and plugins the agents use"
+      "skillsHint": "What the agents can do: skills and plugins",
+      "notesCount": "{count, plural, one {# note} other {# notes}}",
+      "skillsCount": "{count, plural, one {# skill} other {# skills}}"
     },
     "more_page": {
       "title": "More",
@@ -5430,7 +5431,11 @@
     "speed": {
       "label": "Model and box",
       "tps": "{tps} tok/s",
-      "boxTps": "Speed of the whole box, measured live"
-    }
+      "boxTps": "Speed of the whole box, measured live",
+      "tpsNone": "– tok/s",
+      "lastTps": "Last speed this box measured",
+      "noTps": "This box has not measured a speed yet"
+    },
+    "openLastChat": "Open your last chat"
   }
 }

@@ -25,7 +25,7 @@ import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
 import { useElementWidth } from "@/hooks/useElementWidth";
 import { PanelResizeHandle } from "@/components/chat/PanelResizeHandle";
 import { clampPanelWidth, defaultPanelWidth, loadPanelWidth, panelOverlays, savePanelWidth } from "@/lib/panelWidth";
-import { rememberChat } from "@/lib/recentChats";
+import { loadRecentChats, rememberChat } from "@/lib/recentChats";
 import { CHAT_ENTRY_PARAM, chatUrl, isPhoneViewport, takeDirectLoad, usePhoneViewport, type ChatKind } from "@/lib/chatHistory";
 import { useHeadRuns } from "@/components/heads/useHeadRuns";
 import { HeadChatPlaceholder } from "@/components/heads/HeadChatPlaceholder";
@@ -398,13 +398,21 @@ function SessionsPageContent() {
     const open = searchParams.get("pick") !== "1";
     if (paramAgent) { setSelected(paramAgent); setMobileView("chat"); return; }
 
-    const storedId = loadLastAgentId();
+    // ONE source for "the last chat": lib/recentChats (written on every
+    // pick, drawer link and deep link). The old per-kind keys only fill in
+    // for a device that has no recent list yet. Two competing keys opened
+    // the wrong chat (shell review A1, operator pictures 18.11.2026).
+    const last = loadRecentChats()[0];
+    const storedId = last ? (last.kind === "agent" ? last.id : loadLastAgentId()) : loadLastAgentId();
     const storedAgent = storedId ? agents.find((a) => a.id === storedId) : undefined;
     if (storedAgent) { setSelected(storedAgent); if (open) setMobileView("chat"); return; }
 
     const running = agents.find((a) => agentIsRunning(a));
-    setSelected(running ?? agents[0]);
+    const fallback = running ?? agents[0];
+    setSelected(fallback);
     if (open) setMobileView("chat");
+    // The chat on screen is the last chat from now on — the drawer marks it.
+    if (!last || last.kind === "agent") rememberChat({ kind: "agent", id: fallback.id });
   }, [agents, selected, searchParams]);
 
   // The picker opens and closes through the URL: "New chat" adds ?pick=1,
@@ -476,6 +484,7 @@ function SessionsPageContent() {
       handledParam.current = key;
       setSelected(agent);
       setSelectedGroupId(null);
+      saveLastGroupId(null);
       setSelectedHeadId(null);
       setMobileView("chat");
       rememberChat({ kind: "agent", id: agent.id });
@@ -484,6 +493,7 @@ function SessionsPageContent() {
       if (!groups.some((g) => g.id === groupParam)) return;
       handledParam.current = key;
       setSelectedGroupId(groupParam);
+      saveLastGroupId(groupParam);
       setSelectedHeadId(null);
       setMobileView("chat");
       rememberChat({ kind: "group", id: groupParam });
@@ -616,7 +626,9 @@ function SessionsPageContent() {
       setMobileView("chat");
       return;
     }
-    const storedId = loadLastGroupId();
+    // Only when the last chat WAS this group (one source, see above).
+    const last = loadRecentChats()[0];
+    const storedId = last ? (last.kind === "group" ? last.id : null) : loadLastGroupId();
     if (storedId && groups.some((g) => g.id === storedId)) {
       setSelectedGroupId(storedId);
       if (searchParams.get("pick") !== "1") setMobileView("chat");

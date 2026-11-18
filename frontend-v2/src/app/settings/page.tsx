@@ -73,7 +73,6 @@ import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 const SHORTCUTS = [
   { keys: ["Cmd", "K"], descKey: "shortcuts.items.commandPalette" },
-  { keys: ["Cmd", "B"], descKey: "shortcuts.items.sidebar" },
   { keys: ["Esc"], descKey: "shortcuts.items.closeDialog" },
   { keys: ["?"], descKey: "shortcuts.items.help" },
   { keys: ["g", "h"], descKey: "shortcuts.items.goHome" },

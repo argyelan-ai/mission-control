@@ -4,7 +4,8 @@
  * Settings › More reaches every page that left the main navigation.
  */
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const redirect = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({
@@ -16,6 +17,14 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/components/layout/AppShell", () => ({
   __esModule: true,
   default: ({ children }: { children: React.ReactNode }) => <div data-testid="shell">{children}</div>,
+}));
+
+const counts = vi.hoisted(() => ({ notes: 212, skills: 37 }));
+vi.mock("@/lib/api", () => ({
+  api: {
+    vault: { list: vi.fn(async () => ({ count: counts.notes, notes: [] })) },
+    skills: { list: vi.fn(async () => ({ skills: [], total: counts.skills })) },
+  },
 }));
 
 import StartPage from "../page";
@@ -32,10 +41,28 @@ describe("start route", () => {
 });
 
 describe("Knowledge landing", () => {
+  const renderKnowledge = () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={qc}>
+        <KnowledgePage />
+      </QueryClientProvider>,
+    );
+  };
+
   it("leads to the existing Memory and Skills pages, nothing else", () => {
-    render(<KnowledgePage />);
+    renderKnowledge();
     expect(screen.getByRole("heading", { level: 1, name: "Knowledge" })).toBeInTheDocument();
     expect(hrefs(screen.getByTestId("knowledge-links"))).toEqual(["/memory", "/skills"]);
+  });
+
+  // Operator pictures 18.11.2026: two bare rows in a lot of empty space.
+  it("each row says what is behind it and how much", async () => {
+    renderKnowledge();
+    await waitFor(() => expect(screen.getAllByTestId("link-list-count").map((e) => e.textContent)).toEqual(["212 notes", "37 skills"]));
+    const rows = within(screen.getByTestId("knowledge-links")).getAllByRole("link");
+    expect(rows[0]).toHaveTextContent("notes, lessons, references");
+    expect(rows[1]).toHaveTextContent("skills and plugins");
   });
 });
 

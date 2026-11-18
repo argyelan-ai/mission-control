@@ -33,20 +33,25 @@ export function sublineKind(
   }
 }
 
+/** One predicate for "a turn runs" — the subline's "Working" and the speed
+ *  line's live tok/s agree on it (shell review A5). */
+export function isTurnRunning(state: StateEvent | null, sending = false): boolean {
+  return sublineKind(state, "active", sending) === "working";
+}
+
 /**
- * The one muted line under the chat title (variant C): "model · Working for
- * 3 min", "model · Ready". The duration counts from the operator's last
+ * The one muted line under the chat title (variant C): "Working for 3 min",
+ * "Ready". The model is named once, in the speed line under the composer
+ * (operator pictures 18.11.2026: the same id stood in both places). The duration counts from the operator's last
  * message in the transcript — the start of the running turn — and only
  * shows from one minute on (K17). Nothing known → no line (K3).
  */
 export function ChatHeaderSubline({
-  model,
   state,
   aliveness,
   turnStartedAt,
   sending = false,
 }: {
-  model: string | null;
   state: StateEvent | null;
   aliveness: ChatAliveness;
   turnStartedAt: string | null;
@@ -56,7 +61,7 @@ export function ChatHeaderSubline({
   const locale = useLocale();
   const now = useNow(30_000);
   const kind = sublineKind(state, aliveness, sending);
-  if (!kind && !model) return null;
+  if (!kind) return null;
 
   let text: string | null;
   if (kind === "working") {
@@ -69,16 +74,14 @@ export function ChatHeaderSubline({
   } else if (kind === "ready") {
     text = t("ready");
   } else {
+    // "ended": the header's own "ended" badge already says it (K3).
     text = null;
   }
-  // "ended" adds no word: the header's own "ended" badge already says it (K3).
-  // One text node on purpose: "model · state" reads as one line, and the
-  // state word never stands alone next to the status line's own word.
-  const line = [model, text].filter(Boolean).join(" · ");
+  if (!text) return null;
 
   return (
     <span data-testid="chat-header-subline" data-kind={kind ?? undefined} className="text-xs leading-tight truncate" style={{ color: C.textMuted }}>
-      {line}
+      {text}
     </span>
   );
 }

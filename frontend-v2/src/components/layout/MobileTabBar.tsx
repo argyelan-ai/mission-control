@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
-import { activeTabFor, TAB_HREFS, TAB_ICONS, TAB_LABEL_KEYS, TAB_ORDER, type MobileTabKey } from "@/lib/mobileNav";
+import { activeTabFor, chatTabHref, TAB_HREFS, TAB_ICONS, TAB_LABEL_KEYS, TAB_ORDER, type MobileTabKey } from "@/lib/mobileNav";
 import { badgeLabel } from "@/lib/inbox";
 import { loadRecentChats, RECENT_CHATS_EVENT, type ChatRef } from "@/lib/recentChats";
 import { useInbox } from "@/hooks/useInbox";
@@ -74,6 +74,7 @@ export function MobileTabBar() {
   const t = useTranslations("cockpit");
   const pathname = usePathname() ?? "/";
   const { count } = useInbox();
+  const recent = useRecentChats();
   const keyboardOpen = useKeyboardOpen();
   const active = activeTabFor(pathname);
   const badge = badgeLabel(count);
@@ -99,7 +100,7 @@ export function MobileTabBar() {
           return (
             <Link
               key={key}
-              href={TAB_HREFS[key]}
+              href={key === "chat" ? chatTabHref(recent) : TAB_HREFS[key]}
               aria-current={on ? "page" : undefined}
               aria-label={tabBadge ? `${label}, ${t("chatWaiting", { count })}` : undefined}
               data-tab={key}

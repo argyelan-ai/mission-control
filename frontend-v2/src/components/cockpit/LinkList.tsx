@@ -4,7 +4,14 @@ import Link from "next/link";
 import { ChevronRight, type LucideIcon } from "lucide-react";
 import { C } from "@/lib/colors";
 
-export type LinkListItem = { href: string; icon: LucideIcon; title: string; hint?: string };
+export type LinkListItem = {
+  href: string;
+  icon: LucideIcon;
+  title: string;
+  hint?: string;
+  /** A quiet count at the right edge ("212 notes"); absent while unknown. */
+  count?: string | null;
+};
 
 /**
  * A calm list of destinations: icon, title, an optional one-line hint, a
@@ -33,6 +40,11 @@ export function LinkList({ items, testId }: { items: LinkListItem[]; testId?: st
                   </span>
                 )}
               </span>
+              {item.count && (
+                <span data-testid="link-list-count" className="shrink-0 text-sm tabular-nums" style={{ color: C.textMuted }}>
+                  {item.count}
+                </span>
+              )}
               <ChevronRight size={18} aria-hidden style={{ color: C.textMuted }} className="shrink-0" />
             </Link>
           </li>

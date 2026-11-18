@@ -28,8 +28,15 @@ export default function AppShell({
   mobileChromeless = false,
   mobileHideAppBar = false,
   wide = false,
+  mobileTitle,
+  mobileAction,
 }: {
   children: React.ReactNode;
+  /** Phone: the page title in the app bar, read like the chat header (the
+   *  three tab pages). The page then hides its own h1 below md. */
+  mobileTitle?: string;
+  /** Phone: the page's one action in the app bar, in place of voice. */
+  mobileAction?: React.ReactNode;
   fullHeight?: boolean;
   /** Let the page use the whole width beside the sidebar instead of the
    *  centred 1600 px column. Only for pages that lay out their own panes and
@@ -128,7 +135,7 @@ export default function AppShell({
       <AmbientBackground />
 
       {/* Phone: top app bar (wordmark + voice) */}
-      {!mobileChromeless && <MobileNav showBar={!mobileHideAppBar} />}
+      {!mobileChromeless && <MobileNav showBar={!mobileHideAppBar} title={mobileTitle} action={mobileAction} />}
 
       {/* Phone: the chat drawer — the one phone menu (operator decision
           2026-11-18, variant A's menu), opened by the sidebar icon in the

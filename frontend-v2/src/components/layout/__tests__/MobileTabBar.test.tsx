@@ -153,6 +153,13 @@ describe("phone tab bar", () => {
     expect(within(bar()).getByRole("link", { name: "Knowledge" })).toHaveAttribute("href", "/knowledge");
   });
 
+  // Shell review A2: plain /sessions sent an open chat back to the old list.
+  it("Chat leads straight into the last chat, without the list-entry marker", () => {
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-7" }]));
+    renderNav();
+    expect(within(bar()).getByRole("link", { name: "Chat" })).toHaveAttribute("href", "/sessions?agent=agent-7");
+  });
+
   it("Chat badge = reviews + approvals + open head questions", async () => {
     data.approvals = [{ id: "a1", status: "pending" }, { id: "a2", status: "pending" }];
     data.reviews = [{ id: "t1", status: "review", assigned_agent_id: null, human_review_required: false }];

@@ -15,6 +15,9 @@
 import { BookOpen, Gauge, MessageSquare, type LucideIcon } from "lucide-react";
 import { CHROME_ITEMS, NAV_ITEMS, type NavItem } from "./nav";
 
+import { chatUrl } from "./chatHistory";
+import type { ChatRef } from "./recentChats";
+
 export type MobileTabKey = "chat" | "models" | "knowledge";
 
 export const TAB_ORDER: MobileTabKey[] = ["chat", "models", "knowledge"];
@@ -48,6 +51,15 @@ export const TAB_HREFS: Record<MobileTabKey, string> = {
   models: "/runtimes",
   knowledge: "/knowledge",
 };
+
+/**
+ * Where the Chat tab leads: straight into the last chat (its plain URL, no
+ * entry marker — no list goes in behind it). Plain `/sessions` sent an open
+ * chat back to the old full-screen list (shell review A2).
+ */
+export function chatTabHref(recent: ChatRef[]): string {
+  return recent[0] ? chatUrl(recent[0].kind, recent[0].id) : TAB_HREFS.chat;
+}
 
 export type SheetPages = { usedMost: NavItem[]; others: NavItem[] };
 

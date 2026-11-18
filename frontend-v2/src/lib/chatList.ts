@@ -21,7 +21,6 @@ import type { HeadRun } from "@/lib/heads";
 import { openHeadQuestions } from "@/lib/inbox";
 import { isAgentWorking } from "@/lib/agentStatus";
 import { chatEntryHref, type ChatKind } from "@/lib/chatHistory";
-import type { ChatRef } from "@/lib/recentChats";
 
 /** waiting = the operator has to act · working = a turn runs · idle = neither. */
 export type ChatListState = "waiting" | "working" | "idle";
@@ -48,8 +47,6 @@ export type ChatListInput = {
   groups: Pick<GroupSummary, "id" | "name" | "status" | "created_at" | "last_message">[];
   headRuns: HeadRun[];
   approvals: Pick<Approval, "agent_id" | "status">[];
-  /** Chats this device opened, with the time it opened them (lib/recentChats). */
-  recent: ChatRef[];
 };
 
 /** The later of two ISO times; null only when both are missing. */
@@ -57,10 +54,6 @@ function later(a: string | null | undefined, b: string | null | undefined): stri
   if (!a) return b ?? null;
   if (!b) return a;
   return Date.parse(a) >= Date.parse(b) ? a : b;
-}
-
-function openedAt(recent: ChatRef[], kind: ChatKind, id: string): string | null {
-  return recent.find((r) => r.kind === kind && r.id === id)?.at ?? null;
 }
 
 export function buildChatList(input: ChatListInput): ChatListEntry[] {
@@ -74,7 +67,10 @@ export function buildChatList(input: ChatListInput): ChatListEntry[] {
       kind: "agent",
       id: agent.id,
       title: agent.name,
-      at: later(agent.last_task_activity_at, openedAt(input.recent, "agent", agent.id)),
+      // Server facts only, so every device sorts alike (operator pictures
+      // 18.11.2026: a per-device "opened at" gave the desktop a Today
+      // section the phone did not have).
+      at: agent.last_task_activity_at ?? null,
       state: pending.has(agent.id) ? "waiting" : isAgentWorking(agent.status) ? "working" : "idle",
       href: chatEntryHref("agent", agent.id),
     });
@@ -86,7 +82,7 @@ export function buildChatList(input: ChatListInput): ChatListEntry[] {
       kind: "group",
       id: group.id,
       title: group.name,
-      at: later(later(group.last_message?.created_at, group.created_at), openedAt(input.recent, "group", group.id)),
+      at: later(group.last_message?.created_at, group.created_at),
       state: group.status === "waiting_gate" ? "waiting" : group.status === "running" ? "working" : "idle",
       href: chatEntryHref("group", group.id),
     });

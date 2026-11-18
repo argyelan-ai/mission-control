@@ -3843,7 +3843,7 @@
       "emptyConnectByAddress": "Per Adresse verbinden",
       "emptyPickProviderModel": "Anbieter-Modell wählen",
       "tabFleet": "Flotte",
-      "tabModels": "Modelle",
+      "tabModels": "Bibliothek",
       "tabInfra": "Infrastruktur",
       "tabCloud": "Cloud",
       "registerTitle": "Runtime-Register",
@@ -5407,15 +5407,16 @@
     "stateWorking": "arbeitet",
     "more": "Mehr",
     "settings": "Einstellungen",
-    "opening": "Dein letzter Chat wird geöffnet …",
     "pickTitle": "Mit wem willst du chatten?",
     "knowledge": {
       "title": "Wissen",
       "lead": "Was MC weiss und was es kann.",
       "memoryTitle": "Gedächtnis",
-      "memoryHint": "Notizen, Lektionen und Verweise",
+      "memoryHint": "Was die Agenten festhalten: Notizen, Lektionen, Verweise",
       "skillsTitle": "Skills",
-      "skillsHint": "Skills und Plugins, die die Agenten nutzen"
+      "skillsHint": "Was die Agenten können: Skills und Plugins",
+      "notesCount": "{count, plural, one {# Notiz} other {# Notizen}}",
+      "skillsCount": "{count, plural, one {# Skill} other {# Skills}}"
     },
     "more_page": {
       "title": "Mehr",
@@ -5430,7 +5431,11 @@
     "speed": {
       "label": "Modell und Box",
       "tps": "{tps} tok/s",
-      "boxTps": "Tempo der ganzen Box, live gemessen"
-    }
+      "boxTps": "Tempo der ganzen Box, live gemessen",
+      "tpsNone": "– tok/s",
+      "lastTps": "Zuletzt gemessenes Tempo dieser Box",
+      "noTps": "Diese Box hat noch kein Tempo gemessen"
+    },
+    "openLastChat": "Deinen letzten Chat öffnen"
   }
 }

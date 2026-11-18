@@ -26,7 +26,7 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
-import { SpeedLine, SpeedLineView, boxLabel, liveTps } from "./SpeedLine";
+import { SpeedLine, SpeedLineView, boxLabel, lastTps, liveTps } from "./SpeedLine";
 
 const intl = (ui: React.ReactNode) => (
   <NextIntlClientProvider locale="en" messages={en}>
@@ -58,25 +58,39 @@ describe("boxLabel / liveTps", () => {
     expect(liveTps({ ...pulse, now_tps: 0 }, true)).toBeNull();
     expect(liveTps(undefined, true)).toBeNull();
   });
+
+  it("at rest: the newest point the box measured above zero", () => {
+    const pulse = { points: [{ t: 1, tps: 38.6 }, { t: 2, tps: 41.2 }, { t: 3, tps: 0 }], now_tps: 0, idle_seconds: 40, available: true };
+    expect(lastTps(pulse)).toBe(41);
+    expect(lastTps({ ...pulse, points: [] })).toBeNull();
+    expect(lastTps({ ...pulse, available: false })).toBeNull();
+  });
 });
 
 describe("SpeedLineView", () => {
   it("with data: box · model and the live tok/s", () => {
-    render(intl(<SpeedLineView box="Box A + Box B" model="qwen3.8-27b" tps={41} />));
+    render(intl(<SpeedLineView box="Box A + Box B" model="qwen3.8-27b" tps={41} live />));
     const line = screen.getByTestId("speed-line");
     expect(line).toHaveTextContent("Box A + Box B · qwen3.8-27b");
     expect(screen.getByTestId("speed-line-tps")).toHaveTextContent("41 tok/s");
   });
 
-  it("not streaming: box · model, no number", () => {
-    render(intl(<SpeedLineView box="Box A" model="qwen3.8-27b" tps={null} />));
+  it("at rest: the last measured tok/s, quiet, not marked live", () => {
+    render(intl(<SpeedLineView box="Box A" model="qwen3.8-27b" tps={38} />));
     expect(screen.getByTestId("speed-line")).toHaveTextContent("Box A · qwen3.8-27b");
-    expect(screen.queryByTestId("speed-line-tps")).toBeNull();
+    expect(screen.getByTestId("speed-line-tps")).toHaveTextContent("38 tok/s");
+    expect(screen.getByTestId("speed-line-tps")).not.toHaveAttribute("data-live");
+  });
+
+  it("a box that never measured: '– tok/s' instead of nothing", () => {
+    render(intl(<SpeedLineView box="Box A" model="qwen3.8-27b" tps={null} />));
+    expect(screen.getByTestId("speed-line-tps")).toHaveTextContent("– tok/s");
   });
 
   it("a cloud model without a box: only the model", () => {
     render(intl(<SpeedLineView box={null} model="claude-opus-5" tps={null} />));
     expect(screen.getByTestId("speed-line")).toHaveTextContent(/^claude-opus-5$/);
+    expect(screen.queryByTestId("speed-line-tps")).toBeNull();
   });
 
   it("without data: no line at all (K3)", () => {
@@ -104,12 +118,13 @@ describe("SpeedLine (loaded)", () => {
     await waitFor(() => expect(screen.getByTestId("speed-line")).toHaveTextContent("Box A + Box B · qwen3.8-27b-nvfp4"));
   });
 
-  it("asks the box for its pulse only while the chat streams", async () => {
+  it("at rest it still shows the box's last measured speed", async () => {
     apiMock.runtimes = [RUNTIME];
-    apiMock.pulseCalls = 0;
+    apiMock.pulse = { points: [{ t: 1, tps: 39.7 }], now_tps: 0, idle_seconds: 300, available: true };
     withQuery(<SpeedLine runtimeId="rt-1" model={null} streaming={false} />);
-    await waitFor(() => expect(screen.getByTestId("speed-line")).toBeInTheDocument());
-    expect(apiMock.pulseCalls).toBe(0);
+    await waitFor(() => expect(screen.getByTestId("speed-line-tps")).toHaveTextContent("40 tok/s"));
+    expect(screen.getByTestId("speed-line-tps")).not.toHaveAttribute("data-live");
+    apiMock.pulse = { points: [], now_tps: 41.4, idle_seconds: 0, available: true };
   });
 
   it("steps aside outside a query client instead of throwing", () => {

@@ -13,8 +13,7 @@
 
 import { chatEntryHref } from "@/lib/chatHistory";
 
-/** `at` = when this device last opened the chat (ISO); older entries lack it. */
-export type ChatRef = { kind: "agent" | "group"; id: string; at?: string };
+export type ChatRef = { kind: "agent" | "group"; id: string };
 
 export const RECENT_CHATS_KEY = "mc-recent-chats";
 const LEGACY_LAST_AGENT_KEY = "mc-sessions-last-agent";
@@ -25,12 +24,7 @@ export const RECENT_CHATS_EVENT = "mc-recent-chats";
 function isChatRef(v: unknown): v is ChatRef {
   if (!v || typeof v !== "object") return false;
   const r = v as Record<string, unknown>;
-  return (
-    (r.kind === "agent" || r.kind === "group") &&
-    typeof r.id === "string" &&
-    r.id.length > 0 &&
-    (r.at === undefined || typeof r.at === "string")
-  );
+  return (r.kind === "agent" || r.kind === "group") && typeof r.id === "string" && r.id.length > 0;
 }
 
 export function loadRecentChats(): ChatRef[] {
@@ -53,7 +47,7 @@ export function pushRecent(list: ChatRef[], ref: ChatRef): ChatRef[] {
 
 export function rememberChat(ref: ChatRef): void {
   try {
-    const next = pushRecent(loadRecentChats(), { ...ref, at: ref.at ?? new Date().toISOString() });
+    const next = pushRecent(loadRecentChats(), ref);
     localStorage.setItem(RECENT_CHATS_KEY, JSON.stringify(next));
     window.dispatchEvent(new Event(RECENT_CHATS_EVENT));
   } catch {

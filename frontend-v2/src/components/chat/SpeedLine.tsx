@@ -12,8 +12,11 @@ export type SpeedLineFacts = {
   /** Box (or boxes) the chat's model runs on, e.g. "Box A+B"; null = cloud / unknown. */
   box: string | null;
   model: string | null;
-  /** Live tokens per second of that box; null = not streaming or not measured. */
+  /** Tokens per second of that box; null = never measured. */
   tps: number | null;
+  /** true = measured right now while this chat streams; false = the last
+   *  value the box measured (the operator wants a number at rest too). */
+  live?: boolean;
 };
 
 /** The box part of the line: the runtime's head box plus its duo members. */
@@ -36,8 +39,21 @@ export function liveTps(pulse: HostPulse | undefined, streaming: boolean): numbe
   return tps > 0 ? tps : null;
 }
 
+/**
+ * The last speed the box measured, for a chat at rest: the newest pulse point
+ * above zero (the ring the runtimes stage draws). null = nothing measured.
+ */
+export function lastTps(pulse: HostPulse | undefined): number | null {
+  if (!pulse?.available) return null;
+  for (let i = pulse.points.length - 1; i >= 0; i--) {
+    const tps = Math.round(pulse.points[i].tps);
+    if (tps > 0) return tps;
+  }
+  return null;
+}
+
 /** Pure render — tested without queries. Nothing known → nothing shown (K3). */
-export function SpeedLineView({ box, model, tps }: SpeedLineFacts) {
+export function SpeedLineView({ box, model, tps, live = false }: SpeedLineFacts) {
   const t = useTranslations("cockpit.speed");
   if (!box && !model) return null;
   const parts = [box, model].filter(Boolean).join(" · ");
@@ -51,17 +67,21 @@ export function SpeedLineView({ box, model, tps }: SpeedLineFacts) {
       <span
         aria-hidden
         className="w-1.5 h-1.5 rounded-full shrink-0"
-        style={{ background: tps != null ? C.info : C.textDim }}
+        style={{ background: live ? C.info : C.textDim }}
       />
       <span className="truncate min-w-0">{parts}</span>
-      {tps != null && (
+      {/* A local box always shows a speed: live while streaming, else the
+          last measured one, else "– tok/s". A cloud model has no box and
+          no measured speed — nothing is shown then (K3). */}
+      {box && (
         <span
           data-testid="speed-line-tps"
-          title={t("boxTps")}
+          data-live={live || undefined}
+          title={live ? t("boxTps") : tps != null ? t("lastTps") : t("noTps")}
           className="font-mono tabular-nums shrink-0"
-          style={{ color: C.textSecondary }}
+          style={{ color: live ? C.textSecondary : C.textMuted }}
         >
-          {t("tps", { tps })}
+          {tps != null ? t("tps", { tps }) : t("tpsNone")}
         </span>
       )}
     </div>
@@ -90,14 +110,17 @@ function SpeedLineLoaded({ runtimeId, model, streaming }: SpeedLineProps) {
   const { data: pulse } = useQuery({
     queryKey: ["hosts", hostId, "pulse"],
     queryFn: () => api.hosts.pulse(hostId!),
-    enabled: !!hostId && streaming,
-    refetchInterval: 5_000,
+    enabled: !!hostId,
+    // Fast while this chat streams, slow at rest (only the last value is shown).
+    refetchInterval: streaming ? 5_000 : 60_000,
   });
+  const live = liveTps(pulse, streaming);
   return (
     <SpeedLineView
       box={boxLabel(runtime)}
       model={model ?? runtime?.model_identifier ?? null}
-      tps={liveTps(pulse, streaming)}
+      tps={live ?? lastTps(pulse)}
+      live={live != null}
     />
   );
 }
