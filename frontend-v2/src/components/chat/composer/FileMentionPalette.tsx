@@ -73,7 +73,7 @@ export function FileMentionPalette({
             {message}
           </div>
         ) : (
-          <div className="max-h-56 overflow-y-auto p-1.5">
+          <div className="max-h-56 overflow-y-auto p-1">
             {files.map((file, i) => {
               const dir = file.path.slice(0, Math.max(0, file.path.length - file.name.length - 1));
               const active = i === highlightedIndex;
@@ -88,7 +88,7 @@ export function FileMentionPalette({
                   onPointerDown={(e) => e.preventDefault()}
                   onMouseEnter={() => onHover(i)}
                   onClick={() => onSelect(file)}
-                  className="w-full flex items-center gap-2 px-2 min-h-11 md:min-h-0 md:py-1.5 rounded-sm text-xs cursor-pointer text-left"
+                  className="w-full flex items-center gap-2 px-2 min-h-11 md:min-h-0 md:py-2 rounded-sm text-xs cursor-pointer text-left"
                   style={{ backgroundColor: active ? C.accentSubtle : "transparent" }}
                 >
                   <FileText size={14} className="shrink-0" style={{ color: C.textMuted }} />
