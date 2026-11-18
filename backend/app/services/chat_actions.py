@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from app.services.chat_changes import _normalise
+from app.services.git_harden import run_git
 from app.services.workspace_diff import (
     MC_HELPER_FILES,
     current_branch,
@@ -309,17 +310,17 @@ def _write_atomic(path: Path, text: str) -> None:
 
 
 def _git(*args: str, cwd: Path, stdin: str | None = None) -> subprocess.CompletedProcess:
-    """git with an argv list, never a shell; no prompts. Callers check
+    """git with an argv list, never a shell; no prompts; repo config that
+    names a program is neutralised (``git_harden``). Callers check
     ``returncode`` themselves."""
-    return subprocess.run(
-        ["git", "--no-pager", "-c", "safe.directory=*", "-c", "core.quotepath=false", *args],
-        cwd=str(cwd),
+    return run_git(
+        "-c", "safe.directory=*", "-c", "core.quotepath=false", *args,
+        cwd=cwd,
         input=stdin,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
     )
 
 
