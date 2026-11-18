@@ -11,6 +11,7 @@ import { ClampedContent, USER_CLAMP_MAX_PX } from "./ClampedContent";
 import { ChatErrorCard } from "./ChatErrorCard";
 import { ChatNoticeCard } from "./ChatNoticeCard";
 import { EventCard } from "./EventCard";
+import { QuoteReplyButton } from "./QuoteReplyButton";
 import type { MessageEvent } from "@/lib/chatTypes";
 
 // Weiterhin von hier importierbar (Tests, ChatView) — die Umsetzung ist
@@ -331,7 +332,7 @@ export function ChatMessage({
   }
 
   return (
-    <div className="w-full px-4 md:px-5 py-3 md:py-4">
+    <div className="w-full px-4 md:px-5 py-3 md:py-4" data-quote-message>
       {/* Only shown when the model CHANGED (see ChatView's modelBadgeUuids):
           stamping every assistant turn with the same name is noise, but a
           switch mid-session is exactly what this fleet's operator needs to
@@ -349,6 +350,7 @@ export function ChatMessage({
       <div className="text-[14px] leading-[1.7] max-w-[76ch] min-w-0 break-words [&>*:last-child]:mb-0">
         <MarkdownContent content={ev.text} />
       </div>
+      <QuoteReplyButton text={ev.text} />
     </div>
   );
 }

@@ -27,6 +27,7 @@ import { ContextPanel, cacheHitRateOf } from "./ContextPanel";
 import { PopoverPortal, anchoredBoxStyle, useAnchoredPosition } from "@/lib/anchoredPopover";
 import { harnessLabel } from "@/components/shared/HarnessIcon";
 import { formatShare } from "@/lib/usage";
+import { appendQuote } from "./chatQuote";
 
 const MAX_ROWS = 8;
 /** Rows of room the input holds at rest, before anything is typed. */
@@ -34,6 +35,21 @@ const MIN_ROWS = 2;
 // Matches the textarea's own line-height (14px body × 1.5, rounded) so the
 // auto-grow ceiling lands on a whole row instead of clipping one mid-glyph.
 const LINE_HEIGHT_PX = 22;
+
+/** Pasted plain text from this size on (UTF-8 bytes) becomes a `.txt`
+ *  attachment instead of landing in the textarea. */
+export const LONG_PASTE_BYTES = 32 * 1024;
+
+export function isLongPaste(text: string): boolean {
+  // Cheap exit first: a UTF-8 character is at most 4 bytes.
+  if (text.length * 4 < LONG_PASTE_BYTES) return false;
+  return new TextEncoder().encode(text).length >= LONG_PASTE_BYTES;
+}
+
+function pastedTextFile(text: string): File {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*$/, "");
+  return new File([text], `pasted-text-${stamp}.txt`, { type: "text/plain;charset=utf-8" });
+}
 
 // Desktop-app-style context ring — compact circular indicator instead of a
 // bar, per the operator's ask to match the Claude Desktop app's look.
@@ -225,6 +241,9 @@ interface ComposerProps {
   /** Text the parent wants in the box (a withdrawn steer coming back for
    *  editing). `at` makes the same text re-applicable: a new stamp = apply. */
   prefill?: { text: string; at: number } | null;
+  /** A reply the operator quoted (`chatQuote`): appended to the draft as a
+   *  Markdown blockquote, never sent. `at` makes the same text re-applicable. */
+  quote?: { text: string; at: number } | null;
   /** Phone: the detail action bar sits below and owns the home-indicator
    *  strip, so the composer drops its own safe-area padding. */
   barBelow?: boolean;
@@ -260,7 +279,7 @@ interface ComposerProps {
  *  globals.css passen. */
 export const EFFORT_SETTLE_MS = 320;
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, quote = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
   const t = useTranslations("sessions");
   // One word per effort level, the same as the bench (round-2 Q2):
   // "High" / "Hoch" instead of the raw "high" the harness reports.
@@ -329,6 +348,21 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /** Where the caret goes once a quote has landed in the draft. */
+  const caretToEndRef = useRef(false);
+  useEffect(() => {
+    if (!quote || !quote.text.trim()) return;
+    caretToEndRef.current = true;
+    setText((draft) => appendQuote(draft, quote.text));
+  }, [quote]);
+  useEffect(() => {
+    if (!caretToEndRef.current) return;
+    caretToEndRef.current = false;
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(text.length, text.length);
+  }, [text]);
 
   const isWorking = state?.status === "working";
   const hasText = text.trim().length > 0;
@@ -528,9 +562,19 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     // Dateien im Zwischenspeicher liegen — sonst bliebe normales Text-
     // Einfügen auf der Strecke.
     const files = Array.from(e.clipboardData?.files ?? []);
-    if (files.length === 0) return;
+    if (files.length > 0) {
+      e.preventDefault();
+      void addFiles(files);
+      return;
+    }
+    // Ein sehr langer Text (Log, ganze Datei) gehoert nicht ins Eingabefeld:
+    // er sprengt die Zeilen und reist sonst unsichtbar mit. Er wird zum
+    // Anhang — derselbe Weg wie eine gewaehlte Datei.
+    const pasted = e.clipboardData?.getData("text/plain") ?? "";
+    if (!isLongPaste(pasted)) return;
     e.preventDefault();
-    void addFiles(files);
+    void addFiles([pastedTextFile(pasted)]);
+    notify.info(t("pastedAsFile"));
   }
 
   function handleDrop(e: React.DragEvent) {

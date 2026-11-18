@@ -2201,3 +2201,88 @@ describe("Composer — Anhänge", () => {
     await waitFor(() => expect(screen.getAllByTestId("attachment-tile").length).toBe(2));
   });
 });
+
+describe("Composer — long pasted text becomes a file", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUpload.mockResolvedValue(mkAttachment({ name: "pasted-text.txt", isImage: false }));
+  });
+
+  function pasteText(textarea: HTMLElement, text: string): boolean {
+    return fireEvent.paste(textarea, {
+      clipboardData: { files: [], items: [], getData: (type: string) => (type === "text/plain" ? text : "") },
+    });
+  }
+
+  it("turns 32 KiB of pasted text into a .txt attachment instead of inserting it", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+    const textarea = screen.getByRole("textbox");
+    const big = "x".repeat(32 * 1024);
+
+    const notPrevented = pasteText(textarea, big);
+
+    expect(notPrevented).toBe(false);
+    await waitFor(() => expect(mockUpload).toHaveBeenCalledTimes(1));
+    const file = mockUpload.mock.calls[0][1] as File;
+    expect(file.name).toMatch(/\.txt$/);
+    expect(file.type).toMatch(/^text\/plain/);
+    expect(file.size).toBe(32 * 1024);
+    expect(await file.text()).toBe(big);
+    expect(textarea).toHaveValue("");
+    expect(mockNotifyInfo).toHaveBeenCalledWith(en.sessions.pastedAsFile);
+  });
+
+  it("measures UTF-8 bytes, not characters", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+    // 16384 characters, but 32768 bytes: "ä" is two bytes in UTF-8.
+    pasteText(screen.getByRole("textbox"), "ä".repeat(16 * 1024));
+    await waitFor(() => expect(mockUpload).toHaveBeenCalledTimes(1));
+  });
+
+  it("leaves text one byte under the threshold to the normal paste", () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+    const notPrevented = pasteText(screen.getByRole("textbox"), "x".repeat(32 * 1024 - 1));
+    expect(notPrevented).toBe(true);
+    expect(mockUpload).not.toHaveBeenCalled();
+    expect(mockNotifyInfo).not.toHaveBeenCalled();
+  });
+
+  it("still takes pasted files first, even with long text alongside", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+    fireEvent.paste(screen.getByRole("textbox"), {
+      clipboardData: { files: [mkFile()], items: [], getData: () => "x".repeat(40 * 1024) },
+    });
+    await waitFor(() => expect(mockUpload).toHaveBeenCalledTimes(1));
+    expect((mockUpload.mock.calls[0][1] as File).name).toBe("foto.png");
+  });
+});
+
+describe("Composer — quote a reply into the draft", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("appends the quote below the draft, cursor after it, nothing sent", () => {
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={onSend} onStop={vi.fn()} />,
+    );
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "my draft" } });
+
+    rerender(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={onSend} onStop={vi.fn()} quote={{ text: "one\ntwo", at: 1 }} />,
+    );
+
+    expect(textarea).toHaveValue("my draft\n\n> one\n> two\n\n");
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.selectionStart).toBe(textarea.value.length);
+    expect(textarea.selectionEnd).toBe(textarea.value.length);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("applies the same text again when it comes with a new stamp", () => {
+    const props = { agentId: "a1", usage: null, state: mkState("idle"), onSend: vi.fn(), onStop: vi.fn() };
+    const { rerender } = render(<Composer {...props} quote={{ text: "a", at: 1 }} />);
+    rerender(<Composer {...props} quote={{ text: "a", at: 2 }} />);
+    expect(screen.getByRole("textbox")).toHaveValue("> a\n\n> a\n\n");
+  });
+});

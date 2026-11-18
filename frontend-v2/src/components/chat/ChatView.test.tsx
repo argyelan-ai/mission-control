@@ -2963,3 +2963,30 @@ describe("ChatView — talking across harnesses (ADR-100 2d)", () => {
     expect(screen.queryByText("mc send worker")).toBeNull();
   });
 });
+
+describe("ChatView — quote a reply into the composer", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setRole("admin");
+  });
+
+  it("puts the quoted reply into the draft without sending", async () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [mkMsg({ text: "Plan is ready" })] }));
+    const user = userEvent.setup();
+    renderChatView();
+
+    await user.type(screen.getByPlaceholderText("Message the agent…"), "Thanks");
+    await user.click(screen.getByTestId("quote-reply"));
+
+    expect(screen.getByPlaceholderText("Message the agent…")).toHaveValue("Thanks\n\n> Plan is ready\n\n");
+    expect(api.chat.sendText).not.toHaveBeenCalled();
+  });
+
+  it("offers no quote where the composer cannot send", () => {
+    setRole("viewer");
+    mockUseChatStream.mockReturnValue(mkStream({ events: [mkMsg({ text: "Plan is ready" })] }));
+    renderChatView();
+    expect(screen.getByText("Plan is ready")).toBeInTheDocument();
+    expect(screen.queryByTestId("quote-reply")).toBeNull();
+  });
+});

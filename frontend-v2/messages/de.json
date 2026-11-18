@@ -1047,6 +1047,7 @@
     "removeAttachment": "Anhang {name} entfernen",
     "attachmentUploadingOne": "lädt…",
     "attachmentUploadingMany": "{count} laden…",
+    "pastedAsFile": "Langer Text eingefügt — als Datei angehängt",
     "attachmentFailed": "Anhang fehlgeschlagen",
     "attachmentExpandImage": "Bild {name} vergrössern",
     "attachmentCollapseImage": "Bild {name} verkleinern",
@@ -4404,6 +4405,7 @@
   "chat": {
     "showMore": "Mehr anzeigen",
     "showLess": "Weniger anzeigen",
+    "quoteReply": "In der Antwort zitieren",
     "event": {
       "task": "Aufgabe",
       "correction": "Korrektur",

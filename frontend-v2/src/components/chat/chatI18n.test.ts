@@ -43,6 +43,8 @@ const FILES = [
   // "Send again" (S1-R7): the contract between ChatView and the card, and
   // the notice card, whose sentences without values are translated now.
   "chatResend.tsx",
+  // "Quote in reply" under an assistant message (composer quote).
+  "QuoteReplyButton.tsx",
   "ChatNoticeCard.tsx",
   "AgentCard.tsx",
   "NotificationRow.tsx",
