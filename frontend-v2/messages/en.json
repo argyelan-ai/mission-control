@@ -1861,7 +1861,7 @@
       "localHintFirst": "Share of output tokens",
       "empty": "No usage recorded yet.",
       "costHintCloud": "This week so far · cloud at list price — flat-rate plans are not billed per token",
-      "costHintLocal": "This week so far · local runs — no API price set for local models yet"
+      "costHintLocal": "This week so far · local runs at the API list price of the same model — calls straight to a box's API have no price"
     },
     "heatmap": {
       "title": "Tokens per day",

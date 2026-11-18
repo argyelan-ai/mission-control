@@ -6,8 +6,8 @@
  * (ADR-086: local first). Cost is compared with the same weekdays of last
  * week; the line shows the finished weeks only. The page's switch (All ·
  * Cloud · Local) picks which cost: cloud = cost − the local part; local is
- * the list price of the local rows, which is $0 until local models get an
- * API price.
+ * the API list price of the local rows (calls straight to a box's API have
+ * no price).
  *
  *   $1,339                                  ╱╲_╱‾╲__●
  *   This week so far · list-price equivalent — flat-rate plans …

@@ -1861,7 +1861,7 @@
       "localHintFirst": "Anteil der Output-Tokens",
       "empty": "Noch keine Nutzung erfasst.",
       "costHintCloud": "Diese Woche bis jetzt · Cloud zum Listenpreis — Flatrate-Abos zahlen nicht pro Token",
-      "costHintLocal": "Diese Woche bis jetzt · lokale Läufe — für lokale Modelle ist noch kein API-Preis hinterlegt"
+      "costHintLocal": "Diese Woche bis jetzt · lokale Läufe zum API-Listenpreis desselben Modells — Aufrufe direkt an die API einer Box haben keinen Preis"
     },
     "heatmap": {
       "title": "Tokens pro Tag",

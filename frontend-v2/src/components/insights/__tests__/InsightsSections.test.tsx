@@ -33,7 +33,7 @@ describe("InsightsHero", () => {
     expect(screen.getByText(/list-price equivalent — flat-rate plans are not billed per token/)).toBeInTheDocument();
   });
 
-  it("moves the cost with the switch: cloud is the rest, local says it has no API price yet", () => {
+  it("moves the cost with the switch: cloud is the rest, local is the API list price of the local runs", () => {
     const split = {
       ...days,
       days: [
@@ -51,7 +51,7 @@ describe("InsightsHero", () => {
       </QueryClientProvider>,
     );
     expect(screen.getByTestId("hero-cost")).toHaveTextContent("$10");
-    expect(screen.getByText(/no API price set for local models yet/)).toBeInTheDocument();
+    expect(screen.getByText(/local runs at the API list price/)).toBeInTheDocument();
     expect(screen.getByTestId("hero-change")).toHaveTextContent("50% less than the same days last week");
   });
 

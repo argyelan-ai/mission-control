@@ -71,7 +71,7 @@ describe("InsightsPage", () => {
     const local = screen.getByTestId("hero-cost").textContent;
     expect(local).not.toBe(all);
     expect(local).not.toBe(cloud);
-    expect(screen.getByText(/no API price set for local models yet/)).toBeInTheDocument();
+    expect(screen.getByText(/local runs at the API list price/)).toBeInTheDocument();
   });
 
   it("asks for days and weeks in the browser's time zone", async () => {
