@@ -2376,4 +2376,76 @@ describe("Composer @ file mention", () => {
       ),
     );
   });
+
+  it("a folder too large to list in full says so above the list", async () => {
+    mockFiles.mockResolvedValue({ ...LIST, truncated: true });
+    const user = userEvent.setup();
+    render(<Composer {...props} />);
+    await user.type(screen.getByRole("textbox"), "@comp");
+    expect(await screen.findByTestId("mention-palette-truncated")).toHaveTextContent(
+      en.sessions.fileMentionTruncated,
+    );
+    expect(screen.getByTestId("mention-item-src/Composer.tsx")).toBeInTheDocument();
+  });
+
+  it("no hint while the whole folder was listed", async () => {
+    const user = userEvent.setup();
+    render(<Composer {...props} />);
+    await user.type(screen.getByRole("textbox"), "@comp");
+    await screen.findByTestId("mention-item-src/Composer.tsx");
+    expect(screen.queryByTestId("mention-palette-truncated")).toBeNull();
+  });
+
+  it("Enter never takes a file from the answer to an older search", async () => {
+    // The answer for "comp" is on screen; the operator types on and hits
+    // Enter before the answer for the new word arrived.
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(<Composer {...props} onSend={onSend} />);
+    const box = screen.getByRole("textbox");
+    await user.type(box, "see @comp");
+    await screen.findByTestId("mention-item-src/Composer.tsx");
+    let answerNext: (v: typeof LIST) => void = () => {};
+    mockFiles.mockReturnValue(new Promise((r) => { answerNext = r; }));
+    await user.type(box, "zz{Enter}");
+    expect(box).toHaveValue("see @compzz");
+    expect(onSend).not.toHaveBeenCalled();
+    answerNext({ ...LIST, files: [] });
+  });
+
+  it("Enter on a bare @ sends the message instead of taking the first file", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(<Composer {...props} onSend={onSend} />);
+    const box = screen.getByRole("textbox");
+    await user.type(box, "meet @");
+    await screen.findByTestId("mention-item-src/Composer.tsx");
+    await user.keyboard("{Enter}");
+    expect(onSend).toHaveBeenCalledWith("meet @");
+  });
+
+  it("on a bare @ the arrow keys still pick a file for Enter", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(<Composer {...props} onSend={onSend} />);
+    const box = screen.getByRole("textbox");
+    await user.type(box, "@");
+    await screen.findByTestId("mention-item-src/Composer.tsx");
+    await user.keyboard("{ArrowDown}{ArrowUp}{Enter}");
+    expect(box).toHaveValue("@src/Composer.tsx ");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("a message ending in a mention is sent with a space after it", async () => {
+    // Docker agents get one-line text as typed keys: a space closes the
+    // harness's own @ suggestions, so the Enter after it sends.
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(<Composer {...props} onSend={onSend} />);
+    const box = screen.getByRole("textbox");
+    await user.type(box, "look at @co");
+    await user.click(await screen.findByTestId("mention-item-src/Composer.tsx"));
+    await user.keyboard("{Enter}");
+    expect(onSend).toHaveBeenCalledWith("look at @src/Composer.tsx ");
+  });
 });

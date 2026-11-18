@@ -1052,6 +1052,7 @@
     "fileMentionSearching": "Suche Dateien…",
     "fileMentionNoMatch": "Keine Datei passt",
     "fileMentionNoFolder": "Dieser Chat hat keinen Arbeitsordner",
+    "fileMentionTruncated": "Ordner zu gross — nur ein Teil wird gezeigt",
     "fileMentionError": "Dateien konnten nicht gelistet werden",
     "attachmentFailed": "Anhang fehlgeschlagen",
     "attachmentExpandImage": "Bild {name} vergrössern",

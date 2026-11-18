@@ -1052,6 +1052,7 @@
     "fileMentionSearching": "Looking for files…",
     "fileMentionNoMatch": "No file matches",
     "fileMentionNoFolder": "This chat has no working folder",
+    "fileMentionTruncated": "Folder too large — showing part of it",
     "fileMentionError": "Could not list the files",
     "attachmentFailed": "Attachment failed",
     "attachmentExpandImage": "Enlarge image {name}",

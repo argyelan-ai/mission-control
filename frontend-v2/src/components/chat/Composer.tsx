@@ -354,6 +354,9 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   /** The `@word` at the caret while the file mention list is open. */
   const [mention, setMention] = useState<MentionToken | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
+  /** The operator moved through the list with the arrow keys: Enter then
+   *  takes a file even for a bare "@". */
+  const [mentionPicked, setMentionPicked] = useState(false);
   /** Start of the `@word` the operator closed with Escape: it stays closed
    *  until the caret leaves that word. */
   const mentionDismissedRef = useRef<number | null>(null);
@@ -529,7 +532,12 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   // "@" file mention: the files of the chat's working folder, searched with
   // the word after the "@". Only the path lands in the draft — the harness
   // works in that folder and reads the file itself; nothing is attached.
-  const { files: mentionFiles, status: mentionStatus } = useChatFileSearch(
+  const {
+    files: mentionFiles,
+    status: mentionStatus,
+    truncated: mentionTruncated,
+    answeredQuery: mentionAnswered,
+  } = useChatFileSearch(
     agentId,
     mention ? mention.query : null,
   );
@@ -542,7 +550,10 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     if (!token || token.start !== mentionDismissedRef.current) mentionDismissedRef.current = null;
     const next = token && mentionDismissedRef.current === null ? token : null;
     // A new word or a new search starts again at the top of the list.
-    if (next?.query !== mention?.query || next?.start !== mention?.start) setMentionIndex(0);
+    if (next?.query !== mention?.query || next?.start !== mention?.start) {
+      setMentionIndex(0);
+      setMentionPicked(false);
+    }
     setMention(next);
   }
 
@@ -654,7 +665,12 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     // Text ist dann nicht nötig.
     if (text.trim().length === 0 && attachments.length === 0) return;
     const lines = attachments.map((a) => `[Anhang: ${a.path}]`);
-    const body = [text.trim(), ...lines].filter(Boolean).join("\n");
+    const typed = text.trim();
+    // Docker agents get one-line text as typed keys. A message that ends in
+    // "@path" would leave the harness's own @ suggestions open, and the Enter
+    // after it could pick one instead of sending — a space closes them first.
+    const tail = lines.length === 0 && /(^|\s)@\S+$/.test(typed) ? " " : "";
+    const body = [typed + tail, ...lines].filter(Boolean).join("\n");
     onSend(body);
     setMention(null);
     setText("");
@@ -666,19 +682,31 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
       const n = mentionFiles.length;
       if (e.key === "ArrowDown" && n > 0) {
         e.preventDefault();
+        setMentionPicked(true);
         setMentionIndex((i) => Math.min(i + 1, n - 1));
         return;
       }
       if (e.key === "ArrowUp" && n > 0) {
         e.preventDefault();
+        setMentionPicked(true);
         setMentionIndex((i) => Math.max(i - 1, 0));
         return;
       }
-      if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && n > 0) {
-        // The highlighted file wins over sending — like the slash palette.
-        e.preventDefault();
-        selectMention(mentionFiles[mentionHighlight]);
-        return;
+      if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey) {
+        if (mentionAnswered !== mention.query) {
+          // The list on screen answers an older search (the new one is still
+          // on its way): taking a file from it would insert the wrong one,
+          // and sending would cut the mention off. Wait for the answer.
+          e.preventDefault();
+          return;
+        }
+        if (n > 0 && (mention.query !== "" || mentionPicked)) {
+          // The highlighted file wins over sending — like the slash palette.
+          // A bare "@" ("meet @") only when the operator picked with the arrows.
+          e.preventDefault();
+          selectMention(mentionFiles[mentionHighlight]);
+          return;
+        }
       }
       if (e.key === "Escape") {
         // Closes the list only; the typed "@…" stays.
@@ -923,6 +951,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           style={anchoredBoxStyle(mentionStyle)}
           files={mentionFiles}
           status={mentionStatus}
+          truncated={mentionTruncated}
           highlightedIndex={mentionHighlight}
           onHover={setMentionIndex}
           onSelect={selectMention}

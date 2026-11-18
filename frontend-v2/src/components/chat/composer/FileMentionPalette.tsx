@@ -13,6 +13,9 @@ interface FileMentionPaletteProps {
   style: CSSProperties;
   files: ChatFile[];
   status: ChatFileStatus;
+  /** The folder was larger than one listing covers: a file may exist and
+   *  still be missing here — said, never silently. */
+  truncated?: boolean;
   highlightedIndex: number;
   onHover: (index: number) => void;
   onSelect: (file: ChatFile) => void;
@@ -32,6 +35,7 @@ export function FileMentionPalette({
   style,
   files,
   status,
+  truncated = false,
   highlightedIndex,
   onHover,
   onSelect,
@@ -63,6 +67,15 @@ export function FileMentionPalette({
           boxShadow: "var(--shadow-elevated)",
         }}
       >
+        {truncated && status === "ready" && (
+          <div
+            data-testid="mention-palette-truncated"
+            className="px-3 py-2 text-xs"
+            style={{ color: C.textMuted, borderBottom: `1px solid ${C.border}` }}
+          >
+            {t("fileMentionTruncated")}
+          </div>
+        )}
         {message ? (
           <div
             data-testid="mention-palette-message"

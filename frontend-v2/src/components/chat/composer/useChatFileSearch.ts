@@ -7,11 +7,15 @@ export const FILE_SEARCH_DEBOUNCE_MS = 120;
 /**
  * Files matching `query` while a mention is open (`query !== null`). Keeps
  * the last answer on screen while the next one loads, and drops answers
- * that arrive after a newer question.
+ * that arrive after a newer question. `answeredQuery` names the search the
+ * shown answer belongs to: while it differs from `query`, the list on
+ * screen is an older one and must not be chosen from.
  */
 export function useChatFileSearch(agentId: string, query: string | null) {
   const [files, setFiles] = useState<ChatFile[]>([]);
   const [status, setStatus] = useState<ChatFileStatus>("idle");
+  const [truncated, setTruncated] = useState(false);
+  const [answeredQuery, setAnsweredQuery] = useState<string | null>(null);
   const seq = useRef(0);
 
   useEffect(() => {
@@ -19,6 +23,8 @@ export function useChatFileSearch(agentId: string, query: string | null) {
       seq.current += 1;
       setStatus("idle");
       setFiles([]);
+      setTruncated(false);
+      setAnsweredQuery(null);
       return;
     }
     const mine = ++seq.current;
@@ -28,11 +34,15 @@ export function useChatFileSearch(agentId: string, query: string | null) {
         (list) => {
           if (seq.current !== mine) return;
           setFiles(list.files);
+          setTruncated(list.truncated === true);
+          setAnsweredQuery(query);
           setStatus("ready");
         },
         (err: unknown) => {
           if (seq.current !== mine) return;
           setFiles([]);
+          setTruncated(false);
+          setAnsweredQuery(query);
           setStatus(err instanceof Error && err.message.includes("no_workspace") ? "no_folder" : "error");
         },
       );
@@ -40,5 +50,5 @@ export function useChatFileSearch(agentId: string, query: string | null) {
     return () => clearTimeout(id);
   }, [agentId, query]);
 
-  return { files, status };
+  return { files, status, truncated, answeredQuery };
 }
