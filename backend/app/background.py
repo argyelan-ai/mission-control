@@ -123,6 +123,7 @@ from app.services.runtime_pulse import runtime_pulse
 from app.services.heads.sync import heads_sync
 from app.services.checklist_todo_sync import chat_todo_sync
 from app.services.chat_reset_audit import chat_reset_audit
+from app.services.chat_record_import import chat_record_sync
 from app.services.browser_sessions import browser_session_lifecycle
 from app.services.heads.night_shift import night_shift
 from app.services.task_runner import task_runner
@@ -214,6 +215,10 @@ async def start_background_services(app: Any) -> None:
     # /clear MC sent, and records the resets nobody in MC asked for (a
     # daemon restart that could not resume, new_session from outside MC).
     await chat_reset_audit.start()
+    # MC's own chat record (ADR-103): sweeps every agent's session files into
+    # the record — the live sink only writes while a chat is open. Idles
+    # while CHAT_RECORD_ENABLED is off.
+    await chat_record_sync.start()
     await browser_session_lifecycle.start()  # ADR-088 — browser-session lifecycle
     # Night shift (ROADMAP E2): starts heads marked "run tonight" inside the
     # operator's time window, one after another, and sends one morning
@@ -297,6 +302,7 @@ async def stop_background_services(app: Any) -> None:
     await _timed_stop("heads_sync", heads_sync.stop())
     await _timed_stop("chat_todo_sync", chat_todo_sync.stop())
     await _timed_stop("chat_reset_audit", chat_reset_audit.stop())
+    await _timed_stop("chat_record_sync", chat_record_sync.stop())
     await _timed_stop("browser_session_lifecycle", browser_session_lifecycle.stop())
     await _timed_stop("cli_update_checker", cli_update_checker.stop())
     await _timed_stop("model_catalog_checker", model_catalog_checker.stop())

@@ -445,6 +445,11 @@ class Settings(BaseSettings):
     # from chats / chat_sessions / chat_events; the chat runs exactly as
     # before. Env CHAT_RECORD_ENABLED. Way back: false + truncate the tables.
     chat_record_enabled: bool = False
+    # How often the background services sweep every agent's session files
+    # into the record (services/chat_record_import.ChatRecordSync). The live
+    # sink only writes while somebody has the chat open; this covers the
+    # rest. Unchanged files cost one stat each. Idles while the flag is off.
+    chat_record_import_interval: int = 600
 
     # App
     environment: str = "development"

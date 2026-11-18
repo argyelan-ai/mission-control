@@ -498,3 +498,208 @@ async def test_nul_characters_never_reach_the_database(host_home, flag_on, make_
 def test_nul_strip_keeps_a_literal_backslash_u_text_intact():
     out = chat_record._strip_nul({"text": "see \\u0000 and real\u0000nul", "items": ["a\u0000"]})
     assert out == {"text": "see \\u0000 and realnul", "items": ["a"]}
+
+
+# ── critic round 1 (2026-11-18) ────────────────────────────────────────────
+
+
+def _dup_tool_session() -> list[dict]:
+    """A long or compacted Claude Code session repeats a tool_use id under a
+    NEW entry uuid (10 of 832 real files). Both turn into ``tool:tool-1``."""
+    return [
+        *_session_one(),
+        _assistant_tool("a1b", "2026-11-01T10:00:20.000Z", "Again.", "tool-1", "Bash", {"command": "ls"}),
+    ]
+
+
+async def _assert_dup_tool_file_imports(host_home, make_agent):
+    agent = await make_agent(name="Alpha", slug="alpha")
+    _write(_claude_dir(host_home, "alpha") / "dup.jsonl", _dup_tool_session())
+    stats = await _import_all()
+    assert stats.errors == [] and stats.files_imported == 1, stats
+    async with AsyncSession(test_engine) as s:
+        chat = (await s.exec(select(Chat).where(Chat.legacy_agent_id == agent.id))).one()
+    evs = await _events(chat.id)
+    assert [e.source_key for e in evs].count("tool:tool-1") == 1
+    # The card keeps its result — the later repeat without one never wipes it.
+    assert next(e for e in evs if e.kind == "tool").payload["result"] == "config.py\nloader.py"
+
+
+async def test_duplicate_tool_id_in_one_file_imports(host_home, flag_on, make_agent):
+    await _assert_dup_tool_file_imports(host_home, make_agent)
+
+
+@pytest.mark.postgres
+async def test_pg_duplicate_tool_id_in_one_file_imports(host_home, flag_on, make_agent):
+    """Postgres refuses two rows with the same conflict key in ONE
+    ``INSERT .. ON CONFLICT DO UPDATE`` (CardinalityViolation); SQLite does
+    not — this is the lane that catches it."""
+    await _assert_dup_tool_file_imports(host_home, make_agent)
+
+
+async def test_failing_file_is_marked_and_retried_only_after_it_changes(
+    host_home, flag_on, make_agent, auth_client, monkeypatch
+):
+    await make_agent(name="Alpha", slug="alpha")
+    path = _claude_dir(host_home, "alpha") / "bad.jsonl"
+    _write(path, _session_one())
+    real = chat_record.upsert_events
+
+    async def _boom(*a, **k):
+        raise RuntimeError("write refused")
+
+    monkeypatch.setattr(chat_record, "upsert_events", _boom)
+    first = await _import_all()
+    assert first.errors == ["alpha/bad.jsonl: RuntimeError"]
+    async with AsyncSession(test_engine) as s:
+        row = (await s.exec(select(ChatSession))).one()
+    assert row.last_error == "RuntimeError" and row.failed_bytes == path.stat().st_size
+
+    # Unchanged file: not read again, but still counted as failed.
+    again = await _import_all()
+    assert again.errors == [] and again.files_failed_unchanged == 1
+
+    # Visible in the read API, not only in a log line.
+    chats = (await auth_client.get("/api/v1/chat-record/chats")).json()["chats"]
+    assert chats[0]["failedSessions"] == 1
+    hist = (await auth_client.get(f"/api/v1/chat-record/chats/{chats[0]['id']}/history")).json()
+    assert hist["sessions"][0]["error"] == "RuntimeError"
+
+    # The file grows -> tried again; success clears the mark.
+    monkeypatch.setattr(chat_record, "upsert_events", real)
+    _append(path, _session_two())
+    healed = await _import_all()
+    assert healed.files_imported == 1 and healed.errors == []
+    async with AsyncSession(test_engine) as s:
+        row = (await s.exec(select(ChatSession))).one()
+    assert row.last_error is None and row.failed_bytes == 0
+
+
+async def _next_seq(agent_id) -> int:
+    async with AsyncSession(test_engine) as s:
+        return (await s.exec(select(Chat.next_seq).where(Chat.legacy_agent_id == agent_id))).one()
+
+
+async def test_growth_writes_only_the_new_rows(host_home, flag_on, make_agent):
+    """One appended line on a grown file: one row written, one seq used —
+    the unchanged rows are not rewritten (critic: 51 written, 50 rewritten)."""
+    agent = await make_agent(name="Alpha", slug="alpha")
+    path = _claude_dir(host_home, "alpha") / "s.jsonl"
+    lines = [_user(f"u{i}", f"2026-11-01T10:00:{i:02d}.000Z", f"line {i}") for i in range(50)]
+    _write(path, lines)
+    first = await _import_all()
+    assert first.events == 50
+    seq_before = await _next_seq(agent.id)
+    _append(path, [_user("u50", "2026-11-01T10:01:00.000Z", "line 50")])
+    grown = await _import_all()
+    assert grown.events == 1
+    assert await _next_seq(agent.id) == seq_before + 1
+
+
+@pytest.mark.postgres
+async def test_pg_growth_leaves_unchanged_rows_alone(host_home, flag_on, make_agent):
+    from sqlalchemy import text
+
+    await make_agent(name="Alpha", slug="alpha")
+    path = _claude_dir(host_home, "alpha") / "s.jsonl"
+    _write(path, [_user(f"u{i}", f"2026-11-01T10:00:{i:02d}.000Z", f"line {i}") for i in range(50)])
+    await _import_all()
+    async with AsyncSession(test_engine) as s:
+        before = dict((await s.exec(text("SELECT source_key, xmin::text FROM chat_events"))).all())
+    _append(path, [_user("u50", "2026-11-01T10:01:00.000Z", "line 50")])
+    await _import_all()
+    async with AsyncSession(test_engine) as s:
+        after = dict((await s.exec(text("SELECT source_key, xmin::text FROM chat_events"))).all())
+    assert len(after) == 51
+    assert [k for k in before if before[k] != after[k]] == []
+
+
+async def test_changed_payload_is_still_updated(host_home, flag_on, make_agent):
+    """The no-rewrite rule must not freeze a card: a tool result that
+    arrives later still lands on the existing row."""
+    agent = await make_agent(name="Alpha", slug="alpha")
+    path = _claude_dir(host_home, "alpha") / "s.jsonl"
+    _write(path, _session_one()[:2])
+    await _import_all()
+    _append(path, _session_one()[2:])
+    await _import_all()
+    async with AsyncSession(test_engine) as s:
+        chat = (await s.exec(select(Chat).where(Chat.legacy_agent_id == agent.id))).one()
+    tool = next(e for e in await _events(chat.id) if e.kind == "tool")
+    assert tool.payload["result"] == "config.py\nloader.py"
+
+
+async def test_recorder_backfills_every_session_file_not_only_the_current(host_home, flag_on, make_agent):
+    """A session that rolled over while nobody watched (model/runtime
+    switch) reaches the record when the next viewer opens the chat."""
+    from app.services.transcript_adapters import adapter_for
+
+    agent = await make_agent(name="Alpha", slug="alpha")
+    tdir = _claude_dir(host_home, "alpha")
+    old, new = tdir / "old.jsonl", tdir / "new.jsonl"
+    _write(old, _session_one())
+    _write(new, _session_two())
+    rec = chat_record.LiveRecorder(agent, adapter_for(agent), new, session_factory=_test_factory)
+    await rec.backfilled.wait()
+    rec.close()
+    assert rec.errors == 0
+    assert (await _counts())["events"] == 6
+    assert (await _counts())["sessions"] == 2
+
+
+async def test_scheduled_sync_imports_without_any_viewer(host_home, flag_on, make_agent, monkeypatch):
+    import app.database
+
+    monkeypatch.setattr(app.database, "async_session_maker", _test_factory)
+    await make_agent(name="Alpha", slug="alpha")
+    _write(_claude_dir(host_home, "alpha") / "s.jsonl", _session_one())
+    stats = await chat_record_import.chat_record_sync.sweep_once()
+    assert stats is not None and stats.events == 4
+    assert (await _counts())["events"] == 4
+
+
+async def test_scheduled_sync_idles_while_flag_is_off(host_home, make_agent):
+    await make_agent(name="Alpha", slug="alpha")
+    _write(_claude_dir(host_home, "alpha") / "s.jsonl", _session_one())
+    assert await chat_record_import.chat_record_sync.sweep_once() is None
+    assert (await _counts())["events"] == 0
+
+
+def _omp_files(host_home, slug):
+    folder = host_home / ".mc" / "agents" / slug / "omp-sessions" / "--workspace--"
+    head = {"type": "session", "version": 3, "id": "s-acp", "timestamp": "2026-11-01T10:00:00.000Z",
+            "cwd": "/workspace"}
+
+    def _msg(mid, text):
+        return {"type": "message", "id": mid, "parentId": None, "timestamp": "2026-11-01T10:00:01.000Z",
+                "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
+
+    native = folder / "2026-11-01T10-00-00_s-acp.jsonl"
+    bridge = folder / ".mc" / "2026-11-01T10-00-00-000Z_s-acp.jsonl"
+    _write(native, [head, _msg("n1", "hello acp")])
+    return native, bridge, head, _msg
+
+
+async def test_omp_native_then_bridge_file_never_doubles_a_turn(host_home, flag_on, make_agent):
+    """Under ACP the tailer can start on omp's own file and move to the
+    bridge's copy of the SAME session. The two files have independent entry
+    ids; the record must end with the turn once (the bridge's)."""
+    from app.services.transcript_adapters import adapter_for
+
+    agent = await make_agent(name="Omp", slug="omp-a", harness="omp")
+    adapter = adapter_for(agent)
+    native, bridge, head, _msg = _omp_files(host_home, "omp-a")
+    rec = chat_record.LiveRecorder(agent, adapter, native, session_factory=_test_factory)
+    await rec.backfilled.wait()
+    _write(bridge, [dict(head, bridge="acp"), _msg("b1", "hello acp")])
+    rec.record(bridge, {"kind": "message", "uuid": "b1", "ts": "2026-11-01T10:00:01.000Z",
+                        "role": "user", "text": "hello acp"})
+    await rec.wait_idle()
+    rec.close()
+    assert rec.errors == 0
+    async with AsyncSession(test_engine) as s:
+        texts = [e.search_text for e in (await s.exec(select(ChatEvent))).all()]
+    assert texts == ["hello acp"]
+    # A later importer run agrees.
+    await _import_all()
+    assert (await _counts())["events"] == 1

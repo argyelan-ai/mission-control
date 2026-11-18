@@ -1,6 +1,8 @@
 """Read endpoints of MC's chat record (ADR-103).
 
-Read-only, signed-in users. While ``CHAT_RECORD_ENABLED`` is off every route
+Read-only, signed-in users (role viewer or higher). The privacy gate of the
+transcript adapters (``transcript_allowed``) runs when an event is WRITTEN
+(importer, live sink); what is in the record stays readable here. While ``CHAT_RECORD_ENABLED`` is off every route
 answers 404 ``{"reason": "chat_record_disabled"}`` — the record does not exist
 for the product until the flag is on.
 """
@@ -11,7 +13,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.auth import require_user
+from app.auth import Role, require_role
 from app.database import get_session
 from app.services import chat_record
 
@@ -26,7 +28,7 @@ def _require_enabled() -> None:
 @router.get("/chats")
 async def list_record_chats(
     limit: int = Query(100, ge=1, le=500),
-    current_user=Depends(require_user),
+    current_user=Depends(require_role(Role.VIEWER)),
     session: AsyncSession = Depends(get_session),
 ):
     """The chat list from the record, newest activity first."""
@@ -38,7 +40,7 @@ async def list_record_chats(
 async def search_record(
     q: str = Query(..., min_length=2, max_length=200),
     limit: int = Query(50, ge=1, le=200),
-    current_user=Depends(require_user),
+    current_user=Depends(require_role(Role.VIEWER)),
     session: AsyncSession = Depends(get_session),
 ):
     """Search across every chat the user can see (Postgres full-text)."""
@@ -51,7 +53,7 @@ async def get_record_history(
     chat_id: uuid.UUID,
     limit: int = Query(200, ge=1, le=1000),
     before: uuid.UUID | None = Query(None),
-    current_user=Depends(require_user),
+    current_user=Depends(require_role(Role.VIEWER)),
     session: AsyncSession = Depends(get_session),
 ):
     """One page of a chat's record across all its sessions, oldest first;

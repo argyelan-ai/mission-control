@@ -89,6 +89,15 @@ class ChatSession(SQLModel, table=True):
     #: Bytes of the native file already read into the record (importer) — a
     #: file that has not grown since is skipped on the next run.
     imported_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, server_default="0"))
+    #: The last import of this file failed: the error class (no message — it
+    #: can quote file content), the file size it failed at, and when. A file
+    #: that has not changed since is not read again; the read API shows the
+    #: mark ("record incomplete") instead of a silent gap.
+    last_error: str | None = Field(default=None, max_length=200)
+    failed_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, server_default="0"))
+    last_error_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
     started_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
@@ -124,6 +133,9 @@ class ChatEvent(SQLModel, table=True):
     #: Plain text for search (message / thinking text, tool title, command).
     search_text: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     payload_bytes: int = Field(default=0, sa_column=Column(Integer, nullable=False, server_default="0"))
+    #: sha256 of the stored JSON — a re-read event with the same hash is not
+    #: written again (no rewrite, no new seq).
+    payload_hash: str | None = Field(default=None, max_length=64)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP")),

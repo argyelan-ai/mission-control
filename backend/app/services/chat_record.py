@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 import uuid
@@ -271,6 +272,30 @@ async def _reserve_seq(session: AsyncSession, chat_id: uuid.UUID, n: int) -> int
     return int(value) - n
 
 
+def _has_result(ev: dict[str, Any]) -> bool:
+    return ev.get("result") is not None
+
+
+def _dedupe(items: Iterable[tuple[str, dict[str, Any]]]) -> list[tuple[str, dict[str, Any]]]:
+    """One item per key, at the place the key first showed up.
+
+    A long or compacted Claude Code session repeats a ``tool_use`` id under a
+    new entry uuid (10 of 832 real files, critic 2026-11-18). Both become
+    ``tool:<id>``; Postgres refuses two rows with the same conflict key in
+    one ``INSERT .. ON CONFLICT DO UPDATE``. The later payload wins, unless
+    it would drop a tool result the earlier one already had."""
+    order: list[str] = []
+    chosen: dict[str, dict[str, Any]] = {}
+    for key, ev in items:
+        prev = chosen.get(key)
+        if prev is None:
+            order.append(key)
+            chosen[key] = ev
+        elif _has_result(ev) or not _has_result(prev):
+            chosen[key] = ev
+    return [(key, chosen[key]) for key in order]
+
+
 async def upsert_events(
     session: AsyncSession,
     chat_id: uuid.UUID,
@@ -279,14 +304,19 @@ async def upsert_events(
 ) -> int:
     """Writes ``(source_key, event)`` pairs. New keys get new rows in order;
     a known key gets the newer payload (a tool card with its result).
-    Returns the number of rows written (inserted or updated). Does not commit."""
+
+    Only rows that really change are written: a known key whose payload hash
+    is unchanged is left alone (no rewrite, no new seq), and a tool card that
+    already has its result is never replaced by one without. Sequence numbers
+    are reserved for new keys only. Returns the number of rows written
+    (inserted or changed). Does not commit."""
     rows: list[dict[str, Any]] = []
     last_ts: datetime | None = None
-    for key, ev in items:
+    for key, ev in _dedupe(items):
         payload = capped_payload(ev)
         # U+0000 shows up in real tool output; Postgres text and JSONB refuse
         # it (measurement run 2026-11-18). Dropped from the JSON escape form.
-        encoded = json.dumps(_strip_nul(payload), ensure_ascii=False, default=str)
+        encoded = json.dumps(_strip_nul(payload), ensure_ascii=False, default=str, sort_keys=True)
         ts = parse_ts(ev.get("ts"))
         if ts is not None and (last_ts is None or ts > last_ts):
             last_ts = ts
@@ -299,6 +329,7 @@ async def upsert_events(
                 "payload": json.loads(encoded),
                 "search_text": (search_text_of(ev) or "").replace("\x00", "") or None,
                 "payload_bytes": len(encoded.encode("utf-8")),
+                "payload_hash": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
             }
         )
     if not rows:
@@ -308,7 +339,52 @@ async def upsert_events(
     written = 0
     for start in range(0, len(rows), _UPSERT_CHUNK):
         chunk = rows[start : start + _UPSERT_CHUNK]
-        first = await _reserve_seq(session, chat_id, len(chunk))
+        existing = {
+            key: digest
+            for key, digest in (
+                await session.execute(
+                    sa_select(table.c.source_key, table.c.payload_hash).where(
+                        table.c.chat_id == chat_id,
+                        table.c.source_key.in_([r["source_key"] for r in chunk]),
+                    )
+                )
+            ).all()
+        }
+        new_rows = [r for r in chunk if r["source_key"] not in existing]
+        changed = [
+            r for r in chunk
+            if r["source_key"] in existing and existing[r["source_key"]] != r["payload_hash"]
+        ]
+        # A card that already carries its result keeps it.
+        bare_tools = [r["source_key"] for r in changed if r["kind"] == "tool" and not _has_result(r["payload"])]
+        if bare_tools:
+            kept = {
+                key
+                for key, payload in (
+                    await session.execute(
+                        sa_select(table.c.source_key, table.c.payload).where(
+                            table.c.chat_id == chat_id, table.c.source_key.in_(bare_tools)
+                        )
+                    )
+                ).all()
+                if isinstance(payload, dict) and _has_result(payload)
+            }
+            changed = [r for r in changed if r["source_key"] not in kept]
+        for r in changed:
+            await session.execute(
+                update(table)
+                .where(table.c.chat_id == chat_id, table.c.source_key == r["source_key"])
+                .values(
+                    payload=r["payload"],
+                    search_text=r["search_text"],
+                    payload_bytes=r["payload_bytes"],
+                    payload_hash=r["payload_hash"],
+                )
+            )
+        written += len(changed)
+        if not new_rows:
+            continue
+        first = await _reserve_seq(session, chat_id, len(new_rows))
         now = utcnow()
         values = [
             {
@@ -319,19 +395,25 @@ async def upsert_events(
                 "created_at": now,
                 **row,
             }
-            for i, row in enumerate(chunk)
+            for i, row in enumerate(new_rows)
         ]
         stmt = insert(table).values(values)
+        # Another writer can insert the same key between the SELECT above
+        # and this INSERT (importer and live sink at once): then the newer
+        # payload wins, but only when it differs.
         stmt = stmt.on_conflict_do_update(
             index_elements=["chat_id", "source_key"],
             set_={
                 "payload": stmt.excluded.payload,
                 "search_text": stmt.excluded.search_text,
                 "payload_bytes": stmt.excluded.payload_bytes,
+                "payload_hash": stmt.excluded.payload_hash,
             },
+            where=table.c.payload_hash.is_distinct_from(stmt.excluded.payload_hash),
         )
-        await session.execute(stmt)
-        written += len(chunk)
+        result = await session.execute(stmt)
+        rowcount = getattr(result, "rowcount", -1)
+        written += rowcount if isinstance(rowcount, int) and rowcount >= 0 else len(new_rows)
     if last_ts is not None:
         await session.execute(
             update(Chat.__table__)
@@ -358,10 +440,18 @@ class LiveRecorder:
     """Background writer for one tailer. ``record`` never blocks the tailer:
     it snapshots the event and queues it; one worker task writes in order.
 
-    On start the worker first backfills the session file the tailer began
-    on (the tailer joins at the END of the file — what was written while
-    nobody watched is otherwise missing). The backfill uses the importer's
-    reader, so its keys match the live ones.
+    On start the worker first backfills EVERY session file of the agent
+    (the tailer joins at the END of its file, and sessions that rolled over
+    while nobody watched — a model or runtime switch — would otherwise be
+    missing until the next scheduled sweep). Each later file the tailer
+    moves to is backfilled the first time an event of it arrives. The
+    backfill is the importer, so its keys match the live ones and an
+    unchanged file costs one ``stat``.
+
+    omp under ACP: events of omp's own file are not written while the
+    bridge's copy of the same session exists; when the tailer moves to the
+    bridge file, its backfill replaces the rows of omp's file (independent
+    entry ids — keeping both would show every turn twice).
     """
 
     def __init__(
@@ -373,11 +463,17 @@ class LiveRecorder:
     ) -> None:
         self._agent = agent
         self._adapter = adapter
+        from app.services.chat_record_import import agent_snapshot
+
+        self._snapshot = agent_snapshot(agent)
         self._factory = session_factory
         self._queue: asyncio.Queue = asyncio.Queue()
         self._counters: dict[str, KeyCounter] = {}
         self._session_rows: dict[str, tuple[uuid.UUID, uuid.UUID]] = {}
         self._initial_path = initial_path
+        #: Paths whose backfill ran: ``True`` = write its events, ``False`` =
+        #: skip them (gate, or omp's own file shadowed by the bridge's).
+        self._settled: dict[str, bool] = {}
         #: Set once the start-up backfill is done (tests wait on it).
         self.backfilled = asyncio.Event()
         self._task = asyncio.create_task(self._worker())
@@ -429,17 +525,41 @@ class LiveRecorder:
         self._session_rows[str(path)] = (chat.id, row.id)
         return chat.id, row.id
 
-    async def _worker(self) -> None:
-        if self._initial_path is not None:
-            try:
-                from app.services.chat_record_import import import_session_file
+    async def _backfill_file(self, path: Path) -> bool:
+        """Imports ``path`` once (idempotent); ``False`` = do not write its
+        live events."""
+        from app.services import chat_record_import as imp
 
-                async with self._new_session() as db:
-                    await import_session_file(db, self._agent, self._adapter, self._initial_path)
-                    await db.commit()
-            except Exception:
+        result = None
+        async with self._new_session() as db:
+            try:
+                result = await imp.import_session_file(db, self._agent, self._adapter, path)
+                await db.commit()
+            except Exception as exc:
+                await db.rollback()
                 self.errors += 1
-                logger.warning("chat record: backfill failed", exc_info=True)
+                logger.warning("chat record: backfill of %s failed", path.name, exc_info=True)
+                await imp.mark_failed(db, self._snapshot, self._adapter, path, exc)
+        ok = result not in (imp.SKIPPED_GATE, imp.SKIPPED_SHADOW)
+        self._settled[str(path)] = ok
+        return ok
+
+    async def _backfill_all(self) -> None:
+        from app.services import chat_record_import as imp
+
+        async with self._new_session() as db:
+            stats = imp.ImportStats()
+            await imp.import_agent(db, self._agent, stats, adapter=self._adapter)
+            self.errors += len(stats.errors)
+        if self._initial_path is not None:
+            await self._backfill_file(self._initial_path)
+
+    async def _worker(self) -> None:
+        try:
+            await self._backfill_all()
+        except Exception:
+            self.errors += 1
+            logger.warning("chat record: backfill failed", exc_info=True)
         self.backfilled.set()
         while True:
             item = await self._queue.get()
@@ -447,6 +567,11 @@ class LiveRecorder:
                 if item is None:
                     return
                 path, key, ev = item
+                ok = self._settled.get(str(path))
+                if ok is None:
+                    ok = await self._backfill_file(path)
+                if not ok:
+                    continue
                 async with self._new_session() as db:
                     chat_id, session_row_id = await self._session_row(db, path)
                     self.written += await upsert_events(db, chat_id, session_row_id, [(key, ev)])
@@ -490,12 +615,16 @@ async def list_chats(session: AsyncSession, user: Any, *, limit: int = 100) -> l
         .subquery()
     )
     sessions = (
-        select(ChatSession.chat_id.label("chat_id"), func.count().label("sessions"))
+        select(
+            ChatSession.chat_id.label("chat_id"),
+            func.count().label("sessions"),
+            func.count(ChatSession.last_error).label("failed"),
+        )
         .group_by(ChatSession.chat_id)
         .subquery()
     )
     q = (
-        select(Chat, counts.c.events, sessions.c.sessions)
+        select(Chat, counts.c.events, sessions.c.sessions, sessions.c.failed)
         .outerjoin(counts, counts.c.chat_id == Chat.id)
         .outerjoin(sessions, sessions.c.chat_id == Chat.id)
         .where(Chat.archived_at.is_(None))
@@ -506,7 +635,7 @@ async def list_chats(session: AsyncSession, user: Any, *, limit: int = 100) -> l
     if visible is not True:
         q = q.where(visible)
     out = []
-    for chat, events, n_sessions in (await session.exec(q)).all():
+    for chat, events, n_sessions, failed in (await session.exec(q)).all():
         out.append(
             {
                 "id": str(chat.id),
@@ -519,6 +648,8 @@ async def list_chats(session: AsyncSession, user: Any, *, limit: int = 100) -> l
                 "lastActivityAt": chat.last_activity_at.isoformat() if chat.last_activity_at else None,
                 "events": int(events or 0),
                 "sessions": int(n_sessions or 0),
+                # Sessions whose last import failed — "record incomplete".
+                "failedSessions": int(failed or 0),
             }
         )
     return out
@@ -586,6 +717,8 @@ async def chat_history(
                 "place": s.place,
                 "nativeSessionId": s.native_session_id,
                 "startedAt": s.started_at.isoformat() if s.started_at else None,
+                "error": s.last_error,
+                "errorAt": s.last_error_at.isoformat() if s.last_error_at else None,
             }
             for s in sessions
         ],
