@@ -889,7 +889,7 @@ export default function RuntimesPage() {
       mobileTitle={tCockpit("tabModels")}
       mobileAction={addButton}
     >
-      <div className="py-6 max-w-4xl">
+      <div className="pb-6 md:pt-6 max-w-4xl">
         {/* Header (desktop; the phone's app bar carries title and +). The
             page is the Models tab, so it says Models — no caps mark above
             the title (K7). */}

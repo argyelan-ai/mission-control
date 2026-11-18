@@ -69,14 +69,20 @@ export function ChatDrawer() {
     const opener = document.activeElement as HTMLElement | null;
     const focusables = () =>
       [...(panelRef.current?.querySelectorAll<HTMLElement>("a[href], button:not([disabled])") ?? [])];
-    focusables()[0]?.focus();
+    // The dialog itself takes focus (not "New chat": a ring around the first
+    // button read as a selection in the operator's picture); Tab goes on
+    // from there into the list.
+    panelRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
       const list = focusables();
       if (list.length === 0) return;
       const first = list[0];
       const last = list[list.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
+      if (document.activeElement === panelRef.current) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && document.activeElement === first) {
         e.preventDefault();
         last.focus();
       } else if (!e.shiftKey && document.activeElement === last) {
@@ -109,12 +115,15 @@ export function ChatDrawer() {
           <motion.div
             ref={panelRef}
             id="chat-drawer"
+            tabIndex={-1}
             role="dialog"
             aria-modal="true"
             aria-label={t("chatList")}
             data-testid="chat-drawer"
             className="absolute inset-y-0 left-0 flex flex-col w-[85%] max-w-sm pt-island pb-safe-bottom"
-            style={{ background: "var(--color-p2-pan)", borderRight: "1px solid var(--color-p2-line2)", boxShadow: "var(--shadow-elevated)" }}
+            // The panel holds focus only as a starting point for Tab — no ring around
+            // the whole drawer (the global focus-visible rule would draw one).
+            style={{ background: "var(--color-p2-pan)", borderRight: "1px solid var(--color-p2-line2)", boxShadow: "var(--shadow-elevated)", outline: "none" }}
             initial={{ x: "-100%" }}
             animate={{ x: 0 }}
             exit={{ x: "-100%" }}

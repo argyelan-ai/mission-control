@@ -203,8 +203,14 @@ describe("chat drawer (phone)", () => {
   // Shell review D1: a modal drawer takes focus, keeps it, gives it back.
   it("moves focus into the drawer and gives it back to the icon on close", async () => {
     await openDrawer();
-    expect(screen.getByTestId("chat-drawer")).toContainElement(document.activeElement as HTMLElement);
+    // the dialog itself — no ring around "New chat" that reads as a selection
+    expect(document.activeElement).toBe(screen.getByTestId("chat-drawer"));
+    await userEvent.tab();
     expect(document.activeElement).toHaveTextContent("New chat");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByTestId("chat-drawer")).toBeNull());
+    expect(document.activeElement).toBe(screen.getByTestId("drawer-button"));
+    await userEvent.click(screen.getByTestId("drawer-button"));
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByTestId("chat-drawer")).toBeNull());
     expect(document.activeElement).toBe(screen.getByTestId("drawer-button"));
