@@ -41,7 +41,7 @@ import { HeadChatFooter } from "@/components/heads/HeadChatFooter";
 import { HeadRunRecordCard } from "@/components/heads/HeadRunRecordCard";
 import { HeadNoTranscriptFallback } from "@/components/heads/HeadNoTranscriptFallback";
 import { HelperLine } from "./HelperLine";
-import { helperReports } from "./helpers";
+import { helperReports, isHelperSpawn } from "./helpers";
 import { NotificationRow } from "./NotificationRow";
 import { WorkingOnRow, type WorkingOn } from "./WorkingOnRow";
 import { matchRuns } from "./agentRuns";
@@ -193,7 +193,7 @@ function isVisibleAtLevel(ev: TimelineChatEvent, level: DetailLevel): boolean {
      er sagt, WER hier gerade woran arbeitet. Ohne diese Ausnahme verschwaende
      die Karte in "Kompakt" spurlos — samt dem einzigen Zugang zum Protokoll
      des Subagenten. */
-  if (isAgentSpawn(ev)) return true;
+  if (isHelperSpawn(ev)) return true;
   // Kompakt: tool/thinking rows are noise for a quick skim — hide entirely
   // rather than collapse (that's what Normal is for). Since no tool/thinking
   // event survives this filter, `Kompakt` also produces no activity groups —
