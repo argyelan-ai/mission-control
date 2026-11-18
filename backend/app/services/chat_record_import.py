@@ -42,6 +42,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.services import chat_record
+from app.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +216,7 @@ async def mark_failed(db: AsyncSession, agent: Any, adapter: Any, path: Path, ex
         _chat, row = await _session_row_for(db, agent, adapter, path)
         row.last_error = type(exc).__name__[:200]
         row.failed_bytes = size
-        row.last_error_at = chat_record.utcnow()
+        row.last_error_at = utcnow()
         db.add(row)
         await db.commit()
     except Exception:
