@@ -129,7 +129,7 @@
    {"id": "chat-helpers", "label": "Helpers (subagents) shown with their state", "cells": {
     "claude": {"status": "yes", "note": "launch state from toolUseResult, end from the task notification; one helpers line per stretch", "evidence": ["backend/app/services/transcript_chat.py:1189-1212", "frontend-v2/src/components/chat/HelperLine.tsx"]},
     "openclaude": {"status": "open", "note": "same parser as claude; never measured for openclaude"},
-    "omp": {"status": "yes", "note": "task tool: helpers from arguments/progress, one report per helper from async-result", "evidence": ["backend/app/services/omp_chat.py:1128-1146", "backend/app/services/omp_chat.py:1724"]},
+    "omp": {"status": "yes", "note": "task tool: helpers from arguments/progress; the end from async-result or the job tool (poll/await); the async-result text with the helpers' output stays visible", "evidence": ["backend/app/services/omp_chat.py:1124-1137", "backend/app/services/omp_chat.py:1729-1770", "backend/app/services/omp_chat.py:1778-1790"]},
     "hermes": {"status": "open", "note": "shares the omp parser; not measured on a hermes transcript"},
     "kimi": {"status": "no", "note": "no transcript adapter — the chat shows nothing", "since": "2026-11-18", "recheck": "kimi entry in transcript_adapters._BUILDERS", "evidence": ["backend/app/services/transcript_adapters.py:366-376"]},
     "grok": {"status": "no", "note": "no transcript adapter", "since": "2026-11-18", "recheck": "grok in transcript_adapters._BUILDERS", "evidence": ["backend/app/services/transcript_adapters.py:343-353"]},
