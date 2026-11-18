@@ -98,12 +98,17 @@ export function AgentCard({
   const detail = (ev.detail ?? {}) as Record<string, unknown>;
   /* Aus dem Steckbrief, sonst aus dem Aufruf. `ev.title` bleibt aussen vor —
      der traegt bereits "Agent: " im Text, das gaebe eine Doppelung. */
-  const name =
-    helper.name ?? run?.name ?? str(detail.name) ?? run?.agentType ?? str(detail.subagent_type)
-    ?? helper.agent ?? t("agentCardFallbackName");
   // omp: ein Aufruf, mehrere Helfer — sein Auftragstext gehoert keinem davon
   // allein, darum dort die Rolle statt eines geliehenen Texts.
-  const description = ev.name === "task" ? helper.agent : run?.description ?? str(detail.description);
+  const job = ev.name === "task" ? helper.agent : run?.description ?? str(detail.description);
+  /* Vorne steht, was den Helfer unterscheidet: sein eigener Name, sonst sein
+     Auftrag. Der Typ ("general-purpose") steht bei fast allen gleich da und
+     sagt nichts — er kommt nur, wenn sonst nichts da ist. */
+  const ownName = helper.name ?? run?.name ?? str(detail.name);
+  const name =
+    ownName ?? job ?? run?.agentType ?? str(detail.subagent_type) ?? helper.agent
+    ?? t("agentCardFallbackName");
+  const description = ownName ? job : null;
   const seconds = helperElapsedSeconds(helper, now);
   // K17: Dauern erst ab 1 min, immer in der Dauer-Form.
   const duration = seconds != null && seconds >= 60 ? formatDuration(seconds, locale) : null;
@@ -122,8 +127,11 @@ export function AgentCard({
         className="shrink-0 w-1.5 h-1.5 rounded-full"
         style={{ background: HELPER_DOT[helper.state] }}
       />
-      <span className="text-sm shrink-0 truncate max-w-1/2" style={{ color: C.textSecondary }}>
-        {name}
+      <span
+        className={description ? "text-sm shrink-0 truncate max-w-1/2" : "text-sm truncate min-w-0"}
+        style={{ color: C.textSecondary }}
+      >
+        {description ? name : short(name)}
       </span>
       {description && (
         <span className="text-xs truncate min-w-0" style={{ color: C.textMuted }}>
