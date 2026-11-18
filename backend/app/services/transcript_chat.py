@@ -10,8 +10,14 @@ Normalized event shapes (plain dicts, JSON-serializable):
    "toolUseId":str|None,"result":str|None,"status":"done"|"error",
    "stats":{"additions":int,"deletions":int}|None,"sidechain":bool,
    "diffs"?:[ToolDiff],"locations"?:[str],     (P1; see chat_diff.py)
-   "images"?:[{"id":str,"mime":str,"width":int,"height":int,"bytes":int}]}
+   "images"?:[{"id":str,"mime":str,"width":int,"height":int,"bytes":int}],
                                               (P2; see chat_media.py)
+   "helpers"?:[{"id":str|None,"name":str|None,"agent":str|None,
+                "state":"working"|"done"|"failed","durationMs":int|None}]}
+      — only on a call that started helpers (subagents), see clean_helpers
+  {"kind":"notification","uuid":str,"ts":str,"taskId":str|None,
+   "toolUseId":str|None,"status":str|None,"summary":str|None,
+   "durationMs":int|None}  — a background job/helper reported back
   {"kind":"tool_output","uuid":None,"ts":str,"toolUseId":str,"text":str}
       — VOLATILE (P1): a running tool's output so far, from the ACP preview
         channel; replace-me per toolUseId, never in the history.
@@ -585,6 +591,14 @@ def _parse_user_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
                     tool_result["images"] = images
             events.append(tool_result)
 
+    # ``toolUseResult`` gehoert der ZEILE, nicht einem Block: nur wenn sie
+    # genau EIN Ergebnis traegt, ist klar, wen es beschreibt.
+    results = [ev for ev in events if ev["kind"] == "_tool_result"]
+    if len(results) == 1:
+        helpers = _claude_spawn_helpers(d.get("toolUseResult"), results[0]["is_error"])
+        if helpers is not None:
+            results[0]["helpers"] = helpers
+
     return events
 
 
@@ -1078,6 +1092,11 @@ _NOTIFICATION_FIELD_RE = re.compile(r"<(?P<tag>[a-z-]+)>(?P<value>.*?)</(?P=tag)
 _NOTIFICATION_KEEP = {"task-id": "taskId", "tool-use-id": "toolUseId",
                       "status": "status", "summary": "summary"}
 
+#: Die gemessene Laufzeit steht verschachtelt in ``<usage>`` (live 11.10.2026:
+#: ``<usage><subagent_tokens>…<tool_uses>…<duration_ms>88915</duration_ms>``).
+#: ``_NOTIFICATION_FIELD_RE`` sieht nur die aeussere Ebene, darum eigens.
+_NOTIFICATION_DURATION_RE = re.compile(r"<duration_ms>\s*(?P<ms>\d{1,12})\s*</duration_ms>")
+
 
 def _parse_task_notification(
     text: str, msg_uuid: str, ts: str
@@ -1104,7 +1123,92 @@ def _parse_task_notification(
     for tag, name in _NOTIFICATION_KEEP.items():
         wert = felder.get(tag)
         ereignis[name] = wert or None
+    dauer = _NOTIFICATION_DURATION_RE.search(match.group("body"))
+    ereignis["durationMs"] = int(dauer.group("ms")) if dauer else None
     return [ereignis]
+
+
+# ── Helfer (Subagenten) ─────────────────────────────────────────────────────
+#
+# Die Chat-Zeile "4 Helfer · 3 arbeiten" braucht den ZUSTAND jedes Helfers.
+# Den gab es bisher nicht: ein Auftrag (Werkzeug ``Agent``) startet in der
+# heutigen CLI fast immer im HINTERGRUND — sein Ergebnis kommt nach einer
+# Sekunde und sagt nur "gestartet". Das Frontend las "hat ein Ergebnis" als
+# "fertig", jeder Helfer stand also ab Start als erledigt da. Live gezaehlt
+# (18.11.2026, 150 Sitzungen): 136 ``async_launched`` + 54
+# ``teammate_spawned``, kein einziger Vordergrund-Lauf. Die CLI schreibt den
+# wahren Startzustand in ``toolUseResult`` der Ergebnis-Zeile; das Ende kommt
+# spaeter als ``<task-notification>`` (oben).
+
+HELPER_STATES = frozenset({"working", "done", "failed"})
+_HELPER_TEXT_MAX = 200
+
+#: ``toolUseResult.status`` eines Agent-Aufrufs -> Zustand. Unbekanntes wird
+#: NICHT geraten: dann gibt es schlicht kein ``helpers``-Feld.
+_CLAUDE_SPAWN_STATES = {
+    "async_launched": "working",
+    "teammate_spawned": "working",
+    "completed": "done",
+}
+
+
+def _helper_text(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:_HELPER_TEXT_MAX]
+
+
+def clean_helpers(raw: Any) -> list[dict[str, Any]] | None:
+    """Die harness-neutrale Helfer-Liste einer Werkzeug-Karte — oder ``None``.
+
+    Fail closed: ein unbekannter Zustand verwirft die GANZE Liste (lieber
+    keine Zeile als eine erfundene), schiefe Einzelwerte werden ``None``.
+    Geteilt von Claude Code (hier) und omp (``omp_chat``)."""
+    if not isinstance(raw, list) or not raw:
+        return None
+    out: list[dict[str, Any]] = []
+    for item in raw[:64]:
+        if not isinstance(item, dict) or item.get("state") not in HELPER_STATES:
+            return None
+        duration = item.get("durationMs")
+        ok_duration = (
+            isinstance(duration, int) and not isinstance(duration, bool) and duration >= 0
+        )
+        out.append(
+            {
+                "id": _helper_text(item.get("id")),
+                "name": _helper_text(item.get("name")),
+                "agent": _helper_text(item.get("agent")),
+                "state": item["state"],
+                "durationMs": duration if ok_duration else None,
+            }
+        )
+    return out
+
+
+def _claude_spawn_helpers(tool_use_result: Any, is_error: bool) -> list[dict[str, Any]] | None:
+    """``toolUseResult`` eines Agent-Aufrufs -> ein Helfer, sonst ``None``.
+
+    Erkannt wird ein Auftrag an ``agentId`` — andere Werkzeuge haben das Feld
+    nicht. Der Name kommt nur bei Teamkollegen (``name``)."""
+    if not isinstance(tool_use_result, dict):
+        return None
+    agent_id = tool_use_result.get("agentId")
+    if not isinstance(agent_id, str) or not agent_id:
+        return None
+    state = "failed" if is_error else _CLAUDE_SPAWN_STATES.get(tool_use_result.get("status"))
+    if state is None:
+        return None
+    return clean_helpers(
+        [
+            {
+                "id": agent_id,
+                "name": tool_use_result.get("name"),
+                "state": state,
+                "durationMs": tool_use_result.get("totalDurationMs") if state == "done" else None,
+            }
+        ]
+    )
 
 
 #: Der EINZIGE Ordner, in dem je eine Wegwerf-Sitzung der Katalog-Erkennung
@@ -1802,6 +1906,11 @@ def _merge_tool_result(
             tool_event["images"] = refs
     if tool_result.get("is_error"):
         tool_event["status"] = "error"
+    # Helpers (subagents) this call started, with their state at launch —
+    # Claude Code ``toolUseResult`` or omp ``details.progress``.
+    helpers = clean_helpers(tool_result.get("helpers"))
+    if helpers is not None:
+        tool_event["helpers"] = helpers
     # Chat package P1 (ACP): the settled update carries the diff per edited
     # file and the final file locations. The +/− badge then counts the SAME
     # diff the card shows.
