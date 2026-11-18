@@ -1,6 +1,6 @@
 # ADR-072 — ChatAdapter: ein Kontrakt für den Team-Chat, Absender-Identität als erstklassiges Konzept
 
-**Status:** Accepted · Inbound routing partially superseded by [ADR-085](085-head-per-job.md) (2026-09-22) — channels become output-only; the outbound contract stays
+**Status:** Accepted · Inbound routing partially superseded by [ADR-085](085-head-per-job.md) (2026-09-22) — channels become output-only; the outbound contract stays · partially superseded by [ADR-102](102-cockpit-direction.md) (2026-11-17) — Slack / Telegram are no longer an output channel; the code stays until stage 2 removes it
 **Datum:** 2026-07-28
 **Scope:** Backend/Services · Backend/Config · Backend/Tests
 

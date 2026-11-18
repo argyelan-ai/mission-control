@@ -5,58 +5,87 @@ lives in the linked decision records. When a rule and the code disagree, the
 code is the bug — or the rule needs a new ADR, not a quiet exception.
 
 Where the project stands on these rules: [ROADMAP.md](ROADMAP.md).
-The decisions behind the current direction:
-[ADR-085 — Head per job](decisions/085-head-per-job.md), amended by
-[ADR-086 — Harness and runtime freely switchable, local first](decisions/086-harness-runtime-cross-switch.md),
-[ADR-089 — The lead agent is the operator's single right hand, with hands](decisions/089-lead-agent-with-hands.md)
-[ADR-090 — The MC chat is the operator's remote control](decisions/090-chat-as-remote-control.md)
-and [ADR-100 — MC is the foundation under every harness](decisions/100-foundation-and-cross-harness-comms.md).
+The decision behind the current direction:
+[ADR-102 — MC is the cockpit for your AI](decisions/102-cockpit-direction.md).
+Still in force from earlier decisions:
+[ADR-086 — Harness and runtime freely switchable, local first](decisions/086-harness-runtime-cross-switch.md)
+and [ADR-093 — Everything the user may change is changeable in MC](decisions/093-user-configurable-and-extensible.md).
+Rule numbers stay stable because code and ADRs cite them; a rule that ADR-102
+overturned is marked in place, not deleted or renumbered.
 
 ---
 
 ## 1 · Why MC exists now
 
-**North star: an autonomous team the operator leads, not babysits.** The
-operator sets direction, approves what matters and reads results; the system
-does the work and keeps itself honest. Every restart, nudge or manual state
-flip the operator has to do is a defect, not a routine.
+**North star: MC is the cockpit for your AI — one chat, your models and
+devices, your knowledge. On your own hardware, as simple as Claude,
+installable by anyone** (ADR-102, replacing the "autonomous team" north star
+of ADR-085).
 
-"Team" no longer means a roster of named, long-running agents. It means **a
-written procedure plus short-lived sessions that follow it** (ADR-085 §7,
-decision 1). MC exists to hold what only this operator has: their rules,
-their knowledge, their hardware and their evidence.
+The ten principles (ADR-102 §1). Parts not built yet name the ROADMAP stage
+that builds them.
+
+1. **Chat first, as simple as Claude.** MC opens in the last chat. Few
+   menus: chat, models, knowledge (stages 1–2).
+2. **Chats instead of fixed agents.** No named, long-running agents. Every
+   chat picks its model and harness and can switch both at any time
+   (stage 1).
+3. **Local AI and devices belong to the core.** MC sets up models on the
+   operator's devices (GPU boxes, Windows PCs, later others); the speed is
+   visible in the chat. Local first, the cloud as fallback (stage 3).
+4. **A slim core; everything else is a module** with a fixed interface,
+   from a marketplace (stage 4).
+5. **A real product, not tinkered software.** Every feature works after a
+   fresh install: one-step install (Mac, Windows, NAS), update by button
+   with backup and way back, several users, and an automatic test of every
+   feature on a fresh install before every release (stage 4).
+6. **Knowledge in one place; projects instead of a task page.** Facts
+   (notes), skills and project knowledge kept apart. A project is a folder
+   with its chats and its knowledge, on a fixed file structure (stage 2).
+7. **Private reach.** Home network or Tailscale only, set up from inside MC;
+   no access from the open internet (stage 3).
+8. **The phone is a full client.** An own iOS app: notices only for what
+   matters, dictation with live text, widgets, one-tap approvals. Slack,
+   Telegram and Discord go away as channels (stage 5).
+9. **Simplify before extending.** What nobody uses goes away, with evidence
+   and a way back. Ready-made parts are adopted instead of rebuilt where they
+   fit. The chat and the phone app are MC's own; good patterns from other
+   products are rebuilt independently, never copied.
+10. **Honest numbers.** Insights stays; local usage is priced at API prices
+    so the operator sees what it would have cost (stage 2).
 
 ## 2 · The direction
 
-1. **A head per job.** Every job gets one short-lived coding-CLI session in
-   its own git worktree, branched from `origin/main`. It plans, calls
-   helpers, checks its own work, opens a PR, writes a run record and ends
-   (ADR-085 §1).
-2. **MC becomes small.** MC keeps rules and procedures (as files), the vault,
-   the GPU box manager, metrics and the cross-cutting core (API, DB, auth,
-   scheduler). Questions and overview may come from the coding CLI, but a
-   neutral start and status path for every harness lives in MC
-   (ADR-085 §2, ADR-086 decision 5).
+Rules 3–5 are cited by code and ADRs and keep their numbers.
+
+1. **Work happens in chats.** A chat is the unit of work, not a head and not
+   a fixed agent (ADR-102). The head launcher (one short-lived coding session
+   per job in its own worktree, ADR-085 §1) and the night shift stay as
+   built until stage 2 decides keep, module or remove.
+2. **A slim core.** The core is what the ten principles name — chat, models
+   and devices, knowledge and projects, insights — plus API, database and
+   auth. Every other page is judged in stage 2: core, module or removed
+   (ADR-102).
 3. **Configure before building.** Before any new MC code: at most three
    evenings of trying what already exists, with zero MC code. Only a measured
-   gap gets built (ADR-085 §3).
-4. **Build stop on the fleet layer.** Dispatch, watchdog/healers, Sessions
-   chat and group chat get safety and operations fixes only — no features
-   (ADR-085 §4). Exception: the chat of the two fixed agents — the lead
-   agent and the local omp agent — the operator's remote control away from
-   the desk, inside a closed feature list (ADR-089, ADR-090). Second
-   exception: session-to-session conversation across harnesses, inside the
+   gap gets built; a ready-made part that fits is adopted (ADR-085 §3,
+   ADR-102 principle 9).
+4. **Build stop on the fleet layer — superseded by ADR-102.** The chat is
+   the product's home and is built further (ROADMAP stages 1 and 3), for
+   every harness, not only for two fixed agents. What holds: dispatch,
+   watchdog/healers and group chat get safety and operations fixes only until
+   stage 2 judges them; session-to-session conversation stays inside the
    closed list of ADR-100 §3.
 5. **Reversible first.** Persistent agents are paused, not deleted. Code is
-   deleted only after two weeks of measured non-use, in themed PRs
-   (ADR-085 §5).
-6. **Harness × runtime, freely and cross-wise.** Every head is a pair of
-   harness and runtime, chosen per job and changeable at any time, within the
-   pairs `harness_compat.py` allows — the one source of truth for what works
-   (ADR-086 decisions 1–2).
+   deleted only after two weeks of measured non-use, in themed PRs, with
+   evidence and a way back (ADR-085 §5, ADR-102 principle 9).
+6. **Harness × runtime, freely and cross-wise.** Every chat is a pair of
+   harness and runtime, chosen per chat and changeable at any time, within
+   the pairs `harness_compat.py` allows — the one source of truth for what
+   works (ADR-086 decisions 1–2, applied to chats by ADR-102).
 7. **Local first.** Local runtimes are pre-selected wherever they are good
-   enough; the cloud is the fallback, and the run record says which pair ran
-   and why (ADR-086 decision 3).
+   enough; the cloud is the fallback, and it is visible which pair ran
+   (ADR-086 decision 3).
 
 ## 3 · Build rules for a fast-moving AI market
 
@@ -80,8 +109,12 @@ their knowledge, their hardware and their evidence.
    status. The one exception is the existing harness layer
    (`harness_compat.py`, `harness_catalog.py`); start commands live there,
    nowhere else (ADR-085 §6 rule 3, ADR-086).
-5. **At most one new third-party component per quarter, and only if it
-   replaces something.** Versions pinned (ADR-085 §6 rule 4).
+5. **Third-party components — superseded in part by ADR-102.** The limit
+   "at most one new third-party component per quarter, only if it replaces
+   something" (ADR-085 §6 rule 4) no longer holds: ready-made parts that fit
+   are adopted instead of rebuilt, and modules come from a marketplace
+   (§1 principles 4 and 9). What holds: versions pinned, and each adopted
+   part replaces own code or fills a measured gap.
 6. **Crutches carry an expiry.** Every workaround names the metric that ends
    it and is reviewed every three months (ADR-085 §6 rule 5).
 7. **Quarterly swap probe.** Run one real job with a second coding CLI using
@@ -139,19 +172,20 @@ their knowledge, their hardware and their evidence.
    Direction: what gets built or stopped. Money: usage limits and paid
    services. Data: deletes, migrations that drop data, anything personal.
    Outside effect: deploys, messages or posts to people, anything public.
-   Merges to `main` follow the operator's standing merge rule; a head never
-   merges on its own. The lead agent merges and deploys only through MC's
-   change-class gate (ADR-089); until its merge gate exists, it does not
-   merge on its own either.
-2. **Everything else the head decides** — and records the decision and its
-   reason in the run record. A head asks only when a question falls into one
-   of the four areas above (ADR-085 §1).
+   Taste: what the operator sees — visible design goes to the operator as a
+   picture first (ADR-102). Merges to `main` follow the operator's standing
+   merge rule; no agent or head merges on its own.
+2. **Everything else the agent decides** — the agent in a chat or a head —
+   and records the decision and its reason. It asks only when a question
+   falls into one of the areas above (ADR-085 §1).
 3. **Unattended heads have a forbidden list.** Never: secrets or `.env`, SSH
    keys, deploys, pushes to `main`, deletes outside the worktree, outbound mail
    or posts. No permission bypass on the host (ADR-085 §7, decision 2).
 4. **Usage share limits automatic heads.** New automatic heads stop starting
    above the usage share the operator set (provisional: 30 % of the weekly
-   limit, ADR-085 decision 3). Chat channels are output-only (decision 4).
+   limit, ADR-085 decision 3). The chat-channel part is **superseded by
+   ADR-102**: Slack, Telegram and Discord go away as channels; notices come
+   through the iOS app (ROADMAP stage 5).
 5. **Big or ambiguous changes: recommend first, then deliver completely.**
    Small changes are done, not proposed.
 6. **Direction changes are ADRs.** Reversing a decision needs a new ADR that
@@ -165,7 +199,10 @@ their knowledge, their hardware and their evidence.
    `work_language` (default `en`) is everything between agents and in
    artifacts: prompts, comments, handoffs, run records, code, commits. Both
    are per-agent fields (`backend/app/models/agent.py`, migration 0201).
-2. **Only the lead agent talks in the operator's language.** Both fields
+2. **Only the lead agent talks in the operator's language — superseded in
+   part by ADR-102:** there will be no fixed lead agent; which chats answer
+   in the operator's language is decided in stage 1. Until then the per-agent
+   fields and defaults below stay as built. Both fields
    default to `en`; the operator sets `operator_language` on the lead agent
    only. Heads and all other agents work in English: shorter prompts, one
    vocabulary, faster runs. Existing installations keep the
@@ -210,8 +247,9 @@ the rules every UI change is checked against. Visual rules:
 8. **The page scrolls, the header stays.** No scroll inside scroll.
 9. **Colour only from `LANE`/`STATUS`.** Tags, agents and types are grey;
    exceptions exist only where DESIGN.md documents them.
-10. **Phone means monitor and intervene briefly.** Targets ≥ 44 px, inputs
-    ≥ 16 px, tables become cards; no full editing on a phone.
+10. **Phone sizes.** Targets ≥ 44 px, inputs ≥ 16 px, tables become cards.
+    The old limit "monitor and intervene briefly, no full editing on a phone"
+    is **superseded by ADR-102**: the phone is a full client (§1 principle 8).
 11. **One type scale, one Markdown renderer.**
 12. **Pages scheduled for removal get no polish** — only what shared
     building blocks bring along.
@@ -222,30 +260,38 @@ the rules every UI change is checked against. Visual rules:
 
 ## 8 · What MC deliberately does NOT do
 
-1. No own control-room UI, job page or coordinator before stop 2 — the
-   coding-CLI vendor is shipping one (ADR-085 §7, decision 5). The head
-   launcher on the existing task form and task detail (start, status, stop,
-   restart with another pair) is not a control room (ADR-086 decision 5).
-2. No persistent heads. Exactly one lead agent (ADR-089): it runs as turns
-   of the coding CLI's official background mode or of omp over ACP, on either
-   brain, and acts only through MC's gates.
+1. **No own control room — superseded by ADR-102.** MC gets its own, simple
+   surface: the cockpit, with few menus (chat, models, knowledge). What
+   holds: no extra page or menu entry beyond them unless a ROADMAP stage
+   decides it; sheets and panels inside the chat come first.
+2. **No persistent heads; exactly one lead agent — superseded in part by
+   ADR-102.** There are no fixed, named agents in the new direction; chats
+   take their place (stage 1). What holds: no persistent heads. The lead
+   agent and the local omp agent keep running as built until stage 1 moves
+   them into chats.
 3. No own harness driver, agent loop or MCP server for heads — a CLI script is
    enough; an admin token is never handed to a head. Exceptions: MCP tools
    that carry only the scope `comms:talk` and read-only facts (ADR-100 §2);
    and the worker flow, in which a registered agent with its own token and an
-   explicit scope list works its cards over MCP (ADR-101).
+   explicit scope list works its cards over MCP (ADR-101) — built, but
+   deferred by ADR-102: not extended until stage 2 decides it with the task
+   page.
 4. No new task columns, statuses or "head" run type; the task core is frozen.
+   Stage 2 replaces the task page with projects.
 5. No model gateway or proxy in front of the coding CLI — so Claude Code on
    a local model stays unavailable until an own ADR decides otherwise; the
    local route is OpenClaude or omp (ADR-086 decision 6).
-6. No box-manager features beyond the switch lock (refuse a model switch
-   while the engine reports running requests).
-7. No deletes without two weeks of measured non-use; agents are paused,
-   never deleted, in this phase.
+6. **No box-manager features beyond the switch lock — superseded by
+   ADR-102.** Setting up models on the operator's devices is core (§1
+   principle 3, stage 3). What holds: the switch lock (refuse a model switch
+   while the engine reports running requests) stays on every switch path.
+7. No deletes without two weeks of measured non-use, evidence and a way
+   back; agents are paused, never deleted, until stage 1 decides what
+   becomes of them.
 8. No dollar cap as a steering tool — usage share and operator minutes are
-   the currency.
-9. No zoo of third-party components; no second toast system, no new design
-   language.
+   the currency; cost is shown honestly (§1 principle 10).
+9. No second toast system, no new design language; third-party parts follow
+   §3 rule 5.
 10. No headless print-mode or SDK scripting for automatic Claude heads —
     they use the coding CLI's official interactive or background modes. Other
     harnesses use their own official non-interactive mode, which may be a
@@ -256,5 +302,5 @@ the rules every UI change is checked against. Visual rules:
 ---
 
 **Changing this file:** a principle changes only together with the ADR that
-motivates it. Link the ADR in the rule; keep each rule to one to three
-sentences.
+motivates it (the current direction: ADR-102). Link the ADR in the rule;
+keep each rule to one to three sentences.

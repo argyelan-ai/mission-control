@@ -1,6 +1,6 @@
 # ADR-090 — The MC chat is the operator's remote control; the chat may grow again; omp stays the local harness
 
-**Status:** Accepted (2026-10-12) · amends ADR-085 §4 and ADR-089 §4 / §9 (the chat exception) and PRINCIPLES §2 rule 4 · touches ADR-084 (capability row for omp)
+**Status:** Accepted (2026-10-12) · amends ADR-085 §4 and ADR-089 §4 / §9 (the chat exception) and PRINCIPLES §2 rule 4 · touches ADR-084 (capability row for omp) · partially superseded by [ADR-102](102-cockpit-direction.md) (2026-11-17) — the chat is the home of the product, no longer a remote control limited to two fixed agents and a closed list (§1); §2, §3 and omp over ACP stay
 **Amended by:** [ADR-099](099-chat-workspace.md) — §1 feature list gains the header buttons changes / browser and a resizable side panel; see the note at the end
 **Re-justified by:** [ADR-100](100-foundation-and-cross-harness-comms.md) §5 — the chat stays for harnesses without their own phone app; see the note at the end
 **Datum:** 2026-10-12

@@ -1,6 +1,6 @@
 # ADR-089 — The lead agent is the operator's single right hand, with hands
 
-**Status:** Accepted · amends ADR-085 (§4 build stop, §5 quiet mode, §7 decision 4 wording, §8 stop 3) and PRINCIPLES §8 rule 2
+**Status:** Accepted · amends ADR-085 (§4 build stop, §5 quiet mode, §7 decision 4 wording, §8 stop 3) and PRINCIPLES §8 rule 2 · partially superseded by [ADR-102](102-cockpit-direction.md) (2026-11-17) — no fixed lead agent (§4), voice is no longer the lead agent's voice (§6), build order B1–B15 stops; the never-list (§3), the origin rule R3 and the pause holds stay
 **Amended by:** [ADR-090](090-chat-as-remote-control.md) — §4 / §9 (the chat exception now covers the chat of both fixed agents, not only the lead agent's chat input and driver); see the note before the references
 **Datum:** 2026-10-07
 **Scope:** Architecture/Direction · Agent Protocol · Backend/Autonomy · Infra/Runtime · Docs

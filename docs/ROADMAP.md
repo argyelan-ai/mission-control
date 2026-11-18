@@ -1,164 +1,84 @@
 # Mission Control — Roadmap
 
 Where the project is on the direction set in
-[ADR-085 — Head per job](decisions/085-head-per-job.md), amended by
-[ADR-086 — Harness and runtime freely switchable, local first](decisions/086-harness-runtime-cross-switch.md),
-[ADR-089 — The lead agent is the operator's single right hand, with hands](decisions/089-lead-agent-with-hands.md)
-[ADR-090 — The MC chat is the operator's remote control](decisions/090-chat-as-remote-control.md)
-and [ADR-100 — MC is the foundation under every harness](decisions/100-foundation-and-cross-harness-comms.md).
-The rules behind it:
-[PRINCIPLES.md](PRINCIPLES.md).
+[ADR-102 — MC is the cockpit for your AI](decisions/102-cockpit-direction.md).
+The rules behind it: [PRINCIPLES.md](PRINCIPLES.md).
 
-No dates are promised. Stages move when their acceptance check passes, and
-the operator decides at each stop point whether to continue or take the exit.
+No dates are promised. The order is: first MC becomes something the operator
+uses daily, then it becomes installable for others. Every stage ends with
+something the operator can see and use. The operator decides at each stop
+point whether to continue, reorder or stop.
 
 **Status words:** `done` (merged and live, with PR) · `in progress` (started,
 not all acceptance checks passed) · `next` (ready to start) · `later`
-(waits for a stop point or a measured need).
+(waits for an earlier stage or a stop point).
 
-**Hardening merged while the fleet layer stays frozen (E0):** streams open
-with short-lived tickets instead of the login token in the URL, and secrets
-are redacted in logs (#666) · terminals and the plugin shell are admin-only
-(#669) · the health page shows the watchdog running in the worker instead of
-"stopped" (#676) · new tasks are no longer auto-routed to the lead agent
-(#677); it acts on the operator's word (ADR-089).
+**Before this roadmap:** the previous roadmap (stages E0–E6 under ADR-085 to
+ADR-101) delivered, among others: the measuring layer (usage baseline per
+week and source, the route beacon for page views, #692), the switch lock
+across engine families, the head launcher and night shift as opt-in
+previews, chat features (live diffs, todo panel, cache rate, question cards
+and plan mode, tool screenshots), and the removal of several dead verticals.
+Its full text is in the git history of this file (`git log -p -- docs/ROADMAP.md`).
 
 ---
 
 ## Stages
 
-Strangler pattern: the new path grows next to the old one; the persistent
-fleet is paused instead of running in parallel.
+| Stage | After it, the operator can … | Content | Clarify first | Operator's call | Status |
+|---|---|---|---|---|---|
+| **0** — write down the direction | … rely on every helper reading the new direction in the repo instead of the old one | ADR-102, PRINCIPLES and this roadmap · three checks that decide later stages, without rebuilding anything (see Open checks) · sort the open PRs: finish, close or park — some belong to the old direction (for example #515 task detail, #871 lead agent at first run) | — | Which open PRs to close | in progress |
+| **1** — the chat is home | … open MC, land in the last chat, see all chats with their state on the left, and pick model and harness per chat | New navigation (the variant the operator chose) · speed line under the input · chat list with state and search (N4) · chats instead of fixed agents — changes how MC stores conversations, the largest piece · polish of history and input (N1, N2) · approvals with three fixed buttons and a permission level per chat (N3) | What becomes of today's agents and their histories? Where does a chat's working folder live? How does the list look on the phone? | Pictures (phone first) before anything visible goes live | next |
+| **2** — clean up: fewer pages, projects instead of tasks | … use a short menu (chat, models, knowledge), projects as folders, and honest numbers in Insights | The task page goes; a project is a folder with its chats and knowledge · knowledge in one place: notes, skills, project knowledge · every page gets a verdict: core, module or removed, each removal with evidence (page views) and a way back · Insights: one switch all / cloud / local for the whole page, with cost; local usage priced at API prices · the separate voice assistant goes, voice becomes a function in every chat | What happens to old tasks and their data (way back)? Scheduled runs and loops: core or module? | The list "stays · module · removed" per page | later |
+| **3** — models and devices in the core | … switch the model mid-chat without losing the thread, and set up a new device from MC | Model switch with hand-over of the conversation (N5) · many providers through one seam (ACP), depending on the stage 0 check · devices page in the core: GPU boxes, Windows PCs, later others · first start finds installed agents and projects instead of creating sample agents (N7) · Tailscale set up from MC | How much of the conversation moves on a switch? Which providers first? | Little: mostly invisible, goes live after tests and a counter-check; anything visible as in stage 1 | later |
+| **4** — a real product | … have someone else install MC in one step on Mac, Windows or NAS, and everything works | One-step install; Windows means the MC server runs on Windows · update by button with backup and way back (decided in ADR-094) · several users · an automatic test of every feature on a fresh install before every release (a start: open PR #873) · modules with a fixed interface and a marketplace; first candidates: X content, news | What does the module interface look like? What may a module do, and what not (security)? How much of ADR-094 is built? | Whether and when MC is promoted publicly (outside effect) | later |
+| **5** — the phone app | … get a notice on the iPhone, approve with one tap, and dictate a message | Own iOS app for all of MC: notices only for what matters, one-tap approvals, widgets · dictation: text lands in the input, sent only on tap (N6) · messages wait while there is no network (N8) | How the app is built. How notices arrive without content sitting at a third-party service (iPhone notices always pass Apple's push service — what they contain is the question) | Money: a paid Apple developer account; other costs not clear yet | later |
 
-| Stage | What | Status | Acceptance check |
-|---|---|---|---|
-| **E0** — direction and quiet mode | ADR-085 (#649) · build stop on dispatch, healers, Sessions chat, group chat · all persistent agents except the lead and voice agent paused (live since 2026-09-22) · Claude 5 model prices, so usage stops billing as zero (#650) · measuring layer: actor on status changes (#640), daily metrics digest (#641), run record (#645, #646) · token baseline per source and week measured (#663, `docs/metrics/2026-09-baseline.md`) · page-usage measurement from existing logs found **not measurable** with a minimal proposal recorded (same baseline doc) · baseline as a query: tokens, list-price cost and local share per ISO week × source (`GET /api/v1/intelligence/costs/by-week`, digest line M5) · the proposed route beacon is built: views per route pattern and day (`POST /api/v1/usage/page`, also the page half of the E5 beacon) · since ADR-089: two fixed agents — the lead agent and one local omp agent; the voice agent becomes the lead agent's voice | in progress | ADR merged; paused agents receive no push dispatch (probe card stays in inbox; since ADR-089 Nachtrag 2026-11-13 its own poll holds it too, until the agent is active again); Claude 5 usage priced above zero; baseline table exists |
-| **E1** — the new path by day | Procedure files (`SKILL.md` + `AGENTS.md`) on the CLI's goal loop — maintained outside this repo during the trial; moving them into the repo is part of this stage: plan → failing test → change → sabotage probe → fresh reviewer → PR → run record · remote start by day · three trial jobs (one outside this repo, one with a local helper on a GPU box) · **switch lock stage 1**: refuse a model switch while the engine reports running requests, now always on and covering every switch path and non-head requests across vLLM, SGLang, llama.cpp and TensorFold (`backend/app/services/heads/box_guard.py`, #659, #686, #729) | in progress (switch lock stage 1 now covers every current engine family · one local-helper trial job passed end to end — run record in the vault, PR merged (#722 fixed three local-runtime startup bugs first, then #724/#725 closed review cards automatically on PR merge) · a second job outside this repo started 2026-10-04, not finished · old-vs-new usage comparison not done) | A deliberately red test ends as "not passed" in the run record, never as done · each job: run record in the vault, PR open, operator minutes ≤ 15, no manual status changes · local step produces an applicable `git diff`; an engine outage mid-step falls back to a cloud subagent and is recorded · a switch during a running local request is refused · three jobs: one with a large-model head, two with a mid-size head · a run record is understandable without MC knowledge in 5 minutes · interactive sessions stay logged in over a 48-hour probe · **comparison old vs. new** in usage share (not dollars): operator minutes, follow-up questions, manual rescues of heads, share of local steps, large vs. mid-size head (sabotage: a deliberately aborted head counts as one rescue) · procedure files live in the repo |
-| **E1b** — head launcher (harness × runtime, local first) | ADR-086 · "Run as head" on a new task: pick harness × runtime from the compatibility matrix (local runtime pre-selected), MC starts one short-lived head in its own worktree from `origin/main` with the harness-neutral procedure (`AGENTS.md` + prompt) · status (running / needs you / passed / failed), heartbeat, stop, "restart with …" another pair · result (PR + run record) on the task detail · runtimes page shows which runtime is busy · forbidden list and the 30 % usage limit for Claude heads apply · reuses matrix, runtimes table, worktree code and task detail; no persistent agent, no change to frozen dispatch or healers · heads stop on no measured progress instead of a fixed wall-clock limit (#679) · token usage of heads is recorded (#678) · operator minutes per job now estimated (#721) | in progress (one local Claude-pair job ran start to finish as PR + run record, #724; a Claude pair on a local runtime had three launch bugs found and fixed first, #722) | One job each on a local pair and a Claude pair ends as PR + run record, started and watched from MC only · an incompatible pair is refused with its reason from the matrix · stop ends the process and the run record says "stopped" · "restart with …" another pair continues the same job · a local engine outage ends as "failed — runtime unreachable", never as done (sabotage: engine stopped mid-run) · no forbidden action reaches the host |
-| **Stop 1** (~2 weeks after E0) | Is the new meaning of the north star ("team" = procedure plus short-lived heads) acceptable? Does the path work without the operator at the desk, outside this repo, with a local helper? Does local first hold — what share of jobs finish on a local runtime, and at what operator cost (ADR-086)? Is output-only on chat channels acceptable? · checklist: Claude-head local trial passed (#722, #724), operator minutes measured (#721), auto-close on PR merge wired (#724, #725) and night shift running — all done; the one trial job outside this repo is in progress (started 2026-10-04), not finished | next | Operator decision recorded. **No → exit "harden the fleet":** fleet leaves quiet mode, hardening resumes, new ADR |
-| **E2** — unattended runs | Scheduled background sessions without remote control · forbidden list enforced (ADR-085 decision 2) · usage switch (no new heads above the limit share) · stall notice job (reads run-record heartbeats, reports "blocked / stalled" to chat) · automatic fallback local → cloud helper · **night shift merged and running:** "run tonight" marks, time window in Settings, one head per GPU box, cloud share only for cloud pairs, blocked notice and morning report in MC (Home card via the alert hook, #675; one-line journey-test result alongside it, #718; Slack / Telegram copy optional, off by default) (#664) — used for several night runs since (rule-register heads #716, #720) | in progress (night shift merged and running nightly; fallback local → cloud and usage switch not started) | Evening job → PR and run record next morning, also with a simulated GPU-box outage · a job with a deliberately forbidden action produces a visible "blocked" notice by morning · interactive sessions stay logged in |
-| **Stop 2** (~week 5) | Are unattended runs acceptable? Is the vendor's local coordinator available? → decision 5 final: adopt it, or build one lean page | later | Operator decision recorded; no → day-time operation only |
-| **E3** — measured gaps only | Possibly switch lock stage 2 (lease with expiry), a jobs table without FK to tasks (or Markdown only), usage attribution by worktree path · **mandatory swap probe** with a second coding CLI, including watchdog and question path · the lead agent's equal-quality test (ADR-089) counts as one swap probe | later | A second CLI finishes one job with the same files, and its "blocked" notice arrives too |
-| **E4** — lead agent with hands (ADR-089) | One lead agent on two brains (coding CLI subscription / omp + local model, same package, no protocol proxy) · change-class gate on the existing autonomy levels for merge, deploy and runtime switch (docs/tests L1, invisible fixes L2 with proof and undo, visible UI after the picture, decisions via the ADR gate, data/infra/fleet L3 unless pre-approved) · hard never-list, counted · helpers (subagents and heads) visible in its chat · brain fallback to the cloud with a notice · voice through the same lead (local voice note first, live voice later) · chat inbound re-routed: channels output-only (ADR-085 decision 4, ADR-089 §7) · paused agents off for good, "restart individually if missed" · separation stage A now, stage B before unattended night deploys · build order below | in progress (decision recorded in ADR-089; the merge gate waits for the operator's GitHub App — operator: later) | Equal-quality test green on both brains · an invisible fix merged and deployed by the lead agent with proof of effect · a UI change waits for the picture · a forbidden action is refused and counted · a chat-channel message gets a clean pointer to the MC chat instead of being acted on or dropped · voice decision recorded (done, ADR-089) |
-| **Stop 3** — voice agent | Keep, rebuild on the new path, or retire; decided together with the channel re-routing | done — answered by ADR-089 (operator decision 2026-10-03): rebuilt as the lead agent's voice; the separate voice agent is paused once the lead agent's voice replaces it | Operator decision recorded |
-| **E4b** — chat as remote control (ADR-090) | The chat of the two fixed agents (lead + local omp agent) is unfrozen as the operator's remote control away from the desk, inside a closed feature list: chat reliability first, todo panel = task checklist, cache rate, then the omp port packages P1–P7, effort per harness, automations from the chat · omp stays the local harness over ACP; plugins, skills and MCP reach omp through its own native places · budget per package (+50 % → operator), live proof on phone and desktop before done, omp pinned (18.10.1, #788) · package list below | in progress (todo panel #787, #790 and cache rate #786, #791 done; install/modify slash commands refused until the approval card exists, #792; P1 done, #794, #795; P2 done, #809, #816; P3 done, #817; reliability stage: queue + real `/new` merged, #777, phone reproduction not yet done) | Five jobs done completely from the phone within two weeks after stage 5 — fix to PR with the local agent, answer/approve a card, install an MCP server and see it used, create an automation and read its result, long chat with follow-ups, Stop and `/new` without a chat error (5/5) · chat error lines caused by MC per week = 0 (from transcripts) · secondary: local fresh-token share through MC (#779, baseline ~1 %) |
-| **E5** — clean-up | Delete frozen code in themed PRs: news/content vertical removed (#708) · workflows, automations and playbooks removed (#711) · webhooks, meetings and the Discord config API removed (#714) · cli-session leftovers, the research router and agents runtime-status removed (#715) · board groups, phase CRUD, board approvals and two board streams removed (#717) · skill lab, ClawHub and plugin management frozen but not yet removed (#710) · still open: terminal remote control, healers, Sessions-chat input/delivery for paused agents (the read-only chat view stays — it shows heads, ADR-085 Nachtrag 2026-10-04), group chat · the `mc` back-channel left this list by ADR-100 §4 (sending across harnesses reuses it) · review the box manager against existing swap/orchestration tools (new ADR) · UI only as decision 5 says | in progress | CI green; fix commits on fleet-layer code near zero, and the overall fix share below the recorded baseline (counting: non-merge commits on `main` with a `fix` prefix over 60 days — 245 of 494, about 50 %, on 2026-09-23); existing installations get release notes for each removal |
-| **E6** — foundation under every harness (ADR-100) | Stage 1: agents read box facts (engine, model, running requests, paused, switch lock; `mc box status`, MCP `mc_box_status`) · stage 2: directory with "alive" and "listening" apart, sending to a named session over the existing thread path, guest card for terminal sessions, inbox tab "between agents" · messaging skill removed after two weeks in parallel · worker flow (ADR-101): a registered agent fetches, works and finishes its cards over MCP, with the rules of MC told by the server | next | An agent answers "is box X free?" from MC alone, and says "paused / not serving" during a hand test · stop criterion: fewer than ~5 conversations that are not coding CLI ↔ coding CLI in the 4 weeks after the phone view → sending removed, box facts stay |
+## Packages N1–N8
 
-### E4 build order (ADR-089)
+Chat and phone patterns rebuilt independently (ADR-102 principle 9). Nothing
+is built yet.
 
-Small PRs, each extending an existing part. Until B9, merges work as today.
+| Package | What | Stage | Needs first | Status |
+|---|---|---|---|---|
+| N1 chat history | Duration in the tool line, an "answer only" detail level, a "changed files" card under the answer, a helper line ("4 helpers, 3 working") | 1 | — | next |
+| N2 input | `@` files, quote an answer, long pasted text becomes a file | 1 | — | next |
+| N3 approvals | Three fixed buttons, typing an answer = no with a reason; four permission levels per chat | 1 | What each harness supports in levels | later |
+| N4 chat list | Chats instead of agents, state per row, search, pin | 1 | Picture round with the navigation | later |
+| N5 model switch with thread | The conversation moves along when model or harness changes | 3 | Spec and ADR; the stage 0 check of what survives today | later |
+| N6 dictation | Speech to text in the input, sent only on tap | 5 | Where recognition runs (local) | later |
+| N7 first start | Finds installed agents and projects | 3 | ADR-102 (this change) | later |
+| N8 notices to the phone | Approval notice, queue without network | 5 | The own iOS app | later |
 
-| Step | What | Extends | Status |
-|---|---|---|---|
-| B1 | ADR-089 and the ROADMAP / PRINCIPLES / AGENTS.md lines | ADR chain; the ADR gate checks the text | in progress |
-| B2 | Change classes: path → class, "strictest wins", contract test "every file exactly one class, unknown = L3"; no caller yet | the ADR gate's decision-document pattern | next |
-| B3 | Autonomy overrides in the database instead of Redis; new types `merge_docs_tests`, `merge_invisible`, `deploy_invisible`, `runtime_switch` with EN/DE labels; security core cannot be lowered | `AUTONOMY_DEFAULTS`, Settings → Autonomy | next |
-| B4 | Security: `credentials:read` removed where not needed; the voice agent down to six scopes; installer token removed; shared tokens no longer handed to every agent container — the token parts wait for the operator's GitHub step (later) | `scopes.py`, `start-all.sh` | next |
-| B5 | omp subagents in the chat (`subagent_runs` for omp) | the existing adapter hook, default "empty" | next |
-| B6 | Agent route "start / stop a head" (lead agent only, local pairs only, budget) plus `mc head …`; head status as a line in the lead agent's chat | `heads/launcher.py`, `heads/mirror.py` | later |
-| B7 | Bypass counter from the transcript, automatic brake, emergency brake in the lead agent's chat | transcript reader, AGENTS.md rule, autonomy levels | later |
-| B8 | Lead-agent driver: the coding CLI's official background mode and omp over ACP; no skipped permissions, with the deny-list; own home directory (own GitHub identity waits for the GitHub step) | the lead agent's host runtime, `acp_chat_transport.py`, the heads' settings as template | later |
-| B9 | Merge gate `mc pr merge` (class, CI, head SHA, origin reference, ADR gate) | `git_service.merge_pr`, `enforce_autonomy`, ADR gate | later — **waits for the GitHub App (operator: later)** |
-| B10 | Equal-quality test (same jobs, both brains, temptations, load) | head fixtures, the standard bench method | later |
-| B11 | Deploy gate `mc deploy` (preflight, class, `deploy_history`, health, acceptance probe, undo); the deploy procedure as a script the skill uses too | deploy skill and preflight, `routers/deploy.py` | later |
-| B12 | Runtime-switch gate `mc runtime switch` plus brain guard (own engine → cloud brain first) | `agent_runtime_switch.py`, switch lock, recipe switcher | later |
-| B13 | Voice stage 1: local voice note → the lead agent's chat | local speech-to-text service, the lead agent's chat | later |
-| B14 | Voice stage 2: live voice delegating to the lead agent; the separate voice agent paused (operator: later) | ADR-083 transport | built as an opt-in preview behind `VOICE_LIVE_ENABLED` (#802–#814); [ADR-091](decisions/091-live-voice-in-the-chat.md) still Proposed, so the stage is not accepted |
-| B15 | Clean-up: terminal driver and its web terminal, only after two weeks of non-use | ADR-085 §5 | later |
+## Counter-positions considered
 
-### E4b packages (ADR-090)
+- **Phone app earlier.** With Slack, Telegram and Discord off, no notice
+  reaches the phone until stage 5. If that hurts in daily use, a simple
+  notice moves forward; which way works for it is not checked.
+- **Product earlier (stage 4 before 1).** Makes sense if others should
+  install MC soon. Catch: the install gets polished for a surface that
+  changes right after.
+- **Clean-up first (stage 2 before 1).** Less code makes every rebuild
+  easier. Catch: nothing new to see for a long time, and MC stays hardly
+  used.
 
-Each package plans its PRs before it starts; one that needs 50 % more than
-planned stops and goes to the operator. Done = live test in the real MC on
-phone and desktop with real data and a screenshot to the operator.
+## Parked, not in the order
 
-| Package | What | Status |
-|---|---|---|
-| S1 | Chat reliability: reproduce "a turn is already running" on the phone, slash list from what omp advertises, honest unreachable-daemon lines, chat control contract test with sabotage probe — **stop point** after it | in progress (queue + real `/new`, #777) |
-| S2 | Todo panel = task checklist (harness-neutral chat event) | done (#787, #790) |
-| S3 | Prompt cache hit rate in the context ring | done (#786, #791) |
-| P1 | Live tool output, per-edit diffs, file chips, session cost | done (#794, #795) |
-| P2 | Screenshots / images from tools | done (#809, #816) |
-| P3 | Question cards and plan mode | done (#817) |
-| P4 | Session list, resume, fork | next |
-| P5 | Send an image | later |
-| P6 | Install plugins / skills / MCP: one-tap approval card, allowlist, re-render into omp's native places after recreate; omp capability row only after live proof | later (chat-typed install commands refused meanwhile, #792) |
-| P7 | Small items | later |
-| Effort | Effort per harness, measured on the local model — **stop point**: keep or hide the switch | later |
-| Automations | Create a schedule from the chat (agent tool in the MCP agent mode, #783) and read its result in the chat | later |
+- A phone agent and "share to MC" (an inbox for raw material).
+- Check a DeepSeek harness.
+- External harnesses working cards over MCP (ADR-101, built, deferred).
 
----
+## Open checks
 
-## UI waves
+Each is answered by the stage in brackets; none of them rebuilds anything.
 
-Page-by-page overhaul of the existing UI (independent of decision 5: pages
-that stay get fixed now). Every wave is one PR package with a click list of at
-most ten items for the operator.
-
-| Wave | What | Status | Acceptance check |
-|---|---|---|---|
-| **0b** — defuse one-click traps | "Approve all" removed from the command palette, confirmations with consequence sentence (cancel task, disable job, deactivate user, dispatch again), draft-discard prompt, provider-scoped API-key picker, installer shell only on click, demo-data lock on setup | done (#653) | No one-click action nudges an agent, cancels or approves without a confirmation |
-| **0a** — 17 audited bug fixes | Overlay stacking on phones, click-outside only for non-forms, vault scroll, paused-aware agent counts, example-crew banner, tab state in URL, and others; follow-up sidebar count (#654) | done (#652, #654) | Each fix has a test that was red before and green after |
-| **0c** — fast runtimes page | Runtime probes in parallel with a per-probe timeout, no cache | done (#651) | Page shows content in about the time of the slowest single probe (measured 14.4 s → 5.9 s) |
-| **0d** — light theme, opt-in | Light theme as a switch; dark stays the default (ADR-087) | done (#672) | Switching themes changes no other behaviour; default stays dark |
-| **3a** — task detail lite | State card with embedded approval, facts row, "Summary" from the run record as default tab, ⋯ menu, grey monogram; sticky context-bar header variant A; a second pass calmed the run-control, review-decision and approval blocks in the header (#687) | done (#655, #680, #687) | Opens on the summary for finished work; tab and task live in the URL; "not found" on dead links |
-| **1a** — open-everything probe + dialog kit + undo | A script that opens every panel and dropdown (run before and after each wave), one dialog/sheet/confirm component with the old props, undo through the existing `notify`, skeleton/empty/not-found states | next | Probe runs as one command with a write lock; Esc, focus and overlay stacking correct in all dialogs of the pages that stay |
-| **1b** — rest of the kit | Menus/popovers, tabs, `useUrlState`, one Markdown renderer, page body, tokens, lint ratchet + i18n check | later (operator's call at the pause after 3a and 1a) | Ratchet counts only go down |
-| **2** — overlays and URL on pages that stay | Tasks, Inbox, Memory, Settings, Runtimes, Schedule on the shared kit; confirmation for runtime stop | later (operator's call at the pause after 3a and 1a) | Every overlay on these pages passes the probe; state survives reload |
-| **3b** — task detail full | Four tabs, activity stream with detail level, facts column on wide screens, keyboard navigation | later (after stop 2, only if the MC UI stays) | — decided at stop 2 |
-| **4** — status vocabulary everywhere | One status module for agents and tasks, honest insights, formatters everywhere | later (after stop 2); task status words already follow the UI language (#682) | — |
-| **5** — one language per screen | Remaining hard-coded labels to i18n (task form, insights, memory types) | later (after stop 2) | English UI shows no German label |
-| **6** — phone | Palette and search in the header, responsive tables, settings as select, 16/44 px everywhere | in progress (started ahead of stop 2 by operator decision 2026-10-01) | Tab bar, ⊕ sheet and a real inbox count shipped (#726); two-level menu variant B with board/account/log out in Settings (#738); Settings as its own per-section screen on phones (#741) |
-| **7** — colour and polish | Colour rules per DESIGN.md, stricter token ratchet, strict probe | later (after stop 2) | — |
-
-**Pause after 3a and 1a:** the operator looks at the result and decides whether
-1b and 2 follow now or wait for stop 2.
-
-Pages that are candidates for removal (Sessions, Office, loops, content, and
-private add-on pages) get only what shared building blocks bring along.
-
-Design quality is tracked separately from the waves: rules, a craft skill and
-guards landed as docs (#673) and apply to every wave from here on. A
-dark-theme text-contrast pass to WCAG AA landed ahead of the waves (#689).
-
----
-
-## Roter Faden (coherence)
-
-A parallel, low-cost thread that keeps the product legible to itself —
-"does a new PR know what already exists, and does the map still match the
-code" — run through the `kz` tool and the plain-text product map in
-`docs/produkt/`. Independent of the stages above; it feeds every head instead
-of gating them.
-
-| Stage | What | Status | Evidence |
-|---|---|---|---|
-| **E0** — agent entry | Every agent gets a context brief and the "does this already exist" question before building; three reviewer questions at PR time | done | #674 |
-| **E1** — repo signal | `.kohaerenz.yaml` + `kz check` / `kz links` as a local, fast gate | done | `kz` in this repo (`kz check`, `kz links`), used by this PR |
-| **E2** — heads | Every head gets the product map in its `job.md`, and `kz check` runs in its pre-push step | done | #681 |
-| **E3a** — product map foundation | `docs/produkt/landkarte.yaml`: journeys and one feature per page, `inventar.json`, `regeln.yaml`; endpoints and tables not mapped yet (parked in `luecken-basis.json` as the E3b work list) | done (foundation only) | #684, `docs/produkt/README.md` |
-| **E3b** — endpoints and tables | Map endpoints/tables onto the product map; resolve `luecken-basis.json` (R1–R10, one area per round, local heads) | done | #691, #695, #696, #698, #699, #700, #701, #702, #705, #707, #710, #720 · baseline shrank 12 known gaps → 4 (`kz check`: `0 new, 4 known, 0 fixed`) |
-| **E6** — journey tests | Click tests per journey (`e2e/journeys/`) against a throw-away stack with a fake harness, nightly on the operator's machine, never in GitHub CI; a gap a journey finds is pinned as `known gap` until fixed | in progress (2 of 6 journeys written — `J-phone-needs-you`, `J-usage`; 4 more only listed in `luecken-basis.json`; nightly launchd job installed and running, with a one-line result on Home, #718) | `docs/journeys.md` |
-
----
-
-## Risks and open checks
-
-Each open check is answered by the stage named in brackets.
-
-| Risk or open check | Consequence here |
+| Open check | Decides |
 |---|---|
-| Remote start needs a full interactive login; long-lived tokens are rejected | Unattended runs (E2) use scheduled background sessions without remote control |
-| Auto mode falls back to asking after 3 blocks in a row or 20 in total | Night runs can stall; hence short jobs, a precise forbidden list and the stall notice job (E2) |
-| Usage quota is tight; long workflows may not pause at the limit in background sessions | Usage switch as a share of the current limit; at most 2–3 heads at once (E2) |
-| Do all local engines report running requests the same way? | **Answered no, but mapped per engine** (E1): vLLM, SGLang and llama.cpp each have their own running-requests metric name; TensorFold has none, so the lock falls back to its `/health` JSON (#686, #729) |
-| Do existing logs contain page views? | **Answered no** (2026-09-24 baseline): no access log, backend log has no referrer and rotates on container start. E0 built the proposed route beacon |
-| Does the status line (usage share) run in background and remote sessions? | Decides where the run record gets its usage share (E1/E2) |
-| Is a mid-size head as good as a large-model head? | Measured in the E1 comparison; sets the default head size |
-| Does the lead agent act as well on a local model as on the cloud? | Equal-quality test (E4, step B10); the local brain stays unselectable until it is green |
-
----
+| Does the open agent protocol ACP carry Claude Code and Codex, not only omp? (0) | Stage 3: many providers through one seam |
+| What survives a model or harness switch mid-chat today? (0) | N5 |
+| Does the Windows installer (`setup.ps1`, sets up WSL2 and Docker) run cleanly today? (0) | Stage 4: Windows as an equal platform |
+| Which pages are opened at all? | **Answered:** the route beacon (`POST /api/v1/usage/page`, #692) records views per route since 2026-09-28. The numbers feed stage 2's verdicts and stay out of this repo |
+| How long each stage takes | Unknown on purpose; no dates until a stage is planned in detail |
 
 ## Watch list
 
@@ -167,11 +87,12 @@ build unnecessary — check here before building.
 
 | Watch | Why it matters here |
 |---|---|
-| Local variant of the coding-CLI vendor's coordinator (announced 2026-09-17, cloud-only so far) | Decides stop 2: adopt it as the control room instead of building one |
-| Coding-CLI changelog: local-model subagents, agent view, remote start with long-lived tokens | Local helpers without a wrapper; unattended remote start |
-| Engine-side protection against model eviction (swap proxies) | Could replace the switch lock and part of the box manager |
-| Subscription plan and usage-limit rules | Sets the usage share for automatic heads (provisional: 30 % of the weekly limit) |
-| Board / multi-agent products | Only relevant above three parallel jobs or real multi-phase projects |
+| Coding-CLI and harness changelogs: ACP support, local-model subagents, remote start with long-lived tokens | Stage 3 providers; fewer own adapters |
+| Engine-side protection against model eviction (swap proxies) | Could replace the switch lock and part of the device management |
+| Subscription plan and usage-limit rules | Sets what cloud fallback costs and the usage share for automatic heads |
+
+The coherence thread (product map and `kz check`, [docs/produkt/README.md](produkt/README.md))
+runs alongside every stage and gates nothing.
 
 ---
 
@@ -186,4 +107,4 @@ build unnecessary — check here before building.
 4. **Keep it one page.** Details belong in ADRs and PR descriptions; link
    them instead of copying.
 5. **Public repository:** no personal names, agent names, host names or
-   paths — "the operator", "the lead agent", "GPU boxes".
+   paths — "the operator", "GPU boxes".

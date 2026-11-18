@@ -1,6 +1,6 @@
 # ADR-100 — MC is the foundation under every harness; talking across harnesses belongs to it
 
-**Status:** Accepted (2026-11-01) · amends PRINCIPLES §2 rule 4 (new exception) and §8 rule 3, ROADMAP E5 (the `mc` back-channel leaves the delete list) · re-justifies ADR-090 (see §5) · touches ADR-016, ADR-075, ADR-085, ADR-086, ADR-089
+**Status:** Accepted (2026-11-01) · amends PRINCIPLES §2 rule 4 (new exception) and §8 rule 3, ROADMAP E5 (the `mc` back-channel leaves the delete list) · re-justifies ADR-090 (see §5) · touches ADR-016, ADR-075, ADR-085, ADR-086, ADR-089 · partially superseded by [ADR-102](102-cockpit-direction.md) (2026-11-17) — "not a competing chat app" and §5 no longer hold (MC's own chat is the home for every harness); §1, §2, §6 and §8 stay
 **Datum:** 2026-11-01
 **Scope:** Architecture/Direction · Backend/API · Backend/Auth · scripts/mc-cli · scripts/mc-mcp · Frontend/Inbox
 
