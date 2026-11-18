@@ -1244,6 +1244,191 @@ def test_messages_held_when_the_daemon_restarts_are_reported_not_lost_silently(t
     print("PASS test_messages_held_when_the_daemon_restarts_are_reported_not_lost_silently")
 
 
+# ── the omp child died while idle: reload the session before the prompt ────
+#
+# Incident 13.11.2026: the child got SIGTERM between two turns. The next
+# prompt went to a fresh `omp acp` the client had started silently — no
+# initialize, no session/load — which answered "Resource not found" for our
+# session id. The chat showed a raw "Protocol error" card and stayed broken.
+
+
+class _IdleProc:
+    def __init__(self) -> None:
+        self.dead = False
+
+    def poll(self):
+        return 1 if self.dead else None
+
+
+class _SilentRespawnClient(FakeClient):
+    """Real-client shape: has a `_proc`. While it is dead, a prompt behaves
+    like the old `_send_raw()` did — a fresh child without the session
+    answers "Resource not found". `not_found` scripts that answer from a
+    LIVE child too (the child already respawned before this daemon knew)."""
+
+    def __init__(self, *, not_found=0, **kw):
+        super().__init__(**kw)
+        self._proc = _IdleProc()
+        self._not_found = not_found
+
+    def prompt(self, session_id, text, timeout=600.0):
+        if self._proc.dead or self._not_found:
+            self.calls.append(("prompt", session_id, text))
+            self._proc.dead = False
+            self._not_found = max(0, self._not_found - 1)
+            raise acp_client.ACPError(
+                f"session/prompt failed: Resource not found: {session_id} ()")
+        return super().prompt(session_id, text, timeout=timeout)
+
+    def close(self, timeout=5.0):
+        super().close(timeout)
+        self._proc = None      # like ACPClient.close()
+
+
+def _respawn_session(tmp_path, clients):
+    made = list(clients)
+    handed: list = []
+
+    def factory():
+        client = made.pop(0)
+        handed.append(client)
+        return client
+
+    sess = acp_chat.ChatSession(
+        client_factory=factory,
+        cwd=str(tmp_path / "work"),
+        state_dir=tmp_path / "state",
+        sessions_dir=tmp_path / "sessions",
+    )
+    return sess, handed
+
+
+def _codes(sess) -> list:
+    return [(e.get("data") or {}).get("code") for e in
+            entries_of_type(read_lines(sess.transcript_path), "custom_message", "chat_error")]
+
+
+def test_dead_child_before_the_prompt_reloads_the_session_then_prompts(tmp_path):
+    first = _SilentRespawnClient(session_result=SESSION_RESULT)
+    second = FakeClient(session_result=SESSION_RESULT, turns=[{"chunks": ["pong"]}])
+    sess, handed = _respawn_session(tmp_path, [first, second])
+    sess.start()
+    first._proc.dead = True        # SIGTERM while idle
+    sess.prompt("ping")
+    assert sess.wait_idle(timeout=5)
+    try:
+        assert handed == [first, second], "the dead child was not replaced"
+        assert not [c for c in first.calls if c[0] == "prompt"], \
+            "the prompt went to the dead child"
+        names = [c[0] for c in second.calls]
+        assert names.index("load_session") < names.index("prompt")
+        assert ("load_session", "sid-1", str(tmp_path / "work")) in second.calls
+        assert ("prompt", "sid-1", "ping") in second.calls
+        assert _codes(sess) == [], "a quiet reload must not show a card"
+        lines = read_lines(sess.transcript_path)
+        assert user_texts(lines) == ["ping"]
+        assert assistant_texts(lines) == ["pong"]
+        assert sess.state()["sessionId"] == "sid-1"
+    finally:
+        sess.close()
+    print("PASS test_dead_child_before_the_prompt_reloads_the_session_then_prompts")
+
+
+def test_resource_not_found_from_a_live_child_reloads_and_retries_once(tmp_path):
+    first = _SilentRespawnClient(session_result=SESSION_RESULT, not_found=1)
+    second = FakeClient(session_result=SESSION_RESULT, turns=[{"chunks": ["pong"]}])
+    sess, handed = _respawn_session(tmp_path, [first, second])
+    sess.start()
+    sess.prompt("ping")
+    assert sess.wait_idle(timeout=5)
+    try:
+        assert handed == [first, second]
+        assert first.closed, "the child without the session must be closed"
+        assert ("load_session", "sid-1", str(tmp_path / "work")) in second.calls
+        assert [c for c in second.calls if c[0] == "prompt"] == [("prompt", "sid-1", "ping")]
+        assert _codes(sess) == []
+        lines = read_lines(sess.transcript_path)
+        assert user_texts(lines) == ["ping"], "the retry must not write the user line twice"
+        assert assistant_texts(lines) == ["pong"]
+    finally:
+        sess.close()
+    print("PASS test_resource_not_found_from_a_live_child_reloads_and_retries_once")
+
+
+def test_resource_not_found_is_retried_only_once(tmp_path):
+    first = _SilentRespawnClient(session_result=SESSION_RESULT, not_found=1)
+    second = _SilentRespawnClient(session_result=SESSION_RESULT, not_found=5)
+    third = FakeClient(session_result=SESSION_RESULT, turns=[{"chunks": ["never"]}])
+    sess, handed = _respawn_session(tmp_path, [first, second, third])
+    sess.start()
+    sess.prompt("ping")
+    assert sess.wait_idle(timeout=5)
+    try:
+        assert handed == [first, second], "more than one reload for one turn"
+        assert len([c for c in second.calls if c[0] == "prompt"]) == 1
+        assert _codes(sess) == ["rpc_error"], "a second miss must stay visible"
+    finally:
+        sess.close()
+    print("PASS test_resource_not_found_is_retried_only_once")
+
+
+def test_resource_not_found_for_another_session_is_not_a_reload(tmp_path):
+    client = FakeClient(session_result=SESSION_RESULT, turns=[{"raise": acp_client.ACPError(
+        "session/prompt failed: Resource not found: some-other-id ()")}])
+    spare = FakeClient(session_result=SESSION_RESULT)
+    sess, handed = _respawn_session(tmp_path, [client, spare])
+    sess.start()
+    sess.prompt("ping")
+    assert sess.wait_idle(timeout=5)
+    try:
+        assert handed == [client]
+        assert _codes(sess) == ["rpc_error"]
+    finally:
+        sess.close()
+    print("PASS test_resource_not_found_for_another_session_is_not_a_reload")
+
+
+class _NoStartClient(FakeClient):
+    def initialize(self, timeout=30.0):
+        raise acp_client.ACPError("omp acp would not start")
+
+
+def test_a_failed_reload_before_the_prompt_shows_one_card_not_two(tmp_path):
+    first = _SilentRespawnClient(session_result=SESSION_RESULT)
+    broken = _NoStartClient(session_result=SESSION_RESULT)
+    sess, handed = _respawn_session(tmp_path, [first, broken])
+    sess.start()
+    first._proc.dead = True
+    sess.prompt("ping")
+    assert sess.wait_idle(timeout=5)
+    try:
+        assert handed == [first, broken]
+        assert not [c for c in first.calls if c[0] == "prompt"]
+        assert _codes(sess) == ["process_exit"]
+    finally:
+        sess.close()
+    print("PASS test_a_failed_reload_before_the_prompt_shows_one_card_not_two")
+
+
+def test_client_does_not_silently_respawn_a_dead_child(tmp_path):
+    """The root of the incident: `_send_raw()` started a fresh `omp acp`
+    without the session. A dead child must surface as an error instead."""
+    client = acp_client.ACPClient(command=[sys.executable, "-c", "pass"], cwd=str(tmp_path))
+    try:
+        proc = client._ensure_process()
+        proc.wait(timeout=10)
+        try:
+            client.prompt("sid-1", "ping", timeout=5)
+        except acp_client.ACPError as exc:
+            assert "exited" in f"{exc}"
+        else:
+            raise AssertionError("a prompt to a dead child must raise")
+        assert client._proc is proc, "a new omp acp was started silently"
+    finally:
+        client.close()
+    print("PASS test_client_does_not_silently_respawn_a_dead_child")
+
+
 if __name__ == "__main__":  # standalone runner
     import tempfile
 
