@@ -45,6 +45,7 @@ const FILES = [
   "chatResend.tsx",
   "ChatNoticeCard.tsx",
   "AgentCard.tsx",
+  "HelperLine.tsx",
   "NotificationRow.tsx",
   "chatOptions.ts",
   "../layout/AppShell.tsx",

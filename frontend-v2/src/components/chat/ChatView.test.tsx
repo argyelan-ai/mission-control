@@ -432,7 +432,7 @@ describe("buildTimelineItems — delegierte Auftraege", () => {
   it("macht aus einem Agent-Aufruf ein eigenes Element", () => {
     const items = buildTimelineItems([agentTool("a1")]);
     expect(items).toHaveLength(1);
-    expect(items[0].kind).toBe("agent");
+    expect(items[0].kind).toBe("helpers");
   });
 
   it("wird zwischen zwei Werkzeugen nicht in eine Gruppe geschluckt", () => {
@@ -440,12 +440,12 @@ describe("buildTimelineItems — delegierte Auftraege", () => {
     // einer Werkzeug-Gruppe — in der Praxis der Normalfall, weil er fast
     // immer neben Bash/Read steht.
     const items = buildTimelineItems([bash("b1"), agentTool("a1"), bash("b2")]);
-    expect(items.map((i) => i.kind)).toEqual(["single", "agent", "single"]);
+    expect(items.map((i) => i.kind)).toEqual(["single", "helpers", "single"]);
   });
 
   it("behandelt Task wie Agent", () => {
     const ev = { ...agentTool("a1"), name: "Task" } as TimelineChatEvent;
-    expect(buildTimelineItems([ev])[0].kind).toBe("agent");
+    expect(buildTimelineItems([ev])[0].kind).toBe("helpers");
   });
 
   it("laesst gewoehnliche Werkzeuge unberuehrt", () => {
@@ -474,7 +474,7 @@ describe("buildTimelineItems — Hintergrund-Meldungen", () => {
     // Sonst stuende dieselbe Aussage zweimal nebeneinander — die Karte sagt
     // "fertig", und direkt darunter noch einmal eine Zeile.
     const items = buildTimelineItems([agentTool2("a1", "t1"), notif("n1", "t1")]);
-    expect(items.map((i) => i.kind)).toEqual(["agent"]);
+    expect(items.map((i) => i.kind)).toEqual(["helpers"]);
   });
 
   it("zeigt eine Meldung ohne zugehoerigen Aufruf als eigene Zeile", () => {
