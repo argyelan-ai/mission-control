@@ -38,6 +38,7 @@
  */
 
 import type { ChatEvent, NotificationEvent, SubagentRun, ToolEvent } from "@/lib/chatTypes";
+import { isHelperSpawn } from "./helpers";
 
 /** `agent_id: <name>@<teamName>` aus dem Ergebnis des Agent-Aufrufs.
  *  Der Text drumherum wird NIE angezeigt — er traegt Spawn-Metadaten und
@@ -45,9 +46,9 @@ import type { ChatEvent, NotificationEvent, SubagentRun, ToolEvent } from "@/lib
  *  Schluessel. */
 const AGENT_ID_RE = /agent_id:\s*([A-Za-z0-9_.-]+)@(session-[A-Za-z0-9]+)/;
 
-export function isAgentSpawn(ev: ChatEvent): ev is ToolEvent {
-  return ev.kind === "tool" && (ev.name === "Agent" || ev.name === "Task");
-}
+/** Same rule as the helpers line (`helpers.ts`) — one place decides what a
+ *  helper call is, for Claude Code and omp alike. */
+export const isAgentSpawn: (ev: ChatEvent) => ev is ToolEvent = isHelperSpawn;
 
 function readAgentId(ev: ToolEvent): { name: string; team: string } | null {
   const raw = typeof ev.result === "string" ? ev.result : JSON.stringify(ev.result ?? "");

@@ -1143,9 +1143,6 @@
     "effortLevelCurrent": "Effort level: {level}",
     "effortLevelLocked": "Effort level: {level} (not switchable)",
     "effortLockedHint": "Effort cannot be switched from the chat for this agent — its runtime has no controllable terminal.",
-    "agentCardRunning": "running …",
-    "agentCardFailed": "failed",
-    "agentCardDone": "done",
     "agentCardNoTranscript": "This task has no transcript of its own.",
     "agentCardLoading": "Loading transcript …",
     "agentCardExpand": "Show the subagent's transcript",
@@ -1169,6 +1166,18 @@
     "effortRejected": "Effort change rejected",
     "effortUnconfirmed": "Effort change not confirmed — check the terminal",
     "effortFailed": "Effort change failed",
+    "helperLine": {
+      "count": "{count, plural, one {# helper} other {# helpers}}",
+      "working": "{count} working",
+      "done": "{count} done",
+      "failed": "{count} failed",
+      "allDone": "done",
+      "stateWorking": "working",
+      "stateDone": "done",
+      "stateFailed": "failed",
+      "expand": "Show helpers",
+      "collapse": "Hide helpers"
+    },
     "toolGroup": {
       "commands": "{count, plural, one {# command executed} other {# commands executed}}",
       "tools": "{count, plural, one {# tool used} other {# tools used}}",
