@@ -45,6 +45,8 @@ const FILES = [
   "chatResend.tsx",
   // "Quote in reply" under an assistant message (composer quote).
   "QuoteReplyButton.tsx",
+  // The "@" file mention list under the composer.
+  "composer/FileMentionPalette.tsx",
   "ChatNoticeCard.tsx",
   "AgentCard.tsx",
   "NotificationRow.tsx",
