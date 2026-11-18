@@ -9,8 +9,8 @@
  *      How much ran on the local boxes, and how much of it bypassed MC?  (box)
  *      What did the live voice cost, today and this week?               (voice)
  *   5. What got done?                                                  (done)
- * The switch All · Cloud · Local in the title row moves the hero's cost and
- * the heatmap together. Everything the old tabs showed lives folded away in
+ * The switch All · Cloud · Local in the title row moves the hero's cost, the
+ * heatmap with its day row and the source split together. Everything the old tabs showed lives folded away in
  * "Details".
  * Days and weeks are counted in the browser's time zone.
  */
@@ -94,7 +94,7 @@ export default function InsightsPage() {
               <UsageHeatmap data={byDay.data} metric={metric} />
             </div>
             <div className="mt-12 grid grid-cols-1 lg:grid-cols-2 gap-12">
-              <SourceSplit week={weeks[weeks.length - 1]} />
+              <SourceSplit week={weeks[weeks.length - 1]} metric={metric} />
               <LocalShareTrend weeks={weeks} />
               <BoxTokens week={weeks[weeks.length - 1]} since={byWeek.data.box_tracking_since} />
               <VoiceUsage />

@@ -5,7 +5,8 @@
  * graph — 26 weeks on the phone, 52 from 1024 px. Colour = generated tokens
  * (input + output, no cache reads) in five brightness steps of the accent by
  * quartiles (DESIGN.md: colour means status, so no green). The page's switch
- * (All · Cloud · Local) picks which tokens colour the days. Since the local boxes count their
+ * (All · Cloud · Local) picks which tokens colour the days and what the day
+ * row says (that slice's tokens, cost and top source). Since the local boxes count their
  * own tokens, a day also holds what was sent straight to a box's API from
  * another machine (local in both modes); the day row names that part.
  *
@@ -29,6 +30,7 @@ import { C, alpha } from "@/lib/colors";
 import { formatShare, formatUsd, sourceLabel } from "@/lib/usage";
 import {
   dayTotals,
+  dayView,
   heatmapGrid,
   shiftDay,
   formatTokens,
@@ -61,8 +63,8 @@ export function UsageHeatmap({ data, metric = "all" }: { data: UsageByDay; metri
     new Intl.DateTimeFormat(locale, { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(
       new Date(`${iso}T00:00:00Z`),
     );
-  const totals = day ? dayTotals(day) : null;
-  const localShare = totals?.localShare ?? null;
+  const view = day ? dayView(day, metric) : null;
+  const localShare = view?.localShare ?? null;
 
   return (
     <section data-region="heatmap" aria-labelledby="heatmap-heading" className="min-w-0">
@@ -107,29 +109,29 @@ export function UsageHeatmap({ data, metric = "all" }: { data: UsageByDay; metri
         <div className="py-3 min-w-0" aria-live="polite">
           <p className="text-sm font-medium" style={{ color: C.textPrimary }}>{selected && dayLabel(selected)}</p>
           <p className="mt-1 text-xs" style={{ color: C.textSecondary }}>
-            {!day || !totals || totals.all === 0 ? (
+            {!view || view.tokens === 0 ? (
               t("dayEmpty")
             ) : (
               <>
-                <span className="tabular-nums">{t("dayTokens", { tokens: formatTokens(totals.all, locale) })}</span>
-                {totals.external > 0 && (
+                <span className="tabular-nums">{t("dayTokens", { tokens: formatTokens(view.tokens, locale) })}</span>
+                {view.external > 0 && (
                   <>
                     {" · "}
-                    <span className="tabular-nums">{t("dayExternal", { tokens: formatTokens(totals.external, locale) })}</span>
+                    <span className="tabular-nums">{t("dayExternal", { tokens: formatTokens(view.external, locale) })}</span>
                   </>
                 )}
                 {" · "}
-                <span className="tabular-nums">{formatUsd(day.cost_usd, locale)}</span>
+                <span className="tabular-nums">{formatUsd(view.cost, locale)}</span>
                 {localShare !== null && localShare > 0 && (
                   <>
                     {" · "}
                     <span className="tabular-nums">{t("dayLocal", { share: formatShare(localShare, locale) ?? "" })}</span>
                   </>
                 )}
-                {day.top_source && (
+                {view.topSource && (
                   <>
                     {" · "}
-                    {t("mostly", { source: sourceText(ts, day.top_source) })}
+                    {t("mostly", { source: sourceText(ts, view.topSource) })}
                   </>
                 )}
               </>

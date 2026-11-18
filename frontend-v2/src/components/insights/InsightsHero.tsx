@@ -83,7 +83,8 @@ export function InsightsHero({
         )}
       </div>
 
-      {share !== null && (
+      {/* On Cloud or Local the share is 0 % or 100 % by definition. */}
+      {metric === "all" && share !== null && (
         <div data-testid="hero-local">
           <p className="flex items-baseline gap-2">
             <span className="display text-xl font-medium tabular-nums" style={{ color: C.textPrimary }}>

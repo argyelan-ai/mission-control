@@ -12,6 +12,8 @@ export interface UsageDay extends UsageTotals {
   generated_tokens: number; // input + output, no cache
   local_generated_tokens: number;
   top_source: string | null;
+  top_source_local?: string | null; // the same over only local / only cloud rows
+  top_source_cloud?: string | null; // (missing from older backends)
 }
 
 export interface UsageByDay {
@@ -60,6 +62,24 @@ export function dayTotals(day: UsageDay) {
 export function dayValue(day: UsageDay, metric: HeatMetric): number {
   const t = dayTotals(day);
   return t[metric];
+}
+
+/**
+ * The day row under the heatmap for the switch: that slice's tokens, cost and
+ * biggest source. Direct API tokens ran on a box, so they belong to All and
+ * Local only; the local share only means something on All (on Cloud or Local
+ * it is 0 % or 100 % by definition).
+ */
+export function dayView(day: UsageDay, metric: HeatMetric) {
+  const t = dayTotals(day);
+  const topSource = metric === "all" ? day.top_source : (metric === "local" ? day.top_source_local : day.top_source_cloud) ?? null;
+  return {
+    tokens: t[metric],
+    external: metric === "cloud" ? 0 : t.external,
+    cost: costOf(day, metric),
+    localShare: metric === "all" ? t.localShare : null,
+    topSource,
+  };
 }
 
 /**
@@ -170,8 +190,11 @@ export interface SourceRow {
 }
 
 /** Top `n` sources of a week by cost with their share; the rest folded into one row. */
-export function sourceSplit(week: UsageWeek | undefined, n = 4) {
-  const sources = (week?.sources ?? []).filter((s) => s.cost_usd > 0).sort((a, b) => b.cost_usd - a.cost_usd);
+export function sourceSplit(week: UsageWeek | undefined, n = 4, metric: HeatMetric = "all") {
+  const sources = (week?.sources ?? [])
+    .map((s) => ({ source: s.source, cost_usd: costOf(s, metric) }))
+    .filter((s) => s.cost_usd > 0)
+    .sort((a, b) => b.cost_usd - a.cost_usd);
   const total = sources.reduce((sum, s) => sum + s.cost_usd, 0);
   if (total <= 0) return { rows: [] as SourceRow[], rest: null };
   const rows = sources.slice(0, n).map((s) => ({ source: s.source, cost_usd: s.cost_usd, share: s.cost_usd / total }));

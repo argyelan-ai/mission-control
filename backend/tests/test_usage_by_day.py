@@ -100,6 +100,11 @@ async def test_generated_tokens_leave_cache_reads_out(session):
     assert day["unpriced_events"] == 1
     assert day["local_output_share"] == pytest.approx(60 / 70)
     assert day["top_source"] == "unattributed"  # 110 generated vs. the head's 100
+    # The switch's views each name their own biggest source.
+    assert day["top_source_cloud"] == "unattributed"
+    assert day["top_source_local"] == "heads:local"
+    empty = _days(await compute_daily_usage(session, days=2, now=NOW, tz=ZRH))["2026-10-28"]
+    assert empty["top_source_local"] is None and empty["top_source_cloud"] is None
 
 
 async def test_local_cost_is_split_off_so_cloud_cost_is_the_rest(session):

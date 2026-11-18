@@ -80,6 +80,16 @@ describe("InsightsHero", () => {
     expect(within(local).getByRole("meter")).toHaveAttribute("aria-valuenow", "20");
   });
 
+  it("shows the local share only on All — on Cloud or Local it would be 0 % or 100 % by definition", () => {
+    const qc = new QueryClient();
+    const { rerender } = wrap(<InsightsHero days={days} weeks={mkUsageByWeek()} metric="all" />);
+    expect(screen.getByTestId("hero-local")).toBeInTheDocument();
+    for (const metric of ["cloud", "local"] as const) {
+      rerender(<QueryClientProvider client={qc}><InsightsHero days={days} weeks={mkUsageByWeek()} metric={metric} /></QueryClientProvider>);
+      expect(screen.queryByTestId("hero-local")).toBeNull();
+    }
+  });
+
   it("draws the line over finished weeks only", () => {
     wrap(<InsightsHero days={days} weeks={mkUsageByWeek()} />);
     const points = screen.getByTestId("hero-sparkline").querySelector("polyline")!.getAttribute("points")!;
@@ -146,6 +156,40 @@ describe("UsageHeatmap", () => {
     expect(level("2026-09-29")).toBe("0");
   });
 
+  it("the day row follows the switch: tokens, cost and top source of that slice", () => {
+    const data = mkUsageByDay();
+    data.days[data.days.length - 1] = {
+      ...mkDay("2026-09-30", 1_000_000, 100_000, 50, 4),
+      ...mkBox(700_000, 100_000),
+      top_source: "operator",
+      top_source_cloud: "operator",
+      top_source_local: "heads:local",
+    };
+    const qc = new QueryClient();
+    const { rerender } = wrap(<UsageHeatmap data={data} />);
+    const row = screen.getByTestId("heatmap-day");
+    rerender(<QueryClientProvider client={qc}><UsageHeatmap data={data} metric="local" /></QueryClientProvider>);
+    expect(row).toHaveTextContent("700K tokens"); // 100K via MC + 600K direct API
+    expect(row).toHaveTextContent("of which direct API: 600K");
+    expect(row).toHaveTextContent("$4.00");
+    expect(row).not.toHaveTextContent("$50");
+    expect(row).not.toHaveTextContent("% local"); // the whole slice is local
+    expect(row).toHaveTextContent("Mostly Heads local");
+    rerender(<QueryClientProvider client={qc}><UsageHeatmap data={data} metric="cloud" /></QueryClientProvider>);
+    expect(row).toHaveTextContent("900K tokens");
+    expect(row).not.toHaveTextContent("direct API"); // direct API tokens are local
+    expect(row).toHaveTextContent("$46.00");
+    expect(row).not.toHaveTextContent("% local");
+    expect(row).toHaveTextContent("Mostly You, interactive");
+  });
+
+  it("leaves the top source out on a switched view when the backend does not send it", () => {
+    const data = mkUsageByDay();
+    data.days[data.days.length - 1] = { ...mkDay("2026-09-30", 1000, 100, 5, 1), top_source: "operator" };
+    wrap(<UsageHeatmap data={data} metric="local" />);
+    expect(screen.getByTestId("heatmap-day")).not.toHaveTextContent("Mostly");
+  });
+
   it("adds direct API tokens to the day and says how many", () => {
     const data = mkUsageByDay();
     data.days[data.days.length - 1] = { ...mkDay("2026-09-30", 1_000_000, 100_000, 50), ...mkBox(700_000, 100_000) };
@@ -193,6 +237,25 @@ describe("SourceSplit", () => {
     expect(screen.getByTestId("source-rest")).toHaveTextContent("Other (2)$4.004.0%");
     expect(screen.getByTestId("sources-bar").children).toHaveLength(5);
     expect(screen.getByText("this week · list price")).toBeInTheDocument();
+  });
+
+  it("follows the switch: each source's cloud or local part", () => {
+    const week = mkUsageWeek({
+      sources: [
+        { ...mkSource("operator", 60, 1), local_cost_usd: 0 },
+        { ...mkSource("heads:local", 10, 1), local_cost_usd: 10 },
+        { ...mkSource("lead", 30, 1), local_cost_usd: 5 },
+      ],
+    });
+    const qc = new QueryClient();
+    const { rerender } = wrap(<SourceSplit week={week} metric="local" />);
+    expect(screen.queryByTestId("source-operator")).toBeNull(); // no local cost
+    expect(screen.getByTestId("source-heads:local")).toHaveTextContent("$10.0066.7%");
+    expect(screen.getByTestId("source-lead")).toHaveTextContent("$5.0033.3%");
+    rerender(<QueryClientProvider client={qc}><SourceSplit week={week} metric="cloud" /></QueryClientProvider>);
+    expect(screen.queryByTestId("source-heads:local")).toBeNull();
+    expect(screen.getByTestId("source-operator")).toHaveTextContent("$60.0070.6%");
+    expect(screen.getByTestId("source-lead")).toHaveTextContent("$25.0029.4%");
   });
 
   it("says so when the week has no cost yet", () => {
