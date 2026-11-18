@@ -4,7 +4,10 @@
  * Insights → hero: the one answer at the top of the page — what this week's
  * AI work cost so far (list-price equivalent) and how much of it ran locally
  * (ADR-086: local first). Cost is compared with the same weekdays of last
- * week; the line shows the finished weeks only.
+ * week; the line shows the finished weeks only. The page's switch (All ·
+ * Cloud · Local) picks which cost: cloud = cost − the local part; local is
+ * the list price of the local rows, which is $0 until local models get an
+ * API price.
  *
  *   $1,339                                  ╱╲_╱‾╲__●
  *   This week so far · list-price equivalent — flat-rate plans …
@@ -18,12 +21,23 @@
 import { useLocale, useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
 import { formatShare, formatUsd, type UsageByWeek } from "@/lib/usage";
-import { fullWeeks, weekSoFar, type UsageByDay } from "@/lib/insights";
+import { costOf, fullWeeks, weekSoFar, type HeatMetric, type UsageByDay } from "@/lib/insights";
 
-export function InsightsHero({ days, weeks }: { days: UsageByDay; weeks: UsageByWeek }) {
+const COST_HINT: Record<HeatMetric, string> = { all: "costHint", cloud: "costHintCloud", local: "costHintLocal" };
+
+export function InsightsHero({
+  days,
+  weeks,
+  metric = "all",
+}: {
+  days: UsageByDay;
+  weeks: UsageByWeek;
+  metric?: HeatMetric;
+}) {
   const t = useTranslations("insights.hero");
   const locale = useLocale();
-  const now = weekSoFar(days.days);
+  const now = weekSoFar(days.days, metric);
+  const finished = fullWeeks(weeks.weeks);
   const current = weeks.weeks[weeks.weeks.length - 1];
   const previous = weeks.weeks[weeks.weeks.length - 2];
   const share = current?.totals.local_output_share ?? null;
@@ -59,9 +73,9 @@ export function InsightsHero({ days, weeks }: { days: UsageByDay; weeks: UsageBy
           >
             {formatUsd(now.cost, locale)}
           </p>
-          <Sparkline values={fullWeeks(weeks.weeks).map((w) => w.totals.cost_usd)} label={t("trendAria", { count: fullWeeks(weeks.weeks).length })} />
+          <Sparkline values={finished.map((w) => costOf(w.totals, metric))} label={t("trendAria", { count: finished.length })} />
         </div>
-        <p className="mt-2 text-xs" style={{ color: C.textMuted }}>{t("costHint")}</p>
+        <p className="mt-2 text-xs" style={{ color: C.textMuted }}>{t(COST_HINT[metric])}</p>
         {changeText && (
           <p className="mt-1 text-xs" style={{ color: C.textSecondary }} data-testid="hero-change">
             {changeText}

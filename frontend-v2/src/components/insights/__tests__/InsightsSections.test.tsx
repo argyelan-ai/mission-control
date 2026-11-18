@@ -33,6 +33,39 @@ describe("InsightsHero", () => {
     expect(screen.getByText(/list-price equivalent — flat-rate plans are not billed per token/)).toBeInTheDocument();
   });
 
+  it("moves the cost with the switch: cloud is the rest, local says it has no API price yet", () => {
+    const split = {
+      ...days,
+      days: [
+        mkDay("2026-09-21", 10, 0, 100, 20), mkDay("2026-09-22", 10, 0, 100, 0), mkDay("2026-09-23", 10, 0, 100, 0),
+        mkDay("2026-09-28", 10, 0, 50, 10), mkDay("2026-09-29", 10, 0, 100, 0), mkDay("2026-09-30", 10, 0, 0, 0),
+      ],
+    };
+    const { rerender } = wrap(<InsightsHero days={split} weeks={mkUsageByWeek()} metric="cloud" />);
+    expect(screen.getByTestId("hero-cost")).toHaveTextContent("$140");
+    expect(screen.getByText(/cloud at list price/)).toBeInTheDocument();
+    expect(screen.getByTestId("hero-change")).toHaveTextContent("50% less than the same days last week");
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <InsightsHero days={split} weeks={mkUsageByWeek()} metric="local" />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByTestId("hero-cost")).toHaveTextContent("$10");
+    expect(screen.getByText(/no API price set for local models yet/)).toBeInTheDocument();
+    expect(screen.getByTestId("hero-change")).toHaveTextContent("50% less than the same days last week");
+  });
+
+  it("draws the line for the switched cost", () => {
+    const weeks = mkUsageByWeek();
+    weeks.weeks = weeks.weeks.map((w, i) => ({ ...w, totals: { ...w.totals, local_cost_usd: i === 1 ? w.totals.cost_usd : 0 } }));
+    wrap(<InsightsHero days={days} weeks={weeks} metric="local" />);
+    const ys = screen.getByTestId("hero-sparkline").querySelector("polyline")!.getAttribute("points")!
+      .split(" ").map((p) => Number(p.split(",")[1]));
+    // Only week 2 had local cost: it is the top of the line, every other week sits on the floor.
+    expect(ys.filter((y) => y === Math.min(...ys))).toHaveLength(1);
+    expect(ys.indexOf(Math.min(...ys))).toBe(1);
+  });
+
   it("compares with the same weekdays of last week", () => {
     wrap(<InsightsHero days={days} weeks={mkUsageByWeek()} />);
     expect(screen.getByTestId("hero-change")).toHaveTextContent("50% less than the same days last week");
@@ -96,15 +129,21 @@ describe("UsageHeatmap", () => {
     expect(row).toHaveTextContent("Mostly You, interactive");
   });
 
-  it("switches the colour to the local tokens", () => {
+  it("colours by the page's switch: local or cloud tokens", () => {
     const days = [mkDay("2026-09-28", 1000, 0), mkDay("2026-09-29", 10, 10), mkDay("2026-09-30", 0, 0)];
-    wrap(<UsageHeatmap data={{ ...mkUsageByDay(), days }} />);
+    const data = { ...mkUsageByDay(), days };
     const level = (date: string) =>
       screen.getByTestId("heatmap-grid-26").querySelector(`rect[data-date="${date}"]`)!.getAttribute("data-level");
+    const { rerender } = wrap(<UsageHeatmap data={data} />);
     expect(level("2026-09-28")).toBe("4");
-    fireEvent.click(screen.getByRole("radio", { name: "Local" }));
+    expect(screen.queryByRole("radiogroup")).toBeNull(); // the switch lives at the top of the page now
+    const qc = new QueryClient();
+    rerender(<QueryClientProvider client={qc}><UsageHeatmap data={data} metric="local" /></QueryClientProvider>);
     expect(level("2026-09-28")).toBe("0");
     expect(level("2026-09-29")).toBe("4");
+    rerender(<QueryClientProvider client={qc}><UsageHeatmap data={data} metric="cloud" /></QueryClientProvider>);
+    expect(level("2026-09-28")).toBe("4");
+    expect(level("2026-09-29")).toBe("0");
   });
 
   it("adds direct API tokens to the day and says how many", () => {
@@ -117,8 +156,6 @@ describe("UsageHeatmap", () => {
     expect(row).toHaveTextContent("43.8% local"); // (100K + 600K) / 1.6M
     const cell = screen.getByTestId("heatmap-grid-26").querySelector('rect[data-date="2026-09-30"]')!;
     expect(cell.querySelector("title")).toHaveTextContent("2026-09-30 · 1.6M · of which direct API: 600K");
-    fireEvent.click(screen.getByRole("radio", { name: "Local" }));
-    expect(cell.querySelector("title")).toHaveTextContent("2026-09-30 · 700K · of which direct API: 600K");
   });
 
   it("says nothing about the direct API on a day without it", () => {

@@ -1834,6 +1834,12 @@
   },
   "insights": {
     "title": "Insights",
+    "metric": {
+      "aria": "Which usage the page shows",
+      "all": "All",
+      "cloud": "Cloud",
+      "local": "Local"
+    },
     "loadFailed": "Could not load the usage numbers.",
     "source": {
       "operator": "You, interactive",
@@ -1853,13 +1859,12 @@
       "local": "ran locally",
       "localHint": "Share of output tokens · last week {share}",
       "localHintFirst": "Share of output tokens",
-      "empty": "No usage recorded yet."
+      "empty": "No usage recorded yet.",
+      "costHintCloud": "This week so far · cloud at list price — flat-rate plans are not billed per token",
+      "costHintLocal": "This week so far · local runs — no API price set for local models yet"
     },
     "heatmap": {
       "title": "Tokens per day",
-      "metricAria": "Which tokens colour the days",
-      "all": "All",
-      "local": "Local",
       "gridAria": "Tokens per day over the last {weeks} weeks — pick a day with the arrows below",
       "less": "less",
       "more": "more",

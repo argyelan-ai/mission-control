@@ -69,11 +69,12 @@ export function mkDaily(over: Partial<DailyMetrics> = {}): DailyMetrics {
   };
 }
 
-export function mkDay(date: string, generated: number, localGenerated: number, cost = 0): UsageDay {
+export function mkDay(date: string, generated: number, localGenerated: number, cost = 0, localCost = 0): UsageDay {
   const totals = mkTotals(cost, generated * 30, generated ? localGenerated / generated : null);
   return {
     date,
     ...totals,
+    local_cost_usd: localCost,
     generated_tokens: generated,
     local_generated_tokens: localGenerated,
     top_source: generated ? "operator" : null,
