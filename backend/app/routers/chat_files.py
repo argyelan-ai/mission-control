@@ -19,17 +19,27 @@ Safety, by construction rather than by checks on user input:
   inside their own workspace; host agents: only inside the MC home, never
   its sensitive folders). A host agent's fallback workspace goes through the
   same guard.
-* The walk never follows a symlink (a link to ``/`` lists nothing), skips
-  ``.git``, ``node_modules``, virtualenvs and build output, never enters the
-  MC home's sensitive folders, and stops at ``MAX_SCAN`` files and
-  ``MAX_DEPTH`` levels (``truncated: true`` then).
+* The folder itself is resolved through symlinks and must STILL lie inside
+  that boundary (``listing_root``): a session folder that is a link to ``/``
+  or into ``~/.mc/secrets`` lists nothing.
+* In a git repository the listing is ``git ls-files`` (tracked + untracked,
+  ``.gitignore`` honoured — nested worktrees and ``.env`` stay out; git's
+  ``core.fsmonitor`` hook is switched off, so a repo's config runs nothing).
+  Elsewhere a breadth-first walk. Neither lists a symlink, ``.git``,
+  ``node_modules``, virtualenvs, build output, nested agent worktrees or the
+  MC home's sensitive folders; both stop at ``MAX_SCAN`` files (the walk also
+  at ``MAX_DEPTH`` levels) and then answer ``truncated: true``.
 * Operator only (``require_user``): an agent token cannot call it.
 """
 from __future__ import annotations
 
 import asyncio
 import os
+import stat
+import subprocess
 import threading
+from collections import deque
+from concurrent.futures import Future
 import time
 import uuid
 from pathlib import Path
@@ -55,7 +65,12 @@ IGNORED_DIRS = frozenset({
     ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "__pycache__",
     ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".next", ".turbo",
     ".cache", "dist", "build", "coverage", ".gradle", "target", ".idea",
+    ".worktrees",
 })
+#: Nested folders skipped by their path below a parent: the agent worktrees
+#: Claude Code keeps in ``.claude/worktrees`` are full copies of the repo —
+#: they would fill the listing with duplicates of every file.
+IGNORED_NESTED = frozenset({(".claude", "worktrees")})
 #: Most files one walk collects; beyond it the answer says ``truncated``.
 MAX_SCAN = 20_000
 #: Deepest folder level the walk enters below the working folder.
@@ -64,8 +79,13 @@ MAX_DEPTH = 12
 MAX_LIMIT = 100
 #: How long one walk's result serves further keystrokes for the same folder.
 CACHE_SECONDS = 15.0
+#: Longest ``git ls-files`` may take before the plain walk takes over.
+GIT_TIMEOUT_SECONDS = 10.0
 
 _cache: dict[str, tuple[float, list[str], bool]] = {}
+#: Walks running right now, per folder: parallel keystrokes wait for the one
+#: walk instead of starting their own (single flight).
+_inflight: dict[str, Future] = {}
 _cache_lock = threading.Lock()
 
 
@@ -74,24 +94,89 @@ def _blocked_dirs() -> frozenset[Path]:
     backups, browser profiles) — never entered, even when a host chat works
     in the MC home itself."""
     mc_home = workspace_diff._host_home() / ".mc"
-    return frozenset(mc_home / name for name in sensitive_subpaths())
+    homes = {mc_home}
+    try:
+        homes.add(mc_home.resolve())
+    except OSError:
+        pass
+    return frozenset(home / name for home in homes for name in sensitive_subpaths())
+
+
+def _skipped_dir(parts: tuple[str, ...]) -> bool:
+    """A folder (as path parts below the listed folder) never listed into."""
+    if parts and parts[-1] in IGNORED_DIRS:
+        return True
+    return len(parts) >= 2 and (parts[-2], parts[-1]) in IGNORED_NESTED
 
 
 def walk_files(root: Path, *, max_scan: int | None = None,
                max_depth: int | None = None) -> tuple[list[str], bool]:
     """Every file below ``root`` as a POSIX path relative to it, and whether
-    the walk stopped early. Synchronous — run it via ``to_thread``.
+    the listing stopped early. Synchronous — run it via ``to_thread``.
 
-    Symlinks are never followed nor listed: a link can point anywhere, a
-    listing is only about what lies in this folder."""
+    A git repository is listed by git (``.gitignore`` holds), anything else
+    by a breadth-first walk. Symlinks are never followed nor listed: a link
+    can point anywhere, a listing is only about what lies in this folder."""
     cap = MAX_SCAN if max_scan is None else max_scan
-    depth_cap = MAX_DEPTH if max_depth is None else max_depth
+    listed = _git_files(root, cap)
+    if listed is not None:
+        return listed
+    return _walk(root, cap, MAX_DEPTH if max_depth is None else max_depth)
+
+
+def _git_files(root: Path, cap: int) -> tuple[list[str], bool] | None:
+    """``git ls-files`` below ``root`` (tracked + untracked, ignored ones
+    out), filtered by the same rules as the walk. ``None``: not a git
+    repository (or git failed) — the walk takes over."""
+    try:
+        proc = subprocess.run(
+            ["git", "--no-pager", "-c", "safe.directory=*", "-c", "core.fsmonitor=false",
+             "-c", "core.quotepath=false", "-C", str(root),
+             "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            capture_output=True, timeout=GIT_TIMEOUT_SECONDS, check=False,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"},
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    blocked = _blocked_dirs()
+    files: list[str] = []
+    seen: set[str] = set()
+    for raw in proc.stdout.split(b"\0"):
+        rel = raw.decode("utf-8", errors="replace")
+        # "dir/" = a nested repository (not a file); a path listed twice is
+        # a file with a merge conflict.
+        if not rel or rel.endswith("/") or rel in seen:
+            continue
+        parts = tuple(rel.split("/"))
+        if any(_skipped_dir(parts[: i + 1]) for i in range(len(parts) - 1)):
+            continue
+        path = root / rel
+        if blocked and any(parent in blocked for parent in path.parents):
+            continue
+        try:
+            # Only real files: no symlink, and nothing git lists that is gone.
+            if not stat.S_ISREG(os.lstat(path).st_mode):
+                continue
+        except OSError:
+            continue
+        if len(files) >= cap:
+            return files, True
+        seen.add(rel)
+        files.append(rel)
+    return files, False
+
+
+def _walk(root: Path, cap: int, depth_cap: int) -> tuple[list[str], bool]:
+    """Breadth first: every level is listed before the next one, so one huge
+    folder cannot eat the whole budget before its siblings are reached."""
     blocked = _blocked_dirs()
     files: list[str] = []
     truncated = False
-    stack: list[tuple[Path, int]] = [(root, 0)]
-    while stack:
-        folder, depth = stack.pop()
+    queue: deque[tuple[Path, int]] = deque([(root, 0)])
+    while queue:
+        folder, depth = queue.popleft()
         try:
             with os.scandir(folder) as it:
                 entries = sorted(it, key=lambda e: e.name)
@@ -104,7 +189,7 @@ def walk_files(root: Path, *, max_scan: int | None = None,
                     continue
                 if entry.is_dir(follow_symlinks=False):
                     sub = Path(entry.path)
-                    if entry.name in IGNORED_DIRS or sub in blocked:
+                    if sub in blocked or _skipped_dir(sub.relative_to(root).parts):
                         continue
                     if depth + 1 > depth_cap:
                         truncated = True
@@ -116,21 +201,39 @@ def walk_files(root: Path, *, max_scan: int | None = None,
                     files.append(Path(entry.path).relative_to(root).as_posix())
             except OSError:
                 continue
-        # Reverse: the stack pops the alphabetically first folder next.
-        stack.extend((s, depth + 1) for s in reversed(subdirs))
+        queue.extend((s, depth + 1) for s in subdirs)
     return files, truncated
 
 
 def _cached_walk(root: Path) -> tuple[list[str], bool]:
+    """One listing per folder serves keystrokes for ``CACHE_SECONDS``.
+    Keystrokes during a cold listing wait for it (single flight); expired
+    folders are dropped, so the cache never grows past the folders in use."""
     key = str(root)
     now = time.monotonic()
     with _cache_lock:
+        for stale in [k for k, v in _cache.items() if now - v[0] >= CACHE_SECONDS]:
+            del _cache[stale]
         hit = _cache.get(key)
-        if hit is not None and now - hit[0] < CACHE_SECONDS:
+        if hit is not None:
             return hit[1], hit[2]
-    files, truncated = walk_files(root)
+        running = _inflight.get(key)
+        owner = running is None
+        if owner:
+            running = _inflight[key] = Future()
+    if not owner:
+        return running.result()
+    try:
+        files, truncated = walk_files(root)
+    except BaseException as exc:
+        with _cache_lock:
+            _inflight.pop(key, None)
+        running.set_exception(exc)
+        raise
     with _cache_lock:
         _cache[key] = (now, files, truncated)
+        _inflight.pop(key, None)
+    running.set_result((files, truncated))
     return files, truncated
 
 
@@ -139,8 +242,9 @@ def _score(path: str, query: str) -> tuple[int, int] | None:
 
     0 file name equals the query · 1 file name starts with it · 2 file name
     contains it · 3 the path contains it · 4 the query's characters appear
-    in order in the path (``cmpsr`` finds ``Composer.tsx``). The second value
-    is where the match starts in its tier, so an earlier hit wins."""
+    in order in the FILE NAME (``cmpsr`` finds ``Composer.tsx``; over the
+    whole path almost any word would match something). The second value is
+    where the match starts in its tier, so an earlier hit wins."""
     p = path.lower()
     name = p.rsplit("/", 1)[-1]
     if name == query:
@@ -156,7 +260,7 @@ def _score(path: str, query: str) -> tuple[int, int] | None:
     pos = -1
     first = -1
     for ch in query:
-        pos = p.find(ch, pos + 1)
+        pos = name.find(ch, pos + 1)
         if pos < 0:
             return None
         if first < 0:
@@ -179,10 +283,40 @@ def rank(files: list[str], query: str, limit: int) -> list[str]:
     return [row[3] for row in scored[:limit]]
 
 
+def _inside(path: Path, boundary: Path) -> bool:
+    return path == boundary or boundary in path.parents
+
+
+def _allowed_resolved(folders: _ChatFolders, resolved: Path) -> bool:
+    """The resolved folder still lies where ``host_path_for_agent_cwd`` would
+    let it: inside the Docker agent's own workspace, or inside the MC home
+    but outside its sensitive folders (host agents)."""
+    if folders.runtime == "cli-bridge":
+        if folders.root is None:
+            return False
+        try:
+            return _inside(resolved, folders.root.resolve())
+        except OSError:
+            return False
+    mc_home = workspace_diff._host_home() / ".mc"
+    try:
+        mc_real = mc_home.resolve()
+    except OSError:
+        return False
+    if not _inside(resolved, mc_real):
+        return False
+    rel = resolved.relative_to(mc_real).parts
+    return not (rel and rel[0] in sensitive_subpaths())
+
+
 def listing_root(folders: _ChatFolders) -> Path | None:
     """The folder whose files the chat may mention: the session's own folder,
     else (no folder recorded at all) the agent's workspace — through the
-    same guard a recorded folder passes. ``None``: nothing to list."""
+    same guard a recorded folder passes. ``None``: nothing to list.
+
+    The guard checks the path as recorded; a symlink on the way could still
+    lead out (``/workspace/x -> /``, a session folder linked into
+    ``~/.mc/secrets``). So the RESOLVED folder is checked once more."""
     if folders.cwd is not None:
         candidate = folders.session_dir
     elif folders.root is None:
@@ -197,6 +331,8 @@ def listing_root(folders: _ChatFolders) -> Path | None:
     try:
         resolved = candidate.resolve()
     except OSError:
+        return None
+    if not _allowed_resolved(folders, resolved):
         return None
     return resolved if resolved.is_dir() else None
 
