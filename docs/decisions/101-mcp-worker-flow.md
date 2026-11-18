@@ -1,6 +1,6 @@
 # ADR-101 — A registered agent works its cards over MCP (worker flow)
 
-**Status:** Accepted (2026-11-12) · amends PRINCIPLES §8 rule 3 (second exception) · builds on ADR-100 §1 and §2 · touches ADR-034, ADR-037, ADR-085
+**Status:** Accepted (2026-11-12) · amends PRINCIPLES §8 rule 3 (second exception) · builds on ADR-100 §1 and §2 · touches ADR-034, ADR-037, ADR-085 · partially superseded by [ADR-102](102-cockpit-direction.md) (2026-11-17) — deferred: the worker flow stays as built (#1026) and is not extended; stage 2 decides it with the task page
 **Datum:** 2026-11-12
 **Scope:** scripts/mc-mcp · scripts/mc-cli (reused, unchanged) · Architecture/Direction
 
