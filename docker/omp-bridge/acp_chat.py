@@ -1327,6 +1327,9 @@ class ChatSession:
                   context: Optional[str] = None) -> None:
         result = None
         error_text = ""
+        # True once a reload in this turn failed: its `process_exit` card
+        # already told the operator — no second card for the same cause.
+        restart_failed = False
         self._mapper.begin_turn()
         self._full_text = []
         self._throttle = {"chars": -10 ** 9, "at": time.monotonic(), "pending": None}
@@ -1335,16 +1338,29 @@ class ChatSession:
         with self._lock:
             omp_mark, self._omp_mark = self._omp_mark, (None, 0)
         try:
-            with self._lock:
-                client, sid = self._client, self._session_id
+            # The child died while idle (SIGTERM, recycler): nothing of this
+            # turn is lost yet — reload the session quietly, then prompt.
+            # A prompt to a dead child would only fail (incident 13.11.2026).
+            if not self._client_alive():
+                logger.info("omp child gone before turn %d — reloading the session", turn)
+                restart_failed = not self._restart_child()
             # A prompt Mission Control wrote is its event in the chat, not
             # an operator bubble — the same line the task path writes.
             self._emit_transcript(self._mapper.map_user_prompt(
                 text, origin=origin if origin in _MC_ORIGINS else None))
             # The run context goes to the model only; the line above wrote
             # the operator's own text (t1 MUST-1).
-            result = client.prompt(sid, _model_text(text, context),
-                                   timeout=self._prompt_timeout)
+            try:
+                result = self._prompt_once(text, context)
+            except Exception as exc:  # noqa: BLE001
+                if not self._session_unknown(exc):
+                    raise
+                # A live child that does not know our session (it was
+                # respawned without session/load): reload, retry ONCE. A
+                # second miss falls through to the error card below.
+                logger.warning("omp child lost the session (%s) — reloading, one retry", exc)
+                restart_failed = not self._restart_child()
+                result = self._prompt_once(text, context)
         except Exception as exc:  # noqa: BLE001 — a dead turn must still report
             error_text = f"{exc}"
         finally:
@@ -1407,7 +1423,7 @@ class ChatSession:
             # and text segment land before the card below (N11).
             self._emit_transcript(self._mapper.flush_on_abort())
 
-        if not alive:
+        if not alive and not restart_failed:
             # The card offers the text of the turn that died — the
             # operator's, and only when its reply never came (`result` is
             # None): a child that exits right after a complete reply leaves
@@ -1432,8 +1448,24 @@ class ChatSession:
                     text=_MODEL_UNREACHABLE_TEXT if operator else _MODEL_UNREACHABLE_NEUTRAL_TEXT,
                     data=retry_data(text) if operator else None,
                 )
-            elif code:
+            elif code and not restart_failed:
                 self._emit_error(code, detail)
+
+    def _prompt_once(self, text: str, context: Optional[str]):
+        with self._lock:
+            client, sid = self._client, self._session_id
+        if sid is None:
+            # `_restart_child()` failed and left no session to prompt.
+            raise acp_client.ACPError("no chat session — the omp child could not be restarted")
+        return client.prompt(sid, _model_text(text, context), timeout=self._prompt_timeout)
+
+    def _session_unknown(self, exc: BaseException) -> bool:
+        """True when omp answered "Resource not found" for OUR session id —
+        the child runs but never loaded the session."""
+        message = f"{exc}"
+        with self._lock:
+            sid = self._session_id
+        return bool(sid) and "Resource not found" in message and sid in message
 
     def _client_alive(self) -> bool:
         """False only when a REAL child process died. An injected/in-memory
@@ -1446,8 +1478,9 @@ class ChatSession:
         except Exception:  # noqa: BLE001
             return False
 
-    def _restart_child(self) -> None:
-        """Respawn the child and re-`session/load` — history keeps its file."""
+    def _restart_child(self) -> bool:
+        """Respawn the child and re-`session/load` — history keeps its file.
+        False when the respawn failed (its `process_exit` card is out)."""
         self._expire_elicitations()
         try:
             self._client.close()
@@ -1464,6 +1497,8 @@ class ChatSession:
         except Exception as exc:  # noqa: BLE001 — a failed respawn stays visible
             logger.error("child restart failed: %s", exc)
             self._emit_error("process_exit", f"restart failed: {exc}")
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # ACP events

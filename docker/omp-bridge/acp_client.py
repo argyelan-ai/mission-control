@@ -526,7 +526,16 @@ class ACPClient:
         return message
 
     def _send_raw(self, obj: dict) -> None:
-        proc = self._ensure_process()
+        # The first write may start the child. A child that already ran and
+        # exited is NOT replaced here: a fresh `omp acp` has no initialize
+        # and no loaded session, so the next session/prompt would only get
+        # "Resource not found". The caller sees the exit and reconnects
+        # (ChatSession._restart_child -> session/load).
+        proc = self._proc
+        if proc is None:
+            proc = self._ensure_process()
+        elif proc.poll() is not None:
+            raise ACPError(f"omp acp child exited (code {proc.returncode})")
         assert proc.stdin
         data = json.dumps(obj)
         with self._writer_lock:
