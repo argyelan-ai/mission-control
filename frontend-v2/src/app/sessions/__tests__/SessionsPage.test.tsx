@@ -1012,8 +1012,8 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument();
   });
 
-  // Operator pictures 18.11.2026: the recent list named Sparky as newest,
-  // the old per-agent key still named Boss — and Boss opened. One source.
+  // Operator pictures 18.11.2026: the recent list named one agent as newest,
+  // the old per-agent key still named another — and that one opened.
   it("the recent-chats list wins over the old last-agent key", async () => {
     localStorage.setItem("mc-sessions-last-agent", "agent-1");
     localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }, { kind: "agent", id: "agent-1" }]));
