@@ -441,6 +441,11 @@ class Settings(BaseSettings):
     # True = Quick Mode + Structured Mode active, planning brief for the board lead
     structured_intake_enabled: bool = False
 
+    # MC's own chat record (ADR-103). False = nothing is written to or read
+    # from chats / chat_sessions / chat_events; the chat runs exactly as
+    # before. Env CHAT_RECORD_ENABLED. Way back: false + truncate the tables.
+    chat_record_enabled: bool = False
+
     # App
     environment: str = "development"
     # Matches the public release tag (CHANGELOG.md / GitHub Releases).
