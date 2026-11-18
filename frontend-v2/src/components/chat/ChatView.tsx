@@ -22,7 +22,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
-import { Check, ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
+import { Check, ChevronDown, MessagesSquare, MoreHorizontal, Users } from "lucide-react";
 import { C, alpha } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -70,9 +70,12 @@ import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { TerminalPanel, type AgentWithState } from "./TerminalPanel";
 import { ChatOptionsSheet } from "./ChatOptionsSheet";
 import { SendCard } from "./SendCard";
-import { DirectorySheet, ReachableButton } from "./DirectorySheet";
+import { DirectorySheet } from "./DirectorySheet";
+import { reachableCount } from "@/lib/comms";
+import { ChatHeaderSubline } from "./ChatHeaderSubline";
+import { SpeedLine } from "./SpeedLine";
+import { DrawerButton } from "@/components/layout/ChatDrawer";
 import { useCommsDirectory } from "@/hooks/useCommsDirectory";
-import { VoiceButton } from "@/components/voice/VoiceWidget";
 import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
 import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
@@ -389,6 +392,7 @@ export function ChatView({
   onSelectHeadRun,
 }: ChatViewProps) {
   const t = useTranslations("sessions");
+  const tComms = useTranslations("comms");
   /** Typing into a live session (text, keys, approvals, effort) is admin-only
    *  on the backend — non-admins read the transcript without a composer. */
   const isAdmin = useIsAdmin();
@@ -1216,7 +1220,15 @@ export function ChatView({
       : badgeAliveness === "active"
         ? "live"
         : "ended";
-  const titleSide = headerSideReservation({ hasBack: !!onBack, badge: headerBadge });
+  // Start of the running turn = the operator's last message in the
+  // transcript; the header subline counts "working for …" from there.
+  const turnStartedAt = useMemo(() => {
+    for (let i = stream.events.length - 1; i >= 0; i--) {
+      const ev = stream.events[i];
+      if (ev.kind === "message" && ev.role === "user") return ev.ts ?? null;
+    }
+    return null;
+  }, [stream.events]);
   // Die Beschriftung der aktuellen Stufe kommt aus dem Katalog, nicht aus der
   // Liste selbst (chatOptions.ts fuehrt nur Schluessel) — sonst stuende hier
   // wieder ein deutsches Wort in der englischen Oberflaeche.
@@ -1356,72 +1368,23 @@ export function ChatView({
         className="relative flex items-center gap-2 pl-1 pr-2 md:px-4 py-1.5 md:py-2.5 pt-safe-top md:pt-2.5 border-b shrink-0 bg-[var(--color-bg-surface)]"
         style={{ borderColor: C.border }}
       >
-        {onBack && (
-          <button
-            type="button"
-            onClick={onBack}
-            aria-label={t("backToSessions")}
-            // Rund statt eckig (Operator-Wunsch 19.08.2026, Vorbild
-            // Claude-App): ein runder Knopf liest sich als Navigation, ein
-            // eckiger als Schaltflaeche im Inhalt.
-            //
-            // Sichtbarer Kreis 36px, TREFFERFLAECHE 44px (DESIGN.md/WCAG
-            // 2.5.5) — siehe `TOUCH_TARGET` oben fuer die Rechnung, warum der
-            // Kopf davon nicht hoeher wird.
-            className={`relative z-10 flex md:hidden items-center justify-center shrink-0 cursor-pointer ${TOUCH_TARGET}`}
-          >
-            <span
-              className="flex items-center justify-center w-9 h-9 rounded-full"
-              style={{ color: C.textSecondary, backgroundColor: C.bgHover }}
-            >
-              <ChevronLeft size={19} />
-            </span>
-          </button>
-        )}
+        {/* Left: the sidebar icon that opens the chat drawer (variant C +
+            A's menu, operator decision 2026-11-18) — it replaces the back
+            chevron: every other chat is one tap away there, the list is no
+            longer a screen behind the chat. Desktop: the shell's left column
+            shows the list, so no button. */}
+        <DrawerButton className="md:hidden -m-1" />
 
-        {/* EIN Titel-Block, der nur seine Anordnung wechselt — nicht zwei
-            Bloecke mit `md:hidden`/`hidden md:`. Zwei waeren derselbe Name
-            zweimal im Dokument: Vorleseprogramme lesen ihn doppelt, und jede
-            Suche nach dem Namen findet zwei Treffer (genau daran ist der
-            erste Versuch hier aufgelaufen).
-
-            Auf dem Handy liegt er ABSOLUT in der Mitte, nicht im Fluss
-            zwischen den Knoepfen: im Fluss haenge seine Position davon ab,
-            wie breit links und rechts gerade sind (Badge da oder nicht) — der
-            Name wuerde je nach Zustand wandern. `px-14` haelt ihn von den
-            beiden runden Knoepfen frei, `pointer-events-none` aus ihrem Weg.
-
-            Ab md kehrt er in den Fluss zurueck: dort ist der Kopf eine
-            Werkzeugleiste, kein Bildschirmtitel, und ein mittiger Name haette
-            neben den Schaltern rechts keinen Bezugspunkt. */}
+        {/* Title + one muted subline (state), left-aligned next to the
+            drawer icon on the phone, one baseline row on the desktop. The
+            "N reachable" line moved into the ⋯ menu (K4). */}
         <div
           data-testid="chat-header-title"
-          // Die Reservierung kommt als CSS-Variable herein, NICHT als
-          // Inline-Padding: ein Inline-Stil schlaegt jede Klasse, auch
-          // `md:px-0` — auf dem Desktop bliebe der Handy-Platzhalter stehen.
-          // Als Variable in einer Utility-Klasse gilt die md-Regel wieder.
-          style={
-            {
-              "--chat-title-l": `${titleSide.left}px`,
-              "--chat-title-r": `${titleSide.right}px`,
-            } as React.CSSProperties
-          }
-          // `items-center` IST die Zentrierung auf dem Handy: der Block ist
-          // eine Spalte, seine Kinder sind schmaler als er. `justify-center`
-          // und `text-center` standen hier frueher mit — beide wirkungslos
-          // (im Browser nachgemessen: Name identisch bei x=120.4/w=149.2),
-          // weil der Block `absolute` ohne `top`/`bottom` ist und seine Hoehe
-          // exakt dem Inhalt entspricht. Es gibt nichts zu verteilen.
-          className="absolute inset-x-0 pl-[var(--chat-title-l)] pr-[var(--chat-title-r)]
-                     flex flex-col items-center pointer-events-none
-                     md:static md:inset-auto md:px-0 md:flex-1 md:min-w-0 md:flex-row md:items-baseline
-                     md:gap-2 md:pointer-events-auto"
+          className="flex-1 min-w-0 flex flex-col md:flex-row md:items-baseline md:gap-2"
         >
-          {/* Zustandspunkt VOR dem Namen (ADR-099, Operator 01.11.2026): das
-              Wort "live" kostete 38 px und sagte nichts, was ein Punkt nicht
-              sagt. Gruen = arbeitet, grau = wartet am Prompt. Farbe traegt nie
-              allein: Vorlesetext und Tooltip kommen aus i18n. "beendet" ist
-              eine Warnung und bleibt ein Wort (rechte Gruppe). */}
+          {/* Zustandspunkt VOR dem Namen (ADR-099): gruen = arbeitet, grau =
+              wartet am Prompt. Farbe traegt nie allein: Vorlesetext und
+              Tooltip kommen aus i18n. */}
           <span className="flex items-center gap-1.5 max-w-full min-w-0 md:shrink-0">
             {(headerBadge === "live" || headerBadge === "dot") && (
               <span
@@ -1430,29 +1393,25 @@ export function ChatView({
                 role="img"
                 aria-label={headerBadge === "live" ? t("sessionLive") : t("sessionWaitingAtPrompt")}
                 title={headerBadge === "live" ? t("sessionLive") : t("sessionWaitingAtPrompt")}
-                className="w-1.5 h-1.5 rounded-full shrink-0 pointer-events-auto"
+                className="w-1.5 h-1.5 rounded-full shrink-0"
                 style={{ background: headerBadge === "live" ? C.online : C.textDim }}
               />
             )}
             <span
-              className="text-[15px] md:text-[13px] font-semibold md:font-medium truncate min-w-0"
+              className="text-base leading-tight md:text-sm font-semibold md:font-medium truncate min-w-0"
               style={{ color: C.textPrimary }}
             >
               {agent.name}
             </span>
           </span>
-          {/* Who can be talked to across harnesses (ADR-100 §4): a quiet
-              second line under the name on the phone, next to it on the
-              desktop — a state that opens a sheet, not another header
-              action beside ⋯ (K4). The ::before widens the finger target
-              without making the header taller (K11). */}
-          <ReachableButton
-            directory={directory.data}
-            onOpen={() => setDirectoryOpen(true)}
-            className="relative pointer-events-auto md:shrink-0 before:absolute before:content-[''] before:-inset-x-2 before:-inset-y-3"
+          <ChatHeaderSubline
+            model={stream.usage?.model ?? stream.capabilities?.model ?? agent.model ?? null}
+            state={statusState}
+            aliveness={aliveness}
+            turnStartedAt={turnStartedAt}
+            sending={stream.awaitingResponse}
           />
         </div>
-
         {/* Rechte Gruppe: EIN ml-auto buendelt Badge und "…" am rechten Rand.
             Zwei getrennte auto-Margins wuerden den freien Platz unter sich
             aufteilen und das Badge in die Naehe der Mitte schieben — genau
@@ -1475,27 +1434,11 @@ export function ChatView({
           </span>
         )}
 
-        {/* Sprachbedienung. Auf dem Chat-Schirm gibt es die App-Leiste nicht
-            mehr (AppShell `mobileChromeless`), und ihr Knopf war der EINZIGE
-            Zugang auf dem Handy: die Sidebar ist `hidden md:flex`, ein
-            Tastenkuerzel existiert nicht. Ohne diesen Ersatz waere die
-            Sprachbedienung auf dem Telefon ersatzlos weggefallen — ausgerechnet
-            dort, wo Sprechen am meisten bringt.
-
-            Warum in den Kopf und nicht ins Optionen-Blatt: Sprache ist ein
-            Griff fuer besetzte Haende. Zwei Antippen bis zum Mikrofon nehmen
-            ihm genau den Vorteil. Der Knopf bringt seine 44px-Trefferflaeche
-            selbst mit; `-m-1` am Rahmen haelt den Kopf auf seiner Hoehe,
-            dieselbe Rechnung wie bei `TOUCH_TARGET`. */}
-        {/* While a live voice call runs in THIS chat, the Jarvis mic steps
-            aside: two mics with two meanings side by side confused the
-            operator (voice PR 1 review). Jarvis itself is unchanged. */}
-        {!voiceCallActive && (
-          <span className="flex md:hidden -m-1">
-            <VoiceButton size={36} />
-          </span>
-        )}
-
+        {/* The voice-assistant mic left the chat header (variant C: the
+            header carries only the drawer icon, the title and ⋯). Voice in
+            a chat is the composer's live-voice mic (ADR-102: "voice is a
+            function in every chat"); the assistant's mic stays in the app
+            bar of every other page and in the desktop column. */}
         <button
           type="button"
           onClick={() => setOptionsOpen(true)}
@@ -1620,6 +1563,23 @@ export function ChatView({
                         </button>
                       ))}
                     </div>
+                    {/* "N reachable" moved here from the header (variant C, K4). */}
+                    {directory.data && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        data-testid="menu-reachable"
+                        onClick={() => {
+                          setDetailOpen(false);
+                          setDirectoryOpen(true);
+                        }}
+                        className="w-full flex items-center gap-2 text-left px-2 py-1.5 mt-1 text-xs rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+                        style={{ color: C.textPrimary, borderTop: `1px solid ${C.borderSubtle}` }}
+                      >
+                        <Users size={13} aria-hidden="true" style={{ color: C.textMuted }} />
+                        <span className="flex-1 tabular-nums">{tComms("reachable", { count: reachableCount(directory.data) })}</span>
+                      </button>
+                    )}
                   </div>
                 </PopoverPortal>
               )}
@@ -1916,10 +1876,22 @@ export function ChatView({
                       />
                     ) : null
                   }
+                  // The tab bar sits under the chat on the phone now
+                  // (variant C) and owns the home-indicator strip.
+                  barBelow
                 />
                 )}
                 </VoiceLiveDock>
               ) : null}
+              {/* The speed line under the input (variant C, operator
+                  decision 2026-11-18): box · model · live tok/s. */}
+              {agent && (
+                <SpeedLine
+                  runtimeId={agent.runtime_id ?? null}
+                  model={stream.usage?.model ?? stream.capabilities?.model ?? agent.model ?? null}
+                  streaming={stream.state?.status === "working" || stream.state?.status === "task_working"}
+                />
+              )}
             </>
           )}
         </>
@@ -1945,6 +1917,8 @@ export function ChatView({
           detailLevel={detailLevel}
           onDetailLevelChange={onDetailLevelChange}
           onOpenPanel={onOpenPanel}
+          reachable={directory.data ? reachableCount(directory.data) : null}
+          onOpenDirectory={() => setDirectoryOpen(true)}
         />
       )}
     </div>

@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { NavVoiceButton } from "@/components/voice/live/NavVoiceButton";
+import { DrawerButton } from "./ChatDrawer";
 import { P2 } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
@@ -15,13 +16,12 @@ const BRAND_MAIN = _dot > 0 ? _BRAND.slice(0, _dot) : _BRAND;
 const BRAND_ACCENT = _dot > 0 ? _BRAND.slice(_dot) : "";
 
 /* ────────────────────────────────────────────────────────────────
-   Geteilter Zustand des Handy-Menüs.
+   Geteilter Zustand der Handy-Navigation.
 
-   Das ⊕-Blatt (QuickSheet.tsx, Variante B „Zwei Ebenen") ist das einzige
-   Handy-Menü. Es hat zwei Ebenen: „root" (Starten: Neuer Job, Sprache,
-   letzter Chat, Seiten ›, Einstellungen ›) und „pages" (alle Seiten, die
-   nicht in der Leiste stehen). Die alte Schublade („Mehr…") gibt es nicht
-   mehr; Board, Konto und Abmelden stehen am Handy in den Einstellungen.
+   Seit 18.11.2026 (Operator-Entscheid, Variante C + Menü aus A) ist die
+   Chat-Schublade (ChatDrawer.tsx) das Handy-Menü: Chats, darunter Modelle ·
+   Wissen · Einstellungen. Das ⊕-Blatt (QuickSheet.tsx) hängt die Shell nicht
+   mehr ein; sein Zustand bleibt hier, bis es mit Beleg entfernt wird.
    ──────────────────────────────────────────────────────────────── */
 export type QuickLevel = "root" | "pages";
 
@@ -32,6 +32,10 @@ type MobileNavState = {
   /** Which level of the sheet shows. Every open starts at "root". */
   quickLevel: QuickLevel;
   setQuickLevel: (v: QuickLevel) => void;
+  /** The chat drawer (components/layout/ChatDrawer.tsx), opened by the
+   *  sidebar icon in the chat header and in the app bar. */
+  drawerOpen: boolean;
+  setDrawerOpen: (v: boolean) => void;
 };
 
 const MobileNavContext = createContext<MobileNavState | null>(null);
@@ -39,6 +43,7 @@ const MobileNavContext = createContext<MobileNavState | null>(null);
 export function MobileNavProvider({ children }: { children: React.ReactNode }) {
   const [quickOpen, setQuickOpenRaw] = useState(false);
   const [quickLevel, setQuickLevel] = useState<QuickLevel>("root");
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = usePathname();
 
   // Opening always lands on level 1; closing forgets level 2.
@@ -51,10 +56,12 @@ export function MobileNavProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setQuickOpenRaw(false);
     setQuickLevel("root");
+    setDrawerOpen(false);
   }, [pathname]);
 
   // Prevent body scroll while the sheet is up — iOS-fest via Fixed-Position-Technik (MOBILE-SPEC M4)
-  useBodyScrollLock(quickOpen);
+  useBodyScrollLock(quickOpen || drawerOpen);
+  useEscapeKey(() => setDrawerOpen(false), drawerOpen);
 
   // Esc = one step back: level 2 → level 1, level 1 → closed (panel register rule 4).
   useEscapeKey(() => {
@@ -63,11 +70,17 @@ export function MobileNavProvider({ children }: { children: React.ReactNode }) {
   }, quickOpen);
 
   const value = useMemo(
-    () => ({ quickOpen, setQuickOpen, quickLevel, setQuickLevel }),
-    [quickOpen, setQuickOpen, quickLevel],
+    () => ({ quickOpen, setQuickOpen, quickLevel, setQuickLevel, drawerOpen, setDrawerOpen }),
+    [quickOpen, setQuickOpen, quickLevel, drawerOpen],
   );
 
   return <MobileNavContext.Provider value={value}>{children}</MobileNavContext.Provider>;
+}
+
+/** Same state, or null outside the shell (a component rendered on its own,
+ *  e.g. in a test) — for parts that simply step aside there. */
+export function useMobileNavOptional(): MobileNavState | null {
+  return useContext(MobileNavContext);
 }
 
 export function useMobileNav(): MobileNavState {
@@ -79,7 +92,8 @@ export function useMobileNav(): MobileNavState {
 }
 
 /**
- * MobileNav — the phone's top app bar: wordmark (→ Home) left, voice right.
+ * MobileNav — the phone's top app bar on every page but the chat: the chat
+ * drawer's sidebar icon and the wordmark (→ the last chat) left, voice right.
  * Stays `fixed` (an overlay-like bar above the scrolling content). The menu
  * itself is the ⊕ sheet; this file only holds the bar and the shared state.
  */
@@ -102,6 +116,8 @@ export default function MobileNav({ showBar = true }: {
           borderBottom: "1px solid var(--color-p2-line2)",
         }}
       >
+        <div className="flex items-center -ml-3">
+        <DrawerButton />
         <Link
           href="/"
           className="flex items-center h-11 cursor-pointer"
@@ -117,6 +133,7 @@ export default function MobileNav({ showBar = true }: {
           {BRAND_MAIN}
           <span style={{ color: P2.amb }}>{BRAND_ACCENT}</span>
         </Link>
+        </div>
 
         <div className="flex items-center gap-2">
           {/* The lead agent's live voice (voice PR 5); Jarvis when that is off. */}

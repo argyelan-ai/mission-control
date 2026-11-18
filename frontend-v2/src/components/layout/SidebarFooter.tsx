@@ -17,7 +17,15 @@ const MONO = { fontFamily: "var(--font-p2-mono)" };
  * plus the user and the shell's controls.
  * Same data source as the old bar (system.status), a fraction of the noise.
  */
-export default function SidebarFooter({ collapsed = false }: { collapsed?: boolean }) {
+export default function SidebarFooter({
+  collapsed = false,
+  collapsible = true,
+}: {
+  collapsed?: boolean;
+  /** false = the column cannot collapse (the chat column of the new shell) —
+   *  then no collapse button, instead of one that does nothing. */
+  collapsible?: boolean;
+}) {
   const t = useTranslations("shell");
   const tNav = useTranslations("nav");
   const router = useRouter();
@@ -165,6 +173,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
         {currentUser?.name ?? "—"}
       </div>
 
+      {collapsible && (
       <button
         onClick={toggleSidebar}
         aria-label={t("collapseSidebar")}
@@ -176,6 +185,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
       >
         {sidebarCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
       </button>
+      )}
       <ThemeCycleButton />
       <Link
         href="/settings"

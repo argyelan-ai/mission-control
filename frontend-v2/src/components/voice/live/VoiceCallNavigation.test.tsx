@@ -58,6 +58,8 @@ vi.mock("@/components/layout/MobileNav", async () => {
 });
 vi.mock("@/components/layout/MobileTabBar", () => ({ MobileTabBar: () => <div data-testid="mobile-tabbar" /> }));
 vi.mock("@/components/layout/QuickSheet", () => ({ QuickSheet: () => null }));
+vi.mock("@/components/layout/ChatDrawer", () => ({ ChatDrawer: () => null, DrawerButton: () => null }));
+vi.mock("@/components/layout/ChatSidebar", () => ({ ChatSidebar: () => null }));
 vi.mock("@/components/layout/Sidebar", () => ({ __esModule: true, default: () => null }));
 vi.mock("@/components/layout/AmbientBackground", () => ({ AmbientBackground: () => null }));
 vi.mock("@/components/shared/CommandPalette", () => ({ __esModule: true, default: () => null }));

@@ -633,40 +633,12 @@ describe("SessionsPage — sidebar collapse (mc.chat.sidebar)", () => {
     vi.restoreAllMocks();
   });
 
-  it("defaults to open, collapses on chevron click, persists to mc.chat.sidebar, and restores on expand", async () => {
-    const user = userEvent.setup();
+  // The page's own desktop rail left with the new shell (2026-11-18): the
+  // shell's left column (ChatSidebar) lists the chats on the desktop.
+  it("renders no desktop rail of its own — the shell's column lists the chats", async () => {
     renderPage();
     await screen.findAllByText("Agent One");
-    // Scoped to the desktop rail instance — the mobile sheet is a separate,
-    // always-mounted SessionSidebar (jsdom ignores its `md:hidden` class)
-    // and legitimately renders "Agent One" too, in its own toggle label.
-    const desktopSidebar = screen.getByTestId("sidebar-desktop");
-
-    // Open by default: the row's name is visible in the desktop rail.
-    expect(within(desktopSidebar).getByRole("option", { name: "Agent One" })).toBeInTheDocument();
-
-    await user.click(within(desktopSidebar).getByRole("button", { name: "Seitenleiste einklappen" }));
-
-    // Collapsed: name text is gone, row is icon-only but still an
-    // accessible option (title attribute carries the name).
-    expect(within(desktopSidebar).queryByText("Agent One")).not.toBeInTheDocument();
-    expect(within(desktopSidebar).getByRole("option", { name: "Agent One" })).toBeInTheDocument();
-    await waitFor(() => expect(localStorage.getItem("mc.chat.sidebar")).toBe("collapsed"));
-
-    await user.click(within(desktopSidebar).getByRole("button", { name: "Seitenleiste ausklappen" }));
-    expect(await within(desktopSidebar).findByText("Agent One")).toBeInTheDocument();
-    await waitFor(() => expect(localStorage.getItem("mc.chat.sidebar")).toBe("open"));
-  });
-
-  it("restores a persisted mc.chat.sidebar=collapsed on load", async () => {
-    localStorage.setItem("mc.chat.sidebar", "collapsed");
-    renderPage();
-
-    const desktopSidebar = screen.getByTestId("sidebar-desktop");
-    await waitFor(() =>
-      expect(within(desktopSidebar).getByRole("option", { name: "Agent One" })).toBeInTheDocument()
-    );
-    expect(within(desktopSidebar).queryByText("Agent One")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sidebar-desktop")).toBeNull();
   });
 
   it("the mobile stack list is unaffected by the desktop collapse state", async () => {
@@ -896,12 +868,14 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
   const chat = () => screen.getByTestId("chat-column");
   const isHidden = (el: HTMLElement) => el.className.split(/\s+/).includes("hidden");
 
-  it("starts on the list screen with the chat screen display:none", async () => {
+  // MC opens in a chat (ADR-102, operator decision 2026-11-18): with
+  // nothing remembered, the first agent's chat — never the list.
+  it("opens straight in a chat with the list screen display:none", async () => {
     renderPage();
     await screen.findAllByText("Agent One");
 
-    expect(isHidden(list())).toBe(false);
-    expect(isHidden(chat())).toBe(true);
+    await waitFor(() => expect(isHidden(chat())).toBe(false));
+    expect(isHidden(list())).toBe(true);
   });
 
   it("hides the list screen once a session is opened", async () => {
@@ -966,7 +940,7 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
   it("a ?agent= link arriving while the page is open opens that chat", async () => {
     const view = renderPage();
     await screen.findAllByText("Agent One");
-    expect(isHidden(chat())).toBe(true);
+    await waitFor(() => expect(screen.getByText("Chat: Agent One")).toBeInTheDocument());
 
     nav.searchParamsString = "agent=agent-2";
     view.rerender(
@@ -976,7 +950,7 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     );
     await waitFor(() => expect(isHidden(chat())).toBe(false));
     expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument();
-    expect(JSON.parse(localStorage.getItem("mc-recent-chats") ?? "[]")[0]).toEqual({ kind: "agent", id: "agent-2" });
+    expect(JSON.parse(localStorage.getItem("mc-recent-chats") ?? "[]")[0]).toMatchObject({ kind: "agent", id: "agent-2" });
   });
 
   it("back to the list stays on the list although the URL still names the chat", async () => {
@@ -1023,16 +997,61 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     renderPage();
     await screen.findAllByText("Agent One");
     await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
-    expect(JSON.parse(localStorage.getItem("mc-recent-chats") ?? "[]")[0]).toEqual({ kind: "agent", id: "agent-2" });
+    const first = JSON.parse(localStorage.getItem("mc-recent-chats") ?? "[]")[0];
+    expect(first).toMatchObject({ kind: "agent", id: "agent-2" });
+    // with the time this device opened it — the drawer sorts by it
+    expect(Number.isNaN(Date.parse(first.at))).toBe(false);
   });
 
-  it("a merely remembered selection still opens on the list screen", async () => {
+  // Start in the last chat (operator decision 2026-11-18): "/" redirects
+  // here and the remembered chat opens straight away, on the phone too.
+  it("a remembered selection opens straight in that chat", async () => {
     localStorage.setItem("mc-sessions-last-agent", "agent-2");
     renderPage();
     await screen.findAllByText("Agent Two");
 
+    await waitFor(() => expect(isHidden(chat())).toBe(false));
+    expect(isHidden(list())).toBe(true);
+    expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument();
+  });
+
+  it("a remembered group opens straight in that group", async () => {
+    vi.spyOn(api.groups, "list").mockResolvedValue([
+      { id: "g-1", name: "Review room", status: "idle", archived_at: null } as never,
+    ]);
+    vi.spyOn(api.groups, "get").mockResolvedValue({ id: "g-1", name: "Review room", status: "idle" } as never);
+    localStorage.setItem("mc-sessions-last-group", "g-1");
+    renderPage();
+    await waitFor(() => expect(isHidden(chat())).toBe(false));
+    expect(isHidden(list())).toBe(true);
+  });
+
+  // "New chat" (drawer, desktop column) = ?pick=1: the list with a title,
+  // in place of the chat — on the phone and on the desktop alike.
+  it("?pick=1 shows the picker list with its title instead of the chat", async () => {
+    nav.searchParamsString = "pick=1";
+    localStorage.setItem("mc-sessions-last-agent", "agent-2");
+    renderPage();
+    await screen.findAllByText("Agent Two");
+
+    expect(screen.getByTestId("chat-picker-title")).toHaveTextContent("Who do you want to chat with?");
     expect(isHidden(list())).toBe(false);
     expect(isHidden(chat())).toBe(true);
+    expect(list().className).toContain("md:flex");
+    expect(screen.getByTestId("chat-island").className).toContain("md:hidden");
+  });
+
+  it("a pick from the picker replaces it with the chat (back does not return to the picker)", async () => {
+    const user = userEvent.setup();
+    nav.replaced = [];
+    nav.pushed = [];
+    nav.searchParamsString = "pick=1";
+    renderPage();
+    await screen.findAllByText("Agent Two");
+
+    await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
+    expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]);
+    expect(nav.pushed).toEqual([]);
   });
 });
 
@@ -1315,7 +1334,7 @@ describe("SessionsPage — phone history puts the list behind every chat", () =>
     const user = userEvent.setup();
     renderPage();
     await screen.findAllByText("Agent One");
-    await user.click(within(screen.getByTestId("sidebar-desktop")).getByRole("option", { name: /Agent Two/ }));
+    await user.click(within(screen.getByTestId("session-list-mobile")).getByRole("option", { name: /Agent Two/ }));
     expect(nav.pushed).toEqual([]);
   });
 });

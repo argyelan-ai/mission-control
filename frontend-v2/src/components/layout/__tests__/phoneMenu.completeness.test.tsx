@@ -1,15 +1,16 @@
 /**
- * Completeness guard for the phone menu (variant B „Zwei Ebenen", 2026-10-02).
+ * Completeness guard for the phone navigation.
  *
- * Everything the old menu drawer (MobileNav "Index", reached via "More…") and
- * the previous ⊕ sheet offered must still be reachable on the phone — through
- * the tab bar, the ⊕ sheet (level 1 or level 2 "Pages"), the top app bar, or
- * the Settings page (account, board, log out, theme).
+ * Shell „Drei Daumen" (operator decision 2026-11-18): the tab bar holds only
+ * Chat · Models · Knowledge, the chat drawer holds the chats plus Models ·
+ * Knowledge · Settings, and every other page sits in Settings › More.
+ * Everything the earlier menus offered must still be reachable on the phone
+ * without typing a URL — through the app bar, the tab bar, the drawer or
+ * Settings › More (account, board, log out and theme stay in Settings).
  *
- * The expected set is built from what the OLD drawer rendered — every leaf of
- * NAV_TREE (pinned rows + groups = the whole tree) plus CHROME_ITEMS — not
- * from the new sheet's own generator, so dropping a destination or an action
- * anywhere in the new menu turns this red.
+ * The expected set is built from the whole navigation tree (NAV_TREE +
+ * CHROME_ITEMS), not from the new menus' own generators, so dropping a
+ * destination anywhere turns this red.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within, cleanup } from "@testing-library/react";
@@ -87,7 +88,8 @@ vi.mock("@/components/shared/CreateTaskModal", () => ({
 import { CHROME_ITEMS, NAV_TREE } from "@/lib/nav";
 import MobileNav, { MobileNavProvider } from "../MobileNav";
 import { MobileTabBar } from "../MobileTabBar";
-import { QuickSheet } from "../QuickSheet";
+import { ChatDrawer } from "../ChatDrawer";
+import { MorePagesSection } from "@/components/settings/MorePagesSection";
 import { PhoneAccountPanel } from "@/components/settings/PhoneAccountPanel";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 
@@ -101,7 +103,7 @@ function renderPhoneChrome() {
     <MobileNavProvider>
       <MobileNav />
       <MobileTabBar />
-      <QuickSheet />
+      <ChatDrawer />
     </MobileNavProvider>,
   );
 }
@@ -116,19 +118,17 @@ const OLD_DRAWER_ROUTES = [
   ...CHROME_ITEMS,
 ];
 
-/** Every route reachable on the phone without a URL: app bar + tab bar + both sheet levels. */
+/** Every route reachable on the phone without a URL: app bar + tab bar + drawer + Settings › More. */
 async function reachablePhoneRoutes(): Promise<Set<string>> {
   renderPhoneChrome();
   const found = new Set<string>();
-  // app bar (wordmark → Home) + tab bar
   linksIn(document.body).forEach((h) => found.add(h));
-  // ⊕ level 1
-  await userEvent.click(within(screen.getByTestId("mobile-tab-bar")).getByRole("button", { name: "New" }));
-  await waitFor(() => expect(screen.getByTestId("quick-last-chat")).toBeInTheDocument());
-  linksIn(screen.getByTestId("quick-sheet")).forEach((h) => found.add(h));
-  // ⊕ level 2 "Pages"
-  await userEvent.click(screen.getByTestId("quick-pages"));
-  linksIn(screen.getByTestId("quick-sheet")).forEach((h) => found.add(h));
+  await userEvent.click(screen.getByTestId("drawer-button"));
+  await waitFor(() => expect(screen.getAllByTestId("chat-list-row").length).toBeGreaterThan(0));
+  linksIn(screen.getByTestId("chat-drawer")).forEach((h) => found.add(h));
+  cleanup();
+  wrap(<MorePagesSection />);
+  linksIn(screen.getByTestId("settings-more")).forEach((h) => found.add(h));
   return found;
 }
 
@@ -141,38 +141,31 @@ beforeEach(() => {
   voice.toggleButton.mockClear();
 });
 
-describe("phone menu completeness (old drawer + old ⊕ sheet → variant B)", () => {
-  it("the old drawer's route list is not empty (guards the guard)", () => {
+describe("phone navigation completeness (tab bar + drawer + Settings › More)", () => {
+  it("the navigation tree is not empty (guards the guard)", () => {
     expect(OLD_DRAWER_ROUTES.length).toBeGreaterThanOrEqual(15);
   });
 
-  it("every route of the old drawer is reachable via app bar, tab bar or the ⊕ sheet", async () => {
+  it("every route of the navigation tree is reachable via app bar, tab bar, drawer or Settings › More", async () => {
     const found = await reachablePhoneRoutes();
     const missing = OLD_DRAWER_ROUTES.filter((h) => !found.has(h));
     expect(missing).toEqual([]);
   });
 
-  it("every action of the old ⊕ sheet stays: new job, voice, continue a chat", async () => {
+  it("the last chat is one tap away in the drawer, New chat leads to the picker", async () => {
     renderPhoneChrome();
-    await userEvent.click(within(screen.getByTestId("mobile-tab-bar")).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("drawer-button"));
+    const drawer = screen.getByTestId("chat-drawer");
     await waitFor(() =>
-      expect(screen.getByTestId("quick-last-chat")).toHaveAttribute("href", "/sessions?agent=a1&enter=1"),
+      expect(within(drawer).getByText("Lead").closest("a")).toHaveAttribute("href", "/sessions?agent=a1&enter=1"),
     );
-    await userEvent.click(screen.getByTestId("quick-voice"));
-    expect(voice.toggleButton).toHaveBeenCalledTimes(1);
-    await userEvent.click(within(screen.getByTestId("mobile-tab-bar")).getByRole("button", { name: "New" }));
-    await userEvent.click(screen.getByTestId("quick-new-job"));
-    expect(screen.getByTestId("create-task-modal")).toBeInTheDocument();
+    expect(within(drawer).getByTestId("chat-list-new")).toHaveAttribute("href", "/sessions?pick=1");
   });
 
-  it("the old drawer's chrome stays: wordmark → Home, voice in the app bar, Inbox in the bar", () => {
+  it("the app bar keeps the wordmark (→ the last chat via /) and the voice button", () => {
     renderPhoneChrome();
     expect(document.querySelector("header a[href='/']")).not.toBeNull();
     expect(screen.getByTestId("appbar-voice")).toBeInTheDocument();
-    expect(within(screen.getByTestId("mobile-tab-bar")).getByRole("link", { name: "Inbox" })).toHaveAttribute(
-      "href",
-      "/inbox",
-    );
   });
 
   it("the Settings page carries the phone account panel (board, account, log out)", () => {
@@ -203,12 +196,12 @@ describe("phone menu completeness (old drawer + old ⊕ sheet → variant B)", (
     expect(router.replace).toHaveBeenCalledWith("/login");
   });
 
-  it("the theme switch lives in Settings › Appearance — and not in the sheet", async () => {
+  it("the theme switch lives in Settings › Appearance — and not in the drawer", async () => {
     wrap(<AppearanceSection />);
     expect(screen.getByRole("radiogroup")).toBeInTheDocument();
     cleanup();
     renderPhoneChrome();
-    await userEvent.click(within(screen.getByTestId("mobile-tab-bar")).getByRole("button", { name: "New" }));
-    expect(within(screen.getByTestId("quick-sheet")).queryByRole("radiogroup")).toBeNull();
+    await userEvent.click(screen.getByTestId("drawer-button"));
+    expect(within(screen.getByTestId("chat-drawer")).queryByRole("radiogroup")).toBeNull();
   });
 });

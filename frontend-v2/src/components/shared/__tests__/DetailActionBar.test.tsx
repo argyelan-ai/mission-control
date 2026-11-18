@@ -111,7 +111,9 @@ describe("recent chats", () => {
     localStorage.setItem("mc-sessions-last-agent", "legacy");
     expect(loadRecentChats()).toEqual([{ kind: "agent", id: "legacy" }]);
     rememberChat({ kind: "group", id: "g1" });
-    expect(loadRecentChats()[0]).toEqual({ kind: "group", id: "g1" });
+    expect(loadRecentChats()[0]).toMatchObject({ kind: "group", id: "g1" });
+    // stamped with the time this device opened it (the chat list sorts by it)
+    expect(Number.isNaN(Date.parse(loadRecentChats()[0].at ?? ""))).toBe(false);
   });
 
   it("ignores broken storage content", () => {

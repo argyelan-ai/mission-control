@@ -45,6 +45,7 @@ import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
 import { ClaudeAccountTab } from "@/components/settings/ClaudeAccountTab";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { LanguageSection } from "@/components/settings/LanguageSection";
+import { MorePagesSection } from "@/components/settings/MorePagesSection";
 import { NightShiftTab } from "@/components/settings/NightShiftTab";
 import { PhoneAccountPanel } from "@/components/settings/PhoneAccountPanel";
 import { BoardsCard } from "@/components/settings/BoardsCard";
@@ -2460,6 +2461,11 @@ function SettingsContent() {
               )}
               {activeSection === "shortcuts" && <ShortcutsSection />}
               {activeSection === "about" && <AboutSection />}
+              {activeSection === "more" && (
+                <SectionMotion sectionKey="more">
+                  <MorePagesSection />
+                </SectionMotion>
+              )}
             </AnimatePresence>
           </div>
         </div>

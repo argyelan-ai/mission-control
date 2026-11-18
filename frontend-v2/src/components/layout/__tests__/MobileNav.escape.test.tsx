@@ -1,7 +1,7 @@
 /**
  * Phone overlays close on Esc — the UI probe found the menu stayed open at
  * 390 px (panel register rule 4: every overlay closes on Esc). Since variant
- * B the ⊕ sheet is the only phone menu; Esc steps back one level, then closes.
+ * 2026-11-18 the chat drawer is the phone menu; Esc closes it.
  */
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -34,6 +34,13 @@ vi.mock("@/lib/api", () => ({
     approvals: { list: vi.fn(async () => []) },
     boards: { list: vi.fn(async () => []) },
     heads: { list: vi.fn(async () => ({ runs: [] })) },
+    tasks: { list: vi.fn(async () => []), comments: { list: vi.fn(async () => []) } },
+    agents: {
+      list: vi.fn(async () => []),
+      listDockerSessions: vi.fn(async () => []),
+      listHostSessions: vi.fn(async () => [{ id: "a1", name: "Lead", status: "idle" }]),
+    },
+    groups: { list: vi.fn(async () => []) },
   },
 }));
 
@@ -43,34 +50,22 @@ vi.mock("@/components/voice/VoiceWidget", () => ({
 }));
 
 import MobileNav, { MobileNavProvider } from "../MobileNav";
-import { MobileTabBar } from "../MobileTabBar";
-import { QuickSheet } from "../QuickSheet";
+import { ChatDrawer } from "../ChatDrawer";
 
 describe("phone menu", () => {
-  it("closes on Esc", async () => {
+  it("the chat drawer closes on Esc", async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
         <MobileNavProvider>
           <MobileNav />
-          <MobileTabBar />
-          <QuickSheet />
+          <ChatDrawer />
         </MobileNavProvider>
       </QueryClientProvider>,
     );
 
-    // ⊕ sheet closes on Esc
-    await userEvent.click(screen.getByRole("button", { name: "New" }));
-    expect(screen.getByRole("dialog", { name: "Menu" })).toBeInTheDocument();
-    await userEvent.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-
-    // level 2 → Esc → level 1 → Esc → closed
-    await userEvent.click(screen.getByRole("button", { name: "New" }));
-    await userEvent.click(screen.getByTestId("quick-pages"));
-    expect(screen.getByRole("dialog", { name: "Pages" })).toBeInTheDocument();
-    await userEvent.keyboard("{Escape}");
-    expect(screen.getByRole("dialog", { name: "Menu" })).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("drawer-button"));
+    expect(screen.getByRole("dialog", { name: "Chats" })).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });

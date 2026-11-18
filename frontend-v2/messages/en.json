@@ -54,7 +54,8 @@
       "back": "Back",
       "reply": "Reply",
       "more": "More"
-    }
+    },
+    "knowledge": "Knowledge"
   },
   "settingsProfile": {
     "email": "Email",
@@ -2078,7 +2079,8 @@
       "nightShift": "Night shift",
       "appearance": "Appearance",
       "claude": "Claude",
-      "language": "Language"
+      "language": "Language",
+      "more": "More"
     },
     "security": {
       "title": "Security",
@@ -2515,7 +2517,8 @@
       "fleet": "Fleet",
       "connections": "Connections",
       "secrets": "Secrets",
-      "system": "System"
+      "system": "System",
+      "pages": "Pages"
     },
     "aiProviders": {
       "title": "AI providers",
@@ -5385,5 +5388,49 @@
     "agentButton": "{lang} to you",
     "agentButtonTitle": "Language: {summary}",
     "languageSettings": "Language settings"
+  },
+  "cockpit": {
+    "tabChat": "Chat",
+    "tabModels": "Models",
+    "tabKnowledge": "Knowledge",
+    "chatWaiting": "{count} waiting for you",
+    "mainNav": "Main navigation",
+    "openChats": "Open chats",
+    "closeChats": "Close chats",
+    "chatList": "Chats",
+    "newChat": "New chat",
+    "sectionWaiting": "Waiting for you",
+    "sectionToday": "Today",
+    "sectionEarlier": "Earlier",
+    "emptyChats": "No chats yet",
+    "stateWaiting": "waits for you",
+    "stateWorking": "working",
+    "more": "More",
+    "settings": "Settings",
+    "opening": "Opening your last chat…",
+    "pickTitle": "Who do you want to chat with?",
+    "knowledge": {
+      "title": "Knowledge",
+      "lead": "What MC knows and what it can do.",
+      "memoryTitle": "Memory",
+      "memoryHint": "Notes, lessons and references",
+      "skillsTitle": "Skills",
+      "skillsHint": "Skills and plugins the agents use"
+    },
+    "more_page": {
+      "title": "More",
+      "lead": "Every page outside the main navigation. All still work as before."
+    },
+    "header": {
+      "working": "Working",
+      "workingFor": "Working for {span}",
+      "ready": "Ready",
+      "waitingInput": "Waits for you"
+    },
+    "speed": {
+      "label": "Model and box",
+      "tps": "{tps} tok/s",
+      "boxTps": "Speed of the whole box, measured live"
+    }
   }
 }

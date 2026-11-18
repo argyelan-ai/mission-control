@@ -7,10 +7,10 @@ import { useBoardsBootstrap } from "@/lib/boards";
 import { api, getToken, getStoredUser, setStoredUser } from "@/lib/api";
 import { SETUP_PATH, shouldRedirectToSetup } from "@/lib/firstRun";
 import { AmbientBackground } from "./AmbientBackground";
-import Sidebar from "./Sidebar";
 import MobileNav, { MobileNavProvider } from "./MobileNav";
 import { MobileTabBar } from "./MobileTabBar";
-import { QuickSheet } from "./QuickSheet";
+import { ChatDrawer } from "./ChatDrawer";
+import { ChatSidebar } from "./ChatSidebar";
 import CommandPalette from "@/components/shared/CommandPalette";
 import ToastRenderer from "@/components/shared/ToastRenderer";
 import { VoiceProvider, VoiceOverlay } from "@/components/voice/VoiceWidget";
@@ -130,15 +130,17 @@ export default function AppShell({
       {/* Phone: top app bar (wordmark + voice) */}
       {!mobileChromeless && <MobileNav showBar={!mobileHideAppBar} />}
 
-      {/* Phone: the ⊕ menu sheet of the tab bar — the one phone menu
-          (variant B „Zwei Ebenen"). md:hidden inside. */}
-      <QuickSheet />
+      {/* Phone: the chat drawer — the one phone menu (operator decision
+          2026-11-18, variant A's menu), opened by the sidebar icon in the
+          chat header and in the app bar. md:hidden inside. */}
+      <ChatDrawer />
 
-      {/* Desktop: one column carries board, search, navigation and status
-          (Shell v4). The former WorkspaceSwitcher rail, TopBar and StatusBar
-          folded into it — see components/layout/Sidebar.tsx. */}
+      {/* Desktop: one column — the chats, then Chat · Models · Knowledge,
+          More and the user (components/layout/ChatSidebar.tsx). The Shell v4
+          page tree (Sidebar.tsx) left the shell; its pages sit in
+          Settings › More. */}
       <div className="hidden md:flex h-full relative z-10 p-2 pr-0">
-        <Sidebar />
+        <ChatSidebar />
       </div>
 
       {/* Main content area — deliberately NO z-index: a z-index here would

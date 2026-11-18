@@ -25,6 +25,7 @@ import {
   Moon,
   Palette,
   Languages,
+  LayoutGrid,
   type LucideIcon,
 } from "lucide-react";
 
@@ -34,9 +35,11 @@ import {
 // autonomy do agents have" next to "where does the Slack token live". The
 // groups answer one question each: whose account, how the fleet behaves, what
 // it talks to, what secrets it holds, who administers it.
-export type SettingsGroup = "account" | "fleet" | "connections" | "secrets" | "system";
+// "pages" (2026-11-18): Settings › More — every page outside Chat · Models ·
+// Knowledge. First, because on the phone it is the way to them.
+export type SettingsGroup = "pages" | "account" | "fleet" | "connections" | "secrets" | "system";
 
-export const GROUP_ORDER: SettingsGroup[] = ["account", "fleet", "connections", "secrets", "system"];
+export const GROUP_ORDER: SettingsGroup[] = ["pages", "account", "fleet", "connections", "secrets", "system"];
 
 export interface SettingsSection {
   id: string;
@@ -47,6 +50,7 @@ export interface SettingsSection {
 }
 
 export const SECTIONS: SettingsSection[] = [
+  { id: "more", labelKey: "sections.more", icon: LayoutGrid, group: "pages" },
   { id: "profile", labelKey: "sections.profile", icon: User, group: "account" },
   { id: "security", labelKey: "sections.security", icon: Shield, group: "account" },
   { id: "appearance", labelKey: "sections.appearance", icon: Palette, group: "account" },

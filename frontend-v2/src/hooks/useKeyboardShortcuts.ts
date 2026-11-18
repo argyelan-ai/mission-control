@@ -47,7 +47,7 @@ export function useKeyboardShortcuts() {
         if (chordTimeoutRef.current) clearTimeout(chordTimeoutRef.current);
 
         switch (e.key) {
-          case "h": router.push("/"); break;
+          case "h": router.push("/home"); break; // the dashboard left "/" (2026-11-18)
           case "t": router.push("/tasks"); break;
           case "a": router.push("/agents"); break;
           case "i": router.push("/inbox"); break;

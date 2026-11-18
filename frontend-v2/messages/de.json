@@ -54,7 +54,8 @@
       "back": "Zurück",
       "reply": "Antworten",
       "more": "Mehr"
-    }
+    },
+    "knowledge": "Wissen"
   },
   "settingsProfile": {
     "email": "E-Mail",
@@ -2078,7 +2079,8 @@
       "nightShift": "Nachtschicht",
       "appearance": "Darstellung",
       "claude": "Claude",
-      "language": "Sprache"
+      "language": "Sprache",
+      "more": "Mehr"
     },
     "security": {
       "title": "Sicherheit",
@@ -2515,7 +2517,8 @@
       "fleet": "Flotte",
       "connections": "Anschlüsse",
       "secrets": "Geheimnisse",
-      "system": "System"
+      "system": "System",
+      "pages": "Seiten"
     },
     "aiProviders": {
       "title": "KI-Provider",
@@ -5385,5 +5388,49 @@
     "agentButton": "{lang} an dich",
     "agentButtonTitle": "Sprache: {summary}",
     "languageSettings": "Sprach-Einstellungen"
+  },
+  "cockpit": {
+    "tabChat": "Chat",
+    "tabModels": "Modelle",
+    "tabKnowledge": "Wissen",
+    "chatWaiting": "{count} warten auf dich",
+    "mainNav": "Hauptnavigation",
+    "openChats": "Chats öffnen",
+    "closeChats": "Chats schliessen",
+    "chatList": "Chats",
+    "newChat": "Neuer Chat",
+    "sectionWaiting": "Wartet auf dich",
+    "sectionToday": "Heute",
+    "sectionEarlier": "Früher",
+    "emptyChats": "Noch keine Chats",
+    "stateWaiting": "wartet auf dich",
+    "stateWorking": "arbeitet",
+    "more": "Mehr",
+    "settings": "Einstellungen",
+    "opening": "Dein letzter Chat wird geöffnet …",
+    "pickTitle": "Mit wem willst du chatten?",
+    "knowledge": {
+      "title": "Wissen",
+      "lead": "Was MC weiss und was es kann.",
+      "memoryTitle": "Gedächtnis",
+      "memoryHint": "Notizen, Lektionen und Verweise",
+      "skillsTitle": "Skills",
+      "skillsHint": "Skills und Plugins, die die Agenten nutzen"
+    },
+    "more_page": {
+      "title": "Mehr",
+      "lead": "Alle Seiten ausserhalb der Hauptnavigation. Alle funktionieren wie bisher."
+    },
+    "header": {
+      "working": "Arbeitet",
+      "workingFor": "Arbeitet seit {span}",
+      "ready": "Bereit",
+      "waitingInput": "Wartet auf dich"
+    },
+    "speed": {
+      "label": "Modell und Box",
+      "tps": "{tps} tok/s",
+      "boxTps": "Tempo der ganzen Box, live gemessen"
+    }
   }
 }
