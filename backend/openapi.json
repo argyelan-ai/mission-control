@@ -2614,6 +2614,15 @@
         ]
       }
     },
+    "/api/v1/chat-record/agent/me/chats/{chat_id}/switch/{event_id}/result": {
+      "put": {
+        "operationId": "agent_report_switch_result_api_v1_chat_record_agent_me_chats__chat_id__switch__event_id__result_put",
+        "summary": "Agent Report Switch Result",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
     "/api/v1/chat-record/chats": {
       "get": {
         "operationId": "list_record_chats_api_v1_chat_record_chats_get",
@@ -2661,6 +2670,33 @@
       "get": {
         "operationId": "get_record_chat_resume_api_v1_chat_record_chats__chat_id__resume_get",
         "summary": "Get Record Chat Resume",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
+    "/api/v1/chat-record/chats/{chat_id}/switch": {
+      "post": {
+        "operationId": "switch_record_chat_api_v1_chat_record_chats__chat_id__switch_post",
+        "summary": "Switch Record Chat",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
+    "/api/v1/chat-record/chats/{chat_id}/switch-back": {
+      "post": {
+        "operationId": "switch_back_record_chat_api_v1_chat_record_chats__chat_id__switch_back_post",
+        "summary": "Switch Back Record Chat",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
+    "/api/v1/chat-record/chats/{chat_id}/switch/{event_id}": {
+      "get": {
+        "operationId": "get_record_chat_switch_api_v1_chat_record_chats__chat_id__switch__event_id__get",
+        "summary": "Get Record Chat Switch",
         "tags": [
           "chat-record"
         ]
