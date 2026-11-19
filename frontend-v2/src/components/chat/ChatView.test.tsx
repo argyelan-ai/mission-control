@@ -424,7 +424,7 @@ describe("buildTimelineItems — delegierte Auftraege", () => {
   it("macht aus einem Agent-Aufruf ein eigenes Element", () => {
     const items = buildTimelineItems([agentTool("a1")]);
     expect(items).toHaveLength(1);
-    expect(items[0].kind).toBe("agent");
+    expect(items[0].kind).toBe("helpers");
   });
 
   it("wird zwischen zwei Werkzeugen nicht in eine Gruppe geschluckt", () => {
@@ -432,12 +432,12 @@ describe("buildTimelineItems — delegierte Auftraege", () => {
     // einer Werkzeug-Gruppe — in der Praxis der Normalfall, weil er fast
     // immer neben Bash/Read steht.
     const items = buildTimelineItems([bash("b1"), agentTool("a1"), bash("b2")]);
-    expect(items.map((i) => i.kind)).toEqual(["single", "agent", "single"]);
+    expect(items.map((i) => i.kind)).toEqual(["single", "helpers", "single"]);
   });
 
   it("behandelt Task wie Agent", () => {
     const ev = { ...agentTool("a1"), name: "Task" } as TimelineChatEvent;
-    expect(buildTimelineItems([ev])[0].kind).toBe("agent");
+    expect(buildTimelineItems([ev])[0].kind).toBe("helpers");
   });
 
   it("laesst gewoehnliche Werkzeuge unberuehrt", () => {
@@ -466,7 +466,7 @@ describe("buildTimelineItems — Hintergrund-Meldungen", () => {
     // Sonst stuende dieselbe Aussage zweimal nebeneinander — die Karte sagt
     // "fertig", und direkt darunter noch einmal eine Zeile.
     const items = buildTimelineItems([agentTool2("a1", "t1"), notif("n1", "t1")]);
-    expect(items.map((i) => i.kind)).toEqual(["agent"]);
+    expect(items.map((i) => i.kind)).toEqual(["helpers"]);
   });
 
   it("zeigt eine Meldung ohne zugehoerigen Aufruf als eigene Zeile", () => {
@@ -1949,6 +1949,32 @@ describe("ChatView", () => {
     expect(
       screen.getByText("Session ended — a new message starts the next session")
     ).toBeInTheDocument();
+  });
+
+  it("an ended session's helpers line says 'no report' for a helper that never reported, never 'working'", () => {
+    const spawn = {
+      kind: "tool", uuid: "sp1", ts: "2026-08-15T10:01:00Z", name: "Agent", title: "Agent: x",
+      detail: { description: "Scan the repo" }, toolUseId: "tu-sp1", result: "Async agent launched",
+      status: "done", stats: null, sidechain: false,
+      helpers: [{ id: "ag-sp1", name: null, agent: null, state: "working", durationMs: null }],
+    } as TimelineChatEvent;
+    mockUseChatStream.mockReturnValue(
+      mkStream({ events: [spawn], session: { sessionId: "s1", live: false, startedAt: null, aliveness: "ended" } })
+    );
+    renderChatView();
+    expect(screen.getByTestId("helper-line-label").textContent).toBe("1 helper · 1 no report");
+  });
+
+  it("a live session's helper without a report is still working", () => {
+    const spawn = {
+      kind: "tool", uuid: "sp1", ts: "2026-08-15T10:01:00Z", name: "Agent", title: "Agent: x",
+      detail: { description: "Scan the repo" }, toolUseId: "tu-sp1", result: "Async agent launched",
+      status: "done", stats: null, sidechain: false,
+      helpers: [{ id: "ag-sp1", name: null, agent: null, state: "working", durationMs: null }],
+    } as TimelineChatEvent;
+    mockUseChatStream.mockReturnValue(mkStream({ events: [spawn] }));
+    renderChatView();
+    expect(screen.getByTestId("helper-line-label").textContent).toBe("1 helper · 1 working");
   });
 
   it('does NOT say "beendet" on a stale mtime alone (old backend)', () => {

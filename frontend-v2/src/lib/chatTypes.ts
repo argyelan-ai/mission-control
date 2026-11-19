@@ -104,6 +104,24 @@ export interface ToolEvent {
    *  images it read. References only — the bytes come from
    *  `api.agents.chatMediaUrl` with the chat's auth (backend `chat_media.py`). */
   images?: ToolImage[] | null;
+  /** Helpers (subagents) this call started, with their state as the
+   *  harness reported it at launch (backend `clean_helpers`): Claude Code's
+   *  `toolUseResult` or omp's `task` progress. A background launch is
+   *  `working` here — its end arrives later as a `notification`. Absent =
+   *  not a helper call, or an older backend. */
+  helpers?: HelperSpawn[] | null;
+}
+
+export interface HelperSpawn {
+  /** The harness's job id: Claude `agentId` (== a notification's `taskId`),
+   *  omp job name. */
+  id: string | null;
+  name: string | null;
+  /** omp: the helper's role (`scout`, `task`, …). */
+  agent: string | null;
+  state: "working" | "done" | "failed";
+  /** Measured run time, only when the harness reported one. */
+  durationMs: number | null;
 }
 
 /** One stored tool picture. `id` is its sha256; width/height are the
@@ -534,6 +552,8 @@ export interface NotificationEvent {
   toolUseId: string | null;
   status: string | null;
   summary: string | null;
+  /** How long the job ran, as the harness measured it (absent on older backends). */
+  durationMs?: number | null;
 }
 
 /** One item of an agent's todo list, normalised across harnesses

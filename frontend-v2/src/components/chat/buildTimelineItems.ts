@@ -10,7 +10,7 @@
  * waehrend ChatView rendert (siehe buildTimelineItems.seam-Abschnitt in
  * ChatView.test.tsx). Reines Umhaengen: gleiche Ein- und Ausgaben.
  */
-import { isAgentSpawn } from "./agentRuns";
+import { isHelperSpawn } from "./helpers";
 import type { ActivityEvent } from "./ToolGroup";
 import type { TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
 import { parseSendCall, type SendCall } from "@/lib/comms";
@@ -32,8 +32,10 @@ export type TimelineItem =
   | { kind: "activity"; events: ActivityEvent[] }
   /** A run of consecutive sidechain (subagent) events → one SubagentGroup. */
   | { kind: "sidechain"; events: TimelineChatEvent[] }
-  /** Ein delegierter Auftrag (Werkzeug `Agent`) → eine eigene Karte. */
-  | { kind: "agent"; event: ToolEvent }
+  /** Every helper (subagent) started in one working stretch → ONE quiet
+   *  line ("4 helpers · 3 working"), standing where the first was started.
+   *  A later spawn of the same stretch joins it instead of adding a card. */
+  | { kind: "helpers"; events: ToolEvent[] }
   /** A message to another session (`mc send` / `mc_send`, ADR-100 2d) → a send card. */
   | { kind: "send"; event: ToolEvent; call: SendCall };
 
@@ -74,12 +76,24 @@ export function buildTimelineItems(events: TimelineChatEvent[]): TimelineItem[] 
     activityRun = [];
   }
 
-  const absorbiert = new Set(
-    events.filter(isAgentSpawn).map((ev) => ev.toolUseId).filter(Boolean) as string[],
+  /* The helpers line of the stretch that is still open. A message of the
+     operator or a reply of the agent ends the stretch; a helper's own report
+     (teammate message) or a tool call between two spawns does not. */
+  let openHelpers: ToolEvent[] | null = null;
+
+  const spawns = events.filter(isHelperSpawn);
+  const absorbiert = new Set(spawns.map((ev) => ev.toolUseId).filter(Boolean) as string[]);
+  /* A report can also name only the helper itself (omp jobs; Claude reports
+     without a tool id) — it belongs to the line all the same. */
+  const helperIds = new Set(
+    spawns.flatMap((ev) => (ev.helpers ?? []).map((h) => h.id)).filter(Boolean) as string[],
   );
 
   for (const ev of events) {
-    if (ev.kind === "notification" && ev.toolUseId && absorbiert.has(ev.toolUseId)) {
+    if (
+      ev.kind === "notification" &&
+      ((ev.toolUseId && absorbiert.has(ev.toolUseId)) || (ev.taskId && helperIds.has(ev.taskId)))
+    ) {
       /* Gehoert zu einer Karte — dort wird sie gezeigt. Zweimal dasselbe
          nebeneinander war genau das Rauschen, das hier weg soll. */
       continue;
@@ -90,21 +104,27 @@ export function buildTimelineItems(events: TimelineChatEvent[]): TimelineItem[] 
       continue;
     }
     flushSidechain();
-    // Before isAgentSpawn: its type guard narrows every tool out of `ev`.
+    // Before isHelperSpawn: its type guard narrows every tool out of `ev`.
     const send = ev.kind === "tool" ? parseSendCall(ev) : null;
     if (send && ev.kind === "tool") {
       /* Like a delegated job: talking to another session is something the
          operator wants to see, not "+1 tool" inside a collapsed group. */
       flushActivity();
+      openHelpers = null;
       out.push({ kind: "send", event: ev, call: send });
       continue;
     }
-    if (isAgentSpawn(ev)) {
+    if (isHelperSpawn(ev)) {
       /* Muss VOR der Aktivitaets-Sammlung stehen: sonst verschwindet der
          Auftrag als anonymes "+1 Tool" in einer Werkzeug-Gruppe, weil er in
          der Praxis fast immer neben Bash/Read steht. */
       flushActivity();
-      out.push({ kind: "agent", event: ev });
+      if (openHelpers) {
+        openHelpers.push(ev);
+      } else {
+        openHelpers = [ev];
+        out.push({ kind: "helpers", events: openHelpers });
+      }
       continue;
     }
     if (isActivity(ev)) {
@@ -112,6 +132,7 @@ export function buildTimelineItems(events: TimelineChatEvent[]): TimelineItem[] 
       continue;
     }
     flushActivity();
+    if (ev.kind === "command" || (ev.kind === "message" && ev.role !== "teammate")) openHelpers = null;
     out.push({ kind: "single", event: ev });
   }
 

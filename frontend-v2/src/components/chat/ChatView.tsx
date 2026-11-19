@@ -40,10 +40,11 @@ import { HeadChatHeader } from "@/components/heads/HeadChatHeader";
 import { HeadChatFooter } from "@/components/heads/HeadChatFooter";
 import { HeadRunRecordCard } from "@/components/heads/HeadRunRecordCard";
 import { HeadNoTranscriptFallback } from "@/components/heads/HeadNoTranscriptFallback";
-import { AgentCard } from "./AgentCard";
+import { HelperLine } from "./HelperLine";
+import { helperReports, isHelperSpawn } from "./helpers";
 import { NotificationRow } from "./NotificationRow";
 import { WorkingOnRow, type WorkingOn } from "./WorkingOnRow";
-import { isAgentSpawn, matchRuns, notificationsByTool } from "./agentRuns";
+import { matchRuns } from "./agentRuns";
 import type { TimelineItem } from "./buildTimelineItems";
 import { ChatMessage } from "./ChatMessage";
 import { PreviewRow } from "./PreviewRow";
@@ -193,7 +194,7 @@ function isVisibleAtLevel(ev: TimelineChatEvent, level: DetailLevel): boolean {
      er sagt, WER hier gerade woran arbeitet. Ohne diese Ausnahme verschwaende
      die Karte in "Kompakt" spurlos — samt dem einzigen Zugang zum Protokoll
      des Subagenten. */
-  if (isAgentSpawn(ev)) return true;
+  if (isHelperSpawn(ev)) return true;
   // Kompakt: tool/thinking rows are noise for a quick skim — hide entirely
   // rather than collapse (that's what Normal is for). Since no tool/thinking
   // event survives this filter, `Kompakt` also produces no activity groups —
@@ -1060,7 +1061,10 @@ export function ChatView({
   );
   /* Meldungen, die zu einem Werkzeugaufruf gehoeren, werden in dessen Karte
      gezeigt — nicht zusaetzlich als eigene Zeile daneben. */
-  const toolNotices = useMemo(() => notificationsByTool(stream.events), [stream.events]);
+  /* Every observed end of a helper (reports, idle team members) — the
+     helpers line reads its "3 working" from these, over ALL events so a
+     detail level that hides reports never freezes a helper at "working". */
+  const reports = useMemo(() => helperReports(stream.events), [stream.events]);
   // What a live voice call listens along to (voice PR 3): the same stream the
   // chat renders. A preview tick changes none of these three, so it costs nothing.
   const voiceProgress = useMemo(
@@ -1182,6 +1186,7 @@ export function ChatView({
   // over the history handshake, because the history query no longer refetches
   // on focus while the pane probe keeps publishing (see resolveSessionAliveness).
   const aliveness = resolveSessionAliveness(stream);
+  const helpersSessionEnded = aliveness === "ended" || (!!head && isHeadDone(head));
   const prompt = stream.state?.status === "permission_prompt" ? stream.state.prompt : null;
 
   /* "Send again" on a chat error card (S1-R7, chatResend.tsx): the card sends
@@ -1252,18 +1257,22 @@ export function ChatView({
   // previous render" (reproduced directly: render with `head={null}`, then
   // re-render the SAME `ChatView` instance with a real `head`).
   function renderChatItem(item: TimelineItem) {
-                if (item.kind === "agent") {
+                if (item.kind === "helpers") {
                   return (
-                    <AgentCard
-                      key={item.event.toolUseId ?? item.event.uuid}
-                      ev={item.event}
-                      run={runMatches.get(item.event.toolUseId ?? "")}
-                      notice={toolNotices.get(item.event.toolUseId ?? "")}
+                    <HelperLine
+                      key={`helpers-${item.events[0].toolUseId ?? item.events[0].uuid}`}
+                      events={item.events}
+                      reports={reports}
+                      runs={runMatches}
                       // A head has no subagent-detail endpoint of its own
                       // (ADR-085 Nachtrag §4: the main transcript only) — an
                       // empty id just makes the "open subagent" affordance a
                       // harmless no-reply instead of crashing on `agent.id`.
                       agentId={agent?.id ?? ""}
+                      // An ended session (or a finished head) runs no helper
+                      // any more: one that never reported says so instead of
+                      // "working" with a clock that counts for weeks.
+                      sessionEnded={helpersSessionEnded}
                     />
                   );
                 }
