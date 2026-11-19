@@ -21,7 +21,10 @@ import type { ChatDiffSource } from "./types";
  *  Zug scheitert (z.B. `model_fallback`: das gemerkte Modell bietet die
  *  Runtime nicht mehr an, ein anderes wird genutzt). Werte in
  *  `MessageEvent.notice`. */
-export type MessageSourceKind = "task" | "nudge" | "inbox" | "teammate" | "system" | "error" | "notice";
+/*  `switch` = ein Wechsel des Chats auf ein anderes Paar (ADR-105). Er steht
+ *  nicht im Transkript, sondern in MCs Aufzeichnung; useChatStream legt ihn
+ *  zu seiner Zeit in den Verlauf. Werte in `MessageEvent.switchInfo`. */
+export type MessageSourceKind = "task" | "nudge" | "inbox" | "teammate" | "system" | "error" | "notice" | "switch";
 
 export interface MessageSource {
   kind: MessageSourceKind;
@@ -59,6 +62,10 @@ export interface MessageEvent {
   /** Nur bei `source.kind === "notice"`: `code` waehlt den Satz,
    *  `previous`/`current` sind die Werte darin. */
   notice?: ChatNoticeInfo | null;
+  /** Nur bei `source.kind === "switch"`: die Zeile der Aufzeichnung, der
+   *  Chat, zu dem sie gehoert, und ob sie der juengste Wechsel ist (nur der
+   *  bietet „Zurueck wechseln" an). */
+  switchInfo?: { row: import("./api").SwitchRow; chatId: string; latest: boolean } | null;
 }
 
 export interface ChatNoticeInfo {

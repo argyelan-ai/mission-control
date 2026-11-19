@@ -12,7 +12,13 @@ import type { DetailLevel } from "./chatOptions";
 import type { MessageEvent, TimelineChatEvent } from "@/lib/chatTypes";
 
 function isErrorCard(ev: TimelineChatEvent): boolean {
-  return ev.kind === "message" && ev.role === "teammate" && ev.source?.kind === "error";
+  // A chat switch (ADR-105) changes what answers from here on — like an
+  // error, it stays visible at every level.
+  return (
+    ev.kind === "message" &&
+    ev.role === "teammate" &&
+    (ev.source?.kind === "error" || ev.source?.kind === "switch")
+  );
 }
 
 /** Something the operator (or MC on their behalf) put into the chat — the
