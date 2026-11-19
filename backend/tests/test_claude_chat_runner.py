@@ -485,7 +485,10 @@ class _Docker:
             return subprocess.CompletedProcess(argv, rc, out, err)
 
         if "list-windows" in tmux:
-            return done(out="".join(f"{s}\t{n}\n" for s, n in self.windows))
+            fmt = opt("-F")
+            return done(out="".join(
+                fmt.replace("#{session_name}", s).replace("#{window_name}", n) + "\n"
+                for s, n in self.windows))
         if "new-session" in tmux:
             session = opt("-s")
             if any(s == session for s, _ in self.windows):

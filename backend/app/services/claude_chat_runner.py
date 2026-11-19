@@ -353,15 +353,17 @@ async def _chat_windows(slug: str) -> tuple[bool, set[str]]:
     (a missing chats session is no error; a dead tmux server is)."""
     result = await _docker([
         "docker", "exec", "-u", "agent", f"mc-agent-{slug}",
-        "tmux", "list-windows", "-a", "-F", "#{session_name}\t#{window_name}",
+        # ":" as the separator: tmux never allows it in a session name (a tab
+        # would not do — tmux 3.3a, the image's, prints it as "_").
+        "tmux", "list-windows", "-a", "-F", "#{session_name}:#{window_name}",
     ])
     if result.returncode != 0:
         raise ClaudeChatRunnerError("agent_unreachable", (result.stderr or "").strip()[:200])
-    session = chats_session(slug)
+    prefix = f"{chats_session(slug)}:"
     names = {
-        line.split("\t", 1)[1]
+        line[len(prefix):]
         for line in (result.stdout or "").splitlines()
-        if "\t" in line and line.split("\t", 1)[0] == session
+        if line.startswith(prefix)
     }
     return bool(names), names
 
