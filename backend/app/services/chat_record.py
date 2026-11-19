@@ -1031,11 +1031,17 @@ async def list_chats(
     visible = _visible(user)
     if visible is not True:
         q = q.where(visible)
+    rows = (await session.exec(q)).all()
+    from app.services import chat_turn_state
+
+    # busy / idle / stale from each chat's current session file — read, not
+    # stored, so a chat nobody has open shows its state too.
+    states = await chat_turn_state.turn_states(session, [r[0] for r in rows])
     out = []
-    for chat, events, n_sessions, failed in (await session.exec(q)).all():
+    for chat, events, n_sessions, failed in rows:
         out.append(
             {
-                **chat_out(chat),
+                **chat_turn_state.with_state(chat_out(chat), states.get(chat.id)),
                 "events": int(events or 0),
                 "sessions": int(n_sessions or 0),
                 # Sessions whose last import failed — "record incomplete".
@@ -1068,10 +1074,16 @@ async def chat_history(
     *,
     limit: int = 200,
     before: uuid.UUID | None = None,
+    kinds: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """The newest ``limit`` events of a chat (oldest first), or the page
-    right before event ``before`` — order is (ts, seq) across all sessions."""
+    right before event ``before`` — order is (ts, seq) across all sessions.
+    ``kinds`` = only events of these kinds (the switch cards of a long chat
+    sit far behind its newest page); paging works the same inside them."""
     q = select(ChatEvent).where(ChatEvent.chat_id == chat_id)
+    kind_list = sorted(set(kinds or ()))
+    if kind_list:
+        q = q.where(ChatEvent.kind.in_(kind_list))
     if before is not None:
         anchor = (await session.exec(
             select(ChatEvent).where(ChatEvent.chat_id == chat_id, ChatEvent.id == before)

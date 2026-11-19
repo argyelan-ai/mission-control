@@ -14,6 +14,7 @@ for the product until the flag is on.
 """
 from __future__ import annotations
 
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -23,9 +24,13 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import Role, require_agent, require_role
 from app.database import get_session
 from app.scopes import Scope, require_scope
-from app.services import chat_record, chat_switch
+from app.services import chat_record, chat_switch, chat_turn_state
 
 router = APIRouter(prefix="/api/v1/chat-record", tags=["chat-record"])
+
+#: An event kind as the record stores it (``chat_events.kind``, 40 chars).
+_KIND_RE = re.compile(r"[a-z][a-z_]{0,39}")
+_MAX_KINDS = 10
 
 
 def _require_enabled() -> None:
@@ -108,17 +113,30 @@ async def get_record_history(
     chat_id: uuid.UUID,
     limit: int = Query(200, ge=1, le=1000),
     before: uuid.UUID | None = Query(None),
+    kind: list[str] | None = Query(None),
     current_user=Depends(require_role(Role.VIEWER)),
     session: AsyncSession = Depends(get_session),
 ):
     """One page of a chat's record across all its sessions, oldest first;
-    ``before`` = an event id for backward paging."""
+    ``before`` = an event id for backward paging; ``kind`` (repeatable) =
+    only events of these kinds, e.g. ``kind=switch`` for every switch card
+    of the chat, however old."""
     _require_enabled()
+    kinds = kind or []
+    if len(kinds) > _MAX_KINDS or any(not _KIND_RE.fullmatch(k) for k in kinds):
+        raise HTTPException(status_code=422, detail={"reason": "bad_kind"})
     chat = await chat_record.get_chat(session, current_user, chat_id)
     if chat is None:
         raise HTTPException(status_code=404, detail="Chat not found")
-    history = await chat_record.chat_history(session, chat.id, limit=limit, before=before)
-    history["chat"] = {"id": str(chat.id), "title": chat.title, "harness": chat.harness, "model": chat.model}
+    history = await chat_record.chat_history(session, chat.id, limit=limit, before=before, kinds=kinds)
+    history["chat"] = {
+        "id": str(chat.id),
+        "title": chat.title,
+        "harness": chat.harness,
+        "model": chat.model,
+    }
+    states = await chat_turn_state.turn_states(session, [chat])
+    chat_turn_state.with_state(history["chat"], states.get(chat.id))
     return history
 
 
