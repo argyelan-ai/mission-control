@@ -7,9 +7,12 @@ Contract:
 * flag off: exactly today's behaviour — the one-argument transport, ``/new``
   is the daemon's ``new_session`` (204), no chat is created; a ``chatId``
   is refused (404 ``chat_record_disabled``) instead of being dropped;
-* flag on, ``/new`` on an omp agent: 201 ``{"newChat": …}``, a further chat
-  in the record, the daemon's session untouched; the agent's OWN ``/new``
-  command still goes to the harness as text;
+* flag on, ``/new`` on an omp agent: still the daemon's reset until its own
+  switch ``CHAT_RECORD_NEW_AS_CHAT`` is on (the chat view does not follow
+  ``newChat`` yet); with it: 201 ``{"newChat": …}``, a further chat in the
+  record, the daemon's session untouched, a ``chat.session_reset`` event
+  with who sent it; the agent's OWN ``/new`` command still goes to the
+  harness as text;
 * flag on, ``chatId``: the further chat goes to the daemon by id
   (``chatId`` on the wire for every op); the agent's default chat is the
   agent's own chat; another agent's chat is 404;
@@ -77,6 +80,22 @@ def flag(monkeypatch):
     monkeypatch.setattr(settings, "chat_record_enabled", True, raising=False)
 
 
+@pytest.fixture
+def new_as_chat(monkeypatch, flag):
+    """``/new`` opens a further chat — its own switch on top of the record."""
+    monkeypatch.setattr(settings, "chat_record_new_as_chat", True, raising=False)
+
+
+async def _reset_events(agent_id):
+    from app.models.activity import ActivityEvent
+
+    async with AsyncSession(test_engine) as s:
+        return (await s.exec(
+            select(ActivityEvent).where(ActivityEvent.event_type == "chat.session_reset",
+                                        ActivityEvent.agent_id == agent_id)
+        )).all()
+
+
 async def _omp(make_agent, slug="omp-many"):
     return await make_agent(name="Omp Many", slug=slug, agent_runtime="cli-bridge", harness="omp")
 
@@ -119,7 +138,32 @@ async def test_flag_off_a_chat_id_is_refused_not_dropped(auth_client, make_agent
 # ── flag on ────────────────────────────────────────────────────────────────
 
 
-async def test_new_creates_a_further_chat_and_leaves_the_session(auth_client, make_agent, wire, flag):
+async def test_record_on_new_stays_the_daemon_reset_until_its_own_switch(auth_client, make_agent, wire, flag):
+    """The chat view does not follow `newChat` yet: with only the record on,
+    `/new` keeps today's reset — never a chat the operator cannot reach."""
+    agent = await _omp(make_agent)
+    url, body = _input(agent, text="/new")
+    resp = await auth_client.post(url, json=body)
+    assert resp.status_code == 204, resp.text
+    assert _calls(wire) == [("new_session", None)]
+    assert all(c.agent_default for c in await _chats(agent.id))
+
+
+async def test_new_as_a_chat_is_on_record_like_every_reset(auth_client, make_agent, wire, new_as_chat):
+    agent = await _omp(make_agent)
+    url, body = _input(agent, text="/new")
+    resp = await auth_client.post(url, json=body)
+    assert resp.status_code == 201, resp.text
+    events = await _reset_events(agent.id)
+    assert len(events) == 1
+    detail = events[0].detail
+    assert detail["outcome"] == "new_chat" and detail["command"] == "/new"
+    assert detail["new_chat_id"] == resp.json()["newChat"]["id"]
+    assert detail["actor"] == "operator" and detail["via"] == "chat_input"
+    assert "opened a new chat" in events[0].title
+
+
+async def test_new_creates_a_further_chat_and_leaves_the_session(auth_client, make_agent, wire, new_as_chat):
     agent = await _omp(make_agent)
     url, body = _input(agent, text="/new")
     resp = await auth_client.post(url, json=body)
@@ -138,7 +182,7 @@ async def test_new_creates_a_further_chat_and_leaves_the_session(auth_client, ma
     assert len(await _chats(agent.id)) == 3
 
 
-async def test_the_agents_own_new_command_still_goes_to_the_harness(auth_client, make_agent, monkeypatch, flag):
+async def test_the_agents_own_new_command_still_goes_to_the_harness(auth_client, make_agent, monkeypatch, new_as_chat):
     from app.services import agent_chat_input
 
     fake = _FakeTransport()
@@ -153,7 +197,7 @@ async def test_the_agents_own_new_command_still_goes_to_the_harness(auth_client,
     assert await _chats(agent.id) == []
 
 
-async def test_a_message_to_a_further_chat_names_it_on_the_wire(auth_client, make_agent, wire, flag):
+async def test_a_message_to_a_further_chat_names_it_on_the_wire(auth_client, make_agent, wire, new_as_chat):
     agent = await _omp(make_agent)
     url, body = _input(agent, text="/new")
     chat_id = (await auth_client.post(url, json=body)).json()["newChat"]["id"]
@@ -169,7 +213,7 @@ async def test_a_message_to_a_further_chat_names_it_on_the_wire(auth_client, mak
     assert _calls(wire)[-1] == ("prompt", None, "main chat")
 
 
-async def test_the_default_chat_id_is_the_agents_own_chat(auth_client, make_agent, wire, flag):
+async def test_the_default_chat_id_is_the_agents_own_chat(auth_client, make_agent, wire, new_as_chat):
     agent = await _omp(make_agent)
     url, body = _input(agent, text="/new")
     await auth_client.post(url, json=body)
@@ -179,7 +223,7 @@ async def test_the_default_chat_id_is_the_agents_own_chat(auth_client, make_agen
     assert _calls(wire) == [("prompt", None, "hi")]
 
 
-async def test_another_agents_chat_is_not_found(auth_client, make_agent, wire, flag):
+async def test_another_agents_chat_is_not_found(auth_client, make_agent, wire, new_as_chat):
     first = await _omp(make_agent, slug="omp-first")
     second = await _omp(make_agent, slug="omp-second")
     url, body = _input(first, text="/new")
@@ -191,7 +235,7 @@ async def test_another_agents_chat_is_not_found(auth_client, make_agent, wire, f
     assert _calls(wire) == []
 
 
-async def test_an_archived_chat_takes_no_message(auth_client, make_agent, wire, flag):
+async def test_an_archived_chat_takes_no_message(auth_client, make_agent, wire, new_as_chat):
     agent = await _omp(make_agent)
     url, body = _input(agent, text="/new")
     chat_id = (await auth_client.post(url, json=body)).json()["newChat"]["id"]

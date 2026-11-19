@@ -66,7 +66,7 @@ from app.services import acp_chat_chats, chat_actions, chat_media, chat_run_cont
 from app.services.activity import emit_event
 from app.services.chat_changes import aggregate_changes
 from app.services.chat_diff import capture_texts
-from app.services.chat_reset_audit import CHAT_SESSION_RESET_EVENT, chat_input_event
+from app.services.chat_reset_audit import CHAT_SESSION_RESET_EVENT, ChatReset, actor_label, chat_input_event
 from app.services.chat_engine_activity import agent_engine_activity
 from app.services.chat_task_activity import task_activity
 from app.services.sse import _sse_generator, sse_response
@@ -1338,9 +1338,21 @@ async def post_chat_input(
         return JSONResponse(status_code=404, content={"reason": "chat_record_disabled"})
     except acp_chat_chats.ChatNotFoundError:
         return JSONResponse(status_code=404, content={"reason": "chat_not_found"})
-    new_chat = await acp_chat_chats.new_chat_for_reset(session, current_user, agent, body.text)
-    if new_chat is not None:
+    made = await acp_chat_chats.new_chat_for_reset(session, current_user, agent, body.text)
+    if made is not None:
         # The conversation it was typed in stays as it is — its own chat.
+        new_chat, command = made
+        # On record like every /new (incident 21.10.2026): who, and that it
+        # became a further chat instead of a reset.
+        _title, detail = chat_input_event(
+            ChatReset(command=command, previous_session_id=None, queued=False),
+            _actor(current_user, request),
+        )
+        detail = {**detail, "outcome": "new_chat", "new_chat_id": new_chat["id"],
+                  "chat_id": chat_id}
+        title = (f"{command} by {actor_label(detail)} opened a new chat — "
+                 "the conversation it was typed in stays as it is")
+        await _audit(session, agent, CHAT_SESSION_RESET_EVENT, title, detail)
         return JSONResponse(status_code=201, content={"newChat": new_chat})
 
     try:

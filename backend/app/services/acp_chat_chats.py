@@ -73,12 +73,17 @@ async def resolve_chat(session: AsyncSession, user: Any, agent: Any, chat_id: uu
     return str(chat.id)
 
 
-async def new_chat_for_reset(session: AsyncSession, user: Any, agent: Any, text: str) -> dict | None:
-    """``/new`` or ``/clear`` with the record on: a further chat of the agent
-    (committed), as ``chat_record.chat_out``. None when the text is no reset
-    MC handles here — any other text, the agent's OWN command of that name
-    (it goes to the harness as text, as before), or an agent / flag state
-    that keeps today's reset."""
+async def new_chat_for_reset(session: AsyncSession, user: Any, agent: Any, text: str) -> tuple[dict, str] | None:
+    """``/new`` or ``/clear`` with the record AND ``chat_record_new_as_chat``
+    on: a further chat of the agent (committed), as ``chat_record.chat_out``,
+    and the command (``"/new"``). None when the text is no reset MC handles
+    here — any other text, the agent's OWN command of that name (it goes to
+    the harness as text, as before), or an agent / flag state that keeps
+    today's reset. The sub-flag stays off until the chat view follows
+    ``newChat``: before that the new chat could not be reached and ``/new``
+    would do less than today."""
+    if not getattr(settings, "chat_record_new_as_chat", False):
+        return None
     if not further_chats_supported(agent):
         return None
     from app.services.agent_chat_input import _acp_session_reset_command
@@ -88,4 +93,4 @@ async def new_chat_for_reset(session: AsyncSession, user: Any, agent: Any, text:
         return None
     chat = await chat_record.create_chat(session, user, agent)
     await session.commit()
-    return chat_record.chat_out(chat)
+    return chat_record.chat_out(chat), f"/{reset[0]}"
