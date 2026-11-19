@@ -1116,8 +1116,6 @@ async def send_keys(agent, keys: list[str]) -> None:
 
     kind = _target_kind(agent)
     slug = agent.slug
-    if chat_id and kind not in _ACP_KINDS:
-        raise InputNotSupportedError()
 
     if kind in _ACP_KINDS:
         # Der Stop-Knopf des Composers schickt genau ``["Escape"]`` — das ist
