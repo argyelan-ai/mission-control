@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import uuid
@@ -204,9 +205,10 @@ def test_two_chats_alternate_each_file_grows_only_with_its_own(box):
     # The system prompt went in as the agent's card, by file.
     snapshot = next(x for x in _lines(file_a) if x["type"] == "attachment")
     assert snapshot["attachment"]["systemPrompt"] == ["You are Rex. CARD-TEXT"]
-    # Shared config by link, own .claude.json with trust + onboarding answered.
+    # The agent's settings as the chat's OWN copy (never a link — the hooks in
+    # it are rewritten per chat), own .claude.json with trust + onboarding.
     chat_dir = box["home"] / "chats" / chat_a
-    assert (chat_dir / "settings.json").is_symlink()
+    assert not (chat_dir / "settings.json").is_symlink()
     assert json.loads((chat_dir / "settings.json").read_text()) == {"model": "opus"}
     cfg = json.loads((chat_dir / ".claude.json").read_text())
     assert cfg["theme"] == "dark"  # started from the agent's own answers
@@ -297,6 +299,106 @@ def test_start_with_handoff_keeps_the_snapshot_on(box):
     assert snap["attachment"]["systemPrompt"] == ["You are Rex. CARD-TEXT\n\nPKG"]
 
 
+_TURN_SIGNAL_SETTINGS = {
+    "model": "opus",
+    # Exactly what backend/templates/cli_agent_settings.json.j2 renders.
+    "hooks": {
+        "UserPromptSubmit": [{"hooks": [{"type": "command", "timeout": 5,
+            "command": "printf '%s submit\\n' $(date +%s) >> /home/agent/.turn-signal"}]}],
+        "Stop": [{"hooks": [{"type": "command", "timeout": 5,
+            "command": "printf '%s stop\\n' $(date +%s) >> /home/agent/.turn-signal"}]}],
+    },
+    "statusLine": {"type": "command", "command": "bash /home/agent/.claude/statusline-mc.sh"},
+}
+
+
+def _hook_commands(settings_data: dict) -> list[str]:
+    return [h["command"] for groups in settings_data.get("hooks", {}).values()
+            for g in groups for h in g["hooks"]]
+
+
+def test_chat_never_writes_the_agents_turn_signal(box):
+    """poll.sh and the backend read /home/agent/.turn-signal as the turn state
+    of window 0 (heartbeat, stagnation, the new-task /clear, dispatch guard).
+    A chat's claude runs the agent's hooks — so in the chat's settings every
+    turn-signal hook writes the chat's OWN file, never the agent's."""
+    (box["home"] / "settings.json").write_text(json.dumps(_TURN_SIGNAL_SETTINGS), encoding="utf-8")
+    (box["home"] / "settings.local.json").write_text(
+        json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command",
+            "command": "echo x >> $HOME/.turn-signal"}]}]}}), encoding="utf-8")
+    chat = str(uuid.uuid4())
+    chat_dir = box["home"] / "chats" / chat
+    # A chat dir from an earlier build still has the link to the agent's file.
+    chat_dir.mkdir(parents=True)
+    (chat_dir / "settings.json").symlink_to("../../settings.json")
+
+    _script(box, "--chat", chat, "--resume", SID)
+
+    raw = (chat_dir / "settings.json").read_text()
+    assert not (chat_dir / "settings.json").is_symlink()
+    assert not (chat_dir / "settings.local.json").is_symlink()
+    assert "/home/agent/.turn-signal" not in raw
+    assert "/.turn-signal" not in (chat_dir / "settings.local.json").read_text().replace(
+        f"{chat_dir}/.turn-signal", "")
+    data = json.loads(raw)
+    assert data["model"] == "opus" and data["statusLine"] == _TURN_SIGNAL_SETTINGS["statusLine"]
+    # The agent's own file is untouched (the link was not written through).
+    assert json.loads((box["home"] / "settings.json").read_text()) == _TURN_SIGNAL_SETTINGS
+    # Running the chat's hooks writes the chat's file only.
+    commands = _hook_commands(data)
+    assert len(commands) == 2
+    for command in commands:
+        subprocess.run(["sh", "-c", command], check=True, timeout=10)
+    lines = (chat_dir / ".turn-signal").read_text().split()
+    assert lines[1::2] == ["submit", "stop"]
+
+    # A later change by the agent's sync reaches the chat on its next start.
+    (box["home"] / "settings.json").write_text(
+        json.dumps({**_TURN_SIGNAL_SETTINGS, "model": "sonnet"}), encoding="utf-8")
+    _script(box, "--chat", chat, "--resume", SID)
+    assert json.loads((chat_dir / "settings.json").read_text())["model"] == "sonnet"
+
+
+def test_chat_claude_json_follows_the_agents_mcp_servers(box):
+    """The chat's .claude.json is its own (trust, history), but MCP servers
+    and per-folder trust the agent's sync adds later reach existing chats."""
+    chat = str(uuid.uuid4())
+    _script(box, "--chat", chat, "--resume", SID)
+    chat_json = box["home"] / "chats" / chat / ".claude.json"
+    own = json.loads(chat_json.read_text())
+    own["theme"] = "light"  # the chat's own answer stays
+    chat_json.write_text(json.dumps(own))
+
+    (box["home"] / ".claude.json").write_text(json.dumps({
+        "theme": "dark",
+        "mcpServers": {"mc": {"command": "mc-mcp"}},
+        "projects": {"/workspace/repo": {"hasTrustDialogAccepted": True,
+                                         "mcpServers": {"x": {"command": "x"}}}},
+    }))
+    _script(box, "--chat", chat, "--resume", SID)
+    merged = json.loads(chat_json.read_text())
+    assert merged["theme"] == "light"
+    assert merged["mcpServers"] == {"mc": {"command": "mc-mcp"}}
+    assert merged["projects"]["/workspace/repo"]["hasTrustDialogAccepted"] is True
+    assert merged["projects"]["/workspace/repo"]["mcpServers"] == {"x": {"command": "x"}}
+    assert merged["projects"]["/home/agent"]["hasTrustDialogAccepted"] is True
+
+
+def test_sticky_resume_carries_the_current_card_and_the_old_package(box):
+    """After a handoff the session runs with the snapshot off — every request
+    reads the prompt file. A later card change by the agent's sync must show
+    up there; the package of the handoff stays."""
+    chat, native = str(uuid.uuid4()), str(uuid.uuid4())
+    _say(box, chat, native, "first")
+    _say(box, chat, native, "switch", handoff="PKG-OLD")
+    (box["home"] / "SOUL.md").write_text("You are Rex. NEW-CARD", encoding="utf-8")
+    later = _say(box, chat, native, "next day")
+    assert later.snapshot_off
+    shapes = [x["shape"]["system"] for x in _lines(runner.pinned_transcript("rex", chat, native))
+              if x["type"] == "api-request-shape"]
+    assert shapes[-1] == "You are Rex. NEW-CARD\n\nPKG-OLD"
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # start-claude.sh — default chat unchanged, macOS login
 # ══════════════════════════════════════════════════════════════════════════
@@ -354,18 +456,57 @@ def test_chat_mode_refuses_a_bad_chat_id(box):
 
 
 class _Docker:
-    """Records docker argv; answers list-windows with ``windows``."""
+    """A fake ``docker exec … tmux`` with sessions: records argv, answers
+    ``list-windows -a`` and behaves like tmux 3.3a for ``new-session`` (a
+    duplicate name fails), ``new-window`` (``-S`` selects an existing window
+    of that name instead of opening a second one) and ``kill-window``.
+    ``delay`` stretches every call, as a real docker exec does (~50 ms)."""
 
-    def __init__(self, windows=("0", "1", "2")):
+    def __init__(self, windows=(("rex", "0"), ("rex", "1"), ("rex", "2")), delay: float = 0.0):
         self.calls: list[list[str]] = []
-        self.windows = list(windows)
+        self.windows = [tuple(w) for w in windows]
+        self.delay = delay
+
+    def opens(self) -> list[list[str]]:
+        return [c for c in self.calls if "new-window" in c or "new-session" in c]
 
     async def __call__(self, argv):
+        import asyncio
+
         self.calls.append(argv)
-        out = "\n".join(self.windows) + "\n" if "list-windows" in argv else ""
-        if "new-window" in argv:
-            self.windows.append(argv[argv.index("-n") + 1])
-        return subprocess.CompletedProcess(argv, 0, out, "")
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        tmux = argv[argv.index("tmux"):]
+
+        def opt(name):
+            return tmux[tmux.index(name) + 1] if name in tmux else None
+
+        def done(rc=0, out="", err=""):
+            return subprocess.CompletedProcess(argv, rc, out, err)
+
+        if "list-windows" in tmux:
+            return done(out="".join(f"{s}\t{n}\n" for s, n in self.windows))
+        if "new-session" in tmux:
+            session = opt("-s")
+            if any(s == session for s, _ in self.windows):
+                return done(1, err=f"duplicate session: {session}")
+            self.windows.append((session, opt("-n")))
+            return done()
+        if "new-window" in tmux:
+            session, name = opt("-t").rstrip(":"), opt("-n")
+            if not any(s == session for s, _ in self.windows):
+                return done(1, err=f"can't find session: {session}")
+            if "-S" in tmux and (session, name) in self.windows:
+                return done()
+            self.windows.append((session, name))
+            return done()
+        if "kill-window" in tmux:
+            session, name = opt("-t").split(":", 1)
+            if (session, name) not in self.windows:
+                return done(1, err=f"can't find window: {name}")
+            self.windows.remove((session, name))
+            return done()
+        return done()
 
 
 class _Agent:
@@ -383,24 +524,152 @@ async def test_ensure_window_opens_once_and_restarts_only_for_a_handoff(box, mon
     agent, chat, native = _Agent(), str(uuid.uuid4()), str(uuid.uuid4())
 
     target = await runner.ensure_window(agent, chat, native)
-    assert target == f"rex:chat-{chat}"
-    new = [c for c in docker.calls if "new-window" in c]
-    assert len(new) == 1
-    assert new[0][:7] == ["docker", "exec", "-e", "LANG=C.UTF-8", "-u", "agent", "mc-agent-rex"]
-    tail = new[0][new[0].index("/home/agent/start-claude.sh"):]
+    assert target == f"chats-rex:chat-{chat}"
+    (new,) = docker.opens()
+    assert new[:7] == ["docker", "exec", "-e", "LANG=C.UTF-8", "-u", "agent", "mc-agent-rex"]
+    tail = new[new.index("/home/agent/start-claude.sh"):]
     assert tail[:3] == ["/home/agent/start-claude.sh", "--chat", chat]
     assert tail[3:6] == ["--dangerously-skip-permissions", "--session-id", native]
-    assert new[0][new[0].index("-c") + 1] == "/home/agent"
+    assert new[new.index("-c") + 1] == "/home/agent"
 
     # Running window, no handoff: used as it is.
     await runner.ensure_window(agent, chat, native)
-    assert len([c for c in docker.calls if "new-window" in c]) == 1
+    assert len(docker.opens()) == 1
     assert not [c for c in docker.calls if "kill-window" in c]
 
     # A switch with a handoff: the old process goes, a new one comes.
     await runner.ensure_window(agent, chat, native, handoff="PKG")
-    assert [c for c in docker.calls if "kill-window" in c][0][-1] == f"rex:chat-{chat}"
-    assert len([c for c in docker.calls if "new-window" in c]) == 2
+    assert [c for c in docker.calls if "kill-window" in c][0][-1] == f"chats-rex:chat-{chat}"
+    assert len(docker.opens()) == 2
+    assert docker.windows.count(("chats-rex", f"chat-{chat}")) == 1
+
+
+async def test_chat_windows_never_touch_the_agents_own_session(box, monkeypatch):
+    """The container watchdog knows windows 0/1/2 of the agent's session by
+    INDEX only, poll.sh types tasks into :0, the recycler respawns :0. A
+    chat window in that session would take the lowest free index — hiding a
+    dead poll.sh (1) or recycler (2), or becoming :0 itself. So chat windows
+    live in their own session ``chats-<slug>`` and every tmux call of the
+    runner names that session, never the agent's."""
+    # poll.sh's window 1 just died: index 1 is free in the agent's session.
+    docker = _Docker(windows=(("rex", "0"), ("rex", "2")))
+    monkeypatch.setattr(runner, "_docker", docker)
+    agent = _Agent()
+    chats = [(str(uuid.uuid4()), str(uuid.uuid4())) for _ in range(3)]
+    for chat, native in chats:
+        target = await runner.ensure_window(agent, chat, native)
+        assert target.startswith("chats-rex:")
+    # Nothing new in the agent's session: index 1 stays free for the watchdog.
+    assert [w for w in docker.windows if w[0] == "rex"] == [("rex", "0"), ("rex", "2")]
+    assert sorted(n for s, n in docker.windows if s == "chats-rex") == sorted(
+        f"chat-{c}" for c, _ in chats)
+    for call in docker.opens():
+        tmux = call[call.index("tmux"):]
+        session = tmux[tmux.index("-s") + 1] if "-s" in tmux else tmux[tmux.index("-t") + 1]
+        assert session.rstrip(":") == "chats-rex", call
+    # The first open made the session; the later ones added windows to it.
+    assert "new-session" in docker.opens()[0] and all("new-window" in c for c in docker.opens()[1:])
+    # The agent's send-keys/capture target is a chats-session window too.
+    assert runner.chat_target("rex", chats[0][0]) == f"chats-rex:chat-{chats[0][0]}"
+
+
+async def test_concurrent_sends_open_one_window(box, monkeypatch):
+    """Two sends to the same not-yet-open chat at the same time: exactly ONE
+    claude process. Two windows of one name would run two claudes on one
+    session id, and ``send-keys -t <name>`` then fails (ambiguous name)."""
+    import asyncio
+
+    docker = _Docker(delay=0.05)
+    monkeypatch.setattr(runner, "_docker", docker)
+    agent, chat, native = _Agent(), str(uuid.uuid4()), str(uuid.uuid4())
+    targets = await asyncio.gather(runner.ensure_window(agent, chat, native),
+                                   runner.ensure_window(agent, chat, native))
+    assert targets[0] == targets[1]
+    assert len(docker.opens()) == 1, f"{len(docker.opens())} windows named chat-{chat} opened"
+    assert docker.windows.count(("chats-rex", f"chat-{chat}")) == 1
+
+    # Two DIFFERENT chats at once while the chats session does not exist yet:
+    # both open (one makes the session, the other joins it), none fails.
+    docker2 = _Docker(delay=0.05)
+    monkeypatch.setattr(runner, "_docker", docker2)
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    await asyncio.gather(runner.ensure_window(agent, a, native),
+                         runner.ensure_window(agent, b, str(uuid.uuid4())))
+    assert {n for s, n in docker2.windows if s == "chats-rex"} == {f"chat-{a}", f"chat-{b}"}
+
+
+async def test_failed_handoff_plan_does_not_kill_running_window(box, monkeypatch):
+    """A switch whose launch cannot be planned (package too large, prompt
+    file not writable) must leave the running process alone."""
+    docker = _Docker()
+    monkeypatch.setattr(runner, "_docker", docker)
+    agent, chat, native = _Agent(), str(uuid.uuid4()), str(uuid.uuid4())
+    await runner.ensure_window(agent, chat, native)
+
+    with pytest.raises(ClaudeChatRunnerError) as e:
+        await runner.ensure_window(agent, chat, native, handoff="x" * (600 * 1024))
+    assert e.value.code == "prompt_too_large"
+    assert not [c for c in docker.calls if "kill-window" in c]
+    assert ("chats-rex", f"chat-{chat}") in docker.windows
+
+    def _no_write(*a, **k):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(Path, "write_text", _no_write)
+    with pytest.raises(ClaudeChatRunnerError) as e:
+        await runner.ensure_window(agent, chat, native, handoff="PKG")
+    assert e.value.code == "prompt_write_failed"
+    assert not [c for c in docker.calls if "kill-window" in c]
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="needs a real tmux")
+async def test_real_tmux_watchdog_indexes_stay_free(box, monkeypatch, tmp_path):
+    """The same with a REAL tmux server (private socket): the agent's session
+    has windows 0 and 2 (poll.sh died); three chats open; the watchdog's
+    ``new-window -t <slug>:1`` still works, and two concurrent opens of one
+    chat give one window."""
+    import asyncio
+
+    sock = f"mc-test-{uuid.uuid4().hex[:8]}"
+
+    def local(argv):
+        tmux = argv[argv.index("tmux") + 1:]
+        if "/home/agent/start-claude.sh" in tmux:
+            tmux = tmux[:tmux.index("/home/agent/start-claude.sh")] + ["sleep", "60"]
+        if "-c" in tmux:
+            tmux[tmux.index("-c") + 1] = str(tmp_path)
+        return ["tmux", "-L", sock, *tmux]
+
+    async def _real(argv):
+        await asyncio.sleep(0.02)
+        return await asyncio.to_thread(subprocess.run, local(argv), capture_output=True,
+                                       text=True, timeout=10)
+
+    run = lambda *a: subprocess.run(["tmux", "-L", sock, *a], capture_output=True, text=True)
+    run("new-session", "-d", "-s", "rex", "sleep 60")
+    run("new-window", "-t", "rex:1", "sleep 60")
+    run("new-window", "-t", "rex:2", "sleep 60")
+    run("kill-window", "-t", "rex:1")
+    try:
+        monkeypatch.setattr(runner, "_docker", _real)
+        agent, native = _Agent(), str(uuid.uuid4())
+        chats = [str(uuid.uuid4()) for _ in range(3)]
+        await asyncio.gather(*(runner.ensure_window(agent, c, str(uuid.uuid4())) for c in chats))
+        await asyncio.gather(runner.ensure_window(agent, chats[0], native),
+                             runner.ensure_window(agent, chats[0], native))
+        rex = run("list-windows", "-t", "rex", "-F", "#{window_index}").stdout.split()
+        assert rex == ["0", "2"]
+        # The watchdog's restart of poll.sh (entrypoint.sh) still succeeds.
+        assert run("new-window", "-t", "rex:1", "sleep 60").returncode == 0
+        names = run("list-windows", "-t", "chats-rex", "-F", "#{window_name}").stdout.split()
+        assert sorted(names) == sorted(f"chat-{c}" for c in chats)
+        # send-keys by name finds exactly one window.
+        assert run("send-keys", "-t", runner.chat_target("rex", chats[0]), "-l", "--", "x").returncode == 0
+        # The agent's session is never matched by the chats session's name.
+        run("kill-session", "-t", "rex")
+        assert run("has-session", "-t", "rex").returncode != 0
+    finally:
+        run("kill-server")
 
 
 async def test_ensure_window_refuses_non_container_agents(box, monkeypatch):
@@ -480,7 +749,7 @@ async def test_chat_id_types_into_the_chats_own_window(monkeypatch):
 
     async def _open(agent, chat_id, *, handoff=None):
         opened.append(chat_id)
-        return f"{agent.slug}:chat-{chat_id}"
+        return f"chats-{agent.slug}:chat-{chat_id}"
 
     monkeypatch.setattr(runner, "open_chat", _open)
     chat_a, chat_b = str(uuid.uuid4()), str(uuid.uuid4())
@@ -488,9 +757,58 @@ async def test_chat_id_types_into_the_chats_own_window(monkeypatch):
     await agent_chat_input.send_text(agent, "to A", chat_id=chat_a)
     await agent_chat_input.send_text(agent, "line1\nline2", chat_id=chat_b)
     targets = [c[c.index("-t") + 1] for c in calls if "send-keys" in c]
-    assert targets == [f"rex:chat-{chat_a}"] * 2 + [f"rex:chat-{chat_b}"] * 2
+    assert targets == [f"chats-rex:chat-{chat_a}"] * 2 + [f"chats-rex:chat-{chat_b}"] * 2
     assert opened == [chat_a, chat_b]
     assert panes == [chat_a, chat_b]
+
+
+async def test_chat_send_leaves_window_0s_recycler_clock_and_preview_alone(monkeypatch):
+    """A further chat's traffic is not window 0's: no touch of the agent's
+    recycler idle marker (it decides when window 0 is recycled) and no
+    preview anchor for the agent's default chat."""
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(settings, "chat_record_enabled", True, raising=False)
+    calls, _ = _fake_send(monkeypatch, agent_chat_input)
+
+    async def _open(agent, chat_id, *, handoff=None):
+        return f"chats-{agent.slug}:chat-{chat_id}"
+
+    monkeypatch.setattr(runner, "open_chat", _open)
+    agent = _Agent()
+    agent_chat_input.pop_last_sent(str(agent.id))
+    await agent_chat_input.send_text(agent, "only for the chat", chat_id=str(uuid.uuid4()))
+    assert not [c for c in calls if "touch" in c]
+    assert agent_chat_input.pop_last_sent(str(agent.id)) is None
+    # The default chat still does both.
+    await agent_chat_input.send_text(agent, "default")
+    assert [c for c in calls if "touch" in c]
+    assert agent_chat_input.pop_last_sent(str(agent.id)) == "default"
+
+
+@pytest.mark.parametrize("word", ["/clear", "/new", " /CLEAR "])
+async def test_clear_in_a_further_chat_is_refused_not_typed(monkeypatch, word):
+    """/clear or /new typed into a further chat's claude would start a new
+    session under a random id: the chat's pin would still name the old file,
+    and the next restart would resume the pre-clear session — everything
+    after the /clear silently gone. Refused before anything opens or types."""
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(settings, "chat_record_enabled", True, raising=False)
+    calls, _ = _fake_send(monkeypatch, agent_chat_input)
+    opened: list[str] = []
+
+    async def _open(agent, chat_id, *, handoff=None):
+        opened.append(chat_id)
+        return f"chats-{agent.slug}:chat-{chat_id}"
+
+    monkeypatch.setattr(runner, "open_chat", _open)
+    with pytest.raises(agent_chat_input.InputNotSupportedError):
+        await agent_chat_input.send_text(_Agent(), word, chat_id=str(uuid.uuid4()))
+    assert calls == [] and opened == []
+    # An ordinary message that starts with the word is just text.
+    await agent_chat_input.send_text(_Agent(), "/clear den Cache", chat_id=str(uuid.uuid4()))
+    assert len(opened) == 1
 
 
 async def test_chat_id_refused_for_other_harnesses(monkeypatch):

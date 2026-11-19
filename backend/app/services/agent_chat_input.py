@@ -953,8 +953,16 @@ async def send_text(agent, text: str, *, origin: str | None = None,
             or (getattr(agent, "harness", None) or "claude") != "claude"
         ):
             raise InputNotSupportedError()
+        if _session_clearing_word(text):
+            # Typed into the chat's claude, ``/clear``/``/new`` would start a
+            # session under a random id; the chat's pin would still name the
+            # old file and the next restart would resume the pre-clear
+            # session — everything after it silently lost. Refused until MC
+            # turns it into a new chat (as the omp path does).
+            raise InputNotSupportedError()
         # Opens (or resumes) the chat's own claude before anything is typed;
-        # its errors (chat not found, start failed) reach the caller.
+        # its errors (``ClaudeChatRunnerError``: chat not found, start failed)
+        # reach the caller.
         chat_target = await claude_chat_runner.open_chat(agent, chat_id)
 
     if kind in _ACP_KINDS:
@@ -1021,7 +1029,10 @@ async def send_text(agent, text: str, *, origin: str | None = None,
     if kind == "docker":
         from app.services.transcript_adapters import PANE_PROBED_HARNESSES
 
-        await _touch_recycler_marker(slug)
+        if not chat_target:
+            # The recycler watches window 0 only: a further chat's traffic
+            # must not keep the agent's own session from being recycled.
+            await _touch_recycler_marker(slug)
         if getattr(agent, "harness", None) in PANE_PROBED_HARNESSES:
             # Das Tor liest den Pane mit den Regeln DIESES Harness. Solange es
             # nur Claude-Regeln gab, erfuellte eine fremde TUI sie nie — der omp-Agent
@@ -1053,7 +1064,10 @@ async def send_text(agent, text: str, *, origin: str | None = None,
         else:
             await _run_docker_exec(_docker_argv(slug, "-l", "--", text, target=chat_target))
         await _run_docker_exec(_docker_argv(slug, "Enter", target=chat_target))
-        note_sent(str(getattr(agent, "id", "") or slug), text)
+        if not chat_target:
+            # The live-preview anchor of the agent's DEFAULT chat (keyed by
+            # agent): a further chat's text is not its anchor.
+            note_sent(str(getattr(agent, "id", "") or slug), text)
         return _terminal_reset(text)
 
     # kind == "boss" — same shape as the docker path (literal text, multi-line

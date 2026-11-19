@@ -66,32 +66,85 @@ if [ "${1:-}" = "--chat" ]; then
     shift 2
     CHAT_DIR="$CLAUDE_HOME/chats/$CHAT_ID"
     mkdir -p "$CHAT_DIR"
-    # Shared with the agent's own config (model, hooks, status line, skills,
-    # plugins): links, so a change by the agent's sync reaches every chat.
-    # The chat's own: projects/ (its session files), .claude.json (trust,
-    # onboarding), history.
-    for _name in settings.json settings.local.json skills plugins agents commands CLAUDE.md statusline-mc.sh; do
+    # Shared with the agent's own config (skills, plugins, agents, commands,
+    # CLAUDE.md, status line script): links, so a change by the agent's sync
+    # reaches every chat. NOT the settings files: their hooks write the
+    # agent-wide /home/agent/.turn-signal, which poll.sh and the backend read
+    # as window 0's turn state (heartbeat, stagnation, the new-task /clear,
+    # dispatch) — a chat's copy is written below with those paths rewritten.
+    # The chat's own: projects/ (its session files), .claude.json, history.
+    for _name in skills plugins agents commands CLAUDE.md statusline-mc.sh; do
         if [ -e "$CLAUDE_HOME/$_name" ] && [ ! -e "$CHAT_DIR/$_name" ] && [ ! -L "$CHAT_DIR/$_name" ]; then
             ln -s "../../$_name" "$CHAT_DIR/$_name"
         fi
     done
-    # First start of a new config dir: claude would ask for theme, folder
-    # trust and the skip-permissions warning — a chat cannot answer those.
-    # Start from the agent's own .claude.json (it has answered them) and set
-    # the same trust entries entrypoint.sh sets for the agent.
-    MC_CHAT_PARENT_JSON="$CLAUDE_HOME/.claude.json" MC_CHAT_JSON="$CHAT_DIR/.claude.json" python3 - <<'PY' || echo "[start-claude] warn: could not prepare $CHAT_DIR/.claude.json" >&2
+    # Every start (so the agent's later changes arrive):
+    # - settings.json / settings.local.json = the agent's, with every
+    #   turn-signal path pointing at the chat's own file;
+    # - .claude.json: the first start begins from the agent's (it has
+    #   answered theme, folder trust and the skip-permissions warning — a
+    #   chat cannot answer them); later starts keep the chat's own file and
+    #   take over the agent's MCP servers and per-folder trust/MCP entries;
+    #   plus the trust entries entrypoint.sh sets for the agent.
+    MC_CHAT_PARENT="$CLAUDE_HOME" MC_CHAT_DIR="$CHAT_DIR" python3 - <<'PY' || echo "[start-claude] warn: could not prepare $CHAT_DIR" >&2
 import json, os
 
-parent, path = os.environ["MC_CHAT_PARENT_JSON"], os.environ["MC_CHAT_JSON"]
-d = {}
-for src in (path, parent):
-    if os.path.exists(src):
-        try:
-            with open(src) as f:
-                d = json.load(f)
-            break
-        except Exception:
-            d = {}
+parent_dir, chat_dir = os.environ["MC_CHAT_PARENT"], os.environ["MC_CHAT_DIR"]
+own_signal = chat_dir + "/.turn-signal"
+AGENT_SIGNALS = ("/home/agent/.turn-signal", "$HOME/.turn-signal", "${HOME}/.turn-signal", "~/.turn-signal")
+
+
+def load(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def write(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)  # replaces a link from an earlier build, not its target
+
+
+def own_paths(value):
+    if isinstance(value, str):
+        for agent_path in AGENT_SIGNALS:
+            value = value.replace(agent_path, own_signal)
+        return value
+    if isinstance(value, list):
+        return [own_paths(v) for v in value]
+    if isinstance(value, dict):
+        return {k: own_paths(v) for k, v in value.items()}
+    return value
+
+
+for name in ("settings.json", "settings.local.json"):
+    path = os.path.join(chat_dir, name)
+    data = load(os.path.join(parent_dir, name))
+    if data is not None:
+        write(path, own_paths(data))
+    elif os.path.lexists(path):
+        os.unlink(path)
+
+path = os.path.join(chat_dir, ".claude.json")
+parent = load(os.path.join(parent_dir, ".claude.json")) or {}
+own = load(path)
+d = own if own is not None else dict(parent)
+if own is not None:
+    if "mcpServers" in parent:
+        d["mcpServers"] = parent["mcpServers"]
+    for folder, entry in (parent.get("projects") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        mine = d.setdefault("projects", {}).setdefault(folder, {})
+        for key in ("mcpServers", "enabledMcpjsonServers", "disabledMcpjsonServers",
+                    "hasTrustDialogAccepted", "allowedTools"):
+            if key in entry:
+                mine[key] = entry[key]
 d["hasCompletedOnboarding"] = True
 d["bypassPermissionsModeAccepted"] = True
 projects = d.setdefault("projects", {})
@@ -99,10 +152,7 @@ for p in ("/home/agent", "/workspace"):
     e = projects.setdefault(p, {})
     e["hasTrustDialogAccepted"] = True
     e.setdefault("allowedTools", [])
-tmp = path + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(d, f, indent=2)
-os.replace(tmp, path)
+write(path, d)
 PY
     export CLAUDE_CONFIG_DIR="$CHAT_DIR"
     # macOS keeps the login in the keychain under a name derived from

@@ -6,7 +6,11 @@ agent's default chat and nothing here touches it. A *further* chat of the
 same agent (``chats.agent_default = false``, created by
 ``chat_record.create_chat`` with a pinned ``native_session_id``) gets:
 
-* its own tmux window ``chat-<chat id>`` in the agent's tmux session;
+* its own tmux window ``chat-<chat id>`` in a SEPARATE tmux session
+  ``chats-<slug>`` — never in the agent's own session: the container
+  watchdog (entrypoint.sh) knows windows 0/1/2 there by index only, poll.sh
+  types tasks into :0 and the recycler respawns :0, so a chat window there
+  could take a free index 0/1/2 (``new-window`` picks the lowest free one);
 * its own ``CLAUDE_CONFIG_DIR`` = ``<claude-config>/chats/<chat id>/`` — so
   its session file lands in ``…/chats/<chat id>/projects/<cwd>/<native>.jsonl``
   and never next to the agent's own files (the default chat follows the
@@ -44,6 +48,7 @@ import json
 import logging
 import subprocess
 import uuid
+import weakref
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -61,8 +66,16 @@ CONTAINER_CWD = "/home/agent"
 START_SCRIPT = "/home/agent/start-claude.sh"
 CHATS_DIRNAME = "chats"
 PROMPT_FILENAME = "system-prompt.md"
+#: The package of the last handoff applied with the snapshot off: a later
+#: resume recomposes the prompt file from the CURRENT card plus this.
+HANDOFF_FILENAME = "handoff.md"
 STATE_FILENAME = "runner.json"
 WINDOW_PREFIX = "chat-"
+#: The tmux session that holds every further chat's window of one agent.
+#: A prefix, not a suffix: tmux resolves ``-t <slug>`` by name prefix too,
+#: so ``<slug>-chats`` would answer the watchdog's ``has-session -t <slug>``
+#: once the agent's own session is gone (and it would never restart it).
+CHATS_SESSION_PREFIX = "chats-"
 #: Upper bound for the system-prompt file in BYTES (umlauts are two). The
 #: handoff budget is at most 32 000 tokens ≈ 128 000 chars (plan §2.0); with
 #: two-byte characters and the agent's card that stays far below this.
@@ -224,45 +237,84 @@ def plan_launch(
 
     prompt_file: str | None = None
     prompt_host = chat_dir / PROMPT_FILENAME
-    if action == "start" or snapshot_off:
-        if handoff or not (sticky_off and prompt_host.is_file()):
-            # A sticky resume keeps the file of its handoff; anything else
-            # gets the current card (+ the new handoff).
-            text = compose_system_prompt(_card_text(slug), handoff)
+    handoff_host = chat_dir / HANDOFF_FILENAME
+    try:
+        if action == "start" or snapshot_off:
+            package: str | None = handoff
+            keep_file = False
+            if not handoff and sticky_off:
+                # A later resume of a session that runs with the snapshot
+                # off: the CURRENT card (the agent's sync may have changed
+                # it) plus the package of its handoff. A chat dir from before
+                # handoff.md existed keeps its prompt file as it is.
+                if handoff_host.is_file():
+                    package = handoff_host.read_text(encoding="utf-8")
+                else:
+                    keep_file = prompt_host.is_file()
+            if not keep_file:
+                text = compose_system_prompt(_card_text(slug), package)
+                chat_dir.mkdir(parents=True, exist_ok=True)
+                if text:
+                    prompt_host.write_text(text, encoding="utf-8")
+                else:
+                    prompt_host.unlink(missing_ok=True)
+            if handoff and snapshot_off:
+                handoff_host.write_text(handoff, encoding="utf-8")
+            if prompt_host.is_file():
+                prompt_file = f"{container_chat_dir(chat_id)}/{PROMPT_FILENAME}"
+        if snapshot_off and prompt_file is None:
+            raise ClaudeChatRunnerError("snapshot_off_without_prompt", slug)
+        if snapshot_off and not sticky_off:
             chat_dir.mkdir(parents=True, exist_ok=True)
-            if text:
-                prompt_host.write_text(text, encoding="utf-8")
-            else:
-                prompt_host.unlink(missing_ok=True)
-        if prompt_host.is_file():
-            prompt_file = f"{container_chat_dir(chat_id)}/{PROMPT_FILENAME}"
-    if snapshot_off and prompt_file is None:
-        raise ClaudeChatRunnerError("snapshot_off_without_prompt", slug)
-    if snapshot_off and not sticky_off:
-        chat_dir.mkdir(parents=True, exist_ok=True)
-        (chat_dir / STATE_FILENAME).write_text(
-            json.dumps({"snapshotOffSession": sid}), encoding="utf-8"
-        )
+            (chat_dir / STATE_FILENAME).write_text(
+                json.dumps({"snapshotOffSession": sid}), encoding="utf-8"
+            )
+    except OSError as e:
+        # The chat dir is not writable (owner, disk): a stable code, so the
+        # caller can tell it apart — and nothing has been closed yet.
+        raise ClaudeChatRunnerError("prompt_write_failed", str(e)[:200]) from e
 
     argv = build_argv(action=action, session_id=sid, prompt_file=prompt_file,
                       snapshot_off=snapshot_off)
     return Launch(action=action, argv=argv, prompt_file=prompt_file, snapshot_off=snapshot_off)
 
 
+def chats_session(slug: str) -> str:
+    """The agent's tmux session for further chats (never ``<slug>`` itself)."""
+    return f"{CHATS_SESSION_PREFIX}{slug}"
+
+
+def _chat_command(chat_id: str, launch: Launch) -> list[str]:
+    return [START_SCRIPT, "--chat", _valid_uuid(chat_id), *launch.argv]
+
+
 def new_window_argv(slug: str, chat_id: str, launch: Launch) -> list[str]:
-    """``docker exec`` that opens the chat's window. tmux runs the command
-    directly (several arguments, no shell), so nothing is quoted."""
+    """``docker exec`` that opens the chat's window in the chats session.
+    ``-S``: a window of that name that exists already is selected, never
+    opened a second time. tmux runs the command directly (several arguments,
+    no shell), so nothing is quoted."""
     return [
         "docker", "exec", "-e", "LANG=C.UTF-8", "-u", "agent", f"mc-agent-{slug}",
-        "tmux", "new-window", "-d", "-t", f"{slug}:", "-n", window_name(chat_id),
-        "-c", CONTAINER_CWD,
-        START_SCRIPT, "--chat", _valid_uuid(chat_id), *launch.argv,
+        "tmux", "new-window", "-d", "-S", "-t", f"{chats_session(slug)}:",
+        "-n", window_name(chat_id), "-c", CONTAINER_CWD,
+        *_chat_command(chat_id, launch),
+    ]
+
+
+def new_session_argv(slug: str, chat_id: str, launch: Launch) -> list[str]:
+    """``docker exec`` that makes the chats session with this chat as its
+    first window (the session ends with its last window)."""
+    return [
+        "docker", "exec", "-e", "LANG=C.UTF-8", "-u", "agent", f"mc-agent-{slug}",
+        "tmux", "new-session", "-d", "-s", chats_session(slug),
+        "-n", window_name(chat_id), "-c", CONTAINER_CWD,
+        *_chat_command(chat_id, launch),
     ]
 
 
 def chat_target(slug: str, chat_id: str) -> str:
     """tmux target of the chat's window (``send-keys -t`` / ``capture-pane -t``)."""
-    return f"{slug}:{window_name(chat_id)}"
+    return f"{chats_session(slug)}:{window_name(chat_id)}"
 
 
 # ── container side ─────────────────────────────────────────────────────────
@@ -277,14 +329,46 @@ async def _docker(argv: list[str]) -> subprocess.CompletedProcess:
         raise ClaudeChatRunnerError("docker_timeout", " ".join(argv[:6])) from e
 
 
-async def window_exists(slug: str, chat_id: str) -> bool:
+#: One lock per agent around "is the window there? → open it": two sends to a
+#: chat that is not open yet would otherwise both open a window of the same
+#: name (two claudes on one session id; ``send-keys -t <name>`` then fails as
+#: ambiguous), and two chats would race to make the chats session. In-process
+#: is enough: the backend runs one worker (see ``agent_chat_input._LAST_SENT``).
+#: Kept per event loop (a lock belongs to the loop it was first used in).
+_OPEN_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _open_lock(slug: str) -> asyncio.Lock:
+    locks = _OPEN_LOCKS.setdefault(asyncio.get_running_loop(), {})
+    lock = locks.get(slug)
+    if lock is None:
+        lock = locks[slug] = asyncio.Lock()
+    return lock
+
+
+async def _chat_windows(slug: str) -> tuple[bool, set[str]]:
+    """``(chats session exists, its window names)`` — one ``list-windows -a``
+    (a missing chats session is no error; a dead tmux server is)."""
     result = await _docker([
         "docker", "exec", "-u", "agent", f"mc-agent-{slug}",
-        "tmux", "list-windows", "-t", slug, "-F", "#{window_name}",
+        "tmux", "list-windows", "-a", "-F", "#{session_name}\t#{window_name}",
     ])
     if result.returncode != 0:
         raise ClaudeChatRunnerError("agent_unreachable", (result.stderr or "").strip()[:200])
-    return window_name(chat_id) in (result.stdout or "").split()
+    session = chats_session(slug)
+    names = {
+        line.split("\t", 1)[1]
+        for line in (result.stdout or "").splitlines()
+        if "\t" in line and line.split("\t", 1)[0] == session
+    }
+    return bool(names), names
+
+
+async def window_exists(slug: str, chat_id: str) -> bool:
+    _session, names = await _chat_windows(slug)
+    return window_name(chat_id) in names
 
 
 async def capture_chat_pane(slug: str, chat_id: str) -> str | None:
@@ -299,6 +383,20 @@ async def capture_chat_pane(slug: str, chat_id: str) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
+async def _open_window(slug: str, chat_id: str, launch: Launch, session_up: bool) -> None:
+    """New window in the chats session, or the session itself when there is
+    none. Each way falls back to the other once: the session can end (its
+    last window closed) or appear (opened outside this process) in between."""
+    order = [new_window_argv, new_session_argv] if session_up else [new_session_argv, new_window_argv]
+    errors: list[str] = []
+    for make in order:
+        result = await _docker(make(slug, chat_id, launch))
+        if result.returncode == 0:
+            return
+        errors.append((result.stderr or "").strip()[:200])
+    raise ClaudeChatRunnerError("process_start_failed", " | ".join(errors))
+
+
 async def ensure_window(
     agent: Any,
     chat_id: str,
@@ -309,28 +407,38 @@ async def ensure_window(
 ) -> str:
     """The chat's window runs claude on the chat's own session; returns its
     tmux target. An existing window is used as it is — except with a
-    ``handoff`` (a switch), which needs a new process: the old one is
-    closed first. A window that is gone (container restart, ``/exit``) is
-    opened again and resumes the session from its file."""
+    ``handoff`` (a switch), which needs a new process: the new launch is
+    planned first (so a refused package leaves the running process alone),
+    then the old window is closed. A window that is gone (container
+    restart, ``/exit``) is opened again and resumes the session from its
+    file."""
     slug = getattr(agent, "slug", None)
     if not slug or getattr(agent, "agent_runtime", None) != "cli-bridge":
         raise ClaudeChatRunnerError("not_a_container_agent", str(slug))
-    exists = await window_exists(slug, chat_id)
-    if exists and not handoff:
-        return chat_target(slug, chat_id)
-    if exists:
-        await _docker([
-            "docker", "exec", "-u", "agent", f"mc-agent-{slug}",
-            "tmux", "kill-window", "-t", chat_target(slug, chat_id),
-        ])
-    launch = plan_launch(slug, chat_id, native_session_id,
-                         planned_action=planned_action, handoff=handoff)
-    result = await _docker(new_window_argv(slug, chat_id, launch))
-    if result.returncode != 0:
-        raise ClaudeChatRunnerError("process_start_failed", (result.stderr or "").strip()[:200])
+    target = chat_target(slug, chat_id)
+    async with _open_lock(slug):
+        session_up, names = await _chat_windows(slug)
+        exists = window_name(chat_id) in names
+        if exists and not handoff:
+            return target
+        launch = plan_launch(slug, chat_id, native_session_id,
+                             planned_action=planned_action, handoff=handoff)
+        if exists:
+            result = await _docker([
+                "docker", "exec", "-u", "agent", f"mc-agent-{slug}",
+                "tmux", "kill-window", "-t", target,
+            ])
+            if result.returncode != 0:
+                # ``new-window -S`` would then select the OLD process and the
+                # switch would silently not happen.
+                raise ClaudeChatRunnerError("process_stop_failed",
+                                            (result.stderr or "").strip()[:200])
+            # The last window closed ends the chats session.
+            session_up = len(names) > 1
+        await _open_window(slug, chat_id, launch, session_up)
     logger.info("claude chat runner: opened %s (%s, snapshot_off=%s)",
-                chat_target(slug, chat_id), launch.action, launch.snapshot_off)
-    return chat_target(slug, chat_id)
+                target, launch.action, launch.snapshot_off)
+    return target
 
 
 async def load_chat_plan(agent: Any, chat_id: str) -> dict[str, Any]:
