@@ -2366,7 +2366,12 @@ class _Handler(socketserver.StreamRequestHandler):
             response = {"ok": False, "error": "bad_request", "detail": str(exc)}
         else:
             try:
-                response = dispatch(self.server.chat_session, request)
+                # `chatId` routes to a further chat of the agent (S2); without
+                # it the op table above, exactly as before.
+                import acp_chat_pool  # noqa: PLC0415 — it imports this module
+
+                response = acp_chat_pool.dispatch(
+                    getattr(self.server, "chat_pool", None), self.server.chat_session, request)
             except Exception as exc:  # noqa: BLE001 — never drop a connection
                 logger.exception("dispatch failed")
                 response = {"ok": False, "error": "internal",
@@ -2386,7 +2391,9 @@ class _UnixServer(socketserver.ThreadingUnixStreamServer):
 class ChatSocketServer:
     """Newline-delimited JSON over a Unix socket in front of a ChatSession."""
 
-    def __init__(self, session: ChatSession, socket_path: str):
+    def __init__(self, session: ChatSession, socket_path: str, pool: Any = None):
+        """`pool`: the further chats of the agent (`acp_chat_pool.ChatPool`);
+        None = a request with `chatId` is refused (`chats_unsupported`)."""
         self._path = str(socket_path)
         Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         # A stale socket file from a killed daemon would block bind().
@@ -2397,6 +2404,7 @@ class ChatSocketServer:
                 pass
         self._server = _UnixServer(self._path, _Handler)
         self._server.chat_session = session
+        self._server.chat_pool = pool
         try:
             os.chmod(self._path, 0o600)
         except OSError:
@@ -2510,7 +2518,12 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     session = build_session()
     session.start()
-    server = ChatSocketServer(session, args.socket or default_socket_path())
+    import acp_chat_pool  # noqa: PLC0415 — it imports this module
+
+    # Further chats of this agent (S2): opened on their first message, each
+    # with its own omp child and native session.
+    pool = acp_chat_pool.build_pool(session)
+    server = ChatSocketServer(session, args.socket or default_socket_path(), pool=pool)
     sys.stderr.write(
         f"[acp-chat] ready: session={session.state()['sessionId']} "
         f"model={session._model} socket={server.path} "
@@ -2522,6 +2535,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         pass
     finally:
         server.shutdown()
+        pool.close()
         session.close()
     return 0
 

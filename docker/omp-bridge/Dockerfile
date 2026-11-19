@@ -161,6 +161,7 @@ COPY bridge.py            /opt/omp-bridge/bridge.py
 COPY acp_client.py        /opt/omp-bridge/acp_client.py
 COPY acp_chat_events.py   /opt/omp-bridge/acp_chat_events.py
 COPY acp_chat.py          /opt/omp-bridge/acp_chat.py
+COPY acp_chat_pool.py     /opt/omp-bridge/acp_chat_pool.py
 # sink_migration.py (S1-R3): acp_chat.py imports it at start — moves MC's old
 # display copies into <folder>/.mc/. Without this line the chat daemon does not
 # start (tests/test_dockerfile_copies_modules.py guards every such import).
