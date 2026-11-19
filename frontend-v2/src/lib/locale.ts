@@ -17,6 +17,7 @@ import {
   LOCALE_AUTO_KEY,
   LOCALE_CACHE_KEY,
   LOCALE_COOKIE_MAX_AGE,
+  LOCALE_NONE_KEY,
   LOCALE_PENDING_ATTR,
   LOCALE_RELOAD_KEY,
 } from "./localeScript";
@@ -38,6 +39,8 @@ export interface StartupInput {
   /** Language the server rendered this page in (<html lang>). */
   current: Locale;
   loggedIn: boolean;
+  /** The server lookup failed (not 404): `saved` is unknown, not "none". */
+  serverFailed?: boolean;
 }
 
 export interface StartupPlan {
@@ -59,6 +62,19 @@ export function planStartupLocale(i: StartupInput): StartupPlan {
     // from the browser language. A cookie from before this fix (no marker)
     // was set by the language selector, so it counts as a choice.
     const isChoice = i.cached === i.cookie || i.auto !== i.cookie;
+    // An automatic cookie is only the browser language: the language saved
+    // for the user replaces it (critic 19.11.2026 — otherwise one load before
+    // the row existed pinned that browser to the browser language for good).
+    if (!isChoice && i.saved) {
+      return {
+        locale: i.saved,
+        writeCookie: i.saved !== i.cookie,
+        reload: i.saved !== i.current,
+        saveToDb: null,
+        cache: i.saved,
+        markAuto: false,
+      };
+    }
     return {
       locale: i.cookie,
       writeCookie: false,
@@ -74,10 +90,16 @@ export function planStartupLocale(i: StartupInput): StartupPlan {
       locale: chosen,
       writeCookie: true,
       reload: chosen !== i.current,
-      saveToDb: i.loggedIn && i.saved === null ? chosen : null,
+      // Unknown row (lookup failed): never overwrite it with this browser's cache.
+      saveToDb: i.loggedIn && i.saved === null && !i.serverFailed ? chosen : null,
       cache: chosen,
       markAuto: false,
     };
+  }
+  // The lookup failed: write nothing, so the next load asks again instead of
+  // pinning the browser language (the page shows the browser language now).
+  if (i.serverFailed) {
+    return { locale: i.current, writeCookie: false, reload: false, saveToDb: null, cache: null, markAuto: false };
   }
   // Nothing chosen anywhere: keep what the server picked from the browser
   // language, and remember that this cookie is not a choice.
@@ -126,13 +148,17 @@ function reveal() {
   }
 }
 
-async function fetchSavedLocale(): Promise<Locale | null> {
+/** `null` = nothing saved (404), `"failed"` = unknown (5xx, offline, …). */
+type SavedLookup = Locale | null | "failed";
+
+async function fetchSavedLocale(): Promise<SavedLookup> {
   try {
     const res = await api.settings.get(UI_LANGUAGE_SETTING_KEY);
     const lang = (res?.value as { language?: unknown } | null)?.language;
     return isLocale(lang) ? lang : null;
-  } catch {
-    return null; // 404 = nothing saved yet; offline = keep what we have
+  } catch (err) {
+    // lib/api.ts request() throws "API <status>: …" for HTTP errors.
+    return err instanceof Error && /^API 404\b/.test(err.message) ? null : "failed";
   }
 }
 
@@ -149,21 +175,43 @@ function cachedLocale(): Locale | null {
 
 // ── Entry points ────────────────────────────────────────────────────────────
 
-/** Decide and write cookie / cache / server row; reloading is up to the caller. */
-async function applyStartupLocale(): Promise<StartupPlan> {
-  const loggedIn = !!getToken();
+function onLoginPage(): boolean {
+  try {
+    return window.location.pathname.replace(/\/+$/, "") === "/login";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Decide and write cookie / cache / server row; reloading is up to the caller.
+ * `prefetched` = a lookup the caller already made (after login).
+ */
+async function applyStartupLocale(opts: { lookup: boolean; prefetched?: SavedLookup }): Promise<StartupPlan> {
+  const loggedIn = opts.lookup && !!getToken();
   const cookie = readLocaleCookie();
   // Ask the server only when it can change something: without a cookie, or
-  // to save a pre-existing choice it does not know yet.
-  const needServer = loggedIn && (!isLocale(cookie) || get("localStorage", LOCALE_CACHE_KEY) !== cookie);
-  const saved = needServer ? await fetchSavedLocale() : null;
+  // when the cookie is no cached choice (an automatic cookie, or a choice
+  // from before this fix). "Nothing saved" is remembered for the browser
+  // session, so an automatic cookie costs one lookup per session, not per load.
+  const needServer =
+    loggedIn &&
+    (!isLocale(cookie) ||
+      (get("localStorage", LOCALE_CACHE_KEY) !== cookie && get("sessionStorage", LOCALE_NONE_KEY) !== "1"));
+  const lookup: SavedLookup = !needServer
+    ? null
+    : opts.prefetched !== undefined
+      ? opts.prefetched
+      : await fetchSavedLocale();
+  if (needServer && lookup === null) put("sessionStorage", LOCALE_NONE_KEY, "1");
   const plan = planStartupLocale({
     cookie,
-    saved,
+    saved: lookup === "failed" ? null : lookup,
     cached: cachedLocale(),
     auto: get("localStorage", LOCALE_AUTO_KEY),
     current: renderedLocale(),
     loggedIn: needServer,
+    serverFailed: lookup === "failed",
   });
   if (plan.writeCookie) writeLocaleCookie(plan.locale);
   if (plan.cache) {
@@ -177,7 +225,10 @@ async function applyStartupLocale(): Promise<StartupPlan> {
 
 /** Runs once per full page load (<LocaleSync> in the root layout). */
 export async function syncLocaleOnLoad(): Promise<void> {
-  const plan = await applyStartupLocale();
+  // No authenticated call on /login: a stale token would answer 401, and
+  // lib/api.ts then reloads the login page (critic 19.11.2026). The saved
+  // language is taken over right after login (adoptSavedLocaleAfterLogin).
+  const plan = await applyStartupLocale({ lookup: !onLoginPage() });
   if (plan.reload && readLocaleCookie() === plan.locale && get("sessionStorage", LOCALE_RELOAD_KEY) !== plan.locale) {
     put("sessionStorage", LOCALE_RELOAD_KEY, plan.locale);
     window.location.reload(); // stays hidden if the head script hid it
@@ -200,13 +251,14 @@ export async function chooseUiLocale(locale: Locale): Promise<void> {
  * the caller then does a full navigation so the server renders it.
  */
 export async function adoptSavedLocaleAfterLogin(): Promise<boolean> {
+  put("sessionStorage", LOCALE_NONE_KEY, null); // maybe another user before
   const saved = await fetchSavedLocale();
-  if (saved) {
+  if (saved && saved !== "failed") {
     writeLocaleCookie(saved);
     put("localStorage", LOCALE_CACHE_KEY, saved);
     put("localStorage", LOCALE_AUTO_KEY, null);
     return saved !== renderedLocale();
   }
   // Nothing saved yet: keep this browser's language (and save it if it was a choice).
-  return (await applyStartupLocale()).reload;
+  return (await applyStartupLocale({ lookup: true, prefetched: saved })).reload;
 }

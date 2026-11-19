@@ -80,6 +80,33 @@ describe("planStartupLocale", () => {
     expect(p).toMatchObject({ saveToDb: null, cache: null, reload: false });
   });
 
+  // Critic 19.11.2026: an automatic cookie must not hide the language saved
+  // for the user — it is only the browser language, not a choice.
+  it("automatic cookie + another language saved for the user -> saved wins, cookie rewritten, reload", () => {
+    const p = planStartupLocale({ ...base, cookie: "en", auto: "en", saved: "de", current: "en" });
+    expect(p).toMatchObject({ locale: "de", writeCookie: true, reload: true, saveToDb: null, cache: "de", markAuto: false });
+  });
+
+  it("automatic cookie + the same language saved -> becomes the cached choice (no lookups any more)", () => {
+    const p = planStartupLocale({ ...base, cookie: "de", auto: "de", saved: "de", current: "de" });
+    expect(p).toMatchObject({ locale: "de", writeCookie: false, reload: false, cache: "de" });
+  });
+
+  it("a real cookie choice still beats the saved language", () => {
+    const p = planStartupLocale({ ...base, cookie: "en", cached: "en", saved: "de" });
+    expect(p).toMatchObject({ locale: "en", writeCookie: false, reload: false });
+  });
+
+  it("server lookup failed, no cookie, nothing cached -> writes NO cookie (asks again next load)", () => {
+    const p = planStartupLocale({ ...base, serverFailed: true });
+    expect(p).toMatchObject({ writeCookie: false, markAuto: false, saveToDb: null, reload: false });
+  });
+
+  it("server lookup failed, cached choice -> cookie from the cache, but never saved over the unknown row", () => {
+    const p = planStartupLocale({ ...base, serverFailed: true, cached: "de" });
+    expect(p).toMatchObject({ locale: "de", writeCookie: true, saveToDb: null });
+  });
+
   it("not logged in -> never writes to the server", () => {
     const p = planStartupLocale({ ...base, loggedIn: false, cached: "de" });
     expect(p.saveToDb).toBeNull();
@@ -153,6 +180,59 @@ describe("runtime", () => {
     await syncLocaleOnLoad();
     expect(settingsSet).toHaveBeenCalledWith(UI_LANGUAGE_SETTING_KEY, { language: "de" });
     expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("an automatic cookie from earlier gives way to the language saved later", async () => {
+    localStorage.setItem("mc_auth_token", "t");
+    settingsGet.mockImplementation(notFound);
+    await syncLocaleOnLoad(); // nothing saved yet -> auto cookie "en"
+    expect(readLocaleCookie()).toBe("en");
+    sessionStorage.clear(); // a later visit (new tab / session)
+    settingsGet.mockReset().mockResolvedValue(savedRow("de"));
+    await syncLocaleOnLoad();
+    expect(readLocaleCookie()).toBe("de");
+    expect(localStorage.getItem(LOCALE_CACHE_KEY)).toBe("de");
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed lookup (502 / offline) does not pin the browser language", async () => {
+    localStorage.setItem("mc_auth_token", "t");
+    settingsGet.mockRejectedValue(new Error("API 502: Bad Gateway"));
+    html().setAttribute(LOCALE_PENDING_ATTR, "");
+    html().style.visibility = "hidden";
+    await syncLocaleOnLoad();
+    expect(readLocaleCookie()).toBeNull();
+    expect(localStorage.getItem(LOCALE_AUTO_KEY)).toBeNull();
+    expect(html().style.visibility).toBe(""); // shown again anyway
+    settingsGet.mockReset().mockResolvedValue(savedRow("de"));
+    await syncLocaleOnLoad();
+    expect(readLocaleCookie()).toBe("de");
+  });
+
+  it("automatic cookie and nothing saved: at most one lookup per browser session", async () => {
+    localStorage.setItem("mc_auth_token", "t");
+    settingsGet.mockImplementation(notFound);
+    await syncLocaleOnLoad();
+    await syncLocaleOnLoad();
+    await syncLocaleOnLoad();
+    expect(settingsGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("on /login no authenticated lookup is made (a stale token must not bounce the page)", async () => {
+    localStorage.setItem("mc_auth_token", "stale");
+    vi.stubGlobal("location", { ...window.location, reload, pathname: "/login" });
+    settingsGet.mockResolvedValue(savedRow("de"));
+    await syncLocaleOnLoad();
+    expect(settingsGet).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("after login an automatic cookie from the login page does not block the saved language", async () => {
+    document.cookie = "NEXT_LOCALE=en; path=/";
+    localStorage.setItem(LOCALE_AUTO_KEY, "en");
+    settingsGet.mockResolvedValue(savedRow("de"));
+    expect(await adoptSavedLocaleAfterLogin()).toBe(true);
+    expect(readLocaleCookie()).toBe("de");
   });
 
   it("chooseUiLocale writes cookie, cache and the per-user setting", async () => {

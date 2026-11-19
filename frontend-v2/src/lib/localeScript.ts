@@ -24,6 +24,8 @@ export const LOCALE_CACHE_KEY = "mc_locale";
 export const LOCALE_AUTO_KEY = "mc_locale_auto";
 /** sessionStorage: the language we already reloaded for (no reload loop). */
 export const LOCALE_RELOAD_KEY = "mc_locale_reload";
+/** sessionStorage: the server said "nothing saved" (404) in this session. */
+export const LOCALE_NONE_KEY = "mc_locale_none";
 /** On <html> while the saved language is still being looked up. */
 export const LOCALE_PENDING_ATTR = "data-locale-pending";
 export const LOCALE_PENDING_MS = 2500;
