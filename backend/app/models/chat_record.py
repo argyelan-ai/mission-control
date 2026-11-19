@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, Column, DateTime, Index, Integer, Text, UniqueConstraint, text
+from sqlalchemy import JSON, BigInteger, Boolean, Column, DateTime, Index, Integer, Text, UniqueConstraint, false, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -32,15 +32,26 @@ JSONType = JSON().with_variant(JSONB(), "postgresql")
 class Chat(SQLModel, table=True):
     __tablename__ = "chats"
     __table_args__ = (
-        # One chat per imported agent — the importer and the live sink both
-        # find "the agent's chat" through this, so it must never fork.
+        # One DEFAULT chat per agent (migration 0229; before: one chat per
+        # agent) — the importer and the live sink route every session that no
+        # other chat pinned into it, so it must never fork.
         Index(
-            "uq_chats_legacy_agent",
+            "uq_chats_agent_default",
             "legacy_agent_id",
             unique=True,
-            postgresql_where=text("legacy_agent_id IS NOT NULL"),
-            sqlite_where=text("legacy_agent_id IS NOT NULL"),
+            postgresql_where=text("agent_default"),
+            sqlite_where=text("agent_default"),
         ),
+        # A native session belongs to at most one chat of an agent (S2).
+        Index(
+            "uq_chats_agent_native",
+            "legacy_agent_id",
+            "native_session_id",
+            unique=True,
+            postgresql_where=text("native_session_id IS NOT NULL"),
+            sqlite_where=text("native_session_id IS NOT NULL"),
+        ),
+        Index("ix_chats_legacy_agent_id", "legacy_agent_id"),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -54,6 +65,17 @@ class Chat(SQLModel, table=True):
     permission_level: str | None = Field(default=None, max_length=40)
     pinned: bool = False
     legacy_agent_id: uuid.UUID | None = Field(default=None, foreign_key="agents.id", nullable=True)
+    #: The agent's own chat (the importer's "one chat per agent"): it takes
+    #: every native session no other chat of the agent pinned. Further chats
+    #: on the same agent (S2, "many chats per harness") have ``False``.
+    agent_default: bool = Field(
+        default=False, sa_column=Column(Boolean, nullable=False, server_default=false())
+    )
+    #: The native session this chat drives (S2). Claude Code: chosen by MC
+    #: at creation (``claude --session-id``). omp: set once ACP
+    #: ``session/new`` returned it. ``None`` on default chats and on chats
+    #: whose first session has not started yet.
+    native_session_id: str | None = Field(default=None, max_length=200)
     #: Next free ``chat_events.seq`` — bumped atomically by the writer
     #: (``UPDATE … SET next_seq = next_seq + n RETURNING``) so the live sink
     #: and the importer never hand out the same number.
