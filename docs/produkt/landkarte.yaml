@@ -849,6 +849,14 @@ internal:
   - "endpoint:* /api/v1/comms/*"
   - "table:comms_guest_cards"
   - "table:comms_sessions"
+  # ADR-103: MC's own chat record (first slice of chats instead of fixed
+  # agents). Behind CHAT_RECORD_ENABLED (default off); read API only, no
+  # screen reads it yet — the chat list and history switch over in a later
+  # ROADMAP stage-1 package.
+  - "endpoint:* /api/v1/chat-record/*"
+  - "table:chats"
+  - "table:chat_sessions"
+  - "table:chat_events"
   # Skill packs: seeded for the playbook layer, which was removed in E5
   # (migration 0207); the rows stay, nothing reads them any more.
   - "table:skill_packs"

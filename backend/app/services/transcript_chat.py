@@ -2218,6 +2218,14 @@ class ChatTailerManager:
             preview_state["anchor"] = await asyncio.to_thread(
                 _last_message_anchor, current_path, adapter
             )
+        # Created right before the loop so the ``finally`` below always
+        # ends its writer.
+        # MC's own chat record (ADR-103): every published event is also
+        # written to the DB, in the background — ``None`` while the flag is
+        # off, and then this tailer behaves exactly as before.
+        from app.services import chat_record
+
+        recorder = chat_record.live_recorder_for(agent, adapter, initial_path)
         try:
             while True:
                 await asyncio.sleep(self.POLL_INTERVAL)
@@ -2430,6 +2438,8 @@ class ChatTailerManager:
                                     media = chat_media.context_for(agent, current_path)
                                     await asyncio.to_thread(_merge_tool_result, tool_ev, ev, media)
                                     await sse.broadcast(channel, "chat_event", tool_ev)
+                                    if recorder is not None:
+                                        recorder.record(current_path, tool_ev, republish=True)
                                 continue
 
                             if ev["kind"] == "_command_result":
@@ -2437,6 +2447,8 @@ class ChatTailerManager:
                                 if cmd_ev is not None:
                                     _merge_command_result(cmd_ev, ev)
                                     await sse.broadcast(channel, "chat_event", cmd_ev)
+                                    if recorder is not None:
+                                        recorder.record(current_path, cmd_ev, republish=True)
                                 continue
 
                             if ev["kind"] == "tool":
@@ -2491,6 +2503,8 @@ class ChatTailerManager:
                                     preview_state["pending"] = None
 
                             await sse.broadcast(channel, "chat_event", ev)
+                            if recorder is not None:
+                                recorder.record(current_path, ev)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -2504,6 +2518,9 @@ class ChatTailerManager:
             # A silently dead tailer looks identical to "no new events yet"
             # from the outside — make every exit visible.
             logger.warning("chat tailer loop exited (agent_id=%s)", agent_id)
+            if recorder is not None:
+                # The writer drains what is queued, then ends on its own.
+                recorder.close()
 
     @staticmethod
     def _is_genuine_rollover(adapter: Any, new_path: Path, current_path: Path) -> bool:

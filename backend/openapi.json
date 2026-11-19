@@ -2587,6 +2587,33 @@
         ]
       }
     },
+    "/api/v1/chat-record/chats": {
+      "get": {
+        "operationId": "list_record_chats_api_v1_chat_record_chats_get",
+        "summary": "List Record Chats",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
+    "/api/v1/chat-record/chats/{chat_id}/history": {
+      "get": {
+        "operationId": "get_record_history_api_v1_chat_record_chats__chat_id__history_get",
+        "summary": "Get Record History",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
+    "/api/v1/chat-record/search": {
+      "get": {
+        "operationId": "search_record_api_v1_chat_record_search_get",
+        "summary": "Search Record",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
     "/api/v1/claude-account": {
       "get": {
         "operationId": "get_claude_account_api_v1_claude_account_get",
