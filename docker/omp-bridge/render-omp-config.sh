@@ -439,6 +439,61 @@ print(json.dumps({r: sys.argv[1] for r in sys.argv[2].split()}))' \
         echo "[render-omp-config] WARN: omp config set task.agentModelOverrides fehlgeschlagen — ein alter Eintrag pro Subagent schlägt die Modell-Rollen"
     fi
 
+    # ── Verdichtung: Text-Zusammenfassung zuerst (19.11.2026) ───────────────
+    # omp 18.14.2 default order: remote, snapcompact, handoff, shake, soft.
+    # remote needs server compaction (remoteEndpoint or an openai-responses /
+    # anthropic route) — mc-openai speaks openai-completions, so omp skips it;
+    # snapcompact ("history onto dense bitmap images the active vision model
+    # reads back", no LLM call) is then the FIRST method on every vision
+    # runtime. Measured on Sparky 13.11.2026 (memory note sparky-kontext-
+    # compaction-2026-11-13): snapcompact frames (196×71 chars, ~1100 tokens
+    # each) plus "older middle history dropped" — 3/7 facts readable, the run
+    # report gave a wrong start time; omp's `soft` text summary kept 12/12 of
+    # the same probe questions in 17K tokens. Runs 7+ with soft first: every
+    # fact survived 10 compactions. Soft first holds for every MC agent: the
+    # cause is the method, not the model. A text runtime never reaches
+    # snapcompact anyway; for it the change is soft before handoff.
+    # The order is only re-read when omp starts (a long-lived `omp acp` keeps
+    # its value): the entrypoint renders before omp starts, a reload reaches
+    # the next omp process.
+    # A hand edit of config.yml does not survive a recreate (this script
+    # rewrites the profile on every start) — set OMP_COMPACTION_METHOD_ORDER
+    # on the container instead: a comma list of soft, shake, handoff,
+    # snapcompact, remote, or `omp-default` for omp's own order. omp itself
+    # takes ANY array (`omp config set … '["bogus"]'` exits 0) and drops
+    # unknown names when it reads it — an empty result means no compaction at
+    # all — so unknown names are dropped here, loudly, and an order left empty
+    # falls back to the default.
+    _COMPACTION_DEFAULT="soft,shake,handoff,snapcompact"
+    _compaction_order="${OMP_COMPACTION_METHOD_ORDER:-$_COMPACTION_DEFAULT}"
+    if [ "$_compaction_order" = "omp-default" ]; then
+        omp config reset compaction.methodOrder >/dev/null 2>&1 \
+            && echo "[render-omp-config] Verdichtung: omps eigene Reihenfolge (OMP_COMPACTION_METHOD_ORDER=omp-default)" \
+            || echo "[render-omp-config] WARN: omp config reset compaction.methodOrder fehlgeschlagen"
+    else
+        # One python call: WARN lines first, the JSON order as the last line.
+        _compaction_out=$(python3 -c 'import json, sys
+known = ("soft", "shake", "handoff", "snapcompact", "remote")
+order = []
+for name in sys.argv[1].replace(",", " ").split():
+    if name not in known:
+        print("[render-omp-config] WARN: OMP_COMPACTION_METHOD_ORDER: unbekannte Methode " + repr(name) + " verworfen")
+    elif name not in order:
+        order.append(name)
+if not order:
+    print("[render-omp-config] WARN: OMP_COMPACTION_METHOD_ORDER ohne gültige Methode — Standard " + sys.argv[2])
+    order = sys.argv[2].split(",")
+print(json.dumps(order))' "$_compaction_order" "$_COMPACTION_DEFAULT" 2>/dev/null) || _compaction_out=""
+        _COMPACTION_JSON=$(printf '%s\n' "$_compaction_out" | tail -n 1)
+        printf '%s\n' "$_compaction_out" | sed '$d'
+        if [ -n "$_COMPACTION_JSON" ] \
+            && omp config set compaction.methodOrder "$_COMPACTION_JSON" >/dev/null 2>&1; then
+            echo "[render-omp-config] Verdichtung: compaction.methodOrder ${_COMPACTION_JSON}"
+        else
+            echo "[render-omp-config] WARN: omp config set compaction.methodOrder fehlgeschlagen — omp verdichtet in seiner eigenen Reihenfolge (Bilder vor Text)"
+        fi
+    fi
+
     # Nicht-Vision-Fall: statt nur `modelRoles.vision` unbelegt zu lassen
     # (omps eigener Auflösungspfad sucht dann quer über ALLE registrierten
     # Modelle nach einem bildfähigen und würde trotzdem den eingebauten
