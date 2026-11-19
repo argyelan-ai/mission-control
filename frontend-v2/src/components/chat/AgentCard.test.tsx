@@ -1,13 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { AgentCard } from "./AgentCard";
+import { AgentCard as Row } from "./AgentCard";
+import { collectHelpers, helperReports } from "./helpers";
 import type { SubagentRun, ToolEvent } from "@/lib/chatTypes";
 
 const subagentHistory = vi.fn();
 vi.mock("@/lib/api", () => ({
   api: { chat: { subagentHistory: (...a: unknown[]) => subagentHistory(...a) } },
 }));
+
+/** The row as the helpers line renders it: state from `collectHelpers`. */
+function AgentCard(props: { ev: ToolEvent; run?: SubagentRun; agentId: string }) {
+  const [helper] = collectHelpers([props.ev], helperReports([props.ev]));
+  return <Row {...props} helper={helper} />;
+}
 
 function wrap(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -48,12 +55,11 @@ beforeEach(() => {
 });
 
 describe("AgentCard", () => {
-  it("zeigt Name, Auftrag und Modell, ohne den Verlauf zu laden", () => {
+  it("zeigt Name und Auftrag, ohne den Verlauf zu laden", () => {
     wrap(<AgentCard ev={spawn()} run={RUN} agentId="a1" />);
 
     expect(screen.getByText("pruefer")).toBeInTheDocument();
     expect(screen.getByText(/Prueft den Zweig/)).toBeInTheDocument();
-    expect(screen.getByText("claude-opus-5")).toBeInTheDocument();
     // Erst beim Aufklappen — eine Sitzung kann Dutzende Auftraege haben.
     expect(subagentHistory).not.toHaveBeenCalled();
   });
@@ -93,7 +99,7 @@ describe("AgentCard", () => {
 
   it("nennt einen laufenden Auftrag laufend und einen gescheiterten gescheitert", () => {
     const { rerender } = wrap(<AgentCard ev={spawn({ result: null })} run={RUN} agentId="a1" />);
-    expect(screen.getByText(/running|läuft/i)).toBeInTheDocument();
+    expect(screen.getByText(/working|arbeitet/i)).toBeInTheDocument();
 
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     rerender(

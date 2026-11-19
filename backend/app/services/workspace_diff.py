@@ -33,12 +33,12 @@ from __future__ import annotations
 import logging
 import os
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from app.services.fs_roots import sensitive_subpaths
+from app.services.git_harden import run_git
 from app.services.token_harvester import _host_home
 
 logger = logging.getLogger("mc.workspace_diff")
@@ -88,20 +88,18 @@ def _run_git(*args: str, cwd: Path) -> str:
     """Runs git with an argv list (never a shell string) and returns
     stdout. ``-c safe.directory=*`` guards against git's dubious-ownership
     refusal for bind-mounted agent workspaces; ``-c core.quotepath=false``
-    keeps umlaut/unicode filenames literal instead of octal-escaped."""
-    result = subprocess.run(
-        [
-            "git", "--no-pager",
-            "-c", "safe.directory=*",
-            "-c", "core.quotepath=false",
-            *args,
-        ],
-        cwd=str(cwd),
+    keeps umlaut/unicode filenames literal instead of octal-escaped. The
+    workspace is agent-writable, so ``run_git`` neutralises repo config that
+    names a program (``git_harden``)."""
+    result = run_git(
+        "-c", "safe.directory=*",
+        "-c", "core.quotepath=false",
+        *args,
+        cwd=cwd,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
     )
     if result.returncode != 0:
         raise NoWorkspaceError(

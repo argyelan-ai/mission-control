@@ -1227,6 +1227,15 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/chat/files": {
+      "get": {
+        "operationId": "get_chat_files_api_v1_agents__agent_id__chat_files_get",
+        "summary": "Get Chat Files",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/chat/history": {
       "get": {
         "operationId": "get_chat_history_api_v1_agents__agent_id__chat_history_get",

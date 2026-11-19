@@ -14,6 +14,7 @@ export interface UsageTotals {
   total_tokens: number;
   generated_tokens?: number; // input + output, no cache
   cost_usd: number;
+  local_cost_usd?: number; // the part of cost_usd from local rows (missing from older backends)
   unpriced_events: number;
   local_tokens: number;
   local_output_tokens: number;

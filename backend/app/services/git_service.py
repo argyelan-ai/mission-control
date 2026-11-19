@@ -12,6 +12,7 @@ import logging
 import os
 import re
 
+from app.services.git_harden import hardened_argv, hardened_env
 from app.services.github_config import require_github_owner, resolve_github_config
 
 logger = logging.getLogger("mc.git")
@@ -93,8 +94,16 @@ class GitService:
             # A vault-set token must beat any stale GH_TOKEN in the process
             # env — gh reads GH_TOKEN/GITHUB_TOKEN before the credential store.
             env = {**os.environ, "GH_TOKEN": self._token, "GITHUB_TOKEN": self._token}
+        argv = list(args)
+        if argv and argv[0] in ("git", "gh"):
+            # Project checkouts and task worktrees are agent-writable: their
+            # repo config must not name a program git (or gh's own git
+            # calls) would run here — see git_harden.
+            env = await asyncio.to_thread(hardened_env, cwd, argv[1:] if argv[0] == "git" else (), env)
+            if argv[0] == "git":
+                argv = hardened_argv(argv[1:])
         proc = await asyncio.create_subprocess_exec(
-            *args,
+            *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,

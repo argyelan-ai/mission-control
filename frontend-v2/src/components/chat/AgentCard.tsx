@@ -3,6 +3,10 @@
 /**
  * Ein delegierter Auftrag im Verlauf — mit seinem eigenen Protokoll darin.
  *
+ * Seit der Helfer-Zeile (N1) eine ruhige ZEILE in deren aufgeklappter Liste,
+ * keine eigene Karte mehr: Zustandspunkt, Name, Auftrag, Dauer. Der Zustand
+ * kommt aus `helpers.ts` (beobachtet, nie aus "hat ein Ergebnis").
+ *
  * Vorher war ein Subagenten-Auftrag im Chat nur eine Werkzeug-Zeile ohne
  * Inhalt, weil sein Gespraech gar nicht im Hauptstrom steht: Claude Code
  * schreibt es in eine eigene Datei (live gemessen 22.08.2026 — 0 Zeilen mit
@@ -17,27 +21,19 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Bot, ChevronRight, ChevronDown, CircleDot } from "lucide-react";
-import { useTranslations } from "next-intl";
-import { C, STATUS } from "@/lib/colors";
+import { ChevronRight } from "lucide-react";
+import { useLocale, useTranslations } from "next-intl";
+import { C, STATUS_TEXT } from "@/lib/colors";
+import { formatDuration } from "@/lib/taskDetail/format";
+import { helperElapsedSeconds, type HelperState, type HelperView } from "./helpers";
 import { api } from "@/lib/api";
-import type { ChatEvent, NotificationEvent, SubagentRun, ToolEvent } from "@/lib/chatTypes";
+import type { ChatEvent, SubagentRun, ToolEvent } from "@/lib/chatTypes";
 import { ChatMessage } from "./ChatMessage";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
 import { CommandRow } from "./CommandRow";
 
 const DESC_MAX = 90;
-
-/** Farbnamen aus dem Steckbrief auf die Palette abbilden. Ein unbekannter
- *  Name faellt auf die Akzentfarbe zurueck — nie auf eine rohe CSS-Farbe aus
- *  fremden Daten. */
-const RUN_COLORS: Record<string, string> = {
-  green: STATUS.online,
-  red: STATUS.error,
-  yellow: STATUS.warning,
-  blue: C.accent,
-};
 
 function str(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
@@ -64,144 +60,138 @@ function renderChild(ev: ChatEvent) {
   }
 }
 
+/** Der Zustandspunkt: "arbeitet" ist Info (aktive Arbeit), "fehlgeschlagen"
+ *  eine Warnung (ein Helfer, nicht der Zug), "fertig" ist keine Nachricht
+ *  und bleibt neutral — so steht pro Liste hoechstens eine Statusfarbe da,
+ *  ausser es arbeitet einer UND einer scheiterte. */
+export const HELPER_DOT: Record<HelperState, string> = {
+  working: STATUS_TEXT.info,
+  done: C.textMuted,
+  failed: STATUS_TEXT.warning,
+  unknown: C.textMuted,
+};
+
+const STATE_KEY: Record<HelperState, string> = {
+  working: "helperLine.stateWorking",
+  done: "helperLine.stateDone",
+  failed: "helperLine.stateFailed",
+  unknown: "helperLine.stateUnknown",
+};
+
 export function AgentCard({
   ev,
   run,
-  notice,
   agentId,
+  helper,
+  now,
 }: {
   ev: ToolEvent;
   run?: SubagentRun;
-  /** Die Hintergrund-Meldung der CLI zu genau diesem Aufruf, falls sie
-   *  eingetroffen ist. */
-  notice?: NotificationEvent;
   agentId: string;
+  /** Zustand und Dauer dieses Helfers (aus `collectHelpers`). */
+  helper: HelperView;
+  /** Uhr der Zeile darueber — damit alle Zeilen dieselbe Zeit zeigen. */
+  now?: Date;
 }) {
   const t = useTranslations("sessions");
+  const locale = useLocale();
   const [expanded, setExpanded] = useState(false);
 
   const detail = (ev.detail ?? {}) as Record<string, unknown>;
   /* Aus dem Steckbrief, sonst aus dem Aufruf. `ev.title` bleibt aussen vor —
      der traegt bereits "Agent: " im Text, das gaebe eine Doppelung. */
+  // omp: ein Aufruf, mehrere Helfer — sein Auftragstext gehoert keinem davon
+  // allein, darum dort die Rolle statt eines geliehenen Texts.
+  const job = ev.name === "task" ? helper.agent : run?.description ?? str(detail.description);
+  /* Vorne steht, was den Helfer unterscheidet: sein eigener Name, sonst sein
+     Auftrag. Der Typ ("general-purpose") steht bei fast allen gleich da und
+     sagt nichts — er kommt nur, wenn sonst nichts da ist. */
+  const ownName = helper.name ?? run?.name ?? str(detail.name);
   const name =
-    run?.name ?? str(detail.name) ?? run?.agentType ?? str(detail.subagent_type)
+    ownName ?? job ?? run?.agentType ?? str(detail.subagent_type) ?? helper.agent
     ?? t("agentCardFallbackName");
-  const description = run?.description ?? str(detail.description);
-  const model = run?.model ?? str(detail.model);
-  const dot = run?.color ? RUN_COLORS[run.color] ?? C.accent : null;
-
-  /* Zuerst die BEOBACHTUNG: die CLI meldet selbst, wenn der Auftrag endet.
-     Ohne sie blieb nur die Vermutung "kein Ergebnis heisst laeuft noch" — die
-     nach einem Abbruch dauerhaft falsch stehen bleibt.
-     Nie aus dem Ergebnis-TEXT: dort stehen Spawn-Metadaten, die sich selbst
-     als nicht zitierfaehig bezeichnen. Sie werden gedeutet, nicht abgedruckt. */
-  const status =
-    notice?.status === "failed" || ev.status === "error"
-      ? t("agentCardFailed")
-      : notice?.status === "completed" || ev.result !== null
-        ? t("agentCardDone")
-        : t("agentCardRunning");
+  const description = ownName ? job : null;
+  const seconds = helperElapsedSeconds(helper, now);
+  // K17: Dauern erst ab 1 min, immer in der Dauer-Form.
+  const duration = seconds != null && seconds >= 60 ? formatDuration(seconds, locale) : null;
 
   const history = useQuery({
     queryKey: ["subagent-history", agentId, run?.runId],
     queryFn: () => api.chat.subagentHistory(agentId, run!.runId),
     enabled: expanded && !!run,
   });
-
-  const Chevron = expanded ? ChevronDown : ChevronRight;
   const events = history.data?.events ?? [];
 
-  return (
-    <div className="w-full px-4 md:px-5 py-1.5">
-      <div
-        className="w-full rounded-lg overflow-hidden"
-        style={{ border: `1px solid ${C.border}`, background: C.bgElevated }}
-      >
-        {run ? (
-          <button
-            type="button"
-            data-testid="agent-card-toggle"
-            onClick={() => setExpanded((v) => !v)}
-            aria-expanded={expanded}
-            aria-label={expanded ? t("agentCardCollapse") : t("agentCardExpand")}
-            className="w-full flex items-center gap-2 px-3 min-h-[44px] md:min-h-[34px] text-left bg-transparent border-0 cursor-pointer"
-          >
-            <Chevron size={13} className="shrink-0" style={{ color: C.textMuted }} />
-            <Head name={name} description={description} model={model} dot={dot} status={status} />
-          </button>
-        ) : (
-          /* Kein sicher zugeordneter Lauf -> kein Aufklappen. Lieber karg als
-             das Protokoll eines fremden Auftrags anbieten. */
-          <div
-            data-testid="agent-card-static"
-            className="w-full flex items-center gap-2 px-3 min-h-[44px] md:min-h-[34px]"
-          >
-            <Bot size={13} className="shrink-0" style={{ color: C.textMuted }} />
-            <Head name={name} description={description} model={model} dot={dot} status={status} />
-          </div>
-        )}
-
-        {expanded && run && (
-          <div style={{ borderTop: `1px solid ${C.border}` }}>
-            {history.isLoading && (
-              <p className="px-3 py-2 text-[12px]" style={{ color: C.textMuted }}>
-                {t("agentCardLoading")}
-              </p>
-            )}
-            {history.isError && (
-              <p className="px-3 py-2 text-[12px]" style={{ color: C.textMuted }}>
-                {t("agentCardNoTranscript")}
-              </p>
-            )}
-            {events.map(renderChild)}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function Head({
-  name,
-  description,
-  model,
-  dot,
-  status,
-}: {
-  name: string;
-  description: string | null;
-  model: string | null;
-  dot: string | null;
-  status: string;
-}) {
-  return (
+  const head = (
     <>
-      {dot ? (
-        <CircleDot size={11} className="shrink-0" style={{ color: dot }} />
-      ) : (
-        <Bot size={13} className="shrink-0" style={{ color: C.accent }} />
-      )}
-      <span className="text-[13px] shrink-0 font-medium" style={{ color: C.textSecondary }}>
-        {name}
+      <span
+        aria-hidden="true"
+        className="shrink-0 w-1.5 h-1.5 rounded-full"
+        style={{ background: HELPER_DOT[helper.state] }}
+      />
+      <span
+        className={description ? "text-sm shrink-0 truncate max-w-1/2" : "text-sm truncate min-w-0"}
+        style={{ color: C.textSecondary }}
+      >
+        {description ? name : short(name)}
       </span>
       {description && (
-        <span className="text-[12px] truncate hidden sm:inline" style={{ color: C.textMuted }}>
+        <span className="text-xs truncate min-w-0" style={{ color: C.textMuted }}>
           {short(description)}
         </span>
       )}
-      <span className="ml-auto flex items-center gap-2 shrink-0">
-        {model && (
-          <span className="text-[10px] font-mono hidden md:inline" style={{ color: C.textMuted }}>
-            {model}
-          </span>
-        )}
-        <span
-          className="text-[10px] font-mono px-1.5 py-0.5 rounded"
-          style={{ background: C.bgHover, color: C.textMuted }}
-        >
-          {status}
-        </span>
+      <span className="ml-auto flex items-center gap-2 shrink-0 text-xs tabular-nums" style={{ color: C.textMuted }}>
+        {duration && <span data-testid="helper-duration">{duration}</span>}
+        <span data-testid="helper-state">{t(STATE_KEY[helper.state])}</span>
       </span>
     </>
+  );
+
+  return (
+    <div className="w-full" data-testid="helper-row">
+      {run ? (
+        <button
+          type="button"
+          data-testid="agent-card-toggle"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          aria-label={expanded ? t("agentCardCollapse") : t("agentCardExpand")}
+          className="w-full flex items-center gap-2 px-2 min-h-[44px] md:min-h-[34px] text-left bg-transparent border-0 cursor-pointer"
+        >
+          {head}
+          <ChevronRight
+            size={13}
+            className="shrink-0 transition-transform duration-150"
+            style={{ color: C.textMuted, transform: expanded ? "rotate(90deg)" : undefined }}
+            aria-hidden="true"
+          />
+        </button>
+      ) : (
+        /* Kein sicher zugeordneter Lauf -> kein Aufklappen. Lieber karg als
+           das Protokoll eines fremden Auftrags anbieten. */
+        <div
+          data-testid="agent-card-static"
+          className="w-full flex items-center gap-2 px-2 min-h-[44px] md:min-h-[34px]"
+        >
+          {head}
+        </div>
+      )}
+
+      {expanded && run && (
+        <div className="ml-3.5 pl-1" style={{ borderLeft: `1px solid ${C.border}` }}>
+          {history.isLoading && (
+            <p className="px-3 py-2 text-xs" style={{ color: C.textMuted }}>
+              {t("agentCardLoading")}
+            </p>
+          )}
+          {history.isError && (
+            <p className="px-3 py-2 text-xs" style={{ color: C.textMuted }}>
+              {t("agentCardNoTranscript")}
+            </p>
+          )}
+          {events.map(renderChild)}
+        </div>
+      )}
+    </div>
   );
 }

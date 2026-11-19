@@ -9,16 +9,20 @@
  *      How much ran on the local boxes, and how much of it bypassed MC?  (box)
  *      What did the live voice cost, today and this week?               (voice)
  *   5. What got done?                                                  (done)
- * Everything the old tabs showed lives folded away in "Details".
+ * The switch All · Cloud · Local in the title row moves the hero's cost, the
+ * heatmap with its day row and the source split together. Everything the old tabs showed lives folded away in
+ * "Details".
  * Days and weeks are counted in the browser's time zone.
  */
 
+import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import AppShell from "@/components/layout/AppShell";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
-import { browserTimeZone } from "@/lib/insights";
+import { browserTimeZone, type HeatMetric } from "@/lib/insights";
+import { MetricSwitch } from "@/components/insights/MetricSwitch";
 import { InsightsHero } from "@/components/insights/InsightsHero";
 import { UsageHeatmap } from "@/components/insights/UsageHeatmap";
 import { SourceSplit } from "@/components/insights/SourceSplit";
@@ -34,6 +38,7 @@ const WEEKS = 12;
 export default function InsightsPage() {
   const t = useTranslations("insights");
   const tz = browserTimeZone();
+  const [metric, setMetric] = useState<HeatMetric>("all");
 
   const byDay = useQuery({
     queryKey: ["intelligence", "byDay", DAYS, tz],
@@ -71,9 +76,12 @@ export default function InsightsPage() {
   return (
     <AppShell>
       <div className="max-w-6xl mx-auto">
-        <h1 className="display text-2xl font-semibold" style={{ color: C.textPrimary }}>
-          {t("title")}
-        </h1>
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="display text-2xl font-semibold" style={{ color: C.textPrimary }}>
+            {t("title")}
+          </h1>
+          {ready && !failed && <MetricSwitch value={metric} onChange={setMetric} />}
+        </div>
 
         {failed ? (
           <p className="mt-6 text-sm" style={{ color: C.textSecondary }}>{t("loadFailed")}</p>
@@ -81,12 +89,12 @@ export default function InsightsPage() {
           <div className="mt-6 h-32" aria-busy="true" />
         ) : (
           <>
-            <InsightsHero days={byDay.data} weeks={byWeek.data} />
+            <InsightsHero days={byDay.data} weeks={byWeek.data} metric={metric} />
             <div className="mt-12">
-              <UsageHeatmap data={byDay.data} />
+              <UsageHeatmap data={byDay.data} metric={metric} />
             </div>
             <div className="mt-12 grid grid-cols-1 lg:grid-cols-2 gap-12">
-              <SourceSplit week={weeks[weeks.length - 1]} />
+              <SourceSplit week={weeks[weeks.length - 1]} metric={metric} />
               <LocalShareTrend weeks={weeks} />
               <BoxTokens week={weeks[weeks.length - 1]} since={byWeek.data.box_tracking_since} />
               <VoiceUsage />

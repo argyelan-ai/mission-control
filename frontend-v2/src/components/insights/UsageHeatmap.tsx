@@ -4,12 +4,13 @@
  * Insights → "Tokens per day": one cell per day like the GitHub contribution
  * graph — 26 weeks on the phone, 52 from 1024 px. Colour = generated tokens
  * (input + output, no cache reads) in five brightness steps of the accent by
- * quartiles (DESIGN.md: colour means status, so no green). "All · Local"
- * switches to the tokens that ran locally. Since the local boxes count their
+ * quartiles (DESIGN.md: colour means status, so no green). The page's switch
+ * (All · Cloud · Local) picks which tokens colour the days and what the day
+ * row says (that slice's tokens, cost and top source). Since the local boxes count their
  * own tokens, a day also holds what was sent straight to a box's API from
  * another machine (local in both modes); the day row names that part.
  *
- *   Tokens per day                                  ( All | Local )
+ *   Tokens per day
  *        Apr      May      Jun      Jul      Aug      Sep
  *   Mon  ▢▣▣▢▣■▣▢▣▣■■▢▣▣▣■■▣▢▣■■▣▣▢
  *   …
@@ -29,6 +30,7 @@ import { C, alpha } from "@/lib/colors";
 import { formatShare, formatUsd, sourceLabel } from "@/lib/usage";
 import {
   dayTotals,
+  dayView,
   heatmapGrid,
   shiftDay,
   formatTokens,
@@ -49,11 +51,10 @@ export const HEAT_FILL: Record<HeatLevel, string> = {
   4: C.accent,
 };
 
-export function UsageHeatmap({ data }: { data: UsageByDay }) {
+export function UsageHeatmap({ data, metric = "all" }: { data: UsageByDay; metric?: HeatMetric }) {
   const t = useTranslations("insights.heatmap");
   const ts = useTranslations("insights.source");
   const locale = useLocale();
-  const [metric, setMetric] = useState<HeatMetric>("all");
   const today = data.days[data.days.length - 1]?.date ?? "";
   const [selected, setSelected] = useState(today);
   const day = data.days.find((d) => d.date === selected);
@@ -62,39 +63,14 @@ export function UsageHeatmap({ data }: { data: UsageByDay }) {
     new Intl.DateTimeFormat(locale, { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(
       new Date(`${iso}T00:00:00Z`),
     );
-  const totals = day ? dayTotals(day) : null;
-  const localShare = totals?.localShare ?? null;
+  const view = day ? dayView(day, metric) : null;
+  const localShare = view?.localShare ?? null;
 
   return (
     <section data-region="heatmap" aria-labelledby="heatmap-heading" className="min-w-0">
-      <div className="flex items-center justify-between gap-3">
-        <h2 id="heatmap-heading" className="text-base font-semibold" style={{ color: C.textPrimary }}>
-          {t("title")}
-        </h2>
-        <div
-          role="radiogroup"
-          aria-label={t("metricAria")}
-          className="inline-flex rounded-full p-1"
-          style={{ border: `1px solid ${C.border}` }}
-        >
-          {(["all", "local"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              role="radio"
-              aria-checked={metric === m}
-              onClick={() => setMetric(m)}
-              className="min-h-11 px-4 rounded-full text-sm cursor-pointer transition-colors"
-              style={{
-                background: metric === m ? C.bgElevated : "transparent",
-                color: metric === m ? C.textPrimary : C.textSecondary,
-              }}
-            >
-              {t(m)}
-            </button>
-          ))}
-        </div>
-      </div>
+      <h2 id="heatmap-heading" className="text-base font-semibold" style={{ color: C.textPrimary }}>
+        {t("title")}
+      </h2>
 
       <div className="mt-4 lg:hidden">
         <Grid data={data} weeks={26} metric={metric} selected={selected} onSelect={setSelected} />
@@ -133,29 +109,29 @@ export function UsageHeatmap({ data }: { data: UsageByDay }) {
         <div className="py-3 min-w-0" aria-live="polite">
           <p className="text-sm font-medium" style={{ color: C.textPrimary }}>{selected && dayLabel(selected)}</p>
           <p className="mt-1 text-xs" style={{ color: C.textSecondary }}>
-            {!day || !totals || totals.all === 0 ? (
+            {!view || view.tokens === 0 ? (
               t("dayEmpty")
             ) : (
               <>
-                <span className="tabular-nums">{t("dayTokens", { tokens: formatTokens(totals.all, locale) })}</span>
-                {totals.external > 0 && (
+                <span className="tabular-nums">{t("dayTokens", { tokens: formatTokens(view.tokens, locale) })}</span>
+                {view.external > 0 && (
                   <>
                     {" · "}
-                    <span className="tabular-nums">{t("dayExternal", { tokens: formatTokens(totals.external, locale) })}</span>
+                    <span className="tabular-nums">{t("dayExternal", { tokens: formatTokens(view.external, locale) })}</span>
                   </>
                 )}
                 {" · "}
-                <span className="tabular-nums">{formatUsd(day.cost_usd, locale)}</span>
+                <span className="tabular-nums">{formatUsd(view.cost, locale)}</span>
                 {localShare !== null && localShare > 0 && (
                   <>
                     {" · "}
                     <span className="tabular-nums">{t("dayLocal", { share: formatShare(localShare, locale) ?? "" })}</span>
                   </>
                 )}
-                {day.top_source && (
+                {view.topSource && (
                   <>
                     {" · "}
-                    {t("mostly", { source: sourceText(ts, day.top_source) })}
+                    {t("mostly", { source: sourceText(ts, view.topSource) })}
                   </>
                 )}
               </>

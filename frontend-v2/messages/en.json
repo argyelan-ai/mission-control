@@ -1049,6 +1049,12 @@
     "attachmentUploadingOne": "uploading…",
     "attachmentUploadingMany": "uploading {count}…",
     "pastedAsFile": "Long text pasted — attached as a file",
+    "fileMentionList": "Files in this chat's folder",
+    "fileMentionSearching": "Looking for files…",
+    "fileMentionNoMatch": "No file matches",
+    "fileMentionNoFolder": "This chat has no working folder",
+    "fileMentionTruncated": "Folder too large — showing part of it",
+    "fileMentionError": "Could not list the files",
     "attachmentFailed": "Attachment failed",
     "attachmentExpandImage": "Enlarge image {name}",
     "attachmentCollapseImage": "Shrink image {name}",
@@ -1146,9 +1152,6 @@
     "effortLevelCurrent": "Effort level: {level}",
     "effortLevelLocked": "Effort level: {level} (not switchable)",
     "effortLockedHint": "Effort cannot be switched from the chat for this agent — its runtime has no controllable terminal.",
-    "agentCardRunning": "running …",
-    "agentCardFailed": "failed",
-    "agentCardDone": "done",
     "agentCardNoTranscript": "This task has no transcript of its own.",
     "agentCardLoading": "Loading transcript …",
     "agentCardExpand": "Show the subagent's transcript",
@@ -1172,6 +1175,20 @@
     "effortRejected": "Effort change rejected",
     "effortUnconfirmed": "Effort change not confirmed — check the terminal",
     "effortFailed": "Effort change failed",
+    "helperLine": {
+      "count": "{count, plural, one {# helper} other {# helpers}}",
+      "working": "{count} working",
+      "done": "{count} done",
+      "failed": "{count} failed",
+      "allDone": "done",
+      "stateWorking": "working",
+      "stateDone": "done",
+      "stateFailed": "failed",
+      "stateUnknown": "no report",
+      "unknown": "{count} no report",
+      "expand": "Show helpers",
+      "collapse": "Hide helpers"
+    },
     "toolGroup": {
       "commands": "{count, plural, one {# command executed} other {# commands executed}}",
       "tools": "{count, plural, one {# tool used} other {# tools used}}",
@@ -1839,6 +1856,12 @@
   },
   "insights": {
     "title": "Insights",
+    "metric": {
+      "aria": "Which usage the page shows",
+      "all": "All",
+      "cloud": "Cloud",
+      "local": "Local"
+    },
     "loadFailed": "Could not load the usage numbers.",
     "source": {
       "operator": "You, interactive",
@@ -1858,13 +1881,12 @@
       "local": "ran locally",
       "localHint": "Share of output tokens · last week {share}",
       "localHintFirst": "Share of output tokens",
-      "empty": "No usage recorded yet."
+      "empty": "No usage recorded yet.",
+      "costHintCloud": "This week so far · cloud at list price — flat-rate plans are not billed per token",
+      "costHintLocal": "This week so far · local runs at the API list price of the same model — calls straight to a box's API have no price"
     },
     "heatmap": {
       "title": "Tokens per day",
-      "metricAria": "Which tokens colour the days",
-      "all": "All",
-      "local": "Local",
       "gridAria": "Tokens per day over the last {weeks} weeks — pick a day with the arrows below",
       "less": "less",
       "more": "more",

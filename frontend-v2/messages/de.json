@@ -1049,6 +1049,12 @@
     "attachmentUploadingOne": "lädt…",
     "attachmentUploadingMany": "{count} laden…",
     "pastedAsFile": "Langer Text eingefügt — als Datei angehängt",
+    "fileMentionList": "Dateien im Ordner dieses Chats",
+    "fileMentionSearching": "Suche Dateien…",
+    "fileMentionNoMatch": "Keine Datei passt",
+    "fileMentionNoFolder": "Dieser Chat hat keinen Arbeitsordner",
+    "fileMentionTruncated": "Ordner zu gross — nur ein Teil wird gezeigt",
+    "fileMentionError": "Dateien konnten nicht gelistet werden",
     "attachmentFailed": "Anhang fehlgeschlagen",
     "attachmentExpandImage": "Bild {name} vergrössern",
     "attachmentCollapseImage": "Bild {name} verkleinern",
@@ -1146,9 +1152,6 @@
     "effortLevelCurrent": "Effort-Stufe: {level}",
     "effortLevelLocked": "Effort-Stufe: {level} (nicht umschaltbar)",
     "effortLockedHint": "Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal.",
-    "agentCardRunning": "läuft …",
-    "agentCardFailed": "fehlgeschlagen",
-    "agentCardDone": "fertig",
     "agentCardNoTranscript": "Für diesen Auftrag gibt es kein eigenes Protokoll.",
     "agentCardLoading": "Protokoll wird geladen …",
     "agentCardExpand": "Protokoll des Subagenten anzeigen",
@@ -1172,6 +1175,20 @@
     "effortRejected": "Effort-Wechsel abgelehnt",
     "effortUnconfirmed": "Effort-Wechsel nicht bestätigt — im Terminal prüfen",
     "effortFailed": "Effort-Wechsel fehlgeschlagen",
+    "helperLine": {
+      "count": "{count, plural, one {# Helfer} other {# Helfer}}",
+      "working": "{count, plural, one {# arbeitet} other {# arbeiten}}",
+      "done": "{count} fertig",
+      "failed": "{count} fehlgeschlagen",
+      "allDone": "fertig",
+      "stateWorking": "arbeitet",
+      "stateDone": "fertig",
+      "stateFailed": "fehlgeschlagen",
+      "stateUnknown": "ohne Rückmeldung",
+      "unknown": "{count} ohne Rückmeldung",
+      "expand": "Helfer anzeigen",
+      "collapse": "Helfer ausblenden"
+    },
     "toolGroup": {
       "commands": "{count, plural, one {# Befehl ausgeführt} other {# Befehle ausgeführt}}",
       "tools": "{count, plural, one {# Tool verwendet} other {# Tools verwendet}}",
@@ -1839,6 +1856,12 @@
   },
   "insights": {
     "title": "Insights",
+    "metric": {
+      "aria": "Welche Nutzung die Seite zeigt",
+      "all": "Alle",
+      "cloud": "Cloud",
+      "local": "Lokal"
+    },
     "loadFailed": "Die Nutzungszahlen liessen sich nicht laden.",
     "source": {
       "operator": "Du, interaktiv",
@@ -1858,13 +1881,12 @@
       "local": "lief lokal",
       "localHint": "Anteil der Output-Tokens · Vorwoche {share}",
       "localHintFirst": "Anteil der Output-Tokens",
-      "empty": "Noch keine Nutzung erfasst."
+      "empty": "Noch keine Nutzung erfasst.",
+      "costHintCloud": "Diese Woche bis jetzt · Cloud zum Listenpreis — Flatrate-Abos zahlen nicht pro Token",
+      "costHintLocal": "Diese Woche bis jetzt · lokale Läufe zum API-Listenpreis desselben Modells — Aufrufe direkt an die API einer Box haben keinen Preis"
     },
     "heatmap": {
       "title": "Tokens pro Tag",
-      "metricAria": "Welche Tokens die Tage färben",
-      "all": "Alle",
-      "local": "Lokal",
       "gridAria": "Tokens pro Tag der letzten {weeks} Wochen — Tag mit den Pfeilen darunter wählen",
       "less": "weniger",
       "more": "mehr",
