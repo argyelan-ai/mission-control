@@ -7,6 +7,7 @@ import { motion } from "framer-motion";
 import { Loader2, Eye, EyeOff } from "lucide-react";
 import { AUTH_TOKEN_KEY, api, setStoredUser } from "@/lib/api";
 import { postLoginPath } from "@/lib/firstRun";
+import { adoptSavedLocaleAfterLogin } from "@/lib/locale";
 import { AmbientBackground } from "@/components/layout/AmbientBackground";
 import { C, alpha } from "@/lib/colors";
 
@@ -83,7 +84,14 @@ export default function LoginPage() {
       setStoredUser(res.user);
       // First registration -> setup wizard; a later login goes there too
       // while the wizard is still pending (lib/firstRun.ts).
-      router.replace(await postLoginPath(mode === "register" ? "register" : "login"));
+      const next = await postLoginPath(mode === "register" ? "register" : "login");
+      // The user's saved UI language (lib/locale.ts): if it differs from the
+      // login page's, open the app with a full load so it renders in it.
+      if (await adoptSavedLocaleAfterLogin()) {
+        window.location.replace(next);
+        return;
+      }
+      router.replace(next);
     } catch (err) {
       const msg =
         err instanceof Error ? err.message : t("connectionFailed");
