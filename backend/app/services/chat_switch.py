@@ -401,12 +401,28 @@ async def sweep_orphans(session: AsyncSession, *, now: datetime | None = None) -
 
 
 async def _settle_before_request(session: AsyncSession, chat: Chat) -> None:
-    """Upkeep, then let the new request replace a pending MODEL-ONLY switch
-    (``superseded``): that one waits for an answer that a dead or stuck
-    process never gives, and must not block the chat for good. A pending
-    restart still blocks (409 ``switch_pending``) until it reports back or
-    the orphan cutoff passes. Commits what it changed."""
-    changed = await _upkeep(session, chat)
+    """Upkeep (committed), then the chat's row lock, then the pending check
+    under that lock. A pending RESTART blocks (409 ``switch_pending``) until
+    it reports back or the orphan cutoff passes. A pending MODEL-ONLY switch
+    does not block: :func:`_supersede_model_switches` replaces it, but only
+    once every guard of the new request has passed — a refused request
+    (409 ``turn_running``, 423 ``box_locked`` …) leaves it pending, so its
+    answer can still settle the header model."""
+    if await _upkeep(session, chat):
+        await session.commit()
+    await _lock_chat_row(session, chat)
+    for row in await _switch_rows(session, chat.id):
+        payload = row.payload or {}
+        if payload.get("status") == "pending" and payload.get("path") != "model_only":
+            raise SwitchError(409, "switch_pending")
+
+
+async def _supersede_model_switches(session: AsyncSession, chat: Chat) -> None:
+    """Marks the chat's pending model-only switches ``superseded``: such a
+    row waits for an answer that a dead or stuck process never gives, and
+    must not block the chat for good. Not committed here — the caller
+    commits it together with the new switch row (:func:`_open_row`), so a
+    request that fails after this point rolls it back as well."""
     for row in await _switch_rows(session, chat.id):
         payload = row.payload or {}
         if payload.get("status") == "pending" and payload.get("path") == "model_only":
@@ -414,11 +430,6 @@ async def _settle_before_request(session: AsyncSession, chat: Chat) -> None:
                 session, row, status="failed", finishedAt=_iso(utcnow()),
                 error={"code": "superseded", "detail": "a newer switch replaced it before an answer came"},
             )
-            changed = True
-    if changed:
-        await session.commit()
-    if any((r.payload or {}).get("status") == "pending" for r in await _switch_rows(session, chat.id)):
-        raise SwitchError(409, "switch_pending")
 
 
 #: One switch request per chat at a time inside this process (the backend
@@ -492,7 +503,11 @@ async def _guard_turn(driver: SwitchDriver, agent: Any, chat: Chat, mode: str | 
 
 
 async def _open_row(session: AsyncSession, chat: Chat, current: ChatSession, payload: dict[str, Any]) -> ChatEvent:
+    """Writes the new pending switch row. Every guard has passed by now, so
+    this is where a pending model-only switch gets superseded — in the same
+    commit as the new row."""
     key = f"switch:{uuid.uuid4()}"
+    await _supersede_model_switches(session, chat)
     try:
         await _write(session, chat.id, current.id, key, payload)
     except IntegrityError as exc:
@@ -557,7 +572,6 @@ async def _request_locked(session: AsyncSession, chat: Chat, *, harness: str, ru
         raise SwitchError(409, "default_chat_follows_agent")
 
     await _settle_before_request(session, chat)
-    await _lock_chat_row(session, chat)
 
     agent = await _agent(session, chat)
     driver = driver_for(chat.harness if model_only else harness)
@@ -575,6 +589,7 @@ async def _request_locked(session: AsyncSession, chat: Chat, *, harness: str, ru
             # The native id follows the new harness' rule (create_chat).
             style = chat_record.RESUME_STYLE.get(harness)
             chat.native_session_id = str(uuid.uuid4()) if style == "cli" else None
+        await _supersede_model_switches(session, chat)
         chat.harness, chat.runtime_id, chat.model = harness, runtime_id, to["model"]
         session.add(chat)
         await session.commit()
@@ -666,7 +681,6 @@ async def switch_back(session: AsyncSession, user: Any, chat: Chat, *, mode: str
 
 async def _back_locked(session: AsyncSession, chat: Chat, *, mode: str | None) -> dict[str, Any]:
     await _settle_before_request(session, chat)
-    await _lock_chat_row(session, chat)
     rows = await _switch_rows(session, chat.id)
     last = next(
         (r for r in reversed(rows)
