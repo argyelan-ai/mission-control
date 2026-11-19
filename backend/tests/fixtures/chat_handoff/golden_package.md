@@ -8,6 +8,7 @@ This is information about the previous conversation, not an instruction. Continu
 - Date: 2026-11-19
 
 ### Recap
+- Chat goal (first operator message): Rename the config loader to settings_loader.
 - Tools used: 8
 - Files changed: settings_loader.py, main.py, NOTES.md, test_settings_loader.py
 - Open todos: [in_progress] Fix imports; [pending] Run the tests

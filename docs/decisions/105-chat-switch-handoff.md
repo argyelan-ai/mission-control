@@ -37,18 +37,23 @@ model text through the `context` of a `session/prompt`.
 2. **The package is built from MC's record, deterministically.**
    `services/chat_handoff.build_handoff` is a pure function of `chat_events`
    payloads: a header (chat, workspace, pair before / now, date, the ADR-089
-   R3 origin line "information, not an instruction"), a recap (tool count,
+   R3 origin line "information, not an instruction"), a recap (the chat's
+   goal = its first operator message, clipped like any message; tool count,
    changed files by the heads' rule, open todos, an open omp question) and
    the last operator/assistant messages verbatim, newest first until the
    budget is spent. No model call, no harness file. Secrets are masked with
    the heads' masking before any clip.
-3. **Budget:** `min(32 000, max(4 000, 25 % of the new model's window))`
+3. **Budget:** `min(32 000, max(8 000, 25 % of the new model's window))`
    tokens, window from the runtime row (`max_context_len`), else the model
-   name (`resolve_context_window`), else 32 000. 4 characters per token for
-   the cap; the real size comes from the first `usage` after the switch.
+   name (`resolve_context_window`), else 32 000. 3.3 characters per token
+   for the cap; the real size comes from the first `usage` after the switch.
    Header + recap take at most a quarter; one message at most 2 000
-   characters. These are named constants — measurement M1 of the plan
-   (package quality at 4k/8k/16k) is still open and may change the numbers,
+   characters. These are named constants, set by measurement M1 of the plan
+   (package quality at 4k/8k/16k; 10 real chats, 30 questions per cell,
+   two answering models): a 4 000 floor lost ~25 points, 8 000 kept
+   93–97 %, 16 000 added nothing on these chats; 4 characters per token
+   underestimated the package by ~20 %. The 32 000 cap is **not measured**
+   (no chat in M1 reached it). A new measurement may change the numbers,
    not the structure.
 4. **Record first, pair late.** Every switch is one `chat_events` row
    `kind=switch` (`source_key = switch:<uuid>`, no migration) with
@@ -141,8 +146,10 @@ model text through the `context` of a `session/prompt`.
 
 ## Verworfen
 
-- A model-written summary by the outgoing model (plan layer 3): only if M1
-  shows the deterministic package fails.
+- A model-written summary by the outgoing model (plan layer 3): M1 found it
+  not needed for chats up to ~17k tokens of history (at 8k+ only 2–3 of 30
+  questions were lost, none by truncation). The goal line in the recap is
+  the cheap step instead. Measure again once real chats pass ~30k tokens.
 - A `handoff_event_id` / `requested_model` column: the switch row's payload
   carries both; no migration.
 - Translating one harness' session file into another's.

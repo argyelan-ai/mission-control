@@ -13,15 +13,17 @@ record give the same kind of package.
 Layers, in this order:
 
 1. header — chat title, workspace, the pair before and the pair now, date;
-2. recap — tool count, the files an edit/write tool touched (the heads'
-   rule, imported from ``heads/transcript.py``), open todos, an open
-   question;
+2. recap — the chat's goal (its first operator message), tool count, the
+   files an edit/write tool touched (the heads' rule, imported from
+   ``heads/transcript.py``), open todos, an open question;
 3. the verbatim tail — the last operator/assistant messages, newest first
    until the budget is spent, then put back in reading order.
 
-The numbers below are constants on purpose: measurement M1 of the plan
-(package quality at 4k/8k/16k tokens) has not run yet and may move them;
-it must never change the structure.
+The numbers below are constants on purpose. Measurement M1 of the plan
+(package quality at 4k/8k/16k tokens, 10 real chats, 30 questions per
+cell) set them: a 4k floor lost ~25 points, 8k kept 93–97 %, 16k added
+nothing. A new measurement may move them; it must never change the
+structure.
 """
 from __future__ import annotations
 
@@ -38,19 +40,22 @@ from app.services.heads.transcript import (
     _tool_changed_file,
 )
 
-#: Hard cap of a package, in (estimated) tokens.
+#: Hard cap of a package, in (estimated) tokens. NOT measured: no chat in
+#: M1 was large enough to reach it.
 BUDGET_CAP_TOKENS = 32_000
-#: Floor: a package smaller than this cannot carry a useful tail.
-BUDGET_FLOOR_TOKENS = 4_000
+#: Floor: M1 measured 4 000 losing ~25 points against 8 000.
+BUDGET_FLOOR_TOKENS = 8_000
 #: Share of the new model's context window a package may use.
 BUDGET_WINDOW_SHARE = 0.25
 #: Window assumed when neither the runtime nor the model name gives one.
 DEFAULT_WINDOW_TOKENS = 32_000
-#: Cap of one verbatim message (heads use 600; a chat needs more). M1 open.
+#: Cap of one verbatim message (heads use 600; a chat needs more). M1: keep
+#: 2 000 while the floor is at least 8 000 tokens.
 MAX_MSG_CHARS = 2_000
 #: Estimate used for the CAP only; the switch card shows the real number
-#: from the first ``usage`` event after the switch.
-CHARS_PER_TOKEN = 4
+#: from the first ``usage`` event after the switch. M1: 4 made packages
+#: ~20 % larger than estimated.
+CHARS_PER_TOKEN = 3.3
 #: Header + recap may use at most this share of the budget.
 HEADER_SHARE = 0.25
 
@@ -119,7 +124,7 @@ class HandoffPackage:
 
 
 def budget_for_window(window_tokens: int | None) -> int:
-    """``min(32 000, max(4 000, 25 % of the new model's window))``; an
+    """``min(32 000, max(8 000, 25 % of the new model's window))``; an
     unknown window counts as 32 000 (budget 8 000)."""
     window = window_tokens if isinstance(window_tokens, int) and window_tokens > 0 else DEFAULT_WINDOW_TOKENS
     return min(BUDGET_CAP_TOKENS, max(BUDGET_FLOOR_TOKENS, int(BUDGET_WINDOW_SHARE * window)))
@@ -145,7 +150,8 @@ def window_for(runtime: Any | None, model: str | None) -> int | None:
 
 
 def est_tokens(text: str) -> int:
-    return math.ceil(len(text) / CHARS_PER_TOKEN)
+    # Rounded first so 3.3's float error never adds a token (26 400 → 8 000).
+    return math.ceil(round(len(text) / CHARS_PER_TOKEN, 6))
 
 
 # ── Builder ─────────────────────────────────────────────────────────────
@@ -260,18 +266,24 @@ def build_handoff(
     """The package for ``new_pair`` from a chat's record ``events`` (the
     ``chat_events.payload`` dicts of all its sessions, in ``seq`` order).
 
-    Never larger than ``budget_tokens`` (estimated at 4 characters per
-    token). Header + recap take at most a quarter of it; the tail takes
-    the rest, newest message first, so the OLDEST messages are the ones
+    Never larger than ``budget_tokens`` (estimated at
+    :data:`CHARS_PER_TOKEN` characters per token). Header + recap take at
+    most a quarter of it; the tail takes the rest, newest message first, so the OLDEST messages are the ones
     that drop out. Deterministic for the same input (pass ``today`` for a
     fixed date)."""
     events = [ev for ev in events if isinstance(ev, dict)]
-    budget_chars = max(0, int(budget_tokens)) * CHARS_PER_TOKEN
+    budget_chars = int(max(0, int(budget_tokens)) * CHARS_PER_TOKEN)
     header_cap = int(budget_chars * HEADER_SHARE)
 
     tool_count, files, todos, question = _recap(events)
+    messages = _messages(events)
     head = _header(chat, old_pair, new_pair, cwd, today or date.today().isoformat())
     recap = ["", "### Recap"]
+    # The goal survives when the tail drops the oldest messages (M1: the
+    # cheap step instead of a model-written summary).
+    goal = next((text for role, text in messages if role == _ROLE_LABELS["user"]), None)
+    if goal:
+        recap.append(f"- Chat goal (first operator message): {_one_line(goal, MAX_MSG_CHARS)}")
     if tool_count:
         recap.append(f"- Tools used: {tool_count}")
     if files:
@@ -284,7 +296,6 @@ def build_handoff(
     if len(top) > header_cap:
         top = _clip(top, header_cap)
 
-    messages = _messages(events)
     tail_title = "\n\n### Last messages (oldest first)\n"
     room = budget_chars - len(top) - len(tail_title)
     picked: list[str] = []
