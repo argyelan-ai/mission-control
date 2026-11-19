@@ -2596,10 +2596,44 @@
         ]
       }
     },
+    "/api/v1/chat-record/agent/me/chats/{chat_id}/native-session": {
+      "put": {
+        "operationId": "agent_pin_chat_session_api_v1_chat_record_agent_me_chats__chat_id__native_session_put",
+        "summary": "Agent Pin Chat Session",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
+    "/api/v1/chat-record/agent/me/chats/{chat_id}/resume": {
+      "get": {
+        "operationId": "agent_chat_resume_api_v1_chat_record_agent_me_chats__chat_id__resume_get",
+        "summary": "Agent Chat Resume",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
     "/api/v1/chat-record/chats": {
       "get": {
         "operationId": "list_record_chats_api_v1_chat_record_chats_get",
         "summary": "List Record Chats",
+        "tags": [
+          "chat-record"
+        ]
+      },
+      "post": {
+        "operationId": "create_record_chat_api_v1_chat_record_chats_post",
+        "summary": "Create Record Chat",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
+    "/api/v1/chat-record/chats/{chat_id}": {
+      "patch": {
+        "operationId": "update_record_chat_api_v1_chat_record_chats__chat_id__patch",
+        "summary": "Update Record Chat",
         "tags": [
           "chat-record"
         ]
@@ -2609,6 +2643,24 @@
       "get": {
         "operationId": "get_record_history_api_v1_chat_record_chats__chat_id__history_get",
         "summary": "Get Record History",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
+    "/api/v1/chat-record/chats/{chat_id}/native-session": {
+      "put": {
+        "operationId": "pin_record_chat_session_api_v1_chat_record_chats__chat_id__native_session_put",
+        "summary": "Pin Record Chat Session",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
+    "/api/v1/chat-record/chats/{chat_id}/resume": {
+      "get": {
+        "operationId": "get_record_chat_resume_api_v1_chat_record_chats__chat_id__resume_get",
+        "summary": "Get Record Chat Resume",
         "tags": [
           "chat-record"
         ]

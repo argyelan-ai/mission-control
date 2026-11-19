@@ -2,8 +2,8 @@
 
 Reads every chat session file of every agent that has a transcript folder
 (Claude Code, omp, Hermes — whatever ``transcript_adapters`` can read) and
-writes it into ``chats`` / ``chat_sessions`` / ``chat_events``: one chat per
-agent, one chat session per native session, the events through the same
+writes it into ``chats`` / ``chat_sessions`` / ``chat_events``: one default chat per
+agent (plus the chats that pinned one of its native sessions, S2), one chat session per native session, the events through the same
 reader the history page uses (``read_history``).
 
 * **Files stay untouched.** The importer only opens them for reading.
@@ -127,8 +127,8 @@ def _omp_moves_to_bridge(adapter: Any, recorded: str | None, path: Path) -> bool
 
 
 async def _session_row_for(db: AsyncSession, agent: Any, adapter: Any, path: Path):
-    chat = await chat_record.ensure_agent_chat(db, agent)
     native = adapter.session_id_for(path) if hasattr(adapter, "session_id_for") else path.stem
+    chat = await chat_record.chat_for_native(db, agent, native)
     try:
         cwd = adapter.session_cwd(path) if hasattr(adapter, "session_cwd") else None
     except Exception:
@@ -161,6 +161,13 @@ async def import_session_file(
     except OSError:
         return 0
     chat, row = await _session_row_for(db, agent, adapter, path)
+    if not chat.agent_default:
+        # A pinned chat (S2): collect every row / event of its native
+        # session a writer racing the pin left in another chat. Before the
+        # bridge check, so a merged copy of omp's own file is replaced too.
+        moved, touched = await chat_record.merge_strays(db, chat)
+        if touched:
+            force = True
     if await asyncio.to_thread(_omp_moves_to_bridge, adapter, row.transcript_path, path):
         from app.models.chat_record import ChatEvent
 

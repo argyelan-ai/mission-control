@@ -860,9 +860,12 @@ internal:
   - "table:comms_guest_cards"
   - "table:comms_sessions"
   # ADR-103: MC's own chat record (first slice of chats instead of fixed
-  # agents). Behind CHAT_RECORD_ENABLED (default off); read API only, no
-  # screen reads it yet — the chat list and history switch over in a later
-  # ROADMAP stage-1 package.
+  # agents). Behind CHAT_RECORD_ENABLED (default off); no screen reads it
+  # yet — the chat list and history switch over in a later ROADMAP stage-1
+  # package. Slice S2 (migration 0229) adds the admin write side: further
+  # chats per agent with their own pinned native session (create, rename/
+  # archive, pin, resume plan), plus agent-token twins of pin + resume
+  # (/agent/me/chats/…) for the harness side — no harness drives them yet.
   - "endpoint:* /api/v1/chat-record/*"
   - "table:chats"
   - "table:chat_sessions"

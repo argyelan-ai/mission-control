@@ -32,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import and_, func, or_, update
+from sqlalchemy import and_, delete, func, or_, text, update
 from sqlalchemy import select as sa_select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -180,11 +180,14 @@ def _insert_for(session: AsyncSession):
     return pg_insert if dialect == "postgresql" else sqlite_insert
 
 
+def _default_q(agent_id: uuid.UUID):
+    return select(Chat).where(Chat.legacy_agent_id == agent_id, Chat.agent_default.is_(True))
+
+
 async def ensure_agent_chat(session: AsyncSession, agent: Any) -> Chat:
-    """The chat of an existing agent (one per agent, ``legacy_agent_id``)."""
-    existing = (
-        await session.exec(select(Chat).where(Chat.legacy_agent_id == agent.id))
-    ).first()
+    """The DEFAULT chat of an existing agent (one per agent): it takes every
+    native session that no other chat of the agent pinned."""
+    existing = (await session.exec(_default_q(agent.id))).first()
     if existing is not None:
         return existing
     insert = _insert_for(session)
@@ -198,17 +201,34 @@ async def ensure_agent_chat(session: AsyncSession, agent: Any) -> Chat:
             model=getattr(agent, "model", None),
             workspace_path=getattr(agent, "workspace_path", None),
             legacy_agent_id=agent.id,
+            agent_default=True,
             next_seq=1,
             pinned=False,
             created_at=utcnow(),
         )
         .on_conflict_do_nothing(
             index_elements=["legacy_agent_id"],
-            index_where=Chat.__table__.c.legacy_agent_id.isnot(None),
+            index_where=text("agent_default"),
         )
     )
     await session.execute(stmt)
-    return (await session.exec(select(Chat).where(Chat.legacy_agent_id == agent.id))).one()
+    return (await session.exec(_default_q(agent.id))).one()
+
+
+async def chat_for_native(session: AsyncSession, agent: Any, native_session_id: str) -> Chat:
+    """The chat a native session of ``agent`` belongs to: the chat that
+    pinned it (S2), otherwise the agent's default chat."""
+    pinned = (
+        await session.exec(
+            select(Chat).where(
+                Chat.legacy_agent_id == agent.id,
+                Chat.native_session_id == native_session_id[:200],
+            )
+        )
+    ).first()
+    if pinned is not None:
+        return pinned
+    return await ensure_agent_chat(session, agent)
 
 
 async def ensure_session(
@@ -469,7 +489,7 @@ class LiveRecorder:
         self._factory = session_factory
         self._queue: asyncio.Queue = asyncio.Queue()
         self._counters: dict[str, KeyCounter] = {}
-        self._session_rows: dict[str, tuple[uuid.UUID, uuid.UUID]] = {}
+        self._session_rows: dict[str, tuple[uuid.UUID, uuid.UUID, bool]] = {}
         self._initial_path = initial_path
         #: Paths whose backfill ran: ``True`` = write its events, ``False`` =
         #: skip them (gate, or omp's own file shadowed by the bridge's).
@@ -507,11 +527,21 @@ class LiveRecorder:
         await self._queue.join()
 
     async def _session_row(self, db: AsyncSession, path: Path) -> tuple[uuid.UUID, uuid.UUID]:
+        native = self._adapter.session_id_for(path) if hasattr(self._adapter, "session_id_for") else path.stem
         cached = self._session_rows.get(str(path))
         if cached is not None:
-            return cached
-        chat = await ensure_agent_chat(db, self._agent)
-        native = self._adapter.session_id_for(path) if hasattr(self._adapter, "session_id_for") else path.stem
+            chat_id, row_id, is_default = cached
+            if not is_default:
+                # A pinned chat keeps its native session for good.
+                return chat_id, row_id
+            # A pin (S2) can take this native session away from the default
+            # chat while the tailer runs. Route by native id, not by the
+            # cached row: the row may have moved, or be a stray the race
+            # created in the default chat.
+            if await pinned_chat_id(db, self._agent.id, native) is None:
+                return chat_id, row_id
+            self._session_rows.pop(str(path), None)
+        chat = await chat_for_native(db, self._agent, native)
         row = await ensure_session(
             db,
             chat,
@@ -522,7 +552,17 @@ class LiveRecorder:
             place=place_of(self._agent),
             transcript_path=str(path),
         )
-        self._session_rows[str(path)] = (chat.id, row.id)
+        if not chat.agent_default:
+            await merge_strays(db, chat)
+            # merge_strays may have adopted an older row as the chat's own.
+            row = (
+                await db.exec(
+                    select(ChatSession).where(
+                        ChatSession.chat_id == chat.id, ChatSession.native_session_id == native[:200]
+                    )
+                )
+            ).one()
+        self._session_rows[str(path)] = (chat.id, row.id, bool(chat.agent_default))
         return chat.id, row.id
 
     async def _backfill_file(self, path: Path) -> bool:
@@ -593,6 +633,335 @@ def live_recorder_for(agent: Any, adapter: Any, initial_path: Path | None) -> Li
     return LiveRecorder(agent, adapter, initial_path)
 
 
+# ── Many chats per harness (S2) ──────────────────────────────────────────
+
+#: How a harness continues one exact native session, per harness name of
+#: ``transcript_adapters``. ``cli``: Claude Code, ``--session-id <id>`` on
+#: the first start and ``--resume <id>`` later (both flags in
+#: ``claude --help``). ``acp``: omp over ACP, ``session/new`` and then
+#: ``session/load <id>`` (``docker/omp-bridge/acp_chat.py``). A harness not
+#: listed cannot hold a second chat yet.
+RESUME_STYLE: dict[str, str] = {"claude": "cli", "omp": "acp"}
+
+#: A native session id travels into a CLI flag and an ACP call: a plain
+#: token, never a path or anything a shell could split.
+NATIVE_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"
+
+
+class ChatRecordError(Exception):
+    status = 400
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class ChatRecordInvalid(ChatRecordError):
+    status = 422
+
+
+class ChatRecordConflict(ChatRecordError):
+    status = 409
+
+
+def harness_name(agent: Any) -> str:
+    from app.services.transcript_adapters import adapter_for
+
+    harness = getattr(agent, "harness", None)
+    # adapter_for falls back to Claude for an unknown harness; a chat must
+    # not — an unknown harness has no session to pin.
+    if harness and harness not in RESUME_STYLE:
+        return harness
+    return adapter_for(agent).name
+
+
+async def create_chat(session: AsyncSession, user: Any, agent: Any, *, title: str | None = None) -> Chat:
+    """A further chat on ``agent``'s harness, owned by ``user``. Claude Code
+    gets its native session id now (MC starts the CLI with it); omp gets it
+    from ``session/new`` later (:func:`pin_native_session`). Does not commit."""
+    harness = harness_name(agent)
+    style = RESUME_STYLE.get(harness)
+    if style is None:
+        raise ChatRecordInvalid("harness_cannot_pin_sessions")
+    # The default chat first, so routing always has a home for the
+    # sessions nobody pinned.
+    await ensure_agent_chat(session, agent)
+    owner = getattr(user, "id", None)
+    if owner is not None:
+        from app.models.user import User
+
+        # LOCAL_AUTH_TOKEN's synthetic admin has no users row (FK).
+        if await session.get(User, owner) is None:
+            owner = None
+    chat = Chat(
+        id=uuid.uuid4(),
+        title=((title or "").strip() or getattr(agent, "name", None) or "Chat")[:200],
+        owner_user_id=owner,
+        harness=harness,
+        runtime_id=getattr(agent, "runtime_id", None),
+        model=getattr(agent, "model", None),
+        workspace_path=getattr(agent, "workspace_path", None),
+        legacy_agent_id=agent.id,
+        agent_default=False,
+        native_session_id=str(uuid.uuid4()) if style == "cli" else None,
+        next_seq=1,
+        pinned=False,
+        created_at=utcnow(),
+    )
+    session.add(chat)
+    await session.flush()
+    return chat
+
+
+async def _move_events(
+    session: AsyncSession, from_session_id: uuid.UUID, target: Chat, to_session_id: uuid.UUID
+) -> int:
+    """Moves the events of session row ``from_session_id`` that sit outside
+    ``target`` into ``target`` under session row ``to_session_id``; they get
+    fresh sequence numbers of the target chat. A key the target already
+    holds wins, the copy goes. Returns the events moved."""
+    table = ChatEvent.__table__
+    events = (
+        await session.execute(
+            sa_select(table.c.id, table.c.source_key)
+            # Rows already in the target stay as they are.
+            .where(table.c.session_id == from_session_id, table.c.chat_id != target.id)
+            .order_by(table.c.ts.asc().nulls_first(), table.c.seq.asc())
+        )
+    ).all()
+    if not events:
+        return 0
+    taken = {
+        k for (k,) in (
+            await session.execute(
+                sa_select(table.c.source_key).where(
+                    table.c.chat_id == target.id,
+                    table.c.source_key.in_([e.source_key for e in events]),
+                )
+            )
+        ).all()
+    }
+    stale = [e.id for e in events if e.source_key in taken]
+    if stale:
+        await session.execute(delete(table).where(table.c.id.in_(stale)))
+    movers = [e for e in events if e.source_key not in taken]
+    if movers:
+        first = await _reserve_seq(session, target.id, len(movers))
+        for i, ev in enumerate(movers):
+            await session.execute(
+                update(table)
+                .where(table.c.id == ev.id)
+                .values(chat_id=target.id, session_id=to_session_id, seq=first + i)
+            )
+    return len(movers)
+
+
+async def _move_session(session: AsyncSession, row: ChatSession, target: Chat) -> int:
+    """Moves one session row and its events into ``target``. Returns the
+    events moved."""
+    moved = await _move_events(session, row.id, target, row.id)
+    await session.execute(
+        update(ChatSession.__table__)
+        .where(ChatSession.__table__.c.id == row.id)
+        .values(chat_id=target.id, imported_bytes=0)
+    )
+    row.chat_id = target.id
+    row.imported_bytes = 0
+    return moved
+
+
+async def merge_strays(session: AsyncSession, chat: Chat) -> tuple[int, int]:
+    """Makes a pinned chat the ONLY home of its native session, by native id
+    and not by row: every ``chat_sessions`` row of the agent with that
+    native id in another chat is moved in (or merged into the chat's own
+    row and deleted), and events of the chat's own row that a writer put
+    into another chat come over too. Covers the pin race in both shapes —
+    a writer that cached the row before the pin moved it, and a writer that
+    resolved the default chat before the pin and created a NEW row there.
+    Only pinned chats; the default chat has nothing to collect. Returns
+    ``(events moved, rows or events repaired)``. Does not commit."""
+    native = chat.native_session_id
+    if chat.agent_default or not native or chat.legacy_agent_id is None:
+        return 0, 0
+    own = (
+        await session.exec(
+            select(ChatSession).where(ChatSession.chat_id == chat.id, ChatSession.native_session_id == native)
+        )
+    ).first()
+    strays = (
+        await session.exec(
+            select(ChatSession)
+            .join(Chat, Chat.id == ChatSession.chat_id)
+            .where(
+                Chat.legacy_agent_id == chat.legacy_agent_id,
+                ChatSession.native_session_id == native,
+                ChatSession.chat_id != chat.id,
+            )
+            .order_by(ChatSession.created_at.asc())
+        )
+    ).all()
+    moved = touched = 0
+    table = ChatEvent.__table__
+    for row in strays:
+        touched += 1
+        if own is None:
+            moved += await _move_session(session, row, chat)
+            own = row
+            continue
+        if row.transcript_path and own.transcript_path and row.transcript_path != own.transcript_path:
+            # Another file of the same session (omp's own file vs the
+            # bridge's copy): its entry ids differ, merging would double
+            # every turn. Drop the copy, re-read the chat's own file.
+            await session.execute(delete(table).where(table.c.session_id == row.id))
+        else:
+            moved += await _move_events(session, row.id, chat, own.id)
+        # Anything left under the stray row is a key the chat already has.
+        await session.execute(delete(table).where(table.c.session_id == row.id))
+        await session.execute(delete(ChatSession.__table__).where(ChatSession.__table__.c.id == row.id))
+        own.imported_bytes = 0
+        session.add(own)
+    if own is not None:
+        # A writer that cached the row before a pin moved it.
+        own_strays = await _move_events(session, own.id, chat, own.id)
+        moved += own_strays
+        touched += own_strays
+    if touched:
+        await session.flush()
+    return moved, touched
+
+
+async def pin_native_session(session: AsyncSession, chat: Chat, native_session_id: str) -> int:
+    """Binds ``chat`` to one native session of its agent (omp: the id ACP
+    ``session/new`` returned). Idempotent for the same id. Every row of that
+    session another chat of the agent already recorded (the sweep was
+    faster, or a writer raced the pin) moves over with its events
+    (:func:`merge_strays`). Returns the events moved. Does not commit."""
+    import re
+
+    native = native_session_id or ""
+    if not re.match(NATIVE_ID_PATTERN, native):
+        raise ChatRecordInvalid("bad_native_session_id")
+    if chat.agent_default or chat.legacy_agent_id is None:
+        raise ChatRecordConflict("default_chat")
+    if chat.native_session_id == native:
+        return 0
+    if chat.native_session_id is not None:
+        raise ChatRecordConflict("already_pinned")
+    other = (
+        await session.exec(
+            select(Chat).where(
+                Chat.legacy_agent_id == chat.legacy_agent_id,
+                Chat.native_session_id == native,
+                Chat.id != chat.id,
+            )
+        )
+    ).first()
+    if other is not None:
+        raise ChatRecordConflict("pinned_by_other_chat")
+    chat.native_session_id = native
+    session.add(chat)
+    await session.flush()
+    moved, touched = await merge_strays(session, chat)
+    if touched:
+        await session.execute(
+            update(Chat.__table__)
+            .where(Chat.__table__.c.id == chat.id)
+            .values(last_activity_at=func.coalesce(Chat.__table__.c.last_activity_at, utcnow()))
+        )
+    return moved
+
+
+async def pinned_chat_id(session: AsyncSession, agent_id: uuid.UUID, native_session_id: str) -> uuid.UUID | None:
+    """The chat that pinned this native session of the agent, or ``None``
+    (= the default chat). One lookup on ``uq_chats_agent_native``."""
+    return (
+        await session.execute(
+            sa_select(Chat.__table__.c.id).where(
+                Chat.__table__.c.legacy_agent_id == agent_id,
+                Chat.__table__.c.native_session_id == native_session_id[:200],
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def update_chat(
+    session: AsyncSession,
+    chat: Chat,
+    *,
+    title: str | None = None,
+    archived: bool | None = None,
+    pinned: bool | None = None,
+) -> Chat:
+    """Rename, archive / unarchive, pin a chat. The default chat of an agent
+    cannot be archived: the importer would keep writing into a hidden chat.
+    Does not commit."""
+    if title is not None:
+        clean = title.strip()
+        if not clean:
+            raise ChatRecordInvalid("empty_title")
+        chat.title = clean[:200]
+    if archived is not None:
+        if archived and chat.agent_default:
+            raise ChatRecordConflict("default_chat")
+        chat.archived_at = utcnow() if archived else None
+    if pinned is not None:
+        chat.pinned = bool(pinned)
+    session.add(chat)
+    await session.flush()
+    return chat
+
+
+async def resume_plan(session: AsyncSession, chat: Chat) -> dict[str, Any]:
+    """What the harness side must do to put this chat's own session in
+    front of the model: ``start`` a new one or ``resume`` the pinned one.
+    Only data — nothing is started here."""
+    style = RESUME_STYLE.get(chat.harness or "")
+    native = chat.native_session_id
+    started = False
+    if native:
+        started = (
+            await session.exec(
+                select(ChatSession.id).where(
+                    ChatSession.chat_id == chat.id,
+                    ChatSession.native_session_id == native,
+                )
+            )
+        ).first() is not None
+    plan: dict[str, Any] = {
+        "chatId": str(chat.id),
+        "harness": chat.harness,
+        "style": style,
+        "nativeSessionId": native,
+        "agentDefault": chat.agent_default,
+        "action": "resume" if started or (style == "acp" and native) else "start",
+    }
+    if chat.agent_default:
+        # The default chat follows the agent's process as today (newest file).
+        plan["action"] = "follow_agent"
+    elif style == "cli" and native:
+        plan["claudeArgs"] = ["--resume", native] if started else ["--session-id", native]
+    elif style == "acp":
+        plan["acp"] = {"method": "session/load", "sessionId": native} if native else {"method": "session/new"}
+    return plan
+
+
+def chat_out(chat: Chat) -> dict[str, Any]:
+    return {
+        "id": str(chat.id),
+        "title": chat.title,
+        "harness": chat.harness,
+        "model": chat.model,
+        "runtimeId": str(chat.runtime_id) if chat.runtime_id else None,
+        "legacyAgentId": str(chat.legacy_agent_id) if chat.legacy_agent_id else None,
+        "agentDefault": bool(chat.agent_default),
+        "nativeSessionId": chat.native_session_id,
+        "ownerUserId": str(chat.owner_user_id) if chat.owner_user_id else None,
+        "pinned": chat.pinned,
+        "archived": chat.archived_at is not None,
+        "lastActivityAt": chat.last_activity_at.isoformat() if chat.last_activity_at else None,
+    }
+
+
 # ── Read side ────────────────────────────────────────────────────────────
 
 
@@ -605,7 +974,9 @@ def _visible(user: Any):
     return or_(Chat.owner_user_id.is_(None), Chat.owner_user_id == getattr(user, "id", None))
 
 
-async def list_chats(session: AsyncSession, user: Any, *, limit: int = 100) -> list[dict[str, Any]]:
+async def list_chats(
+    session: AsyncSession, user: Any, *, limit: int = 100, agent_id: uuid.UUID | None = None
+) -> list[dict[str, Any]]:
     counts = (
         select(
             ChatEvent.chat_id.label("chat_id"),
@@ -631,6 +1002,8 @@ async def list_chats(session: AsyncSession, user: Any, *, limit: int = 100) -> l
         .order_by(Chat.last_activity_at.desc().nulls_last(), Chat.created_at.desc())
         .limit(limit)
     )
+    if agent_id is not None:
+        q = q.where(Chat.legacy_agent_id == agent_id)
     visible = _visible(user)
     if visible is not True:
         q = q.where(visible)
@@ -638,14 +1011,7 @@ async def list_chats(session: AsyncSession, user: Any, *, limit: int = 100) -> l
     for chat, events, n_sessions, failed in (await session.exec(q)).all():
         out.append(
             {
-                "id": str(chat.id),
-                "title": chat.title,
-                "harness": chat.harness,
-                "model": chat.model,
-                "runtimeId": str(chat.runtime_id) if chat.runtime_id else None,
-                "legacyAgentId": str(chat.legacy_agent_id) if chat.legacy_agent_id else None,
-                "pinned": chat.pinned,
-                "lastActivityAt": chat.last_activity_at.isoformat() if chat.last_activity_at else None,
+                **chat_out(chat),
                 "events": int(events or 0),
                 "sessions": int(n_sessions or 0),
                 # Sessions whose last import failed — "record incomplete".
