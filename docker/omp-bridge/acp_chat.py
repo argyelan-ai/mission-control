@@ -257,6 +257,18 @@ def default_cwd() -> str:
     )
 
 
+class SessionLoadRefused(Exception):
+    """`session/load` of a session that must not be replaced failed — no
+    `session/new` ran (`ChatSession._may_replace_unloadable`)."""
+
+    def __init__(self, session_id: str, detail: str, text: str, data: Optional[dict] = None):
+        super().__init__(f"{session_id}: {detail}")
+        self.session_id = session_id
+        self.detail = detail
+        self.text = text
+        self.data = dict(data or {})
+
+
 class ChatSession:
     """One long-lived ACP chat session: prompts in, transcript lines out.
 
@@ -469,6 +481,12 @@ class ChatSession:
                 self._mapper.map_elicitation_result(elicitation_id, "expired")
             )
 
+    def _may_replace_unloadable(self, session_id: str) -> bool:
+        """May a session whose `session/load` failed be replaced by a new
+        one? The agent's own chat: yes (with its reset card). A further chat
+        pinned in MC's record says no (acp_chat_pool.PinnedChatSession)."""
+        return True
+
     def _migrate_sinks(self) -> Optional[str]:
         """Move MC's old copies under the sessions root into `.mc/`
         (`sink_migration.migrate`). Returns why it did not run — `locked`,
@@ -562,6 +580,12 @@ class ChatSession:
             started_fresh = self._earlier_chat_exists()
         logger.info("chat session to resume: %s (from %s)%s", stored_id or "none",
                     self._resume_source, f" — {reset_detail}" if reset_detail else "")
+        if (session_id is None or sink is None) and stored_id and reset_detail \
+                and not self._may_replace_unloadable(stored_id):
+            # A further chat MC holds pinned to `stored_id` (chats slice S2):
+            # a new session here would be one MC never routes to this chat —
+            # its context lost for good, its history in the agent's main chat.
+            raise SessionLoadRefused(stored_id, reset_detail, reset_text, reset_data)
         if session_id is None or sink is None:
             session_id = client.new_session(self._cwd)
             sink = acp_chat_events.ChatEventSink(self._sessions_dir, session_id)

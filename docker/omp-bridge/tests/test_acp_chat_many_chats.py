@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -69,6 +70,13 @@ class FakeMc:
             raise acp_chat_pool.McUnreachable("down")
         if self.conflict:
             raise acp_chat_pool.PinConflict("pinned_by_other_chat")
+        # The real route (chat_record.pin_native_session): idempotent for
+        # the same id, a second id is refused, another chat's id too.
+        held = self.pins.get(chat_id)
+        if held is not None and held != native:
+            raise acp_chat_pool.PinConflict("already_pinned")
+        if any(n == native and c != chat_id for c, n in self.pins.items()):
+            raise acp_chat_pool.PinConflict("pinned_by_other_chat")
         self.pins[chat_id] = native
         return {"id": chat_id, "nativeSessionId": native}
 
@@ -76,7 +84,8 @@ class FakeMc:
 class Harness:
     """A sessions tree, a default session and a pool, all on fakes."""
 
-    def __init__(self, tmp: Path, mc: FakeMc, *, ids=None, max_open=3, turns=None):
+    def __init__(self, tmp: Path, mc: FakeMc, *, ids=None, max_open=3, turns=None,
+                 client_class=None):
         self.tmp = tmp
         self.mc = mc
         self.sessions_dir = tmp / "omp-sessions" / "--workspace--"
@@ -91,9 +100,14 @@ class Harness:
         self.clients: list[FakeClient] = []
         self._ids = list(ids or [])
 
+        #: Set by a test: every further child fails `session/load` with it.
+        self.load_raises = None
+        make = client_class or FakeClient
+
         def client_factory():
-            client = FakeClient(session_result=dict(SESSION_RESULT),
-                                new_ids=[self._ids.pop(0)] if self._ids else None)
+            client = make(session_result=dict(SESSION_RESULT),
+                          new_ids=[self._ids.pop(0)] if self._ids else None,
+                          load_raises=self.load_raises)
             self.clients.append(client)
             return client
 
@@ -104,8 +118,8 @@ class Harness:
         return acp_chat_pool.dispatch(self.pool, self.default, request)
 
     def chat(self, chat_id):
-        session, _ = self.pool.get(chat_id, start=False)
-        return session
+        """The chat's open session, once its opening thread is done."""
+        return self.pool.wait_open(chat_id)
 
     def close(self):
         self.pool.close()
@@ -366,6 +380,7 @@ def test_all_chats_busy_refuses_instead_of_dropping(tmp_path):
     h = Harness(tmp_path, mc, ids=["sid-a", "sid-b"], max_open=1)
     try:
         h.send({"op": "prompt", "text": "a1", "chatId": A})
+        _wait(h.chat(A))
         h.clients[0].turns.append({"gate": gate})
         h.send({"op": "prompt", "text": "a2", "chatId": A})
         assert h.send({"op": "prompt", "text": "b1", "chatId": B}) == {"ok": False, "error": "chats_busy"}
@@ -373,4 +388,134 @@ def test_all_chats_busy_refuses_instead_of_dropping(tmp_path):
         _wait(h.chat(A))
     finally:
         gate.set()
+        h.close()
+
+
+# ── critic round (19.11.): load failure, slow open, eviction race ─────────
+
+
+def _cards(path, code):
+    return [line for line in read_lines(path) if code in json.dumps(line)]
+
+
+def test_a_pinned_session_that_cannot_load_is_never_replaced(tmp_path):
+    """MC refuses a second id for a pinned chat (`already_pinned`): a new
+    session would never reach this chat. No `session/new`, a card in the
+    chat's own copy, MC's pin unchanged — and the same on every retry."""
+    mc = FakeMc()
+    mc.pins[A] = "sid-a"
+    h = Harness(tmp_path, mc, ids=["sid-a2", "sid-a3"])
+    h.load_raises = RuntimeError("session file gone")
+    try:
+        for attempt in range(2):
+            assert h.send({"op": "prompt", "text": f"x{attempt}", "chatId": A})["ok"]
+            assert h.chat(A) is None  # it did not open
+        news = [c for client in h.clients for c in client.calls if c[0] == "new_session"]
+        assert news == []
+        assert mc.pins == {A: "sid-a"} and not any(c[0] == "pin" for c in mc.calls)
+        copy = next((h.sessions_dir / ".mc").glob("*_sid-a.jsonl"))
+        assert len(_cards(copy, "chat_load_failed")) == 2
+        assert all(client.closed for client in h.clients)
+        # nothing went to the agent's main chat
+        assert not any(c[0] == "prompt" for c in h.default_client.calls)
+    finally:
+        h.close()
+
+
+def test_a_child_restart_whose_load_fails_opens_no_new_session(tmp_path):
+    mc = FakeMc()
+    h = Harness(tmp_path, mc, ids=["sid-a", "sid-x"])
+    try:
+        h.send({"op": "prompt", "text": "a1", "chatId": A})
+        chat = h.chat(A)
+        _wait(chat)
+        h.load_raises = RuntimeError("omp lost the file")
+        assert chat._restart_child() is False
+        assert not any(c[0] == "new_session" for c in h.clients[-1].calls)
+        assert mc.pins == {A: "sid-a"}
+        assert _cards(chat.transcript_path, "chat_load_failed")
+        # the next message drops the dead chat and tries to open it again
+        assert h.send({"op": "prompt", "text": "a2", "chatId": A})["ok"]
+        h.chat(A)
+        assert not any(c[0] == "new_session" for c in h.clients[-1].calls)
+    finally:
+        h.close()
+
+
+class SlowClient(FakeClient):
+    """`initialize` takes seconds, like a real omp child connecting MCP."""
+
+    delay = 2.0
+
+    def initialize(self, timeout=30.0):
+        time.sleep(self.delay)
+        return super().initialize(timeout)
+
+
+def test_opening_a_chat_never_holds_the_request_or_the_pool(tmp_path):
+    mc = FakeMc()
+    h = Harness(tmp_path, mc, ids=["sid-a"], client_class=SlowClient)
+    try:
+        t0 = time.monotonic()
+        answer = h.send({"op": "prompt", "text": "first", "chatId": A})
+        assert time.monotonic() - t0 < 1.0, "the backend waits 10 s at most"
+        assert answer == {"ok": True, "chatId": A, "opening": True, "queued": True}
+        t1 = time.monotonic()
+        listed = h.send({"op": "chats"})
+        assert time.monotonic() - t1 < 1.0
+        assert listed["chats"] == [{"chatId": A, "sessionId": None, "busy": False, "opening": True}]
+        assert h.send({"op": "state", "chatId": A}) == {"ok": True, "chatId": A, "open": False, "opening": True}
+        # a second message while it opens waits its turn, nothing is dropped
+        assert h.send({"op": "prompt", "text": "second", "chatId": A})["opening"] is True
+        chat = h.chat(A)
+        assert chat is not None
+        _wait(chat)
+        _wait(chat)
+        prompts = [c for c in h.clients[0].calls if c[0] == "prompt"]
+        assert prompts == [("prompt", "sid-a", "first"), ("prompt", "sid-a", "second")]
+        assert user_texts(read_lines(chat.transcript_path)) == ["first", "second"]
+    finally:
+        h.close()
+
+
+class BrokenClient(FakeClient):
+    def initialize(self, timeout=30.0):
+        raise RuntimeError("omp did not answer initialize")
+
+
+def test_a_chat_that_cannot_open_says_so_with_the_text_to_send_again(tmp_path):
+    mc = FakeMc()
+    h = Harness(tmp_path, mc, client_class=BrokenClient)
+    try:
+        assert h.send({"op": "prompt", "text": "lost?", "chatId": A})["ok"]
+        assert h.chat(A) is None
+        # no session of its own yet: the card stands in the agent's main chat
+        cards = _cards(h.default.transcript_path, "chat_open_failed")
+        assert cards and "lost?" in json.dumps(cards[0])
+        assert mc.pins == {}
+        # the next message tries again
+        assert h.send({"op": "prompt", "text": "again", "chatId": A})["ok"]
+        h.chat(A)
+        assert len(h.clients) == 2
+    finally:
+        h.close()
+
+
+def test_a_chat_in_use_is_never_closed_to_make_room(tmp_path):
+    """Eviction and use are one step: a chat with an op in flight is not idle."""
+    mc = FakeMc()
+    h = Harness(tmp_path, mc, ids=["sid-a", "sid-b"], max_open=1)
+    try:
+        h.send({"op": "prompt", "text": "a1", "chatId": A})
+        chat = h.chat(A)
+        _wait(chat)
+        with h.pool._lock:
+            chat.inflight += 1  # an op of A between lookup and dispatch
+        assert h.send({"op": "prompt", "text": "b1", "chatId": B}) == {"ok": False, "error": "chats_busy"}
+        assert not h.clients[0].closed
+        with h.pool._lock:
+            chat.inflight -= 1
+        assert h.send({"op": "prompt", "text": "b1", "chatId": B})["ok"]
+        assert h.chat(B) is not None and h.clients[0].closed
+    finally:
         h.close()
