@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChatMessage, USER_CLAMP_MAX_PX } from "./ChatMessage";
 import { splitAttachments } from "./attachments";
+import { ChatQuoteContext } from "./chatQuote";
 import type { MessageEvent } from "@/lib/chatTypes";
 
 // Echte Umsetzung, nur mitgezaehlt: der Anhang-Parser darf ueberhaupt nicht
@@ -336,5 +337,73 @@ describe("ChatMessage — passed on by the live voice (voice PR 2)", () => {
   it("a typed message that only mentions the marker stays a typed message", () => {
     render(<ChatMessage ev={mkEvent({ role: "user", text: "was heisst [per Stimme] im Chat?" })} />);
     expect(screen.queryByTestId("voice-label")).toBeNull();
+  });
+});
+
+describe("ChatMessage — quote a reply", () => {
+  afterEach(() => {
+    window.getSelection()?.removeAllRanges();
+  });
+
+  it("offers no quote button without a composer to quote into", () => {
+    render(<ChatMessage ev={mkEvent({ text: "Antwort" })} />);
+    expect(screen.queryByTestId("quote-reply")).toBeNull();
+  });
+
+  it("quotes the whole assistant message when nothing is selected", async () => {
+    const onQuote = vi.fn();
+    render(
+      <ChatQuoteContext.Provider value={onQuote}>
+        <ChatMessage ev={mkEvent({ text: "Line one\n\nLine two" })} />
+      </ChatQuoteContext.Provider>,
+    );
+    const button = screen.getByTestId("quote-reply");
+    expect(button).toHaveAttribute("aria-label", "Quote in reply");
+    await userEvent.click(button);
+    expect(onQuote).toHaveBeenCalledWith("Line one\n\nLine two");
+  });
+
+  it("quotes only the selected text when the selection lies inside this message", async () => {
+    const onQuote = vi.fn();
+    render(
+      <ChatQuoteContext.Provider value={onQuote}>
+        <ChatMessage ev={mkEvent({ text: "Alpha beta gamma" })} />
+      </ChatQuoteContext.Provider>,
+    );
+    const node = screen.getByText("Alpha beta gamma").firstChild as Text;
+    const range = document.createRange();
+    range.setStart(node, 6);
+    range.setEnd(node, 10);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    fireEvent.pointerDown(screen.getByTestId("quote-reply"));
+    fireEvent.click(screen.getByTestId("quote-reply"));
+    expect(onQuote).toHaveBeenCalledWith("beta");
+  });
+
+  it("ignores a selection in another message", () => {
+    const onQuote = vi.fn();
+    render(
+      <ChatQuoteContext.Provider value={onQuote}>
+        <p>outside text</p>
+        <ChatMessage ev={mkEvent({ text: "Whole reply" })} />
+      </ChatQuoteContext.Provider>,
+    );
+    const range = document.createRange();
+    range.selectNodeContents(screen.getByText("outside text"));
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    fireEvent.pointerDown(screen.getByTestId("quote-reply"));
+    fireEvent.click(screen.getByTestId("quote-reply"));
+    expect(onQuote).toHaveBeenCalledWith("Whole reply");
+  });
+
+  it("shows no quote button on the operator's own messages", () => {
+    render(
+      <ChatQuoteContext.Provider value={vi.fn()}>
+        <ChatMessage ev={mkEvent({ role: "user", text: "Mach mal" })} />
+      </ChatQuoteContext.Provider>,
+    );
+    expect(screen.queryByTestId("quote-reply")).toBeNull();
   });
 });

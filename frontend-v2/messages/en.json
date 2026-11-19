@@ -1047,6 +1047,13 @@
     "removeAttachment": "Remove attachment {name}",
     "attachmentUploadingOne": "uploading…",
     "attachmentUploadingMany": "uploading {count}…",
+    "pastedAsFile": "Long text pasted — attached as a file",
+    "fileMentionList": "Files in this chat's folder",
+    "fileMentionSearching": "Looking for files…",
+    "fileMentionNoMatch": "No file matches",
+    "fileMentionNoFolder": "This chat has no working folder",
+    "fileMentionTruncated": "Folder too large — showing part of it",
+    "fileMentionError": "Could not list the files",
     "attachmentFailed": "Attachment failed",
     "attachmentExpandImage": "Enlarge image {name}",
     "attachmentCollapseImage": "Shrink image {name}",
@@ -4406,6 +4413,7 @@
   "chat": {
     "showMore": "Show more",
     "showLess": "Show less",
+    "quoteReply": "Quote in reply",
     "event": {
       "task": "Task",
       "correction": "Correction",

@@ -27,6 +27,11 @@ import { ContextPanel, cacheHitRateOf } from "./ContextPanel";
 import { PopoverPortal, anchoredBoxStyle, useAnchoredPosition } from "@/lib/anchoredPopover";
 import { harnessLabel } from "@/components/shared/HarnessIcon";
 import { formatShare } from "@/lib/usage";
+import { appendQuote } from "./chatQuote";
+import { type MentionToken, findMentionToken, insertMention } from "./composer/fileMention";
+import { useChatFileSearch } from "./composer/useChatFileSearch";
+import { FileMentionPalette } from "./composer/FileMentionPalette";
+import type { ChatFile } from "./composer/chatFiles";
 
 const MAX_ROWS = 8;
 /** Rows of room the input holds at rest, before anything is typed. */
@@ -34,6 +39,21 @@ const MIN_ROWS = 2;
 // Matches the textarea's own line-height (14px body × 1.5, rounded) so the
 // auto-grow ceiling lands on a whole row instead of clipping one mid-glyph.
 const LINE_HEIGHT_PX = 22;
+
+/** Pasted plain text from this size on (UTF-8 bytes) becomes a `.txt`
+ *  attachment instead of landing in the textarea. */
+export const LONG_PASTE_BYTES = 32 * 1024;
+
+export function isLongPaste(text: string): boolean {
+  // Cheap exit first: a UTF-8 character is at most 4 bytes.
+  if (text.length * 4 < LONG_PASTE_BYTES) return false;
+  return new TextEncoder().encode(text).length >= LONG_PASTE_BYTES;
+}
+
+function pastedTextFile(text: string): File {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*$/, "");
+  return new File([text], `pasted-text-${stamp}.txt`, { type: "text/plain;charset=utf-8" });
+}
 
 // Desktop-app-style context ring — compact circular indicator instead of a
 // bar, per the operator's ask to match the Claude Desktop app's look.
@@ -225,6 +245,9 @@ interface ComposerProps {
   /** Text the parent wants in the box (a withdrawn steer coming back for
    *  editing). `at` makes the same text re-applicable: a new stamp = apply. */
   prefill?: { text: string; at: number } | null;
+  /** A reply the operator quoted (`chatQuote`): appended to the draft as a
+   *  Markdown blockquote, never sent. `at` makes the same text re-applicable. */
+  quote?: { text: string; at: number } | null;
   /** Phone: the detail action bar sits below and owns the home-indicator
    *  strip, so the composer drops its own safe-area padding. */
   barBelow?: boolean;
@@ -260,7 +283,7 @@ interface ComposerProps {
  *  globals.css passen. */
 export const EFFORT_SETTLE_MS = 320;
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, quote = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
   const t = useTranslations("sessions");
   // One word per effort level, the same as the bench (round-2 Q2):
   // "High" / "Hoch" instead of the raw "high" the harness reports.
@@ -328,7 +351,43 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const [effortSupported, setEffortSupported] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
+  /** The `@word` at the caret while the file mention list is open. */
+  const [mention, setMention] = useState<MentionToken | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  /** The operator moved through the list with the arrow keys: Enter then
+   *  takes a file even for a bare "@". */
+  const [mentionPicked, setMentionPicked] = useState(false);
+  /** Start of the `@word` the operator closed with Escape: it stays closed
+   *  until the caret leaves that word. */
+  const mentionDismissedRef = useRef<number | null>(null);
+  /** Where the caret goes once a chosen file has landed in the draft. */
+  const caretAtRef = useRef<number | null>(null);
+  const mentionPaletteRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /** Where the caret goes once a quote has landed in the draft. */
+  const caretToEndRef = useRef(false);
+  useEffect(() => {
+    if (!quote || !quote.text.trim()) return;
+    caretToEndRef.current = true;
+    setText((draft) => appendQuote(draft, quote.text));
+  }, [quote]);
+  useEffect(() => {
+    const at = caretAtRef.current;
+    if (at == null) return;
+    caretAtRef.current = null;
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(at, at);
+  }, [text]);
+  useEffect(() => {
+    if (!caretToEndRef.current) return;
+    caretToEndRef.current = false;
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(text.length, text.length);
+  }, [text]);
 
   const isWorking = state?.status === "working";
   const hasText = text.trim().length > 0;
@@ -470,6 +529,42 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const paletteVisible = paletteOpen && filteredCommands.length > 0;
   const highlightedIndex = Math.min(paletteIndex, Math.max(filteredCommands.length - 1, 0));
 
+  // "@" file mention: the files of the chat's working folder, searched with
+  // the word after the "@". Only the path lands in the draft — the harness
+  // works in that folder and reads the file itself; nothing is attached.
+  const {
+    files: mentionFiles,
+    status: mentionStatus,
+    truncated: mentionTruncated,
+    answeredQuery: mentionAnswered,
+  } = useChatFileSearch(
+    agentId,
+    mention ? mention.query : null,
+  );
+  const mentionVisible = mention !== null && !paletteVisible;
+  const mentionHighlight = Math.min(mentionIndex, Math.max(mentionFiles.length - 1, 0));
+
+  function syncMention(el: HTMLTextAreaElement) {
+    const caret = el.selectionStart ?? el.value.length;
+    const token = el.selectionEnd === caret ? findMentionToken(el.value, caret) : null;
+    if (!token || token.start !== mentionDismissedRef.current) mentionDismissedRef.current = null;
+    const next = token && mentionDismissedRef.current === null ? token : null;
+    // A new word or a new search starts again at the top of the list.
+    if (next?.query !== mention?.query || next?.start !== mention?.start) {
+      setMentionIndex(0);
+      setMentionPicked(false);
+    }
+    setMention(next);
+  }
+
+  function selectMention(file: ChatFile) {
+    if (!mention) return;
+    const out = insertMention(text, mention, file.path);
+    setMention(null);
+    caretAtRef.current = out.caret;
+    setText(out.text);
+  }
+
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -528,9 +623,19 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     // Dateien im Zwischenspeicher liegen — sonst bliebe normales Text-
     // Einfügen auf der Strecke.
     const files = Array.from(e.clipboardData?.files ?? []);
-    if (files.length === 0) return;
+    if (files.length > 0) {
+      e.preventDefault();
+      void addFiles(files);
+      return;
+    }
+    // Ein sehr langer Text (Log, ganze Datei) gehoert nicht ins Eingabefeld:
+    // er sprengt die Zeilen und reist sonst unsichtbar mit. Er wird zum
+    // Anhang — derselbe Weg wie eine gewaehlte Datei.
+    const pasted = e.clipboardData?.getData("text/plain") ?? "";
+    if (!isLongPaste(pasted)) return;
     e.preventDefault();
-    void addFiles(files);
+    void addFiles([pastedTextFile(pasted)]);
+    notify.info(t("pastedAsFile"));
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -560,13 +665,57 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     // Text ist dann nicht nötig.
     if (text.trim().length === 0 && attachments.length === 0) return;
     const lines = attachments.map((a) => `[Anhang: ${a.path}]`);
-    const body = [text.trim(), ...lines].filter(Boolean).join("\n");
+    const typed = text.trim();
+    // Docker agents get one-line text as typed keys. A message that ends in
+    // "@path" would leave the harness's own @ suggestions open, and the Enter
+    // after it could pick one instead of sending — a space closes them first.
+    const tail = lines.length === 0 && /(^|\s)@\S+$/.test(typed) ? " " : "";
+    const body = [typed + tail, ...lines].filter(Boolean).join("\n");
     onSend(body);
+    setMention(null);
     setText("");
     setAttachments([]);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (mentionVisible) {
+      const n = mentionFiles.length;
+      if (e.key === "ArrowDown" && n > 0) {
+        e.preventDefault();
+        setMentionPicked(true);
+        setMentionIndex((i) => Math.min(i + 1, n - 1));
+        return;
+      }
+      if (e.key === "ArrowUp" && n > 0) {
+        e.preventDefault();
+        setMentionPicked(true);
+        setMentionIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey) {
+        if (mentionAnswered !== mention.query) {
+          // The list on screen answers an older search (the new one is still
+          // on its way): taking a file from it would insert the wrong one,
+          // and sending would cut the mention off. Wait for the answer.
+          e.preventDefault();
+          return;
+        }
+        if (n > 0 && (mention.query !== "" || mentionPicked)) {
+          // The highlighted file wins over sending — like the slash palette.
+          // A bare "@" ("meet @") only when the operator picked with the arrows.
+          e.preventDefault();
+          selectMention(mentionFiles[mentionHighlight]);
+          return;
+        }
+      }
+      if (e.key === "Escape") {
+        // Closes the list only; the typed "@…" stays.
+        e.preventDefault();
+        mentionDismissedRef.current = mention.start;
+        setMention(null);
+        return;
+      }
+    }
     if (paletteVisible) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -602,6 +751,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     const value = e.target.value;
     setText(value);
+    syncMention(e.target);
     if (value.startsWith("/") && !value.includes(" ")) {
       const query = value.slice(1).toLowerCase();
       const hasMatch = slashCommands.some((cmd) => cmd.command.slice(1).toLowerCase().startsWith(query));
@@ -719,6 +869,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   // (the input) with the old 320 px floor; the model list starts at its chip;
   // effort menu and reason end at the effort chip's right edge.
   const paletteStyle = useAnchoredPosition(paletteVisible, pillRef, paletteRef, { matchWidth: true, minWidth: 320 });
+  const mentionStyle = useAnchoredPosition(mentionVisible, pillRef, mentionPaletteRef, { matchWidth: true });
   const modelListStyle = useAnchoredPosition(modelOpen && modelOptions.length > 0, modelBoxRef, modelListRef, {
     offset: 6,
   });
@@ -792,6 +943,19 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           </div>
         </div>
         </PopoverPortal>
+      )}
+
+      {mentionVisible && (
+        <FileMentionPalette
+          paletteRef={mentionPaletteRef}
+          style={anchoredBoxStyle(mentionStyle)}
+          files={mentionFiles}
+          status={mentionStatus}
+          truncated={mentionTruncated}
+          highlightedIndex={mentionHighlight}
+          onHover={setMentionIndex}
+          onSelect={selectMention}
+        />
       )}
 
       {/* The pill: one container holding the input and its controls, so the
@@ -881,8 +1045,14 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
+          onSelect={(e) => syncMention(e.currentTarget)}
           onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
+          onBlur={() => {
+            setFocused(false);
+            // Choosing a file keeps the focus (the list swallows pointer-down),
+            // so a blur means the operator went elsewhere.
+            setMention(null);
+          }}
           rows={1}
           placeholder={placeholder ?? t("messagePlaceholder")}
           // 16px on mobile is not a taste call: anything smaller makes iOS

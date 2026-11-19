@@ -9,6 +9,7 @@ import type { ChatAttachment, StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
+import { fetchChatFiles } from "./composer/chatFiles";
 import en from "../../../messages/en.json";
 
 // Round-2 Q2: the effort menu says the same word per level as the bench —
@@ -24,6 +25,8 @@ const word = (level: string) =>
 vi.mock("@/lib/api", () => ({
   api: { chat: { setEffort: vi.fn(), uploadAttachment: vi.fn() } },
 }));
+// The "@" file mention asks the backend for the chat folder's files.
+vi.mock("./composer/chatFiles", () => ({ fetchChatFiles: vi.fn() }));
 vi.mock("@/lib/notify", () => ({
   notify: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
@@ -2199,5 +2202,250 @@ describe("Composer — Anhänge", () => {
     });
 
     await waitFor(() => expect(screen.getAllByTestId("attachment-tile").length).toBe(2));
+  });
+});
+
+describe("Composer — long pasted text becomes a file", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUpload.mockResolvedValue(mkAttachment({ name: "pasted-text.txt", isImage: false }));
+  });
+
+  function pasteText(textarea: HTMLElement, text: string): boolean {
+    return fireEvent.paste(textarea, {
+      clipboardData: { files: [], items: [], getData: (type: string) => (type === "text/plain" ? text : "") },
+    });
+  }
+
+  it("turns 32 KiB of pasted text into a .txt attachment instead of inserting it", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+    const textarea = screen.getByRole("textbox");
+    const big = "x".repeat(32 * 1024);
+
+    const notPrevented = pasteText(textarea, big);
+
+    expect(notPrevented).toBe(false);
+    await waitFor(() => expect(mockUpload).toHaveBeenCalledTimes(1));
+    const file = mockUpload.mock.calls[0][1] as File;
+    expect(file.name).toMatch(/\.txt$/);
+    expect(file.type).toMatch(/^text\/plain/);
+    expect(file.size).toBe(32 * 1024);
+    expect(await file.text()).toBe(big);
+    expect(textarea).toHaveValue("");
+    expect(mockNotifyInfo).toHaveBeenCalledWith(en.sessions.pastedAsFile);
+  });
+
+  it("measures UTF-8 bytes, not characters", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+    // 16384 characters, but 32768 bytes: "ä" is two bytes in UTF-8.
+    pasteText(screen.getByRole("textbox"), "ä".repeat(16 * 1024));
+    await waitFor(() => expect(mockUpload).toHaveBeenCalledTimes(1));
+  });
+
+  it("leaves text one byte under the threshold to the normal paste", () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+    const notPrevented = pasteText(screen.getByRole("textbox"), "x".repeat(32 * 1024 - 1));
+    expect(notPrevented).toBe(true);
+    expect(mockUpload).not.toHaveBeenCalled();
+    expect(mockNotifyInfo).not.toHaveBeenCalled();
+  });
+
+  it("still takes pasted files first, even with long text alongside", async () => {
+    render(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+    fireEvent.paste(screen.getByRole("textbox"), {
+      clipboardData: { files: [mkFile()], items: [], getData: () => "x".repeat(40 * 1024) },
+    });
+    await waitFor(() => expect(mockUpload).toHaveBeenCalledTimes(1));
+    expect((mockUpload.mock.calls[0][1] as File).name).toBe("foto.png");
+  });
+});
+
+describe("Composer — quote a reply into the draft", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("appends the quote below the draft, cursor after it, nothing sent", () => {
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={onSend} onStop={vi.fn()} />,
+    );
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "my draft" } });
+
+    rerender(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={onSend} onStop={vi.fn()} quote={{ text: "one\ntwo", at: 1 }} />,
+    );
+
+    expect(textarea).toHaveValue("my draft\n\n> one\n> two\n\n");
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.selectionStart).toBe(textarea.value.length);
+    expect(textarea.selectionEnd).toBe(textarea.value.length);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("applies the same text again when it comes with a new stamp", () => {
+    const props = { agentId: "a1", usage: null, state: mkState("idle"), onSend: vi.fn(), onStop: vi.fn() };
+    const { rerender } = render(<Composer {...props} quote={{ text: "a", at: 1 }} />);
+    rerender(<Composer {...props} quote={{ text: "a", at: 2 }} />);
+    expect(screen.getByRole("textbox")).toHaveValue("> a\n\n> a\n\n");
+  });
+});
+
+describe("Composer @ file mention", () => {
+  const mockFiles = vi.mocked(fetchChatFiles);
+  const props = { agentId: "a1", usage: null, state: null, onSend: vi.fn(), onStop: vi.fn() };
+  const LIST = {
+    root: "/workspace/proj",
+    truncated: false,
+    files: [
+      { path: "src/Composer.tsx", name: "Composer.tsx" },
+      { path: "docs/composer notes.md", name: "composer notes.md" },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFiles.mockResolvedValue(LIST);
+  });
+
+  it("typing @ opens the list of the chat folder's files, searched with what follows", async () => {
+    const user = userEvent.setup();
+    render(<Composer {...props} />);
+    await user.type(screen.getByRole("textbox"), "look at @comp");
+    expect(await screen.findByTestId("mention-item-src/Composer.tsx")).toBeInTheDocument();
+    await waitFor(() => expect(mockFiles).toHaveBeenLastCalledWith("a1", "comp"));
+  });
+
+  it("an @ inside a word (an e-mail address) opens nothing", async () => {
+    const user = userEvent.setup();
+    render(<Composer {...props} />);
+    await user.type(screen.getByRole("textbox"), "mail me@host");
+    await new Promise((r) => setTimeout(r, 200));
+    expect(screen.queryByTestId("mention-palette")).toBeNull();
+    expect(mockFiles).not.toHaveBeenCalled();
+  });
+
+  it("Enter takes the highlighted file: the draft gets @path and nothing is sent", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(<Composer {...props} onSend={onSend} />);
+    const box = screen.getByRole("textbox");
+    await user.type(box, "see @comp");
+    await screen.findByTestId("mention-item-src/Composer.tsx");
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(box).toHaveValue('see @"docs/composer notes.md" ');
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("mention-palette")).toBeNull();
+  });
+
+  it("a tap takes the file, and the sent message carries the path as text, no attachment", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(<Composer {...props} onSend={onSend} />);
+    const box = screen.getByRole("textbox");
+    await user.type(box, "@co");
+    await user.click(await screen.findByTestId("mention-item-src/Composer.tsx"));
+    expect(box).toHaveValue("@src/Composer.tsx ");
+    await user.type(box, "please{Enter}");
+    expect(onSend).toHaveBeenCalledWith("@src/Composer.tsx please");
+    expect(mockUpload).not.toHaveBeenCalled();
+  });
+
+  it("Escape closes the list and keeps the typed text", async () => {
+    const user = userEvent.setup();
+    render(<Composer {...props} />);
+    const box = screen.getByRole("textbox");
+    await user.type(box, "@comp");
+    await screen.findByTestId("mention-palette");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("mention-palette")).toBeNull();
+    expect(box).toHaveValue("@comp");
+  });
+
+  it("a chat without a working folder says so instead of an empty list", async () => {
+    mockFiles.mockRejectedValue(new Error('API 404: {"reason":"no_workspace"}'));
+    const user = userEvent.setup();
+    render(<Composer {...props} />);
+    await user.type(screen.getByRole("textbox"), "@");
+    // First "looking for files…", then the answer.
+    expect(await screen.findByTestId("mention-palette-message")).toHaveTextContent(
+      en.sessions.fileMentionSearching,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("mention-palette-message")).toHaveTextContent(
+        en.sessions.fileMentionNoFolder,
+      ),
+    );
+  });
+
+  it("a folder too large to list in full says so above the list", async () => {
+    mockFiles.mockResolvedValue({ ...LIST, truncated: true });
+    const user = userEvent.setup();
+    render(<Composer {...props} />);
+    await user.type(screen.getByRole("textbox"), "@comp");
+    expect(await screen.findByTestId("mention-palette-truncated")).toHaveTextContent(
+      en.sessions.fileMentionTruncated,
+    );
+    expect(screen.getByTestId("mention-item-src/Composer.tsx")).toBeInTheDocument();
+  });
+
+  it("no hint while the whole folder was listed", async () => {
+    const user = userEvent.setup();
+    render(<Composer {...props} />);
+    await user.type(screen.getByRole("textbox"), "@comp");
+    await screen.findByTestId("mention-item-src/Composer.tsx");
+    expect(screen.queryByTestId("mention-palette-truncated")).toBeNull();
+  });
+
+  it("Enter never takes a file from the answer to an older search", async () => {
+    // The answer for "comp" is on screen; the operator types on and hits
+    // Enter before the answer for the new word arrived.
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(<Composer {...props} onSend={onSend} />);
+    const box = screen.getByRole("textbox");
+    await user.type(box, "see @comp");
+    await screen.findByTestId("mention-item-src/Composer.tsx");
+    let answerNext: (v: typeof LIST) => void = () => {};
+    mockFiles.mockReturnValue(new Promise((r) => { answerNext = r; }));
+    await user.type(box, "zz{Enter}");
+    expect(box).toHaveValue("see @compzz");
+    expect(onSend).not.toHaveBeenCalled();
+    answerNext({ ...LIST, files: [] });
+  });
+
+  it("Enter on a bare @ sends the message instead of taking the first file", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(<Composer {...props} onSend={onSend} />);
+    const box = screen.getByRole("textbox");
+    await user.type(box, "meet @");
+    await screen.findByTestId("mention-item-src/Composer.tsx");
+    await user.keyboard("{Enter}");
+    expect(onSend).toHaveBeenCalledWith("meet @");
+  });
+
+  it("on a bare @ the arrow keys still pick a file for Enter", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(<Composer {...props} onSend={onSend} />);
+    const box = screen.getByRole("textbox");
+    await user.type(box, "@");
+    await screen.findByTestId("mention-item-src/Composer.tsx");
+    await user.keyboard("{ArrowDown}{ArrowUp}{Enter}");
+    expect(box).toHaveValue("@src/Composer.tsx ");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("a message ending in a mention is sent with a space after it", async () => {
+    // Docker agents get one-line text as typed keys: a space closes the
+    // harness's own @ suggestions, so the Enter after it sends.
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    render(<Composer {...props} onSend={onSend} />);
+    const box = screen.getByRole("textbox");
+    await user.type(box, "look at @co");
+    await user.click(await screen.findByTestId("mention-item-src/Composer.tsx"));
+    await user.keyboard("{Enter}");
+    expect(onSend).toHaveBeenCalledWith("look at @src/Composer.tsx ");
   });
 });

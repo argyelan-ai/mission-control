@@ -56,6 +56,7 @@ import { ToolGroup } from "./ToolGroup";
 import { ToolOutputContext, createToolOutputStore, type ToolOutputStore } from "./toolOutputStore";
 import { ChatMediaContext } from "./chatMedia";
 import { ChatResendContext, useResendableErrorUuid, type ChatResend } from "./chatResend";
+import { ChatQuoteContext } from "./chatQuote";
 import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
 import { ElicitationCard } from "./ElicitationCard";
@@ -422,6 +423,8 @@ export function ChatView({
   const directory = useCommsDirectory(!!agent && !head);
   /** Text eines zurueckgeholten Steers, der noch einmal bearbeitet werden soll. */
   const [composerPrefill, setComposerPrefill] = useState<{ text: string; at: number } | null>(null);
+  /** A reply quoted from the transcript (chatQuote.ts) — appended, never sent. */
+  const [composerQuote, setComposerQuote] = useState<{ text: string; at: number } | null>(null);
   /** Desktop ⋯ menu (detail level, ADR-099 E1). Rendered through a portal
    *  so the chat column's `overflow-hidden` cannot clip it. */
   const [detailOpen, setDetailOpen] = useState(false);
@@ -1197,6 +1200,12 @@ export function ChatView({
     }),
     [resendUuid],
   );
+  /* "Quote in reply" under an assistant message: offered only where the
+     composer can send, like "Send again" above. */
+  const quoteReply = useMemo(
+    () => (canSend ? (text: string) => setComposerQuote({ text, at: Date.now() }) : null),
+    [canSend],
+  );
   // Welches Abzeichen die Kopfzeile gerade zeigt — dieselbe Bedingung wie
   // unten im JSX, hier einmal als Wert, damit die Platzberechnung nicht raet.
   // "active" comes from the transcript's age (written < 60 s ago); the status
@@ -1310,6 +1319,7 @@ export function ChatView({
         agent row) shows none rather than guessing an address. */}
     <ChatMediaContext.Provider value={agent?.id ?? null}>
     <ChatResendContext.Provider value={chatResend}>
+    <ChatQuoteContext.Provider value={quoteReply}>
     <div ref={rootRef} className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* One header for both breakpoints — the parts that only make sense on
           a phone (back chevron, options button) carry
@@ -1879,6 +1889,7 @@ export function ChatView({
                   onSend={handleSend}
                   onStop={handleStop}
                   prefill={composerPrefill}
+                  quote={composerQuote}
                   placeholder={liveTask ? t("messagePlaceholderTaskRunning") : undefined}
                   sessionLive={aliveness !== "ended"}
                   /* Nur die Docker-tmux-Bruecke liefert echten Pane-Text; Host-Agenten
@@ -1931,6 +1942,7 @@ export function ChatView({
         />
       )}
     </div>
+    </ChatQuoteContext.Provider>
     </ChatResendContext.Provider>
     </ChatMediaContext.Provider>
     </TaskStepsRetryContext.Provider>

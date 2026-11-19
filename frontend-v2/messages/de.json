@@ -1047,6 +1047,13 @@
     "removeAttachment": "Anhang {name} entfernen",
     "attachmentUploadingOne": "lädt…",
     "attachmentUploadingMany": "{count} laden…",
+    "pastedAsFile": "Langer Text eingefügt — als Datei angehängt",
+    "fileMentionList": "Dateien im Ordner dieses Chats",
+    "fileMentionSearching": "Suche Dateien…",
+    "fileMentionNoMatch": "Keine Datei passt",
+    "fileMentionNoFolder": "Dieser Chat hat keinen Arbeitsordner",
+    "fileMentionTruncated": "Ordner zu gross — nur ein Teil wird gezeigt",
+    "fileMentionError": "Dateien konnten nicht gelistet werden",
     "attachmentFailed": "Anhang fehlgeschlagen",
     "attachmentExpandImage": "Bild {name} vergrössern",
     "attachmentCollapseImage": "Bild {name} verkleinern",
@@ -4406,6 +4413,7 @@
   "chat": {
     "showMore": "Mehr anzeigen",
     "showLess": "Weniger anzeigen",
+    "quoteReply": "In der Antwort zitieren",
     "event": {
       "task": "Aufgabe",
       "correction": "Korrektur",
