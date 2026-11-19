@@ -445,11 +445,11 @@ print(json.dumps({r: sys.argv[1] for r in sys.argv[2].split()}))' \
     # anthropic route) — mc-openai speaks openai-completions, so omp skips it;
     # snapcompact ("history onto dense bitmap images the active vision model
     # reads back", no LLM call) is then the FIRST method on every vision
-    # runtime. Measured on Sparky 13.11.2026 (memory note sparky-kontext-
-    # compaction-2026-11-13): snapcompact frames (196×71 chars, ~1100 tokens
+    # runtime. Measured on a local vision omp agent, 13.11.2026 (long coding
+    # run, 393K window): snapcompact frames (196×71 chars, ~1100 tokens
     # each) plus "older middle history dropped" — 3/7 facts readable, the run
     # report gave a wrong start time; omp's `soft` text summary kept 12/12 of
-    # the same probe questions in 17K tokens. Runs 7+ with soft first: every
+    # the same probe questions in 17K tokens. A later run with soft first: every
     # fact survived 10 compactions. Soft first holds for every MC agent: the
     # cause is the method, not the model. A text runtime never reaches
     # snapcompact anyway; for it the change is soft before handoff.

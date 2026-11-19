@@ -7,7 +7,7 @@ omp 18.14.2's default ``compaction.methodOrder`` is remote, snapcompact,
 handoff, shake, soft. ``remote`` needs server compaction, which MC's
 ``mc-openai`` provider (openai-completions) does not have, so on a vision
 runtime ``snapcompact`` runs first: the history becomes dense bitmap frames
-the model reads back. Measured on Sparky 13.11.2026: 3/7 facts readable after
+the model reads back. Measured on a local vision omp agent, 13.11.2026: 3/7 facts readable after
 snapcompact, a wrong start time in the run report; omp's ``soft`` text summary
 kept 12/12 probe answers. The order soft, shake, handoff, snapcompact was set
 by hand in the profile's config.yml — and lost on every recreate, because
