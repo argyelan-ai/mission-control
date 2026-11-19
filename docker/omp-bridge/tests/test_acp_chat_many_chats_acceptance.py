@@ -155,9 +155,9 @@ def test_two_chats_keep_their_own_context_and_resume_after_a_restart(tmp_path):
         d = Daemon(tmp_path, mc.url)
         try:
             assert d.say(A, "my cat is Tom") == "I know: my cat is Tom"
-            assert d.say(B, "my dog is Rex") == "I know: my dog is Rex"
+            assert d.say(B, "my dog is Bello") == "I know: my dog is Bello"
             assert d.say(A, "what is my pet?") == "I know: my cat is Tom, what is my pet?"
-            assert d.say(B, "what is my pet?") == "I know: my dog is Rex, what is my pet?"
+            assert d.say(B, "what is my pet?") == "I know: my dog is Bello, what is my pet?"
             pins = dict(mc.pins)
             assert set(pins) == {A, B} and pins[A] != pins[B]
             # the agent's own chat never saw any of it
@@ -170,7 +170,7 @@ def test_two_chats_keep_their_own_context_and_resume_after_a_restart(tmp_path):
 
         d2 = Daemon(tmp_path, mc.url)   # daemon restart: new children, new pool
         try:
-            assert d2.say(B, "and now?") == "I know: my dog is Rex, what is my pet?, and now?"
+            assert d2.say(B, "and now?") == "I know: my dog is Bello, what is my pet?, and now?"
             assert d2.say(A, "and now?") == "I know: my cat is Tom, what is my pet?, and now?"
             assert mc.pins == pins       # same native sessions, nothing re-pinned elsewhere
             for c in (A, B):
