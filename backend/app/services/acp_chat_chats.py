@@ -15,8 +15,14 @@ and what ``/new`` means once the record is on.
   the chat it was typed in — the old conversation stays its own chat. The
   daemon opens the new chat's session on its first message (``session/new``
   + pin through the agent-token route).
-* Claude Code agents are not wired yet (their start script does not take a
-  per-chat ``--session-id`` / ``--resume``); they keep today's behaviour.
+* Flag on, a Claude Code container agent (cli-bridge, not headless): a
+  message may name a further Claude chat of that agent; ``resolve_chat``
+  hands its id on and ``agent_chat_input.send_text`` puts the text into that
+  chat's own claude process (``claude_chat_runner``, chats slice S3 item A).
+* Routing is by the CHAT's harness (``chats.harness``): an omp chat goes to
+  the omp daemon, a Claude chat to the Claude chat runner — each only on an
+  agent that can run it. A chat whose harness this agent cannot run is
+  refused (``ChatHarnessUnsupportedError``), never sent to the wrong process.
 * Switching a further chat's pair (S3 item C, ADR-105): :class:`OmpChatDriver`
   is ``chat_switch``'s driver for harness ``omp``. It stops a running turn
   through the daemon (``stop_for_switch``: the daemon holds the queue for the
@@ -54,6 +60,15 @@ class ChatRecordDisabledError(Exception):
     """A chat id was sent while the record flag is off."""
 
 
+class ChatHarnessUnsupportedError(Exception):
+    """A chat of this agent on a harness this agent cannot run as a further
+    chat (e.g. a Claude chat left on an agent that now runs omp)."""
+
+    def __init__(self, harness: str):
+        super().__init__(harness)
+        self.harness = harness
+
+
 def further_chats_supported(agent: Any) -> bool:
     """True when this agent's daemon can hold further chats: the record is
     on and the agent chats over ACP in its omp container."""
@@ -64,13 +79,36 @@ def further_chats_supported(agent: Any) -> bool:
     )
 
 
+def claude_chats_supported(agent: Any) -> bool:
+    """True when a further Claude chat of this agent can run: the record is
+    on and the agent is a Claude Code container agent (cli-bridge, not
+    headless). The same rule ``agent_chat_input.send_text`` applies before
+    it opens the chat's process (``claude_chat_runner.open_chat``)."""
+    return (
+        bool(getattr(settings, "chat_record_enabled", False))
+        and getattr(agent, "agent_runtime", None) == "cli-bridge"
+        and headless_chat_kind(agent) is None
+        and (getattr(agent, "harness", None) or "claude") == "claude"
+    )
+
+
+#: Which agents can run a further chat, per chat harness.
+_FURTHER_CHAT_SUPPORT = {
+    "omp": further_chats_supported,
+    "claude": claude_chats_supported,
+}
+
+
 async def resolve_chat(session: AsyncSession, user: Any, agent: Any, chat_id: uuid.UUID | None) -> str | None:
     """The chat id to hand to the daemon, or None for the agent's own chat.
 
     ``ChatRecordDisabledError`` when a chat id came while the flag is off;
     ``ChatNotFoundError`` when it is not a visible, unarchived chat of
     ``agent`` (another agent's chat is "not found", never routed). The
-    agent's default chat is the daemon's default session — None."""
+    agent's default chat is the daemon's default session — None.
+    ``ChatHarnessUnsupportedError`` when the chat's harness is not one this
+    agent can run as a further chat (routing is by the chat's harness: omp →
+    the chat daemon, Claude → ``claude_chat_runner`` via ``send_text``)."""
     if chat_id is None:
         return None
     if not getattr(settings, "chat_record_enabled", False):
@@ -84,8 +122,10 @@ async def resolve_chat(session: AsyncSession, user: Any, agent: Any, chat_id: uu
         raise ChatNotFoundError()
     if chat.agent_default:
         return None
-    if not further_chats_supported(agent):
-        raise ChatNotFoundError()
+    harness = chat.harness or chat_record.harness_name(agent)
+    supported = _FURTHER_CHAT_SUPPORT.get(harness)
+    if supported is None or not supported(agent):
+        raise ChatHarnessUnsupportedError(harness)
     return str(chat.id)
 
 

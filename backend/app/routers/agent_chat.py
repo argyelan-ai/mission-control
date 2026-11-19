@@ -1325,10 +1325,13 @@ async def post_chat_input(
     became a new chat session is recorded as the activity event
     ``chat.session_reset`` with who sent it (incident 21.10.2026).
 
-    Chats slice S2, only while ``CHAT_RECORD_ENABLED`` is on, headless omp
-    agents only (``acp_chat_chats``): ``chatId`` names a further chat of
-    this agent (404 ``chat_not_found`` for anything else, 404
-    ``chat_record_disabled`` with the flag off); ``/new`` / ``/clear``
+    Chats slices S2/S3, only while ``CHAT_RECORD_ENABLED`` is on
+    (``acp_chat_chats``): ``chatId`` names a further chat of this agent,
+    routed by the chat's harness — omp → the agent's chat daemon, Claude →
+    that chat's own claude process (``claude_chat_runner``). 404
+    ``chat_not_found`` for anything else, 409 ``{"reason":
+    "chat_harness_unsupported","harness":h}`` for a chat on a harness this
+    agent cannot run, 404 ``chat_record_disabled`` with the flag off; ``/new`` / ``/clear``
     answers 201 ``{"newChat": <chat>}`` — a further chat in the record,
     opened by the daemon on its first message — instead of a reset."""
     agent = await _load_agent_or_404(agent_id, session)
@@ -1354,6 +1357,9 @@ async def post_chat_input(
         return JSONResponse(status_code=404, content={"reason": "chat_record_disabled"})
     except acp_chat_chats.ChatNotFoundError:
         return JSONResponse(status_code=404, content={"reason": "chat_not_found"})
+    except acp_chat_chats.ChatHarnessUnsupportedError as e:
+        return JSONResponse(status_code=409, content={"reason": "chat_harness_unsupported",
+                                                      "harness": e.harness})
     made = await acp_chat_chats.new_chat_for_reset(session, current_user, agent, body.text)
     if made is not None:
         # The conversation it was typed in stays as it is — its own chat.
