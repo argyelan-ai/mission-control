@@ -21,7 +21,6 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import Role, require_role, require_user
-from app.config import settings
 from app.database import get_session, release_session
 from app.models.agent import Agent
 from app.models.task import Task
@@ -42,6 +41,7 @@ from app.services.agent_chat_input import (
     InputNotSupportedError,
     InstallCommandBlockedError,
     QuestionOpenError,
+    SessionCommandBlockedError,
     answer_elicitation,
     can_receive_input,
     clear_queue,
@@ -125,17 +125,14 @@ _ACP_UNREACHABLE = "acp_unreachable"
 def _claude_chat_failed(agent, e: ClaudeChatRunnerError) -> JSONResponse:
     """A further Claude chat could not be put in front of its process
     (chats slice S3, ``claude_chat_runner``): 404 ``chat_not_found``, 409
-    ``chat_process_refused`` (by content) or 502 ``chat_process_unreachable``
-    (container / tmux / disk), each with the runner's code as ``error``.
+    ``chat_process_refused`` (by content), 503 ``chats_busy`` with
+    ``Retry-After`` (every chat slot taken right now) or 502
+    ``chat_process_unreachable`` (container / tmux / disk), each with the
+    runner's code as ``error``.
     The runner's detail goes to the log only (paths, tmux text)."""
-    status, content = claude_chat_runner.http_answer(e)
+    status, content, headers = claude_chat_runner.http_answer(e)
     logger.warning("claude chat for %s refused: %s (%s)", agent.slug, e.code, e.detail[:300])
-    return JSONResponse(status_code=status, content=content)
-
-
-def _is_claude_container(agent) -> bool:
-    return (getattr(agent, "agent_runtime", None) == "cli-bridge"
-            and (getattr(agent, "harness", None) or "claude") == "claude")
+    return JSONResponse(status_code=status, content=content, headers=headers)
 
 
 def _acp_unreachable(e: AcpChatUnreachableError) -> JSONResponse:
@@ -1374,18 +1371,6 @@ async def post_chat_input(
         await _audit(session, agent, CHAT_SESSION_RESET_EVENT, title, detail)
         return JSONResponse(status_code=201, content={"newChat": new_chat})
 
-    if (chat_id and getattr(settings, "chat_record_enabled", False)
-            and _is_claude_container(agent)):
-        # A further Claude chat: a command that moves its claude to another
-        # session (or logs the shared login in/out) would leave the chat's
-        # pin on the old file — refused with a clear answer, nothing typed.
-        command = claude_chat_runner.session_switch_command(body.text)
-        if command:
-            return JSONResponse(
-                status_code=409,
-                content={"reason": "session_command_blocked", "command": command},
-            )
-
     try:
         # The composer: the operator's own text — the only one a chat card
         # may offer to send again (headless agents; ignored elsewhere).
@@ -1398,6 +1383,13 @@ async def post_chat_input(
         return JSONResponse(
             status_code=409,
             content={"reason": "install_blocked", "command": e.command},
+        )
+    except SessionCommandBlockedError as e:
+        # A further Claude chat: the command would move its claude off the
+        # chat's pinned session (``claude_chat_runner.session_switch_command``).
+        return JSONResponse(
+            status_code=409,
+            content={"reason": "session_command_blocked", "command": e.command},
         )
     except InputNotSupportedError:
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)

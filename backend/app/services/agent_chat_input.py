@@ -309,6 +309,21 @@ class InputNotSupportedError(Exception):
     """Raised when the agent's runtime has no live input channel."""
 
 
+class SessionCommandBlockedError(InputNotSupportedError):
+    """A further Claude chat (chats slice S3) got a command that would move
+    its claude off the chat's pinned session — ``/clear`` and its aliases,
+    ``/resume``, ``/branch``, ``/login`` … (the list and why:
+    ``claude_chat_runner.SESSION_SWITCH_COMMANDS``). Nothing is typed, the
+    chat's process is not even opened. The router turns this into 409
+    ``{"reason": "session_command_blocked", "command": str}``. A subclass of
+    ``InputNotSupportedError``: a caller that only knows that one still
+    refuses it."""
+
+    def __init__(self, command: str) -> None:
+        super().__init__(command)
+        self.command = command
+
+
 class EffortSwitchFailedError(Exception):
     """Raised when the effort level could not be verified as applied (a
     verification timeout — no explicit rejection or confirmation seen)."""
@@ -953,13 +968,15 @@ async def send_text(agent, text: str, *, origin: str | None = None,
             or (getattr(agent, "harness", None) or "claude") != "claude"
         ):
             raise InputNotSupportedError()
-        if _session_clearing_word(text):
-            # Typed into the chat's claude, ``/clear``/``/new`` would start a
-            # session under a random id; the chat's pin would still name the
-            # old file and the next restart would resume the pre-clear
-            # session — everything after it silently lost. Refused until MC
-            # turns it into a new chat (as the omp path does).
-            raise InputNotSupportedError()
+        switch = claude_chat_runner.session_switch_command(text)
+        if switch:
+            # Typed into the chat's claude, ``/clear`` (and ``/reset``,
+            # ``/resume``, ``/branch`` …) would move it to another session;
+            # the chat's pin would still name the old file and the next
+            # restart would resume that one — everything after the switch
+            # silently lost. The one gate for it: refused with a clear
+            # answer until MC turns it into a new chat (as the omp path does).
+            raise SessionCommandBlockedError(switch)
         # Opens (or resumes) the chat's own claude before anything is typed;
         # its errors (``ClaudeChatRunnerError``: chat not found, start failed)
         # reach the caller.

@@ -246,7 +246,24 @@ async def lifespan(app: FastAPI):
     # load verticals, and the verticals' own state machines run here.
     from app.verticals import hooks as _vertical_hooks
     app.state.vertical_loop_tasks = _vertical_hooks.start_background_loops()
+    # ── Claude chat idle sweep (chats slice S3) ───────────────────────
+    # Closes further-chat windows without a turn for 15 min — from the
+    # start, not only after the first chat send. API process only (the
+    # runner's turn registry lives here). Off with CHAT_RECORD_ENABLED.
+    app.state.claude_chat_sweep_task = None
+    try:
+        from app.services import claude_chat_runner as _claude_chat_runner
+        app.state.claude_chat_sweep_task = _claude_chat_runner.ensure_idle_sweeper()
+    except Exception as e:
+        logger.error("Claude chat idle sweep failed to schedule: %s", e, exc_info=True)
     yield
+    _claude_chat_sweep = getattr(app.state, "claude_chat_sweep_task", None)
+    if _claude_chat_sweep is not None and not _claude_chat_sweep.done():
+        _claude_chat_sweep.cancel()
+        try:
+            await _claude_chat_sweep
+        except (asyncio.CancelledError, Exception):
+            pass
     await _vertical_hooks.stop_background_loops(
         getattr(app.state, "vertical_loop_tasks", None) or []
     )
