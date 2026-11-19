@@ -33,6 +33,69 @@ async def run_task_done_hooks(session: Any, task: Any) -> None:
             logger.exception("task_done hook %s failed", getattr(hook, "__name__", hook))
 
 
+# Async predicates, asked before the generic completion callback to the board
+# lead (task_lifecycle._notify_lead_on_completion: system_notify comment, DM to
+# the lead, optional Telegram notice). Signature: async (session, task) -> bool.
+# True = the vertical owns the follow-up of this task itself, so the lead is
+# NOT woken (e.g. bench_studio: the operator judges bench results in the
+# Bench Studio; a lead callback only burns cloud tokens — W0.11, 22.10.2026).
+# Self-filtering: return False for tasks that are not yours. A raising
+# predicate counts as False — the callback then runs exactly as before
+# (fail-open to the old behaviour, a broken vertical never swallows it).
+# The caller passes a session used only for the predicates (read-only use
+# expected), so a database error in a predicate cannot break the callback.
+completion_callback_skip_hooks: list[Callable[..., Awaitable[bool]]] = []
+
+
+async def completion_callback_skipped_by(session: Any, task: Any) -> str | None:
+    """Name of the first skip hook that claims `task`, or None (callback runs)."""
+    import logging
+
+    logger = logging.getLogger("mc.verticals.hooks")
+    for hook in completion_callback_skip_hooks:
+        try:
+            if await hook(session, task):
+                return getattr(hook, "__name__", repr(hook))
+        except Exception:
+            logger.exception(
+                "completion_callback skip hook %s failed — callback runs as usual",
+                getattr(hook, "__name__", hook),
+            )
+    return None
+
+
+# Async providers asked before a task's workspace is prepared for dispatch
+# (task_context_builder.setup_git_workspace_for_dispatch and its cli-bridge
+# twin cli_bridge_runner._resolve_workspace). Signature:
+#   async (session, task, agent) -> str | None
+# A str = the HOST path of a folder the vertical prepared for this task; the
+# core then uses it as task.workspace_path and skips its git/worktree setup.
+# None = not mine (self-filtering), the normal path runs. Used by bench_studio
+# so a benchmark starts in an empty folder instead of a worktree of the
+# shared ad-hoc scratch repo (fairness, live finding 28.10.2026). A raising
+# provider is logged and counts as None — the normal path runs.
+task_workspace_providers: list[Callable[..., Awaitable[str | None]]] = []
+
+
+async def provide_task_workspace(session: Any, task: Any, agent: Any) -> str | None:
+    """First workspace a provider prepared for ``task``, or None."""
+    import logging
+
+    logger = logging.getLogger("mc.verticals.hooks")
+    for provider in task_workspace_providers:
+        try:
+            path = await provider(session, task, agent)
+        except Exception:
+            logger.exception(
+                "task_workspace provider %s failed — normal workspace setup runs",
+                getattr(provider, "__name__", provider),
+            )
+            continue
+        if path:
+            return path
+    return None
+
+
 # Async hooks, called when a task lands in status=review, before the generic
 # "wait for a human reviewer" flow runs (task_lifecycle.handle_human_review_
 # handoff). Signature: async (session, task) -> bool. Return True when the
@@ -248,3 +311,46 @@ async def collect_home_alerts(session: Any) -> list[dict]:
                 continue
             alerts.append(alert)
     return alerts
+
+
+# Long-running background loops a vertical needs in the API process (e.g.
+# bench_studio's orphan sweep). Signature: a zero-argument callable that
+# returns a coroutine which runs until cancelled. The API lifespan starts
+# every entry once (start_background_loops) and cancels them on shutdown
+# (stop_background_loops). API process only: the mc-worker never runs the
+# vertical discovery, and vertical state machines (render/compose fan-out)
+# already live in the API process. A loop must handle its own errors; a
+# factory that raises is logged and skipped so one broken vertical never
+# blocks the boot.
+background_loops: list[Callable[[], Awaitable[None]]] = []
+
+
+def start_background_loops() -> list[Any]:
+    """Start every registered background loop as a tracked task."""
+    import logging
+
+    from app.utils import create_tracked_task
+
+    logger = logging.getLogger("mc.verticals.hooks")
+    tasks: list[Any] = []
+    for factory in background_loops:
+        name = getattr(factory, "__name__", repr(factory))
+        try:
+            tasks.append(create_tracked_task(factory(), name=f"vertical:{name}"))
+        except Exception:
+            logger.exception("vertical background loop %s failed to start", name)
+    return tasks
+
+
+async def stop_background_loops(tasks: list[Any]) -> None:
+    """Cancel the tasks start_background_loops returned and wait for them."""
+    import asyncio
+
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    for task in tasks:
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass

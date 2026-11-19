@@ -29,7 +29,10 @@ REDACTED = "<REDACTED>"
 # durch die Regex-Kette geschickt. Access-Logs sind hochfrequent — die
 # ueberwaeltigende Mehrheit trifft keinen Marker und kostet dann nur einen
 # Substring-Scan.
-_MARKERS = ("/bot", "token", "ticket", "Bearer", "key=", "apikey", "secret", "/mc/sessions/", "/s/")
+_MARKERS = (
+    "/bot", "token", "ticket", "Bearer", "key=", "apikey", "secret", "/mc/sessions/", "/s/",
+    "/deliverable-view/", "dv1.",
+)
 
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # Telegram-Bot-Token im Pfad: /bot<id>:<secret>/method — ID mitredigieren,
@@ -52,6 +55,16 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # the address a harness uses (`/s/<token>/`).
     (re.compile(r"(/mc/sessions/)[A-Za-z0-9_-]{32,128}"), rf"\1{REDACTED}"),
     (re.compile(r"(/s/)[A-Za-z0-9_-]{32,128}(?![A-Za-z0-9_-])"), rf"\1{REDACTED}"),
+    # HTML preview folder view (routers/deliverable_view.py): the sandboxed
+    # frame cannot send a header, so its signed token is the path segment
+    # after /deliverable-view/ — uvicorn's access log writes it. The whole
+    # segment goes, whatever it holds (a truncated or tampered token too);
+    # the file path after it stays readable.
+    (re.compile(r"(/deliverable-view/)[^/\s?#\"'<>]+"), rf"\1{REDACTED}"),
+    # ... and the token by its own shape (dv1.<claims>.<signature>, both
+    # base64url), wherever it stands — percent-encoded inside another URL's
+    # query (after "%2F", so no word boundary), or on its own.
+    (re.compile(r"dv1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"), REDACTED),
 )
 
 

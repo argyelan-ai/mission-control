@@ -4,6 +4,8 @@ Operational Controls — System Mode, Dispatch Guards, Stop/Resume.
 Central place for all operational-control logic:
 - System Mode (active/draining/halted) via Redis
 - Dispatch Guard (check_dispatch_allowed) — DRY for all 5 dispatch entry points
+- System-mode gate (system_mode_refusal) — the HALTED/DRAINING rule, shared
+  by the dispatch guard and the agent's poll claim
 - Stop Run / Resume Task Run
 - Continuation Flow Detection (explicit via dispatch_intent)
 """
@@ -106,6 +108,37 @@ def is_continuation_flow(task: Task) -> bool:
     return getattr(task, "dispatch_intent", "root") in CONTINUATION_INTENTS
 
 
+# ── System-mode gate (shared by push dispatch and the poll claim) ──────
+
+#: Refusal reasons of the system mode (check_dispatch_allowed and the poll).
+SYSTEM_HALTED_REASON = "System HALTED"
+SYSTEM_DRAINING_REASON = "System DRAINING — nur automatische Flows erlaubt"
+
+
+def system_mode_refusal(system_mode: str, task: Task) -> str | None:
+    """May MC hand ``task`` to an agent in ``system_mode``? System-wide only.
+
+    Returns the refusal reason, or None when the mode lets the card through:
+    HALTED holds every card, DRAINING holds every card except the automatic
+    continuation flows (subtask, review hand-off, rework).
+
+    One rule for every path that hands a card out: push dispatch
+    (check_dispatch_allowed below) and the paths that do not go through
+    check_dispatch_allowed — the agent's own poll claim (routers/agents.py
+    agent_poll), the undispatched-card watcher (watchdog/task_monitor.py)
+    and pull dispatch (routers/agent_task_status.py get_next_task). The
+    ACK and pending ladders (task_runner._check_dispatch_ack) skip a card
+    it holds. Agent rules (paused, runtime readiness) stay out of here:
+    they differ per path.
+    """
+    # rule: R-system-mode-holds-poll - one system-mode rule for every path that hands a card out
+    if system_mode == "halted":
+        return SYSTEM_HALTED_REASON
+    if system_mode == "draining" and not is_continuation_flow(task):
+        return SYSTEM_DRAINING_REASON
+    return None
+
+
 # ── Dispatch Guard ─────────────────────────────────────────────────────
 
 async def check_dispatch_allowed(
@@ -128,10 +161,13 @@ async def check_dispatch_allowed(
     existing unit tests call this without a session.
     """
     system_mode = await get_system_mode()
+    # HALTED (step 1) and DRAINING (step 5) come from the shared rule; the
+    # priority order between them stays as listed above.
+    system_refusal = system_mode_refusal(system_mode, task)
 
     # 1. System HALTED
-    if system_mode == "halted":
-        return False, "System HALTED"
+    if system_refusal == SYSTEM_HALTED_REASON:
+        return False, system_refusal
 
     # 1.5 MC update drain (ADR-094 decision 7). Lives in Postgres, not in the
     # Redis system mode above: a FLUSHALL must not lift it, and it travels
@@ -193,8 +229,8 @@ async def check_dispatch_allowed(
             )
 
     # 5. System DRAINING — only automatic continuation flows
-    if system_mode == "draining" and not is_continuation_flow(task):
-        return False, "System DRAINING — nur automatische Flows erlaubt"
+    if system_refusal:
+        return False, system_refusal
 
     return True, ""
 
@@ -208,8 +244,13 @@ async def stop_task_run(
     reason: str = "",
     actor_user_id: uuid.UUID | None = None,
     actor_label: str | None = None,
+    changed_by: str = "user",
 ) -> Task:
-    """Stop an active task run. Only for tasks with an active run."""
+    """Stop an active task run. Only for tasks with an active run.
+
+    ``changed_by="system"`` for an automatic stop (e.g. a time limit): the
+    audit trail then names the system, never a person (live finding
+    28.10.2026 — a bench time-limit stop was recorded as the operator's)."""
     task = await session.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -229,6 +270,34 @@ async def stop_task_run(
 
     agent = await session.get(Agent, task.assigned_agent_id) if task.assigned_agent_id else None
 
+    # rule: R-stop-only-own-run - Stop on review card B stopped run A
+    # Which card does the agent's live run work on? The pointer is set only
+    # for in_progress; the bridge's run record (acp-task-state.json) names the
+    # card for every phase, review included. A ``stopped`` card makes the
+    # agent's poll end its session, whatever that session works on — so the
+    # stop must never land on a card that is not the live run (round-4 K5,
+    # r1 N2; review SHOULD-2: the card only hid the button, the API still let
+    # card B end run A).
+    run_task_id: str | None = None
+    if agent is not None:
+        from app.services.acp_chat_transport import read_acp_task_run_id
+        run_task_id = read_acp_task_run_id(agent)
+    this_card = str(task.id)
+    agent_on_this_card = agent is not None and (
+        agent.current_task_id == task.id or run_task_id == this_card
+    )
+    agent_on_other_card = agent is not None and not agent_on_this_card and (
+        agent.current_task_id is not None or run_task_id is not None
+    )
+    # A review card has no run of its own until the reviewer picks it up —
+    # "status review" alone does not say the run is this card's.
+    if task.status == "review" and not agent_on_this_card:
+        raise HTTPException(
+            status_code=409,
+            detail="The agent's run is not this review card — stopping it would end "
+                   "another run. Use Hold to pause a waiting review.",
+        )
+
     # Phase 29: Gateway session reset no longer applies with the gateway sunset.
     # spawn_session_key stays on the model until Phase 30 (DB drop). cli-bridge /
     # host / claude-code runtimes have no remote-session concept — the
@@ -236,14 +305,18 @@ async def stop_task_run(
     # TODO Phase 30: drop spawn_session_key column.
 
     # 2. Update task
-    task, old_status = await lock_and_set(session, task.id, "blocked", actor="user")
+    task, old_status = await lock_and_set(session, task.id, "blocked", actor=changed_by)
     task.run_control = "stopped"
     task.dispatched_at = None
     task.ack_at = None
     # Invalidates all pending agent updates (audit trail).
     from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+    # A time limit is nobody's click: the audit names the system as well.
+    system = changed_by == "system"
     await clear_dispatch_attempt_id(
-        session, task, caller="user_stop", reason="manual_stop",
+        session, task,
+        caller="system_stop" if system else "user_stop",
+        reason=(reason or "system_stop")[:256] if system else "manual_stop",
     )
     task.review_decision = None  # Old review decision is irrelevant after stop
     task.review_decided_at = None
@@ -264,7 +337,10 @@ async def stop_task_run(
     # resume.
     # Live bug 2026-04-24: the operator stopped a Sparky task + restarted the container,
     # on resume the task ended up in inbox with assigned_agent_id=None.
-    if agent:
+    # Only the agent's OWN run ends: an agent that provably runs a different
+    # card (pointer or run record) stays "running" — stopping a queued card
+    # must not mark its busy agent idle.
+    if agent and not agent_on_other_card:
         agent.run_state = "idle"
         if agent.current_task_id == task.id:
             agent.current_task_id = None
@@ -273,7 +349,7 @@ async def stop_task_run(
     # 5. Audit Trail
     await record_task_event(
         session, task.id, old_status, "blocked",
-        changed_by="user", reason="manual_stop",
+        changed_by=changed_by, reason="manual_stop" if changed_by == "user" else "system_stop",
         actor_user_id=actor_user_id, actor_label=actor_label,
     )
 

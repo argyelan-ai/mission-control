@@ -30,6 +30,8 @@ class Client:
         }
         if self.cfg.dispatch_attempt_id:
             h["X-Dispatch-Attempt-Id"] = self.cfg.dispatch_attempt_id
+        if self.cfg.session_role:
+            h["X-MC-Session-Role"] = self.cfg.session_role
         return h
 
     def request(

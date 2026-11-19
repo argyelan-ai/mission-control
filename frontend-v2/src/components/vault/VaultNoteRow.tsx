@@ -23,15 +23,15 @@
  */
 
 import { useMemo } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import type { VaultNote } from "@/lib/types";
 import { colorForAgent } from "./agentColors";
+import { TASK_WIKILINK_RE } from "./wikilinks";
 
 import { alpha, C } from "@/lib/colors";
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-const MONTHS_SHORT = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"] as const;
 const UUID_LIKE_RE = /^[0-9a-f]{6,}-[0-9a-f]{4,}/i;
 
 /**
@@ -123,36 +123,95 @@ export function titleFromNote(note: {
   return cleaned;
 }
 
+/** Note type in the UI language; an unknown type is shown as stored. */
+export function noteTypeLabel(
+  t: { (key: string): string; has: (key: string) => boolean },
+  type: string,
+): string {
+  const key = `noteType.${type}`;
+  return t.has(key) ? t(key) : type;
+}
+
 /** Split space-joined tags string into array, filtering empties. */
 export function parseTags(tagsStr: string): string[] {
   return tagsStr.split(" ").filter(Boolean);
 }
 
-/** Extract a clean 2-line excerpt from content (strip frontmatter + headings). */
+/**
+ * Plain-text preview of a note for the list (2-line clamp). Drops the
+ * frontmatter, headings, attachment embeds and image syntax, and unwraps
+ * Markdown (quotes, emphasis, code, links, wikilinks, list bullets) so the
+ * row reads as text — not as "> **Für …**" or "!../attachments/x.html".
+ */
 export function excerptFromContent(content: string, maxChars = 200): string {
   const stripped = content
     .replace(/^---[\s\S]*?---\n?/, "")
-    .replace(/#+\s+.*\n?/g, "")
-    .replace(/\[\[([^\]]+)\]\]/g, "$1")
+    .replace(/^#+\s+.*$/gm, "")
+    .replace(/!\[\[[^\]]*\]\]/g, "")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, name: string, alias?: string) =>
+      alias ?? (TASK_WIKILINK_RE.test(name) ? name.slice(5, 13) : name),
+    )
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/<((?:https?|mailto):[^>]+)>/gi, "$1")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/^\s*(?:[-*+]|\d+\.)\s+/gm, "")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/\*(\S(?:.*?\S)?)\*/g, "$1")
+    .replace(/(^|[^\w])_(\S(?:.*?\S)?)_(?=[^\w]|$)/g, "$1$2")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/\s+/g, " ")
     .trim();
   return stripped.length > maxChars ? stripped.slice(0, maxChars) + "…" : stripped;
 }
 
-interface ParsedDate {
+export interface ParsedDate {
   day: string;
-  month: string;
+  /** 0-11 — format it with formatMonthShort / formatMonthLabel (UI language). */
+  monthIndex: number;
   year: string;
+  /** Locale-neutral group key, e.g. "2026-10". */
   monthKey: string;
 }
 
-function parsedDateFromDate(d: Date): ParsedDate {
-  const month = MONTHS_SHORT[d.getUTCMonth()] ?? "";
+function makeParsedDate(year: number, monthIndex: number, day: number): ParsedDate {
   return {
-    day: String(d.getUTCDate()),
-    month,
-    year: String(d.getUTCFullYear()),
-    monthKey: `${month} ${d.getUTCFullYear()}`,
+    day: String(day),
+    monthIndex,
+    year: String(year),
+    monthKey: `${year}-${String(monthIndex + 1).padStart(2, "0")}`,
   };
+}
+
+function parsedDateFromDate(d: Date): ParsedDate {
+  return makeParsedDate(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+function utcMonthDate(d: ParsedDate): Date {
+  return new Date(Date.UTC(parseInt(d.year, 10), d.monthIndex, 1, 12));
+}
+
+/** Short month in the UI language ("Oct" / "Okt."), for the row margin. */
+export function formatMonthShort(d: ParsedDate, locale: string): string {
+  return new Intl.DateTimeFormat(locale, { month: "short", timeZone: "UTC" }).format(utcMonthDate(d));
+}
+
+/** Month group label in the UI language ("Oct 2026" / "Okt. 2026"). */
+export function formatMonthLabel(d: ParsedDate, locale: string): string {
+  return new Intl.DateTimeFormat(locale, { month: "short", year: "numeric", timeZone: "UTC" }).format(
+    utcMonthDate(d),
+  );
+}
+
+/** Long date of a parsed (day-precision) date in the UI language. */
+export function formatParsedLongDate(d: ParsedDate, locale: string): string {
+  const date = new Date(Date.UTC(parseInt(d.year, 10), d.monthIndex, parseInt(d.day, 10), 12));
+  return new Intl.DateTimeFormat(locale, {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
 }
 
 /**
@@ -165,13 +224,8 @@ export function parseDateFromPath(path: string): ParsedDate | null {
   if (!match) return null;
   const [, year, monthRaw, dayRaw] = match;
   const monthIdx = parseInt(monthRaw, 10) - 1;
-  const month = MONTHS_SHORT[monthIdx] ?? monthRaw;
-  return {
-    day: String(parseInt(dayRaw, 10)),
-    month,
-    year,
-    monthKey: `${month} ${year}`,
-  };
+  if (monthIdx < 0 || monthIdx > 11) return null;
+  return makeParsedDate(parseInt(year, 10), monthIdx, parseInt(dayRaw, 10));
 }
 
 /**
@@ -202,16 +256,13 @@ export function parseDateFromNote(note: {
   return parseDateFromPath(note.path);
 }
 
-/** Long-form date for the reading panel (e.g. "MAY 14, 2026"). */
-export function formatLongDate(input: string): string {
+/** Long-form date for the reading panel in the UI language
+ *  ("October 23, 2026" / "23. Oktober 2026"). Unparseable input is shown as is. */
+export function formatLongDate(input: string, locale: string): string {
+  const d = new Date(input);
+  if (isNaN(d.getTime())) return input;
   try {
-    return new Date(input)
-      .toLocaleDateString("en-US", {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      })
-      .toUpperCase();
+    return d.toLocaleDateString(locale, { day: "numeric", month: "long", year: "numeric" });
   } catch {
     return input;
   }
@@ -275,6 +326,7 @@ interface VaultNoteRowProps {
 
 export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
   const t = useTranslations("vault");
+  const locale = useLocale();
   const rawTitle = useMemo(() => titleFromNote(note), [note]);
   // titleFromNote returns the sentinel "Untitled" for UUID-only stems —
   // translate it here (the helper stays a pure module function).
@@ -324,7 +376,7 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
                 opacity: selected ? 1 : 0.9,
               }}
             >
-              {date.month}
+              {formatMonthShort(date, locale)}
             </div>
             <div
               className="font-mono tabular-nums mt-1"
@@ -375,7 +427,7 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
               lineHeight: 1,
             }}
           >
-            {note.type}
+            {noteTypeLabel(t, note.type)}
           </span>
           {note.agent && (
             <span

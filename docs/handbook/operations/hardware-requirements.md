@@ -59,4 +59,7 @@ and optional profiles — runs on a Mac mini M4 while staying under a
   [Run a local LLM](../howto/local-llm.md).
 - **Voice and browser sidecars** are optional compose profiles
   (`COMPOSE_PROFILES=voice,browser`) and off by default; enable them only
-  if you use them.
+  if you use them. Building the browser sidecar (`mc-playwright`) downloads
+  the bench-video fonts from Fontshare and Google Fonts and fails without
+  internet access — on an offline or firewalled host set
+  `BENCH_FONTS_OPTIONAL=1` in `.env` (bench videos then use system fonts).

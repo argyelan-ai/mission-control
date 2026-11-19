@@ -395,8 +395,10 @@ async def test_chat_status_line_uses_the_question_aware_state(monkeypatch):
 
     seen = {}
 
-    def _status(agent, *, with_questions=False):
+    def _status(agent, *, with_questions=False, with_task=False):
         seen["with_questions"] = with_questions
+        # The chat tailer also reads the task channel (follow-up to ADR-097).
+        seen["with_task"] = with_task
         return "waiting_input"
 
     monkeypatch.setattr(tc, "read_acp_turn_status", _status)
@@ -411,3 +413,4 @@ async def test_chat_status_line_uses_the_question_aware_state(monkeypatch):
     state = await tc.ChatTailerManager()._compute_pane_state(agent, session)
     assert state["status"] == "waiting_input"
     assert seen["with_questions"] is True
+    assert seen["with_task"] is True

@@ -1,7 +1,7 @@
 // Mirror of backend/app/scopes.py (Scope enum + DEFAULT_SCOPES, verified
 // 2026-07-10). Kept in sync manually; the wizard pre-fills from these, the
 // backend (`get_agent_effective_scopes`) is the actual enforcer. Note: there
-// are 21 scopes today, not 16 — scopes.py grew credentials/vault/telegram
+// are 22 scopes today, not 16 — scopes.py grew credentials/vault/telegram/comms (ADR-100)
 // scopes after the original 16-scope design.
 
 export const ALL_SCOPES: string[] = [
@@ -26,6 +26,7 @@ export const ALL_SCOPES: string[] = [
   "vault:read",
   "vault:write",
   "telegram:send",
+  "comms:talk",
 ];
 
 export const ROLE_DEFAULT_SCOPES: Record<string, string[]> = {

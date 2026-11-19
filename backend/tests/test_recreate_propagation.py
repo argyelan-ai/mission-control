@@ -193,6 +193,10 @@ async def test_recreate_circuit_breaker_gives_up(async_session, fake_redis):
         for _ in range(rp.MAX_SYNC_ATTEMPTS):
             await rp.recreate_pending_agents(async_session)
             await async_session.refresh(agent)
+            # A failed attempt waits SYNC_RETRY_SPACING for the next one:
+            # let that much time pass on the counter's own clock.
+            await fake_redis.expire(rp.RedisKeys.agent_recreate_fails(str(agent.id)),
+                                    rp._FAIL_TTL - rp.SYNC_RETRY_SPACING)
 
     assert agent.pending_recreate is False  # breaker tripped — stop retrying
 

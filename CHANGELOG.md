@@ -6,6 +6,17 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
 ## [Unreleased]
 
+- Fix: "Wake" no longer says "Waking…" when the wake helper on the Mac is not
+  running. The helper (`scripts/porsche-wake-watcher.py`) now leaves a
+  heartbeat on every run; without a fresh one both wake routes answer 503 and
+  the box card and the runtime detail say "Not woken: the wake helper on the
+  Mac is not running." The helper no longer wakes a request older than
+  5 minutes, and its launchd plist runs it from the stable checkout
+  `~/.mc/checkouts/mission-control`. Waking from the runtime detail is
+  operator-only now, like the box card. **Update the helper together with the
+  backend** — an old helper writes no heartbeat, so waking reports it as down.
+  The 503 says why (`detail.reason`: `no_heartbeat`, `heartbeat_stale`,
+  `request_waiting`), and the helper runs on the Mac's own Python 3.9.
 - Release gate: `release.yml` now waits for a maintainer's approval
   (environment `release` with a required reviewer) after the images are
   verified, signs every image by digest with cosign keyless, promotes exactly

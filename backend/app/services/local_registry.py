@@ -484,23 +484,45 @@ def _apply_update(row: LocalRecipe, spec: RecipeSpec) -> bool:
 
 
 async def follow_recipe_into_runtimes(
-    session: AsyncSession, slug: str, old_drop_page_cache: bool, new_drop_page_cache: bool
+    session: AsyncSession,
+    slug: str,
+    old_drop_page_cache: bool,
+    new_drop_page_cache: bool,
+    *,
+    old_context_len: int | None = None,
+    new_context_len: int | None = None,
+    windows_followed: list[str] | None = None,
 ) -> list[str]:
-    """Carry a changed ``drop_page_cache`` into the recipe's instances.
+    """Carry a changed ``drop_page_cache`` / ``context_len`` into the recipe's instances.
 
-    An instance copies the flag once, when the switcher builds it
-    (``recipe_switcher.build_runtime_from_recipe``). Nothing in MC lets a
-    user set it on the instance afterwards, so an instance that still holds
-    the recipe's OLD value got it from the recipe and follows the new one.
-    An instance with a different value was changed by hand and is left alone.
+    An instance copies both once, when the switcher builds it
+    (``recipe_switcher.build_runtime_from_recipe``). So an instance that still
+    holds the recipe's OLD value got it from the recipe and follows the new
+    one. An instance with a different value was changed by hand and is left
+    alone (for the window: PATCH ``/runtimes/db/{slug}`` — since #980 the
+    instance window wins over the recipe at start and in the watcher, so a
+    catalog window fix would otherwise never reach an untouched instance).
     Only explicit instances count (``topology.recipe_slug``) — never a slot
     row, never a runtime that merely serves the same model.
 
+    The window goes through ``runtime_window.apply_window`` (same preferred
+    rule as every other window write). Slugs whose window moved are appended
+    to ``windows_followed``: after the commit the caller hands them to
+    :func:`propagate_followed_windows` (agents + slot mirror).
+
     Does not commit. Returns the slugs of the runtimes it changed.
     """
-    if old_drop_page_cache == new_drop_page_cache:
+    drop_moved = old_drop_page_cache != new_drop_page_cache
+    window_moved = (
+        isinstance(new_context_len, int)
+        and not isinstance(new_context_len, bool)
+        and new_context_len > 0
+        and old_context_len != new_context_len
+    )
+    if not drop_moved and not window_moved:
         return []
     from app.models.runtime import Runtime
+    from app.services.runtime_window import apply_window
 
     changed: list[str] = []
     for runtime in (await session.exec(select(Runtime))).all():
@@ -509,12 +531,52 @@ async def follow_recipe_into_runtimes(
         topology = runtime.topology if isinstance(runtime.topology, dict) else {}
         if topology.get("recipe_slug") != slug:
             continue
-        if runtime.drop_page_cache != old_drop_page_cache:
-            continue
-        runtime.drop_page_cache = new_drop_page_cache
-        session.add(runtime)
-        changed.append(runtime.slug)
+        moved = False
+        if drop_moved and runtime.drop_page_cache == old_drop_page_cache:
+            runtime.drop_page_cache = new_drop_page_cache
+            moved = True
+        if (
+            window_moved
+            and runtime.max_context_len == old_context_len
+            and apply_window(runtime, new_context_len)
+        ):
+            moved = True
+            if windows_followed is not None:
+                windows_followed.append(runtime.slug)
+        elif window_moved and runtime.max_context_len != new_context_len:
+            logger.info(
+                "local registry: %s keeps its hand-set window %r (recipe %s: %r → %r)",
+                runtime.slug, runtime.max_context_len, slug, old_context_len, new_context_len,
+            )
+        if moved:
+            session.add(runtime)
+            changed.append(runtime.slug)
     return changed
+
+
+async def propagate_followed_windows(session: AsyncSession, slugs: list[str]) -> None:
+    """After the commit: agents of each followed instance re-sync, and the
+    slot row serving it takes the new window
+    (``slot_runtimes.mirror_instance_window_to_slot``). Best effort per row —
+    a catalog pass must never fail on it."""
+    if not slugs:
+        return
+    from app.models.runtime import Runtime
+    from app.services.runtime_propagation import mark_agents_for_sync
+    from app.services.slot_runtimes import mirror_instance_window_to_slot
+
+    for slug in slugs:
+        try:
+            runtime = (
+                await session.exec(select(Runtime).where(Runtime.slug == slug))
+            ).first()
+            if runtime is None:
+                continue
+            await mark_agents_for_sync(session, runtime)
+            await mirror_instance_window_to_slot(session, runtime)
+        except Exception:  # noqa: BLE001
+            logger.exception("local registry: window follow-up for %s failed", slug)
+            await session.rollback()
 
 
 async def seed_local_recipes(session: AsyncSession) -> tuple[int, int]:
@@ -636,8 +698,8 @@ async def sync_builtin_recipes(session: AsyncSession) -> CatalogSyncResult:
       ("catalog has a newer version, local edits kept");
     * ``enabled`` is never touched (the same rule as a refresh);
     * a recipe that left the catalog keeps its row — never delete;
-    * an instance whose ``drop_page_cache`` came from the recipe follows the
-      new value (``follow_recipe_into_runtimes``).
+    * an instance whose ``drop_page_cache`` or window came from the recipe
+      follows the new value (``follow_recipe_into_runtimes``).
 
     Never raises past a log line on a per-row problem; the caller wraps the
     whole pass like every other startup seed.
@@ -655,6 +717,7 @@ async def sync_builtin_recipes(session: AsyncSession) -> CatalogSyncResult:
     }
 
     kept: list[tuple[LocalRecipe, str]] = []
+    windows_followed: list[str] = []
     for spec in specs:
         row = rows.get(spec.slug)
         if row is None:
@@ -666,12 +729,14 @@ async def sync_builtin_recipes(session: AsyncSession) -> CatalogSyncResult:
         if current_fp not in shipped.get(spec.slug, set()):
             kept.append((row, catalog_fp))
             continue
-        old_drop = row.drop_page_cache
+        old_drop, old_ctx = row.drop_page_cache, row.context_len
         if _apply_update(row, spec):
             session.add(row)
             result.updated.append(row.slug)
             result.runtimes_followed += await follow_recipe_into_runtimes(
-                session, row.slug, old_drop, row.drop_page_cache
+                session, row.slug, old_drop, row.drop_page_cache,
+                old_context_len=old_ctx, new_context_len=row.context_len,
+                windows_followed=windows_followed,
             )
 
     if result.updated:
@@ -680,10 +745,11 @@ async def sync_builtin_recipes(session: AsyncSession) -> CatalogSyncResult:
             "local registry: %d builtin recipe(s) updated to the shipped catalog: %s%s",
             len(result.updated),
             ", ".join(result.updated),
-            f" (runtimes following drop_page_cache: {', '.join(result.runtimes_followed)})"
+            f" (runtimes following the recipe: {', '.join(result.runtimes_followed)})"
             if result.runtimes_followed
             else "",
         )
+        await propagate_followed_windows(session, windows_followed)
 
     for row, catalog_fp in kept:
         result.kept_local.append(row.slug)
@@ -831,6 +897,7 @@ async def refresh_from_sources(session: AsyncSession) -> RefreshResult:
 
     seen_slugs: set[str] = set()
     new_rows: list[LocalRecipe] = []
+    windows_followed: list[str] = []
 
     for url, payload in payloads:
         specs = _parse_entries(payload, origin=url, reasons=result.reasons)
@@ -853,16 +920,19 @@ async def refresh_from_sources(session: AsyncSession) -> RefreshResult:
                 new_rows.append(row)
                 result.added += 1
             else:
-                old_drop = existing.drop_page_cache
+                old_drop, old_ctx = existing.drop_page_cache, existing.context_len
                 if _apply_update(existing, spec):
                     session.add(existing)
                     result.updated += 1
                     await follow_recipe_into_runtimes(
-                        session, existing.slug, old_drop, existing.drop_page_cache
+                        session, existing.slug, old_drop, existing.drop_page_cache,
+                        old_context_len=old_ctx, new_context_len=existing.context_len,
+                        windows_followed=windows_followed,
                     )
 
     if result.added or result.updated:
         await session.commit()
+        await propagate_followed_windows(session, windows_followed)
 
     # No deletion, by design — log what a source dropped so it is visible.
     # Only rows that CAME from a registry can vanish from one; the builtin seed

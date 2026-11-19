@@ -70,6 +70,73 @@ describe("RuntimesPage", () => {
     vi.spyOn(api.lmstudio, "downloads").mockResolvedValue({ downloads: [] });
     vi.spyOn(api.runtimes, "liveStatus").mockResolvedValue(emptyLive);
     vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
+    // The unprobed first paint (round-2 Q6) stays out of the way unless a
+    // test asks for it: by default it never answers, so the page behaves
+    // exactly as it does on the probed list alone.
+    vi.spyOn(api.runtimes, "listRows").mockImplementation(() => new Promise(() => {}));
+  });
+
+  // Round-2 user test (t4 S1): the probed list waited 5.1 s for one sleeping
+  // box, and the page showed nothing but a spinner. The unprobed rows (DB
+  // only) now paint the page at once; the watcher's live view decides what
+  // runs, everything else says it is being checked until the probes land.
+  it("(q6) paints from the unprobed rows while the live probes are still running", async () => {
+    const spark = makeHost({ slug: "spark", display_name: "DGX Spark", ui_order: 0 });
+    const other = makeHost({ slug: "other", display_name: "Other Box", ui_order: 1 });
+    const serving = makeRuntime({
+      slug: "ds", display_name: "DeepSeek Flash", runtime_type: "ssh_process", state: "unknown",
+      container_status: "not_probed", host: { id: "spark", slug: "spark", display_name: "DGX Spark" },
+    });
+    const idle = makeRuntime({
+      slug: "lm", display_name: "LM Box", runtime_type: "lmstudio", state: "unknown",
+      container_status: "not_probed", host: { id: "other", slug: "other", display_name: "Other Box" },
+    });
+    vi.spyOn(api.runtimes, "list").mockImplementation(() => new Promise(() => {}));
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({ runtimes: [serving, idle] });
+    vi.spyOn(api.hosts, "list").mockResolvedValue([spark, other]);
+    vi.spyOn(api.runtimes, "liveStatus").mockResolvedValue({
+      ...emptyLive,
+      live: { ds: { reachable: true, served_model: "m", latency_ms: 5, last_probe_at: "", consecutive_failures: 0, drift: false } },
+    });
+
+    const { container } = renderPage();
+
+    expect(await screen.findByTestId("stage-card")).toHaveTextContent("DeepSeek Flash");
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="free-box"][data-host-slug="other"]')).toHaveTextContent("Checking…");
+    });
+    expect(screen.queryByTestId("empty-stage")).not.toBeInTheDocument();
+  });
+
+  // PR #960 review SHOULD 1: painted before the watcher's live view, the
+  // rows showed a running duo as two free boxes with an armed "Start model",
+  // then an empty moment, then the stage card. The rows wait for that view.
+  it("(q6) the unprobed rows wait for the live view before painting the stage", async () => {
+    const spark = makeHost({ slug: "spark", display_name: "DGX Spark", ui_order: 0 });
+    const serving = makeRuntime({
+      slug: "ds", display_name: "DeepSeek Flash", runtime_type: "ssh_process", state: "unknown",
+      container_status: "not_probed", host: { id: "spark", slug: "spark", display_name: "DGX Spark" },
+    });
+    vi.spyOn(api.runtimes, "list").mockImplementation(() => new Promise(() => {}));
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({ runtimes: [serving] });
+    vi.spyOn(api.hosts, "list").mockResolvedValue([spark]);
+    let answerLive: (v: typeof emptyLive) => void = () => {};
+    vi.spyOn(api.runtimes, "liveStatus").mockImplementation(() => new Promise((r) => { answerLive = r; }));
+
+    renderPage();
+
+    await waitFor(() => expect(api.runtimes.listRows).toHaveBeenCalled());
+    // Rows are in, live view is not: nothing claims "free".
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId("free-box")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("stage-card")).not.toBeInTheDocument();
+
+    answerLive({
+      ...emptyLive,
+      live: { ds: { reachable: true, served_model: "m", latency_ms: 5, last_probe_at: "", consecutive_failures: 0, drift: false } },
+    });
+    expect(await screen.findByTestId("stage-card")).toHaveTextContent("DeepSeek Flash");
+    expect(screen.queryByTestId("free-box")).not.toBeInTheDocument();
   });
 
   it("(a) an omp runtime on an enabled host with nothing else running is visible via the empty stage AND the register", async () => {
@@ -128,12 +195,11 @@ describe("RuntimesPage", () => {
     expect(await screen.findByTestId("stage-card")).toBeInTheDocument();
   });
 
-  it("(c) a power-managed host whose runtimes lack the power_managed flag renders as a free box, never vanishes", async () => {
-    // Bound runtime exists, but none of them carry power_managed: true — the
-    // page's sleepingGroups filter (page.tsx) requires that flag before a
-    // host is treated as AsleepBox material, so this host stays in
-    // stageGroups and (nothing serving) becomes a FreeBox — the old
-    // SleepingHostLine silently returned null for exactly this case.
+  it("(c) a power-managed host whose runtimes lack the power_managed flag renders as a free box when awake, never vanishes", async () => {
+    // Bound runtime exists, but none of them carry power_managed: true. The
+    // HOST flag makes it the sleeping row (round-5 re-check L1); its own
+    // check says it is awake, so the row shows the free card — the old
+    // SleepingHostLine silently returned null for a case like this.
     const host = makeHost({ slug: "wake-box", display_name: "Wake Box", enabled: true, power_managed: true });
     const bound = makeRuntime({
       slug: "unsloth1", display_name: "Unsloth Wake", runtime_type: "flask_wol", state: "stopped",
@@ -161,6 +227,39 @@ describe("RuntimesPage", () => {
       expect(container.querySelector('[data-testid="free-box"][data-host-slug="wake-box"]')).toBeInTheDocument();
     });
     expect(screen.queryByTestId("asleep-box")).not.toBeInTheDocument();
+  });
+
+  // Round-5 re-check (L1): the same box asleep. Its host carries the flag,
+  // its runtime rows do not — it showed "asleep" next to "Start model" and
+  // could not be woken. Now it is the sleeping card with "Wake".
+  it("(c2) a sleeping power-managed host without a flagged runtime offers Wake, not Start model", async () => {
+    const host = makeHost({ slug: "wake-box", display_name: "Wake Box", kind: "flask_wol", enabled: true, power_managed: true });
+    const bound = makeRuntime({
+      slug: "unsloth1", display_name: "Unsloth Wake", runtime_type: "flask_wol", state: "stopped", power_managed: false,
+      host: { id: "wake-box", slug: "wake-box", display_name: "Wake Box" },
+    });
+    const otherHost = makeHost({ slug: "spark", display_name: "DGX Spark", enabled: true, ui_order: 1 });
+    const elsewhere = makeRuntime({
+      slug: "rt-elsewhere", display_name: "Elsewhere", runtime_type: "vllm_docker", state: "ready",
+      host: { id: "spark", slug: "spark", display_name: "DGX Spark" },
+    });
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [bound, elsewhere] });
+    vi.spyOn(api.hosts, "list").mockResolvedValue([host, otherHost]);
+    vi.spyOn(api.hosts, "metrics").mockImplementation(async (id: string) =>
+      id === "wake-box"
+        ? ({ kind: "flask_wol", reachable: false, awake: false, status: "asleep" } as never)
+        : { reachable: true, gpu_util_pct: 10, vram_used_mb: 1024, vram_total_mb: 8192, gpu_temp_c: 40 },
+    );
+
+    const { container } = renderPage();
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="asleep-box"][data-host-slug="wake-box"]')).toHaveTextContent("asleep");
+    });
+    const card = container.querySelector('[data-testid="asleep-box"][data-host-slug="wake-box"]') as HTMLElement;
+    expect(within(card).getByTestId("wake-box")).toBeInTheDocument();
+    expect(card).not.toHaveTextContent("Start model");
+    expect(container.querySelector('[data-testid="free-box"][data-host-slug="wake-box"]')).not.toBeInTheDocument();
   });
 
   it("(d) page tabs switch the lower area; openModelsTab lands on the Models tab", async () => {

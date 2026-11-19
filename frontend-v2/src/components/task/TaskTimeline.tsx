@@ -23,6 +23,7 @@ import {
   LifeBuoy,
   MessageCircle,
   MessageSquare,
+  MessagesSquare,
   PlayCircle,
   RefreshCw,
   Send,
@@ -33,8 +34,13 @@ import {
 import { useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { formatAbsolute, formatAge } from "@/lib/taskDetail/format";
-import { groupTimelineEntries, type TimelineItem } from "@/lib/taskDetail/timelineGroups";
-import { eventLabel } from "@/lib/taskDetail/eventLabel";
+import {
+  AGENT_REMINDER_KEY,
+  groupTimelineEntries,
+  isAgentReminder,
+  type TimelineItem,
+} from "@/lib/taskDetail/timelineGroups";
+import { eventLabel, statusReasonText } from "@/lib/taskDetail/eventLabel";
 import { C } from "@/lib/colors";
 import type { TaskTimelineEntry } from "@/lib/types";
 
@@ -42,7 +48,9 @@ import type { TaskTimelineEntry } from "@/lib/types";
 
 const DEFAULT_META: { icon: LucideIcon; color: string } = { icon: Info, color: C.textMuted };
 
-const KIND_META: Record<string, { icon: LucideIcon; color: string; label?: string }> = {
+// `titleKey`: the row title comes from i18n (`tasks.<titleKey>.label`, with
+// `.hint` as tooltip) instead of the backend's raw type name.
+const KIND_META: Record<string, { icon: LucideIcon; color: string; label?: string; titleKey?: string }> = {
   // Milestones
   created: { icon: Sparkles, color: C.textSecondary },
   dispatched: { icon: Send, color: C.info },
@@ -56,6 +64,9 @@ const KIND_META: Record<string, { icon: LucideIcon; color: string; label?: strin
   dispatch: { icon: Send, color: C.info },
   recovery: { icon: LifeBuoy, color: C.warning, label: "Recovery" },
   review: { icon: Eye, color: C.warning },
+  // Approve decision note (backend: comment_types.REVIEW_APPROVED_COMMENT_TYPE)
+  // — kept on the card as a record, never delivered to the agent.
+  review_approved: { icon: CheckCircle2, color: C.online },
   stuck: { icon: AlertTriangle, color: C.error },
   promote: { icon: ArrowUpCircle, color: C.accent },
   phase: { icon: Flag, color: C.accent },
@@ -71,9 +82,12 @@ const KIND_META: Record<string, { icon: LucideIcon; color: string; label?: strin
   reflection: { icon: Sparkles, color: C.accent },
   resolution: { icon: CheckCircle2, color: C.online },
   message: { icon: MessageSquare, color: C.textSecondary },
+  // The agent's chat answering on the card — shown, but no sign of the run
+  // (backend: comment_types.NOT_ACTIVITY_COMMENT_TYPES).
+  chat_reply: { icon: MessagesSquare, color: C.textSecondary, titleKey: "chatReply" },
 };
 
-function getKindMeta(kind: string): { icon: LucideIcon; color: string; label: string } {
+function getKindMeta(kind: string): { icon: LucideIcon; color: string; label: string; titleKey?: string } {
   const meta = KIND_META[kind] ?? DEFAULT_META;
   return { ...meta, label: meta.label ?? kind.replace(/_/g, " ") };
 }
@@ -105,7 +119,20 @@ function Node({ color }: { color: string }) {
 function TimelineRow({ entry, isLast }: { entry: TaskTimelineEntry; isLast: boolean }) {
   const t = useTranslations("tasks");
   const locale = useLocale();
-  const { icon: Icon, color } = getKindMeta(entry.kind);
+  const { icon: Icon, color, titleKey } = getKindMeta(entry.kind);
+  // An instruction to the agent: one plain line, not its API commands.
+  const agentReminder = isAgentReminder(entry);
+  const ownTitle = entry.source === "comment" ? titleKey : undefined;
+  const title = agentReminder
+    ? eventLabel(t, AGENT_REMINDER_KEY)
+    : ownTitle
+      ? t(`${ownTitle}.label`)
+      : entry.title;
+  const detail = agentReminder
+    ? null
+    : entry.source === "task_event" && entry.detail
+      ? statusReasonText(t, entry.detail)
+      : entry.detail;
 
   return (
     <div className="relative pl-5" style={{ paddingBottom: isLast ? 0 : 14 }}>
@@ -113,14 +140,19 @@ function TimelineRow({ entry, isLast }: { entry: TaskTimelineEntry; isLast: bool
       <Node color={color} />
       <div className="flex items-center gap-1.5">
         <Icon size={11} style={{ color, flexShrink: 0 }} />
-        <span className="text-xs font-medium truncate" style={{ color: C.textPrimary }}>
-          {entry.title}
+        <span
+          className="text-xs font-medium truncate"
+          style={{ color: C.textPrimary }}
+          title={ownTitle ? t(`${ownTitle}.hint`) : undefined}
+          data-testid={ownTitle ? `timeline-title-${entry.kind}` : undefined}
+        >
+          {title}
         </span>
       </div>
 
-      {entry.detail && (
+      {detail && (
         <div className="mt-1 text-[11px] leading-relaxed" style={{ color: C.textSecondary }}>
-          {entry.detail}
+          {detail}
         </div>
       )}
 

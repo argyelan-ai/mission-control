@@ -10,8 +10,14 @@
  *
  * One DOM node serves both breakpoints, the way the Diff/Browser panel does:
  * a bottom sheet below md (`fixed inset-x-0 bottom-0`), a popover anchored
- * above the ring from md up (`md:absolute md:bottom-full`). Rendering it twice
- * would duplicate every label in the accessibility tree for no gain.
+ * on the ring from md up. Rendering it twice would duplicate every label in
+ * the accessibility tree for no gain.
+ *
+ * The popover lives in a portal at the end of <body> (lib/anchoredPopover):
+ * as a child of the chat column it was cut off by the column's
+ * `overflow-hidden` whenever the side panel made the column narrow. The ring's
+ * coordinates arrive as CSS variables that only the `md:` classes read, so the
+ * phone sheet keeps its own classes untouched.
  *
  * Segment tones are the documented chart ladder — brightness steps, no hue.
  * The consumed buckets carry the brightness because they are the measurement;
@@ -20,11 +26,12 @@
  * the Signal rule that emphasis follows meaning, so the ladder is inverted
  * here on purpose.)
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type CSSProperties, type RefObject } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { C, alpha } from "@/lib/colors";
 import { formatCompactTokens } from "@/lib/claudeCommands";
 import type { SessionCost, UsageComponents, UsageEvent } from "@/lib/chatTypes";
+import { PopoverPortal, useAnchoredPosition } from "@/lib/anchoredPopover";
 
 interface Segment {
   /** Stable row id — also the lookup key under `sessions.contextPanelSegment`
@@ -95,10 +102,16 @@ interface ContextPanelProps {
   pct: number | null;
   pctSource: "cli" | "estimate" | null;
   onClose: () => void;
+  /** The ring the desktop popover hangs on. Without it the box sits at the
+   *  viewport's top-left corner — only tests render it that way. */
+  anchorRef?: RefObject<HTMLElement | null>;
 }
 
-export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelProps) {
+const NO_ANCHOR: RefObject<HTMLElement | null> = { current: null };
+
+export function ContextPanel({ usage, pct, pctSource, onClose, anchorRef = NO_ANCHOR }: ContextPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const anchored = useAnchoredPosition(true, anchorRef, panelRef, { align: "start" });
   const t = useTranslations("sessions");
   const locale = useLocale();
 
@@ -159,8 +172,16 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
       value / 100,
     );
 
+  // Desktop coordinates as CSS variables (see the file comment); until the
+  // first measurement the desktop box stays invisible instead of flashing at 0/0.
+  const anchorVars = {
+    "--anchor-top": `${anchored?.top ?? 0}px`,
+    "--anchor-left": `${anchored?.left ?? 0}px`,
+    "--anchor-max-h": `${anchored?.maxHeight ?? 0}px`,
+  } as CSSProperties;
+
   return (
-    <>
+    <PopoverPortal>
       {/* Mobile-only scrim. Anchored below the app bar for the same stacking
           reason as the other sheets (see --mobile-chat-topbar-h). */}
       <div
@@ -174,11 +195,12 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
         aria-modal="false"
         aria-label={t("contextPanelTitle")}
         data-testid="context-panel"
-        className="fixed inset-x-0 bottom-0 z-50 px-4 pt-3 pb-safe md:absolute md:inset-auto md:bottom-full md:left-0 md:z-30 md:mb-2 md:w-[300px] md:max-w-[320px] md:px-3 md:py-3 md:pb-3"
+        className={`fixed inset-x-0 bottom-0 z-50 px-4 pt-3 pb-safe md:inset-auto md:top-(--anchor-top) md:left-(--anchor-left) md:max-h-(--anchor-max-h) md:overflow-y-auto md:w-[300px] md:max-w-[320px] md:px-3 md:py-3 md:pb-3${anchored ? "" : " md:invisible"}`}
         // One radius on all four corners: as a desktop popover the box is fully
         // visible, and rounding only the top read as a mismatch. On mobile the
         // bottom corners sit off-screen, so the same value serves both.
         style={{
+          ...anchorVars,
           background: C.bgElevated,
           borderRadius: "var(--radius-xl)",
           borderTop: `2px solid ${C.accent}`,
@@ -296,6 +318,6 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
           {t("contextPanelClose")}
         </button>
       </div>
-    </>
+    </PopoverPortal>
   );
 }

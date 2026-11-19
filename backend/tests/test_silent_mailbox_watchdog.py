@@ -385,3 +385,30 @@ async def test_archived_board_is_skipped(make_board, make_agent, make_task):
         await _run_check(s)
 
     assert await _all_notify_comments() == []
+
+
+@pytest.mark.asyncio
+async def test_a_chat_reply_does_not_hide_a_silent_mailbox(make_board, make_agent, make_task):
+    """Round-3 code review r1 S3: the operator asks in a queued card's thread,
+    the agent's CHAT answers (``chat_reply``). That proves the chat, not that
+    the mailbox picks up work — the report still goes out. A comment of the
+    agent itself (a ``message``) would reset the clock, as before."""
+    from app.models.task import TaskComment
+
+    now = utcnow()
+    past = now - timedelta(minutes=20)
+    board, _lead, worker = await _setup_board_and_lead(make_board, make_agent)
+    card = await make_task(
+        board_id=board.id, title="Queued", status="inbox",
+        assigned_agent_id=worker.id, created_at=past,
+    )
+    async with _session() as s:
+        s.add(TaskComment(task_id=card.id, author_type="agent", author_agent_id=worker.id,
+                          comment_type="chat_reply", content="It starts in a moment.",
+                          created_at=now - timedelta(minutes=1)))
+        await s.commit()
+
+    async with _session() as s:
+        await _run_check(s)
+
+    assert len(await _all_notify_comments()) == 1

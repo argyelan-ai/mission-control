@@ -68,7 +68,7 @@ describe("Job detail — Enabled switch", () => {
   it("is a labelled switch, not an ON/OFF chip", async () => {
     setup();
     renderPage();
-    const sw = await screen.findByRole("switch", { name: "Enabled" });
+    const sw = await screen.findByRole("switch", { name: "Run on schedule" });
     expect(sw).toHaveAttribute("aria-checked", "true");
     expect(screen.queryByText("ON")).not.toBeInTheDocument();
   });
@@ -76,7 +76,7 @@ describe("Job detail — Enabled switch", () => {
   it("switching off asks first and names what will not run", async () => {
     setup();
     renderPage();
-    await userEvent.click(await screen.findByRole("switch", { name: "Enabled" }));
+    await userEvent.click(await screen.findByRole("switch", { name: "Run on schedule" }));
     expect(update).not.toHaveBeenCalled();
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveTextContent("Morning digest");
@@ -86,15 +86,15 @@ describe("Job detail — Enabled switch", () => {
   it("confirming switches the job off", async () => {
     setup();
     renderPage();
-    await userEvent.click(await screen.findByRole("switch", { name: "Enabled" }));
-    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Disable job" }));
+    await userEvent.click(await screen.findByRole("switch", { name: "Run on schedule" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Pause job" }));
     expect(update).toHaveBeenCalledWith("job-1", { enabled: false });
   });
 
   it("switching back on needs no confirmation", async () => {
     setup({ ...JOB, enabled: false } as ScheduledJob);
     renderPage();
-    const sw = await screen.findByRole("switch", { name: "Enabled" });
+    const sw = await screen.findByRole("switch", { name: "Run on schedule" });
     expect(sw).toHaveAttribute("aria-checked", "false");
     await userEvent.click(sw);
     expect(update).toHaveBeenCalledWith("job-1", { enabled: true });

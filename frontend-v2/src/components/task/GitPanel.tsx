@@ -21,14 +21,18 @@ import { PrChip } from "./detail/PrChip";
 
 /**
  * What the task detail's Git section should render, or null to hide it.
- * A live branch shows the full panel; a task with only a recorded PR (no
+ * A branch with the task's own work shows the full panel; a task with only a recorded PR (no
  * workspace, so no git probe) still gets the section with just the PR chip.
  */
 export function gitSectionInfo(
   gitInfo: TaskGitInfo | undefined,
   taskPrUrl: string | null | undefined,
 ): TaskGitInfo | null {
-  if (gitInfo?.branch) return gitInfo;
+  // A branch alone is no work: a fresh task branch (cut for every task in a
+  // git workspace, also a bench run) shows nothing until the task commits,
+  // changes files or opens a PR (27.10.: it listed the base's old history).
+  const ownWork = !!gitInfo && ((gitInfo.commits?.length ?? 0) > 0 || gitInfo.ahead > 0 || gitInfo.uncommitted || !!gitInfo.pr_url);
+  if (gitInfo?.branch && (ownWork || taskPrUrl)) return gitInfo;
   if (!taskPrUrl) return null;
   return {
     branch: null,

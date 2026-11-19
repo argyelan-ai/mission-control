@@ -1,6 +1,6 @@
 // ── Core Entities ──────────────────────────────────────────────────────────────
 
-export type AgentStatus = "online" | "offline" | "busy" | "idle" | "error" | "provisioning" | "restarting" | "archived";
+export type AgentStatus = "online" | "offline" | "busy" | "working" | "idle" | "error" | "provisioning" | "restarting" | "archived";
 export type TaskStatus = "inbox" | "in_progress" | "review" | "user_test" | "waiting" | "done" | "blocked" | "failed" | "aborted";
 export type Priority = "low" | "medium" | "high" | "critical";
 export type Severity = "info" | "warning" | "error" | "critical";
@@ -211,6 +211,13 @@ export interface Task {
   priority: Priority;
   task_type: "story" | "bug" | "revision" | "chore";
   assigned_agent_id: string | null;
+  /** The agent that last handed this card to review, and when — read from
+   *  the status history by the task list / single-task read (not a column).
+   *  The hand-off clears `assigned_agent_id` (operator review) or moves it to
+   *  the reviewer, so this is the only place the builder is still named.
+   *  Absent from other task payloads. See lib/taskDelivery.ts. */
+  delivered_by_agent_id?: string | null;
+  delivered_at?: string | null;
   started_at: string | null;
   completed_at: string | null;
   due_at: string | null;
@@ -736,6 +743,10 @@ export interface Agent {
   last_seen_at: string | null;
   last_task_activity_at: string | null;
   current_task_id: string | null;
+  /** The task the agent's live run works on, from the bridge's run record
+   *  (ACP agents only); null without a live run or a record. Unlike
+   *  current_task_id it also names a review card. */
+  run_task_id?: string | null;
   /** null = unbekannt (Agent meldet seit >= 3 Heartbeats keinen Kontextwert) */
   context_tokens: number | null;
   context_max: number;
@@ -791,6 +802,11 @@ export interface Agent {
   // rendered for such an agent; `?view=terminal` stays as a deep link.
   // Absent on older backends = not headless.
   headless_chat?: boolean;
+  // Derived by the backend (models/agent.py computed field, from the
+  // transcript adapter): this agent runs a task in a session of its OWN
+  // beside the chat, so the chat shows the task's steps itself (spec A).
+  // Gate on this, never on a harness name. Absent on older backends = no.
+  tasks_in_own_session?: boolean;
   // Split language fields (Migration 0201) — two audiences, two settings.
   // operator_language: what the agent writes TO the operator (mc report/
   // msg/ask, chat replies). work_language: agent-to-agent traffic (task
@@ -902,6 +918,18 @@ export interface Approval {
   failure_reason: string | null;
   expires_at: string | null;
   created_at: string;
+  /** ADR-100 §6: the session message that most recently reached this
+   *  agent before the card was raised — "triggered by a message from X".
+   *  Absent on older backends, null when no message came first. */
+  triggered_by?: ApprovalTrigger | null;
+}
+
+export interface ApprovalTrigger {
+  /** Sender address; null when the sender row is gone. */
+  from: string | null;
+  thread_id: string;
+  message_id: string;
+  at: string;
 }
 
 export interface VisualReviewPayload {
@@ -1474,8 +1502,9 @@ export interface ScheduledJobRun {
 }
 
 export interface ScheduleJobStats {
-  success_rate_7d: number;       // 0-1
-  success_rate_30d: number;
+  /** 0-1; null when the window holds no run (nothing to rate). */
+  success_rate_7d: number | null;
+  success_rate_30d: number | null;
   avg_duration_ms: number;
   p95_duration_ms: number;
   total_runs_30d: number;
@@ -2021,13 +2050,19 @@ export interface CliUpdateProgress {
  *  - cli_config          Live-Abfrage scheiterte, aber die Liste stammt aus der
  *                        CLI-eigenen Config auf Platte (kimi: config.toml) —
  *                        also weder „live bestätigt" noch „unser Handmanifest".
+ *  - asleep              Der Laufzeit-Wächter sieht die Box seit ≥ 3 Proben
+ *                        dunkel (schläft/aus) — nicht abgefragt, nicht
+ *                        gecacht; „Neu abfragen" fragt trotzdem.
  */
 export type ModelCatalogStatus =
   | "ok"
   | "credential_missing"
   | "unreachable"
   | "manifest_fallback"
-  | "cli_config";
+  | "cli_config"
+  | "asleep"
+  /** The box answers its own check, its model port is dark (round-4). */
+  | "no_model";
 
 export interface ModelCatalogModel {
   id: string;
@@ -2048,6 +2083,9 @@ export interface ModelCatalogProvider {
   key: string; // "anthropic" | "grok" | "kimi" | "openai:qwen-general" | …
   protocol: string; // "anthropic" | "grok" | "kimi" | "openai"
   display_name: string;
+  /** The provider name the backend sends (`label`) — "Anthropic", or the
+   *  runtime's own display name for a local endpoint. */
+  label?: string;
   endpoint: string | null;
   status: ModelCatalogStatus;
   /** Warum die Live-Probe scheiterte — orthogonal zu `status`. */
@@ -2205,7 +2243,37 @@ export interface RuntimeLiveStatus {
    *  der DB-Zeile in jeden Live-Status-Eintrag gespiegelt, damit die Karte es
    *  ohne einen zweiten Request hat. */
   serving_since?: string | null;
+  /** ADR-096 §11 engine death — in the watcher's EXISTING fields: `status`
+   *  is "failed" and `reason` carries the German sentence (as the crash-loop
+   *  stop writes it), plus the fields below. Present while the row is down
+   *  after a death; the first answering probe, a start or a stop clears it. */
+  reason?: string | null;
+  reason_en?: string | null;
+  reason_code?: RuntimeDeathReason | string | null;
+  /** Box the engine died on (display name). */
+  box?: string | null;
+  /** When it died: Docker's own finish time when known, else detection time. */
+  at?: string | null;
+  exit_code?: number | null;
+  /** Last error/marker line of the current boot (tooltip on the card). */
+  log_line?: string | null;
+  /** Whether the box autostart may try a restart (hosts.autostart_enabled). */
+  autostart?: boolean | null;
+  /** Tasks in progress that got a system comment with the reason (work stays). */
+  tasks_commented?: number | null;
+  /** The model the port answered with last (carried through an outage). */
+  last_served_model?: string | null;
 }
+
+/** ADR-096 §11.3 reason codes. */
+export type RuntimeDeathReason =
+  | "guard"
+  | "oom"
+  | "kernel_oom"
+  | "exit"
+  | "member_down"
+  | "crash_loop"
+  | "unknown";
 
 export interface RuntimesLiveResponse {
   live: Record<string, RuntimeLiveStatus>;
@@ -3024,6 +3092,9 @@ export interface VaultSearchResponse {
 export interface VaultNotesListResponse {
   count: number;
   notes: VaultNote[];
+  /** Every agent with notes in the whole filtered set (the agent filter
+   *  itself left out), sorted by slug — not just the agents of this page. */
+  agents?: { agent: string; count: number }[];
 }
 
 /** Response from GET /api/v1/vault/note/{path} */
@@ -3209,4 +3280,29 @@ export interface Device {
   last_error: string | null;
   /** Alter der letzten Meldung in Sekunden. */
   age_s: number | null;
+}
+
+/** GET /boards/{b}/tasks/{t}/model-wait (follow-up to ADR-097): is this
+ *  not-yet-started task waiting for its agent's MODEL? */
+export interface TaskModelWait {
+  /** False for every task that is not an assigned inbox task. */
+  applies: boolean;
+  /** Delivered to the agent (dispatched_at set), not claimed yet. */
+  delivered: boolean;
+  /** The model answers (or is not checked: cloud, gate off, error). */
+  ready: boolean;
+  runtime: string | null;
+  reason: string | null;
+}
+
+// Settings → Language: the languages a NEW agent gets (app_settings rows,
+// services/agent_language_defaults.py). Codes, not names — names come from i18n.
+export interface AgentLanguageDefaults {
+  operator_language: string;
+  work_language: string;
+}
+
+export interface AgentLanguageDefaultsResponse {
+  defaults: AgentLanguageDefaults;
+  supported: string[];
 }

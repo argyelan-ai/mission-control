@@ -1,6 +1,6 @@
 # ADR-086 — Harness and runtime are freely and cross-wise switchable; local first
 
-**Status:** Accepted · amends ADR-085 (§6 rule 2, §7 decision 1, §8 stop 1)
+**Status:** Accepted · amends ADR-085 (§6 rule 2, §7 decision 1, §8 stop 1) · partially superseded by [ADR-102](102-cockpit-direction.md) (2026-11-17) — the pair is chosen per chat, not per head, and the neutral path is no longer the task detail (decisions 1, 5); cross-switch, the matrix as single truth, local first and the proxy ban stay
 **Datum:** 2026-09-23
 **Scope:** Architecture/Direction · Infra/Runtime · Agent Protocol · Docs
 

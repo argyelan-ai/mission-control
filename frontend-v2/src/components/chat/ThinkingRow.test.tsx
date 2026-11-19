@@ -18,21 +18,21 @@ function mkEvent(overrides: Partial<ThinkingEvent> = {}): ThinkingEvent {
 describe("ThinkingRow", () => {
   it("is collapsed by default and hides the thinking text", () => {
     render(<ThinkingRow ev={mkEvent()} />);
-    expect(screen.getByText("Denkt nach…")).toBeInTheDocument();
+    expect(screen.getByText("Thought")).toBeInTheDocument();
     expect(screen.queryByText(/tradeoffs/)).not.toBeInTheDocument();
   });
 
   it("expands to show the full text on click", async () => {
     const user = userEvent.setup();
     render(<ThinkingRow ev={mkEvent()} />);
-    await user.click(screen.getByText("Denkt nach…"));
+    await user.click(screen.getByText("Thought"));
     expect(screen.getByText(/tradeoffs/)).toBeInTheDocument();
   });
 
   it("collapses again on a second click", async () => {
     const user = userEvent.setup();
     render(<ThinkingRow ev={mkEvent()} />);
-    const label = screen.getByText("Denkt nach…");
+    const label = screen.getByText("Thought");
     await user.click(label);
     expect(screen.getByText(/tradeoffs/)).toBeInTheDocument();
     await user.click(label);
@@ -66,7 +66,17 @@ describe("ThinkingRow", () => {
     rerender(<ThinkingRow ev={mkEvent()} detailLevel="verbose" />);
     expect(screen.getByText(/tradeoffs/)).toBeInTheDocument();
 
-    await user.click(screen.getByText("Denkt nach…"));
+    await user.click(screen.getByText("Thought"));
     expect(screen.queryByText(/tradeoffs/)).not.toBeInTheDocument();
+  });
+
+  it("names how long the model thought when the harness recorded it", () => {
+    render(<ThinkingRow ev={mkEvent({ durationMs: 105_000 })} />);
+    expect(screen.getByRole("button")).toHaveTextContent("Thought · 1:45");
+  });
+
+  it("says no duration when none was recorded", () => {
+    render(<ThinkingRow ev={mkEvent()} />);
+    expect(screen.getByRole("button")).toHaveTextContent(/^Thought$/);
   });
 });

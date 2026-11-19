@@ -24,6 +24,7 @@ import {
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { formatBytes, REFERENCE_FILE_ACCEPT } from "@/lib/utils";
 import type { Agent, Project, Repo } from "@/lib/types";
 import { ProjectCombobox } from "./ProjectCombobox";
@@ -525,10 +526,13 @@ export function TaskFormFields({
     queryFn: () => api.projects.deliverables(activeBoardId!, value.projectId!),
     enabled: !!activeBoardId && !!value.projectId,
   });
+  // The credentials Vault is admin-only on the backend (ADR-098): other
+  // roles would only collect a 403, so the picker simply stays empty.
+  const isAdmin = useIsAdmin();
   const { data: vaultCredentials } = useQuery({
     queryKey: ["credentials"],
     queryFn: () => api.credentials.list(),
-    enabled: open,
+    enabled: open && isAdmin,
   });
   const { data: repos } = useQuery({
     queryKey: ["repos"],

@@ -1,7 +1,8 @@
 "use client";
 
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
+import { useEffortWord } from "@/lib/effortWord";
 import { Brain, Square, ArrowUp, ChevronDown, Paperclip, X, FileText} from "lucide-react";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
@@ -14,6 +15,7 @@ import {
   isEffortSwitchRejectedError,
   isInputNotSupportedError,
   isSessionOnlyEffort,
+  isRankedEffort,
   type ChatCapabilities,
   type ChatModelOption,
   type ChatSlashCommand,
@@ -22,6 +24,8 @@ import {
 } from "@/lib/chatTypes";
 import { CLAUDE_MODELS, SLASH_COMMANDS, formatCompactTokens, type SlashCommand } from "@/lib/claudeCommands";
 import { ContextPanel, cacheHitRateOf } from "./ContextPanel";
+import { PopoverPortal, anchoredBoxStyle, useAnchoredPosition } from "@/lib/anchoredPopover";
+import { harnessLabel } from "@/components/shared/HarnessIcon";
 import { formatShare } from "@/lib/usage";
 
 const MAX_ROWS = 8;
@@ -82,6 +86,16 @@ export function effortReasonText(
         : t("effortLockedModelNoEffortGeneric");
     case "foreign_harness":
       return t("effortLockedForeignHarness");
+    /* Kopflose Agenten (ACP): die Zustandsdatei fehlt noch — oder sie ist da,
+       aber der Harness bietet keine Denkstufe an (Hermes vor seinem
+       Upstream-PR). Beides ist KEIN fehlendes Terminal; vorher landeten
+       beide Codes im Terminal-Satz unten (Operator-Befund 22.10.2026). */
+    case "acp_state_missing":
+      return t("effortLockedStateMissing");
+    case "harness_no_effort":
+      return capabilities?.effortHarness
+        ? t("effortLockedHarnessNoEffort", { harness: harnessLabel(capabilities.effortHarness) })
+        : t("effortLockedHarnessNoEffortGeneric");
     /* `no_pane` ist zugleich der Rueckfall: der Text nennt die fehlende
        Terminal-Steuerung und ist damit fuer aeltere Backends ohne Grund-Feld
        die einzige Aussage, die nicht raet. */
@@ -220,6 +234,9 @@ interface ComposerProps {
   /** Plan/Standard switch of a headless (ACP) agent (P3, `ModeChip`), left
    *  of the effort chip. `null`/absent = the agent reports no plan mode. */
   modeSlot?: ReactNode;
+  /** Overrides the default placeholder — while a task runs in this agent's
+   *  chat it says where a message goes ("to the chat, not the task", D12). */
+  placeholder?: string;
 }
 
 /**
@@ -243,8 +260,11 @@ interface ComposerProps {
  *  globals.css passen. */
 export const EFFORT_SETTLE_MS = 320;
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false, voiceSlot = null, modeSlot = null }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
   const t = useTranslations("sessions");
+  // One word per effort level, the same as the bench (round-2 Q2):
+  // "High" / "Hoch" instead of the raw "high" the harness reports.
+  const effortWord = useEffortWord();
   const locale = useLocale();
   const [text, setText] = useState("");
   useEffect(() => {
@@ -254,8 +274,19 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   const [modelOpen, setModelOpen] = useState(false);
   const modelBoxRef = useRef<HTMLDivElement | null>(null);
   const effortBoxRef = useRef<HTMLDivElement | null>(null);
+  /* The popovers render through a portal (lib/anchoredPopover) so the chat
+   * column's `overflow-hidden` can no longer cut them off. They are therefore
+   * no DOM children of their chips any more: the outside-click check below
+   * asks these refs as well. */
+  const modelListRef = useRef<HTMLDivElement | null>(null);
+  const effortPopRef = useRef<HTMLDivElement | null>(null);
+  const pillRef = useRef<HTMLDivElement | null>(null);
+  const paletteRef = useRef<HTMLDivElement | null>(null);
+  const contextTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
+  /** Ties the locked chip to its reason popover (aria-controls). */
+  const effortReasonId = useId();
   /** Vorschau-Position des Reglers waehrend des Ziehens; `null` = zeige den
    *  echten aktuellen Wert. Erst das Loslassen schickt den Wechsel los. */
   const [draftIndex, setDraftIndex] = useState<number | null>(null);
@@ -314,7 +345,14 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    * Pane wir grundsaetzlich nicht lesen koennen. Ein deaktivierter Senden-Knopf
    * behauptet dort eine Ruhe, die wir nie festgestellt haben. */
   const showStop = !hasText && (isWorking || statusUnknown || !paneObservable);
-  const effortLevels = resolveEffortLevels(capabilities);
+  /* Die Leiter des Harness, geteilt: die Stufen mit Rang tragen Regler und
+   * Saeule; ein Eintrag ohne Rang (Hermes `default` = zurueck zur
+   * konfigurierten Stufe) ist kein Punkt auf der Skala, sondern ein eigener
+   * Knopf. Vorher stand `default` als unterste Stufe links von `none` und
+   * fuellte die Saeule zu 1/8. */
+  const switchableLevels = resolveEffortLevels(capabilities);
+  const effortLevels = switchableLevels.filter(isRankedEffort);
+  const effortResetLevel = switchableLevels.find((l) => !isRankedEffort(l)) ?? null;
   /* Welche Stufe der Chip anzeigt. Das usage-Ereignis der laufenden Session
    * gewinnt (nur es kennt die session-only-Stufen max/ultracode); solange es
    * fehlt — eine frisch gestartete Session hat noch keines — faellt der Chip auf
@@ -332,7 +370,13 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     if (!modelOpen && !effortOpen) return;
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Node;
-      if (modelBoxRef.current?.contains(t) || effortBoxRef.current?.contains(t)) return;
+      if (
+        modelBoxRef.current?.contains(t) ||
+        effortBoxRef.current?.contains(t) ||
+        modelListRef.current?.contains(t) ||
+        effortPopRef.current?.contains(t)
+      )
+        return;
       setDraftIndex(null);
       setModelOpen(false);
       setEffortOpen(false);
@@ -378,6 +422,14 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    * der Regler auf der ersten — angezeigt wird trotzdem, was wirklich gilt. */
   const currentEffortIndex = currentEffort ? effortLevels.indexOf(currentEffort) : -1;
   const sliderIndex = draftIndex ?? (currentEffortIndex >= 0 ? currentEffortIndex : 0);
+  /* Was unter dem Regler steht. Meldet der Agent einen Eintrag ohne Rang
+   * (Hermes `default` = konfigurierte Stufe), ruht der Daumen zwar auf der
+   * ersten Stufe, die Beschriftung darf aber nicht "none" behaupten. Beim
+   * Ziehen zeigt sie wieder die Vorschau-Stufe. */
+  const sliderLabel =
+    draftIndex == null && currentEffort != null && !isRankedEffort(currentEffort)
+      ? currentEffort
+      : effortLevels[sliderIndex];
 
   /* Fuellstand der Saeule im Brain-Knopf: Anteil der aktuellen Stufe an der
    * Stufenleiter des Harness. +1, damit schon "low" sichtbar gefuellt ist —
@@ -387,7 +439,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    * die Saeule des read-only-Chips braucht die Leiter trotzdem. */
   const displayLevels = (capabilities?.effortLevels ?? [])
     .map((l) => l.trim())
-    .filter((l) => l.length > 0);
+    .filter((l) => l.length > 0 && isRankedEffort(l));
   const staticFillPct = (() => {
     const idx = currentEffort ? displayLevels.indexOf(currentEffort) : -1;
     return idx >= 0 && displayLevels.length > 0 ? ((idx + 1) / displayLevels.length) * 100 : 0;
@@ -663,6 +715,15 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
       ? t("contextRingTooltip", { detail: tokenDetail, source: sourceLabel }) + cacheHint
       : undefined;
 
+  // Fixed coordinates for the portaled popovers. The palette spans the pill
+  // (the input) with the old 320 px floor; the model list starts at its chip;
+  // effort menu and reason end at the effort chip's right edge.
+  const paletteStyle = useAnchoredPosition(paletteVisible, pillRef, paletteRef, { matchWidth: true, minWidth: 320 });
+  const modelListStyle = useAnchoredPosition(modelOpen && modelOptions.length > 0, modelBoxRef, modelListRef, {
+    offset: 6,
+  });
+  const effortPopStyle = useAnchoredPosition(effortOpen, effortBoxRef, effortPopRef, { align: "end", offset: 6 });
+
   return (
     <div
       data-testid={`composer-${agentId}`}
@@ -684,28 +745,25 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
       className={`relative px-3 pt-2 ${barBelow ? "pb-2" : "pb-safe-bottom"} md:pb-4 md:px-4`}
     >
       {paletteVisible && (
+        <PopoverPortal>
         <div
+          ref={paletteRef}
           data-testid="slash-palette"
-          // Anchored directly above the input: bottom edge sits on the
-          // composer container's top edge (= the textarea's top, since the
-          // palette itself is taken out of flow), same horizontal span as
-          // the textarea (left-3/right-3 mirror the container's own
-          // padding), with a 320px floor for narrow layouts.
+          // Anchored directly above the input (the pill), same width as the
+          // pill with a 320 px floor, through a portal with fixed
+          // coordinates (lib/anchoredPopover) — inside the chat column it was
+          // cut off by the column's `overflow-hidden`.
           //
-          // `position: "absolute"` is set INLINE, not just via the
+          // `position: "fixed"` is set INLINE (anchoredBoxStyle), not via a
           // Tailwind class: `.corner-ticks` in globals.css sets
           // `position: relative` unlayered (plain CSS, not `@layer
-          // utilities`), which beats Tailwind v4's own `.absolute` utility
+          // utilities`), which beats Tailwind v4's own position utilities
           // under CSS cascade-layer rules regardless of source order —
-          // silently downgrading this to an in-flow relative box, which is
-          // what made the palette render detached mid-screen instead of
-          // pinned to the input. Inline style always wins, so this can't
-          // regress again. (Note for whoever owns CommandPalette.tsx: the
-          // ⌘K palette combines `fixed` + `corner-ticks` the same way and
-          // likely has the identical latent bug — out of scope here.)
-          className="absolute bottom-full left-3 right-3 mb-2 min-w-[320px] rounded-md overflow-hidden corner-ticks z-20"
+          // that once made the palette render detached mid-screen. Inline
+          // style always wins, so this can't regress again.
+          className="rounded-md overflow-hidden corner-ticks z-50"
           style={{
-            position: "absolute",
+            ...anchoredBoxStyle(paletteStyle),
             backgroundColor: C.bgElevated,
             border: `1px solid ${C.border}`,
             boxShadow: "var(--shadow-elevated)",
@@ -733,6 +791,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             ))}
           </div>
         </div>
+        </PopoverPortal>
       )}
 
       {/* The pill: one container holding the input and its controls, so the
@@ -749,6 +808,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           against the pill — perceivable per WCAG 2.4.11 without being a halo,
           and unmistakably grey rather than white). */}
       <div
+        ref={pillRef}
         data-testid="composer-dropzone"
         onDragOver={handleDragOver}
         onDragLeave={() => setDragging(false)}
@@ -824,7 +884,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           rows={1}
-          placeholder={t("messagePlaceholder")}
+          placeholder={placeholder ?? t("messagePlaceholder")}
           // 16px on mobile is not a taste call: anything smaller makes iOS
           // Safari zoom the viewport on focus. The placeholder and caret are
           // themed explicitly — the browser's own placeholder (50% alpha of
@@ -926,13 +986,16 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             </button>
             )}
             {modelOptions.length > 0 && modelOpen && (
+              <PopoverPortal>
               <div
+                ref={modelListRef}
                 role="listbox"
                 // Sized to the names: real model ids ("GLM-5.3-Flash-EXL3")
                 // are longer than the old aliases; max-w-72 still fits a
                 // 390 px phone from the chip's left edge.
-                className="absolute bottom-full left-0 mb-1.5 min-w-36 w-max max-w-72 rounded-lg overflow-hidden z-20 p-1"
+                className="min-w-36 w-max max-w-72 rounded-lg overflow-y-auto z-50 p-1"
                 style={{
+                  ...anchoredBoxStyle(modelListStyle),
                   backgroundColor: C.bgElevated,
                   border: `1px solid ${C.border}`,
                   boxShadow: "var(--shadow-elevated)",
@@ -970,6 +1033,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   </button>
                 ))}
               </div>
+              </PopoverPortal>
             )}
           </div>
 
@@ -977,9 +1041,10 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             // The ring stays the compact indicator and the tooltip stays the
             // quick glance; the click opens the breakdown — "how full" and
             // "with what" are two questions, and only the first fits in 18px.
-            // `relative` is what the desktop popover anchors to.
-            <div className="relative shrink-0">
+            // The box hangs on this button through a portal (ContextPanel).
+            <div className="shrink-0">
               <button
+                ref={contextTriggerRef}
                 type="button"
                 data-context-trigger
                 aria-haspopup="dialog"
@@ -1041,6 +1106,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   pct={pct}
                   pctSource={pctSource}
                   onClose={() => setContextOpen(false)}
+                  anchorRef={contextTriggerRef}
                 />
               )}
             </div>
@@ -1103,7 +1169,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   onClick={() => setEffortOpen((v) => !v)}
                   aria-haspopup="listbox"
                   aria-expanded={effortOpen}
-                  aria-label={t("effortLevelCurrent", { level: currentEffort ?? "auto" })}
+                  aria-label={t("effortLevelCurrent", { level: effortWord(currentEffort ?? "auto") })}
                   data-testid="effort-chip"
                   data-level={currentEffort ?? "auto"}
                   data-pending={pendingEffort != null}
@@ -1147,10 +1213,13 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                      Regler zeigt diese Ordnung, wo eine Liste sie nur behauptet.
                      Die Stufen kommen weiterhin ausschliesslich aus den
                      Capabilities des Harness, nichts davon steht hier fest. */
+                  <PopoverPortal>
                   <div
+                    ref={effortPopRef}
                     data-testid="effort-menu"
-                    className="absolute bottom-full right-0 mb-1.5 w-64 rounded-lg z-20 p-3"
+                    className="w-64 rounded-lg z-50 p-3"
                     style={{
+                      ...anchoredBoxStyle(effortPopStyle),
                       backgroundColor: C.bgElevated,
                       border: `1px solid ${C.border}`,
                       boxShadow: "var(--shadow-elevated)",
@@ -1165,7 +1234,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                       list="effort-ticks"
                       data-testid="effort-slider"
                       aria-label={t("effortLevel")}
-                      aria-valuetext={effortLevels[sliderIndex]}
+                      aria-valuetext={effortWord(sliderLabel)}
                       disabled={pendingEffort != null}
                       autoFocus
                       /* Ziehen aendert nur die Vorschau. Gesendet wird erst beim
@@ -1182,17 +1251,17 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                       onBlur={commitSlider}
                       className="w-full cursor-pointer accent-[var(--color-accent)] disabled:cursor-wait"
                     />
-                    <div className="flex justify-between mt-1 font-mono text-[10px]" style={{ color: C.textMuted }}>
-                      <span>{effortLevels[0]}</span>
-                      <span>{effortLevels[effortLevels.length - 1]}</span>
+                    <div className="flex justify-between mt-1 text-[10px]" style={{ color: C.textMuted }}>
+                      <span>{effortWord(effortLevels[0])}</span>
+                      <span>{effortWord(effortLevels[effortLevels.length - 1])}</span>
                     </div>
                     <div className="mt-2 flex items-baseline gap-2">
                       <span
                         data-testid="effort-slider-value"
-                        className="font-mono text-xs"
+                        className="text-xs font-medium"
                         style={{ color: C.accent }}
                       >
-                        {effortLevels[sliderIndex]}
+                        {effortWord(sliderLabel)}
                       </span>
                       {/* Pro Stufe, nicht pauschal: low/medium/high/xhigh
                           schreiben den persistierten Standard des Agenten um,
@@ -1201,7 +1270,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                           Genau diese Frage — "ueberlebt das meine Session?" —
                           muss am gewaehlten Wert stehen, nicht im Kleingedruckten. */}
                       <span className="text-[10px]" style={{ color: C.textMuted }}>
-                        {isSessionOnlyEffort(effortLevels[sliderIndex])
+                        {capabilities?.effortScope === "session" ||
+                        isSessionOnlyEffort(effortLevels[sliderIndex])
                           ? t("effortSessionOnly")
                           : capabilities?.effortShared
                             ? t("effortBecomesDefaultShared")
@@ -1216,7 +1286,26 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                         </span>
                       )}
                     </div>
+                    {effortResetLevel && (
+                      /* Neben-Knopf (K11): Text ohne Rahmen, Fingerziel
+                         44 px am Handy. Akzent, solange die Session auf der
+                         konfigurierten Stufe steht. */
+                      <button
+                        type="button"
+                        data-testid="effort-default"
+                        aria-pressed={currentEffort === effortResetLevel}
+                        disabled={pendingEffort != null}
+                        onClick={() => selectEffort(effortResetLevel)}
+                        className="mt-1 -mx-1 px-1 min-h-[44px] md:min-h-0 md:py-1 text-xs cursor-pointer disabled:cursor-wait"
+                        style={{
+                          color: currentEffort === effortResetLevel ? C.accent : C.textSecondary,
+                        }}
+                      >
+                        {t("effortDefault")}
+                      </button>
+                    )}
                   </div>
+                  </PopoverPortal>
                 )}
               </div>
             ) : displayLevels.length > 0 || capabilities?.effortReason ? (
@@ -1232,28 +1321,70 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                  dann bleibt die Saeule leer — `staticFillPct` ist 0, sobald
                  keine Stufe zuzuordnen ist — und der Chip traegt nur noch den
                  Grund. Das ist der ganze Zweck des Grundes. */
-              <span
-                data-testid="effort-chip-static"
-                data-level={currentEffort ?? "auto"}
-                aria-label={`${t("effortLevelLocked", { level: currentEffort ?? "auto" })} — ${effortReasonText(capabilities, currentModel, t)}`}
-                title={effortReasonText(capabilities, currentModel, t)}
-                data-reason={capabilities?.effortReason ?? "unspecified"}
-                className="inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full cursor-default"
-                style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
-              >
-                <Brain size={15} strokeWidth={1.75} aria-hidden="true" />
-                <span
-                  aria-hidden="true"
-                  className="relative inline-block w-[4px] h-[15px] rounded-full overflow-hidden shrink-0"
-                  style={{ backgroundColor: C.bgHover, border: `1px solid ${C.borderSubtle}` }}
+              /* Seit 22.10.2026 ein Knopf: der Grund stand nur im title — und den
+                 zeigt ein Handy nie. Antippen oeffnet denselben Satz als kleines
+                 Popover (gleiche Optik und Schliess-Regeln wie der Regler:
+                 Klick daneben / Escape, `effortBoxRef`). Gesperrt bleibt
+                 gesperrt: es oeffnet sich nur die Erklaerung, nie ein Regler.
+                 Fingerziel am Handy 44 px (K11) — die Flaeche waechst, die
+                 sichtbare Pille nicht (-my-1 haelt die Zeilenhoehe). */
+              <div className="relative" ref={effortBoxRef}>
+                <button
+                  type="button"
+                  onClick={() => setEffortOpen((v) => !v)}
+                  aria-expanded={effortOpen}
+                  aria-controls={effortOpen ? effortReasonId : undefined}
+                  data-testid="effort-chip-static"
+                  data-level={currentEffort ?? "auto"}
+                  aria-label={`${t("effortLevelLocked", { level: effortWord(currentEffort ?? "auto") })} — ${effortReasonText(capabilities, currentModel, t)}`}
+                  title={effortReasonText(capabilities, currentModel, t)}
+                  data-reason={capabilities?.effortReason ?? "unspecified"}
+                  className="inline-flex items-center justify-center w-12 h-11 -my-1 md:h-8 md:my-0 cursor-pointer"
+                  style={{ color: C.textMuted }}
                 >
                   <span
-                    data-testid="effort-gauge-fill-static"
-                    className="absolute bottom-0 left-0 right-0 rounded-full"
-                    style={{ height: `${staticFillPct}%`, backgroundColor: STATUS.online }}
-                  />
-                </span>
-              </span>
+                    aria-hidden="true"
+                    className="inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full"
+                    style={{
+                      border: `1px solid ${C.border}`,
+                      backgroundColor: effortOpen ? C.bgHover : "transparent",
+                    }}
+                  >
+                    <Brain size={15} strokeWidth={1.75} aria-hidden="true" />
+                    <span
+                      aria-hidden="true"
+                      className="relative inline-block w-[4px] h-[15px] rounded-full overflow-hidden shrink-0"
+                      style={{ backgroundColor: C.bgHover, border: `1px solid ${C.borderSubtle}` }}
+                    >
+                      <span
+                        data-testid="effort-gauge-fill-static"
+                        className="absolute bottom-0 left-0 right-0 rounded-full"
+                        style={{ height: `${staticFillPct}%`, backgroundColor: STATUS.online }}
+                      />
+                    </span>
+                  </span>
+                </button>
+                {effortOpen && (
+                  <PopoverPortal>
+                  <div
+                    ref={effortPopRef}
+                    id={effortReasonId}
+                    role="status"
+                    data-testid="effort-reason"
+                    className="w-64 rounded-lg z-50 p-3 text-xs"
+                    style={{
+                      ...anchoredBoxStyle(effortPopStyle),
+                      backgroundColor: C.bgElevated,
+                      border: `1px solid ${C.border}`,
+                      boxShadow: "var(--shadow-elevated)",
+                      color: C.textSecondary,
+                    }}
+                  >
+                    {effortReasonText(capabilities, currentModel, t)}
+                  </div>
+                  </PopoverPortal>
+                )}
+              </div>
             ) : (
               /* Aeltere Backends ohne Stufenleiter in den Capabilities: ohne
                  Leiter waere jede Saeulen-Fuellung geraten — dann lieber der
@@ -1262,10 +1393,10 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 data-testid="effort-chip-static"
                 title={effortReasonText(capabilities, currentModel, t)}
                 data-reason={capabilities?.effortReason ?? "unspecified"}
-                className="font-mono text-xs font-medium px-2 py-1 rounded-lg"
+                className="text-xs font-medium px-2 py-1 rounded-lg"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
               >
-                {currentEffort}
+                {effortWord(currentEffort)}
               </span>
             ))}
             {voiceSlot}

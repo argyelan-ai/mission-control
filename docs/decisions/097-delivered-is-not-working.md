@@ -104,3 +104,50 @@ switch like its ADR-042 sibling, not a user setting.
   `backend/app/routers/agents.py` (`agent_poll`, `_withdrawn_task_reason`),
   `backend/app/routers/agent_task_status.py` (agent PATCH)
 - Verwandte ADRs: ADR-042 (point 6 extended), ADR-086, ADR-093
+
+## Nachtrag — the model is not there: wait, do not blame the task
+
+Added with the follow-up PR (same day, live tasks 4de17c6a and 43788774).
+
+1. **Classification.** omp reports a lost model endpoint as one text chunk
+   (`ECONNREFUSED: Unable to connect …`) with stopReason `refusal` — omp's own
+   pattern `refus(al|ed)` matches "ECONNREFUSED" — or as `end_turn` with its
+   retry-budget line as the last text. ACP never says `error` there.
+   `classify_acp` now reads the error message and the END of the turn text
+   (300 characters, never when the sentinel is present) and returns
+   `ABORT_TRANSIENT_API` / `model_unreachable`: not a refusal, not a missing
+   sentinel, never a continue-nudge.
+2. **Unclaimed + model unreachable → wait.** `drive_live_run` returns
+   `awaiting_model`: no retry into the dead endpoint, no blocker, no comment
+   (it would claim the card). The card stays delivered.
+3. **Claimed, then lost → one blocker naming the model.** No nudge, no
+   retry.
+4. **The ACK ladder returns it with the reason.** From half the ACK timeout
+   on, a delivered, unclaimed task whose runtime does not answer
+   (`runtime_ready_for_agent(include_local=True)`) is un-delivered:
+   `dispatched_at` and the attempt id cleared, one system comment with the
+   reason, event `task.returned_model_unreachable`, no rotation, no
+   approval. Checked before the in-turn pause, because the bridge heartbeats
+   "working" while omp retries. A runtime that answers keeps the old ladder.
+5. **Visible.** The bridge writes `acp-task-state.json` at the root of the
+   sessions tree (`delivered` / `working` / `idle`, re-stamped by the
+   heartbeater, stale after 120 s). The chat status shows `task_working`
+   ("Working on a task") and `waiting_model` ("Waiting for the model") —
+   new values, so no Stop button and no queued echo for a task turn.
+   `GET /boards/{b}/tasks/{t}/model-wait` lets the task card name the
+   runtime that does not answer; it is a read (`notify=False`, no timeline
+   line, no "box asleep" event either).
+6. **One answer in chat and card for the whole wait** (review of the
+   follow-up). After `awaiting_model` the bridge keeps the phase `delivered`
+   for as long as the poll holds that card (`runtime_not_ready`); any other
+   poll answer ends the wait. The chat tailer also asks MC itself, through
+   the same cached readiness gate (`notify=False`, fail-open, 10 s per agent):
+   an assigned inbox card + a model that does not answer reads
+   `waiting_model` even without a phase (card returned by the ACK ladder,
+   bridge restarted), and a task turn whose model stopped answering reads
+   `waiting_model` instead of `task_working` (engine died after the claim,
+   omp still retrying).
+
+Out of scope: a genuine content-filter refusal keeps today's path (missing
+sentinel → nudges); whether to report omp's regex upstream is an operator
+decision (public, external).

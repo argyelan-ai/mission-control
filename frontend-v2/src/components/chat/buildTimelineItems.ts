@@ -13,6 +13,7 @@
 import { isAgentSpawn } from "./agentRuns";
 import type { ActivityEvent } from "./ToolGroup";
 import type { TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
+import { parseSendCall, type SendCall } from "@/lib/comms";
 
 function isSidechain(ev: TimelineChatEvent): boolean {
   // CommandEvent carries no `sidechain` field (chatTypes.ts) — narrow safely
@@ -32,7 +33,9 @@ export type TimelineItem =
   /** A run of consecutive sidechain (subagent) events → one SubagentGroup. */
   | { kind: "sidechain"; events: TimelineChatEvent[] }
   /** Ein delegierter Auftrag (Werkzeug `Agent`) → eine eigene Karte. */
-  | { kind: "agent"; event: ToolEvent };
+  | { kind: "agent"; event: ToolEvent }
+  /** A message to another session (`mc send` / `mc_send`, ADR-100 2d) → a send card. */
+  | { kind: "send"; event: ToolEvent; call: SendCall };
 
 /** Runs shorter than this render as plain rows: collapsing a single tool call
  *  behind "1 Befehl ausgeführt" would hide its title (the useful part) and
@@ -87,6 +90,15 @@ export function buildTimelineItems(events: TimelineChatEvent[]): TimelineItem[] 
       continue;
     }
     flushSidechain();
+    // Before isAgentSpawn: its type guard narrows every tool out of `ev`.
+    const send = ev.kind === "tool" ? parseSendCall(ev) : null;
+    if (send && ev.kind === "tool") {
+      /* Like a delegated job: talking to another session is something the
+         operator wants to see, not "+1 tool" inside a collapsed group. */
+      flushActivity();
+      out.push({ kind: "send", event: ev, call: send });
+      continue;
+    }
     if (isAgentSpawn(ev)) {
       /* Muss VOR der Aktivitaets-Sammlung stehen: sonst verschwindet der
          Auftrag als anonymes "+1 Tool" in einer Werkzeug-Gruppe, weil er in

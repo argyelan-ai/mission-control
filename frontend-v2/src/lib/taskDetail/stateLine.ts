@@ -2,6 +2,7 @@ import type { Agent, Task } from "@/lib/types";
 import type { HeadState } from "@/lib/heads";
 import { runDurationSeconds } from "@/lib/heads";
 import type { StateCard } from "./stateCard";
+import type { ChatTaskStub } from "@/lib/chatTypes";
 import { formatDuration, secondsBetween } from "./format";
 import { STATUS_LABEL_KEY } from "./statusLabels";
 
@@ -31,7 +32,7 @@ export type StateLine = {
   detail: { key: string; values: Record<string, string> } | null;
 };
 
-const STATUS_TONE: Record<string, StateTone> = {
+export const STATUS_TONE: Record<string, StateTone> = {
   inbox: "muted",
   in_progress: "info",
   review: "warning",
@@ -101,6 +102,11 @@ export function deriveStateLine({
   now?: Date;
 }): StateLine {
   const agentName = agents.find((a) => a.id === task.assigned_agent_id)?.name;
+  // The agent that delivered the card (round-2 Q5): the hand-off to review
+  // clears or moves the assignment, the status history keeps the builder.
+  const delivererName = task.delivered_by_agent_id
+    ? agents.find((a) => a.id === task.delivered_by_agent_id)?.name
+    : undefined;
   const statusWord = { ns: "tasks" as const, key: STATUS_LABEL_KEY[task.status] };
   const statusTone = STATUS_TONE[task.status] ?? "muted";
 
@@ -157,7 +163,13 @@ export function deriveStateLine({
     return {
       tone: statusTone,
       word: statusWord,
-      detail: duration ? withName(agentName, "took", { duration }) : agentName ? { key: "with", values: { name: agentName } } : null,
+      // Who did the work: the deliverer when known (a reviewer may hold the
+      // card now, or nobody after the operator's review).
+      detail: duration
+        ? withName(delivererName ?? agentName, "took", { duration })
+        : agentName
+          ? { key: "with", values: { name: agentName } }
+          : null,
     };
   }
 
@@ -166,7 +178,71 @@ export function deriveStateLine({
     return { tone: statusTone, word: statusWord, detail: span ? { key: "endedAgo", values: { span } } : null };
   }
 
+  if (card?.kind === "waiting_model") {
+    // The model does not answer: the same warning tone as the chat's
+    // "Waiting for the model" (K10). Delivered and answering: still calm.
+    return {
+      tone: card.ready ? statusTone : "warning",
+      word: statusWord,
+      detail: { key: card.ready ? "waitingFirstAnswer" : "waitingModel", values: {} },
+    };
+  }
+
   // No card: inbox, review, anything else.
   if (task.status === "inbox") return { tone: statusTone, word: statusWord, detail: { key: "notStarted", values: {} } };
-  return { tone: statusTone, word: statusWord, detail: agentName ? { key: "with", values: { name: agentName } } : null };
+  if (agentName) return { tone: statusTone, word: statusWord, detail: { key: "with", values: { name: agentName } } };
+  // Nobody holds it (the operator's review): name who delivered it — "with"
+  // would claim the agent still has it.
+  return {
+    tone: statusTone,
+    word: statusWord,
+    detail: delivererName ? { key: "deliveredBy", values: { name: delivererName } } : null,
+  };
+}
+
+/**
+ * The state line of a task section in the agent chat (spec A §2.5, S4):
+ * "● Task done · took 1 h 4 min". The same keys and formatters as
+ * `deriveStateLine` — the state word is the task's own sentence word
+ * (`tasks.detail.line.task.<status>`), the detail `for` / `took` /
+ * `endedAgo` / `waitingFirstAnswer` / `notStarted`. No agent name: the chat
+ * IS that agent; a task that moved on to another agent says `with`.
+ */
+export function deriveChatTaskLine(stub: ChatTaskStub, locale: string = "en", now: Date = new Date()): StateLine {
+  const tone = STATUS_TONE[stub.status] ?? "muted";
+  const word = { ns: "tasks" as const, key: `detail.line.task.${stub.status}` };
+  // The CURRENT run (round-7 re-check t1 NICE-3): after a rework the line
+  // counted from the first start — "took 9 min" for 88 s + 48 s of work, the
+  // wait for the review included. A second run says which run it is.
+  const start = stub.runStartedAt ?? stub.startedAt ?? stub.startKey;
+  const run = (stub.runs ?? 0) > 1 ? String(stub.runs) : null;
+  if (stub.assignee) return { tone, word, detail: { key: "with", values: { name: stub.assignee } } };
+  switch (stub.status) {
+    case "in_progress": {
+      const span = spanSince(start, locale, now);
+      if (!span) return { tone, word, detail: null };
+      return { tone, word, detail: run ? { key: "forRun", values: { span, n: run } } : { key: "for", values: { span } } };
+    }
+    case "done":
+    case "review": {
+      const duration = stub.endedAt ? formatDuration(secondsBetween(start, stub.endedAt, now), locale) : null;
+      if (!duration) return { tone, word, detail: null };
+      return { tone, word, detail: run ? { key: "tookRun", values: { duration, n: run } } : { key: "took", values: { duration } } };
+    }
+    case "failed":
+    case "aborted": {
+      const span = spanSince(stub.endedAt, locale, now);
+      return { tone, word, detail: span ? { key: "endedAgo", values: { span } } : null };
+    }
+    case "inbox":
+      return { tone, word, detail: { key: stub.deliveredAt ? "waitingFirstAnswer" : "notStarted", values: {} } };
+    default:
+      return { tone, word, detail: null };
+  }
+}
+
+/** First letter up: a state word that also stands mid-sentence ("task in
+ *  progress") opens a line in the chat. */
+export function capitalize(text: string, locale: string = "en"): string {
+  return text ? text.charAt(0).toLocaleUpperCase(locale) + text.slice(1) : text;
 }

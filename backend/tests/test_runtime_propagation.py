@@ -175,6 +175,10 @@ async def test_sync_circuit_breaker_gives_up_after_max_attempts(async_session, f
         for _ in range(rp.MAX_SYNC_ATTEMPTS):
             await rp.sync_pending_agents(async_session)
             await async_session.refresh(agent)
+            # A failed attempt waits SYNC_RETRY_SPACING for the next one:
+            # let that much time pass on the counter's own clock.
+            await fake_redis.expire(rp.RedisKeys.agent_model_sync_fails(str(agent.id)),
+                                    rp._FAIL_TTL - rp.SYNC_RETRY_SPACING)
 
     assert agent.pending_runtime_sync is False  # breaker tripped — stop retrying
 

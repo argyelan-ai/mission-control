@@ -1,0 +1,156 @@
+{{/*
+  Mission Control maintenance page.
+
+  Served by Caddy's `handle_errors` block (see ../Caddyfile and
+  ../Caddyfile.tls.example) to a browser page load whenever the frontend or
+  backend upstream is down — usually the restart window of an update
+  (docs/decisions/094-*.md), but just as well a crash or a failed start
+  (a 502 dial error, or a 503). The copy says that honestly: "not
+  responding, usually a restart" — never a promise that it is one.
+
+  Rendered through Caddy's built-in `templates` directive (no app server
+  involved, so it still works while MC itself is down). Language is picked
+  the way MC picks its UI language (frontend-v2/src/i18n/request.ts,
+  pickLocale): the NEXT_LOCALE cookie first, then the first supported tag
+  in Accept-Language (any case), else English. The color scheme follows the
+  browser's OS-level preference (prefers-color-scheme). Both are decided
+  without JavaScript. The page reloads itself every 5 seconds via
+  <meta http-equiv="refresh">, matching the Retry-After header Caddy sends
+  alongside it.
+
+  One small optional script: if this tab has been reloading the page for
+  over 2 minutes without a break, it shows a "taking longer than usual"
+  line. Without JavaScript that line just stays hidden.
+  Behaviour test: ../test_maintenance_page.sh.
+*/}}
+{{- $lang := "" -}}
+{{- $cookie := .Cookie "NEXT_LOCALE" -}}
+{{- if or (eq $cookie "de") (eq $cookie "en") }}{{ $lang = $cookie }}{{ end -}}
+{{- if not $lang -}}
+  {{- range splitList "," (.Req.Header.Get "Accept-Language") -}}
+    {{- if not $lang -}}
+      {{- $primary := lower (trim (first (splitList "-" (first (splitList ";" .))))) -}}
+      {{- if or (eq $primary "de") (eq $primary "en") }}{{ $lang = $primary }}{{ end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if not $lang }}{{ $lang = "en" }}{{ end -}}
+<!doctype html>
+<html lang="{{$lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="5">
+<title>{{if eq $lang "de"}}MC antwortet nicht{{else}}MC is not responding{{end}}</title>
+<style>
+  :root {
+    --bg: #181818;
+    --bg-surface: #262626;
+    --border: rgba(168,168,168,0.16);
+    --text: #F2F2F2;
+    --text-muted: #B3B3B3;
+    --accent: #75AEEA;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #F5F4F0;
+      --bg-surface: #FFFFFF;
+      --border: rgba(24,24,24,0.12);
+      --text: #181818;
+      --text-muted: #5A5A5A;
+      --accent: #2E6FB0;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "General Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  main {
+    max-width: 420px;
+    width: 100%;
+    text-align: center;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px 32px;
+  }
+  .spinner {
+    width: 32px;
+    height: 32px;
+    margin: 0 auto 24px;
+    border-radius: 50%;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  h1 {
+    margin: 0 0 12px;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  p {
+    margin: 0 0 8px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-muted);
+    text-wrap: balance;
+  }
+  .hint {
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--text-muted);
+    opacity: 0.8;
+  }
+  .slow {
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--text);
+  }
+</style>
+</head>
+<body>
+  <main>
+    <div class="spinner" aria-hidden="true"></div>
+    {{if eq $lang "de"}}
+    <h1>Mission Control antwortet gerade nicht</h1>
+    <p>Meist startet MC nur neu. Die Seite kommt dann von selbst zurück.</p>
+    <p class="hint">Lädt sich alle 5 Sekunden neu …</p>
+    <p class="slow" id="mc-slow" hidden>Das dauert länger als üblich. Prüfe, ob die MC-Container laufen (docker compose ps).</p>
+    {{else}}
+    <h1>Mission Control is not responding right now</h1>
+    <p>Usually MC is just restarting. This page then comes back on its own.</p>
+    <p class="hint">Reloading every 5 seconds …</p>
+    <p class="slow" id="mc-slow" hidden>This is taking longer than usual. Check that the MC containers are running (docker compose ps).</p>
+    {{end}}
+  </main>
+  <script>
+    // Optional: the page works without it. Remember since when this tab has
+    // been reloading this page; a gap of over 30 s starts a new outage.
+    try {
+      var key = "mc-maintenance-since";
+      var now = Date.now();
+      var seen = JSON.parse(sessionStorage.getItem(key) || "null");
+      if (!seen || now - seen.last > 30000) seen = { first: now };
+      seen.last = now;
+      sessionStorage.setItem(key, JSON.stringify(seen));
+      if (now - seen.first > 120000) document.getElementById("mc-slow").hidden = false;
+    } catch (e) {}
+  </script>
+</body>
+</html>

@@ -93,10 +93,11 @@ def _agent_scoped_endpoints() -> set[str]:
     from app.routers.agent_scoped import router as agent_router
     from app.routers.agent_comments import router as agent_comments_router
     from app.routers.agent_task_status import router as agent_task_status_router
+    from app.routers.agent_comms import router as agent_comms_router
     from app.routers.vault import agent_router as vault_agent_router
 
     endpoints: set[str] = set()
-    routers = [agent_router, agent_comments_router, agent_task_status_router]
+    routers = [agent_router, agent_comments_router, agent_task_status_router, agent_comms_router]
     if _content_agent_router is not None:
         routers.append(_content_agent_router)
     for router_obj in routers:

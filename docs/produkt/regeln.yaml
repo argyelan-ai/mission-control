@@ -2,6 +2,59 @@
 # Every active rule names an existing guard test (`path::test_name`); a rule
 # without one is a `wish`. Code anchors: `# rule: R-... - why`.
 rules:
+  - id: R-one-presence-source
+    says: "Only services/comms_directory.py decides whether a principal is alive or listening; every reader asks it. Alive and listening stay apart, and the first 60 s after a backend or Redis restart say unknown."
+    source: "ADR-100 section 6 rule 2"
+    owner: backend/app/services/comms_directory.py
+    applies_to: ["backend/app/services/comms_*.py", "backend/app/routers/agent_comms.py"]
+    enforced_by:
+      - {test: "backend/tests/test_comms_directory.py::test_only_the_directory_reads_or_writes_presence"}
+      - {test: "backend/tests/test_comms_directory.py::test_alive_and_listening_are_kept_apart"}
+      - {test: "backend/tests/test_comms_directory.py::test_redis_restart_means_unknown_for_60s"}
+    status: active
+    checked: 2026-11-01
+
+  - id: R-comms-send-enforced-tier
+    says: "Session conversations are written only through POST /agent/comms/send: sender from the token, no broadcast, 10 per minute, 50 open per inbox, duplicates refused, a non-listening receiver refused, and after 6 messages without the operator the conversation pauses behind an approval card. An approval raised after such a message names its sender."
+    source: "ADR-100 section 6 rule 4 (enforced tier)"
+    owner: backend/app/services/comms_send.py
+    applies_to: ["backend/app/services/comms_send.py", "backend/app/routers/agent_comms.py", "backend/app/routers/agent_scoped.py"]
+    enforced_by:
+      - {test: "backend/tests/test_comms_send.py::test_sender_comes_from_the_token_never_from_the_body"}
+      - {test: "backend/tests/test_comms_send.py::test_brake_after_six_replies_creates_an_approval_card"}
+      - {test: "backend/tests/test_comms_send.py::test_session_threads_cannot_be_written_around_the_send_path"}
+      - {test: "backend/tests/test_comms_send.py::test_rate_limit_ten_per_minute"}
+      - {test: "backend/tests/test_comms_send.py::test_approval_after_a_message_names_the_message_sender"}
+    status: active
+    checked: 2026-11-01
+  - id: R-comms-credential-brake
+    says: "An agent that received a session message within the last 30 minutes gets no credential directly (credential list, single credential, visual-verify credential_id, deploy tokens): 409 credential_read_needs_approval plus one approval card per agent and target. An approved card lets that agent read that target for 30 minutes until a newer message arrives; a rejected card refuses it. The voice worker's vault keys are not braked (fixed code, not the model)."
+    source: "ADR-100 Nachtrag 2026-11-02"
+    owner: backend/app/services/comms_credential_brake.py
+    applies_to: ["backend/app/services/comms_credential_brake.py", "backend/app/routers/agent_scoped.py", "backend/app/routers/deploy.py"]
+    enforced_by:
+      - {test: "backend/tests/test_comms_credential_brake.py::test_recent_message_refuses_and_raises_one_card"}
+      - {test: "backend/tests/test_comms_credential_brake.py::test_approved_card_serves_that_agent_that_credential"}
+      - {test: "backend/tests/test_comms_credential_brake.py::test_no_message_means_credentials_are_served"}
+      - {test: "backend/tests/test_comms_credential_brake.py::test_a_message_older_than_30_minutes_does_not_brake"}
+      - {test: "backend/tests/test_comms_credential_brake.py::test_session_token_cannot_read_credentials_at_all"}
+    status: active
+    checked: 2026-11-02
+
+  - id: R-terminal-session-own-principal
+    says: "A terminal session talks only as its own principal: enrolled with an admin-issued guest card, it gets a session token with only comms:talk and an expiry no later than its card. The token works only on the comms routes; the card token only enrolls; no row in agents is created; revoking the card ends its sessions."
+    source: "ADR-100 section 6 rule 1"
+    owner: backend/app/services/comms_guest.py
+    applies_to: ["backend/app/services/comms_guest.py", "backend/app/comms_auth.py", "backend/app/routers/comms.py"]
+    enforced_by:
+      - {test: "backend/tests/test_comms_guest_card.py::test_hello_makes_its_own_principal_not_an_agent_row"}
+      - {test: "backend/tests/test_comms_guest_card.py::test_session_token_reaches_only_comms_routes"}
+      - {test: "backend/tests/test_comms_guest_card.py::test_card_token_only_enrolls"}
+      - {test: "backend/tests/test_comms_guest_card.py::test_an_expired_card_ends_its_sessions_too"}
+      - {test: "backend/tests/test_comms_guest_card.py::test_only_an_admin_issues_a_card"}
+    status: active
+    checked: 2026-11-01
+
   - id: R-one-migration-head
     says: "Alembic has exactly one head; a new migration checks for a colliding revision first."
     source: "AGENTS.md (rules that bite)"
@@ -25,14 +78,47 @@ rules:
     checked: 2026-09-26
 
   - id: R-paused-no-dispatch
-    says: "A paused agent receives no dispatch."
-    source: "ADR-085 section 5 (quiet mode)"
+    says: "A paused agent receives no push dispatch: check_dispatch_allowed refuses it, and a card assigned to it stays in its inbox, still assigned. Its own poll is R-paused-holds-poll."
+    source: "ADR-085 section 5 (quiet mode); ADR-089 Nachtrag 2026-10-20 (b), (e)"
     owner: backend/app/services/operations.py
     applies_to: ["backend/app/services/operations.py", "backend/app/services/task_runner.py"]
     enforced_by:
       - {test: "backend/tests/test_operations.py::test_check_dispatch_agent_paused"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_paused_agent_gets_no_card_until_set_active"}
     status: active
-    checked: 2026-09-26
+    checked: 2026-11-13
+
+  - id: R-paused-holds-poll
+    says: "A paused agent gets no card from its own poll either: no fresh inbox card, no phase approval, no undelivered dispatched card, no restart of an orphaned run (state=idle + agent_paused, or working for the run). A card already in flight keeps its answer and running work is still reported. Pull dispatch answers 204; the undispatched-card watcher does not prepare the card; the ACK and pending ladders do not retry or escalate it. The card stays assigned in its inbox; the first poll after the agent is active again delivers it."
+    source: "ADR-089 Nachtrag 2026-11-13 (pause holds the poll too)"
+    owner: backend/app/routers/agents.py
+    applies_to: ["backend/app/routers/agents.py", "backend/app/services/watchdog/task_monitor.py"]
+    enforced_by:
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_paused_agent_gets_no_card_until_set_active"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_paused_poll_holds_a_phase_approval_card"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_a_card_in_flight_keeps_its_answer_when_paused"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_undispatched_watcher_leaves_a_paused_agents_card"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_paused_poll_does_not_restart_an_orphaned_run"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_pull_dispatch_hands_a_paused_agent_nothing"}
+      - {test: "backend/tests/test_paused_agent_poll_hold.py::test_ladders_do_not_escalate_a_card_waiting_on_a_paused_agent"}
+    status: active
+    checked: 2026-11-13
+
+  - id: R-system-mode-holds-poll
+    says: "The system mode holds a card on every path that hands one out, not only push dispatch: the agent poll, the undispatched-card watcher and pull dispatch ask the same rule (HALTED holds every card, DRAINING every card but the continuation flows). A card the poll already delivered and that waits for its ACK keeps its answer. The ACK and pending ladders and the silent-mailbox alarm wait while a card is held and for one ACK timeout after the hold. The agent's own pause is a separate gate (R-paused-holds-poll)."
+    source: "ADR-089 Nachtrag 2026-10-20, the system mode holds every path that hands a card out"
+    owner: backend/app/services/operations.py
+    applies_to: ["backend/app/services/operations.py", "backend/app/routers/agents.py", "backend/app/routers/agent_task_status.py", "backend/app/services/task_runner.py", "backend/app/services/watchdog/task_monitor.py"]
+    enforced_by:
+      - {test: "backend/tests/test_poll_respects_system_halt.py::test_halted_poll_hands_out_no_fresh_inbox_card"}
+      - {test: "backend/tests/test_poll_respects_system_halt.py::test_poll_and_push_dispatch_decide_the_system_mode_alike"}
+      - {test: "backend/tests/test_poll_respects_system_halt.py::test_a_card_already_delivered_keeps_its_answer_while_held"}
+      - {test: "backend/tests/test_system_mode_holds_every_path.py::test_watcher_does_not_prepare_a_card_the_system_holds"}
+      - {test: "backend/tests/test_system_mode_holds_every_path.py::test_ack_ladder_waits_while_the_system_holds_the_card"}
+      - {test: "backend/tests/test_system_mode_holds_every_path.py::test_silent_mailbox_does_not_report_a_card_the_system_holds"}
+      - {test: "backend/tests/test_system_mode_holds_every_path.py::test_pull_dispatch_claims_nothing_while_halted"}
+    status: active
+    checked: 2026-10-20
 
   - id: R-local-first-default
     says: "The head launcher pre-selects a local pair and never falls back to a cloud pair on its own."
@@ -101,6 +187,20 @@ rules:
       - {test: "backend/tests/test_agent_harness_switch.py::test_incompatible_harness_raises"}
     status: active
     checked: 2026-10-01
+
+  - id: R-harness-matrix-current
+    says: "docs/harness-matrix.json is the one source of harness capabilities (matrix + dev ring). Every harness known in code has a column, the generated docs/harness-matrix.md equals the renderer output, and every cited evidence path and line range exists."
+    source: "AGENTS.md (rules that bite: harness facts)"
+    owner: tools/render-harness-matrix.py
+    applies_to: ["docs/harness-matrix.json", "docs/harness-matrix.md", "backend/app/services/harness_compat.py", "backend/app/services/host_harness_adapter.py", "backend/app/services/compose_renderer.py"]
+    enforced_by:
+      - {test: "backend/tests/test_harness_matrix.py::test_every_harness_known_in_code_has_a_column"}
+      - {test: "backend/tests/test_harness_matrix.py::test_every_harness_column_is_a_known_harness"}
+      - {test: "backend/tests/test_harness_matrix.py::test_generated_doc_matches_source"}
+      - {test: "backend/tests/test_harness_matrix.py::test_cell_shape_and_evidence"}
+      - {test: "backend/tests/test_harness_dev_ring.py::test_stale_exceptions_container_images"}
+    status: active
+    checked: 2026-11-02
 
   - id: R-github-vault-before-env
     says: "GitHub owner and token resolve through one central resolver (services/github_config.py) with Vault before Env."
@@ -327,6 +427,21 @@ rules:
     status: active
     checked: 2026-10-16
 
+  - id: R-merge-only-mc-pr-note
+    says: "MC squash-merges a card's PR only from its own \"PR erstellt:\" note (system author, progress type, content starting with the note). A chat reply, an agent note or MC's task-done summary that names another PR never picks the merge target. Note and card field disagree, or only a foreign note exists: no merge, a warning in the log. The ADR gate, the reviewer brief and the proof gate read the same note through one query (pr_marker.py)."
+    source: "round-7 re-check (r1 N5, raised to SHOULD): a newer comment quoting another PR made MC merge that PR"
+    owner: backend/app/services/pr_marker.py
+    applies_to: ["backend/app/services/pr_marker.py", "backend/app/services/task_lifecycle.py", "backend/app/routers/agent_git.py", "backend/app/services/adr_gate.py", "backend/app/services/dispatch_message_builder.py", "backend/app/services/proof_gate.py"]
+    enforced_by:
+      - {test: "backend/tests/test_pr_marker_trust.py::test_newer_foreign_note_does_not_steer_the_merge"}
+      - {test: "backend/tests/test_pr_marker_trust.py::test_only_agent_written_note_merges_nothing"}
+      - {test: "backend/tests/test_pr_marker_trust.py::test_note_and_card_field_disagree_merges_nothing"}
+      - {test: "backend/tests/test_pr_marker_trust.py::test_adr_gate_reads_the_same_trusted_note"}
+      - {test: "backend/tests/test_pr_marker_trust.py::test_review_brief_shows_mcs_pr_not_a_quoted_one"}
+      - {test: "backend/tests/test_pr_marker_trust.py::test_proof_gate_ignores_a_quoted_pr_note"}
+    status: active
+    checked: 2026-10-23
+
   - id: R-proof-gate-finish
     says: "An agent's move to review/done on a card with a PR is checked on the server with evidence it fetches itself: the PR exists, is open (done: open or merged), is this card's PR, a reported SHA is the pushed head, the required CI checks are green, the PR really changed after the last change request (against the head the server recorded), review->done is closed by someone other than the developer with his own verdict, PR URLs quoted in the agent's comments exist. warn = card comment + task.proof_gate warning event, enforce = 422; no request field skips it; the date flip waits for PROOF_GATE_ENFORCE_MIN_CHECKS checked moves."
     source: "Beweis-Tor (team measure 2026-10-19: false finish reports were found by hand)"
@@ -346,12 +461,185 @@ rules:
     status: active
     checked: 2026-10-19
 
+  - id: R-runtime-window-one-source
+    says: "The bound runtime's context window has one source (runtime_window.runtime_context_window): every OpenAI-protocol harness is told it (MC_CONTEXT_WINDOW, omp also OMP_CONTEXT_WINDOW; Hermes via model.context_length), and the omp-format chat shows it over a harness-reported window that disagrees. Two harnesses on one runtime never show two different windows. The agent row's context_max follows the same window on every heartbeat (agent_shown_window), so the agent page and the chat divide by one number; vendor-window harnesses (Claude Code, Grok, Kimi) keep their own."
+    source: "ADR-086 (harness x runtime cross-switch); ADR-064 (host model sync)"
+    owner: backend/app/services/runtime_window.py
+    applies_to: ["backend/app/services/runtime_window.py", "backend/app/routers/internal.py", "backend/app/services/omp_chat.py", "scripts/hermes-config-patch.py", "scripts/hermes-bridge.py", "backend/app/routers/agents.py"]
+    enforced_by:
+      - {test: "backend/tests/test_agent_context_window_from_runtime.py::test_heartbeat_sizes_the_agent_to_its_runtime_window"}
+      - {test: "backend/tests/test_agent_context_window_from_runtime.py::test_vendor_window_agents_keep_their_own_number"}
+      - {test: "backend/tests/test_hermes_runtime_window_sync.py::test_parity_omp_and_hermes_show_the_runtime_window"}
+      - {test: "backend/tests/test_hermes_runtime_window_sync.py::test_hermes_harness_gets_the_runtime_window"}
+      - {test: "backend/tests/test_hermes_bridge_config_sync.py::test_acp_start_patches_config_before_hermes_starts"}
+      - {test: "backend/tests/test_hermes_config_patcher.py::test_context_length_written_from_runtime_window"}
+    status: active
+    checked: 2026-10-22
+
+  - id: R-runtime-window-one-writer
+    says: "Every write of a runtime row's window goes through runtime_window.apply_window (max takes the new value; preferred follows only when empty, equal to the old max, or above the new max): the slot writer, the instance -> slot mirror, the watcher's context drift and the catalog follow. A slot row takes the window of the instance it serves (slot_runtimes.mirror_instance_window_to_slot) on PATCH, restart, recipe start and confirmed drift; the instance row beats the recipe while the engine reports no window; a catalog window change reaches only instances still holding the recipe's old value."
+    source: "ADR-096 (one truth, every path through one function); live 23.10.2026 (slot kept 1M after the instance went to 262144); PR #980"
+    owner: backend/app/services/runtime_window.py
+    applies_to: ["backend/app/services/runtime_window.py", "backend/app/services/slot_runtimes.py", "backend/app/services/runtime_watcher.py", "backend/app/services/local_registry.py", "backend/app/services/recipe_switcher.py", "backend/app/routers/runtimes.py"]
+    enforced_by:
+      - {test: "backend/tests/test_slot_window_mirror.py::test_apply_window_preferred_rule"}
+      - {test: "backend/tests/test_slot_window_mirror.py::test_patching_the_instance_window_reaches_the_slot"}
+      - {test: "backend/tests/test_slot_window_mirror.py::test_recipe_start_gives_the_slot_the_instance_window"}
+      - {test: "backend/tests/test_slot_window_mirror.py::test_confirmed_instance_drift_reaches_the_slot_in_the_same_tick"}
+      - {test: "backend/tests/test_slot_window_mirror.py::test_catalog_window_change_follows_into_untouched_instances"}
+      - {test: "backend/tests/test_slot_window_mirror.py::test_lone_instance_of_another_confirmed_recipe_lends_no_window"}
+    status: active
+    checked: 2026-10-24
+
+  - id: R-lead-usage-only-from-lead-dir
+    says: "Host Claude Code usage is booked on the lead agent only when the transcript lives in the lead's own project dir (the Claude Code encoding of its working dir, MC_CHECKOUT_PATH / token_harvester.lead_checkout_path). Every other MC-looking transcript under the host's ~/.claude/projects is the operator's own usage (agent_id NULL, harness operator-session) and shows as its own cost bucket; private ones are skipped. The harvester, the Sessions chat and the usage baseline read the lead dir from that one helper."
+    source: "Cost misattribution found 2026-10-22: operator sessions were booked on the lead (~150x inflated lead cost)"
+    owner: backend/app/services/token_harvester.py
+    applies_to: ["backend/app/services/token_harvester.py", "backend/app/services/transcript_chat.py", "backend/app/services/usage_baseline.py", "backend/app/routers/system.py"]
+    enforced_by:
+      - {test: "backend/tests/test_harvester_boss_attribution.py::test_only_the_boss_session_dir_is_booked_on_boss"}
+      - {test: "backend/tests/test_harvester_boss_attribution.py::test_transcript_chat_and_baseline_use_the_same_lead_dir"}
+      - {test: "backend/tests/test_harvester_boss_attribution.py::test_cost_view_shows_operator_sessions_apart_from_boss"}
+      - {test: "backend/tests/test_harvester_boss_attribution.py::test_reattribution_dry_run_counts_and_writes_nothing"}
+    status: active
+    checked: 2026-10-22
+
+  - id: R-chat-never-works-own-run
+    says: "A call from an agent's chat session (X-MC-Session-Role: chat) never writes the run state of a task a run of that agent holds (assigned and live, or delivered; for a reviewer the review_handoff card in review, without a time limit) or let go of within 30 minutes: run-state comments, status, deliverables, checklist, recover, a blocking ask, and question/help/delegate (they set the run's task to blocked) and review verdicts (mc review / mc review-note) are refused with 409; reading, a plain question, mc msg and a reply (message comment) stay open (the reply not on the card the agent's review run works), and so do tasks no run holds. The reply goes by task id (mc comment message … --task-id <id>; the chat has no task env): the board-agnostic comment route takes a chat reply with tasks:write, everything else there stays tasks:manage. The context block and the chat's comment wake-up name that reply, and the block names per review card who decides it (the operator with its two buttons, the agent's own review run, or a reviewer agent's run). A chat reply or chat mc msg never ACKs a delivered task; the reply is stored as chat_reply, the chat's thread messages (mc msg, a plain mc ask) carry Message.from_chat, and no watchdog counts either as the run's sign of life (silent card, silent mailbox, stale check, stuck check). Every other reader of a card's activity or the run's latest word skips chat_reply through the one list comment_types.NOT_ACTIVITY_COMMENT_TYPES (activity_comment_filter()): the task list's last activity, the daily digest's stale cards, the reviewer/Lead-reacted checks, the builder a rework goes back to, failure reasons and agent metrics; the UI labels it Chat reply / Chat-Antwort in the timeline and the comments tab. One timeline row per task and action per 10 minutes. The omp chat turn is told what the run is doing instead, on the operator's clock, in plain status words, as a snapshot (as of HH:MM)."
+    source: "docs/specs/chat-over-acp.md (The chat never works its agent's own task)"
+    owner: backend/app/services/chat_session_guard.py
+    applies_to: ["backend/app/services/chat_session_guard.py", "backend/app/services/chat_run_context.py", "backend/app/routers/agent_comments.py", "backend/app/routers/agent_task_status.py", "backend/app/routers/agent_scoped.py", "backend/app/routers/agents.py", "backend/app/services/task_evidence.py", "backend/app/comment_types.py", "backend/app/services/messaging.py", "backend/app/services/task_runner.py", "backend/app/routers/tasks.py", "backend/app/services/daily_metrics_digest.py", "backend/app/models/thread.py", "docker/omp-bridge/acp_chat.py", "scripts/mc-cli/mc_cli/client.py", "scripts/mc-cli/mc_cli/commands.py", "docker/omp-bridge/bridge.py"]
+    enforced_by:
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_progress_comment_on_running_task_is_refused"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_reply_by_task_id_works_without_tasks_manage"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_run_session_by_task_id_still_needs_tasks_manage"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_reply_by_task_id_on_its_review_runs_card_is_refused"}
+      - {test: "backend/tests/test_chat_run_context.py::test_the_block_names_the_reply_the_chat_may_write"}
+      - {test: "backend/tests/test_chat_run_context.py::test_a_human_review_card_names_the_operator_and_the_button"}
+      - {test: "docker/omp-bridge/tests/test_acp_chat_run_context.py::test_comment_wakeup_in_the_chat_allows_a_reply_but_no_run_state"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_finish_on_running_task_is_refused"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_comment_after_review_handoff_is_refused"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_run_session_progress_comment_still_accepted"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_blocking_ask_on_running_task_is_refused"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_question_does_not_block_the_running_task"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_help_request_does_not_block_the_running_task"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_delegate_does_not_block_the_running_task"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_reply_comment_on_running_task_is_allowed"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_may_write_a_task_whose_run_ended_long_ago"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_repeated_refusals_leave_one_timeline_row"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_may_not_write_the_card_its_review_run_works"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_reply_on_the_card_its_review_run_works_is_refused"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_review_decision_on_the_card_its_review_run_works_is_refused"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_late_review_note_on_its_runs_card_is_refused"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_msg_never_claims_a_dispatched_task"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_thread_msg_never_claims_a_dispatched_task"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_reply_is_no_sign_of_life_of_the_run"}
+      - {test: "backend/tests/test_silent_mailbox_watchdog.py::test_a_chat_reply_does_not_hide_a_silent_mailbox"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_reply_does_not_move_the_stale_check_clock"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_msg_does_not_move_the_stale_check_clock_for_comm_v2"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_thread_msg_does_not_move_the_stale_check_clock_for_comm_v2"}
+      - {test: "backend/tests/test_chat_session_task_guard.py::test_chat_plain_ask_does_not_move_the_stale_check_clock_for_comm_v2"}
+      - {test: "backend/tests/test_stuck_in_progress_watchdog.py::test_fresh_chat_reply_does_not_hide_a_silent_run"}
+      - {test: "backend/tests/test_watchdog_structural_reads.py::test_chat_reply_after_resolution_does_not_hide_it_from_the_stale_check"}
+      - {test: "backend/tests/test_proof_gate_r2.py::test_chat_reply_is_no_verdict"}
+      - {test: "backend/tests/test_chat_run_context.py::test_times_are_the_operators_local_time"}
+      - {test: "backend/tests/test_chat_run_context.py::test_the_block_forbids_review_decisions_and_raw_snapshots"}
+      - {test: "scripts/mc-cli/tests/test_task_get_board_fallback.py::test_task_get_with_an_id_and_no_board_reads_the_board_from_me"}
+      - {test: "backend/tests/test_chat_reply_not_activity.py::test_task_list_last_activity_ignores_a_later_chat_reply"}
+      - {test: "backend/tests/test_chat_reply_not_activity.py::test_digest_stale_card_stays_stale_after_a_chat_reply"}
+      - {test: "backend/tests/test_chat_reply_not_activity.py::test_rework_builder_is_not_the_lead_who_only_answered_in_chat"}
+      - {test: "backend/tests/test_chat_reply_not_activity.py::test_no_unscoped_latest_comment_reader_outside_display"}
+      - {test: "scripts/mc-cli/tests/test_comment_task_id.py::test_comment_command_help_names_the_chat_reply_rule"}
+    status: active
+    checked: 2026-10-23
+
+  - id: R-host-open-at-host-only
+    says: "Open on the Mac / Show in Finder act on the MC host's screen: the UI offers them only when MC was opened via a loopback name (location.hostname), and both open endpoints refuse any other Origin/Host with 403. A failing open (helper down or erroring) is a 502, never ok."
+    source: "Round-2 user tests (t3 S1, r1 S4, t4, r2 N6); backend/app/services/host_open.py module comment"
+    owner: backend/app/services/host_open.py
+    applies_to: ["backend/app/services/host_open.py", "backend/app/routers/tasks.py", "backend/app/routers/files.py", "frontend-v2/src/lib/hostOnly.ts", "frontend-v2/src/components/task/DeliverableCard.tsx", "frontend-v2/src/components/files/FilePreviewPanel.tsx"]
+    enforced_by:
+      - {test: "backend/tests/test_host_open.py::test_deliverable_open_from_another_computer_is_refused"}
+      - {test: "backend/tests/test_host_open.py::test_files_open_from_another_computer_is_refused"}
+      - {test: "backend/tests/test_host_open.py::test_deliverable_open_reports_a_failing_helper"}
+      - {test: "backend/tests/test_host_open.py::test_request_is_from_host"}
+    status: active
+    checked: 2026-10-23
+
+  - id: R-wake-needs-helper-heartbeat
+    says: "Wake (box card and runtime detail) queues a Wake-on-LAN request only while the host-side wake helper shows a heartbeat (watcher.alive younger than 90 s) and no request waits longer than 120 s; otherwise both wake routes answer 503 and nothing is queued. The helper never wakes a request older than 5 minutes and runs on the Mac's Python 3.9. Both wake routes are operator-only."
+    source: "Round-7 re-check L5 (r1 S1, N1, N2); PR #976 review MUST 1"
+    owner: backend/app/services/runtime_manager.py
+    applies_to: ["backend/app/services/runtime_manager.py", "backend/app/services/box_wake.py", "backend/app/routers/hosts.py", "backend/app/routers/runtimes.py", "scripts/porsche-wake-watcher.py", "scripts/launchd/com.mc.porsche-wake-watcher.plist"]
+    enforced_by:
+      - {test: "backend/tests/test_host_wake.py::test_an_empty_folder_without_heartbeat_is_a_missing_helper"}
+      - {test: "backend/tests/test_host_wake.py::test_runtime_route_answers_503_without_heartbeat"}
+      - {test: "backend/tests/test_host_wake.py::test_runtime_route_viewer_may_not_wake"}
+      - {test: "backend/tests/test_porsche_wake_watcher.py::test_a_run_without_requests_still_beats"}
+      - {test: "backend/tests/test_porsche_wake_watcher.py::test_an_old_request_is_retired_without_waking"}
+      - {test: "backend/tests/test_porsche_wake_watcher.py::test_watcher_source_is_python_39"}
+      - {test: "backend/tests/test_host_wake.py::test_both_wake_routes_share_one_answer_and_one_clean_up"}
+    status: active
+    checked: 2026-10-23
+
+  - id: R-credentials-admin-only
+    says: "The credentials Vault API (list, get, create, update, delete) is admin-only; the masked secret list is operator or higher. Agents read credentials only through their own scope-checked routes."
+    source: "ADR-098 (amends ADR-033); round-3 user tests (R1)"
+    owner: backend/app/routers/credentials.py
+    applies_to: ["backend/app/routers/credentials.py", "backend/app/routers/secrets.py"]
+    enforced_by:
+      - {test: "backend/tests/test_credentials_admin_only.py::test_credentials_refuse_non_admin"}
+      - {test: "backend/tests/test_credentials_admin_only.py::test_viewer_cannot_see_existing_credential"}
+      - {test: "backend/tests/test_credentials_admin_only.py::test_secret_list_refuses_viewer"}
+    status: active
+    checked: 2026-10-23
+
+  - id: R-mask-no-length-no-password
+    says: "A masked secret never shows its length: always a fixed run of dots. One field rule serves the credentials Vault and the API-key list: a name that, NFKC-folded, lower-cased with separators and camelCase folded, contains pass/pw/phrase/kennwort/pin/secret/seed/private/otp or content never shows a tail; only token/key-like names keep the last 4 characters, and only for 20+ characters; every other name gets the fixed run. A nested value (dict/list) is hidden in full. Only the public name github_owner is shown in full."
+    source: "ADR-098 (amended round-4 K5); round-3 user tests (t4 S4); round-4 r1 N1"
+    owner: backend/app/services/encryption.py
+    applies_to: ["backend/app/services/encryption.py", "backend/app/routers/credentials.py", "backend/app/routers/secrets.py"]
+    enforced_by:
+      - {test: "backend/tests/test_credentials_admin_only.py::test_password_mask_shows_no_character_and_no_length"}
+      - {test: "backend/tests/test_credentials_admin_only.py::test_password_like_fields_never_show_a_tail"}
+      - {test: "backend/tests/test_credentials_admin_only.py::test_short_values_are_fully_hidden_with_fixed_length"}
+      - {test: "backend/tests/test_mask_field_rule.py::test_password_like_names_in_any_spelling_never_show_a_tail"}
+      - {test: "backend/tests/test_mask_field_rule.py::test_unknown_names_never_show_a_tail"}
+      - {test: "backend/tests/test_mask_field_rule.py::test_nested_values_are_hidden_in_full"}
+      - {test: "backend/tests/test_mask_field_rule.py::test_secret_routes_mask_with_the_field_rule"}
+      - {test: "backend/tests/test_mask_field_rule.py::test_github_owner_is_a_name_not_a_secret"}
+    status: active
+    checked: 2026-10-23
+
+  - id: R-stop-only-own-run
+    says: "A task card offers Stop run only for a run that is provably its own: the agent's current_task_id names the card, or the bridge's live run record (run_task_id on the agent read, from acp-task-state.json) names it. A busy agent with an empty pointer is no proof — with two review cards delivered, Stop on card B used to end run A. The stop API holds the same line: a review card that is not the agent's run gets 409, and stopping any card sets the agent idle only when it does not provably run a different card."
+    source: "round-4 user tests K5 (r1 N2); K5 review SHOULD-2"
+    owner: frontend-v2/src/components/task/TaskActions.tsx
+    applies_to: ["frontend-v2/src/components/task/TaskActions.tsx", "backend/app/routers/agents.py", "backend/app/services/acp_chat_transport.py", "backend/app/services/operations.py"]
+    enforced_by:
+      - {test: "frontend-v2/src/components/task/__tests__/TaskActions.reviewQ5.test.tsx::review: Stop run only while an agent reviews"}
+      - {test: "backend/tests/test_agent_run_task_id.py::test_agents_list_and_detail_carry_run_task_id"}
+      - {test: "backend/tests/test_agent_run_task_id.py::test_a_live_task_phase_names_its_task"}
+      - {test: "backend/tests/test_stop_only_own_run.py::test_review_card_of_another_run_is_refused"}
+      - {test: "backend/tests/test_stop_only_own_run.py::test_stopping_a_card_keeps_the_agent_running_when_it_runs_another"}
+    status: active
+    checked: 2026-10-23
+
+  - id: R-run-end-signal-never-starves
+    says: "The poll's stopped/cancelled answer ends the session on THAT card and nothing more. It wins only while the agent is still on the card: its current_task_id names the card, or it has no pointer and a live working heartbeat. Otherwise the poll delivers the agent's real work (a newly dispatched card, a running card's working answer), and a stopped card is never handed out again as new work. With nothing else to deliver the old answer stays, so Stop then Resume is unchanged. A bench time-limit stop leaves blocked + stopped for good — it used to answer stopped on every poll while a new card waited."
+    source: "live incident 28.10.2026 (bench time-limit stop, PR #995)"
+    owner: backend/app/routers/agents.py
+    applies_to: ["backend/app/routers/agents.py", "backend/app/services/operations.py"]
+    enforced_by:
+      - {test: "backend/tests/test_poll_stopped_card_starvation.py::test_old_stopped_card_does_not_shadow_new_dispatched_card"}
+      - {test: "backend/tests/test_poll_stopped_card_starvation.py::test_freshly_stopped_card_is_never_redelivered_as_new_task"}
+      - {test: "backend/tests/test_poll_stopped_card_starvation.py::test_stop_wins_while_agent_is_in_turn_on_the_card"}
+      - {test: "backend/tests/test_poll_stopped_card_starvation.py::test_agent_working_on_another_card_reports_working"}
+      - {test: "backend/tests/test_poll_stopped_card_starvation.py::test_resume_delivers_the_stopped_card_again"}
+    status: active
+    checked: 2026-10-28
+
 rejected:
-  - id: X-own-control-room
-    idea: "An own control-room UI, job page or coordinator for heads"
-    why: "The coding-CLI vendor ships one; decided at stop 2. The launcher on the task form is not a control room."
-    source: "PRINCIPLES 8.1; ADR-085 decision 5; ADR-086 decision 5"
-    keywords: [control room, job page, coordinator, dashboard for heads]
   - id: X-head-run-type
     idea: "New task columns, statuses or a 'head' run type"
     why: "The task core is frozen."

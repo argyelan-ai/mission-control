@@ -40,6 +40,19 @@ tensorfold_health:cached_tokens_total 14000
 tensorfold_health:pool_tokens 1099776
 """
 
+# TensorFold's native (Zig) server (the DeepSeek-V4.1-Flash two-Spark recipe):
+# lines of a live scrape (20.10.2026), with one reply in flight. No
+# tensorfold_health:* family and no prompt cache counter — although that box
+# does reuse prompt states (a known gap, see the ledger's module docstring).
+_TENSORFOLD_NATIVE = """
+# TYPE tensorfold:generation_tokens_running gauge
+tensorfold:generation_tokens_running 5904
+# TYPE tensorfold:prompt_tokens_total counter
+tensorfold:prompt_tokens_total 7957562
+# TYPE tensorfold:generation_tokens_total counter
+tensorfold:generation_tokens_total 216401
+"""
+
 _VLLM = """
 vllm:prompt_tokens_total{model_name="m"} 900.0
 vllm:generation_tokens_total{model_name="m",finished_reason="stop"} 40.0
@@ -84,6 +97,22 @@ def test_counter_delta_missing_value_books_nothing():
 
 def test_parse_tensorfold_prefers_streaming_completion_counter():
     assert parse_box_counters(_TENSORFOLD, "tensorfold") == _c(16000, 14000, 310)
+
+
+def test_parse_tensorfold_native_books_finished_tokens_only():
+    """The in-flight gauge is left out on purpose: the ledger reads every drop
+    as an engine restart and books the new value in full, so a gauge that
+    falls when a reply ends would book the whole counter again. Finished
+    tokens are booked when the reply ends — in that hour."""
+    assert parse_box_counters(_TENSORFOLD_NATIVE, "tensorfold") == _c(7957562, None, 216401)
+
+
+def test_parse_tensorfold_native_prompt_cache_counter_is_the_cached_column():
+    # A newer upstream native server exports it when it keeps prompt states
+    # (server/metrics.zig: "if (keeps)"); the build on the DeepSeek box does
+    # not yet, so there the column stays empty until an engine update.
+    text = _TENSORFOLD_NATIVE + "tensorfold:prompt_tokens_cached_total 4096\n"
+    assert parse_box_counters(text, "tensorfold") == _c(7957562, 4096, 216401)
 
 
 def test_parse_vllm_sums_series_and_marks_missing_cache_as_none():
@@ -230,6 +259,34 @@ async def test_pulse_tick_feeds_the_ledger_and_keeps_the_tps_ring(async_session,
     assert state is not None and state.host_id == host.id and state.engine == "tensorfold"
     assert (state.last_prompt, state.last_cached, state.last_generated) == (16000, 14000, 310)
     assert await fake_redis.llen(RedisKeys.host_pulse(str(host.id))) == 1
+
+
+async def test_pulse_tick_feeds_the_ledger_for_a_native_tensorfold_box(async_session, fake_redis):
+    """Before the fix the pulse found no speed counter on the native build and
+    returned before the ledger — the box's tokens were never booked."""
+    host = Host(id=uuid.uuid4(), slug="gpu-box", display_name="gpu-box", kind="ssh", ssh_host="192.0.2.10")
+    async_session.add(host)
+    await async_session.commit()
+    async_session.add(Runtime(slug="slot", display_name="slot", runtime_type="openai_compatible",
+                              endpoint="http://192.0.2.10:8000/v1", enabled=True, is_slot=True, host_id=host.id))
+    await async_session.commit()
+    await fake_redis.set(RedisKeys.runtime_live("slot"), '{"reachable": true}')
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.get = AsyncMock(return_value=MagicMock(status_code=200, text=_TENSORFOLD_NATIVE))
+    ledger = _ledger(async_session)
+
+    async def _get():
+        return fake_redis
+
+    with patch("app.services.runtime_pulse.get_redis", _get), \
+         patch("app.services.runtime_pulse.token_ledger", ledger), \
+         patch("httpx.AsyncClient", return_value=client):
+        await RuntimePulse(interval=5).tick(session=async_session)
+
+    state = (await async_session.exec(select(RuntimeTokenCounter))).first()
+    assert state is not None and state.host_id == host.id and state.engine == "tensorfold"
+    assert (state.last_prompt, state.last_cached, state.last_generated) == (7957562, None, 216401)
 
 
 async def test_pulse_survives_a_broken_ledger(async_session, fake_redis):

@@ -42,14 +42,18 @@ import type {
   TaskStatus,
 } from "@/lib/types";
 import { C, LANE, STATUS_TEXT, alpha } from "@/lib/colors";
+import { NotFoundState } from "@/components/shared/NotFoundState";
+import {
+  actionTypeLabel,
+  formatChartDay,
+  formatDuration,
+  jobStateSentence,
+  nextRunAbsolute,
+  runStatusLabel,
+  type JobStateTone,
+} from "@/components/schedule/jobDisplay";
 
 // Helpers
-function formatMs(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return "—";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${(ms / 60_000).toFixed(1)}min`;
-}
 
 function formatPercent(rate: number | null | undefined): string {
   if (rate == null || !Number.isFinite(rate)) return "—";
@@ -70,6 +74,14 @@ function scheduleLabel(job: ScheduledJob, t: Translate): string {
     return t("schedWeeklyCustom", { days: job.schedule_weekdays.join(","), time: job.schedule_time ?? "" });
   return "—";
 }
+
+// The dot before the state sentence: green runs on schedule, ochre is
+// snoozed for a while, grey is paused.
+const STATE_DOT: Record<JobStateTone, string> = {
+  active: C.online,
+  snoozed: C.warning,
+  paused: C.textMuted,
+};
 
 // Task status chips via LANE map
 const TASK_STATUS_COLOR: Record<string, string> = {
@@ -165,6 +177,7 @@ export default function ScheduleJobDetailPage() {
   });
 
   const board = boards.find((b: Board) => b.id === job?.task_board_id) ?? null;
+  const hasFailedDay = (stats?.runs_by_day ?? []).some((d) => d.failed > 0);
   const agentLookup = useMemo(() => {
     const m = new Map<string, Agent>();
     for (const a of agents as Agent[]) m.set(a.id, a);
@@ -176,24 +189,12 @@ export default function ScheduleJobDetailPage() {
   if (!job && (jobsLoaded || jobsFailed)) {
     return (
       <AppShell>
-        <div className="flex flex-col items-center justify-center h-full gap-3 py-16 text-center">
-          <p className="text-sm font-medium" style={{ color: C.textPrimary }}>
-            {jobsFailed ? t("jobLoadFailed") : t("jobNotFound")}
-          </p>
-          {!jobsFailed && (
-            <p className="text-xs" style={{ color: C.textMuted }}>
-              {t("jobNotFoundHint")}
-            </p>
-          )}
-          <Link
-            href="/schedule"
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 min-h-11 sm:min-h-0 rounded-md transition-colors"
-            style={{ color: C.accent, border: `1px solid ${C.borderAccent}` }}
-          >
-            <ArrowLeft size={13} aria-hidden />
-            {t("backToSchedule")}
-          </Link>
-        </div>
+        <NotFoundState
+          title={jobsFailed ? t("jobLoadFailed") : t("jobNotFound")}
+          hint={jobsFailed ? null : t("jobNotFoundHint")}
+          backHref="/schedule"
+          backLabel={t("backToSchedule")}
+        />
       </AppShell>
     );
   }
@@ -210,6 +211,11 @@ export default function ScheduleJobDetailPage() {
       </AppShell>
     );
   }
+
+  // The state in one sentence under the title (K12, round-4 r2 S3): the head
+  // read "Enabled" next to a switch set to off; "paused" stood only deep in
+  // the config card.
+  const state = jobStateSentence(job, t, (iso) => timeAgo(iso, locale), dateLocale);
 
   return (
     <AppShell>
@@ -232,15 +238,17 @@ export default function ScheduleJobDetailPage() {
             <span className="max-sm:hidden" style={{ color: C.textMuted }}>/</span>
             {/* h2 intentionally — this is a sub-page breadcrumb, h1 already in AppShell nav */}
             <h1
-              className="display text-xl font-semibold flex-1 min-w-0 truncate"
+              className="display text-xl font-semibold flex-1 min-w-0 break-words line-clamp-3 md:truncate"
               style={{ color: C.textPrimary }}
             >
               {job.name}
             </h1>
+            {/* A setting, not a state word: the state is the sentence below. */}
             <button
               type="button"
               role="switch"
               aria-checked={job.enabled}
+              aria-label={t("runOnSchedule")}
               onClick={() =>
                 job.enabled
                   ? setConfirmDisable(true)
@@ -250,7 +258,7 @@ export default function ScheduleJobDetailPage() {
               className="flex items-center gap-2 px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs transition-colors cursor-pointer shrink-0 disabled:opacity-50"
               style={{ color: C.textSecondary }}
             >
-              <span>{t("enabledSwitch")}</span>
+              <span className="max-sm:hidden">{t("runOnSchedule")}</span>
               <span
                 aria-hidden
                 className="relative shrink-0 rounded-full transition-colors"
@@ -285,6 +293,18 @@ export default function ScheduleJobDetailPage() {
               <span className="max-sm:hidden">{t("edit")}</span>
             </button>
           </div>
+          <p
+            data-testid="job-state"
+            className="flex items-center gap-2 text-xs mt-1"
+            style={{ color: C.textSecondary }}
+          >
+            <span
+              aria-hidden
+              className="inline-block h-1.5 w-1.5 rounded-full shrink-0"
+              style={{ backgroundColor: STATE_DOT[state.tone] }}
+            />
+            {state.text}
+          </p>
         </div>
 
         {/* Messmarke: 1px-Linie mit Akzent-Segment — Header-Trenner */}
@@ -304,11 +324,11 @@ export default function ScheduleJobDetailPage() {
             />
             <KPICard
               label={t("avgDuration")}
-              value={formatMs(stats?.avg_duration_ms ?? 0)}
+              value={formatDuration(stats?.avg_duration_ms ?? 0, locale)}
             />
             <KPICard
               label={t("p95Duration")}
-              value={formatMs(stats?.p95_duration_ms ?? 0)}
+              value={formatDuration(stats?.p95_duration_ms ?? 0, locale)}
             />
             <KPICard
               label={t("runs30d")}
@@ -331,6 +351,7 @@ export default function ScheduleJobDetailPage() {
                     <CartesianGrid strokeDasharray="3 3" stroke={C.borderSubtle} />
                     <XAxis
                       dataKey="date"
+                      tickFormatter={(d: string) => formatChartDay(d, dateLocale)}
                       tick={{ fill: C.textMuted, fontSize: 11 }}
                       stroke={C.borderActive}
                     />
@@ -340,6 +361,7 @@ export default function ScheduleJobDetailPage() {
                       allowDecimals={false}
                     />
                     <Tooltip
+                      labelFormatter={(d) => formatChartDay(String(d), dateLocale)}
                       contentStyle={{
                         background: C.bgSurface,
                         border: `1px solid ${C.border}`,
@@ -350,17 +372,23 @@ export default function ScheduleJobDetailPage() {
                     <Area
                       type="monotone"
                       dataKey="success"
+                      name={t("runStatus.success")}
                       stackId="1"
                       stroke={C.online}
                       fill={alpha(C.online, 0.3)}
                     />
-                    <Area
-                      type="monotone"
-                      dataKey="failed"
-                      stackId="1"
-                      stroke={C.error}
-                      fill={alpha(C.error, 0.3)}
-                    />
+                    {/* No failure in the window: no red series. It drew a red
+                        line on top of the green area at "0 failed". */}
+                    {hasFailedDay && (
+                      <Area
+                        type="monotone"
+                        dataKey="failed"
+                        name={t("runStatus.failed")}
+                        stackId="1"
+                        stroke={C.error}
+                        fill={alpha(C.error, 0.3)}
+                      />
+                    )}
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -376,23 +404,10 @@ export default function ScheduleJobDetailPage() {
               </h2>
               <dl className="flex flex-col gap-3 text-xs">
                 <ConfigRow label={t("colTrigger")} value={scheduleLabel(job, t)} />
-                <ConfigRow
-                  label={t("nextRun")}
-                  value={
-                    job.next_run_at
-                      ? new Date(job.next_run_at).toLocaleString(dateLocale, {
-                          weekday: "short",
-                          day: "2-digit",
-                          month: "2-digit",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })
-                      : "—"
-                  }
-                />
+                <ConfigRow label={t("nextRun")} value={nextRunAbsolute(job, t, dateLocale)} />
                 <ConfigRow
                   label={t("lastStatus")}
-                  value={job.last_run_status ?? "—"}
+                  value={runStatusLabel(job.last_run_status, t)}
                   valueColor={
                     job.last_run_status === "failed"
                       ? STATUS_TEXT.error
@@ -405,7 +420,7 @@ export default function ScheduleJobDetailPage() {
                   label={t("retryLabel")}
                   value={
                     job.retry_max > 0
-                      ? `${job.retry_max}× / ${job.retry_delay_minutes}min`
+                      ? `${job.retry_max}× / ${job.retry_delay_minutes} min`
                       : t("noneLower")
                   }
                 />
@@ -414,7 +429,7 @@ export default function ScheduleJobDetailPage() {
                   value={job.task_skip_review ? t("yesLower") : t("noLower")}
                 />
                 <ConfigRow label={t("boardLabel")} value={board?.name ?? "—"} />
-                <ConfigRow label={t("actionLabel")} value={job.action_type} />
+                <ConfigRow label={t("actionLabel")} value={actionTypeLabel(job.action_type, t)} />
                 {job.consecutive_failures && job.consecutive_failures > 0 ? (
                   <ConfigRow
                     label={t("consecutiveFailsLabel")}
@@ -596,10 +611,11 @@ function RunRow({ run }: { run: ScheduledJobRun }) {
       </span>
       {duration !== null && (
         <span
-          className="font-mono text-[11px] flex-shrink-0"
+          className="tabular-nums text-[11px] flex-shrink-0"
           style={{ color: C.textMuted }}
         >
-          {formatMs(duration)}
+          {/* K7: a duration is not a machine value — no mono. */}
+          {formatDuration(duration, locale)}
         </span>
       )}
       {run.error && (

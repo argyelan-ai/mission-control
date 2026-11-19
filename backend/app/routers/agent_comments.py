@@ -19,25 +19,32 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, field_validator
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.scopes import Scope, require_scope
+from app.auth import require_agent
+from app.scopes import Scope, get_agent_effective_scopes, require_scope
 from app.database import get_session
 from app.models.agent import Agent
 from app.models.memory import BoardMemory
 from app.models.task import Task, TaskComment
 from app.services.activity import emit_event
 from app.services.blocker_triage import is_lead_agent
+from app.services.chat_session_guard import (
+    CHAT_REPLY_COMMENT_TYPES,
+    is_chat_session,
+    refuse_chat_task_write,
+)
+from app.services.chat_run_context import review_run_holds
 from app.services.task_state import lock_and_set
 from app.utils import utcnow
 
 # Single Source of Truth: app/comment_types.py (REL-01). Same alias as
 # agent_scoped.py uses — preserves the historical name for tests.
 from app.comment_types import ALL_COMMENT_TYPES as VALID_COMMENT_TYPES
-from app.comment_types import validate_comment_content
+from app.comment_types import CHAT_REPLY_COMMENT_TYPE, validate_comment_content
 
 logger = logging.getLogger("mc.agent_comments")
 
@@ -247,6 +254,7 @@ async def agent_add_comment(
     board_id: uuid.UUID,
     task_id: uuid.UUID,
     payload: AgentCommentCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_WRITE)),
 ):
@@ -257,7 +265,10 @@ async def agent_add_comment(
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    return await _create_comment(session, task, agent, payload)
+    # A chat session never writes the run state of its own agent's task
+    # (t1 MUST-1); a plain reply is not run state (round-2 r1 S3).
+    await _refuse_chat_run_comment(session, request, agent, task, payload)
+    return await _create_comment(session, task, agent, payload, from_chat=is_chat_session(request))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -274,21 +285,58 @@ async def agent_add_comment(
 # caller. Gated on TASKS_MANAGE (Board Leads/orchestrators only) so a
 # regular worker without an active task still gets a clear 403 here
 # instead of silently landing on its own active task via a different verb.
+#
+# One exception (round-4 user test t1 SHOULD-1): a chat reply. An agent's
+# chat session has no TASK_ID / BOARD_ID of its own (acp_chat
+# ``chat_child_env``), so `mc comment message "…" --task-id <id>` is the
+# only way it can answer in a task thread — and a developer's chat got
+# "Missing scopes: tasks:manage" for it. A ``message`` from the chat needs
+# TASKS_WRITE here, the same right the board route above asks for any task
+# on the agent's board; everything else stays TASKS_MANAGE.
 # ─────────────────────────────────────────────────────────────────────
 @router.post("/tasks/{task_id}/comments", status_code=status.HTTP_201_CREATED)
 async def agent_add_comment_by_task_id(
     task_id: uuid.UUID,
     payload: AgentCommentCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
-    agent: Agent = Depends(require_scope(Scope.TASKS_MANAGE)),
+    agent: Agent = Depends(require_agent),
 ):
+    chat_reply = is_chat_session(request) and payload.comment_type in CHAT_REPLY_COMMENT_TYPES
+    needed = Scope.TASKS_WRITE if chat_reply else Scope.TASKS_MANAGE
+    if needed.value not in get_agent_effective_scopes(agent):
+        # Same answer as ``require_scope`` gives.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Missing scopes: {needed.value}",
+        )
     task = await session.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     if agent.board_id != task.board_id:
         raise HTTPException(status_code=403, detail="Agent not assigned to this board")
 
-    return await _create_comment(session, task, agent, payload)
+    await _refuse_chat_run_comment(session, request, agent, task, payload)
+    return await _create_comment(session, task, agent, payload, from_chat=is_chat_session(request))
+
+
+async def _refuse_chat_run_comment(
+    session: AsyncSession, request: Request, agent: Agent, task: Task,
+    payload: AgentCommentCreate,
+) -> None:
+    """409 for a chat-session comment that moves its own run (progress,
+    resolution, blocker, …). A reply (``CHAT_REPLY_COMMENT_TYPES``) passes:
+    the operator asked in the task thread, the answer belongs there
+    (round-2 review r1 S3). Not on the card this agent's review run works:
+    there a reviewer's ``message`` ends the review wait and counts as the
+    reviewer having spoken (``review_park``, ``proof_gate``)."""
+    if (
+        is_chat_session(request)
+        and payload.comment_type in CHAT_REPLY_COMMENT_TYPES
+        and not review_run_holds(task, agent)
+    ):
+        return
+    await refuse_chat_task_write(session, request, agent, task, f"comment {payload.comment_type}")
 
 
 async def _create_comment(
@@ -296,6 +344,8 @@ async def _create_comment(
     task: Task,
     agent: Agent,
     payload: AgentCommentCreate,
+    *,
+    from_chat: bool = False,
 ):
     """Shared comment-write path for both comment endpoints above.
 
@@ -350,19 +400,34 @@ async def _create_comment(
 
     # ── Auto-ACK: first comment from the assigned agent → set ack_at ──
     # Shared handshake (§3.3) — same implementation as the Message channel.
-    from app.services.task_lifecycle import apply_ack_handshake
-    apply_ack_handshake(session, task, agent)
+    # Never from the chat session (``from_chat``): its reply is not the run
+    # taking the task — the ACK would flip a delivered task to in_progress
+    # behind the run's back (round-2 review r1 S3).
+    if not from_chat:
+        from app.services.task_lifecycle import apply_ack_handshake
+        apply_ack_handshake(session, task, agent)
 
+    # A chat reply is stored as ``chat_reply`` (round-3 code review r1 S3):
+    # as a plain ``message`` it was the run's sign of life for the watchdogs
+    # (``task_evidence.last_real_activity_at``), so "how far are you?" on a
+    # hanging run pushed the silent-card alarm back. Shown like a message.
+    stored_type = (
+        CHAT_REPLY_COMMENT_TYPE
+        if from_chat and payload.comment_type in CHAT_REPLY_COMMENT_TYPES
+        else payload.comment_type
+    )
     comment = TaskComment(
         task_id=task_id,
         author_type="agent",
         author_agent_id=agent.id,
-        comment_type=payload.comment_type,
+        comment_type=stored_type,
         content=payload.content,
     )
     session.add(comment)
-    agent.last_task_activity_at = utcnow()
-    session.add(agent)
+    if not from_chat:
+        # Run liveness (watchdogs read it); a chat reply is no sign of the run.
+        agent.last_task_activity_at = utcnow()
+        session.add(agent)
 
     # ── Resolution Auto-Promote ──────────────────────────────────────────
     # When an agent writes a "resolution" comment but the task is still

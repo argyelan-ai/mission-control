@@ -166,6 +166,8 @@ async def test_wake_rejects_non_power_managed():
 
 @pytest.mark.asyncio
 async def test_wake_writes_trigger_file(tmp_path):
+    # The host-side watcher's heartbeat (round-7 L5): without it no wake is queued.
+    (tmp_path / runtime_manager.WAKE_HELPER_HEARTBEAT_NAME).write_text("{}")
     with patch.object(runtime_manager.settings, "wake_request_dir", tmp_path):
         result = await runtime_manager.wake_runtime(WOL_RT)
     assert result["ok"] is True

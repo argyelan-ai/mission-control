@@ -79,6 +79,7 @@ from app.auth import require_agent
 from app.scopes import Scope, require_scope
 from app.database import get_session
 from app.models.agent import Agent
+from app.services.agent_language_defaults import apply_language_defaults
 from app.models.agent_template import AgentTemplate
 from app.models.approval import Approval
 from app.models.board import Board, Project
@@ -87,6 +88,7 @@ from app.models.memory import BoardMemory
 from app.models.task import Task, TaskComment
 from app.services.harness_compat import is_voice_harness
 from app.services.activity import emit_event
+from app.services.chat_session_guard import is_chat_session, refuse_chat_task_write
 from app.services.task_state import lock_and_set
 from app.services.thread_scope import thread_agent_may_write_to
 from app.utils import utcnow
@@ -1017,6 +1019,7 @@ async def agent_create_project(
 async def agent_help_request(
     board_id: uuid.UUID,
     payload: HelpRequestCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_HELP)),
 ):
@@ -1036,6 +1039,9 @@ async def agent_help_request(
             status_code=status.HTTP_409_CONFLICT,
             detail="Task ist nicht in_progress — Help Request nur waehrend aktiver Arbeit moeglich.",
         )
+    # From the chat session this would block the RUN's task; the helper's
+    # result would then start a second run (round-2 review r1 S2).
+    await refuse_chat_task_write(session, request, agent, current_task, "help")
 
     # 2. Tiefenlimit
     if current_task.help_request_from is not None:
@@ -1122,6 +1128,7 @@ async def agent_help_request(
 async def agent_delegate_task(
     board_id: uuid.UUID,
     payload: DelegateCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_CREATE)),
 ):
@@ -1250,6 +1257,14 @@ async def agent_delegate_task(
                 "moeglich (oder --parent <task-id> explizit setzen)."
             )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+    # From the chat session a delegation hangs a subtask and a progress note
+    # on the RUN's task and (callback, the default) blocks it — the callback
+    # would then start a second run (round-2 review r1 S2). A parent no run
+    # of this agent holds is not the guard's business.
+    await refuse_chat_task_write(
+        session, request, agent, current_task or explicit_parent, "delegate",
+    )
 
     target_agent = await session.get(Agent, payload.assigned_agent_id)
     if not target_agent:
@@ -1528,6 +1543,7 @@ async def agent_delegate_task(
 async def agent_clarification(
     board_id: uuid.UUID,
     payload: ClarificationCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_HELP)),
 ):
@@ -1546,6 +1562,10 @@ async def agent_clarification(
             status_code=status.HTTP_409_CONFLICT,
             detail="Task ist nicht in_progress — Klaerungsfrage nur waehrend aktiver Arbeit moeglich.",
         )
+    # From the chat session this would block the RUN's task; the operator's
+    # answer would then start a second run (round-2 review r1 S2). The chat
+    # asks with a plain `mc ask` (no status change) instead.
+    await refuse_chat_task_write(session, request, agent, current_task, "question")
 
     # 2. Load project name for context
     project_name = None
@@ -1683,6 +1703,7 @@ class AskResponse(BaseModel):
 @router.post("/tasks/current/ask", status_code=status.HTTP_201_CREATED)
 async def agent_ask(
     payload: AskCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.CHAT_WRITE)),
 ):
@@ -1729,6 +1750,14 @@ async def agent_ask(
             session, agent, create_dm_if_missing=True
         )
     else:
+        if payload.blocking:
+            # A blocking ask parks the RUN's task in `waiting`; from the chat
+            # session the answer would then start a second run next to the
+            # first (round-1 user test t1 MUST-1, review SHOULD 1). A plain
+            # question leaves the status alone and stays open to the chat.
+            await refuse_chat_task_write(
+                session, request, agent, current_task, "ask --blocking"
+            )
         # Task 12 (final-review A2, defense-in-depth): a blocking ask parks
         # the task in `waiting` until an answer is delivered — but answer
         # delivery is gated on the comm_v2 pilot. A non-pilot agent parking
@@ -1768,6 +1797,9 @@ async def agent_ask(
             "default": payload.default,
             "deadline": payload.deadline,
         },
+        # A plain `mc ask` from the chat is allowed — but it is the chat's
+        # question, not the run's sign of life (round-3 re-review M1).
+        from_chat=is_chat_session(request),
     )
 
     # No task here → no task status to report (DM fallback, see above; a
@@ -1951,6 +1983,7 @@ async def _resolve_message_target(
 @router.post("/tasks/current/messages", status_code=status.HTTP_201_CREATED)
 async def agent_post_message(
     payload: MessageCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.CHAT_WRITE)),
 ):
@@ -1976,7 +2009,10 @@ async def agent_post_message(
 
     # First inbound agent Message ACKs the task (idempotent). Non-committing —
     # the post_message commit below persists the handshake mutations too.
-    if task is not None:
+    # Never from the chat session: its `mc msg` answers the operator, it is
+    # not the run taking the task (round-3 code review r1 S2 — same rule as
+    # the chat's `message` comment, agent_comments._create_comment).
+    if task is not None and not is_chat_session(request):
         apply_ack_handshake(session, task, agent)
 
     body_text, attachment = _message_attachment(payload)
@@ -1989,6 +2025,9 @@ async def agent_post_message(
         body=body_text,
         reply_to=payload.reply_to,
         attachment=attachment,
+        # The chat's `mc msg` is no sign of life of the run: the stale
+        # check's clock leaves it out (round-3 re-review M1).
+        from_chat=is_chat_session(request),
     )
 
     if task is not None:
@@ -2089,6 +2128,7 @@ async def agent_write_group_document(
 async def agent_post_thread_message(
     thread_id: uuid.UUID,
     payload: MessageCreate,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.CHAT_WRITE)),
 ):
@@ -2101,6 +2141,15 @@ async def agent_post_thread_message(
     from app.services.messaging import answer_clears_awaiting, post_message
     from app.services.task_lifecycle import apply_ack_handshake
 
+    from app.models.thread import Thread as _Thread
+    _target = await session.get(_Thread, thread_id)
+    if _target is not None and _target.kind == "session":
+        # ADR-100 §6: session conversations are written only through the send
+        # path (brake, rate limit, inbox cap) — never around it.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Session conversations are answered with `mc send <address> \"…\"` (POST /api/v1/agent/comms/send).",
+        )
     thread = await thread_agent_may_write_to(session, agent, thread_id)
     if thread is None:
         raise HTTPException(
@@ -2124,11 +2173,12 @@ async def agent_post_thread_message(
     # A task thread reached this way must ACK its dispatch exactly like
     # /tasks/current/messages does — otherwise an agent that answers via
     # `--thread` looks unresponsive and the monitor reassigns a task it is
-    # already working on.
+    # already working on. Not from the chat session (round-3 r1 S2, see
+    # agent_post_message).
     task = (
         await session.get(Task, thread.task_id) if thread.task_id is not None else None
     )
-    if task is not None:
+    if task is not None and not is_chat_session(request):
         apply_ack_handshake(session, task, agent)
 
     body_text, attachment = _message_attachment(payload)
@@ -2205,6 +2255,7 @@ async def agent_post_thread_message(
         # autonome Runde würde Slack/Telegram fluten.
         mirror_to_telegram=(thread.kind != "group"),
         attachment=attachment,
+        from_chat=is_chat_session(request),  # round-3 re-review M1, see above
     )
 
     # SSE für Marks Live-Ansicht des Gruppenraums (Kanal mc:events:group:{id}).
@@ -2797,6 +2848,7 @@ async def agent_create_deliverable(
     task_id: uuid.UUID,
     payload: DeliverableCreate,
     background_tasks: BackgroundTasks,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_WRITE)),
 ):
@@ -2807,6 +2859,7 @@ async def agent_create_deliverable(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
+    await refuse_chat_task_write(session, request, agent, task, "deliverable")
 
     if payload.deliverable_type in ("document", "data") and not (payload.content and payload.content.strip()):
         raise HTTPException(
@@ -3902,6 +3955,7 @@ async def agent_create_custom(
         agent_token_hash=token_hash,
         provision_status="local",
     )
+    await apply_language_defaults(session, new_agent)  # Settings → Language: fleet default for new agents
     session.add(new_agent)
     await session.commit()
     await session.refresh(new_agent)
@@ -3952,6 +4006,7 @@ async def agent_create_checklist(
     task_id: uuid.UUID,
     payload: ChecklistBulkCreate,
     response: Response,
+    request: Request,
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
@@ -3978,6 +4033,7 @@ async def agent_create_checklist(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task nicht gefunden")
+    await refuse_chat_task_write(session, request, agent, task, "checklist add")
 
     # Dedup only against NON-TERMINAL items (pending/in_progress). An already
     # done/skipped item with the same title must NOT swallow a genuinely new
@@ -4040,6 +4096,7 @@ async def agent_update_checklist_item(
     task_id: uuid.UUID,
     item_id: uuid.UUID,
     payload: ChecklistItemUpdate,
+    request: Request,
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
@@ -4053,6 +4110,7 @@ async def agent_update_checklist_item(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task nicht gefunden")
+    await refuse_chat_task_write(session, request, agent, task, f"checklist {payload.status}")
 
     item = await session.get(TaskChecklistItem, item_id)
     if not item or item.task_id != task_id:
@@ -4093,6 +4151,7 @@ async def agent_delete_checklist_item(
     board_id: uuid.UUID,
     task_id: uuid.UUID,
     item_id: uuid.UUID,
+    request: Request,
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
@@ -4112,6 +4171,7 @@ async def agent_delete_checklist_item(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task nicht gefunden")
+    await refuse_chat_task_write(session, request, agent, task, "checklist delete")
 
     if not agent.is_board_lead:
         raise HTTPException(
@@ -4485,6 +4545,11 @@ async def agent_visual_verify(
                 422,
                 f"Credential ist type='{cred.credential_type}' — nur 'login' wird fuer visual-verify unterstuetzt.",
             )
+        from app.services.comms_credential_brake import guard_credential_read
+
+        await guard_credential_read(
+            session, agent, target=str(cred.id), label=f"the credential '{cred.name}' (visual-verify login)"
+        )
         decrypted = safe_decrypt(cred.encrypted_data)
         data = _json.loads(decrypted) if decrypted else {}
         username = data.get("username")
@@ -4984,6 +5049,7 @@ async def agent_me_generate_pdf(
 async def agent_me_create_deliverable(
     payload: MeDeliverableCreate,
     background_tasks: BackgroundTasks,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_WRITE)),
 ):
@@ -4999,6 +5065,7 @@ async def agent_me_create_deliverable(
         task_id=task.id,
         payload=payload,
         background_tasks=background_tasks,
+        request=request,
         session=session,
         agent=agent,
     )
@@ -5051,13 +5118,18 @@ async def agent_list_credentials(
     """Agent lists all available credentials (masked, sorted alphabetically).
 
     Credentials are global (not board-scoped) — board_id is only for URL consistency.
-    Returns data_masked (last 4 characters visible, rest asterisks).
+    Returns data_masked: a fixed mask that hides the length; only values of
+    20+ characters keep their last 4, password fields and free text never do
+    (ADR-098).
     """
     import json
     from app.models.credential import Credential
     from app.services.encryption import safe_decrypt
     from app.routers.credentials import _mask_data
 
+    from app.services.comms_credential_brake import TARGET_LIST, guard_credential_read
+
+    await guard_credential_read(session, agent, target=TARGET_LIST, label="the credential list")
     result = await session.exec(select(Credential).order_by(Credential.name))
     credentials = result.all()
 
@@ -5110,6 +5182,11 @@ async def agent_get_credential(
     if not credential:
         raise HTTPException(status_code=404, detail="Credential not found")
 
+    from app.services.comms_credential_brake import guard_credential_read
+
+    await guard_credential_read(
+        session, agent, target=str(credential.id), label=f"the credential '{credential.name}'"
+    )
     decrypted = safe_decrypt(credential.encrypted_data)
     data = json.loads(decrypted) if decrypted else {}
     data = redact_never_exposed_fields(data)
@@ -5122,6 +5199,22 @@ async def agent_get_credential(
         "url": credential.url,
         "notes": credential.notes,
     }
+
+
+@router.get("/boxes/status")
+async def agent_box_status(
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
+):
+    """Box facts for agents, read-only (ADR-100 §3 item 1): per GPU box the
+    engines, model, running requests, switch lock, a working head, whether MC
+    restarts a stopped engine there — and a strict verdict (never "free" for
+    an engine that does not serve). ``tasks:read`` because every role holds
+    it: reading box facts before planning work needs no new right, and a new
+    scope would need a grant migration for every existing agent."""
+    from app.services.box_status import read_box_status
+
+    return await read_box_status(session)
 
 
 @router.get("/operator")

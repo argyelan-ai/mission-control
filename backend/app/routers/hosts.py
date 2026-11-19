@@ -33,7 +33,7 @@ from app.database import get_session
 from app.models.host import Host, normalise_role
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys, get_redis
-from app.services import host_bootstrap, host_metrics_history, host_onboarding, host_probe, launch_template, runtime_manager, ssh_host_keys
+from app.services import box_wake, host_bootstrap, host_liveness, host_metrics_history, host_onboarding, host_probe, launch_template, runtime_manager, ssh_host_keys
 from app.services.host_resolver import ResolvedHost, resolved_host_from_row, ssh_capable
 
 router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
@@ -683,10 +683,23 @@ async def host_metrics(
 
     resolved = resolved_host_from_row(host)
     if host.kind == "flask_wol":
-        # get_host_metrics' flask_wol branch probes the :5555 control server —
-        # reachable == box awake + logged in (work-ready), otherwise it's asleep.
-        m = await runtime_manager.get_host_metrics(resolved)
-        awake = bool(m.get("reachable"))
+        # A fresh "asleep" answers from memory (round-5 re-check, L1): a
+        # sleeping box drops the packets, so every check costs ~3 s and the
+        # card read "checking" that long on each visit. Not re-remembered
+        # here, so the memory runs out and the box is asked again within
+        # host_liveness.AWAKE_TTL_S; waking it (POST /{id}/wake) forgets it.
+        # "Awake" is always asked: an awake box answers in milliseconds and
+        # may fall asleep any moment.
+        if await host_liveness.recall(host.id) is False:
+            awake = False
+        else:
+            # get_host_metrics' flask_wol branch probes the :5555 control
+            # server — reachable == box awake + logged in (work-ready).
+            m = await runtime_manager.get_host_metrics(resolved)
+            awake = bool(m.get("reachable"))
+            # The model catalog reads this answer instead of asking the box a
+            # second time (round-4 t3 S1: "model port dark" is not "asleep").
+            await host_liveness.remember(host.id, awake)
         return {
             "kind": "flask_wol",
             "slug": host.slug,
@@ -710,6 +723,30 @@ async def host_metrics(
         except Exception as e:
             host_metrics_history.log_history_failure(str(host.id), "geschrieben", e)
     return {"kind": host.kind, "slug": host.slug, **metrics}
+
+
+@router.post("/{host_id}/wake")
+async def wake_host(
+    host_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_role(Role.OPERATOR)),
+):
+    """Wake a power-managed box via Wake-on-LAN — from its host row.
+
+    Round-5 re-check (L1): the box's ``power_managed`` flag lives on the host
+    row; a box whose runtime rows lack it (or that has none) still sleeps and
+    must still be wakeable. Same trigger-file path as
+    ``POST /runtimes/{id}/wake`` (runtime_manager), keyed by the host, and the
+    same rules (round-7 L5): a viewer only looks — waking a box is an operator
+    action; 503 when the wake helper on the Mac sends no heartbeat.
+    """
+    host = await _get_host(session, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' not found")
+    result = await runtime_manager.wake_host(resolved_host_from_row(host))
+    box_wake.raise_unless_sent(result)
+    await box_wake.forget_box_after_wake(session, host.id)
+    return result
 
 
 @router.get("/{host_id}/pulse")

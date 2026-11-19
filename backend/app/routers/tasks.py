@@ -1,5 +1,4 @@
 import logging
-import sys
 import uuid
 from datetime import datetime, timedelta
 
@@ -460,14 +459,18 @@ async def list_tasks(
     result = await session.exec(query)
     tasks = result.all()
 
-    # Compute last_activity_at: max(started_at, updated_at, last comment)
+    # Compute last_activity_at: max(started_at, updated_at, last comment).
+    # A chat session's reply is no sign of the run (round-5 r1 S1): "how far
+    # are you?" on a hanging card must not turn its red "no activity" clock
+    # back to 0 — same rule as the watchdogs (comment_types.NOT_ACTIVITY_…).
     task_ids = [t.id for t in tasks if t.status == "in_progress"]
     last_comment_map: dict[uuid.UUID, datetime] = {}
     if task_ids:
         from sqlalchemy import func as sa_func
+        from app.comment_types import activity_comment_filter
         comment_query = (
             select(TaskComment.task_id, sa_func.max(TaskComment.created_at).label("last_comment"))
-            .where(TaskComment.task_id.in_(task_ids))  # type: ignore[union-attr]
+            .where(TaskComment.task_id.in_(task_ids), activity_comment_filter())  # type: ignore[union-attr]
             .group_by(TaskComment.task_id)
         )
         comment_result = await session.exec(comment_query)  # type: ignore[arg-type]
@@ -488,9 +491,15 @@ async def list_tasks(
             tid = str(row[2])
             list_tag_map.setdefault(tid, []).append({"name": row[0], "color": row[1]})
 
+    # Who delivered a card that waits for review or is done: the hand-off
+    # clears/moves assigned_agent_id on purpose, the status history keeps it.
+    from app.services.task_delivery import delivery_fields, find_deliverers
+    deliverers = await find_deliverers(session, tasks)
+
     enriched = []
     for t in tasks:
         data = t.model_dump()
+        data.update(delivery_fields(deliverers, t.id))
         if t.status == "in_progress":
             candidates = [ts for ts in [t.started_at, t.updated_at] if ts]
             last_comment = last_comment_map.get(t.id)
@@ -1174,13 +1183,19 @@ async def open_deliverable(
     task_id: uuid.UUID,
     deliverable_id: uuid.UUID,
     body: _OpenDeliverableBody,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Open a file or directory with the native macOS app (open -R = Finder reveal)."""
+    """Open a file or directory with the native macOS app (open -R = Finder reveal).
+
+    Only for a viewer at the MC host (403 otherwise), and a failing open is a
+    502 — never ``{"ok": true}`` for nothing (``services/host_open.py``)."""
     import os
-    import subprocess
     from app.models.deliverable import TaskDeliverable
+    from app.services.host_open import open_on_host_or_502, require_host_viewer
+
+    require_host_viewer(request)
 
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
@@ -1223,24 +1238,9 @@ async def open_deliverable(
     else:
         host_target = host_root_real
 
-    # macOS `open` doesn't run inside the Docker container — call the host helper via host.docker.internal.
-    # sys is imported at the end of the module (for test monkeypatching via patch("app.routers.tasks.sys.platform")).
-    # IMPORTANT: send the host helper the HOST path, not the container mount path.
-    in_docker = os.path.exists("/.dockerenv") or sys.platform.startswith("linux")
-    if in_docker:
-        import httpx
-        try:
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    "http://host.docker.internal:8765/open",
-                    json={"path": host_target, "reveal": body.reveal},
-                    timeout=3.0,
-                )
-        except Exception:
-            pass  # Helper unreachable — open silently fails
-    else:
-        cmd = ["open", "-R", host_target] if body.reveal else ["open", host_target]
-        subprocess.Popen(cmd)
+    # The HOST path goes to `open` (directly on a Mac, via the host helper
+    # from Docker) — never the container mount path.
+    await open_on_host_or_502(host_target, reveal=body.reveal)
     return {"ok": True}
 
 
@@ -1407,6 +1407,50 @@ async def get_task_checklist(
     return result.all()
 
 
+@router.get("/boards/{board_id}/tasks/{task_id}/model-wait")
+async def get_task_model_wait(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Is this not-yet-started task waiting for its agent's MODEL? For the
+    task card (follow-up to ADR-097, delivered is not working): an assigned
+    ``inbox`` task is either delivered and waiting for the model's first
+    answer, or held because the model does not answer. Same decision the
+    poll and the ACK ladder use (``runtime_readiness``, cached, fail-open,
+    local runtimes included) — but a read: no timeline note.
+
+    ``applies`` is false for every other task; the card then shows nothing."""
+    task = await session.get(Task, task_id)
+    if not task or task.board_id != board_id:
+        raise HTTPException(status_code=404, detail="Task nicht gefunden")
+    result = {"applies": False, "delivered": False, "ready": True,
+              "runtime": None, "reason": None}
+    if task.status != "inbox" or task.assigned_agent_id is None:
+        return result
+    agent = await session.get(Agent, task.assigned_agent_id)
+    if agent is None:
+        return result
+    from app.models.runtime import Runtime
+    from app.services.runtime_readiness import runtime_ready_for_agent
+
+    runtime = await session.get(Runtime, agent.runtime_id) if agent.runtime_id else None
+    delivered = task.dispatched_at is not None
+    runtime_name = runtime.display_name if runtime else None
+    # Pool hygiene: the gate awaits Redis and maybe an HTTP probe — release
+    # the read transaction first (read phase, nothing uncommitted).
+    await session.commit()
+    ready, reason = await runtime_ready_for_agent(
+        agent, session, include_local=True, notify=False,
+    )
+    result.update(
+        applies=True, delivered=delivered, ready=bool(ready),
+        runtime=runtime_name, reason=reason,
+    )
+    return result
+
+
 @router.get("/boards/{board_id}/tasks/{task_id}/git-info")
 async def get_task_git_info_endpoint(
     board_id: uuid.UUID,
@@ -1429,7 +1473,13 @@ async def get_task_git_info_endpoint(
         }
 
     from app.services.git_service import git_service
-    info = await git_service.get_task_git_info(task.workspace_path, branch_name=task.branch_name)
+    # Only the task's own commits: what its branch adds over the base, or —
+    # working on the base branch itself — what came after the task started.
+    info = await git_service.get_task_git_info(
+        task.workspace_path,
+        branch_name=task.branch_name,
+        since=task.started_at or task.dispatched_at,
+    )
     info["workspace_path"] = task.workspace_path
 
     # Attach repo metadata from the project
@@ -1479,7 +1529,10 @@ async def get_task(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
-    return task
+    from app.services.task_delivery import delivery_fields, find_deliverers
+    data = task.model_dump()
+    data.update(delivery_fields(await find_deliverers(session, [task]), task.id))
+    return data
 
 
 @router.patch("/boards/{board_id}/tasks/{task_id}")
@@ -1981,6 +2034,7 @@ _ACTIVITY_KIND_MAP: dict[str, str] = {
     "task.stuck_awaiting_orchestrator_close": "stuck",
     "task.auto_closed_stuck": "stuck",
     "task.late_update_rejected": "stuck",
+    "task.chat_write_rejected": "stuck",
     "task.stale_update_warning": "stuck",
     "task.promoted": "promote",
     "task.promote_approval_required": "promote",
@@ -1997,6 +2051,31 @@ _ACTIVITY_KIND_MAP: dict[str, str] = {
     "task.run_stopped": "system",
     "task.run_resumed": "system",
 }
+
+# Events whose title already says everything the operator needs: their
+# detail dict is machine context (``action: … · status: …``) and stays in
+# ``meta.detail`` only, not under the title (PR #954 review SHOULD 2).
+#
+_ACTIVITY_DETAIL_IN_TITLE = {"task.chat_write_rejected"}
+
+# operator.notice of these action types (round-2 Q5, t4 S-neu-5): the detail
+# repeats the title and carries the report-channel body, which stays ASCII on
+# purpose (test_notice_only_escalations: "Review fuer … haengt … noetig") —
+# that transliteration must not land in the operator's timeline. The matching
+# task.review_stuck row already says reviewer and minutes. Other notice types
+# (dispatch_escalation: reason + minutes, dependency_zombie: upstream status)
+# keep their detail — it is the only place that information shows
+# (PR #961 review SHOULD 2).
+_NOTICE_DETAIL_IN_TITLE = {"review_stuck"}
+
+
+def _activity_detail_in_title(event_type: str, detail: dict | None) -> bool:
+    if event_type in _ACTIVITY_DETAIL_IN_TITLE:
+        return True
+    return (
+        event_type == "operator.notice"
+        and (detail or {}).get("action_type") in _NOTICE_DETAIL_IN_TITLE
+    )
 
 # Events whose signal is ALWAYS fully represented elsewhere in the timeline
 # (task.status_changed is handled conditionally — see _has_matching_task_event).
@@ -2181,7 +2260,11 @@ async def get_task_timeline(
             # MEDIUM 2 review fix: detail dict (the dispatch_failed/blocked/
             # stuck reason lives here) is no longer discarded — compact
             # "key: value" string for display, full dict in meta.detail.
-            "detail": _format_detail_dict(e.detail), "actor": actor,
+            "detail": (
+                None if _activity_detail_in_title(e.event_type, e.detail)
+                else _format_detail_dict(e.detail)
+            ),
+            "actor": actor,
             "meta": {"event_type": e.event_type, "severity": e.severity, "detail": e.detail},
         })
 

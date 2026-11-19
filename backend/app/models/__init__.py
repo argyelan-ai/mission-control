@@ -5,6 +5,8 @@ from app.models.approval import Approval
 from app.models.board import Board, PlannerMessage, Project
 from app.models.install_log import InstallLog
 from app.models.chat import ChatMessage
+from app.models.chat_record import Chat, ChatEvent, ChatSession  # noqa: F401
+from app.models.comms import CommsConversation, CommsCursor, CommsGuestCard, CommsSession  # noqa: F401
 from app.models.content import ContentPipeline
 from app.models.credential import Credential
 from app.models.deploy_history import DeployHistory
@@ -38,7 +40,7 @@ from app.models.repo import Repo  # noqa: F401
 from app.models.loop import Loop, LoopRound  # noqa: F401
 from app.models.reference_file import ReferenceFile  # noqa: F401
 from app.models.prompt_template import PromptTemplate  # noqa: F401
-from app.models.bench import BenchChallenge, BenchEntry  # noqa: F401
+from app.models.bench import BenchChallenge, BenchEntry, BenchProbe, BenchReceipt  # noqa: F401
 from app.models.thread import Thread, Message, AgentThreadCursor, UserThreadCursor  # noqa: F401
 from app.models.browser_session import BrowserSession  # noqa: F401
 from app.models.config_check import ConfigCheck  # noqa: F401
@@ -92,6 +94,7 @@ __all__ = [
     "PromptTemplate",
     "BenchChallenge",
     "BenchEntry",
+    "BenchProbe",
     "Thread",
     "Message",
     "AgentThreadCursor",

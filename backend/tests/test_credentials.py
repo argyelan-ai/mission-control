@@ -2,6 +2,8 @@
 import pytest
 from httpx import AsyncClient
 
+from app.services.encryption import MASK
+
 
 @pytest.mark.asyncio
 async def test_create_credential_login(auth_client: AsyncClient):
@@ -18,7 +20,7 @@ async def test_create_credential_login(auth_client: AsyncClient):
     body = resp.json()
     assert body["name"] == "Test Login"
     assert body["credential_type"] == "login"
-    assert "****" in body["data_masked"]["password"]
+    assert body["data_masked"]["password"] == MASK  # no character, no length
     assert body["data_masked"]["username"] == "admin"
     assert body["url"] == "https://example.com"
 
@@ -36,7 +38,8 @@ async def test_create_credential_token(auth_client: AsyncClient):
     assert resp.status_code == 201
     body = resp.json()
     assert body["credential_type"] == "token"
-    assert "****" in body["data_masked"]["token"]
+    # A short token (< 20 chars) is password-sized: fully hidden too.
+    assert body["data_masked"]["token"] == MASK
 
 
 @pytest.mark.asyncio

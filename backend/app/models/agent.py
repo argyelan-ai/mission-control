@@ -310,6 +310,20 @@ class Agent(SQLModel, table=True):
 
         return headless_chat_kind(self) is not None
 
+    # Spec A (task steps in the chat): this agent runs a task in a session of
+    # its OWN, beside the chat — so the chat shows that task's steps itself.
+    # The rule is the transcript adapter's (``find_task_session`` +
+    # ``tasks_in_own_session``, asked at call time), the same one the chat's
+    # task endpoints answer ``applies`` with; the UI reads this flag instead
+    # of comparing harness names (PRINCIPLES §3.4, review MUST-1 on #937).
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def tasks_in_own_session(self) -> bool:
+        from app.services.transcript_adapters import adapter_for
+
+        adapter = adapter_for(self)
+        return adapter.find_task_session is not None and adapter.tasks_in_own_session()
+
 
 @event.listens_for(Agent, "before_insert")
 def _agent_fill_slug(mapper, connection, target: "Agent") -> None:

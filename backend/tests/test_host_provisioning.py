@@ -563,6 +563,9 @@ async def test_stage_omp_host_agent_renders_models_yml(home_host, async_session,
     # reads a different models.yml than the one just rendered.
     env_txt = open(result.env_path).read()
     assert f"OMP_PROFILE='{hp.omp_host_profile(result.slug)}'" in env_txt
+    # omp aborts silent streams after 300 s; the host agent gets 1 h.
+    assert "PI_OPENAI_STREAM_IDLE_TIMEOUT_MS='3600000'" in env_txt
+    assert "PI_STREAM_IDLE_TIMEOUT_MS='3600000'" in env_txt
     # ...and the rendered file must sit in exactly that profile.
     assert f"/.omp/profiles/{hp.omp_host_profile(result.slug)}/agent/models.yml" in result.omp_models_path
 
@@ -611,7 +614,9 @@ async def test_stage_openclaude_host_agent_gets_no_models_yml(
     )
     assert result.omp_models_path is None
     assert not (home_host / ".omp").exists()
-    assert "OMP_PROFILE" not in open(result.env_path).read()
+    env_txt = open(result.env_path).read()
+    assert "OMP_PROFILE" not in env_txt
+    assert "STREAM_IDLE_TIMEOUT" not in env_txt
 
 
 @pytest.mark.asyncio

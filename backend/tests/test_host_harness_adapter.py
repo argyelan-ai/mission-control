@@ -387,3 +387,40 @@ async def test_sync_host_agent_model_token_stable_across_repeated_syncs(
     assert f"MC_AGENT_TOKEN='{token}'" in env
     # The full file stays tiny — no exponential quote accumulation.
     assert len(env) < 400
+
+
+@pytest.mark.asyncio
+async def test_sync_host_omp_agent_gets_stream_idle_timeout_setdefault(
+    async_session, tmp_path, monkeypatch
+):
+    """omp host agents get the 1 h stream idle timeout on sync; an operator
+    value already in agent.env survives; a non-omp agent gets none."""
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    rt = _mk_rt(async_session)
+    await async_session.commit()
+    await async_session.refresh(rt)
+    from app.services.host_harness_adapter import sync_host_agent_model
+
+    d = tmp_path / ".mc" / "agents" / "ompx"
+    d.mkdir(parents=True)
+    (d / "agent.env").write_text("MC_AGENT_TOKEN='t'\nPI_STREAM_IDLE_TIMEOUT_MS='120000'\n")
+    omp = Agent(name="Ompx", role="developer", agent_runtime="host",
+                harness="omp", runtime_id=rt.id, slug="ompx")
+    async_session.add(omp)
+    await async_session.commit()
+    await async_session.refresh(omp)
+    await sync_host_agent_model(omp, rt, session=async_session)
+    lines = (d / "agent.env").read_text().splitlines()
+    assert "PI_OPENAI_STREAM_IDLE_TIMEOUT_MS='3600000'" in lines
+    assert "PI_STREAM_IDLE_TIMEOUT_MS='120000'" in lines
+
+    d2 = tmp_path / ".mc" / "agents" / "hermes"
+    d2.mkdir(parents=True)
+    (d2 / "agent.env").write_text("MC_AGENT_TOKEN='t'\n")
+    h = Agent(name="Hermes", role="developer", agent_runtime="host",
+              harness="hermes", runtime_id=rt.id, slug="hermes")
+    async_session.add(h)
+    await async_session.commit()
+    await async_session.refresh(h)
+    await sync_host_agent_model(h, rt, session=async_session)
+    assert "STREAM_IDLE_TIMEOUT" not in (d2 / "agent.env").read_text()

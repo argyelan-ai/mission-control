@@ -89,6 +89,8 @@ def test_run_acp_once_marks_a_continue_as_nudge(tmp_path):
 def test_serve_loop_tells_the_factory_who_sends_what():
     """Tripwire on the two call sites in serve_loop's ACP branch."""
     src = (HERE.parent / "bridge.py").read_text(encoding="utf-8")
-    assert 'return acp_run(_p, origin_kind="task")' in src
-    assert 'return acp_run(nudge, origin_kind="nudge")' in src
+    # The continue resumes the previous session (28.10.2026): the nudge is
+    # sent as a nudge; only the no-session fallback sends the full task.
+    assert 'o = acp_run(_p, origin_kind="task")' in src
+    assert 'nudge, origin_kind="nudge",' in src
     assert '"# New Task:" in prompt else "nudge"' not in src

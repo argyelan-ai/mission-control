@@ -2,13 +2,21 @@
 (same auth dependency as the core approvals/files routers). Exception: the
 entry HTML view route uses require_bench_view, which additionally accepts a
 short-lived resource-scoped view-token (see auth.create_bench_view_token) —
-that route's URL is meant to be copied/shared/opened on a phone."""
+that route's URL is meant to be copied/shared/opened on a phone.
+
+Bench W1 kill list (24.10.2026, concept 30 W1.8): the legacy create
+(POST /challenges, the "Neue Challenge" dialog's 3-6 model grid), the
+Spark-only GET /spark-models and /effort-levels*, and the X-draft path
+(POST /challenges/{id}/draft -> Approval(x_post) -> x_publisher) are gone.
+Tests start through POST /bench/tests (w1_routes); MC posts nothing to X.
+What stays here: reading old challenges, stop/archive/delete, entry
+rename/view/rerender/retry, and the challenge-wide rerender/recompose —
+which hand W1 tests to the W1 runner (run 1 only, W1 templates)."""
 from __future__ import annotations
 
 import logging
 import uuid
 from pathlib import Path
-from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
@@ -23,11 +31,13 @@ from app.utils import create_tracked_task
 from app.verticals import hooks
 
 from . import orchestrator
-from .drafts import create_draft
 
 logger = logging.getLogger("mc.bench_studio")
 
 router = APIRouter(prefix="/api/v1/bench", tags=["bench-studio"])
+
+# Longest entry label create and PATCH accept.
+LABEL_MAX_LEN = 80
 
 BENCH_CHALLENGE_RUN_CLAIM_TTL_S = 1800  # self-heal net if the bg task dies without releasing
 
@@ -72,35 +82,6 @@ async def _claim_challenge_run(challenge_id: uuid.UUID) -> None:
 # ── Schemas ───────────────────────────────────────────────────────────────
 
 
-class BenchModelSpec(BaseModel):
-    label: str = Field(min_length=1, max_length=80)
-    source_kind: Literal["spark", "agent"]
-    spark_model: str | None = None
-    agent_id: uuid.UUID | None = None
-    # Custom chip tag for the branded video (e.g. "OMP · DGX SPARK").
-    # None -> harness-derived default (orchestrator._build_branding_payload).
-    display_tag: str | None = Field(default=None, max_length=80)
-
-
-class BenchChallengeCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=200)
-    prompt_template_id: uuid.UUID | None = None
-    prompt_text: str | None = None
-    mode: Literal["single", "side_by_side"] = "side_by_side"
-    models: list[BenchModelSpec] = Field(min_length=1, max_length=6)
-    series_label: str | None = Field(default=None, max_length=80)
-    # Video length in seconds. None -> legacy RECORD_DURATION_S fallback
-    # (orchestrator.py). 5..60 mirrors the mc-playwright /record bound
-    # (RecordRequest.duration_s) plus the timeout budget headroom noted there.
-    record_duration_s: int | None = Field(default=None, ge=5, le=60)
-
-
-class BenchDraftCreate(BaseModel):
-    tweet_text: str = Field(min_length=1, max_length=280)
-    include_speed_labels: bool = False
-    board_id: uuid.UUID | None = None
-
-
 class BenchChallengeUpdate(BaseModel):
     """Operator edit after a run — only presentation fields."""
     title: str | None = Field(default=None, min_length=1, max_length=200)
@@ -113,7 +94,7 @@ class BenchEntryUpdate(BaseModel):
     # name here (mirrors bench_entries.model_label), so opt out.
     model_config = {"protected_namespaces": ()}
 
-    model_label: str | None = Field(default=None, min_length=1, max_length=80)
+    model_label: str | None = Field(default=None, min_length=1, max_length=LABEL_MAX_LEN)
     display_tag: str | None = Field(default=None, max_length=80)
 
 
@@ -129,10 +110,17 @@ def _serialize(
     return {
         **challenge.model_dump(),
         "entries": [
-            {**e.model_dump(), "task_state": states.get(e.id)}
-            for e in sorted(entries, key=lambda e: e.model_label)
+            {**_entry_dict(e), "task_state": states.get(e.id)}
+            for e in sorted(entries, key=orchestrator.entry_order_key)
         ],
     }
+
+
+def _entry_dict(entry: BenchEntry) -> dict:
+    """An entry as the UI gets it: ``model_label`` as shown — an effort word
+    that create appended before round-2 Q2 ("DeepSeek · Off") is cut, the
+    level is the pill next to it (orchestrator.display_label)."""
+    return {**entry.model_dump(), "model_label": orchestrator.entry_display_label(entry)}
 
 
 async def _entries_for(session: AsyncSession, challenge_id: uuid.UUID) -> list[BenchEntry]:
@@ -144,98 +132,6 @@ async def _entries_for(session: AsyncSession, challenge_id: uuid.UUID) -> list[B
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────
-
-
-@router.get("/spark-models")
-async def list_spark_models(current_user=Depends(require_user)):
-    """Bench #21: live model list for the vanilla (direct-API) row in the
-    New-Challenge dialog. Always 200 — an unreachable Spark is a state the
-    dialog renders (offline warning + free-text fallback), not an error."""
-    return await orchestrator.spark_models_status()
-
-
-@router.post("/challenges", status_code=status.HTTP_201_CREATED)
-async def create_challenge(
-    body: BenchChallengeCreate,
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    # Edited text wins over template body. Only use template body as fallback when prompt_text is empty.
-    prompt_text = body.prompt_text
-    if body.prompt_template_id is not None:
-        from app.models.prompt_template import PromptTemplate  # PR 2
-
-        template = await session.get(PromptTemplate, body.prompt_template_id)
-        if template is None:
-            raise HTTPException(404, "Prompt template not found")
-        # Use template body only if prompt_text is empty/None (user did not edit or left it blank)
-        if not prompt_text or not prompt_text.strip():
-            prompt_text = template.body
-    if not prompt_text or not prompt_text.strip():
-        raise HTTPException(400, "prompt_text or prompt_template_id required")
-
-    # Bench #21 vanilla "auto" option: empty spark_model -> freeze the live
-    # active model now, so the entry/outro never end up pointing at nothing
-    # regardless of later model switches on the box (422 if Spark can't be
-    # reached to resolve it). Resolved at most ONCE per request — a
-    # multi-model side_by_side challenge with several auto specs must not
-    # fire N sequential probes against the same box for the same answer
-    # (review finding).
-    resolved_spark_model: str | None = None
-    for spec in body.models:
-        if spec.source_kind == "agent" and spec.agent_id is None:
-            raise HTTPException(400, f"model {spec.label!r}: agent_id required")
-        if spec.source_kind == "spark" and not (spec.spark_model or "").strip():
-            if resolved_spark_model is None:
-                resolved_spark_model = await orchestrator.resolve_spark_model_or_422()
-            spec.spark_model = resolved_spark_model
-            if not spec.label.strip():
-                spec.label = spec.spark_model
-
-    series_no = None
-    if body.series_label:
-        existing = (
-            await session.exec(
-                select(BenchChallenge.series_no).where(
-                    BenchChallenge.series_label == body.series_label
-                )
-            )
-        ).all()
-        series_no = max([n for n in existing if n is not None], default=0) + 1
-
-    challenge = BenchChallenge(
-        title=body.title,
-        prompt_template_id=body.prompt_template_id,
-        prompt_text=prompt_text,
-        mode=body.mode,
-        series_label=body.series_label,
-        series_no=series_no,
-        record_duration_s=body.record_duration_s,
-    )
-    session.add(challenge)
-    await session.flush()
-    entries = [
-        BenchEntry(
-            challenge_id=challenge.id,
-            model_label=spec.label,
-            source_kind=spec.source_kind,
-            spark_model=spec.spark_model,
-            agent_id=spec.agent_id,
-            display_tag=(spec.display_tag or "").strip() or None,
-        )
-        for spec in body.models
-    ]
-    for e in entries:
-        session.add(e)
-    await session.commit()
-    await session.refresh(challenge)
-
-    create_tracked_task(
-        orchestrator.start_challenge(challenge.id),
-        name=f"start_challenge({challenge.id})"
-    )
-    logger.info("bench challenge %s created (%d entries)", challenge.id, len(entries))
-    return _serialize(challenge, entries)
 
 
 @router.get("/challenges")
@@ -265,8 +161,9 @@ async def get_challenge(
     if challenge is None:
         raise HTTPException(404, "Challenge not found")
     entries = await _entries_for(session, challenge_id)
-    # Poll-fallback for failed agent tasks (they never fire task_done):
-    await orchestrator.reconcile_challenge(session, challenge, entries)
+    # Read-only (W0.8): failed/aborted/deleted agent tasks are healed by the
+    # vertical's background sweep (orchestrator.reconcile_loop), so the list
+    # shows them too and a GET never writes.
     # Why a running agent entry waits (blocked + question, last sign of
     # life) — derived, read-only, never persisted.
     task_states = await orchestrator.entry_task_states(session, entries)
@@ -362,33 +259,6 @@ async def view_bench_entry(
     )
 
 
-@router.post("/challenges/{challenge_id}/draft", status_code=status.HTTP_201_CREATED)
-async def create_challenge_draft(
-    challenge_id: uuid.UUID,
-    body: BenchDraftCreate,
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    challenge = await session.get(BenchChallenge, challenge_id)
-    if challenge is None:
-        raise HTTPException(404, "Challenge not found")
-    from app.services.x_publisher import validate_draft
-
-    warnings = validate_draft(body.tweet_text).warnings
-    approval = await create_draft(
-        session,
-        challenge,
-        tweet_text=body.tweet_text,
-        include_speed_labels=body.include_speed_labels,
-        board_id=body.board_id,
-    )
-    return {
-        "approval_id": str(approval.id),
-        "challenge_status": challenge.status,
-        "warnings": warnings,
-    }
-
-
 @router.post("/challenges/{challenge_id}/rerender")
 async def rerender_challenge(
     challenge_id: uuid.UUID,
@@ -403,21 +273,35 @@ async def rerender_challenge(
             409,
             f"Challenge is {challenge.status!r} — rerender only from review/drafted/failed/rendering/composing.",
         )
-    # An open X-Post approval still points at the current video path
-    # (Approval.payload.media_paths, frozen at draft time) — rerender would
-    # rename AND delete that file (_cleanup_old_compose), breaking the
-    # approve-then-post flow days later (2026-07-13 incident).
-    if await orchestrator.pending_x_post_approval(session, challenge_id) is not None:
-        raise HTTPException(
-            409,
-            "Open X-Post approval references the current video — approve or reject it first.",
-        )
     await _claim_challenge_run(challenge_id)
+    if _is_w1(challenge):
+        # W1: record run 1 again (seeded Math.random -> same video) and
+        # recompose with the W1 templates — never every repetition.
+        create_tracked_task(
+            _w1_then_release(challenge.id, "rerender"), name=f"bench_w1_rerender({challenge.id})"
+        )
+        return {"ok": True}
     create_tracked_task(
         orchestrator.rerender_challenge(challenge.id),
         name=f"rerender_challenge({challenge.id})"
     )
     return {"ok": True}
+
+
+def _is_w1(challenge: BenchChallenge) -> bool:
+    return (challenge.protocol_version or "v0") == "v1"
+
+
+async def _w1_then_release(challenge_id: uuid.UUID, what: str) -> None:
+    from . import w1_runner
+
+    try:
+        if what == "rerender":
+            await w1_runner.rerender(challenge_id)
+        else:
+            await w1_runner.recompose(challenge_id)
+    finally:
+        await orchestrator._release_challenge_run_claim(challenge_id)
 
 
 # ── Operator lifecycle: stop / archive / delete (2026-07-12) ──────────────
@@ -472,13 +356,31 @@ async def update_entry(
         )
     fields = body.model_dump(exclude_unset=True)
     if "model_label" in fields and fields["model_label"]:
-        entry.model_label = fields["model_label"].strip() or entry.model_label
+        new_label = fields["model_label"].strip() or entry.model_label
+        siblings = await _entries_for(session, entry.challenge_id)
+
+        def key(e: BenchEntry, label: str) -> tuple[str, str]:
+            return orchestrator.entry_label_key(
+                label, e.source_kind, (e.metrics or {}).get("effort_requested")
+            )
+
+        # Same rule as create: the label may repeat when the effort differs.
+        if any(
+            e.id != entry.id and key(e, e.model_label) == key(entry, new_label)
+            for e in siblings
+        ):
+            raise HTTPException(
+                409,
+                f"Another entry of this challenge is already called {new_label!r} "
+                "with the same effort.",
+            )
+        entry.model_label = new_label
     if "display_tag" in fields:
         entry.display_tag = (fields["display_tag"] or "").strip() or None
     session.add(entry)
     await session.commit()
     await session.refresh(entry)
-    return entry.model_dump()
+    return _entry_dict(entry)
 
 
 @router.post("/challenges/{challenge_id}/recompose")
@@ -505,14 +407,12 @@ async def recompose_challenge(
             422,
             "recompose needs 1 or 2 recorded entries — use rerender for everything else.",
         )
-    # Same guard as rerender: a pending X-Post approval's media_paths still
-    # point at the current file — recompose would rename AND delete it.
-    if await orchestrator.pending_x_post_approval(session, challenge_id) is not None:
-        raise HTTPException(
-            409,
-            "Open X-Post approval references the current video — approve or reject it first.",
-        )
     await _claim_challenge_run(challenge_id)
+    if _is_w1(challenge):
+        create_tracked_task(
+            _w1_then_release(challenge.id, "recompose"), name=f"bench_w1_recompose({challenge.id})"
+        )
+        return {"ok": True}
     create_tracked_task(
         orchestrator.recompose_challenge(challenge.id),
         name=f"recompose_challenge({challenge.id})",
@@ -538,7 +438,12 @@ async def stop_challenge(
             f"Challenge is {challenge.status!r} — stop only while running "
             f"({'/'.join(RUNNING_STATUSES)}).",
         )
-    await orchestrator.stop_challenge(session, challenge, str(current_user.id))
+    if _is_w1(challenge):
+        from . import w1_tests
+
+        await w1_tests.stop_test(session, challenge, str(current_user.id))
+    else:
+        await orchestrator.stop_challenge(session, challenge, str(current_user.id))
     entries = await _entries_for(session, challenge_id)
     return _serialize(challenge, entries)
 
@@ -652,14 +557,9 @@ async def rerender_entry(
         raise HTTPException(
             409, f"Challenge is {challenge.status!r} — wait for the run to settle."
         )
-    # Same guard as challenge-wide rerender/recompose: a pending X-Post
-    # approval's media_paths still point at the current video — this would
-    # rename AND delete that file (_cleanup_old_compose).
-    if await orchestrator.pending_x_post_approval(session, entry.challenge_id) is not None:
-        raise HTTPException(
-            409,
-            "Open X-Post approval references the current video — approve or reject it first.",
-        )
+    if challenge is not None and _is_w1(challenge):
+        # W1 records run 1 only — the challenge-wide rerender does exactly that.
+        raise HTTPException(409, "W1 test: use the test's rerender (run 1 is the only recording).")
 
     from app.redis_client import RedisKeys, get_redis
 
@@ -707,6 +607,11 @@ async def retry_entry(
         raise HTTPException(404, "Entry not found")
     if entry.status != "failed":
         raise HTTPException(409, f"Entry is {entry.status!r} — retry only from failed.")
+    challenge = await session.get(BenchChallenge, entry.challenge_id)
+    if challenge is not None and _is_w1(challenge):
+        # Attempts of a W1 run are counted by the runner; a new try of the
+        # whole plan is "Nochmal" (POST /bench/tests/{id}/rerun).
+        raise HTTPException(409, "W1 test: use Nochmal (rerun) — attempts are counted by the runner.")
     create_tracked_task(
         orchestrator.retry_entry(entry.id),
         name=f"retry_entry({entry.id})"

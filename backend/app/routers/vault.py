@@ -109,17 +109,33 @@ async def list_notes(
 
     `count` reflects the full filtered set so the client can decide when to
     stop fetching the next page. `notes` is the requested slice.
+
+    `agents` names every agent with notes in the set filtered by everything
+    except `agent` (a facet), with its note count, sorted by slug. The memory
+    header counted agents and the agent filter offered choices from the first
+    page only — "4 agents" in a vault with 19 (round-4 user test t4 SHOULD-1).
+    Leaving the agent filter out keeps the other agents choosable while one
+    is selected.
     """
     index = request.app.state.vault_index
     notes = list(index.list_all())
-    if agent:
-        notes = [n for n in notes if n["agent"] == agent]
     if type:
         notes = [n for n in notes if n["type"] == type]
     # Phase 2: optional status filter
     if status:
         notes = [n for n in notes if n.get("status", "published") == status]
-    return {"count": len(notes), "notes": notes[offset : offset + limit]}
+    agent_counts: dict[str, int] = {}
+    for n in notes:
+        slug = n.get("agent") or ""
+        if slug:
+            agent_counts[slug] = agent_counts.get(slug, 0) + 1
+    if agent:
+        notes = [n for n in notes if n["agent"] == agent]
+    return {
+        "count": len(notes),
+        "notes": notes[offset : offset + limit],
+        "agents": [{"agent": slug, "count": agent_counts[slug]} for slug in sorted(agent_counts)],
+    }
 
 
 @router.get("/search", dependencies=[Depends(require_role(Role.ADMIN))])
@@ -900,25 +916,58 @@ async def get_graph(
             )
             return cached
 
-    payload = await build_graph(
-        index,
-        embeddings,
-        activity,
-        cluster=cluster,
-        heatmap=heatmap,
-        similarity_edges=similarity_edges,
-    )
-    # Mark this as a cold build before caching so the next hit knows.
-    if isinstance(payload, dict) and isinstance(payload.get("stats"), dict):
-        payload["stats"]["cache_hit"] = False
-    await set_cached_graph(redis, version, p_hash, payload)
-    logger.info(
-        "vault_graph: cold build cached at v%d/%s (build_ms=%s)",
-        version,
-        p_hash,
-        (payload.get("stats") or {}).get("build_ms"),
-    )
-    return payload
+    async def _cold_build() -> dict[str, Any]:
+        payload = await build_graph(
+            index,
+            embeddings,
+            activity,
+            cluster=cluster,
+            heatmap=heatmap,
+            similarity_edges=similarity_edges,
+        )
+        # Mark this as a cold build before caching so the next hit knows.
+        if isinstance(payload, dict) and isinstance(payload.get("stats"), dict):
+            payload["stats"]["cache_hit"] = False
+        await set_cached_graph(redis, version, p_hash, payload)
+        logger.info(
+            "vault_graph: cold build cached at v%d/%s (build_ms=%s)",
+            version,
+            p_hash,
+            (payload.get("stats") or {}).get("build_ms"),
+        )
+        return payload
+
+    if no_cache:
+        return await _cold_build()
+    return await _single_flight_graph_build((version, p_hash), _cold_build)
+
+
+# One cold build per (vault version, params) at a time. Agents write notes
+# all the time, so the cache is often cold; without this every open tab and
+# the list tab's idle prefetch started its own full build of the same
+# version (round-3 user test: five builds of v7476 in parallel). The backend
+# runs a single uvicorn worker, so an in-process map is enough.
+_graph_builds: dict[tuple[int, str], "asyncio.Task[dict[str, Any]]"] = {}
+
+
+def _forget_graph_build(key: tuple[int, str], task: "asyncio.Task[Any]") -> None:
+    if _graph_builds.get(key) is task:
+        del _graph_builds[key]
+    # Consume the exception so a build nobody waits for anymore does not log
+    # "Task exception was never retrieved".
+    if not task.cancelled():
+        task.exception()
+
+
+async def _single_flight_graph_build(key, build):
+    task = _graph_builds.get(key)
+    if task is None:
+        task = asyncio.ensure_future(build())
+        _graph_builds[key] = task
+        task.add_done_callback(lambda t, k=key: _forget_graph_build(k, t))
+    # shield: a client that goes away cancels only its own wait, never the
+    # build the other requests (and the cache) are waiting for.
+    return await asyncio.shield(task)
 
 
 # ── Topics (Phase 3 Intelligence) ──────────────────────────────────────────

@@ -1,0 +1,68 @@
+{
+  "test_id": "a0000000-0000-4000-8000-000000000004",
+  "gate": {
+    "status": "red",
+    "reasons": [
+      {
+        "rule": "R1",
+        "severity": "red",
+        "code": "headline_missing",
+        "params": {
+          "field": "tokens_out"
+        },
+        "fix": "harvest"
+      }
+    ],
+    "checksum": null
+  },
+  "downloadable": false,
+  "blocked_reason": {
+    "code": "gate_red",
+    "params": {
+      "rule": "R1"
+    }
+  },
+  "files": [
+    {
+      "name": "video.mp4",
+      "ready": true,
+      "bytes": null,
+      "width": 1920,
+      "height": 1080,
+      "duration_s": null
+    },
+    {
+      "name": "card.png",
+      "ready": false,
+      "bytes": null,
+      "width": null,
+      "height": null,
+      "duration_s": null
+    },
+    {
+      "name": "kit.zip",
+      "ready": false,
+      "bytes": null,
+      "width": null,
+      "height": null,
+      "duration_s": null
+    }
+  ],
+  "texts": {
+    "settings": [
+      "Setup · model only · same prompt (sha d6e0ea9) · n=3, video = run 1 · temp 0.7 · max_tokens 16384",
+      "DeepSeek-V4.1-Flash-1017 · local · DGX Spark ×2 · engine: unknown (hand-made runtime) · GPU mode eco · spec-decoding: unknown · raw API",
+      "effort: server default = high (thinking observed: on) · network blocked during render · method v1 · 2026-10-22 · API list price would be ≈ $0.04 (comparison only)"
+    ],
+    "alt_text": "Result card: Pagoda Garden · same-prompt showdown · 2026-10-22. DeepSeek-V4.1-Flash-1017, running locally on DGX Spark ×2, raw API, effort high (default): compute time 1:06 (median of 3), 6.6k output tokens, 101 tok/s decode. Median of 3 runs · same prompt.",
+    "facts": [],
+    "link": null,
+    "thread_guide": [
+      "Main post: your words + video.mp4",
+      "Reply 1: card.png + alt text",
+      "Then: one reply per settings block (each at most 280 characters)"
+    ]
+  },
+  "footer": "@example_handle",
+  "truncation": null
+}

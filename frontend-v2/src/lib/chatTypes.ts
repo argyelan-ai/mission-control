@@ -65,11 +65,19 @@ export interface ChatNoticeInfo {
   code?: string | null;
   previous?: string | null;
   current?: string | null;
+  /** `new_conversation`: is the previous conversation's copy on disk? Only
+   *  then does the card say it is saved (incident 21.10.2026). */
+  kept?: boolean | null;
 }
 
 export interface ChatErrorInfo {
   code: string;
   detail?: string | null;
+  /** The operator's own message of the turn that broke, word for word —
+   *  what "Send again" sends. The backend leaves it out (never shortens it)
+   *  when the daemon sent none or the text is too long, so a missing value
+   *  means: no button (spec docs/specs/chat-over-acp.md, "Errors"). */
+  retryText?: string | null;
 }
 
 export interface ToolEvent {
@@ -247,6 +255,9 @@ export interface ThinkingEvent {
   ts: string;
   text: string;
   sidechain: boolean;
+  /** How long the model thought, when the harness recorded it (omp bridge,
+   *  20.10.2026). Absent = unknown — then no duration is shown. */
+  durationMs?: number;
 }
 
 export interface CommandEvent {
@@ -333,7 +344,17 @@ export interface ChatPrompt {
 
 export interface StateEvent {
   kind: "state";
-  status: "working" | "idle" | "waiting_input" | "permission_prompt" | "unknown";
+  // ACP agents, task channel (follow-up to ADR-097): task_working = a task
+  // turn runs (the chat itself is free — no Stop, no queued echo);
+  // waiting_model = a task was delivered, its model has not answered yet.
+  status:
+    | "working"
+    | "task_working"
+    | "idle"
+    | "waiting_input"
+    | "waiting_model"
+    | "permission_prompt"
+    | "unknown";
   prompt: ChatPrompt | null;
   /** The probe's liveness verdict, published with every `state` frame — also on
    *  a hidden tab, since the backend probes regardless of focus. `null`/absent
@@ -359,7 +380,142 @@ export interface PreviewEvent {
   ts: string;
   text: string;
   source: "pane" | "acp";
+  /** `"thinking"`: the model is THINKING, this is the end of its running
+   *  thought — never an answer (operator finding 20.10.2026: minutes of
+   *  reasoning looked like "nothing happens"). Absent = answer text. */
+  block?: "thinking";
+  /** The running thought's full size in characters (`text` is only its end). */
+  chars?: number;
+  /** When the running thought began (ISO) — the chat counts up from here. */
+  startedAt?: string;
 }
+
+/** `GET /agents/{id}/chat/engine` (backend `services/chat_engine_activity.py`):
+ *  whether the engine the agent is bound to has a request in flight. A model
+ *  can work for minutes without streaming anything (a tool call's arguments
+ *  arrive only when complete). Per ENGINE: another agent on the same engine
+ *  counts too. `null` = unknown — never busy. */
+export interface ChatEngineActivity {
+  engine: { busy: boolean; running: number; checkedAt: string } | null;
+}
+
+// ── Task steps in the agent chat (spec A, variant A) ────────────────────────
+// `GET /agents/{id}/chat/tasks`, `…/tasks/{task_id}/steps`, `…/steps/{row_id}`
+// (backend `services/chat_task_steps.py`). Read-only; a task's work stands at
+// its time inside the chat. Never fed through `useChatStream` (#898).
+
+/** One task of this chat: every live task assigned to the agent, plus the
+ *  newest finished ones (cards). Times are ISO strings. */
+export interface ChatTaskStub {
+  taskId: string;
+  title: string;
+  status: string;
+  /** Assigned to this agent AND in a live state (in_progress, waiting,
+   *  blocked, user_test, or inbox + delivered). Never from "worked by". */
+  live: boolean;
+  deliveredAt: string | null;
+  startedAt: string | null;
+  /** Where the task stands in the chat: started_at → first in_progress
+   *  event → dispatched_at (survives park/requeue). */
+  startKey: string | null;
+  /** The current run's start: the newest step into in_progress (a rework
+   *  is run 2). Absent on an older backend = the first start. */
+  runStartedAt?: string | null;
+  /** How many runs the task had (steps into in_progress). */
+  runs?: number;
+  endedAt: string | null;
+  /** A task this agent worked on that now sits with another agent. */
+  assignee: string | null;
+  /** One plain line: result / question / reason (≤ 200 chars), or null. */
+  outcome: string | null;
+  deliverables: number;
+  /** A review run of this agent works the card (a review handoff gave it
+   *  the `review` card): not live, but a real task turn (round-4 r1 S2).
+   *  Absent on an older backend = false. */
+  reviewRun?: boolean;
+  /** The task's `auto_reason` — a bench run carries "bench_studio challenge
+   *  <test id>" and its card leads to the benchmark result. Absent on an
+   *  older backend = a plain task. */
+  autoReason?: string | null;
+  /** The RUNNING task's own context fill (the agent's heartbeat figure, as
+   *  on the agent page) — only on the task the agent runs now; null/absent =
+   *  unknown or another task (never "0 %"). */
+  context?: { tokens: number; max: number } | null;
+}
+
+export type ChatTasksResponse =
+  | { applies: false }
+  | { applies: true; tasks: ChatTaskStub[]; queued: number; hasMore: boolean };
+
+interface TaskStepBase {
+  /** `<attempt>:<eventIndex>` or `<attempt>:<eventIndex>.<k>` (recovered piece). */
+  id: string;
+  ts: string | null;
+}
+
+export type TaskStepRow =
+  | (TaskStepBase & { k: "think"; lead: string; more?: boolean; ms?: number })
+  | (TaskStepBase & {
+      k: "tool";
+      name: string | null;
+      title: string;
+      st: "running" | "done" | "error";
+      stats?: { additions: number; deletions: number } | null;
+    })
+  | (TaskStepBase & { k: "comment"; type: string; text: string; more?: boolean })
+  | (TaskStepBase & { k: "text"; text: string; more?: boolean })
+  | (TaskStepBase & { k: "system"; what: string; request?: boolean; decision?: string; src?: string })
+  | (TaskStepBase & { k: "delivery"; lead: string; more?: boolean })
+  | (TaskStepBase & { k: "attempt"; n: number });
+
+/** The task's running thought or answer (live tasks only). */
+export type TaskLiveRow =
+  | { block: "thinking"; startedAt: string | null; ts: string; chars: number | null; stale: boolean; text?: string }
+  | { block: "text"; ts: string; text: string; stale: boolean };
+
+export type TaskStepsResponse =
+  | { applies: false }
+  | {
+      applies: true;
+      taskId: string;
+      status: string;
+      live: boolean;
+      hasSession: boolean;
+      attempts: { n: number; startedAt: string | null }[];
+      /** Oldest first. */
+      rows: TaskStepRow[];
+      /** Current form of rows listed in `open` (a running tool finished). */
+      updated: TaskStepRow[];
+      cursor: string;
+      /** More rows behind the cursor — fetch again at once. */
+      hasMore: boolean;
+      /** The cursor did not fit: `rows` replace everything. */
+      reset: boolean;
+      /** Rows older than the first returned one (initial page only). */
+      omitted: number;
+      liveRow: TaskLiveRow | null;
+    };
+
+/** One step in full (on tap). */
+export interface TaskStepDetail {
+  id: string;
+  ts: string | null;
+  k: "think" | "tool" | "comment" | "text" | "system" | "delivery" | "attempt";
+  text?: string;
+  truncated?: boolean;
+  durationMs?: number;
+  name?: string | null;
+  title?: string | null;
+  st?: "running" | "done" | "error";
+  detail?: Record<string, unknown> | null;
+  result?: string | null;
+  diffs?: ToolDiff[] | null;
+  locations?: string[] | null;
+  stats?: { additions: number; deletions: number } | null;
+  type?: string;
+}
+
+export type TaskStepLiveDetail = { liveRow: TaskLiveRow | null };
 
 /** Eine Hintergrund-Meldung der CLI: ein Subagent oder ein Hintergrund-Befehl
  *  ist fertig. Sie steht im Transkript als Nachricht mit der Rolle `user` —
@@ -588,6 +744,12 @@ export interface ChatCapabilities {
    *  zeigte nach Neuladen "high", Pane sagte "low"). Absent/false = der Wert
    *  ist der settings.json-Standard fuer NEUE Sessions, usage bleibt vorn. */
   effortLive?: boolean;
+  /** `"session"`: a switch holds for the running chat session only and is
+   *  never written into the agent's own settings — every ACP agent (the level
+   *  is a session config option). Then every level gets the "this session
+   *  only" hint, not just the ones `SESSION_ONLY_EFFORT_LEVELS` names.
+   *  Absent = the per-level rule below applies. */
+  effortScope?: "session" | null;
   /** WARUM sich der Effort nicht umschalten laesst — damit das UI es erklaeren
    *  kann, statt das Bedienelement wortlos wegzulassen. Nur gesetzt, wenn
    *  `canSwitchEffort` false ist; `null`/absent = kein Grund noetig oder
@@ -598,8 +760,17 @@ export interface ChatCapabilities {
    *    ("Effort not supported for <modell>") — der haeufigste Fall bei
    *    Agenten auf lokalen/eigenen Modellen.
    *  - `foreign_harness`: diese CLI kennt `/effort` gar nicht (kimi, omp).
-   *  - `no_pane`: die Runtime hat keinen steuerbaren Kanal (Hermes, Jarvis). */
+   *  - `no_pane`: die Runtime hat keinen steuerbaren Kanal (Jarvis, Hermes
+   *    auf dem alten tmux-Treiber).
+   *  - `acp_state_missing`: kopfloser Agent (ACP), sein Chat-Daemon hat noch
+   *    keine Einstellungen gemeldet.
+   *  - `harness_no_effort`: kopfloser Agent, Einstellungen gemeldet, aber
+   *    sein Harness bietet keine Denkstufe an (Name in `effortHarness`). */
   effortReason?: string | null;
+  /** Der Harness-Schluessel (z.B. `hermes`) bei `effortReason:
+   *  "harness_no_effort"` — der Satz nennt ihn dann beim Namen
+   *  (`harnessLabel`). Absent = allgemeiner Satz ohne Namen. */
+  effortHarness?: string | null;
   /** Das MODELL, ueber das die CLI die Effort-Aussage gemacht hat — direkt aus
    *  ihrer eigenen Picker-Zeile ("Effort not supported for <modell>"). Nur bei
    *  `effortReason: "model_no_effort"` gesetzt.
@@ -677,6 +848,18 @@ export const SESSION_ONLY_EFFORT_LEVELS = new Set(["max", "ultracode", "off"]);
 
 export function isSessionOnlyEffort(level: string): boolean {
   return SESSION_ONLY_EFFORT_LEVELS.has(level);
+}
+
+/**
+ * Ladder entries that are not a level but a hand-back to the agent's own
+ * configured level (Hermes over ACP reports `default` first in its list).
+ * They have no rank: no stop on the slider, no fill in the gauge — the chip
+ * offers them as a separate "Default" button instead.
+ */
+export const UNRANKED_EFFORT_LEVELS = new Set(["default", "auto"]);
+
+export function isRankedEffort(level: string): boolean {
+  return !UNRANKED_EFFORT_LEVELS.has(level);
 }
 
 /** Eine hochgeladene Datei, wie sie der Anhang-Endpunkt zurueckgibt.

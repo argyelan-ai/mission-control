@@ -127,7 +127,9 @@ class _FakeTransport:
         self.queued: list[dict] = []
         self.cancel_ends_turn = True
 
-    async def prompt(self, text, mode=None):
+    async def prompt(self, text, mode=None, origin=None):
+        # The voice relay is not the operator's typed text: origin stays unknown.
+        assert origin is None, origin
         self.calls.append(("prompt", text, mode))
         return {"ok": True}
 

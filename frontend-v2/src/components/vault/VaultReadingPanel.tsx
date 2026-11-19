@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,13 +11,15 @@ import type { VaultNote } from "@/lib/types";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { useVaultNote } from "@/hooks/useVaultNote";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
-import { VaultMarkdown } from "./VaultMarkdown";
+import { VaultMarkdown, stripLeadingTitle } from "./VaultMarkdown";
 import { AttachmentPreview } from "./AttachmentPreview";
 import {
   titleFromNote,
   parseTags,
   parseDateFromNote,
   formatLongDate,
+  formatParsedLongDate,
+  noteTypeLabel,
 } from "./VaultNoteRow";
 import { colorForAgent } from "./agentColors";
 import { ConfirmDeleteModal } from "./ConfirmDeleteModal";
@@ -96,7 +98,7 @@ function RelatedNotesSection({
                   minWidth: "60px",
                 }}
               >
-                {n.type}
+                {noteTypeLabel(t, n.type)}
               </span>
               <span
                 className="truncate min-w-0"
@@ -168,6 +170,7 @@ function PanelContent({
   onDeleted?: () => void;
 }) {
   const t = useTranslations("vault");
+  const locale = useLocale();
   const { data, isLoading, isError } = useVaultNote(note.path);
   const agentColor = colorForAgent(note.agent);
   const tags = parseTags(note.tags);
@@ -194,10 +197,14 @@ function PanelContent({
     typeof data?.frontmatter?.date === "string" ? data.frontmatter.date : null;
   const fallbackDate = parseDateFromNote(note);
   const displayDate = fmDate
-    ? formatLongDate(fmDate)
+    ? formatLongDate(fmDate, locale)
     : fallbackDate
-    ? `${fallbackDate.month} ${fallbackDate.day}, ${fallbackDate.year}`
+    ? formatParsedLongDate(fallbackDate, locale)
     : null;
+
+  const hasAttachmentPreview =
+    typeof data?.frontmatter?.deliverable_id === "string" &&
+    typeof data?.frontmatter?.attachment_mime === "string";
 
   // ── Edit mode ─────────────────────────────────────────────────────────────
   // Draft state lives next to the note in this component so switching notes
@@ -415,7 +422,7 @@ function PanelContent({
               lineHeight: 1,
             }}
           >
-            {note.type}
+            {noteTypeLabel(t, note.type)}
           </span>
           {note.agent && (
             <span
@@ -614,15 +621,19 @@ function PanelContent({
         ) : (
           data && (
             <>
+              {/* The title is already the heading above — a body that opens
+                  with the same "# Title" would show it twice. The ![[…]]
+                  embed is left out when the attachment preview below shows
+                  the real file. */}
               <VaultMarkdown
-                content={data.content}
+                content={stripLeadingTitle(data.content, title)}
                 onWikilinkClick={onWikilinkClick}
+                hideEmbeds={hasAttachmentPreview}
               />
               {/* Phase 5: inline preview of the binary attachment for
                   deliverable wrappers. Only deliverable kinds with a
                   mime hint get a preview — document/url have no binary. */}
-              {typeof data.frontmatter?.deliverable_id === "string" &&
-                typeof data.frontmatter?.attachment_mime === "string" && (
+              {hasAttachmentPreview && (
                   <AttachmentPreview
                     deliverableId={String(data.frontmatter.deliverable_id)}
                     mime={String(data.frontmatter.attachment_mime)}

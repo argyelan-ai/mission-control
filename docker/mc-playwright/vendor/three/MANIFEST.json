@@ -1,0 +1,27 @@
+{
+  "three_version": "0.170.0",
+  "revision": "170",
+  "esbuild_version": "0.24.0",
+  "source": "npm three@0.170.0",
+  "files": {
+    "addons/controls/OrbitControls.js": "80efaadea4f8a636a65fb0bd08bfef62f3d93a0bb94e2e7500f23176c5c07f4e",
+    "addons/environments/RoomEnvironment.js": "85869bdd22f7cf0b22e68dcefe6cb710480af0f5c901a76f7a7764fd07fc8014",
+    "addons/geometries/RoundedBoxGeometry.js": "d20aeaf7077c459a8d952d215738d7b44fba028440bb862d84b622a34f0c80bb",
+    "addons/math/ImprovedNoise.js": "a199c945dcae1b0fd7db1503909c4d0da53b448461f4f96f2c8724b13f9bccc0",
+    "addons/math/SimplexNoise.js": "9b8d541b77b0ddc79afaa6a1de8941452c191b8b9006f04e7b8fc422e2b263f7",
+    "addons/objects/Sky.js": "eacd17d5debec3b909d1208304d70024a59c38c58b6533fcd4711f8a6a0b63bc",
+    "addons/postprocessing/EffectComposer.js": "d234e578618fa816955ebdc059c049c577e203e650e33cf22bde3f232c29e669",
+    "addons/postprocessing/MaskPass.js": "328cf7db0da5d9be83ffe39d54b01d5ac1fddf108cc98182ddbb056f5c8b537f",
+    "addons/postprocessing/OutputPass.js": "32f879d2179087676631c799857a885586b3cdd13b9731bd3b13f06428bd58b7",
+    "addons/postprocessing/Pass.js": "b3c6128340eaa37e40a6a2f1b738e894c855239417d50959759b34a2b5e89f92",
+    "addons/postprocessing/RenderPass.js": "6c9b8a539ea16e898f65e4760f14937ef9ea94043bd9842c141e0301f41903e8",
+    "addons/postprocessing/ShaderPass.js": "3b28a1ee27e0eb96c0eab137a1f442ccf127a926904eced2d51e125ec44af781",
+    "addons/postprocessing/UnrealBloomPass.js": "3bd23a1097af75c7002d0ffc21a6c14f45c4dd701dbaf737030dfc61fb7c64d9",
+    "addons/shaders/CopyShader.js": "4e3346db194db56a596cd074e9bdb39fb5eb52040c333e0d29dc4eb1324d3b1d",
+    "addons/shaders/LuminosityHighPassShader.js": "9f4866f9abb2d96fd83eec46ba4bf2165b22155a7a37ff425c0f60eba18007cb",
+    "addons/shaders/OutputShader.js": "4944cecd49c0d4d1520a4d927bde8a590fd43f041ee913252b9451855a01d0f0",
+    "addons/utils/BufferGeometryUtils.js": "c25b7930e570e9ec56173cd3b866ec8d2e10016630db3937efb439daf1cedbf6",
+    "three.global.min.js": "4052746cbae28354a9f281ca8446024be7c41c29a6d4a3c5432f2c3e5682b72f",
+    "three.module.min.js": "08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7"
+  }
+}

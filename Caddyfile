@@ -9,21 +9,26 @@
 
 # Never log credentials from URLs. Browsers cannot send an Authorization
 # header on EventSource/WebSocket, so stream URLs carry a short-lived,
-# single-use `?ticket=` (older clients: the login JWT as `?token=`). Caddy
-# writes the request URI into its log lines (e.g. reverse_proxy errors when a
-# stream is cut off), so redact both parameters on the default logger — it
-# covers the error log and any access log that is not configured separately.
-# If you add a site `log` directive, give it the same `format filter`.
+# single-use `?ticket=` (older clients: the login JWT as `?token=`). The HTML
+# preview's folder view carries its signed token as a path segment:
+# /api/v1/deliverable-view/<token>/… (and so in the Referer of the page's own
+# requests). Caddy writes the request URI and headers into its log lines —
+# every time a client hangs up mid-answer ("aborting with incomplete
+# response": a media player after its first GET, a preview closed while it
+# loads) — so the default logger masks all of them: the segment after
+# /deliverable-view/, the token by its own shape (dv1.<claims>.<signature>,
+# e.g. inside another URL's query) and the three query parameters. One
+# `regexp` per field, because a field takes only one filter (this Caddy has
+# no `multiple`). It covers the error log and any access log that is not
+# configured separately. If you add a site `log` directive, give it the same
+# `format filter`. Test: caddy/test_upstream_headers.sh
 {
 	log default {
 		output stderr
 		format filter {
 			wrap json
-			request>uri query {
-				replace token REDACTED
-				replace ticket REDACTED
-				replace access_token REDACTED
-			}
+			request>uri regexp "(/deliverable-view/)[^/?]+|dv1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}|([?&](?:token|ticket|access_token)=)[^&]*" "${1}${2}REDACTED"
+			request>headers>Referer regexp "(/deliverable-view/)[^/?]+|dv1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}|([?&](?:token|ticket|access_token)=)[^&]*" "${1}${2}REDACTED"
 		}
 	}
 }
@@ -32,7 +37,12 @@
     encode gzip zstd
     header {
         X-Content-Type-Options nosniff
-        Referrer-Policy strict-origin-when-cross-origin
+        # `?` = only when the backend set none: the HTML preview's folder view
+        # and the bench viewer send no-referrer on purpose (agent-written pages
+        # must not send MC's host name to the CDNs they load). This block is
+        # deferred (it deletes Server), so a plain line would overwrite theirs.
+        # Test: caddy/test_upstream_headers.sh
+        ?Referrer-Policy strict-origin-when-cross-origin
         -Server
     }
 
@@ -67,7 +77,14 @@
         respond 403
     }
 
-    # API + Health → backend
+    # API + Health → backend. No active health checks: a dial failure
+    # already gets caught by handle_errors below (Caddy's own matcher is
+    # `in [502, 503]`, which includes 502 dial errors) and turned into the
+    # maintenance page. Active checks were tried and reverted — see the
+    # handle_errors comment and PR 7 of the mc-update plan: a slow but
+    # live backend (one /health call over the check's timeout) made Caddy
+    # mark the whole backend unhealthy and 503 every /api/* request,
+    # including POSTs, which is strictly worse than before.
     handle /api/* {
         reverse_proxy backend:8000
     }
@@ -78,6 +95,32 @@
     # Default: Next.js frontend
     handle {
         reverse_proxy frontend:3000
+    }
+
+    # Maintenance page: while backend or frontend is down, a request-time
+    # dial failure to it is a 502 (Caddy's default on a stopped/unreachable
+    # upstream — verified: stopping the backend container here and hitting
+    # /api/* returns exactly 502, no health check needed to produce it).
+    # Every such 502/503 gets `Retry-After: 5`. Only a browser page load
+    # (Accept contains text/html) also gets the self-reloading page; fetch,
+    # API and script callers keep the bare 502, so the app's error toasts
+    # and agents' tool errors never fill up with 2 KB of HTML.
+    # Copy this block (and maintenance/503.html) into your own Caddyfile —
+    # see caddy/Caddyfile.tls.example for the documented, reusable version.
+    # Behaviour test: caddy/test_maintenance_page.sh.
+    handle_errors {
+        @mc_restarting expression {err.status_code} in [502, 503]
+        header @mc_restarting Retry-After "5"
+        @mc_restarting_page {
+            expression {err.status_code} in [502, 503]
+            header Accept *text/html*
+        }
+        handle @mc_restarting_page {
+            rewrite * /503.html
+            templates
+            root * /etc/caddy/maintenance
+            file_server
+        }
     }
 }
 

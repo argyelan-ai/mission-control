@@ -425,3 +425,118 @@ def test_operator_mc_tasks_still_uses_admin_routes(operator_mod, monkeypatch):
     out = _unwrap(operator_mod.mc_tasks)(board_id=BOARD)
     assert ("GET", f"/boards/{BOARD}/tasks") in calls
     assert "Card one" in out
+
+
+# ── mc_box_status: box facts, read-only (ADR-100) ───────────────────────
+
+_BOXES = {
+    "boxes": [{
+        "slug": "box-a", "display_name": "Box A", "auto_recovery": False,
+        "head": None, "verdict": "not_serving",
+        "reasons": ["engine_not_serving", "manual_test_possible"],
+        "runtimes": [{
+            "slug": "rt-a", "model": "model-a", "served_model": None,
+            "engine": "not_serving", "running_requests": 0, "switch_lock": "open",
+            "role": "head", "switching": None, "load_unknown_reason": None,
+            "checked_at": "2026-11-01T10:00:00+00:00",
+        }],
+    }],
+    "generated_at": "2026-11-01T10:00:01+00:00",
+}
+
+
+def test_agent_mode_offers_mc_box_status(agent_mod):
+    assert "mc_box_status" in _tool_names(agent_mod)
+
+
+def test_agent_mc_box_status_reads_agent_route_only(agent_mod, monkeypatch):
+    fake = FakeMC(overrides={
+        ("GET", "/api/v1/agent/boxes/status"): (200, _BOXES),
+    }).install(agent_mod, monkeypatch)
+    out = _unwrap(agent_mod.mc_box_status)()
+    fake.assert_agent_only()
+    assert fake.paths() == ["/api/v1/agent/boxes/status"]
+    assert [c["method"] for c in fake.calls] == ["GET"]
+    assert "box-a" in out and "not_serving" in out and "manual_test_possible" in out
+    assert "rt-a" in out and "model-a" in out
+
+
+def test_agent_mc_box_status_one_box_and_unknown_slug(agent_mod, monkeypatch):
+    FakeMC(overrides={
+        ("GET", "/api/v1/agent/boxes/status"): (200, _BOXES),
+    }).install(agent_mod, monkeypatch)
+    assert "box-a" in _unwrap(agent_mod.mc_box_status)(box="box-a")
+    assert "nope" in _unwrap(agent_mod.mc_box_status)(box="nope")
+
+
+def test_agent_mc_box_status_403_is_reported(agent_mod, monkeypatch):
+    fake = FakeMC(overrides={
+        ("GET", "/api/v1/agent/boxes/status"): (403, {"detail": "Missing scopes: tasks:read"}),
+    }).install(agent_mod, monkeypatch)
+    out = _unwrap(agent_mod.mc_box_status)()
+    fake.assert_agent_only()
+    assert "403" in out
+
+
+def test_operator_mc_box_status_never_uses_admin_path(operator_mod, monkeypatch):
+    """No agent token in operator mode: an honest error, not an admin call."""
+    fake = FakeMC().install(operator_mod, monkeypatch)
+    out = _unwrap(operator_mod.mc_box_status)()
+    assert fake.calls == []
+    assert "Token" in out or "token" in out
+
+
+# ── mc_who / mc_send, and session mode (ADR-100 2c) ─────────────────────
+
+
+def test_agent_mode_offers_who_and_send(agent_mod):
+    names = _tool_names(agent_mod)
+    assert {"mc_who", "mc_send"} <= names
+
+
+def test_agent_mc_send_posts_to_and_body_as_the_agent(agent_mod, monkeypatch):
+    fake = FakeMC(overrides={
+        ("POST", "/api/v1/agent/comms/send"): (201, {"to": "claude@desk:runtimes", "delivery": "next_rest",
+                                                     "thread_id": "t", "message_id": "m", "paused": False}),
+    }).install(agent_mod, monkeypatch)
+    out = _unwrap(agent_mod.mc_send)(to="runtimes", body="When are you done?")
+    fake.assert_agent_only()
+    [call] = fake.calls
+    assert call["json"] == {"to": "runtimes", "body": "When are you done?"}
+    assert "claude@desk:runtimes" in out and "next_rest" in out
+
+
+def test_agent_mc_who_lists_alive_and_listening(agent_mod, monkeypatch):
+    fake = FakeMC(overrides={
+        ("GET", "/api/v1/agent/comms/who"): (200, {"me": "lead", "warming_up": False, "sessions": [
+            {"address": "local", "kind": "agent", "harness": "omp", "alive": "yes", "listening": False,
+             "busy": False, "task": None, "accept": "accept"}]}),
+    }).install(agent_mod, monkeypatch)
+    out = _unwrap(agent_mod.mc_who)()
+    fake.assert_agent_only()
+    assert "local" in out and "alive yes" in out and "listening no" in out
+
+
+@pytest.fixture
+def session_mod(monkeypatch, tmp_path):
+    f = tmp_path / "session.json"
+    f.write_text('{"token": "mcs_sessiontoken", "address": "claude@desk:runtimes"}')
+    monkeypatch.delenv("MC_AGENT_TOKEN", raising=False)
+    monkeypatch.delenv("MC_AGENT_ENV_FILE", raising=False)
+    monkeypatch.setenv("MC_COMMS_SESSION_FILE", str(f))
+    return _load(tmp_path)
+
+
+def test_session_mode_is_agent_mode_with_the_session_token(session_mod, monkeypatch):
+    assert not (_tool_names(session_mod) & OPERATOR_ONLY)
+    assert "JWT_SECRET_KEY" not in session_mod.ENV
+    fake = FakeMC(overrides={
+        ("GET", "/api/v1/agent/comms/inbox"): (200, {"messages": [
+            {"id": "m1", "thread_id": "t1", "seq": 2, "from": "lead", "body": "[Message from lead (omp) — x]\n\nhi"}],
+            "threads": {"t1": 2}}),
+        ("POST", "/api/v1/agent/comms/inbox/ack"): (200, {"ok": True}),
+    }).install(session_mod, monkeypatch)
+    out = _unwrap(session_mod.mc_inbox)()
+    assert "[Message from lead" in out
+    assert all(c["headers"]["Authorization"] == "Bearer mcs_sessiontoken" for c in fake.calls)
+    assert [c["path"] for c in fake.calls] == ["/api/v1/agent/comms/inbox", "/api/v1/agent/comms/inbox/ack"]

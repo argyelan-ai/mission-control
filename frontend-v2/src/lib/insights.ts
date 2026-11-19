@@ -12,6 +12,8 @@ export interface UsageDay extends UsageTotals {
   generated_tokens: number; // input + output, no cache
   local_generated_tokens: number;
   top_source: string | null;
+  top_source_local?: string | null; // the same over only local / only cloud rows
+  top_source_cloud?: string | null; // (missing from older backends)
 }
 
 export interface UsageByDay {
@@ -22,7 +24,9 @@ export interface UsageByDay {
   days: UsageDay[]; // every day of the window, oldest first, today last
 }
 
-export type HeatMetric = "all" | "local";
+/** The page-wide switch: all usage, only cloud, or only what ran locally. */
+export type HeatMetric = "all" | "cloud" | "local";
+export const METRICS: readonly HeatMetric[] = ["all", "cloud", "local"];
 export type HeatLevel = 0 | 1 | 2 | 3 | 4;
 
 export interface HeatCell {
@@ -52,12 +56,41 @@ export function dayTotals(day: UsageDay) {
   const external = Math.max(0, day.external?.fresh_tokens ?? 0);
   const all = day.generated_tokens + external;
   const local = day.local_generated_tokens + external;
-  return { all, local, external, localShare: all > 0 ? local / all : null };
+  return { all, cloud: all - local, local, external, localShare: all > 0 ? local / all : null };
 }
 
 export function dayValue(day: UsageDay, metric: HeatMetric): number {
   const t = dayTotals(day);
-  return metric === "local" ? t.local : t.all;
+  return t[metric];
+}
+
+/**
+ * The day row under the heatmap for the switch: that slice's tokens, cost and
+ * biggest source. Direct API tokens ran on a box, so they belong to All and
+ * Local only; the local share only means something on All (on Cloud or Local
+ * it is 0 % or 100 % by definition).
+ */
+export function dayView(day: UsageDay, metric: HeatMetric) {
+  const t = dayTotals(day);
+  const topSource = metric === "all" ? day.top_source : (metric === "local" ? day.top_source_local : day.top_source_cloud) ?? null;
+  return {
+    tokens: t[metric],
+    external: metric === "cloud" ? 0 : t.external,
+    cost: costOf(day, metric),
+    localShare: metric === "all" ? t.localShare : null,
+    topSource,
+  };
+}
+
+/**
+ * The list-price cost of a day or week for the switch: cloud = cost − the
+ * local part. A backend without `local_cost_usd` reads as no local cost.
+ */
+export function costOf(t: Pick<UsageTotals, "cost_usd" | "local_cost_usd">, metric: HeatMetric): number {
+  const local = t.local_cost_usd ?? 0;
+  if (metric === "local") return local;
+  if (metric === "cloud") return t.cost_usd - local;
+  return t.cost_usd;
 }
 
 /**
@@ -130,7 +163,7 @@ export function shiftDay(days: UsageDay[], date: string, step: 1 | -1): string {
  * This week so far (Monday up to today) against the same weekdays of last
  * week — a running week is never compared with a whole one.
  */
-export function weekSoFar(days: UsageDay[]) {
+export function weekSoFar(days: UsageDay[], metric: HeatMetric = "all") {
   const empty = { cost: 0, previousCost: 0, change: null as number | null };
   if (days.length === 0) return empty;
   const today = utc(days[days.length - 1].date);
@@ -139,8 +172,8 @@ export function weekSoFar(days: UsageDay[]) {
   let previousCost = 0;
   for (const d of days) {
     const ms = utc(d.date);
-    if (ms >= monday && ms <= today) cost += d.cost_usd;
-    else if (ms >= monday - 7 * DAY_MS && ms <= today - 7 * DAY_MS) previousCost += d.cost_usd;
+    if (ms >= monday && ms <= today) cost += costOf(d, metric);
+    else if (ms >= monday - 7 * DAY_MS && ms <= today - 7 * DAY_MS) previousCost += costOf(d, metric);
   }
   return { cost, previousCost, change: previousCost > 0 ? cost / previousCost - 1 : null };
 }
@@ -157,8 +190,11 @@ export interface SourceRow {
 }
 
 /** Top `n` sources of a week by cost with their share; the rest folded into one row. */
-export function sourceSplit(week: UsageWeek | undefined, n = 4) {
-  const sources = (week?.sources ?? []).filter((s) => s.cost_usd > 0).sort((a, b) => b.cost_usd - a.cost_usd);
+export function sourceSplit(week: UsageWeek | undefined, n = 4, metric: HeatMetric = "all") {
+  const sources = (week?.sources ?? [])
+    .map((s) => ({ source: s.source, cost_usd: costOf(s, metric) }))
+    .filter((s) => s.cost_usd > 0)
+    .sort((a, b) => b.cost_usd - a.cost_usd);
   const total = sources.reduce((sum, s) => sum + s.cost_usd, 0);
   if (total <= 0) return { rows: [] as SourceRow[], rest: null };
   const rows = sources.slice(0, n).map((s) => ({ source: s.source, cost_usd: s.cost_usd, share: s.cost_usd / total }));

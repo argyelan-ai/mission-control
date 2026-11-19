@@ -1,39 +1,20 @@
-// Vertical-owned API namespace (ADR-044 §4). Uses the core request() helper
-// (auth header + BASE_URL) — vertical -> core imports are allowed.
+// Legacy W0 API namespace (ADR-044 §4), trimmed in bench W1 (package D,
+// kill list W1.8): the old create dialog, the X draft, the spark model list
+// and the effort-level probe calls are gone — tests start through
+// w1/api.ts (`benchW1Api`). What stays serves the prompt library and the
+// result page's per-test actions (`BenchTestDetail.allowed`: rerender,
+// recompose, archive, delete, entry view token) until package A retires
+// the /challenges routes.
 import { BASE_URL, request } from "@/lib/api";
-import type {
-  BenchChallenge,
-  BenchChallengeCreate,
-  BenchEntry,
-  PromptTemplate,
-  SparkModelsStatus,
-} from "./types";
+import type { BenchChallenge, PromptTemplate } from "./types";
 
 export const benchApi = {
-  /** Bench #21: live Spark model list for the vanilla row's select in
-   *  NewChallengeDialog — always resolves (reachable: false on error). */
-  sparkModels: {
-    get: () => request<SparkModelsStatus>("/api/v1/bench/spark-models"),
-  },
   challenges: {
     list: (includeArchived = false) =>
       request<BenchChallenge[]>(
         `/api/v1/bench/challenges${includeArchived ? "?include_archived=true" : ""}`
       ),
     get: (id: string) => request<BenchChallenge>(`/api/v1/bench/challenges/${id}`),
-    create: (body: BenchChallengeCreate) =>
-      request<BenchChallenge>("/api/v1/bench/challenges", {
-        method: "POST",
-        body: JSON.stringify(body),
-      }),
-    draft: (
-      id: string,
-      body: { tweet_text: string; include_speed_labels: boolean; board_id?: string | null }
-    ) =>
-      request<{ approval_id: string; challenge_status: string; warnings: string[] }>(
-        `/api/v1/bench/challenges/${id}/draft`,
-        { method: "POST", body: JSON.stringify(body) }
-      ),
     rerender: (id: string) =>
       request<{ ok: boolean }>(`/api/v1/bench/challenges/${id}/rerender`, {
         method: "POST",
@@ -52,11 +33,6 @@ export const benchApi = {
       }),
     remove: (id: string) =>
       request<void>(`/api/v1/bench/challenges/${id}`, { method: "DELETE" }),
-    update: (id: string, body: { title: string }) =>
-      request<BenchChallenge>(`/api/v1/bench/challenges/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify(body),
-      }),
     recompose: (id: string) =>
       request<{ ok: boolean }>(`/api/v1/bench/challenges/${id}/recompose`, {
         method: "POST",
@@ -75,11 +51,6 @@ export const benchApi = {
     rerender: (id: string) =>
       request<{ ok: boolean }>(`/api/v1/bench/entries/${id}/rerender`, {
         method: "POST",
-      }),
-    update: (id: string, body: { model_label?: string; display_tag?: string }) =>
-      request<BenchEntry>(`/api/v1/bench/entries/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify(body),
       }),
     /** Mints a short-lived (30 min), resource-scoped view-token for
      *  entryViewUrl below — requires a full operator session (Bearer/JWT via

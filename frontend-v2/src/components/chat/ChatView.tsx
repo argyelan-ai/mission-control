@@ -2,26 +2,27 @@
 
 /**
  * ChatView — Task B6 (revised). Composes the chat timeline over an agent's
- * Claude Code transcript: header (name, live/beendet badge, detail-level
- * toggle, Chat/Terminal center-view toggle), a scroll-locked event list, the
+ * Claude Code transcript: header (state dot + name, "ended" word, Chat/Terminal
+ * center-view toggle, the changes/browser panel buttons and a ⋯ menu with the
+ * detail level — ADR-099), a scroll-locked event list, the
  * approval card (only while a permission prompt is open), the truthful
  * status line, and the composer.
  *
- * Terminal used to be a side panel (PanelRail); it's now a CENTER-VIEW
- * toggle right next to the detail-level switcher — selecting it swaps the
+ * Terminal used to be a side panel; it's now a CENTER-VIEW
+ * toggle in the header — selecting it swaps the
  * whole body (timeline+composer) for `TerminalPanel` full-size instead of
  * splitting the screen. No-transcript agents (Hermes/Jarvis, or a runtime
  * 404 despite `hasTranscript` saying otherwise) force terminal mode: there's
  * no chat to show, so the "Chat" segment is disabled rather than presenting
  * a dead-end empty-state screen.
  *
- * Owns nothing about the Diff/Browser side panel — that's PanelRail's job,
- * orthogonal to this toggle.
+ * Owns no panel state: the page holds which side panel is open and hands it
+ * in (`activePanel`, `onTogglePanel`); the header only shows the buttons.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
-import { ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
 import { C, alpha } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -33,7 +34,7 @@ import {
   isNoTranscriptError,
   resolveSessionAliveness,
 } from "@/lib/chatTypes";
-import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
+import type { ChatTaskStub, StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
 import { isHeadDone, type HeadRun } from "@/lib/heads";
 import { HeadChatHeader } from "@/components/heads/HeadChatHeader";
 import { HeadChatFooter } from "@/components/heads/HeadChatFooter";
@@ -43,16 +44,18 @@ import { AgentCard } from "./AgentCard";
 import { NotificationRow } from "./NotificationRow";
 import { WorkingOnRow, type WorkingOn } from "./WorkingOnRow";
 import { isAgentSpawn, matchRuns, notificationsByTool } from "./agentRuns";
-import { buildTimelineItems } from "./buildTimelineItems";
+import type { TimelineItem } from "./buildTimelineItems";
 import { ChatMessage } from "./ChatMessage";
 import { PreviewRow } from "./PreviewRow";
 import { TodoPanel } from "./TodoPanel";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
+import { LiveThinkingRow } from "./LiveThinkingRow";
 import { SubagentGroup } from "./SubagentGroup";
 import { ToolGroup } from "./ToolGroup";
 import { ToolOutputContext, createToolOutputStore, type ToolOutputStore } from "./toolOutputStore";
 import { ChatMediaContext } from "./chatMedia";
+import { ChatResendContext, useResendableErrorUuid, type ChatResend } from "./chatResend";
 import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
 import { ElicitationCard } from "./ElicitationCard";
@@ -63,11 +66,24 @@ import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { TerminalPanel, type AgentWithState } from "./TerminalPanel";
 import { ChatOptionsSheet } from "./ChatOptionsSheet";
+import { SendCard } from "./SendCard";
+import { DirectorySheet, ReachableButton } from "./DirectorySheet";
+import { useCommsDirectory } from "@/hooks/useCommsDirectory";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
 import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
 import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
-import type { PanelKind } from "./PanelRail";
+import { HeaderPanelButtons, type PanelKind } from "./PanelButtons";
+import { PopoverPortal, anchoredBoxStyle, useAnchoredPosition } from "@/lib/anchoredPopover";
+import { useChatTasks } from "@/hooks/useChatTasks";
+import { headerAliveness, observedStub, statusLineState } from "./taskSteps/observedState";
+import { useTaskSteps, type TaskStepsSpec } from "@/hooks/useTaskSteps";
+import { TaskStepsAgentContext } from "@/hooks/useTaskStepDetail";
+import { ScrollAnchorContext, type ScrollAnchor } from "./useScrollAnchor";
+import { mergeTimeline, type MergeResult, type MergeTask } from "./taskSteps/mergeTimeline";
+import { rowMs } from "./taskSteps/buildTaskUnits";
+import { SessionDivider, TaskCard, TaskSegment } from "./taskSteps/TaskSection";
+import { TaskStepsRetryContext } from "./taskSteps/TaskUnits";
 
 // Re-exported from their own module so ChatOptionsSheet can use them without
 // importing ChatView back (see chatOptions.ts). Importers are unaffected.
@@ -107,7 +123,7 @@ const GESTURE_TTL_MS = 2500;
  * negative Aussenmass zieht den 44px-Knopf auf ein Aussenmass von 36px zurueck,
  * die Trefferflaeche ragt in die Polsterung der Kopfzeile hinein statt sie
  * aufzublaehen. Der Kopf bleibt damit bei
- * safe + 6px + 36px + 6px + 1px Linie = safe + 3.0625rem — genau der Wert von
+ * safe + 16px + 36px + 6px + 1px Linie = safe + 3.6875rem — genau der Wert von
  * `--mobile-chat-topbar-h`, an dem die Handy-Blaetter (Optionen, Kontext) ihre
  * Oberkante ausrichten. Waechst der Kopf, bleibt unter dem Blatt ein Streifen
  * Gespraech stehen. Horizontal gilt dasselbe: der Kreis sitzt exakt dort, wo
@@ -127,9 +143,7 @@ export const MOBILE_HEADER_METRICS = {
   headerPaddingRight: 8, // pr-2
   control: 36, // Zurueck, Mikrofon, "…"
   gap: 8, // gap-2
-  badgeDot: 6, // w-1.5
-  badgeLive: 38, // "live"
-  badgeEnded: 56, // "beendet"
+  badgeEnded: 56, // "beendet" (das laengere der beiden Woerter)
 } as const;
 
 export type HeaderBadge = "none" | "dot" | "live" | "ended";
@@ -156,17 +170,13 @@ export function headerSideReservation(opts: {
   badge: HeaderBadge;
 }): { left: number; right: number } {
   const M = MOBILE_HEADER_METRICS;
-  const badgeWidth =
-    opts.badge === "ended"
-      ? M.badgeEnded
-      : opts.badge === "live"
-        ? M.badgeLive
-        : opts.badge === "dot"
-          ? M.badgeDot
-          : 0;
+  // ADR-099: "live" und "wartet" sind Punkte VOR dem Namen (sie stehen im
+  // Titel-Block, kosten rechts nichts). Rechts bleibt nur das Wort "beendet" —
+  // eine Warnung bleibt ein Wort.
+  const badgeWidth = opts.badge === "ended" ? M.badgeEnded : 0;
   return {
     left: M.headerPaddingLeft + (opts.hasBack ? M.control : 0),
-    // Mikrofon + "…" stehen immer, das Abzeichen nur manchmal.
+    // Mikrofon + "…" stehen immer, "beendet" nur manchmal.
     right:
       M.headerPaddingRight +
       M.control +
@@ -193,6 +203,27 @@ function isVisibleAtLevel(ev: TimelineChatEvent, level: DetailLevel): boolean {
 /** Timeline items mounted in the first commit — roughly a screenful, so the
  *  operator sees the end of the conversation immediately. */
 export const INITIAL_RENDER_WINDOW = 30;
+
+/** At most this long an omp chat waits for its task rows before it shows
+ *  what it has (spec A S6). */
+export const TASK_LOAD_GATE_MS = 1500;
+/** How long a freshly opened chat may say "Loading…" before its first state
+ *  frame (round-4 t1 NICE-2: 0.23–0.38 s of ocker "check the terminal" on
+ *  every open). Past it, no state is a real unknown again. */
+export const FIRST_STATE_GRACE_MS = 4000;
+
+const EMPTY_ROWS: never[] = [];
+
+/** The same array object while its elements are the same objects — so a
+ *  memo that depends on it reruns only when one of them really changed. */
+function useStableArray<T>(next: T[]): T[] {
+  const ref = useRef<T[]>(next);
+  const prev = ref.current;
+  if (prev !== next && (prev.length !== next.length || prev.some((x, i) => x !== next[i]))) {
+    ref.current = next;
+  }
+  return ref.current;
+}
 
 /**
  * The uuids of assistant messages whose model differs from the previous
@@ -328,9 +359,14 @@ interface ChatViewProps {
    *  the old task line under the agent name: the same fact twice would
    *  break K3. */
   workingOn?: WorkingOn | null;
-  /** Lets the mobile options sheet open the side panels the desktop rail
-   *  owns. Omitted = no Panels section in the sheet. */
+  /** Lets the mobile options sheet open the side panels. Omitted = no Panels
+   *  section in the sheet. */
   onOpenPanel?: (panel: PanelKind) => void;
+  /** The side panel open next to the chat (desktop header buttons, ADR-099). */
+  activePanel?: PanelKind | null;
+  /** Present = the desktop header shows the changes / browser buttons; the
+   *  page passes it only where a panel column exists (agent chats). */
+  onTogglePanel?: (panel: PanelKind | null) => void;
   /** The run that superseded `head`'s own `needs_you` question (a later run
    *  on the same task, `lib/heads.ts::newerHeadRunIdFor`) — when set,
    *  `HeadChatFooter` shows a link to it instead of the answer field
@@ -358,6 +394,8 @@ export function ChatView({
   onBack,
   workingOn = null,
   onOpenPanel,
+  activePanel = null,
+  onTogglePanel,
   newerHeadRunId = null,
   onSelectHeadRun,
 }: ChatViewProps) {
@@ -369,11 +407,31 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
+  /* Mirrors `stickToBottom`, set synchronously wherever it changes (spec A
+     M3): the ResizeObserver below reads THIS, not the value captured when it
+     was created — otherwise an observer made while following pinned once
+     more after an anchored expand had already ended following. */
+  const stickRef = useRef(true);
+  const setStick = useCallback((value: boolean) => {
+    stickRef.current = value;
+    setStickToBottom(value);
+  }, []);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  // ADR-100 §4: "N reachable" in the header opens the directory sheet.
+  const [directoryOpen, setDirectoryOpen] = useState(false);
+  const directory = useCommsDirectory(!!agent && !head);
   /** Text eines zurueckgeholten Steers, der noch einmal bearbeitet werden soll. */
   const [composerPrefill, setComposerPrefill] = useState<{ text: string; at: number } | null>(null);
+  /** Desktop ⋯ menu (detail level, ADR-099 E1). Rendered through a portal
+   *  so the chat column's `overflow-hidden` cannot clip it. */
   const [detailOpen, setDetailOpen] = useState(false);
   const detailBoxRef = useRef<HTMLDivElement | null>(null);
+  const detailMenuRef = useRef<HTMLDivElement | null>(null);
+  const detailMenuStyle = useAnchoredPosition(detailOpen, detailBoxRef, detailMenuRef, {
+    side: "bottom",
+    align: "end",
+    offset: 4,
+  });
   // Chunked first paint: a full Boss transcript is ~200 events of ReactMarkdown,
   // and rendering all of it in one commit blocked the main thread long enough
   // that the page stopped answering (measured: repeated >5s stalls, 741ms LCP
@@ -384,13 +442,14 @@ export function ChatView({
   const [renderAll, setRenderAll] = useState(false);
 
   const streamEnabled = hasTranscript && !!agent && !head;
-  // Klick daneben oder Escape schliesst die Detailgrad-Liste. Ohne das bliebe
-  // sie offen stehen, waehrend man laengst woanders arbeitet — dasselbe Muster
+  // Klick daneben oder Escape schliesst das ⋯-Menue. Ohne das bliebe es
+  // offen stehen, waehrend man laengst woanders arbeitet — dasselbe Muster
   // wie beim Modell-Waehler im Composer.
   useEffect(() => {
     if (!detailOpen) return;
     function onPointerDown(e: PointerEvent) {
-      if (!detailBoxRef.current?.contains(e.target as Node)) setDetailOpen(false);
+      const target = e.target as Node;
+      if (!detailBoxRef.current?.contains(target) && !detailMenuRef.current?.contains(target)) setDetailOpen(false);
     }
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") setDetailOpen(false);
@@ -457,6 +516,267 @@ export function ChatView({
         ? (terminalDeepLink ? "terminal" : "chat")
         : centerView;
 
+  /* useMemo mit Grund: ein preview-Tick (alle 0.3 s ein replace-me-Event)
+     erzeugt ein neues `stream`-Objekt, veraendert aber `events` nicht. Ohne
+     Memo liefen filter + buildTimelineItems über den ganzen Verlauf bei JEDEM
+     Tick — bei einem grossen Transkript blockte das den Main-Thread so lange,
+     dass die Ansicht sprang (Mark: "der chat bewegt sich die ganze zeit").
+     `visibleEvents`-Identitaet kommt aus dem Reducer (bei preview unveraendert),
+     deshalb ist hier events die Abhaengigkeit, nicht das stream-Objekt. */
+  const visibleEvents = useMemo(
+    () => stream.events.filter((ev) => isVisibleAtLevel(ev, detailLevel)),
+    [stream.events, detailLevel],
+  );
+
+  // ── Tasks in the chat (spec A, variant A) ──────────────────────────────
+  // An omp agent over ACP runs a task in a session of its own (#898). Its
+  // steps stand in THIS chat at their time — as sections, or as a card once
+  // finished. Read-only endpoints (`/chat/tasks`, `/chat/tasks/{id}/steps`),
+  // never through useChatStream. Client pre-gate (N6): only an agent whose
+  // tasks run in sessions of their own asks (`tasks_in_own_session`, the
+  // backend's adapter rule — never a harness name here, PRINCIPLES §3.4);
+  // every other agent renders at once, exactly as before.
+  const agentId = agent?.id ?? null;
+  const taskGateOn = !head && !!agent && agent.tasks_in_own_session === true && streamEnabled;
+  const chatOnScreen = effectiveView === "chat" && voiceOnScreen;
+  // A chat-state flip asks for the stubs at once (inside the hook): a task
+  // delivered to an idle agent must not wait for the 60 s idle poll.
+  const chatTasks = useChatTasks(agentId, taskGateOn && chatOnScreen, stream.state?.status ?? null);
+  const tasksApply = taskGateOn && chatTasks.data?.applies === true;
+  const currentStubs: ChatTaskStub[] = useMemo(
+    () => (tasksApply && chatTasks.data?.applies ? chatTasks.data.tasks : []),
+    [tasksApply, chatTasks.data],
+  );
+
+  // What this mount has seen (M4): a task's shape is decided once — finished
+  // when first seen = a card, live = a section — and never changes while the
+  // view is open; a stub that vanishes keeps its content and says so.
+  type Shape = { kind: "card" | "segments"; frozenAtMs: number | null };
+  type TaskMemory = {
+    agentId: string | null;
+    shapes: ReadonlyMap<string, Shape>;
+    stubs: ReadonlyMap<string, ChatTaskStub>;
+    wasLive: ReadonlySet<string>;
+  };
+  const [memory, setMemory] = useState<TaskMemory>(() => ({
+    agentId, shapes: new Map(), stubs: new Map(), wasLive: new Set(),
+  }));
+  const mem: TaskMemory =
+    memory.agentId === agentId ? memory : { agentId, shapes: new Map(), stubs: new Map(), wasLive: new Set() };
+  const defaultShape = (stub: ChatTaskStub): Shape =>
+    stub.live ? { kind: "segments", frozenAtMs: null } : { kind: "card", frozenAtMs: rowMs(stub.endedAt) ?? Date.now() };
+  useEffect(() => {
+    if (!tasksApply) return;
+    setMemory((prev) => {
+      const base = prev.agentId === agentId ? prev : { agentId, shapes: new Map(), stubs: new Map(), wasLive: new Set<string>() };
+      let shapes = base.shapes;
+      let wasLive = base.wasLive;
+      const stubs = new Map(base.stubs);
+      for (const stub of currentStubs) {
+        if (!shapes.has(stub.taskId)) shapes = new Map(shapes).set(stub.taskId, defaultShape(stub));
+        if (stub.live && !wasLive.has(stub.taskId)) wasLive = new Set(wasLive).add(stub.taskId);
+        stubs.set(stub.taskId, stub);
+      }
+      return { agentId, shapes, stubs, wasLive };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasksApply, currentStubs, agentId]);
+
+  // The chat's loaded window (D8): finished tasks older than what the chat
+  // shows stay out; live ones always count.
+  const oldestEventTs = stream.events.length > 0 ? rowMs(stream.events[0].ts) : null;
+  const windowStart = stream.hasMore ? oldestEventTs : rowMs(stream.session?.startedAt ?? null);
+  const [openCards, setOpenCards] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleCard = useCallback((taskId: string) => {
+    setOpenCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }, []);
+
+  const taskEntries = useMemo(() => {
+    if (!tasksApply) return [];
+    const current = new Map(currentStubs.map((s) => [s.taskId, s]));
+    const list: { stub: ChatTaskStub; shape: Shape; detached: boolean; wasLive: boolean }[] = [];
+    for (const stub of currentStubs) {
+      const shape = mem.shapes.get(stub.taskId) ?? defaultShape(stub);
+      if (!stub.live && shape.kind === "card") {
+        const start = rowMs(stub.startKey);
+        if (windowStart == null || start == null || start < windowStart) continue;
+      }
+      list.push({ stub, shape, detached: false, wasLive: mem.wasLive.has(stub.taskId) || stub.live });
+    }
+    // Vanished in this mount after being live here: keep what was shown.
+    for (const [id, stub] of mem.stubs) {
+      if (current.has(id) || !mem.wasLive.has(id)) continue;
+      const shape = mem.shapes.get(id) ?? defaultShape(stub);
+      list.push({ stub: { ...stub, live: false }, shape, detached: true, wasLive: true });
+    }
+    list.sort((a, b) => (rowMs(a.stub.startKey) ?? 0) - (rowMs(b.stub.startKey) ?? 0));
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasksApply, currentStubs, mem, windowStart]);
+
+  const stepSpecs: TaskStepsSpec[] = useMemo(
+    () =>
+      taskEntries.map(({ stub, shape, detached }) => ({
+        taskId: stub.taskId,
+        live: stub.live && !detached,
+        status: stub.status,
+        load: shape.kind === "segments" || stub.live || openCards.has(stub.taskId),
+      })),
+    [taskEntries, openCards],
+  );
+  const steps = useTaskSteps(agentId, stepSpecs, taskGateOn && chatOnScreen);
+  const stepsRef = useRef(steps);
+  stepsRef.current = steps;
+  const retrySteps = useCallback((taskId: string) => stepsRef.current.get(taskId)?.retry(), []);
+  // One version per poll result, so the memos below see a change only when
+  // some task's state object really changed (structural sharing upstream).
+  const stepStates = taskEntries.map((e) => steps.get(e.stub.taskId)?.state ?? null);
+  const stepsVersion = useStableArray(stepStates);
+  // Failed with nothing loaded: the section says so instead of a bare head.
+  const stepFailures = useStableArray(
+    taskEntries.map((e) => {
+      const st = steps.get(e.stub.taskId);
+      return !!st && st.error && !st.state;
+    }),
+  );
+
+  // The task's state from the freshest source (round-3 t1 NICE-2/3): the
+  // steps poll (2 s) carries the status too and is usually ahead of the stub
+  // poll (10 s). Same object while nothing changes, so the memos below hold.
+  const observedRef = useRef(new Map<string, { base: ChatTaskStub; seen: ChatTaskStub }>());
+  const observed = useStableArray(
+    taskEntries.map(({ stub, detached }) => {
+      if (detached) return stub;
+      const st = steps.get(stub.taskId);
+      const seen = observedStub(stub, st?.state ?? null, chatTasks.updatedAt, st?.updatedAt ?? 0);
+      if (seen === stub) return stub;
+      const prev = observedRef.current.get(stub.taskId);
+      if (
+        prev &&
+        prev.base === stub &&
+        prev.seen.status === seen.status &&
+        prev.seen.live === seen.live &&
+        prev.seen.startedAt === seen.startedAt
+      ) {
+        return prev.seen;
+      }
+      observedRef.current.set(stub.taskId, { base: stub, seen });
+      return seen;
+    }),
+  );
+
+  const mergeTasks: MergeTask[] = useMemo(
+    () =>
+      taskEntries.map(({ shape, detached, wasLive }, i) => {
+        const stub = observed[i];
+        const state = stepsVersion[i];
+        // A card that was never live in this mount keeps all its rows; one that
+        // went live again shows the new work below it (M4).
+        const frozenAtMs = shape.kind === "card" ? (wasLive && !detached ? shape.frozenAtMs : Number.POSITIVE_INFINITY) : null;
+        return {
+          stub,
+          shape: shape.kind,
+          frozenAtMs,
+          rows: state?.rows ?? EMPTY_ROWS,
+          liveRow: stub.live && !detached ? state?.liveRow ?? null : null,
+          omitted: state?.omitted ?? 0,
+          // Not loaded yet: no "waiting for the first step" flash.
+          hasSession: state ? state.hasSession : true,
+          detached,
+          loadFailed: stepFailures[i],
+          endLine: !stub.live && !detached && (shape.kind === "segments" || wasLive),
+        };
+      }),
+    [taskEntries, stepsVersion, stepFailures, observed],
+  );
+
+  // The newest chapter of a live task opens by itself — only while the view
+  // follows; otherwise the open chapter stays frozen (no height change above
+  // the reader, M3).
+  const newestChapterIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const t of mergeTasks) {
+      if (!t.stub.live || t.detached) continue;
+      for (let i = t.rows.length - 1; i >= 0; i--) {
+        if (t.rows[i].k === "think") {
+          ids.add(t.rows[i].id);
+          break;
+        }
+      }
+    }
+    return ids;
+  }, [mergeTasks]);
+  const [frozenAutoIds, setFrozenAutoIds] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    if (stickToBottom) setFrozenAutoIds(newestChapterIds);
+  }, [stickToBottom, newestChapterIds]);
+  const autoIds = stickToBottom ? newestChapterIds : frozenAutoIds;
+
+  const queued = tasksApply && chatTasks.data?.applies ? chatTasks.data.queued : 0;
+  const waitingModel = stream.state?.status === "waiting_model";
+  // Previous result only for object reuse (N5) — the output never depends on it.
+  const prevMergeRef = useRef<MergeResult | null>(null);
+  const merged = useMemo(
+    () =>
+      mergeTimeline({
+        chatEvents: visibleEvents,
+        tasks: mergeTasks,
+        detailLevel,
+        queued,
+        autoIds,
+        hidePending: waitingModel,
+        prev: prevMergeRef.current,
+      }),
+    [visibleEvents, mergeTasks, detailLevel, queued, autoIds, waitingModel],
+  );
+  useLayoutEffect(() => {
+    prevMergeRef.current = merged;
+  }, [merged]);
+  const taskById = useMemo(() => new Map(mergeTasks.map((t) => [t.stub.taskId, t])), [mergeTasks]);
+  const liveTask = useMemo(() => [...mergeTasks].reverse().find((t) => t.stub.live && !t.detached) ?? null, [mergeTasks]);
+  // A review run of this agent works a card (never live: it stays in review).
+  const reviewRun = useMemo(() => currentStubs.some((s) => s.reviewRun === true), [currentStubs]);
+  // The task turn ended (no live task left) — the chat probe lags behind it.
+  const statusState = useMemo(
+    () =>
+      statusLineState(stream.state, {
+        tasksShown: tasksApply,
+        tasksKnown: chatTasks.settled && !chatTasks.error,
+        liveTask: liveTask != null,
+        reviewRun,
+      }),
+    [stream.state, tasksApply, chatTasks.settled, chatTasks.error, liveTask, reviewRun],
+  );
+  // The first moments of a chat: no state frame yet is "loading", not
+  // "unknown" (round-4 t1 NICE-2) — for FIRST_STATE_GRACE_MS per agent.
+  const [firstStateGraceOver, setFirstStateGraceOver] = useState(false);
+  useEffect(() => {
+    setFirstStateGraceOver(false);
+    const id = setTimeout(() => setFirstStateGraceOver(true), FIRST_STATE_GRACE_MS);
+    return () => clearTimeout(id);
+  }, [agentId]);
+  const firstStatePending = stream.state == null && !firstStateGraceOver;
+
+  // Load gate (S6): an omp chat shows its timeline once history, task stubs
+  // and the first steps page of each live task are in — at most 1.5 s — so
+  // the tail-first commit already holds the task rows and no card is
+  // inserted above the reader after mount.
+  const [gateCapPassed, setGateCapPassed] = useState(false);
+  useEffect(() => {
+    setGateCapPassed(false);
+    if (!taskGateOn) return;
+    const id = setTimeout(() => setGateCapPassed(true), TASK_LOAD_GATE_MS);
+    return () => clearTimeout(id);
+  }, [taskGateOn, agentId]);
+  const liveStepsSettled = mergeTasks.every((t) => !t.stub.live || t.detached || !!steps.get(t.stub.taskId)?.settled);
+  const gateReady =
+    !taskGateOn || gateCapPassed || (!stream.loading && chatTasks.settled && (!tasksApply || liveStepsSettled));
+
   // `renderAll` is in the deps for a reason: when the deferred remainder mounts,
   // content appears ABOVE the viewport, so a scroll position left untouched
   // would silently show older messages instead of the end. `stream.preview`
@@ -470,19 +790,33 @@ export function ChatView({
     // Basis fuer handleScroll gleich mitfuehren: ohne sie kann das erste
     // Scroll-Ereignis nicht sagen, ob sich Hoehe oder Ansicht geaendert hat.
     lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
-  }, [stream.events, stream.preview, stream.toolOutputs, stickToBottom, renderAll, effectiveView]);
+  }, [
+    stream.events,
+    stream.preview,
+    stream.toolOutputs,
+    // The echo's own height is pinned too (M1); task rows grow without
+    // touching `stream.events`.
+    stream.pendingEchoes.length,
+    merged,
+    gateReady,
+    stickToBottom,
+    renderAll,
+    effectiveView,
+  ]);
 
   // One frame later, not on a timer: the browser gets to paint the tail first,
   // which is the whole point.
   useEffect(() => {
-    if (renderAll) return;
+    // Behind the load gate nothing is drawn yet: the frame counts from the
+    // moment the timeline really mounts.
+    if (renderAll || !gateReady) return;
     if (typeof requestAnimationFrame === "undefined") {
       setRenderAll(true);
       return;
     }
     const handle = requestAnimationFrame(() => setRenderAll(true));
     return () => cancelAnimationFrame(handle);
-  }, [renderAll]);
+  }, [renderAll, gateReady]);
 
   // The effect above fires on new events, which is not enough: the mobile
   // stack keeps the off-screen pane mounted with `display: none`, where the
@@ -500,7 +834,7 @@ export function ChatView({
     const el = scrollRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      if (!stickToBottom) return;
+      if (!stickRef.current) return;
       el.scrollTop = el.scrollHeight;
       lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
     });
@@ -584,7 +918,7 @@ export function ChatView({
     // mitlaufen, und die Geste ist damit beendet.
     if (atBottom) {
       userDrivingUntilRef.current = 0;
-      setStickToBottom(true);
+      setStick(true);
       return;
     }
 
@@ -594,14 +928,14 @@ export function ChatView({
       // ein weiteres Geraete-Ereignis kommt. Jeder Scroll waehrend einer noch
       // gueltigen Geste haelt sie am Leben.
       markUserDriving();
-      setStickToBottom(false);
+      setStick(false);
       return;
     }
 
     // Ohne Geste: nur eine verschobene ANSICHT zaehlt, kein Hoehensprung.
     const heightChanged = previous != null && previous.height !== height;
     const viewMoved = previous != null && previous.top !== top;
-    if (viewMoved && !heightChanged) setStickToBottom(false);
+    if (viewMoved && !heightChanged) setStick(false);
   }
 
   function handleSend(text: string) {
@@ -610,6 +944,9 @@ export function ChatView({
     // not a second later when the tailer has polled the transcript. The request
     // failing removes the echo again — an echo that outlived a failed send would
     // be the one thing worse than the old delay.
+    // Sending jumps to the end first (M1): from anywhere up in a long task
+    // section the operator otherwise never sees his own message arrive.
+    jumpToBottom();
     stream.echoSent(text, stream.state?.status === "working");
     deliver(text);
   }
@@ -728,39 +1065,56 @@ export function ChatView({
     [stream.state, stream.events, stream.todos],
   );
 
-  /* useMemo mit Grund: ein preview-Tick (alle 0.3 s ein replace-me-Event)
-     erzeugt ein neues `stream`-Objekt, veraendert aber `events` nicht. Ohne
-     Memo liefen filter + buildTimelineItems über den ganzen Verlauf bei JEDEM
-     Tick — bei einem grossen Transkript blockte das den Main-Thread so lange,
-     dass die Ansicht sprang (Mark: "der chat bewegt sich die ganze zeit").
-     `visibleEvents`-Identitaet kommt aus dem Reducer (bei preview unveraendert),
-     deshalb ist hier events die Abhaengigkeit, nicht das stream-Objekt. */
-  const visibleEvents = useMemo(
-    () => stream.events.filter((ev) => isVisibleAtLevel(ev, detailLevel)),
-    [stream.events, detailLevel],
-  );
-  const items = useMemo(
-    () => buildTimelineItems(visibleEvents),
-    [visibleEvents],
-  );
-  // Tail first; the remainder joins one frame later (see `renderAll`).
-  const visibleItems = useMemo(
-    () => (renderAll ? items : items.slice(-INITIAL_RENDER_WINDOW)),
-    [items, renderAll],
-  );
-
-  // "Nach unten"-Knopf: sobald das Mitlaufen aus ist, merken wir uns, wie
-  // viele Eintraege der Verlauf da hatte — alles darueber ist "neu seitdem".
-  const itemsAtUnstickRef = useRef<number | null>(null);
+  // "Nach unten"-Knopf (S7): neu ist, was eine NEUERE Zeit traegt als das
+  // Neueste beim Loslassen — Chat-Eintraege, Aufgaben-Schritte und Echos.
+  // Keine Laengen-Differenz: eine spaet eintreffende Seite alter Schritte
+  // oder ein geteiltes Kapitel aendert die Laenge, ohne dass etwas neu ist.
+  const newestAtUnstickRef = useRef<{ server: number | null; echo: number } | null>(null);
   useEffect(() => {
-    itemsAtUnstickRef.current = stickToBottom ? null : items.length;
+    newestAtUnstickRef.current = stickToBottom ? null : { server: merged.newestTs, echo: Date.now() };
     // Nur beim Umschalten einfrieren, nicht bei jedem neuen Eintrag.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stickToBottom]);
+  const unstick = newestAtUnstickRef.current;
   const newSinceUnstick =
-    stickToBottom || itemsAtUnstickRef.current == null
+    stickToBottom || unstick == null
       ? 0
-      : Math.max(0, items.length - itemsAtUnstickRef.current);
+      : (unstick.server == null ? merged.countNewer(Number.NEGATIVE_INFINITY) : merged.countNewer(unstick.server)) +
+        stream.pendingEchoes.filter((e) => e.sentAt > unstick.echo).length;
+
+  // Tail first; the remainder joins one frame later (see `renderAll`).
+  const visibleEntries = useMemo(
+    () => (renderAll ? merged.entries : merged.entries.slice(-INITIAL_RENDER_WINDOW)),
+    [merged, renderAll],
+  );
+  const queuedLabel = useCallback((count: number) => t("taskQueued", { count }), [t]);
+
+  // Is a head of the live task's section on screen? (S5) Then the status
+  // line stays silent in `task_working` (the head says it, K3); otherwise it
+  // names the task. One observer; the state changes only on a crossing.
+  const [taskHeadVisible, setTaskHeadVisible] = useState(false);
+  const liveTaskId = liveTask?.stub.taskId ?? null;
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || !liveTaskId || typeof IntersectionObserver === "undefined") {
+      setTaskHeadVisible(false);
+      return;
+    }
+    const heads = Array.from(
+      root.querySelectorAll(`[data-task-id="${liveTaskId}"] [data-region="chat-task-head"]`),
+    );
+    const seen = new Map<Element, boolean>();
+    const observer = new IntersectionObserver(
+      (records) => {
+        for (const r of records) seen.set(r.target, r.isIntersecting);
+        setTaskHeadVisible([...seen.values()].some(Boolean));
+      },
+      { root },
+    );
+    heads.forEach((h) => observer.observe(h));
+    if (heads.length === 0) setTaskHeadVisible(false);
+    return () => observer.disconnect();
+  }, [liveTaskId, merged, gateReady, effectiveView]);
 
   // Was der Agent GERADE tut, aus dem Transkript statt vom Bildschirm
   // (Befund 10.09.2026): der Tailer sendet ein Werkzeug-Ereignis sofort beim
@@ -787,13 +1141,37 @@ export function ChatView({
     return null;
   }, [stream.events]);
 
+  /* Anchored toggles (spec A §6.3, M3): the tapped row keeps its place on
+     screen — the same scroll owner, no second follow logic. */
+  const anchorRef = useRef<{ el: Element; top: number } | null>(null);
+  const scrollAnchor = useMemo<ScrollAnchor>(
+    () => ({
+      capture(el) {
+        const box = scrollRef.current;
+        if (!box || !el) return;
+        setStick(false);
+        anchorRef.current = { el, top: el.getBoundingClientRect().top - box.getBoundingClientRect().top };
+      },
+      restore() {
+        const a = anchorRef.current;
+        const box = scrollRef.current;
+        anchorRef.current = null;
+        if (!a || !box || !a.el.isConnected) return;
+        const now = a.el.getBoundingClientRect().top - box.getBoundingClientRect().top;
+        if (now !== a.top) box.scrollTop += now - a.top;
+        lastMetricsRef.current = { top: box.scrollTop, height: box.scrollHeight };
+      },
+    }),
+    [setStick],
+  );
+
   function jumpToBottom() {
     const el = scrollRef.current;
     if (!el) return;
     userDrivingUntilRef.current = 0;
     el.scrollTop = el.scrollHeight;
     lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
-    setStickToBottom(true);
+    setStick(true);
   }
   const modelBadges = modelBadgeUuids(visibleEvents);
   const liveUuid = liveEventUuid(visibleEvents, stream.state?.status ?? null);
@@ -802,13 +1180,37 @@ export function ChatView({
   // on focus while the pane probe keeps publishing (see resolveSessionAliveness).
   const aliveness = resolveSessionAliveness(stream);
   const prompt = stream.state?.status === "permission_prompt" ? stream.state.prompt : null;
+
+  /* "Send again" on a chat error card (S1-R7, chatResend.tsx): the card sends
+     through handleSend — echo + deliver, the composer's own path, never a
+     second one — and only the newest card holding the operator's text is
+     offered, while nothing was sent after it. Where the composer cannot send
+     (a head's transcript, a non-admin, an ended session) nothing is offered. */
+  const handleSendRef = useRef(handleSend);
+  handleSendRef.current = handleSend;
+  const canSend = !head && !!agent && isAdmin && aliveness !== "ended";
+  const resendUuid = useResendableErrorUuid(stream.events, stream.pendingEchoes, canSend);
+  const chatResend = useMemo<ChatResend>(
+    () => ({
+      resend: (text) => handleSendRef.current(text),
+      canResend: (uuid) => uuid === resendUuid,
+    }),
+    [resendUuid],
+  );
   // Welches Abzeichen die Kopfzeile gerade zeigt — dieselbe Bedingung wie
   // unten im JSX, hier einmal als Wert, damit die Platzberechnung nicht raet.
+  // "active" comes from the transcript's age (written < 60 s ago); the status
+  // line from the live state. Right after a reply the two disagreed — "live"
+  // in the header, "Bereit" below — and seconds later the same state showed
+  // the dot (round-1 NICE-2). A chat the status line calls ready gets the dot.
+  // Round 4 (t1 NICE-1/4): from the state the status line shows, not the raw
+  // probe — that one kept "live" 12.9 s over a line that said "Ready".
+  const badgeAliveness = headerAliveness(aliveness, statusState);
   const headerBadge: HeaderBadge = !(canChat && stream.session)
     ? "none"
-    : aliveness === "idle"
+    : badgeAliveness === "idle"
       ? "dot"
-      : aliveness === "active"
+      : badgeAliveness === "active"
         ? "live"
         : "ended";
   const titleSide = headerSideReservation({ hasBack: !!onBack, badge: headerBadge });
@@ -840,6 +1242,57 @@ export function ChatView({
   // yet on page load) — threw "Rendered more hooks than during the
   // previous render" (reproduced directly: render with `head={null}`, then
   // re-render the SAME `ChatView` instance with a real `head`).
+  function renderChatItem(item: TimelineItem) {
+                if (item.kind === "agent") {
+                  return (
+                    <AgentCard
+                      key={item.event.toolUseId ?? item.event.uuid}
+                      ev={item.event}
+                      run={runMatches.get(item.event.toolUseId ?? "")}
+                      notice={toolNotices.get(item.event.toolUseId ?? "")}
+                      // A head has no subagent-detail endpoint of its own
+                      // (ADR-085 Nachtrag §4: the main transcript only) — an
+                      // empty id just makes the "open subagent" affordance a
+                      // harmless no-reply instead of crashing on `agent.id`.
+                      agentId={agent?.id ?? ""}
+                    />
+                  );
+                }
+                if (item.kind === "send") {
+                  return <SendCard key={item.event.toolUseId ?? item.event.uuid} ev={item.event} call={item.call} />;
+                }
+                if (item.kind === "sidechain") {
+                  return <SubagentGroup key={`sidechain-${item.events[0].uuid}`} events={item.events} />;
+                }
+                if (item.kind === "activity") {
+                  return (
+                    <ToolGroup
+                      key={`activity-${item.events[0].uuid}`}
+                      events={item.events}
+                      detailLevel={detailLevel}
+                    />
+                  );
+                }
+                if (item.event.kind === "elicitation") {
+                  return (
+                    <ElicitationCard
+                      key={item.event.uuid}
+                      ev={item.event}
+                      result={stream.elicitationResults[item.event.elicitationId] ?? null}
+                      // Read-only for a head's transcript and for a non-admin
+                      // (the answer endpoint is operator-only, like the composer).
+                      agentId={head || !isAdmin ? null : agent?.id ?? null}
+                    />
+                  );
+                }
+                return renderTimelineEvent(
+                  item.event,
+                  detailLevel,
+                  modelBadges.has(item.event.uuid),
+                  item.event.uuid === liveUuid,
+                );
+  }
+
   if (!agent && !head) {
     return (
       <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: C.textMuted }}>
@@ -850,9 +1303,13 @@ export function ChatView({
 
   return (
     <ToolOutputContext.Provider value={toolOutputStore}>
+    <ScrollAnchorContext.Provider value={scrollAnchor}>
+    <TaskStepsAgentContext.Provider value={agentId}>
+    <TaskStepsRetryContext.Provider value={retrySteps}>
     {/* P2: tool pictures load from THIS agent's media route; a head (no
         agent row) shows none rather than guessing an address. */}
     <ChatMediaContext.Provider value={agent?.id ?? null}>
+    <ChatResendContext.Provider value={chatResend}>
     <div ref={rootRef} className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* One header for both breakpoints — the parts that only make sense on
           a phone (back chevron, options button) carry
@@ -944,12 +1401,40 @@ export function ChatView({
                      md:static md:inset-auto md:px-0 md:flex-1 md:min-w-0 md:flex-row md:items-baseline
                      md:gap-2 md:pointer-events-auto"
         >
-          <span
-            className="text-[15px] md:text-[13px] font-semibold md:font-medium truncate max-w-full md:shrink-0"
-            style={{ color: C.textPrimary }}
-          >
-            {agent.name}
+          {/* Zustandspunkt VOR dem Namen (ADR-099, Operator 01.11.2026): das
+              Wort "live" kostete 38 px und sagte nichts, was ein Punkt nicht
+              sagt. Gruen = arbeitet, grau = wartet am Prompt. Farbe traegt nie
+              allein: Vorlesetext und Tooltip kommen aus i18n. "beendet" ist
+              eine Warnung und bleibt ein Wort (rechte Gruppe). */}
+          <span className="flex items-center gap-1.5 max-w-full min-w-0 md:shrink-0">
+            {(headerBadge === "live" || headerBadge === "dot") && (
+              <span
+                data-testid="session-badge"
+                data-aliveness={headerBadge === "live" ? "active" : "idle"}
+                role="img"
+                aria-label={headerBadge === "live" ? t("sessionLive") : t("sessionWaitingAtPrompt")}
+                title={headerBadge === "live" ? t("sessionLive") : t("sessionWaitingAtPrompt")}
+                className="w-1.5 h-1.5 rounded-full shrink-0 pointer-events-auto"
+                style={{ background: headerBadge === "live" ? C.online : C.textDim }}
+              />
+            )}
+            <span
+              className="text-[15px] md:text-[13px] font-semibold md:font-medium truncate min-w-0"
+              style={{ color: C.textPrimary }}
+            >
+              {agent.name}
+            </span>
           </span>
+          {/* Who can be talked to across harnesses (ADR-100 §4): a quiet
+              second line under the name on the phone, next to it on the
+              desktop — a state that opens a sheet, not another header
+              action beside ⋯ (K4). The ::before widens the finger target
+              without making the header taller (K11). */}
+          <ReachableButton
+            directory={directory.data}
+            onOpen={() => setDirectoryOpen(true)}
+            className="relative pointer-events-auto md:shrink-0 before:absolute before:content-[''] before:-inset-x-2 before:-inset-y-3"
+          />
         </div>
 
         {/* Rechte Gruppe: EIN ml-auto buendelt Badge und "…" am rechten Rand.
@@ -957,35 +1442,21 @@ export function ChatView({
             aufteilen und das Badge in die Naehe der Mitte schieben — genau
             dorthin, wo der Titel liegt. */}
         <div className="ml-auto flex items-center gap-2 shrink-0">
-        {/* Three states, three treatments — and only ONE of them is a claim
-            about the session being over. The old two-way badge read `live`,
-            which is mtime-based and therefore false for any CLI that is running
-            but idle at its prompt; the header then announced "beendet" at a
-            session sitting right there. `idle` now gets a quiet dot with no
-            word at all: nothing is happening, and nothing is wrong. */}
-        {canChat && stream.session && aliveness !== "idle" && (
+        {/* Only ONE of the three states is a claim about the session being
+            over, and only that one is a word. The old two-way badge read
+            `live`, which is mtime-based and therefore false for any CLI that
+            is running but idle at its prompt; the header then announced
+            "ended" at a session sitting right there. Active and idle are dots
+            before the name (above); "ended" stays a word here. */}
+        {headerBadge === "ended" && (
           <span
             data-testid="session-badge"
-            data-aliveness={aliveness}
+            data-aliveness="ended"
             className="relative z-10 text-[10px] font-medium px-1.5 py-0.5 rounded-sm font-mono shrink-0"
-            style={{
-              background: aliveness === "active" ? alpha(C.online, 0.1) : C.bgHover,
-              color: aliveness === "active" ? C.online : C.textMuted,
-              border: `1px solid ${aliveness === "active" ? alpha(C.online, 0.2) : C.border}`,
-            }}
+            style={{ background: C.bgHover, color: C.textMuted, border: `1px solid ${C.border}` }}
           >
-            {aliveness === "active" ? "live" : "beendet"}
+            {t("sessionEnded")}
           </span>
-        )}
-        {canChat && stream.session && aliveness === "idle" && (
-          <span
-            data-testid="session-badge"
-            data-aliveness="idle"
-            title={t("sessionWaitingAtPrompt")}
-            className="relative z-10 w-1.5 h-1.5 rounded-full shrink-0"
-            style={{ background: C.textDim }}
-            aria-label={t("sessionWaitingAtPrompt")}
-          />
         )}
 
         {/* Sprachbedienung. Auf dem Chat-Schirm gibt es die App-Leiste nicht
@@ -1026,80 +1497,6 @@ export function ChatView({
         </div>
 
         <div className="hidden md:flex items-center gap-2 shrink-0">
-          {/* Detailgrad: EIN Knopf mit Klappliste statt drei Segmenten
-              (Operator-Wunsch 19.08.2026: "diese viele buttons und switche
-              rechts oben irgendwie verpacken"). Die Wahl der Bedienform folgt
-              der Benutzungshaeufigkeit — den Detailgrad stellt man einmal ein,
-              Chat/Terminal schaltet man staendig. Darum klappt genau dieser
-              ein und der Umschalter daneben bleibt offen. */}
-          {effectiveView === "chat" && (
-            <div className="relative" ref={detailBoxRef}>
-              <button
-                type="button"
-                data-testid="detail-level-trigger"
-                aria-haspopup="listbox"
-                aria-expanded={detailOpen}
-                aria-label={t("detailLevelCurrent", { level: currentDetailLabel })}
-                onClick={() => setDetailOpen((v) => !v)}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[10px] font-medium rounded-md cursor-pointer transition-colors whitespace-nowrap"
-                style={{
-                  border: `1px solid ${C.border}`,
-                  background: detailOpen ? C.bgHover : "transparent",
-                  color: detailOpen ? C.textPrimary : C.textMuted,
-                }}
-              >
-                {currentDetailLabel}
-                <ChevronDown
-                  size={10}
-                  className="transition-transform duration-150"
-                  style={{ transform: detailOpen ? "rotate(180deg)" : undefined }}
-                />
-              </button>
-              {detailOpen && (
-                <div
-                  role="listbox"
-                  aria-label={t("detailLevel")}
-                  className="absolute top-full right-0 mt-1 w-32 rounded-lg overflow-hidden z-20 p-1"
-                  style={{
-                    backgroundColor: C.bgElevated,
-                    border: `1px solid ${C.border}`,
-                    boxShadow: "var(--shadow-elevated)",
-                  }}
-                >
-                  {DETAIL_LEVELS.map(({ key, labelKey }) => (
-                    <button
-                      key={key}
-                      type="button"
-                      role="option"
-                      aria-selected={detailLevel === key}
-                      onClick={() => {
-                        onDetailLevelChange(key);
-                        setDetailOpen(false);
-                      }}
-                      className="w-full text-left px-2 py-1.5 text-[11px] rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
-                      // Die Flaeche der NICHT gewaehlten Eintraege bleibt
-                      // bewusst ohne Inline-Stil. Ein Inline-Stil schlaegt
-                      // jede Klasse, auch `hover:` — mit
-                      // `backgroundColor: "transparent"` war der Hover ein
-                      // Nichts (im Browser gegengeprueft: gehovert meldet
-                      // getComputedStyle rgba(0,0,0,0) statt der Hover-Farbe).
-                      // Genau die Falle, vor der der Kaskaden-Hinweis in
-                      // globals.css warnt.
-                      style={{
-                        color: detailLevel === key ? C.accent : C.textPrimary,
-                        ...(detailLevel === key
-                          ? { backgroundColor: C.accentSubtle }
-                          : null),
-                      }}
-                    >
-                      {t(labelKey)}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
           {!headlessChat && (
           <div
             className="flex items-center rounded-md overflow-hidden"
@@ -1128,11 +1525,97 @@ export function ChatView({
             })}
           </div>
           )}
+
+          {/* Änderungen + Browser (ADR-099): vorher ein eigener 58-px-Streifen
+              rechts vom Chat. Nur wo die Seite eine Panel-Spalte hat. */}
+          {onTogglePanel && <HeaderPanelButtons active={activePanel} onToggle={onTogglePanel} />}
+
+          {/* ⋯ am Desktop: hier wohnt der Detailgrad (ADR-099 E1, verschoben,
+              nicht geloescht). Den stellt man einmal ein; im Kopf stand er als
+              "Normal ▾" dauernd im Blick. Ein kleiner Punkt am ⋯ sagt, dass
+              NICHT Normal eingestellt ist — sonst wuerde eine kompakte Ansicht
+              still Zeilen verschlucken. Nur in der Chat-Ansicht: im Terminal
+              waere das Menue leer. */}
+          {effectiveView === "chat" && (
+            <div className="relative" ref={detailBoxRef}>
+              <button
+                type="button"
+                data-testid="chat-options-desktop"
+                aria-haspopup="menu"
+                aria-expanded={detailOpen}
+                aria-label={t("chatOptions")}
+                title={detailLevel === "normal" ? t("chatOptions") : t("detailLevelCurrent", { level: currentDetailLabel })}
+                onClick={() => setDetailOpen((v) => !v)}
+                className="relative flex items-center justify-center w-8 h-8 rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+                style={{
+                  color: detailOpen ? C.textPrimary : C.textMuted,
+                  ...(detailOpen ? { background: C.bgHover } : null),
+                }}
+              >
+                <MoreHorizontal size={16} />
+                {detailLevel !== "normal" && (
+                  <span
+                    data-testid="detail-level-dot"
+                    aria-hidden="true"
+                    className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full"
+                    style={{ background: C.accent }}
+                  />
+                )}
+              </button>
+              {detailOpen && (
+                <PopoverPortal>
+                  <div
+                    ref={detailMenuRef}
+                    role="menu"
+                    aria-label={t("chatOptions")}
+                    className="w-44 rounded-lg overflow-hidden z-50 p-1"
+                    style={{
+                      ...anchoredBoxStyle(detailMenuStyle),
+                      backgroundColor: C.bgElevated,
+                      border: `1px solid ${C.border}`,
+                      boxShadow: "var(--shadow-elevated)",
+                    }}
+                  >
+                    <div role="group" aria-label={t("detailLevel")}>
+                      <div className="label-sys px-2 pt-1 pb-1" style={{ color: C.textMuted }}>
+                        {t("detailLevel")}
+                      </div>
+                      {DETAIL_LEVELS.map(({ key, labelKey }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={detailLevel === key}
+                          onClick={() => {
+                            onDetailLevelChange(key);
+                            setDetailOpen(false);
+                          }}
+                          className="w-full flex items-center gap-2 text-left px-2 py-1.5 text-[12px] rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+                          // Nicht gewaehlte Eintraege ohne Inline-Flaeche: ein
+                          // Inline-Stil schluege auch `hover:` (siehe
+                          // globals.css, Kaskaden-Hinweis).
+                          style={{
+                            color: detailLevel === key ? C.accent : C.textPrimary,
+                            ...(detailLevel === key ? { backgroundColor: C.accentSubtle } : null),
+                          }}
+                        >
+                          <span className="flex-1">{t(labelKey)}</span>
+                          {detailLevel === key && <Check size={13} aria-hidden="true" />}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </PopoverPortal>
+              )}
+            </div>
+          )}
         </div>
       </div>
       ) : null}
 
-      {!head && agent && workingOn && (
+      {/* Only where the chat shows no task sections: there the section head
+          names the task (K3). */}
+      {!head && agent && workingOn && !tasksApply && (!taskGateOn || chatTasks.settled) && (
         <WorkingOnRow taskId={workingOn.taskId} title={workingOn.title} />
       )}
 
@@ -1178,10 +1661,16 @@ export function ChatView({
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
-            className="flex-1 min-h-0 overflow-y-auto scroll-quiet flex flex-col pt-2 pb-3"
+            className="flex-1 min-h-0 overflow-y-auto scroll-quiet flex flex-col pb-3"
           >
-          <div ref={timelineRef} data-testid="chat-timeline" className="flex flex-col flex-1">
-            {items.length === 0 && stream.pendingEchoes.length === 0 ? (
+          {/* The top gap lives INSIDE the timeline, not on the scroller: a
+              sticky task head sticks at the scroller's padding edge, and an
+              8 px scroller padding let the rows passing beneath it peek out
+              above the head (phone, 31.10.2026). */}
+          <div ref={timelineRef} data-testid="chat-timeline" className="flex flex-col flex-1 pt-2">
+            {!gateReady ? (
+              <TimelineSkeleton />
+            ) : merged.entries.length === 0 && stream.pendingEchoes.length === 0 ? (
               stream.loading ? (
                 <TimelineSkeleton />
               ) : head ? (
@@ -1201,54 +1690,50 @@ export function ChatView({
                 </div>
               )
             ) : (
-              visibleItems.map((item) => {
-                if (item.kind === "agent") {
+              visibleEntries.map((entry, i) => {
+                // The merge's own key: a task row can split a chat tool group,
+                // and both halves would share renderChatItem's turn-uuid key.
+                if (entry.kind === "chat") {
+                  // Chat lines right after a task band: the chat's own session
+                  // goes on here, not the task's (31.10.2026).
+                  const back = i > 0 && visibleEntries[i - 1].kind === "segment";
                   return (
-                    <AgentCard
-                      key={item.event.toolUseId ?? item.event.uuid}
-                      ev={item.event}
-                      run={runMatches.get(item.event.toolUseId ?? "")}
-                      notice={toolNotices.get(item.event.toolUseId ?? "")}
-                      // A head has no subagent-detail endpoint of its own
-                      // (ADR-085 Nachtrag §4: the main transcript only) — an
-                      // empty id just makes the "open subagent" affordance a
-                      // harmless no-reply instead of crashing on `agent.id`.
-                      agentId={agent?.id ?? ""}
-                    />
+                    <Fragment key={entry.key}>
+                      {back && <SessionDivider kind="back" />}
+                      {renderChatItem(entry.item)}
+                    </Fragment>
                   );
                 }
-                if (item.kind === "sidechain") {
-                  return <SubagentGroup key={`sidechain-${item.events[0].uuid}`} events={item.events} />;
-                }
-                if (item.kind === "activity") {
+                const task = taskById.get(entry.taskId);
+                if (!task) return null;
+                if (entry.kind === "card") {
+                  const st = steps.get(entry.taskId);
                   return (
-                    <ToolGroup
-                      key={`activity-${item.events[0].uuid}`}
-                      events={item.events}
+                    <TaskCard
+                      key={entry.key}
+                      stub={task.stub}
+                      open={openCards.has(entry.taskId)}
+                      onToggle={toggleCard}
+                      steps={st?.state ?? null}
+                      loading={!st?.state && !st?.error}
+                      error={!!st?.error}
+                      onRetry={retrySteps}
+                      frozenAtMs={task.frozenAtMs}
                       detailLevel={detailLevel}
                     />
                   );
                 }
-                if (item.event.kind === "elicitation") {
-                  return (
-                    <ElicitationCard
-                      key={item.event.uuid}
-                      ev={item.event}
-                      result={stream.elicitationResults[item.event.elicitationId] ?? null}
-                      // Read-only for a head's transcript and for a non-admin
-                      // (the answer endpoint is operator-only, like the composer).
-                      agentId={head || !isAdmin ? null : agent?.id ?? null}
-                    />
-                  );
-                }
-                return renderTimelineEvent(
-                  item.event,
-                  detailLevel,
-                  modelBadges.has(item.event.uuid),
-                  item.event.uuid === liveUuid,
+                // A task's first segment says itself that it starts a session
+                // of its own (TaskSection `SessionStart`).
+                return (
+                  <TaskSegment key={entry.key} entry={entry} stub={task.stub} detailLevel={detailLevel} queuedLabel={queuedLabel} />
                 );
               })
             )}
+            {/* The newest band is followed by the chat's own echo or live
+                preview — the same session boundary as above. */}
+            {visibleEntries.length > 0 && visibleEntries[visibleEntries.length - 1].kind === "segment" &&
+              (stream.pendingEchoes.length > 0 || stream.preview?.source === "acp") && <SessionDivider kind="back" />}
 
             {/* Locally-echoed sends, always last: they are by definition the
                 newest thing in the conversation, and they disappear the moment
@@ -1279,8 +1764,13 @@ export function ChatView({
                 tmux-Bildschirmabgriff ("pane") zeigte Bruchstuecke, Werkzeug-
                 Rahmen und den Dispatch-Prompt und ist seit 10.09.2026 nicht
                 mehr Teil des Chats — die Statuszeile sagt, was laeuft. */}
+            {/* Ein laufender GEDANKE ist keine Antwort (20.10.2026: minutenlanges
+                Denken sah aus wie „nichts passiert"): eigene, eingeklappte
+                Zeile mit Uhr und Token-Schaetzung statt der Antwort-Vorschau. */}
             {stream.preview && stream.preview.source === "acp" && (
-              <PreviewRow preview={stream.preview} />
+              stream.preview.block === "thinking"
+                ? <LiveThinkingRow preview={stream.preview} />
+                : <PreviewRow preview={stream.preview} />
             )}
 
             {/* The run-record summary card — only once the head has ended
@@ -1353,11 +1843,15 @@ export function ChatView({
           ) : (
             <>
               <StatusLine
-                state={stream.state}
+                state={statusState}
                 connected={stream.connected}
                 activity={activity}
                 aliveness={aliveness}
                 sending={stream.awaitingResponse}
+                task={liveTask ? { taskId: liveTask.stub.taskId, title: liveTask.stub.title, deliveredAt: liveTask.stub.deliveredAt } : null}
+                taskHeadVisible={taskHeadVisible}
+                loading={firstStatePending}
+                hasTerminal={!headlessChat}
               />
               {!isAdmin ? (
                 <AdminOnlyNotice compact message={t("inputAdminOnly")} />
@@ -1366,7 +1860,10 @@ export function ChatView({
                   agentId={agent.id}
                   agentName={agent.name}
                   // Delivered by MC already — only the echo, no second send.
-                  onForwarded={(text, midTurn) => stream.echoSent(text, midTurn)}
+                  onForwarded={(text, midTurn) => {
+                    jumpToBottom();
+                    stream.echoSent(text, midTurn);
+                  }}
                   // Stopped by voice: same aftermath as the Stop button —
                   // the follow-ups the daemon held go back into the composer.
                   onStopped={handleVoiceStopped}
@@ -1382,6 +1879,7 @@ export function ChatView({
                   onSend={handleSend}
                   onStop={handleStop}
                   prefill={composerPrefill}
+                  placeholder={liveTask ? t("messagePlaceholderTaskRunning") : undefined}
                   sessionLive={aliveness !== "ended"}
                   /* Nur die Docker-tmux-Bruecke liefert echten Pane-Text; Host-Agenten
                    * (Boss/Hermes/Jarvis) haben diesen Kanal nicht — dort ist "arbeitet"
@@ -1411,6 +1909,15 @@ export function ChatView({
       )}
 
       {!head && (
+        <DirectorySheet
+          open={directoryOpen}
+          onClose={() => setDirectoryOpen(false)}
+          directory={directory.data}
+          error={directory.isError}
+        />
+      )}
+
+      {!head && (
         <ChatOptionsSheet
           open={optionsOpen}
           onClose={() => setOptionsOpen(false)}
@@ -1424,7 +1931,11 @@ export function ChatView({
         />
       )}
     </div>
+    </ChatResendContext.Provider>
     </ChatMediaContext.Provider>
+    </TaskStepsRetryContext.Provider>
+    </TaskStepsAgentContext.Provider>
+    </ScrollAnchorContext.Provider>
     </ToolOutputContext.Provider>
   );
 }

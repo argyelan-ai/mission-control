@@ -20,6 +20,8 @@ Performance budget (881 nodes target):
 - O(n) build for edges + dedup map
 - Qdrant scroll (1 round-trip per batch) + k-means (sklearn) — sub-second
   for ~1k vectors at 768d on a Mac Mini M4
+- similarity edges: one local cosine matrix pass over the scrolled vectors
+  (~0.1 s for 2k notes) — no per-note Qdrant query
 
 Memory: all `content` columns are loaded into memory at once (one
 `list_all()` call). For 881 notes × ~3 KB this is ~2.5 MB — fine.
@@ -29,6 +31,7 @@ Read-only service: never writes to vault, Qdrant, or activity.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -252,7 +255,8 @@ async def build_graph(
         }
 
     When ``similarity_edges=True`` (default), ghost edges (kind="similarity")
-    from Qdrant top-K nearest neighbours are appended after wikilink edges.
+    from the top-K nearest neighbours (cosine over the scrolled vectors) are
+    appended after wikilink edges.
     Requires Qdrant embeddings; silently skipped if unavailable (W3-A).
     """
     t0 = time.perf_counter()
@@ -342,40 +346,23 @@ async def build_graph(
             if cid is not None:
                 node["cluster_id"] = cid
 
-    # 4b) Ghost edges via Qdrant similarity (W3-A, optional, fail-soft).
+    # 4b) Ghost edges from embedding similarity (W3-A, optional, fail-soft).
+    # Computed locally from the vectors the scroll above already returned —
+    # one matrix pass instead of one Qdrant query per note (that took ~78 s
+    # for ~1,900 notes). Only live notes are in vectors_by_path, so no edge
+    # can point at an archived note.
     if similarity_edges and nodes and vectors_by_path:
         try:
-            from app.services.vault_similarity_edges import build_similarity_edges_async
+            from app.services.vault_similarity_edges import similarity_edges_from_vectors
 
-            qdrant = getattr(vault_embeddings, "qdrant", None) or getattr(
-                vault_embeddings, "qdrant_client", None
+            # Off the event loop: a large vault is a few hundred ms of numpy.
+            sim_edges = await asyncio.to_thread(
+                similarity_edges_from_vectors, vectors_by_path, top_k=3, min_score=0.72
             )
-            collection = getattr(vault_embeddings, "collection", "memory_vault")
-            if qdrant is not None:
-                nodes_with_emb = [
-                    {"id": path, "embedding": vec}
-                    for path, vec in vectors_by_path.items()
-                ]
-                sim_edges = await build_similarity_edges_async(
-                    qdrant,
-                    nodes_with_emb,
-                    top_k=3,
-                    min_score=0.72,
-                    collection=collection,
-                )
-                # Filter: drop edges pointing at notes that no longer exist
-                # in the live vault (Qdrant may still hold embeddings for
-                # W1-archived notes — unresolved refs crash d3-force on the
-                # frontend with "Cannot create property 'vx' on string").
-                live_ids = {n["id"] for n in nodes}
-                sim_edges = [
-                    e for e in sim_edges
-                    if e["source"] in live_ids and e["target"] in live_ids
-                ]
-                edges.extend(sim_edges)
-                logger.debug(
-                    "vault_graph: added %d similarity ghost-edges (W3-A)", len(sim_edges)
-                )
+            edges.extend(sim_edges)
+            logger.debug(
+                "vault_graph: added %d similarity ghost-edges (W3-A)", len(sim_edges)
+            )
         except Exception as e:  # fail-soft — never block graph build
             logger.warning("vault_graph: similarity edges failed, skipping: %s", e)
 

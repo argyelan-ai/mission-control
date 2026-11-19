@@ -13,6 +13,7 @@ import type { TaskTimelineEntry } from "@/lib/types";
 const REMINDER_TYPES = new Set([
   "task.blocked_reminder",
   "task.review_nudge",
+  "task.review_decision_missing",
   "task.dispatch_pending",
   "task.stale_update_warning",
 ]);
@@ -32,7 +33,36 @@ export type TimelineItem =
       last: string;
     };
 
+/**
+ * The watchdog's reminder comments are instructions to the agent ("REVIEW-
+ * ENTSCHEIDUNG FEHLT … POST /api/v1/…"). The operator sees one plain line per
+ * reminder, never the agent's API commands (round-2 Q5, t4 S-neu-5), and
+ * repeated ones collapse like the reminder events.
+ */
+export const AGENT_REMINDER_KEY = "comment.watchdog_notify";
+
+/**
+ * Only the two review reminders addressed to the agent. Other
+ * ``watchdog_notify`` comments (task_monitor.py: "AUFTRAG ABGESCHLOSSEN" with
+ * the subtask evidence, "REVIEW STUCK" / silent-card notes to the lead, the
+ * stuck escalation) carry information the operator needs and keep their text
+ * (PR #961 review SHOULD 1).
+ */
+const AGENT_REMINDER_PREFIX = /^\s*REVIEW-(?:ENTSCHEIDUNG FEHLT|REMINDER)\b/;
+
+export function isAgentReminder(
+  entry: Pick<TaskTimelineEntry, "source" | "kind" | "detail">,
+): boolean {
+  return (
+    entry.source === "comment" &&
+    entry.kind === "watchdog_notify" &&
+    typeof entry.detail === "string" &&
+    AGENT_REMINDER_PREFIX.test(entry.detail)
+  );
+}
+
 function groupKey(entry: TaskTimelineEntry): string | null {
+  if (isAgentReminder(entry)) return AGENT_REMINDER_KEY;
   if (entry.source !== "activity_event" || entry.kind === "status_change") return null;
   const eventType = entry.meta?.event_type;
   return typeof eventType === "string" && isReminderEvent(eventType) ? eventType : null;

@@ -734,3 +734,31 @@ async def test_kill_switch_disables_check(fake_redis, make_board, make_agent, ma
         app.config.settings.lifecycle_watchdog_enabled = original
     t = await _reload_task(task.id)
     assert t.status == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_fresh_chat_reply_does_not_hide_a_silent_run(
+    fake_redis, make_board, make_agent, make_task,
+):
+    """Round-3 re-review M1 (Guard 14): the operator asks the chat "how far are
+    you?" on a dead run. The chat's answer (``chat_reply``, agent-authored,
+    fresh) is not the run's progress — tick 1 still nudges."""
+    from sqlmodel import select
+    from app.models.task import TaskComment
+
+    _b, agent, task = await _make_stuck_setup(make_board, make_agent, make_task)
+    async with _session() as s:
+        s.add(TaskComment(
+            task_id=task.id, author_type="agent", author_agent_id=agent.id,
+            comment_type="chat_reply", content="Still on step 2 as of 05:42.",
+        ))
+        await s.commit()
+    async with _session() as s:
+        await _run_check(fake_redis, s)
+
+    async with _session() as s:
+        comments = (await s.exec(
+            select(TaskComment).where(TaskComment.task_id == task.id)
+        )).all()
+    assert any(c.comment_type == "watchdog_notify" and c.author_type == "system"
+               for c in comments), "a chat reply must not count as the run's progress"

@@ -6,6 +6,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpen } from "lucide-react";
 import { cn, contextPercent, contextColor, timeAgo } from "@/lib/utils";
+import { agentStatusView } from "@/lib/agentStatus";
 import { api } from "@/lib/api";
 import { C, alpha } from "@/lib/colors";
 import { SpotlightCard } from "@/components/shared/SpotlightCard";
@@ -122,20 +123,8 @@ function LearningBadge({ agentId }: { agentId: string }) {
 }
 
 // ── Status Mapping ────────────────────────────────────────────────────────────
-
-type DotStatus = "online" | "busy" | "idle" | "offline" | "error" | "warning";
-
-function agentStatusToDot(status: string): DotStatus {
-  switch (status) {
-    case "online": return "online";
-    case "busy": return "busy";
-    case "error": return "error";
-    case "restarting": return "warning";
-    case "idle": return "idle";
-    case "offline": return "offline";
-    default: return "offline";
-  }
-}
+// `agentStatusView` (lib/agentStatus.ts) — same dot as the detail page and the
+// roster; "working" from the heartbeat used to fall through to "offline" here.
 
 // ── Agent Card ────────────────────────────────────────────────────────────────
 
@@ -150,7 +139,8 @@ export function AgentCard({ agent, className }: AgentCardProps) {
   const pct = contextPercent(agent.context_tokens, agent.context_max);
   const barColor = contextColor(pct);
   const displaySkills = agent.skill_filter ?? agent.skills ?? [];
-  const dotStatus = agentStatusToDot(agent.status);
+  const statusView = agentStatusView(agent);
+  const dotStatus = statusView.dot;
 
   return (
     <Link href={`/agents/${agent.id}`} className="block">
@@ -183,11 +173,13 @@ export function AgentCard({ agent, className }: AgentCardProps) {
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
-                <StatusDot
-                  status={dotStatus}
-                  size="md"
-                  pulse={dotStatus === "online" || dotStatus === "busy"}
-                />
+                <span title={t(statusView.labelKey)} aria-label={t(statusView.labelKey)} role="img">
+                  <StatusDot
+                    status={dotStatus}
+                    size="md"
+                    pulse={dotStatus === "online" || dotStatus === "busy"}
+                  />
+                </span>
               </div>
             </div>
 

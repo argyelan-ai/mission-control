@@ -219,8 +219,38 @@ describe("pickServing", () => {
     expect(pickServing({ host: makeHost({}), runtimes: [cold] },
       { c: live({ reachable: true }) })?.slug).toBe("c");
   });
+  // Round-2 user test (t4 S1): the page paints from unprobed rows first —
+  // every state "unknown", only the watcher's live view decides. Two recipes
+  // on one port both answer; only the one whose model is actually served
+  // (drift false) may take the stage, or the card would flip after the probe.
+  it("among reachable runtimes, the one serving its own model wins", () => {
+    const glm = makeRuntime({ slug: "glm", state: "unknown", container_status: "not_probed", ui_order: 0 });
+    const ds = makeRuntime({ slug: "ds", state: "unknown", container_status: "not_probed", ui_order: 1 });
+    const res = pickServing({ host: makeHost({}), runtimes: [glm, ds] },
+      { glm: live({ reachable: true, drift: true }), ds: live({ reachable: true, drift: false }) });
+    expect(res?.slug).toBe("ds");
+  });
   it("returns null for an idle host", () => {
     expect(pickServing({ host: makeHost({}), runtimes: [makeRuntime({ state: "stopped" })] })).toBeNull();
+  });
+  // Engine death (ADR-096 §11): the box is NOT free — the dead engine keeps
+  // the stage until a start or a stop, so its reason is visible.
+  it("shows a crashed runtime instead of an empty box", () => {
+    const dead = makeRuntime({ slug: "d", state: "stopped" });
+    const other = makeRuntime({ slug: "o", state: "stopped" });
+    expect(pickServing({ host: makeHost({}), runtimes: [other, dead] },
+      { d: live({ status: "failed", reason_code: "exit" }) })?.slug).toBe("d");
+  });
+  it("a failed status without a death record does not hold the stage", () => {
+    const dead = makeRuntime({ slug: "d", state: "stopped" });
+    expect(pickServing({ host: makeHost({}), runtimes: [dead] },
+      { d: live({ status: "failed" }) })).toBeNull();
+  });
+  it("a serving runtime still beats a crashed one", () => {
+    const dead = makeRuntime({ slug: "d", state: "stopped" });
+    const up = makeRuntime({ slug: "u", state: "ready" });
+    expect(pickServing({ host: makeHost({}), runtimes: [dead, up] },
+      { d: live({ status: "failed", reason_code: "exit" }) })?.slug).toBe("u");
   });
 });
 

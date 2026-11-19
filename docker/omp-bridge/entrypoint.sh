@@ -95,7 +95,7 @@ import sys, json
 try:
     d = json.load(sys.stdin)
     for k, v in d.items():
-        if k in ("MC_AGENT_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GH_TOKEN", "AGENT_RECYCLER_ENABLED", "OMP_TURN_IDLE_TIMEOUT", "OMP_TASK_DEADLINE", "OMP_CONTEXT_WINDOW", "OMP_MAX_TOKENS", "OMP_MODEL_INPUT"):
+        if k in ("MC_AGENT_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GH_TOKEN", "AGENT_RECYCLER_ENABLED", "OMP_TURN_IDLE_TIMEOUT", "OMP_TASK_DEADLINE", "OMP_CONTEXT_WINDOW", "OMP_MAX_TOKENS", "OMP_THINKING_BUDGET", "OMP_MODEL_INPUT"):
             print(f"{k}={v}")
 except Exception:
     sys.exit(1)
@@ -131,6 +131,10 @@ except Exception:
         [ -n "$_NEW_CTX_WINDOW" ] && export OMP_CONTEXT_WINDOW="$_NEW_CTX_WINDOW"
         _NEW_MAX_TOKENS=$(echo "$_EXPORTS" | grep '^OMP_MAX_TOKENS=' | cut -d= -f2-)
         [ -n "$_NEW_MAX_TOKENS" ] && export OMP_MAX_TOKENS="$_NEW_MAX_TOKENS"
+        # Thinking cap for models.yml compat.extraBody (backend: omp_thinking_budget).
+        # Empty from MC = no cap for this runtime (cloud / non-reasoning).
+        _NEW_THINKING_BUDGET=$(echo "$_EXPORTS" | grep '^OMP_THINKING_BUDGET=' | cut -d= -f2-)
+        [ -n "$_NEW_THINKING_BUDGET" ] && export OMP_THINKING_BUDGET="$_NEW_THINKING_BUDGET"
         # Vision-Fähigkeit (W3, 06.09.2026): "text" oder "text,image" — siehe
         # render-omp-config.sh für die models.yml/config.yml-Wirkung.
         _NEW_MODEL_INPUT=$(echo "$_EXPORTS" | grep '^OMP_MODEL_INPUT=' | cut -d= -f2-)
@@ -229,6 +233,15 @@ omp config set startup.setupWizard false >/dev/null 2>&1 \
     && omp config set setupVersion 1 >/dev/null 2>&1 \
     && echo "[entrypoint] wizard skipped (startup.setupWizard=false, setupVersion=1)" \
     || echo "[entrypoint] WARN: omp config set failed — TUI may show the setup wizard"
+
+# ── 2c. Read the skills MC hands this agent ─────────────────────────────────
+# MC copies the agent's allowed skills (agents.cli_skills) into
+# ~/.claude/skills (plugin_manager.sync_agent_skills_to_disk). omp only reads
+# that folder with `skills.enableClaudeUser`, which ships OFF — without this
+# line every skill assigned in MC is silently invisible to omp agents.
+omp config set skills.enableClaudeUser true >/dev/null 2>&1 \
+    && echo "[entrypoint] skills: ~/.claude/skills enabled (skills.enableClaudeUser=true)" \
+    || echo "[entrypoint] WARN: omp config set skills.enableClaudeUser failed — MC skills stay invisible"
 
 # ── 3. tmux layout (~/.tmux.conf keeps a large scrollback for the pane SSE) ──
 # mouse on: the Sessions-page web terminal forwards wheel events as mouse CSI

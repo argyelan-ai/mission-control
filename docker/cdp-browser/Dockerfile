@@ -22,6 +22,14 @@
 # and the CI WebGL test guards every rebuild. Bump the digest on purpose.
 FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 
+# ca-certificates floor = the eMudhra fix (Oct 2026: the intermediates' keys
+# leaked). The apt line below upgrades the package and the build FAILS below
+# this version — a stale base image can no longer ship the old bundle, and a
+# cached layer only exists if it passed. backend/tests/test_image_security_floor.py
+# guards the value per distro. Chromium itself does NOT read this bundle
+# (built-in root store — the managed policy further down covers it); it
+# protects the other HTTPS clients here: wget, python3 / cdp-gateway.
+ARG CA_CERTIFICATES_MIN=20250419+deb13u1
 # chromium + socat (the forwarder above), wget + coreutils' timeout (the
 # healthcheck), procps (test_webgl.sh finds the GPU process with pgrep).
 # python3 + websockets: runs cdp-gateway.py (port 9300), the agent-aware
@@ -34,6 +42,9 @@ RUN apt-get update \
  && pip install --no-cache-dir --break-system-packages "websockets==15.0.1" \
  && apt-get purge -y python3-pip && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/* \
+ && v="$(dpkg-query -W -f='${Version}' ca-certificates)" \
+ && echo "ca-certificates $v (floor ${CA_CERTIFICATES_MIN})" \
+ && dpkg --compare-versions "$v" ge "${CA_CERTIFICATES_MIN}" \
  && useradd -m -u 1000 chrome \
  && ln -s /usr/bin/chromium /usr/local/bin/chromium-browser
 
@@ -57,6 +68,17 @@ RUN set -eu; \
     echo "${sum}  /usr/local/bin/websocat" | sha256sum -c -; \
     chmod +x /usr/local/bin/websocat
 
+# Managed Chromium policy: distrust the 12 eMudhra TLS intermediates (and
+# their Sectigo cross-signs) whose private keys leaked in Oct 2026. Chromium
+# verifies against its BUILT-IN Chrome Root Store, not the Debian bundle, and
+# Google blocked these certs through CRLSets — which this headless Chromium
+# never downloads. Measured 2026-10-22: Debian chromium 155.0.8059.79 still
+# loaded https://dv-g3b-emudhra.we-have-a-problem.com/ without the policy and
+# fails with ERR_CERT_AUTHORITY_INVALID with it. Source of the certificates:
+# https://emudhra.we-have-a-problem.com/impacted-intermediates.json (usage
+# "tls"); backend/tests/test_compose_cdp_browser.py pins their SHA-256s.
+# Drop the file once Chromium's own root store excludes them.
+COPY policies/emudhra-distrust.json /etc/chromium/policies/managed/emudhra-distrust.json
 COPY entrypoint.sh /usr/local/bin/cdp-entrypoint.sh
 COPY healthcheck.sh /usr/local/bin/cdp-healthcheck.sh
 COPY gateway/cdp_gateway.py /opt/cdp-gateway/cdp_gateway.py

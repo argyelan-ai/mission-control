@@ -202,7 +202,7 @@ describe("ContextPanel", () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     renderPanel({ onClose });
-    await user.click(screen.getByText("Context"));
+    await user.click(screen.getByText("Context · this chat"));
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -242,3 +242,17 @@ describe("formatSessionCost", () => {
     expect(formatSessionCost({ amount: 2, currency: "NOT-A-CODE" }, "en")).toBe("2.00 NOT-A-CODE");
   });
 });
+
+// Round-4 user test (t3 NICE-1): on the iPhone the panel said only
+// "Kontext 5 %" — that it is THIS chat (the agent page shows the work
+// session, 2 %) stood only in the ring's tooltip, and a phone has no hover.
+describe("ContextPanel names its session", () => {
+  it("says it is this chat and why the agent page may differ, visibly", () => {
+    renderPanel();
+    const panel = screen.getByTestId("context-panel");
+    expect(panel).toHaveTextContent(/this chat/i);
+    expect(panel).toHaveTextContent(/agent page/i);
+    expect(panel.querySelector("[title]")).toBeNull();
+  });
+});
+

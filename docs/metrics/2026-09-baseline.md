@@ -55,7 +55,7 @@ with `GET /api/v1/usage/pages`). Live numbers stay out of this public file.
 
 | Bucket | What it is | How identified |
 |---|---|---|
-| Operator sessions | Interactive coding-CLI sessions on the host, including their subagents and workflow agents | Host CLI project directories other than the lead's checkout. The harvester attributes these to the lead agent's id (its host-session attribution rule in `token_harvester.py`), so `agent_id` alone mixes both |
+| Operator sessions | Interactive coding-CLI sessions on the host, including their subagents and workflow agents | Host CLI project directories other than the lead's checkout. The harvester attributed these to the lead agent's id (its host-session attribution rule in `token_harvester.py`), so `agent_id` alone mixes both. Since 2026-10-22 they are written with `agent_id` NULL and harness `operator-session` (`backend/scripts/reattribute_operator_sessions.py` corrects older rows) |
 | Lead agent | The persistent lead agent on the host (coding CLI, cloud) | Project directory of the MC checkout the lead process runs in (verified: working directory of the running lead process) |
 | Persistent agents A–K | Container and host agents with their own config directory | `agent_id` + per-agent config directory |
 | Heads | Short-lived heads from the head launcher | **No rows** (see §3.3) |

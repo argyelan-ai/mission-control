@@ -43,8 +43,9 @@ cachetools==7.1.4
     # via py-key-value-aio
 caio==0.9.25
     # via aiofile
-certifi==2026.4.22
+certifi==2026.10.19
     # via
+    #   mission-control-backend (pyproject.toml)
     #   httpcore
     #   httpx
     #   requests

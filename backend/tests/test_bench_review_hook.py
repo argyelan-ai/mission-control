@@ -11,7 +11,6 @@ Covers:
     it skips the "wait for Mark" telegram/comment plumbing entirely.
 """
 import uuid
-from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -118,7 +117,9 @@ async def test_on_task_review_finalizes_bench_task_and_collects_artifact(
 
     entry = entries[0]
     await session.refresh(entry)
-    assert entry.artifact_path == str(tmp_path / f"bench-{ch.id}" / "Claude" / "index.html")
+    assert entry.artifact_path == str(
+        tmp_path / f"bench-{ch.id}" / f"Claude-{entry.id.hex[:8]}" / "index.html"
+    )
 
 
 @pytest.mark.asyncio

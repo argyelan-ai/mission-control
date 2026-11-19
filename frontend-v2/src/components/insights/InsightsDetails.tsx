@@ -39,8 +39,25 @@ export function cacheHitRate(models: CostByModel[]): number | null {
   return read + input > 0 ? read / (read + input) : null;
 }
 
+/** The backend's agent-less cost buckets (routers/system.py intelligence_costs)
+ *  come keyed by a fixed non-UUID agent_id. Their name is shown with the same
+ *  words as the source split above (insights.source), in the UI language —
+ *  not the backend's English fallback name. */
+type BucketKey = "headsUnknown" | "operator" | "unattributed";
+const NO_AGENT_BUCKETS: Record<string, BucketKey> = {
+  heads: "headsUnknown",
+  operator: "operator",
+  "": "unattributed",
+};
+
+export function costRowName(row: { agent_id: string; agent_name: string }, ts: (key: BucketKey) => string): string {
+  const key = NO_AGENT_BUCKETS[row.agent_id ?? ""];
+  return key ? ts(key) : row.agent_name;
+}
+
 export function InsightsDetails() {
   const t = useTranslations("insights.details");
+  const ts = useTranslations("insights.source");
   const locale = useLocale();
   const [days, setDays] = useState<number>(30);
   const [open, setOpen] = useState<string | null>(null);
@@ -151,7 +168,7 @@ export function InsightsDetails() {
               {agents.map((a) => (
                 <Line
                   key={a.agent_id}
-                  main={<span className="text-sm" style={{ color: C.textPrimary }}>{a.agent_name}</span>}
+                  main={<span className="text-sm" style={{ color: C.textPrimary }}>{costRowName(a, ts)}</span>}
                   meta={t("agentMeta", { input: formatTokens(a.tokens_in, locale), output: formatTokens(a.tokens_out, locale), events: a.event_count })}
                   value={formatUsd(a.cost_usd, locale)}
                 />
@@ -167,7 +184,7 @@ export function InsightsDetails() {
                 <Line
                   key={s.session_key}
                   main={<span className="font-mono text-sm" style={{ color: C.textPrimary }}>{sessionLabel(s.session_key)}</span>}
-                  meta={`${t("sessionMeta", { agent: s.agent_name, input: formatTokens(s.tokens_in, locale), output: formatTokens(s.tokens_out, locale) })}${s.last_event_at ? ` · ${timeAgo(s.last_event_at, locale)}` : ""}`}
+                  meta={`${t("sessionMeta", { agent: costRowName(s, ts), input: formatTokens(s.tokens_in, locale), output: formatTokens(s.tokens_out, locale) })}${s.last_event_at ? ` · ${timeAgo(s.last_event_at, locale)}` : ""}`}
                   value={formatUsd(s.cost_usd, locale)}
                   as="div"
                 />

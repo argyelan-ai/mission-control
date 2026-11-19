@@ -1,5 +1,8 @@
 # Journey-test stack front door: same routing as the product Caddyfile
 # (/api and /health → backend, rest → frontend), plain HTTP, no LiveKit.
+# Also carries the maintenance-page block (PR 7): stop frontend, and a
+# browser page load gets 502 + Retry-After + the page; fetch/API callers get
+# the bare 502 + Retry-After. Checked by caddy/test_maintenance_page.sh.
 :80 {
     handle /api/v1/internal/* {
         respond 403
@@ -12,5 +15,19 @@
     }
     handle {
         reverse_proxy frontend:3000
+    }
+    handle_errors {
+        @mc_restarting expression {err.status_code} in [502, 503]
+        header @mc_restarting Retry-After "5"
+        @mc_restarting_page {
+            expression {err.status_code} in [502, 503]
+            header Accept *text/html*
+        }
+        handle @mc_restarting_page {
+            rewrite * /503.html
+            templates
+            root * /etc/caddy/maintenance
+            file_server
+        }
     }
 }

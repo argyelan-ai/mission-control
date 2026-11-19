@@ -15,7 +15,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import engine
 from app.models.runtime_schedule import RuntimeSchedule, RuntimeScheduleRun
-from app.services import runtime_manager
+from app.services import runtime_grace, runtime_manager
 
 logger = logging.getLogger("mc.runtime_scheduler")
 
@@ -168,7 +168,9 @@ async def _execute_schedule(schedule: RuntimeSchedule) -> None:
                         logger.warning("lms unload --all schlug fehl: %s", unload_result["message"])
                 result = await runtime_manager.start_runtime(runtime)
             elif schedule.action == "stop":
-                result = await runtime_manager.stop_runtime(runtime)
+                result = await runtime_manager.stop_runtime(
+                    runtime, stop_intent=runtime_grace.INTENT_SCHEDULE,
+                )
             else:
                 raise ValueError(f"Unbekannte Aktion: {schedule.action}")
 

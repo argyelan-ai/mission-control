@@ -49,7 +49,7 @@ export function useVaultList({ scope, agent, type }: UseVaultListParams = {}) {
         limit: PAGE_SIZE,
         offset,
       });
-      return { count: page.count, notes: page.notes };
+      return { count: page.count, notes: page.notes, agents: page.agents };
     },
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => {
@@ -71,9 +71,22 @@ export function useVaultList({ scope, agent, type }: UseVaultListParams = {}) {
 
   const totalCount = result.data?.pages[0]?.count ?? 0;
 
+  // The server's agent facet covers the whole vault (not just the loaded
+  // pages): the header counts it and the agent filter offers it (round-4
+  // user test t4 SHOULD-1 — "4 agents" in a vault with 19). A backend from
+  // before the facet sends none: then the loaded pages are all we know.
+  const agents = useMemo<string[]>(() => {
+    const facet = result.data?.pages[0]?.agents;
+    if (facet) return facet.map((a) => a.agent);
+    const slugs = new Set<string>();
+    for (const p of result.data?.pages ?? []) for (const n of p.notes) if (n.agent) slugs.add(n.agent);
+    return Array.from(slugs).sort();
+  }, [result.data]);
+
   return {
     notes,
     totalCount,
+    agents,
     isLoading: result.isLoading,
     isError: result.isError,
     error: result.error,

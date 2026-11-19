@@ -130,7 +130,7 @@ zeigt, hat eine Definition: die SQL-Funktion `update_running_work()`
 
 **Auth-System (3-Tier):**
 1. **User JWT (HS256)** — Login via `auth/login` (gültig 7 Tage, `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`), localStorage-Storage, `token_version` für Logout-Invalidierung (auch Passwortwechsel: alle anderen Sitzungen abgemeldet, die eigene bekommt einen neuen Token)
-2. **Agent PBKDF2 (200k iter)** — `POST /agents` erzeugt Token einmalig, Redis-Cache `SHA256(token) → agent_id` (5min TTL) verhindert N×200ms Hash pro Request
+2. **Agent PBKDF2 (200k iter)** — `POST /agents` erzeugt Token einmalig, Redis-Cache `SHA256(token) → agent_id` + Fingerabdruck des gespeicherten Hashes (5min TTL) verhindert N×200ms Hash pro Request; ein ersetzter Token (Reset) wird sofort abgelehnt
 3. **Legacy LOCAL_AUTH_TOKEN** — nur falls explizit gesetzt, Fallback
 
 **Step-up (erneute Passwort-Bestätigung, ADR-094 §9):** gefährliche Admin-Aktionen hängen `Depends(require_recent_auth())` aus `services/step_up.py` an. `POST /api/v1/auth/step-up` prüft das Passwort (gleiche Bremse wie Login, plus pro Konto) und gibt einen Einmal-Token, 5 Min gültig, an Benutzer + `token_version` gebunden; der Client schickt ihn im Header `X-MC-Step-Up`. Abgelehnt: `LOCAL_AUTH_TOKEN` und der MCP-Dienst-Token, Konten ohne Passwort, Cookie/`?token=`. Fehlt der Token → **403** `step_up_required` (nie 401 — das würde die UI abmelden). `GET /api/v1/auth/step-up` sagt der UI, ob der Knopf möglich ist. Welche Anmeldung eine Anfrage trug, steht in `request.state.mc_auth_method` (`app/auth.py`).
@@ -153,7 +153,7 @@ zeigt, hat eine Definition: die SQL-Funktion `update_running_work()`
 | `/chat` | Gateway Chat, direkte Agent-Kommunikation |
 | `/memory` | 3-Layer Memory (Episodic/Semantic/Agent Tabs), Qdrant-Suche, Scope-Dropdown |
 | `/insights` | Intelligence Dashboard: KPIs, Agent-Performance, Failure Patterns, LLM Reports |
-| `/runtimes` | Fleet-Tab „Die Bühne" (v2, ADR-079, Standard seit 06.09.2026): ein laufendes Modell = eine Karte (`FleetStage`/`Stage`), Boxen als Mitglieder statt eine Kachel je Box; freie Boxen als `FreeBox`, schlafende als `AsleepBox`, Box-Details im Zahnrad-Cockpit (`BoxCockpit`). Tabs Cloud/Models/Infrastructure unverändert |
+| `/runtimes` | Fleet-Tab „Die Bühne" (v2, ADR-079, Standard seit 06.09.2026): ein laufendes Modell = eine Karte (`FleetStage`/`Stage`), Boxen als Mitglieder statt eine Kachel je Box; freie Boxen als `FreeBox`, schlafende als `AsleepBox` (ob eine Box schläft, sagt nur ihre eigene Prüfung `GET /hosts/{id}/metrics` — ein dunkler Modell-Port allein heisst „prüft", nie „schläft"; der Modelle-Tab nutzt dieselbe Regel über `services/host_liveness.py`: wach + Port dunkel = `no_model`), Box-Details im Zahnrad-Cockpit (`BoxCockpit`). Tabs Cloud/Models/Infrastructure unverändert |
 | `/schedule` | Cron Jobs + Runs |
 | `/settings` | Profile, Autonomy, Intelligence, Secrets, Admin Users, CLI Plugins (7 Tabs) |
 | `/skills` | Skill-Marketplace, Team-Zuweisungen (Matrix), Plugin Audit Trail |
@@ -204,7 +204,7 @@ zeigt, hat eine Definition: die SQL-Funktion `update_running_work()`
 - deployer (+ `gh` CLI + `vercel` CLI)
 
 **`mc-agent-base` Image** (`docker/mc-agent-base/Dockerfile`):
-- `node:22.11.0-alpine`
+- `node:22.23.4-alpine` (Node security floor: `backend/tests/test_image_security_floor.py`)
 - Tools: git, curl, python3, bash, openssh-client, tmux
 - `openclaude@0.1.8` global installiert
 - Non-root `agent` user, `/bin/sh` login shell (wichtig: nicht `/sbin/nologin`, sonst tmux-Zombie)
@@ -667,7 +667,7 @@ PORSCHE ist eine **Windows-Box** mit lokalem **unsloth-OpenAI-Server**, die im L
 - **Neue Runtime-Felder** (Migration 0130, alle nullable/default-off → bestehende Runtimes unberührt): `control_url` (`:5555`-URL), `wol_mac_address`, `power_managed` (bool). Seed in `runtimes.json` als `enabled=false` bis echte Werte (Port/Modell/`launch_command`) gesetzt sind.
 - **State-Mapping** (`get_runtime_state`, Feld `state` + Debug-Feld `container_status`): `:5555` aus → `stopped`/`asleep`; `:5555` da, `/v1` ≠ 200 → `stopped`/`booted_no_model`; `/v1/models` = 200 → `ready`/`serving`.
 - **Bedarfsgesteuert:** WoL weckt nur die Box (billig); das Modell lädt erst on demand via Start (Warmup ~1–3 Min) — GPU/VRAM/Strom laufen nur bei Nutzung, kein Autostart.
-- **Wake-Flow (Backend kann kein L2-Broadcast aus Docker):** `POST /api/v1/runtimes/{id}/wake` → `runtime_manager.wake_runtime()` schreibt eine Trigger-Datei nach `~/.mc/wake-requests/<slug>.request.json` (unter dem bestehenden `~/.mc`-Bind-Mount; Shape `{slug, mac, ip, broadcast, requested_at}`). Ein host-seitiger launchd-Watcher liest sie und ruft `~/.claude/skills/wake-porsche/wake_porsche.py` auf, das das Magic-Packet sendet. Endpoint ist hart auf `power_managed` gegated (400 sonst, 404 wenn Runtime fehlt).
+- **Wake-Flow (Backend kann kein L2-Broadcast aus Docker):** `POST /api/v1/runtimes/{id}/wake` → `runtime_manager.wake_runtime()` schreibt eine Trigger-Datei nach `~/.mc/wake-requests/<slug>.request.json` (unter dem bestehenden `~/.mc`-Bind-Mount; Shape `{slug, mac, ip, broadcast, requested_at}`). Ein host-seitiger launchd-Watcher liest sie und ruft `~/.claude/skills/wake-porsche/wake_porsche.py` auf, das das Magic-Packet sendet. Endpoint ist hart auf `power_managed` gegated (400 sonst, 404 wenn Runtime fehlt). **Am Host (Runde-5-Nachprüfung L1):** `POST /api/v1/hosts/{id}/wake` → `runtime_manager.wake_host()` nimmt denselben Trigger-Weg (gemeinsamer `_write_wake_request`), gegated auf `hosts.power_managed` (keine Runtime-Zeile braucht das Flag), Operator/Admin; vergisst danach die gemerkte Host-Prüfung (`host_liveness.forget`) und die Readiness der Runtimes auf der Box. **Weck-Helfer fehlt (PR #976 Review, Lebenszeichen seit Runde-7 L5):** Der Watcher (`scripts/porsche-wake-watcher.py`, launchd `com.mc.porsche-wake-watcher`, WatchPaths + alle 30 s) aktualisiert bei **jedem** Lauf `~/.mc/wake-requests/watcher.alive` (in place per `utime` — ein neuer Ordner-Eintrag würde WatchPaths erneut auslösen) und räumt jede Anfrage sofort weg. `_write_wake_request` prüft zwei Zeichen: (1) **Lebenszeichen** fehlt oder ist älter als `WAKE_HELPER_HEARTBEAT_S` (90 s = drei verpasste Läufe), (2) eine `*.request.json` wartet länger als `WAKE_HELPER_STALE_S` (120 s, Watcher läuft, kann den Ordner aber nicht abarbeiten). Trifft eines zu, wird nichts Neues geschrieben, Antwort `ok:false, helper_down:true, reason: no_heartbeat|heartbeat_stale|request_waiting` mit deutscher Meldung; beide Wake-Endpoints geben 503 mit `detail: {message, reason}` (gemeinsam in `services/box_wake.py`: `raise_unless_sent` + `forget_box_after_wake`, damit die zwei Wege nicht wieder auseinanderlaufen), Karte **und** Runtime-Detail sagen „Nicht geweckt: Der Weck-Helfer auf dem Mac läuft nicht.“ statt „Wird geweckt…“. Vorher hing die ehrliche 503 nur an einer liegen gebliebenen Datei — ein leerer Ordner zeigte 2 Min „Wird geweckt…“. Eine noch frische Anfrage derselben Box bleibt unverändert (sonst würde ihr Alter verdeckt). Der Watcher weckt keine Anfrage, die älter als 5 min ist (`MAX_REQUEST_AGE_S`, Status `expired`) — eine alte Datei weckt die Box beim ersten Start nicht. **Stabiler Pfad:** Das plist ruft das Skript aus `~/.mc/checkouts/mission-control` (von `docker/shared/ensure-checkout.sh` auf `main` gepinnt), nie aus einem Worktree oder dem Arbeits-Checkout; Installation siehe `scripts/launchd/README.md`. `POST /runtimes/{id}/wake` folgt seit L5 denselben Regeln wie der Host-Weg: Operator/Admin, `host_liveness.forget` + Readiness aller Runtimes der Box. `GET /hosts/{id}/metrics` beantwortet ein frisch gemerktes „schläft“ (≤ `AWAKE_TTL_S`) aus dem Speicher statt jedes Mal ~3 s zu prüfen. Die Runtimes-Seite zeigt jede power-managed Box ohne laufendes Modell als Schlaf-Karte; „Wecken“ (`WakeBoxButton`) geht an den Host, bei „schläft“/„prüft“ gibt es kein „Modell starten“.
 - **Runtime-Readiness Dispatch-Gate** (`services/runtime_readiness.py`): ein Agent, dessen LLM-Hirn auf einer schlafenden PORSCHE sitzt, soll keinen Task in die Session injiziert bekommen. Konsultiert an beiden Dispatch-Einstiegen — `operations.check_dispatch_allowed` (Schritt 3.5, neuer optionaler `session`-Param; alle 6 Push-Aufrufstellen über 5 Dateien — `task_lifecycle.py` mit zweien — übergeben ihn) + `routers/agents.py::agent_poll` (nur der frische Inbox-Claim, Recovery/phase_approval unberührt). **Greift ausschliesslich für `power_managed`-gebundene Agenten:** `runtime_id` NULL, nicht-power-managed Runtime oder Kill-Switch `enable_runtime_readiness_gate=false` → sofortiger früher Return, jeder andere Agent (24/7 cli-bridge, host, DGX, cloud) läuft den unveränderten Pfad. Readiness wird ~15 s in Redis gecacht (kein `:5555`-Hämmern), und **jeder Fehler fällt OPEN** — ein Gate-Bug kann die Fleet nie stalled lassen. Ist die Box schlafend, bleibt der Task geparkt (inbox, `dispatched_at` ungesetzt) bis `ready`. **Seit ADR-097 (19.10.2026)** hält der Poll-Claim (`include_local=True`) auch für jede **lokale** Runtime (`heads.pairs.is_local`), deren Models-Endpunkt nicht antwortet (ein gecachter GET, Antwort < 500 = da) — der Task bleibt in der Inbox, die Timeline bekommt eine Zeile `task.dispatch_held_runtime_down`; Push-Stellen bleiben für lokale Runtimes ungegated. Die omp-bridge (ACP) setzt `in_progress` erst bei der ersten Arbeit des Modells (`FirstActivityAck`), nicht bei der Zustellung.
 - **Default manuelles Wecken** (Auto-Wake-on-dispatch deferred als spätere Opt-in-Stufe).
 
@@ -709,13 +709,13 @@ Vor ADR-056 steckte der **Harness** (welches CLI-Binary treibt den Container —
 "Engine leads, MC follows": `services/runtime_watcher.py` is a singleton
 background loop (same pattern as `intelligence.py` — asyncio task, Redis
 lock for multi-worker dedup, `settings.runtime_watcher_enabled` kill-switch,
-`settings.runtime_watcher_interval` default 90s) that supersedes **D-22**
+`settings.runtime_watcher_interval` default 30 s since 2026-10-20, was 90 s) that supersedes **D-22**
 (ADR-028's "no periodic background probing" call — see ADR-054 for the
 full reversal rationale). Every tick it probes all `enabled` runtimes of a
 probeable `runtime_type` (`vllm_docker`, `llamacpp_docker`, `lmstudio`,
 `openai_compatible`, `unsloth`) via `GET {endpoint}/v1/models` (reuses the Phase-15
 `probe_runtime_model` helper) and writes a live snapshot to Redis
-(`mc:runtime-live:{slug}`, TTL 3×interval — `reachable`, `served_model`,
+(`mc:runtime-live:{slug}`, TTL 3 ticks but at least 270 s — `reachable`, `served_model`,
 `latency_ms`, `last_probe_at`), feeding the `/runtimes` cockpit live-dot
 via `GET /api/v1/runtimes/live-status`.
 
@@ -728,6 +728,19 @@ cli-bridge agent `pending_runtime_sync = true`
 Migration `0141`). Unreachable endpoints only update live status;
 `runtime.unreachable` fires after 3 consecutive failed probes.
 
+**Stale-model net** (`RuntimeWatcher._sync_stale_agent_models`, ADR-078
+follow-up): the row is right, but a bound agent's `agents.model` still
+differs. The net flags **only those agents**
+(`mark_agents_for_sync(..., only_ids=…)`), at most once per runtime per
+`AGENT_MODEL_GUARD_TTL` (600 s). "Stale" and "flagged" use one filter,
+`runtime_propagation.is_model_sync_target` (cli-bridge agents, host agents
+with a registered adapter, never archived ones). Both rules come from a live
+loop (2026-10-20): an archived agent no sync can reach stayed "stale"
+forever, and flagging the whole runtime each window restarted a converged
+host bridge about every 10.5 minutes, all day. Host agents' `agent.env` is
+written only when its bytes change (`services/agent_env_writer.py`), because
+a launchd `WatchPaths` job restarts on every write.
+
 **Propagation** (`services/runtime_propagation.py`) runs a sync pass at the
 end of every tick: idle flagged agents get `sync_docker_agent_files()` +
 a **plain `docker restart`** (re-runs the container entrypoint →
@@ -735,11 +748,12 @@ a **plain `docker restart`** (re-runs the container entrypoint →
 deliberately **not** `respawn_window_only` (ADR-028's same-image fast
 path), because a window respawn keeps the stale tmux environment and would
 never pick up the new model. Busy agents (`current_task_id` set) stay
-flagged and are retried by the *next* watcher tick (≤90s after the task
-ends) rather than via a `task_lifecycle` hook — no new coupling into the
+flagged and are retried by the *next* watcher tick (≤ 30 s after the task
+ends, plus the rest of that tick) rather than via a `task_lifecycle` hook — no new coupling into the
 task-completion path. A Redis failure counter trips a circuit breaker after
 3 failed sync attempts (`agent.model_sync_failed`, agent left as-is — no
-restart-loop). Force path for operators who don't want to wait:
+restart-loop); a failed attempt waits at least 90 s for the next one
+(`SYNC_RETRY_SPACING`), so the 30 s tick does not burn the three attempts in a minute. Force path for operators who don't want to wait:
 `POST /runtimes/db/{slug}/sync-agents`.
 
 #### Runtime Pulse — tok/s heat strip poller (NEU 2026-09-06, Runtimes-Bühne v2 PR 1)
@@ -953,9 +967,11 @@ Verzeichnis bootet unveraendert. Kopplung nur ueber die **Hook-Registry** in
 
 | Registry | Aufgerufen aus | Einsatz |
 |---|---|---|
+| `background_loops` | `main.py::lifespan()` via `start_background_loops()` / `stop_background_loops()` | Dauer-Schleifen eines Verticals im API-Prozess (nicht im Worker): einmal beim Start gestartet, beim Stopp abgebrochen. Fabrik ohne Argumente → Coroutine bis `cancel`; Fehler faengt die Schleife selbst, eine werfende Fabrik wird geloggt und uebersprungen (bench_studio: Waisen-Durchlauf alle 60 s, W0.8) |
 | `task_done_hooks` | `routers/tasks.py`, `routers/agent_task_status.py` | Callback wenn Agent-Task `done` wird (bench_studio: Artefakt einsammeln) |
 | `tools_md_sections` | Template-Renderer | Zusaetzliche TOOLS.md-Sektionen fuer Agents |
 | `x_post_resolved_hooks` (NEU) | `routers/approvals.py::_handle_x_post_resolution()` | Callback bei Approve/Reject eines `x_post`-Approvals (bench_studio: Challenge → `published`) |
+| `completion_callback_skip_hooks` | `services/task_lifecycle.py::_notify_lead_on_completion()` | Vertical uebernimmt die Nacharbeit eigener Tasks selbst → kein Completion-Callback an den Board Lead (bench_studio: Bench-Tasks wecken den Lead nicht mehr, W0.11). Werfendes Hook = Callback wie bisher |
 
 #### Kern-Bausteine fuer Publishing (ADR-065, ADR-070)
 
@@ -979,6 +995,10 @@ neue Endpunkte fuer den Benchmark-Studio-Workflow:
 **Volume-Aenderung:** `mc_shared_deliverables` von `ro` auf `rw` in `docker-compose.yml`
 — der Bench-Orchestrator schreibt `/shared-deliverables/bench-<id>/<label>/index.html`,
 mc-playwright liest und schreibt in dasselbe Volume (Praezedenz: mcp-screenshots ro→rw).
+
+**Browser (since 2026-10-22):** Playwright 1.64 / Chrome for Testing 156, always started via
+`_launch_chromium` (`channel="chromium"`, new headless mode) so the managed eMudhra distrust
+policy applies; the driver runs on a pinned patched Node, not Playwright's bundled one.
 
 #### bench_studio Vertical (NEU 2026-07-11, ADR-070)
 
@@ -1313,12 +1333,12 @@ Frontend `/insights`: 7 Sektionen (KPIs, Agent-Performance BarChart, Task-Durati
 
 ```
 vLLM / LM Studio: model changed at the engine
-  → Watcher probe (≤90s): served_model ≠ runtime.model_identifier
+  → Watcher probe (≤30s + tick run time): served_model ≠ runtime.model_identifier
   → two-probe confirmation (guards against warm-up flapping)
   → Runtime row updated + resolver cache invalidated + runtime.model_changed event
   → agents bound to this runtime (agent.runtime_id == runtime.id):
       idle  → sync_docker_agent_files() + docker restart (re-bootstrap) → agent.model_synced
-      busy  → pending_runtime_sync=true → banner → synced on next watcher tick (≤90s after task ends)
+      busy  → pending_runtime_sync=true → banner → synced on next watcher tick (≤30s after task ends)
       3 failed sync attempts → circuit breaker → agent.model_sync_failed (manual restart required)
   → /runtimes cockpit shows live model + drift-/pending-sync badges until synced
 ```
@@ -1453,10 +1473,30 @@ lang nach — „kein Modell" heisst hier meist „die Box lädt gerade".
 supports_vision` / `local_recipes.supports_vision` (Migration 0196) laufen
 über denselben Reload-Kanal wie Modellname/Fenster — `build_runtime_env` setzt
 `OMP_MODEL_INPUT` (`text`|`text,image`), `render-omp-config.sh` rendert daraus
-`input:` in models.yml plus `omp config set modelRoles.vision` (nur wenn
-vision-fähig) bzw. `images.blockImages: true` (sonst) — Letzteres verhindert,
-dass omp bei fehlender Vision-Rolle auf einen ungeprüften externen
-Standard-Provider ausweicht (live am omp-Binary geprüft, siehe ADR-078).
+`input:` in models.yml plus die Rolle `vision` im `modelRoles`-Satz (nur wenn
+vision-fähig, siehe nächster Absatz) bzw. `images.blockImages: true` (sonst) —
+Letzteres verhindert, dass omp bei fehlender Vision-Rolle auf einen
+ungeprüften externen Standard-Provider ausweicht (live am omp-Binary geprüft,
+siehe ADR-078). Der frühere Aufruf `omp config set modelRoles.vision …` setzte
+nie etwas: omp 18.10.1 antwortet darauf mit „Unknown setting".
+
+**Modell-Rollen + Provider-Sperre (20.10.2026, ADR-086):** omps Subagenten
+wählen ihr Modell über Rollen (`task` → `@task`, `scout` → `@smol`,
+`reviewer` → `@slow`, Effort-Richter `judge`). `render-omp-config.sh`
+schreibt bei JEDEM Lauf (Start, Reload, Runtime-Wechsel) drei Einstellungen,
+jede für sich mit eigener WARN-Zeile: `disabledProviders` (omps eingebaute
+Modell-Provider; offen bleiben `web`, `local`, `cursor` und als einziger
+Discovery-Provider `lm-studio` — ohne ihn liest ein laufendes omp nach einem
+Reload models.yml nie neu ein), `modelRoles` als ganzer Satz (alle
+Chat-Rollen + `judge` → das gebundene Modell) und
+`task.agentModelOverrides: {}`. Grenze: das ist omps Profil-Ebene.
+Projekt-Einstellungen im Arbeitsverzeichnis (`.omp/config.yml`,
+`.claude/settings.json`) ersetzen die Sperre; solange `OPENAI_API_KEY` in
+omps Umgebung steht, erreicht omp dann wieder den eingebauten `openai`-
+Provider. Die Liste stammt aus omp 18.10.1 (`_OMP_LOCK_CHECKED`; ein Test
+bindet sie an `docker/cli-versions.json`, ein anderes omp loggt WARN) —
+bei einem omp-Update `MC_OMP_IMAGE=… pytest
+docker/omp-bridge/tests/test_render_omp_model_roles.py` laufen lassen.
 
 ### Vault (Karpathy-Wiki Memory) — live (M.1-M.5 + Boss/Jarvis on main 2026-05-15)
 
@@ -1518,7 +1558,7 @@ Alle ADRs in `docs/decisions/`:
 - **ADR-007** — Structured Dispatch Messages (Curl-Callbacks self-contained statt TOOLS.md-Lookup)
 - **ADR-008** — Phase-Completion via Watchdog (zentral orchestriert, nicht Agent-getriggert)
 - **ADR-009** — Agent-Scoped Router separat (`agent_scoped.py` vs `agents.py`, Scopes statt User-Rollen)
-- **ADR-010** — Redis-Cache für PBKDF2 (`SHA256(token) → agent_id`, 5min TTL)
+- **ADR-010** — Redis-Cache für PBKDF2 (`SHA256(token) → agent_id` + Hash-Fingerabdruck, 5min TTL; Nachtrag 2026-11-13: ersetzter Token sofort ungültig)
 - **ADR-011** — HTTP-Polling für Docker-Agents (statt Push/Webhooks)
 - **ADR-012** — `use_alter=True` ForeignKeys für Agent↔Task / Board↔Project Zyklus-Break
 - **ADR-013** — Settings.json als echte Kopie (kein Symlink) im Docker-Mount
@@ -1555,6 +1595,7 @@ Alle ADRs in `docs/decisions/`:
 | Agent-Config-Content | `backend/templates/*.j2` | Reprovision der Agents nötig |
 | Host-Agent-Staging (`.plist`/`run.sh`/`agent.env`) | `backend/app/services/host_provisioning.py` | ADR-063 — nur für generische Host-Agenten (nicht Hermes, das bleibt `bootstrap_hermes_agent`); `launchctl`-Load hinter `settings.host_agent_autoload_enabled` |
 | Dispatch-Verhalten | `backend/app/services/dispatch.py` | Watchdog + Task Runner ggf. anpassen |
+| MCP tools for agents (worker flow, vault, comms) | `scripts/mc-mcp.py` | ADR-085 §4, ADR-100 §2, ADR-101 — thin layer over the `/agent/...` routes; finishing reuses `scripts/mc-cli` (`_cmd_finish`); tool sets per mode are pinned in `backend/tests/test_mc_mcp_worker_flow.py`; matrix row `mc-mcp` in `docs/harness-matrix.json` |
 | Neue Task-Status / Workflow | `backend/app/models/task.py` + Routers + Frontend types | Watchdog + Task Lifecycle |
 | Runtime-Wechsel pro Agent | `backend/app/services/agent_runtime_switch.py` (atomic) | Tests + UI-Modal in `RuntimeSwitchModal.tsx` |
 | Runtime-Drift-Probing / -Intervall | `backend/app/services/runtime_watcher.py` (`settings.runtime_watcher_interval`/`_enabled`) | ADR-054 — 2-Probe-Confirm, `/runtimes/live-status` |
@@ -1609,6 +1650,89 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-11-13** — **Pause holds the poll too (ADR-089 Nachtrag 2026-11-13).** `agent_poll`
+  (`_paused_hold` in `backend/app/routers/agents.py`) hands a paused agent no card — fresh,
+  phase approval or undelivered — and answers `idle` + `agent_paused`; a card in flight keeps
+  its answer and running work is still reported. The undispatched-card watcher skips a paused
+  agent's card. Before, a paused agent's poll still claimed any card assigned to it, so *Pause*
+  could not stop an MCP worker (ADR-101). Rule `R-paused-holds-poll` replaces
+  `R-paused-poll-takes-assigned`; guard `backend/tests/test_paused_agent_poll_hold.py`.
+- **2026-11-13** — **A replaced agent token is refused at once (ADR-010 Nachtrag).**
+  The Redis token cache (`mc:agent-auth:{SHA256(token)}`) now stores the agent id plus a
+  fingerprint of the stored token hash; `_resolve_agent_from_token` (`backend/app/auth.py`)
+  accepts a hit only while the agent still has that hash. Before, an old token kept working
+  for up to five minutes after `POST /agents/{id}/reset-token`. No route, no migration;
+  entries in the old format are verified again once. Guard:
+  `backend/tests/test_agent_token_cache_revocation.py`.
+- **2026-11-12** — **Worker flow over MCP (ADR-101).** `scripts/mc-mcp.py` in agent mode with
+  `MC_MCP_WORKER=1` lets a registered agent work its cards without a bridge and without the `mc`
+  command in a shell: `mc_next_task` (poll + accept with the dispatch attempt id, takes over the
+  fresh id on re-delivery), `mc_progress`, `mc_finish` (runs `mc finish` in-process — one finish
+  logic, ADR-037), `mc_handbook`, plus `mc_vault_search` / `mc_vault_read` / `mc_vault_write`.
+  The server tells the model how MC works: MCP `instructions` on connect, the handbook on demand,
+  the next step in every tool answer. While a card is held the server sends the agent heartbeat;
+  it stops after 20 minutes without a tool call, so it proves "process alive and recently in
+  touch", not model output. No new route, table, scope or status. A guest session (ADR-100 §2)
+  gets none of these tools. Setup: `docs/setup/mcp-worker.md`.
+- **2026-10-23** — **Wake helper: a real heartbeat instead of a leftover file (round-7 L5).**
+  `scripts/porsche-wake-watcher.py` (stdlib, Python 3.9 — launchd runs the Mac's `/usr/bin/python3`)
+  touches `~/.mc/wake-requests/watcher.alive` on every run
+  (in place, so launchd's WatchPaths does not refire) and retires requests older than 5 min
+  without waking (`expired`). `runtime_manager._write_wake_request` queues a wake only with a
+  heartbeat younger than 90 s and no request waiting > 120 s; else `helper_down` + `reason`
+  (German message) → 503 with `detail: {message, reason}` on both wake routes (shared in
+  `services/box_wake.py`). `POST /runtimes/{id}/wake` is operator-only and
+  forgets the box's remembered "asleep" like the host route; the runtime detail panel shows the
+  helper sentence. The launchd plist runs the script from `~/.mc/checkouts/mission-control`.
+  Rule `R-wake-needs-helper-heartbeat`. No migration.
+- **2026-10-23** — **Credentials Vault admin-only, masks without length (ADR-098):** all five
+  `/api/v1/credentials` routes need the admin role (viewers could list, change and delete
+  logins); `GET /api/v1/secrets` needs operator+. `encryption.mask()` returns a fixed
+  `••••••••` (no length), keeps the last 4 characters only for values of 20+ characters, and
+  `mask_credential_field` never shows a tail for password-like fields or free text. The task
+  form skips the credentials query for non-admins. Amends ADR-033 (write-auth row).
+- **2026-10-23** — **"Open on the Mac" only at the Mac, with an honest answer.** Both host-open
+  endpoints (`POST …/deliverables/{id}/open`, `POST /files/open`) go through
+  `services/host_open.py`: 403 unless the caller opened MC via a loopback name (the browser's
+  `Origin`, else `X-Forwarded-Host`/`Host` — the client IP is always local behind Tailscale Serve,
+  Caddy and the Next proxy), and a helper that is down or answers an error is a 502 instead of
+  `{"ok": true}`. The frontend applies the same rule to `location.hostname`
+  (`lib/hostOnly.ts` `useIsHostViewer`) next to the phone/mouse CSS, and the deliverable card drops
+  the buttons when its file or folder cannot be loaded. Not a security boundary (headers can be
+  set by any logged-in client). Rule `R-host-open-at-host-only`. No migration.
+
+- **2026-10-22** — **Token harvester: lead cost only from the lead's own session dir.** The host's
+  `~/.claude/projects` is shared by the lead agent and the operator's interactive Claude Code; the
+  harvester booked every MC-looking line there on the lead (cwd/branch heuristic), inflating its
+  cost ~150x. Now only `<projects>/<encode_cwd(lead_checkout_path())>/**` (incl. subagents) is the
+  lead; other MC-looking dirs are written with `agent_id` NULL + harness `operator-session` and show
+  as "Operator sessions" in `/intelligence/costs` and as `operator` in the usage baseline; private
+  dirs stay skipped (`_should_attribute_boss_path` is now only that privacy filter + the chat's
+  fail-closed gate). `lead_checkout_path()` (setting `mc_checkout_path` / `MC_CHECKOUT_PATH`, default
+  as `docker/shared/ensure-checkout.sh`) is the one source for the harvester, the Sessions chat and
+  `usage_baseline`. Old rows: `backend/scripts/reattribute_operator_sessions.py` (dry run by
+  default, `--apply`, `--since`). Rule `R-lead-usage-only-from-lead-dir`. No migration.
+
+- **2026-10-22** — **mc-playwright on Playwright 1.64 (eMudhra follow-up):** base
+  `playwright/python:v1.48.0-jammy` → `v1.64.0-noble` (Chrome for Testing 156, Ubuntu 24.04,
+  Python 3.12, ffmpeg 6.1). The driver's bundled Node (1.64: v24.21.0) is replaced by a pinned
+  `node:24.22.1` binary (`PLAYWRIGHT_NODEJS_PATH`, build floor `NODE_MIN`). Every launch goes through
+  `_launch_chromium` = full browser in new headless mode (`channel="chromium"`), because
+  chrome-headless-shell ignores managed policies; the headless shell is removed from the image and
+  the cdp-browser eMudhra `CADistrustedCertificates` policy is installed for Chrome for Testing.
+  The build proves both by effect (`docker/mc-playwright/check_browser.py`: chrome://policy shows
+  the policy with status OK; a launch without the channel finds no browser). Guarded in
+  `backend/tests/test_image_security_floor.py`; `docker/mc-playwright/tests` get their own CI lane.
+
+- **2026-10-22** — **Image security floor (Node 2026-10-21 release + eMudhra CA):** the backend
+  image moves from NodeSource Node 20 (end of life) to the 22 line with a build-time floor
+  (`NODE_MIN`); `mc-agent-base` / `mc-claude-agent` move from `node:22.11.0` to `node:22.23.4`,
+  `playwright-mcp` to the `22.23.4` digest. MCP servers the backend installs with npm run under
+  the agents' node, so the backend's Node major stays at or below every agent image's (omp: 24).
+  `mc-agent-base` is now Alpine 3.24 / Python 3.14; the CI BusyBox lanes run on that image. certifi floor
+  2026.10.19 in the backend (pyproject + lock) and voice worker; `mc-playwright` upgrades the
+  stale jammy `ca-certificates`. `backend/tests/test_image_security_floor.py` keeps the floor.
+
 - **2026-10-19** — **Terminal door + crash matrix (ADR-094, update plan PR 2c):** on the stable
   channel `install.sh --update`, `--rollback` and `--resume` only run `scripts/mc_update.py`
   (`mc_update_door`: the install's own engine, else the one next to the installer, else main's)
@@ -1633,6 +1757,17 @@ Alle ADRs in `docs/decisions/`:
   a newer update exists or the run's backup is gone. Tests drive the real `backup.sh` against
   the fake docker (`scripts/tests/fake_docker.py`); `backend/tests/test_backup_sh.py` covers
   the new mode against a throwaway Postgres.
+- **2026-10-19** — **Self-update card in Settings → About (ADR-094, update plan PR 5):**
+  `frontend-v2/src/components/settings/MCUpdateCard.tsx` — lights of the preflight (red first,
+  green folded), the password sheet (step-up, `ResponsiveModal` = bottom sheet on the phone),
+  waiting for quiet, the five-step phase bar (never backwards), the restart gap (a status call
+  without an answer is "restarting" for up to 25 min, never "failed"), success / set back /
+  aborted / interrupted / the way back failed, *Back to …* within 14 days, history, copyable
+  commands, EN/DE. The state rules live in one place, `frontend-v2/src/lib/mcUpdate.ts`. Admin
+  only; the status API's `404` (switch off) hides the card, a managed install's `409` carries
+  `enabled` so the "deploy procedure" note appears only once the switch is on. Tests:
+  `src/lib/__tests__/mcUpdate.test.ts`, `src/components/settings/__tests__/MCUpdateCard*.test.tsx`,
+  `src/app/settings/__tests__/AboutUpdateCard.test.tsx`, browser: `playwright/mc-update-card.spec.ts`.
 - **2026-10-19** — **Self-update API + drain in Postgres (ADR-094, update plan PR 4c):**
   `backend/app/routers/system_update.py` — `/api/v1/system/update/{preflight,start,status,
   rollback,resume,history}`, admin only, `start` + `rollback` behind step-up

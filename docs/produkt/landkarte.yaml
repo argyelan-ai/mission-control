@@ -111,11 +111,17 @@ features:
       - "* /api/v1/boards/*/tasks/{task_id}/dependencies"
       - "* /api/v1/boards/*/tasks/{task_id}/deliverables"
       - "* /api/v1/boards/*/tasks/{task_id}/deliverables/{deliverable_id}/*"
+      # A multi-file HTML deliverable in the task detail's preview frame: the
+      # signed, short-lived folder URL minted by …/deliverables/{id}/view-url
+      # (routers/deliverable_view.py, called by HtmlPreview).
+      - "GET /api/v1/deliverable-view/{token}/{file_path}"
       - "* /api/v1/boards/*/tasks/{task_id}/dispatch"
       - "* /api/v1/boards/*/tasks/{task_id}/events"
       - "* /api/v1/boards/*/tasks/{task_id}/git-diff"
       - "* /api/v1/boards/*/tasks/{task_id}/git-info"
       - "* /api/v1/boards/*/tasks/{task_id}/hierarchy"
+      # The task card's model-wait block (ADR-097 addendum, #897).
+      - "* /api/v1/boards/*/tasks/{task_id}/model-wait"
       - "* /api/v1/boards/*/tasks/{task_id}/promote"
       - "* /api/v1/boards/*/tasks/{task_id}/resume"
       - "* /api/v1/boards/*/tasks/{task_id}/review"
@@ -197,6 +203,11 @@ features:
       - "* /api/v1/approvals"
       - "* /api/v1/approvals/{approval_id}"
       - "GET /api/v1/approvals/stream"
+      # ADR-100 2d: tab "Between agents" (read-only session conversations)
+      # and the chat header's directory sheet.
+      - "GET /api/v1/comms/directory"
+      - "GET /api/v1/comms/conversations"
+      - "GET /api/v1/comms/conversations/{thread_id}/messages"
     status: active
     source: "ROADMAP UI wave 2 (pages that stay)"
     tables:
@@ -301,9 +312,13 @@ features:
       # Autonomy levels (autonomy tab).
       - "GET /api/v1/settings/autonomy"
       - "PATCH /api/v1/settings/autonomy"
+      # Fleet default languages for NEW agents (Settings → Language,
+      # services/agent_language_defaults.py, app_settings rows).
+      - "GET /api/v1/settings/agent-language"
+      - "PUT /api/v1/settings/agent-language"
       # Generic per-user key/value preference store (routers/settings.py).
-      # Caller: the profile tab's "Voice language" select (VoiceLanguageField
-      # in page.tsx), which saves a {"language": "auto"|"de"|"en"} value
+      # Caller: the "Voice calls" row in Settings → Language
+      # (LanguageSection.tsx), which saves a {"language": "auto"|"de"|"en"} value
       # under key "voice_language" — read by voice session minting
       # (services/voice_live.py) to override the UI locale. GET /settings
       # (list) still has no caller (internal).
@@ -311,6 +326,19 @@ features:
       - "PUT /api/v1/settings/{key}"
       # Version + update hint in the settings footer.
       - "GET /api/v1/system/version"
+      # Self-update card, Settings → About (ADR-094, update plan PR 5;
+      # MCUpdateCard.tsx): lights, the password sheet, phase bar, restart
+      # gap, history. Admin only and behind MC_SELF_UPDATE_ENABLED (off)
+      # until the button passed acceptance; step-up GET decides whether the
+      # button is offered, POST confirms the password in the sheet.
+      - "GET /api/v1/auth/step-up"
+      - "POST /api/v1/auth/step-up"
+      - "POST /api/v1/system/update/preflight"
+      - "POST /api/v1/system/update/start"
+      - "GET /api/v1/system/update/status"
+      - "POST /api/v1/system/update/rollback"
+      - "POST /api/v1/system/update/resume"
+      - "GET /api/v1/system/update/history"
       # Intelligence analysis-window config + manual trigger (intelligence
       # tab); the insights page also reads the config (listed in F-insights).
       - "PUT /api/v1/intelligence/config"
@@ -348,6 +376,8 @@ features:
       - user_settings
       # config_checks = latest result per checked setting (check registry).
       - config_checks
+      # system_updates = the self-update history the update card lists.
+      - system_updates
   - id: F-memory
     name: "Memory: the vault"
     ui: {route: [/memory, /memory/graph]}
@@ -567,16 +597,21 @@ features:
       - agent_metrics
   - id: F-bench
     name: "Benchmark studio"
-    ui: {route: /bench}
-    status: frozen
-    source: "operator decision 2026-09-29; ADR-070 (benchmark studio as a vertical); ADR-044 (strippable vertical)"
-    # Frozen, not removed: the operator has not used it lately and it stays
-    # reversible as a strippable vertical (ADR-044).
+    ui: {route: [/bench, "/bench/r/[id]"]}
+    status: frozen  # W0+W1 unfrozen by D1 (ADR-070 amendment 2026-10-24); flips to active once journey J-model-test has its e2e spec
+    source: "operator decision 2026-09-29; operator decision D1 (W0+W1 unfrozen, 2026-10-24); ADR-070 (benchmark studio as a vertical); ADR-044 (strippable vertical)"
+    # Frozen 2026-09-29, unfrozen for W0+W1 by D1 ("Test in 2 taps"). The
+    # status stays frozen until the journey (Runtimes "Test" -> sheet ->
+    # result -> X-Kit, Inbox after a switch) has an e2e spec on the journey
+    # stack; kz rejects an active feature without a journey. Still a
+    # strippable vertical (ADR-044).
     api:
       # Benchmark studio vertical (ADR-070, backend/app/verticals/bench_studio/):
-      # challenge gallery/detail CRUD, draft via approval, rerender/recompose/
-      # stop lifecycle, entry retry/rerender/edit, spark model list for the
-      # new-challenge dialog. The entry view URL carries a short-lived
+      # W1 routes (plan, contestants, tests, rerun/stop/harvest, X-Kit with
+      # download token, runtime summary, auto-tests) plus the legacy
+      # challenge rerender/recompose/archive/delete and entry routes the
+      # result page still maps. The X draft, spark-models and effort-levels
+      # routes are gone (W1 kill list). The entry view URL carries a short-lived
       # resource-scoped view-token so it can be opened on a phone without a
       # Bearer header (router docstring).
       - "* /api/v1/bench/*"
@@ -585,10 +620,13 @@ features:
       - "* /api/v1/prompt-templates"
       - "* /api/v1/prompt-templates/*"
     tables:
-      # Bench studio vertical (ADR-070): challenges, entries, content
+      # Bench studio vertical (ADR-070): challenges, entries, the effort
+      # probe cache (which thinking key a served model honours), content
       # pipelines (draft flow) and the prompt library.
       - bench_challenges
       - bench_entries
+      - bench_probes
+      - bench_receipts  # W1: write-once receipt versions (0224)
       - content_pipelines
       - prompt_templates
   - id: F-files
@@ -711,31 +749,15 @@ internal:
   # /api/v1/agent/me/telegram endpoint (FileCard telegram action). No bare
   # /api/v1/agent endpoint exists.
   - "endpoint:* /api/v1/agent/*"
-  # Step-up re-authentication (services/step_up.py, ADR-094 decision 9): a
-  # building block without its own screen. The self-update card (Settings →
-  # System) will ask GET whether to show its button and POST the password in
-  # its confirm sheet; no UI calls it yet.
-  - "endpoint:GET /api/v1/auth/step-up"
-  - "endpoint:POST /api/v1/auth/step-up"
   # Proof gate stats (routers/activity.py, #891): who caught false finish
   # reports (gefangen_von) — the gate, a reviewer role, the lead or the
   # operator. Read-only numbers for the proof-gate evaluation; no screen
   # shows them yet.
   - "endpoint:GET /api/v1/activity/proof-gate/stats"
-  # Self-update API (routers/system_update.py, ADR-094, update plan PR 4c):
-  # behind MC_SELF_UPDATE_ENABLED (off) until the button passed acceptance.
-  # The update card in Settings → System (plan PR 5) is its only consumer
-  # and does not exist yet. system_state holds the drain the update engine
-  # writes through psql and the work it held back; system_updates is the
-  # history the card will show.
-  - "endpoint:POST /api/v1/system/update/preflight"
-  - "endpoint:POST /api/v1/system/update/start"
-  - "endpoint:GET /api/v1/system/update/status"
-  - "endpoint:POST /api/v1/system/update/rollback"
-  - "endpoint:POST /api/v1/system/update/resume"
-  - "endpoint:GET /api/v1/system/update/history"
+  # system_state holds the drain the update engine writes through psql and
+  # the work it held back (ADR-094 §7) — no screen reads it directly; the
+  # update card shows the drain through GET /system/update/status.
   - "table:system_state"
-  - "table:system_updates"
   # Schedule heatmap and upcoming firings: client helpers exist
   # (api.schedule.getHeatmap/getUpcoming) but no component calls them —
   # the schedule page renders ScheduleHeatmap with empty data and the job
@@ -816,6 +838,25 @@ internal:
   # in routers/agent_scoped.py and the agent-scoped endpoints).
   - "table:agent_task_comment_cursor"
   - "table:agent_thread_cursor"
+  # ADR-100: session-to-session conversations — participants and loop brake
+  # of a "session" thread, and the read position of principals without an
+  # agent_thread_cursor (terminal sessions). Agent API only until the inbox
+  # tab (stage 2d) shows them.
+  - "table:comms_conversations"
+  - "table:comms_cursors"
+  # ADR-100 guest cards for terminal sessions: admin API (issue, list,
+  # revoke, revoke-all, sessions). No page yet — the phone view is stage 2d.
+  - "endpoint:* /api/v1/comms/*"
+  - "table:comms_guest_cards"
+  - "table:comms_sessions"
+  # ADR-103: MC's own chat record (first slice of chats instead of fixed
+  # agents). Behind CHAT_RECORD_ENABLED (default off); read API only, no
+  # screen reads it yet — the chat list and history switch over in a later
+  # ROADMAP stage-1 package.
+  - "endpoint:* /api/v1/chat-record/*"
+  - "table:chats"
+  - "table:chat_sessions"
+  - "table:chat_events"
   # Skill packs: seeded for the playbook layer, which was removed in E5
   # (migration 0207); the rows stay, nothing reads them any more.
   - "table:skill_packs"

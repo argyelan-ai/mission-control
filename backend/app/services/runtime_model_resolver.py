@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import AsyncIterator
 from uuid import UUID
 
@@ -46,6 +47,13 @@ _CACHE_TTL = 300  # 5 min
 _NEGATIVE_TTL = 30
 _CACHE_PREFIX = "mc:runtime-model"
 _SENTINEL_NONE = "__none__"
+# Live /v1/models lookup when several runtime rows share the Spark endpoint.
+_LIVE_MODELS_TIMEOUT_S = 3.0
+_LIVE_MODELS_TTL = 20
+# A silent box is cached too (JSON ``null``): an offline LAN host hangs for
+# the whole timeout, and without this every model resolution waited 3 s
+# while several rows share the endpoint (review SHOULD-1, PR #955).
+_LIVE_MODELS_SILENT_TTL = 20
 
 
 def _cache_key(slug: str) -> str:
@@ -224,30 +232,126 @@ async def invalidate_and_reprobe(
 # ── Standalone helpers (background tasks / services without a session) ──────
 
 
-async def get_spark_vllm_runtime(session: AsyncSession) -> Runtime | None:
-    """Locate the primary Spark vLLM runtime by endpoint.
+async def spark_runtime_candidates(session: AsyncSession) -> list[Runtime]:
+    """Every enabled runtime row whose endpoint targets the Spark host:port.
 
-    Returns the first enabled vLLM runtime whose endpoint targets the Spark
-    host on port 8000. This is the canonical "the GPU is serving X" runtime.
-    The host:port to match comes from settings.spark_llm_url (env-configurable)
-    instead of a hardcoded LAN IP.
+    Match by endpoint only — the netloc uniquely identifies the physical GPU
+    serving on Spark:8000. Deliberately NOT filtered by runtime_type: the
+    fleet's Spark runtime has been vllm_docker, omp, ssh_process and
+    vllm_node at various times, and a type filter silently returns nothing
+    whenever it changes (which broke the news worker's model resolution —
+    it then fell back to a stale config default). The host:port comes from
+    settings.spark_llm_url (env-configurable) instead of a hardcoded LAN IP.
+
+    Several rows match in practice: one per recipe that was ever started on
+    the box plus the box's slot row — all enabled, only one of them serving.
     """
     from urllib.parse import urlparse
 
-    # Match by endpoint only — the netloc uniquely identifies the physical GPU
-    # serving on Spark:8000. Deliberately NOT filtered by runtime_type: the
-    # fleet's Spark runtime has been vllm_docker, omp, and vllm_node at various
-    # times, and a type filter silently returns None whenever it changes (which
-    # broke the news worker's model resolution — it then fell back to a stale
-    # config default). Any enabled runtime at that endpoint is "the Spark GPU".
     spark_netloc = urlparse(settings.spark_llm_url).netloc
     stmt = (
         select(Runtime)
         .where(Runtime.endpoint.like(f"%{spark_netloc}%"))  # type: ignore[union-attr]
         .where(Runtime.enabled.is_(True))  # type: ignore[union-attr]
     )
-    result = await session.exec(stmt)
-    return result.first()
+    return list((await session.exec(stmt)).all())
+
+
+async def _live_spark_model_ids() -> list[str] | None:
+    """Model ids ``settings.spark_llm_url`` serves right now (``/v1/models``),
+    or ``None`` when the box does not answer. Short timeout; both answers
+    (the list and the silence) are cached briefly in Redis — this runs on
+    every model resolution while several runtime rows share the endpoint."""
+    import json
+
+    import httpx
+
+    key = f"{_CACHE_PREFIX}:spark-live-models"
+    try:
+        client = await get_redis()
+        cached = await client.get(key)
+        if cached is not None:
+            return json.loads(cached.decode() if isinstance(cached, bytes) else cached)
+    except Exception as exc:  # noqa: BLE001 — cache is optional
+        logger.debug("resolver live-models cache read failed: %s", exc)
+
+    base = settings.spark_llm_url.rstrip("/")
+    url = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+    ids: list[str] | None
+    try:
+        async with httpx.AsyncClient(timeout=_LIVE_MODELS_TIMEOUT_S) as cli:
+            resp = await cli.get(url)
+            resp.raise_for_status()
+            ids = [
+                m["id"] for m in (resp.json().get("data") or [])
+                if isinstance(m, dict) and isinstance(m.get("id"), str)
+            ]
+    except (httpx.HTTPError, ValueError, AttributeError) as exc:
+        logger.debug("resolver: live /v1/models of the Spark failed: %s", exc)
+        ids = None
+    try:
+        client = await get_redis()
+        ttl = _LIVE_MODELS_TTL if ids is not None else _LIVE_MODELS_SILENT_TTL
+        await client.setex(key, ttl, json.dumps(ids))
+    except Exception as exc:  # noqa: BLE001 — cache is optional
+        logger.debug("resolver live-models cache write failed: %s", exc)
+    return ids
+
+
+def _newest_first(rows: list[Runtime]) -> list[Runtime]:
+    """Recipe rows before the slot row (the recipe row carries the real
+    limits, e.g. max_context_len), then the most recently started/updated."""
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+
+    def _aware(value: datetime | None) -> datetime:
+        if value is None:
+            return epoch
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    return sorted(
+        rows,
+        key=lambda r: (
+            bool(getattr(r, "is_slot", False)),
+            -_aware(r.serving_since).timestamp(),
+            -_aware(r.updated_at).timestamp(),
+            r.slug,
+        ),
+    )
+
+
+async def get_spark_vllm_runtime(session: AsyncSession) -> Runtime | None:
+    """The runtime row of what the Spark GPU serves right now.
+
+    One enabled row at the Spark endpoint: that one. Several (one per recipe
+    ever started there, plus the slot row — round-1 user test 23.10.2026:
+    ``first()`` picked the STOPPED GLM row while the box served DeepSeek, so
+    every ``get_active_spark_model`` caller named the wrong model):
+
+    1. the rows whose ``model_identifier`` the box lists in ``/v1/models``;
+    2. box silent: the rows matching the slot row's model — the slot row is
+       written on every confirmed recipe start, so it names the recipe that
+       was switched to last;
+    3. otherwise all rows.
+
+    Within the pick: recipe rows before the slot row, newest first.
+    """
+    rows = await spark_runtime_candidates(session)
+    if len(rows) <= 1:
+        return rows[0] if rows else None
+
+    live = await _live_spark_model_ids()
+    pool: list[Runtime] = []
+    if live:
+        pool = [r for r in rows if r.model_identifier and r.model_identifier in live]
+    if not pool:
+        slot_models = {
+            r.model_identifier for r in rows
+            if getattr(r, "is_slot", False) and r.model_identifier
+        }
+        pool = [r for r in rows if r.model_identifier in slot_models]
+    if not pool:
+        pool = rows
+    return _newest_first(pool)[0]
 
 
 async def get_active_spark_model(*, force_probe: bool = False) -> str | None:

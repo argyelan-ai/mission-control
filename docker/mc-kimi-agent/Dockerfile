@@ -19,6 +19,12 @@
 
 FROM debian:bookworm-slim
 
+# ca-certificates floor = the eMudhra fix (Oct 2026: the intermediates' keys
+# leaked). The apt line below upgrades the package and the build FAILS below
+# this version — a stale base image can no longer ship the old bundle, and a
+# cached layer only exists if it passed. backend/tests/test_image_security_floor.py
+# guards the value per distro.
+ARG CA_CERTIFICATES_MIN=20250419~deb12u2
 # Basis-Tools (gleiche Menge wie mc-claude-agent, minus Node/Office-Stack)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
@@ -37,7 +43,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # unlesbar. Aufgefallen 19.08.2026, als der erste Datei-Anhang im
     # Sessions-Chat ein PDF war: Bilder las der Agent sofort, PDFs gar nicht.
     poppler-utils \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && v="$(dpkg-query -W -f='${Version}' ca-certificates)" \
+    && echo "ca-certificates $v (floor ${CA_CERTIFICATES_MIN})" \
+    && dpkg --compare-versions "$v" ge "${CA_CERTIFICATES_MIN}"
 
 # GitHub CLI (für Agent Git-Workflow — gh auth via GH_TOKEN env)
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -60,6 +69,17 @@ RUN curl -fsSL \
     && chmod +x /usr/local/bin/kimi \
     && /usr/local/bin/kimi --version
 LABEL mc.cli.name="kimi" mc.cli.version="${KIMI_VERSION}"
+
+# eMudhra CA compromise (Oct 2026): the kimi binary embeds its own Node
+# (v24.15.0 in 0.29.1 and still in 2.3.0, the newest release on 2026-10-22),
+# and that Node's built-in root store still trusts the compromised emSign
+# chain. No fixed kimi release exists yet. --use-openssl-ca makes the embedded
+# Node verify against the system bundle instead — the ca-certificates floor
+# above, which no longer contains the bad chain. Measured: both eMudhra test
+# hosts fail, api.kimi.com / auth.kimi.com / code.kimi.com still connect.
+# Drop this once a kimi release ships Node >= 24.22.1.
+# backend/tests/test_image_security_floor.py guards it.
+ENV NODE_OPTIONS=--use-openssl-ca
 
 # Non-root user mit Login-Shell
 RUN groupadd -r agent && useradd -r -g agent -s /bin/bash -m agent

@@ -27,6 +27,10 @@ from app.config import settings
 from app.models.agent import Agent
 from app.models.runtime import Runtime
 from app.routers.internal import build_runtime_env
+# agent.env, models.yml and .mcp.json can all carry secrets: one writer,
+# owner-only from the first byte (see agent_env_writer).
+from app.services.agent_env_writer import write_owner_only_file
+from app.services.harness_compat import OMP_STREAM_IDLE_TIMEOUT_ENV
 from app.services.mcp_sync import render_agent_mcp_json
 from app.services.template_renderer import render_agent_file
 
@@ -70,26 +74,6 @@ def _resolve_slug(agent: Agent) -> str:
     hardened sanitizer; fall back to re-deriving from the display name."""
     candidate = agent.slug or agent.name
     return _slugify(candidate)
-
-
-def _write_owner_only_file(path: Path, content: str) -> None:
-    """Write ``content`` to ``path`` with 0600 perms from the moment the file
-    exists — never write-then-chmod, which leaves a window (governed by the
-    process umask, not the intended mode) where secret content sits on disk
-    at whatever permissions umask produces before the later chmod() call
-    narrows them. os.open()'s mode arg is itself umask-masked too, so we
-    fchmod() immediately after open()/before any content is written, closing
-    that gap as well. Used for both agent.env and the claude-harness
-    .mcp.json (2026-07-10 E2E rerun, Befund 4 — .mcp.json can carry inline
-    MCP-server secrets, e.g. API keys in `env`, same shape as agent.env)."""
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.fchmod(fd, 0o600)
-    except BaseException:
-        os.close(fd)
-        raise
-    with os.fdopen(fd, "w") as f:
-        f.write(content)
 
 
 def _format_env_file(env: dict[str, str]) -> str:
@@ -177,9 +161,19 @@ def render_omp_host_models_yml(slug: str, env: dict[str, str], *, home: Path | N
         f"        contextWindow: {context_window}\n"
         f"        maxTokens: {max_tokens}\n"
     )
+    # Thinking cap (routers/internal.py, omp_thinking_budget): omp sends
+    # compat.extraBody verbatim on every request. Same rule as
+    # render-omp-config.sh: only a positive integer from MC, else no block.
+    thinking_budget = (env.get("OMP_THINKING_BUDGET") or "").strip()
+    if re.fullmatch(r"[0-9]+", thinking_budget) and int(thinking_budget) > 0:
+        models_yml += (
+            "        compat:\n"
+            "          extraBody:\n"
+            f"            thinking_budget: {int(thinking_budget)}\n"
+        )
     models_path = models_dir / "models.yml"
     # 0600 like agent.env — apiKey may be rendered inline above.
-    _write_owner_only_file(models_path, models_yml)
+    write_owner_only_file(models_path, models_yml)
     return str(models_path)
 
 
@@ -261,8 +255,10 @@ async def stage_host_agent_files(
     omp_models_path: str | None = None
     if harness == "omp":
         env["OMP_PROFILE"] = omp_host_profile(slug)
+        for var, value in OMP_STREAM_IDLE_TIMEOUT_ENV.items():
+            env.setdefault(var, value)
         omp_models_path = render_omp_host_models_yml(slug, env, home=home)
-    _write_owner_only_file(env_path, _format_env_file(env))
+    write_owner_only_file(env_path, _format_env_file(env))
 
     # 2a. Isolated MCP config, native-claude harness only. The 'claude' CLI
     # defaults to the operator's own $HOME/.claude config (needed here so it
@@ -290,7 +286,7 @@ async def stage_host_agent_files(
         # ever start referencing env-var placeholders instead of inline
         # values there, this should follow — but that's a separate,
         # pre-existing registry-wide decision, not something to invent here.
-        _write_owner_only_file(Path(mcp_config_path), json.dumps(mcp_config, indent=2) + "\n")
+        write_owner_only_file(Path(mcp_config_path), json.dumps(mcp_config, indent=2) + "\n")
 
     # 2b. poll.sh — without this, the staged agent never picks up work or
     # heartbeats: it boots to an idle interactive prompt and nothing nudges

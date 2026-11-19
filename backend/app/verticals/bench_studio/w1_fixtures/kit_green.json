@@ -1,0 +1,57 @@
+{
+  "test_id": "a0000000-0000-4000-8000-000000000002",
+  "gate": {
+    "status": "green",
+    "reasons": [],
+    "checksum": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "downloadable": true,
+  "blocked_reason": null,
+  "files": [
+    {
+      "name": "video.mp4",
+      "ready": true,
+      "bytes": 18400000,
+      "width": 1920,
+      "height": 1080,
+      "duration_s": 24.5
+    },
+    {
+      "name": "card.png",
+      "ready": true,
+      "bytes": 412000,
+      "width": 1080,
+      "height": 1350,
+      "duration_s": null
+    },
+    {
+      "name": "kit.zip",
+      "ready": true,
+      "bytes": 18800000,
+      "width": null,
+      "height": null,
+      "duration_s": null
+    }
+  ],
+  "texts": {
+    "settings": [
+      "Setup · model only · same prompt (sha d6e0ea9) · n=3, video = run 1 · temp 0.7 · max_tokens 16384",
+      "DeepSeek-V4.1-Flash-1017 · local · DGX Spark ×2 · engine: unknown (hand-made runtime) · GPU mode eco · spec-decoding: unknown · raw API",
+      "effort: server default = high (thinking observed: on) · network blocked during render · method v1 · 2026-10-22 · API list price would be ≈ $0.04 (comparison only)"
+    ],
+    "alt_text": "Result card: Pagoda Garden · same-prompt showdown · 2026-10-22. DeepSeek-V4.1-Flash-1017, running locally on DGX Spark ×2, raw API, effort high (default): compute time 1:06 (median of 3), 6.6k output tokens, 101 tok/s decode. Median of 3 runs · same prompt.",
+    "facts": [
+      "DeepSeek-V4.1-Flash-1017, local, 3 runs: 1:02–1:11 compute time.",
+      "Output tokens per run: 6.4k–6.9k.",
+      "Decode speed: 99.5–103 tok/s, first token after 0.4 s."
+    ],
+    "link": null,
+    "thread_guide": [
+      "Main post: your words + video.mp4",
+      "Reply 1: card.png + alt text",
+      "Then: one reply per settings block (each at most 280 characters)"
+    ]
+  },
+  "footer": "@example_handle",
+  "truncation": null
+}

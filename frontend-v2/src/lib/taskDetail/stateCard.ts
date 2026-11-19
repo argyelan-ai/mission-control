@@ -1,4 +1,4 @@
-import type { Approval, RunRecord, Task, TaskComment, TaskOpenQuestion } from "@/lib/types";
+import type { Approval, RunRecord, Task, TaskComment, TaskModelWait, TaskOpenQuestion } from "@/lib/types";
 import { HEAD_SILENT_WARN_S, isScratchBranchPushed, type HeadRun } from "@/lib/heads";
 import { parseTs, secondsBetween } from "./format";
 
@@ -13,6 +13,10 @@ import { parseTs, secondsBetween } from "./format";
  *   in_progress                   → RUNNING (last step, runtime, heartbeat)
  *   done                          → RESULT (resolution, PR, evidence, duration)
  *   failed / aborted              → FAILED (error in plain words + Open log)
+ *   inbox, model does not answer  → WAITING FOR MODEL (runtime, "nothing is
+ *                                   broken"); delivered + model answers but
+ *                                   no first answer yet → same kind, the
+ *                                   state line says it, no card body
  *   inbox / review                → no card
  *
  * A head run (docs/specs/head-launcher.md §8.2) wins over the task status:
@@ -49,6 +53,15 @@ export type StateCard =
     }
   | { kind: "failed"; error: string | null }
   | {
+      kind: "waiting_model";
+      /** False: the runtime does not answer. True: it answers, the delivered
+       *  task just has not got its first answer yet. */
+      ready: boolean;
+      delivered: boolean;
+      runtime: string | null;
+      reason: string | null;
+    }
+  | {
       kind: "head";
       run: HeadRun;
       mainAction: HeadMainAction;
@@ -72,7 +85,9 @@ export function headMainAction(run: HeadRun): HeadMainAction {
 }
 
 const NEEDS_YOU = new Set(["blocked", "waiting", "user_test"]);
-const RESULT_FALLBACK_TYPES = new Set(["message", "progress", "review", "handoff", "checkpoint"]);
+// "review_approved" = an approve decision note (backend: comment_types.REVIEW_NOTE_COMMENT_TYPES);
+// it counts as a review note here exactly like "review".
+const RESULT_FALLBACK_TYPES = new Set(["message", "progress", "review", "review_approved", "handoff", "checkpoint"]);
 
 function newestFirst<T extends { created_at: string }>(list: T[]): T[] {
   return [...list].sort(
@@ -92,6 +107,7 @@ export function deriveStateCard({
   runRecord,
   headRun = null,
   openQuestion = null,
+  modelWait = null,
 }: {
   task: Task;
   approvals: Approval[];
@@ -101,6 +117,8 @@ export function deriveStateCard({
   headRun?: HeadRun | null;
   /** The open question on the task thread (GET /tasks/{id}/thread). */
   openQuestion?: TaskOpenQuestion | null;
+  /** GET .../model-wait — only fetched for assigned inbox tasks. */
+  modelWait?: TaskModelWait | null;
 }): StateCard | null {
   if (headRun) {
     return {
@@ -147,7 +165,11 @@ export function deriveStateCard({
   }
 
   if (task.status === "in_progress") {
-    const step = sorted.find((c) => c.author_type !== "user" && c.comment_type !== "reflection");
+    // The run's last step: not a reflection, and not the chat's answer to
+    // "how far are you?" (`chat_reply`, round-3 code review r1 S3).
+    const step = sorted.find(
+      (c) => c.author_type !== "user" && c.comment_type !== "reflection" && c.comment_type !== "chat_reply",
+    );
     const lastSchritt = runRecord?.schritte?.[runRecord.schritte.length - 1]?.text ?? null;
     return {
       kind: "running",
@@ -186,6 +208,18 @@ export function deriveStateCard({
     return {
       kind: "failed",
       error: blocker?.content?.trim() || lastEvent?.text || systemNote?.content?.trim() || null,
+    };
+  }
+
+  // Delivered is not working (follow-up to ADR-097): an inbox task whose
+  // model does not answer, or that was delivered and waits for its first answer.
+  if (task.status === "inbox" && modelWait?.applies && (!modelWait.ready || modelWait.delivered)) {
+    return {
+      kind: "waiting_model",
+      ready: modelWait.ready,
+      delivered: modelWait.delivered,
+      runtime: modelWait.runtime,
+      reason: modelWait.reason,
     };
   }
 

@@ -2,7 +2,10 @@
 
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { useLocale, useTranslations } from "next-intl";
+import { AgentLanguageSheet, languageName, languageSummary } from "@/components/agents/AgentLanguageSheet";
 import AppShell from "@/components/layout/AppShell";
+import { NotFoundState } from "@/components/shared/NotFoundState";
+import { isMissingRecord } from "@/lib/apiStatus";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { agentTabFromParam, agentTabHref, type AgentTab } from "../agentTabParam";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
@@ -17,8 +20,10 @@ import {
   WifiOff, Undo2, Plus, Minus, CheckCircle, XCircle,
   Brain, Wrench, FileText, Play, Pause, Server,
   HardDrive, FolderArchive, RefreshCw, Package, Box,
+  Languages, ChevronRight,
 } from "lucide-react";
-import { cn, contextPercent, contextColor, timeAgo } from "@/lib/utils";
+import { cn, contextPercent, contextColor, formatContextPct, timeAgo } from "@/lib/utils";
+import { agentStatusView } from "@/lib/agentStatus";
 import { C, STATUS, alpha } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { useAgentStream } from "@/lib/sse";
@@ -70,27 +75,9 @@ const HEARTBEAT_INTERVALS = [
   { value: "10m", label: "10m" },
 ];
 
-// operator_language / work_language (Migration 0201) — the fleet only runs
-// these two codes today; extend here if a third is ever configured.
-const LANGUAGE_OPTIONS = [
-  { value: "en", label: "EN" },
-  { value: "de", label: "DE" },
-];
-
 // ── Status Mapping ─────────────────────────────────────────────────────────────
-
-type DotStatus = "online" | "busy" | "idle" | "offline" | "error" | "warning";
-
-function agentStatusToDot(status: string): DotStatus {
-  switch (status) {
-    case "online": return "online";
-    case "busy": return "busy";
-    case "error": return "error";
-    case "restarting": return "warning";
-    case "idle": return "idle";
-    default: return "offline";
-  }
-}
+// Dot + label come from `agentStatusView` (lib/agentStatus.ts) — one rule for
+// the detail page, the roster and the cards.
 
 const PROVISION_CONFIG: Record<string, { labelKey: string; color: string }> = {
   local: { labelKey: "provLocal", color: C.textDim },
@@ -1221,7 +1208,9 @@ function OverviewTab({
                 <div className="flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: seenColor }} />
                   <span className="text-[12px] font-mono" style={{ color: seenColor }}>
-                    {seenMins !== null ? t("minsAgo", { mins: seenMins }) : t("never")}
+                    {/* Same words as the header ("vor 20 Tagen"), not raw minutes
+                        ("vor 28462m", round-4 t3 NICE-5). */}
+                    {seenMins !== null ? timeAgo(agent.last_seen_at, locale) : t("never")}
                   </span>
                 </div>
               </div>
@@ -1474,10 +1463,14 @@ export default function AgentDetailPage() {
   );
   useAgentStream(handleAgentEvent);
 
-  const { data: agent } = useQuery({
+  // A missing agent (deleted, archived, a typo in the link) answers 404, a
+  // malformed id 422 — neither changes on a retry or a poll (round-3 t4 S1:
+  // the spinner turned for good while the API had already said "gone").
+  const { data: agent, error: agentError } = useQuery({
     queryKey: ["agent", id],
     queryFn: () => api.agents.get(id),
-    refetchInterval: 60_000,
+    refetchInterval: (q) => (isMissingRecord(q.state.error) ? false : 60_000),
+    retry: (count, err) => !isMissingRecord(err) && count < 1,
   });
 
   const { data: config } = useQuery({
@@ -1485,8 +1478,11 @@ export default function AgentDetailPage() {
     queryFn: () => api.agents.config.all(id),
   });
 
+  const tLang = useTranslations("settingsLanguage");
+  const [languageOpen, setLanguageOpen] = useState(false);
+
   const updateAgentMutation = useMutation({
-    mutationFn: (data: Partial<Pick<Agent, "name" | "role" | "heartbeat_config" | "operational_mode" | "operator_language" | "work_language">>) =>
+    mutationFn: (data: Partial<Pick<Agent, "name" | "role" | "heartbeat_config" | "operational_mode">>) =>
       api.agents.update(id, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent", id] });
@@ -1590,6 +1586,20 @@ export default function AgentDetailPage() {
     onError: () => notify.error(t("detail.reconfigureFailed")),
   });
 
+  if (!agent && agentError) {
+    const missing = isMissingRecord(agentError);
+    return (
+      <AppShell>
+        <NotFoundState
+          title={missing ? t("detail.notFoundTitle") : t("detail.agentLoadFailed")}
+          hint={missing ? t("detail.notFoundHint") : null}
+          backHref="/agents"
+          backLabel={t("detail.backToAgents")}
+        />
+      </AppShell>
+    );
+  }
+
   if (!agent) {
     return (
       <AppShell>
@@ -1603,11 +1613,12 @@ export default function AgentDetailPage() {
   const isCliBridge = agent.agent_runtime === "cli-bridge";
   const pct = contextPercent(agent.context_tokens, agent.context_max);
   const barColor = contextColor(pct);
-  const dotStatus = agentStatusToDot(agent.status);
+  const statusView = agentStatusView(agent);
   const provCfg = PROVISION_CONFIG[agent.provision_status] ?? PROVISION_CONFIG.local;
 
   return (
     <AppShell>
+      <AgentLanguageSheet agent={agent} open={languageOpen} onClose={() => setLanguageOpen(false)} from="agent" />
       <div className="space-y-6 max-w-5xl">
         {/* Back */}
         <Link
@@ -1650,14 +1661,22 @@ export default function AgentDetailPage() {
                   {agent.role && (
                     <span className="text-sm text-[var(--color-text-secondary)]">-- {agent.role}</span>
                   )}
-                  <Pill color={provCfg.color} size="sm">{t(provCfg.labelKey)}</Pill>
-                  {agent.operational_mode === "paused" && (
-                    <Pill color={C.warning} size="sm">{t("detail.paused")}</Pill>
+                  {/* ONE state (round-2 user test t4 S5/S-neu-2: "LIVE · PAUSED ·
+                      Working" at once). The provisioning chip only when it
+                      says something — "live" is the normal case — and pause
+                      folded into the status label, which says what pause
+                      means ("no new tasks"). */}
+                  {agent.provision_status !== "provisioned" && (
+                    <Pill color={provCfg.color} size="sm">{t(provCfg.labelKey)}</Pill>
                   )}
-                  <div className="flex items-center gap-1.5 ml-auto">
-                    <StatusDot status={dotStatus} pulse={dotStatus === "online" || dotStatus === "busy"} />
-                    <span className="text-sm capitalize text-[var(--color-text-secondary)]">
-                      {agent.status === "restarting" ? t("detail.restarting") : agent.status}
+                  <div
+                    className="flex items-center gap-1.5 ml-auto"
+                    data-testid="agent-status"
+                    title={statusView.paused ? t("status.pausedHint") : undefined}
+                  >
+                    <StatusDot status={statusView.dot} pulse={statusView.dot === "online" || statusView.dot === "busy"} />
+                    <span className="text-sm text-[var(--color-text-secondary)]">
+                      {t(statusView.labelKey)}
                     </span>
                   </div>
                 </div>
@@ -1681,42 +1700,32 @@ export default function AgentDetailPage() {
                       ))}
                     </select>
                   </span>
-                  <span className="flex items-center gap-1" title={t("detail.operatorLanguageTitle")}>
-                    {t("detail.operatorLanguageLabel")}:{" "}
-                    <select
-                      value={agent.operator_language ?? "en"}
-                      onChange={(e) =>
-                        updateAgentMutation.mutate({ operator_language: e.target.value })
-                      }
-                      className="bg-transparent border-none text-sm cursor-pointer outline-none text-[var(--color-text-muted)]"
-                    >
-                      {LANGUAGE_OPTIONS.map((lo) => (
-                        <option key={lo.value} value={lo.value}>{lo.label}</option>
-                      ))}
-                    </select>
-                  </span>
-                  <span className="flex items-center gap-1" title={t("detail.workLanguageTitle")}>
-                    {t("detail.workLanguageLabel")}:{" "}
-                    <select
-                      value={agent.work_language ?? "en"}
-                      onChange={(e) =>
-                        updateAgentMutation.mutate({ work_language: e.target.value })
-                      }
-                      className="bg-transparent border-none text-sm cursor-pointer outline-none text-[var(--color-text-muted)]"
-                    >
-                      {LANGUAGE_OPTIONS.map((lo) => (
-                        <option key={lo.value} value={lo.value}>{lo.label}</option>
-                      ))}
-                    </select>
-                  </span>
+                  {/* Both languages live in Settings → Language; here one
+                      calm entry that opens the same sheet (16.11.2026). */}
+                  <button
+                    type="button"
+                    onClick={() => setLanguageOpen(true)}
+                    data-testid="agent-language-button"
+                    title={tLang("agentButtonTitle", {
+                      summary: languageSummary(tLang, agent.operator_language, agent.work_language),
+                    })}
+                    className="inline-flex items-center gap-1 min-h-11 -my-2 cursor-pointer hover:text-[var(--color-text-secondary)] transition-colors"
+                  >
+                    <Languages size={14} aria-hidden />
+                    {tLang("agentButton", { lang: languageName(tLang, agent.operator_language) })}
+                    <ChevronRight size={14} aria-hidden />
+                  </button>
                   <span>{t("detail.lastSeenAgo", { ago: timeAgo(agent.last_seen_at, locale) })}</span>
                 </div>
 
-                {/* Context bar */}
-                <div className="mt-4 max-w-sm">
+                {/* Context bar — the agent's last REPORTED figure (its work
+                    session). The chat ring measures the chat's own session;
+                    both are right, so each says which one it is (round-3
+                    user test t3 NICE-1: 2 % here vs 5 % in the chat). */}
+                <div className="mt-4 max-w-sm" title={t("detail.contextReportedHint")} data-testid="agent-context-bar">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] text-[var(--color-text-muted)]">{t("contextLabel")}</span>
-                    <span className="text-[10px] text-[var(--color-text-muted)]">{pct === null ? "—" : `${pct}%`}</span>
+                    <span className="text-[10px] text-[var(--color-text-muted)]">{t("detail.contextReportedLabel")}</span>
+                    <span className="text-[10px] text-[var(--color-text-muted)]">{formatContextPct(agent.context_tokens, agent.context_max)}</span>
                   </div>
                   <div className="h-1.5 rounded-full bg-[var(--color-bg-elevated)] overflow-hidden">
                     <motion.div

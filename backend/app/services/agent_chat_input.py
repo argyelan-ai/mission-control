@@ -143,6 +143,7 @@ import logging
 import re
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 import websockets as ws_client
@@ -153,6 +154,12 @@ from app.services.acp_chat_transport import (
     headless_chat_kind,
     read_acp_chat_state,
     transport_for,
+)
+from app.services.chat_reset_audit import (
+    HANDLED_BY_HARNESS,
+    HANDLED_BY_TERMINAL,
+    ChatReset,
+    bounded_id,
 )
 from app.services.harness_catalog import (
     discover_effort_support,
@@ -680,18 +687,31 @@ def _acp_advertised_commands(state: dict | None) -> list[dict]:
     ]
 
 
-async def _acp_session_reset_command(agent, text: str) -> str | None:
-    """``"new"``/``"clear"``, wenn ``text`` genau einer dieser Befehle ist UND
-    der Agent ihn nicht selbst anbietet — dann erledigt MC ihn. Sonst
-    ``None``: ``/clear den Cache`` ist eine gewoehnliche Nachricht, und ein
-    Harness mit eigenem ``/new`` behaelt seinen."""
+def _session_clearing_word(text: str) -> str | None:
+    """``"new"``/``"clear"`` when ``text`` is exactly one of these commands
+    (case and surrounding space aside), else None. ``/clear den Cache`` is an
+    ordinary message. The same rule for every agent: what MC turns into a
+    new ACP session, and what it records as a reset sent to a terminal
+    (incident 21.10.2026)."""
     word = text.strip().lower()
     if not word.startswith("/") or word[1:] not in _ACP_SESSION_RESET_COMMANDS:
         return None
-    state = await asyncio.to_thread(read_acp_chat_state, agent)
-    if any(c["name"].lower() == word[1:] for c in _acp_advertised_commands(state)):
-        return None
     return word[1:]
+
+
+async def _acp_session_reset_command(agent, text: str) -> tuple[str, dict | None, bool] | None:
+    """``("new"|"clear", Zustand, eigener Befehl)``, wenn ``text`` genau einer
+    dieser Befehle ist. ``eigener Befehl``: der Agent bietet ihn selbst an —
+    dann geht er als Text an den Harness (der behaelt seinen); sonst erledigt
+    MC ihn (der gelesene Zustand nennt die Sitzung, die er ersetzt). ``None``
+    fuer jeden anderen Text: ``/clear den Cache`` ist eine gewoehnliche
+    Nachricht."""
+    word = _session_clearing_word(text)
+    if word is None:
+        return None
+    state = await asyncio.to_thread(read_acp_chat_state, agent)
+    own = any(c["name"].lower() == word for c in _acp_advertised_commands(state))
+    return word, state, own
 
 
 def _acp_config_option(state: dict | None, option_id: str) -> tuple[list[dict], str | None]:
@@ -708,6 +728,39 @@ def _acp_config_option(state: dict | None, option_id: str) -> tuple[list[dict], 
         ]
         return values, option.get("currentValue")
     return [], None
+
+
+#: Die Denk-Stufe eines kopflosen Agenten: omp meldet sie als id
+#: ``thinking``, Hermes (seit dem Upstream-PR "reasoning effort as an ACP
+#: session config option") als ``reasoning_effort`` — beide mit der
+#: ACP-Standardkategorie ``thought_level`` (SessionConfigOption.category).
+#: Zwilling von ``docker/omp-bridge/acp_chat.py::_thinking_option_id``.
+_ACP_THINKING_OPTION_ID = "thinking"
+_ACP_THOUGHT_LEVEL_CATEGORY = "thought_level"
+
+
+def _acp_thinking_option(state: dict | None) -> tuple[str | None, list[dict], str | None]:
+    """``(id, Optionen, aktueller Wert)`` der Denk-Stufe, harness-neutral.
+
+    Gesucht wird zuerst die id ``thinking`` (omp, genau wie bis 22.10.2026),
+    sonst die erste Zeile mit Kategorie ``thought_level`` (Hermes, und jeder
+    Harness, der den ACP-Standard spricht). Die gefundene ECHTE id ist die,
+    die ``_set_effort_acp`` zurueckschickt — Lesen und Schreiben nennen
+    dieselbe Zeile, ein hart kodiertes ``thinking`` bedeutet bei Hermes
+    nichts. ``(None, [], None)``, wenn der Agent keine Denk-Stufe anbietet."""
+    rows = [o for o in (state or {}).get("configOptions") or [] if isinstance(o, dict)]
+    match = next((o for o in rows if o.get("id") == _ACP_THINKING_OPTION_ID), None)
+    if match is None:
+        match = next(
+            (o for o in rows
+             if o.get("category") == _ACP_THOUGHT_LEVEL_CATEGORY and isinstance(o.get("id"), str)),
+            None,
+        )
+    if match is None:
+        return None, [], None
+    option_id = match["id"]
+    options, current = _acp_config_option(state, option_id)
+    return option_id, options, current
 
 
 #: Provider prefix of the models MC renders into an agent's own config
@@ -825,9 +878,26 @@ async def _wait_for_send_readiness(agent) -> None:
     raise AgentStartingError()
 
 
-async def send_text(agent, text: str) -> None:
-    """Types ``text`` into the agent's live session. Single-line text is sent
-    as one literal ``tmux send-keys -l`` call; multi-line text is wrapped in
+async def send_text(agent, text: str, *, origin: str | None = None,
+                    context: str | None = None) -> ChatReset | None:
+    """Types ``text`` into the agent's live session.
+
+    ``context`` (headless/ACP agents only, ``chat_run_context``): a block the
+    chat daemon puts in front of ``text`` for the model only — what the
+    agent's own task run is doing, so the chat answers instead of doing the
+    task a second time (round-1 user test t1, MUST-1). Ignored on every other
+    path and for ``/new``/``/clear``.
+
+    ``origin`` (headless/ACP agents only): who wrote the text —
+    ``ORIGIN_OPERATOR`` for the composer (the router). The chat daemon
+    offers "Send again" on a card only for the operator's own text; any
+    other caller (Jarvis' voice relay) leaves it unset = unknown = no button. Returns a ``ChatReset``
+    when ``text`` was exactly ``/new`` or ``/clear`` — MC turned it into a new
+    chat session (headless agents), or passed it on to the agent's own
+    command or its terminal — and the caller records who sent it
+    (``chat_reset_audit.chat_input_event``); ``None`` otherwise.
+
+    Single-line text is sent as one literal ``tmux send-keys -l`` call; multi-line text is wrapped in
     a bracketed-paste sequence (so the target CLI treats it as one paste
     instead of one line per Enter-triggered send-keys call). BOTH cases are
     followed by a separate ``Enter`` call to submit — a literal ``-l`` send
@@ -873,19 +943,50 @@ async def send_text(agent, text: str) -> None:
         # Lenken MITTEN im Zug gibt es ueber ACP nicht: ein zweites
         # ``session/prompt`` bricht bei omp den laufenden Zug ab.
         transport = transport_for(agent)
-        if await _acp_session_reset_command(agent, text):
-            answer = await transport.new_session(mode="queue")
+        reset_command = await _acp_session_reset_command(agent, text)
+        if reset_command and not reset_command[2]:
+            word, state, _own = reset_command
+            # Names this request in the daemon's card and its ``resets``
+            # record; the audit completes the activity event by it
+            # (chat_reset_audit). A reset without it is "not sent by MC".
+            request_id = uuid.uuid4().hex
+            answer = await transport.new_session(mode="queue", request_id=request_id)
             if not answer.get("ok"):
+                # Refused (``queue_full`` already shows as a card): nothing
+                # was reset, nothing to record.
                 _raise_for_acp_refusal(answer.get("error"), slug)
-            return
-        answer = await transport.prompt(text, mode="queue")
+                return None
+            previous = bounded_id(answer.get("previousSessionId")) \
+                or bounded_id((state or {}).get("sessionId"))
+            reset = ChatReset(
+                command=f"/{word}",
+                previous_session_id=previous,
+                queued=bool(answer.get("queued")),
+                request_id=request_id,
+                queue_id=bounded_id(answer.get("queueId")),
+            )
+            # A log line too: the activity event is written by the caller
+            # (the router knows who sent it).
+            logger.info("acp chat: reset %s accepted (slug=%s, previous=%s, queued=%s, "
+                        "request=%s)", reset.command, slug, reset.previous_session_id,
+                        reset.queued, request_id)
+            return reset
+        # ``context`` only when set: a transport (or test double) without the
+        # parameter keeps working, and the wire stays byte-identical.
+        extra = {"context": context} if context else {}
+        answer = await transport.prompt(text, mode="queue", origin=origin, **extra)
         if not answer.get("ok"):
             # Zurueck kommt hier nur eine Absage, die der Daemon schon als
             # Karte zeigt (``queue_full``); jede andere wird zur Ausnahme.
             _raise_for_acp_refusal(answer.get("error"), slug)
-            return
+            return None
         note_sent(str(getattr(agent, "id", "") or slug), text)
-        return
+        if reset_command:
+            # The agent's OWN ``/new``/``/clear``: it runs it, MC records who
+            # sent it (the daemon's ``resets`` names no session change then).
+            return ChatReset(command=f"/{reset_command[0]}", previous_session_id=None,
+                             queued=False, handled_by=HANDLED_BY_HARNESS)
+        return None
 
     if kind == "docker":
         from app.services.transcript_adapters import PANE_PROBED_HARNESSES
@@ -919,7 +1020,7 @@ async def send_text(agent, text: str) -> None:
             await _run_docker_exec(_docker_argv(slug, "-l", "--", text))
         await _run_docker_exec(_docker_argv(slug, "Enter"))
         note_sent(str(getattr(agent, "id", "") or slug), text)
-        return
+        return _terminal_reset(text)
 
     # kind == "boss" — same shape as the docker path (literal text, multi-line
     # as one bracketed paste, then a named Enter), delivered by the bridge via
@@ -930,6 +1031,18 @@ async def send_text(agent, text: str) -> None:
         typed = text
     await _send_boss_keys([{"literal": typed}, {"named": "Enter"}])
     note_sent(str(getattr(agent, "id", "") or slug), text)
+    return _terminal_reset(text)
+
+
+def _terminal_reset(text: str) -> ChatReset | None:
+    """A ``/new``/``/clear`` typed into a TUI agent's terminal: its CLI runs
+    it (the chat follows the new transcript as a rollover). MC cannot tell
+    the new session, but it records who sent it (incident 21.10.2026)."""
+    word = _session_clearing_word(text)
+    if word is None:
+        return None
+    return ChatReset(command=f"/{word}", previous_session_id=None, queued=False,
+                     handled_by=HANDLED_BY_TERMINAL)
 
 
 # Was zuletzt je Agent eingetippt wurde — fuer die Live-Vorschau des
@@ -1063,7 +1176,7 @@ async def set_effort(agent, level: str) -> None:
       longer exists."""
     if headless_chat_kind(agent) is not None:
         # Kopflos: die Stufenleiter kommt aus dem Zustand DIESES Agenten
-        # (``configOptions[id=thinking]``), nicht aus einer Harness-Tabelle —
+        # (Denk-Stufen-Zeile der ``configOptions``), nicht aus einer Harness-Tabelle —
         # dieselbe Quelle, aus der der Chip im Composer gebaut wird.
         await _set_effort_acp(agent, level)
         return
@@ -1127,7 +1240,8 @@ async def set_effort(agent, level: str) -> None:
 
 
 async def _set_effort_acp(agent, level: str) -> None:
-    """Denk-Stufe eines kopflosen Agenten: ``config id=thinking``.
+    """Denk-Stufe eines kopflosen Agenten: ``config id=<Denk-Stufen-Zeile>``
+    (omp ``thinking``, Hermes ``reasoning_effort`` — ``_acp_thinking_option``).
 
     Kein Tippen, kein Nachlesen im Pane, kein Aufraeum-Escape — der Daemon
     ANTWORTET, ob die Einstellung angekommen ist (``ok:true`` mit den neuen
@@ -1136,20 +1250,20 @@ async def _set_effort_acp(agent, level: str) -> None:
     angenommen oder abgelehnt.
 
     Zwei Tore davor, beide Spiegel der Capabilities:
-    - keine Zustandsdatei / keine ``thinking``-Optionen -> der Chip ist gar
+    - keine Zustandsdatei / keine Denk-Stufen-Optionen -> der Chip ist gar
       nicht da, also darf auch ein direkter POST nichts schalten
       (``InputNotSupportedError`` -> 409).
     - eine Stufe, die dieser Agent nicht anbietet -> ``ValueError`` (422),
       gleiche Konvention wie die Allowlist der TUI-Pfade."""
     state = await asyncio.to_thread(read_acp_chat_state, agent)
-    options, _current = _acp_config_option(state, "thinking")
+    option_id, options, _current = _acp_thinking_option(state)
     levels = [o["value"] for o in options]
-    if not levels:
+    if option_id is None or not levels:
         raise InputNotSupportedError()
     if level not in levels:
         raise ValueError(f"effort level not allowlisted: {level!r}")
 
-    answer = await transport_for(agent).config("thinking", level)
+    answer = await transport_for(agent).config(option_id, level)
     if not answer.get("ok"):
         raise EffortSwitchRejectedError(
             str(answer.get("detail") or answer.get("error") or "rejected")
@@ -1670,9 +1784,11 @@ async def effort_capabilities(agent) -> dict[str, object]:
     Bedienelement wortlos verschwinden zu lassen.
 
     Kopflose Agenten (``acp-docker``/``acp-http``) beantworten beide Fragen
-    aus EINER Quelle: ``configOptions[id=thinking]`` in der Zustandsdatei des
-    Chat-Daemons. Fehlt sie, ist die Antwort leer mit Grund
-    ``acp_state_missing`` — nie eine Ausnahme.
+    aus EINER Quelle: der Denk-Stufen-Zeile der ``configOptions`` in der
+    Zustandsdatei des Chat-Daemons (id ``thinking`` oder Kategorie
+    ``thought_level``, ``_acp_thinking_option``). Fehlt die Datei, ist die
+    Antwort leer mit Grund ``acp_state_missing``; ist sie da, aber ohne
+    Denk-Stufe, mit ``harness_no_effort`` — nie eine Ausnahme.
 
     Never raises: an unsupported runtime is a normal, expected answer here
     (unlike ``set_effort``, where it's a request the caller made in error),
@@ -1689,9 +1805,17 @@ async def effort_capabilities(agent) -> dict[str, object]:
         # mit Grund, damit das UI es erklaeren kann statt den Chip wortlos
         # verschwinden zu lassen.
         state = await asyncio.to_thread(read_acp_chat_state, agent)
-        options, current = _acp_config_option(state, "thinking")
-        if not options:
+        if state is None:
             return _no_effort("acp_state_missing")
+        _option_id, options, current = _acp_thinking_option(state)
+        if not options:
+            # Die Datei ist da, der Harness bietet nur keine Denk-Stufe an
+            # (Hermes vor dem Upstream-PR: ``configOptions: []``). Das ist
+            # etwas anderes als "noch nichts gemeldet" — der Grund nennt den
+            # Harness, damit das UI ihn beim Namen nennen kann.
+            caps = _no_effort("harness_no_effort")
+            caps["effortHarness"] = getattr(agent, "harness", None)
+            return caps
         levels = [o["value"] for o in options]
         return {
             "effortLevels": levels,
@@ -1703,6 +1827,11 @@ async def effort_capabilities(agent) -> dict[str, object]:
             # damit juenger als jedes usage-Ereignis, gleiche Begruendung wie
             # bei der omp-Statuszeile.
             "effortLive": True,
+            # Eine ACP-Config-Option gehoert der Session: ``_set_effort_acp``
+            # schreibt nichts in die Einstellungen des Agenten (der Daemon
+            # traegt sie nur ueber ein /new). Der Regler darf darum nicht
+            # "wird Standard" versprechen — fuer keine Stufe.
+            "effortScope": "session",
         }
 
     harness = getattr(agent, "harness", None)
@@ -1857,6 +1986,11 @@ def _no_effort(reason: str) -> dict[str, object]:
     - ``foreign_harness``: diese CLI hat kein Effort-Pendant (kimi).
     - ``no_pane``: die Runtime hat keinen steuerbaren Kanal (Hermes, Jarvis).
     - ``model_no_effort``: Harness kann es, das MODELL des Agenten nicht.
+    - ``acp_state_missing``: kopfloser Agent, sein Chat-Daemon hat (noch)
+      keine Zustandsdatei geschrieben — die Einstellungen sind unbekannt.
+    - ``harness_no_effort``: kopfloser Agent, die Zustandsdatei ist da, sein
+      Harness bietet aber keine Denk-Stufe an. Traegt zusaetzlich
+      ``effortHarness`` (der Harness-Schluessel, z.B. ``hermes``).
 
     ``effortModel`` ist hier immer ``None``: nur beim modellbedingten Fall
     hat die CLI ueberhaupt ein Modell genannt. Das Feld steht trotzdem in

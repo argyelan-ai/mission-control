@@ -218,11 +218,14 @@ async def escalate_blocker_to_operator(
     if lead_context:
         lead = await find_board_lead(session, task.board_id)
         if lead:
+            from app.comment_types import activity_comment_filter
             lead_comments = (await session.exec(
                 select(TaskComment)
                 .where(
                     TaskComment.task_id == task.id,
                     TaskComment.author_agent_id == lead.id,
+                    # triage notes, not the Lead's chat answering the operator
+                    activity_comment_filter(),
                 )
                 .order_by(TaskComment.created_at.desc())
                 .limit(2)

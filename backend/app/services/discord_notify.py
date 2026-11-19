@@ -18,6 +18,13 @@ Zwei Regeln:
   und wird NIE dedupt. ``error`` geht sofort raus, Warnungen sammeln sich
   und kommen als EINE Nachricht, sobald das Zeitfenster voll ist oder zu
   viele warten.
+* **Eskalation ist keine Wiederholung.** Der Sperr-Key merkt sich die Stufe,
+  die das Fenster geoeffnet hat. Kommt zum selben Schluessel eine
+  dringendere Meldung (``error`` nach ``warning``), geht sie sofort raus,
+  uebernimmt das Fenster, und die ueberholte Warnung faellt aus der
+  Sammlung. Anlass 2026-10-20: die schlichte Warnung "endpoint unreachable"
+  verschluckte den spaeter bestaetigten Engine-Tod mit seiner Ursache
+  (ADR-096 §11.4).
 
 Was hier NICHT passiert: das ActivityEvent unterdruecken. Die Historie in der
 UI bleibt vollstaendig — nur der Discord-Kanal wird leiser. Wer einen Vorfall
@@ -46,6 +53,10 @@ ALERT_DEDUP_KEY_PREFIX = "mc:alert:dedup:"
 ALERT_DEDUP_TTL_SECONDS = 3600
 ALERT_DEDUP_COUNT_PREFIX = "mc:alert:dedupcnt:"
 DIGEST_MAX_ITEMS = 20  # Sammlung geht frueher raus, wenn so viele warten
+
+# Stufe im Sperr-Key: nur eine dringendere Meldung durchbricht das Fenster.
+# critical sieht den Key nie (geht immer raus), deshalb fehlt es hier.
+_SEVERITY_RANK = {"warning": 1, "error": 2}
 
 # Beide ueber .env stellbar (DISCORD_DIGEST_WINDOW_SECONDS /
 # DISCORD_DEDUP_TTL_SECONDS), damit die Lautstaerke ohne Code-Aenderung passt.
@@ -93,6 +104,33 @@ def _affected_key(event_type: str, detail: dict | None, title: str) -> str:
     return f"{event_type}|{affected}"
 
 
+def _window_rank(raw) -> int:
+    """Stufe, die das laufende Fenster geoeffnet hat.
+
+    Keys von vor der Eskalationsregel tragen ``1`` statt der Stufe: sie
+    zaehlen als Warnung. Lieber eine Meldung zu viel als eine verschluckte.
+    """
+    if isinstance(raw, bytes):
+        raw = raw.decode(errors="replace")
+    return _SEVERITY_RANK.get(str(raw), _SEVERITY_RANK["warning"])
+
+
+async def _drop_superseded(redis, affected: str) -> None:
+    """Wartende Warnungen zum eskalierten Schluessel aus der Sammlung nehmen.
+
+    Sie wuerden sonst bis zu ``DIGEST_WINDOW_SECONDS`` NACH der dringenderen
+    Meldung noch einmal ankommen, ohne deren Inhalt. Die Historie in der UI
+    bleibt vollstaendig; nur der Kanal sagt es nicht zweimal.
+    """
+    for raw in await redis.lrange(DIGEST_KEY, 0, -1):
+        try:
+            item = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(item, dict) and item.get("key") == affected:
+            await redis.lrem(DIGEST_KEY, 1, raw)
+
+
 def _with_repeat_suffix(description: str, repeats: int) -> str:
     """Haengt ' (+N gleiche Meldungen in der letzten Stunde)' an."""
     if repeats <= 0:
@@ -133,7 +171,9 @@ async def notify_event(
     max. 1x pro 60 Minuten raus (``mc:alert:dedup:<key>``, TTL 3600).
     Unterdrueckte Wiederholungen werden gezaehhlt und beim naechsten
     erlaubten Senden als "+N" nachgereicht. ``critical`` umgeht die Sperre
-    und geht IMMER sofort raus.
+    und geht IMMER sofort raus. Eine dringendere Stufe zum selben Schluessel
+    (``error`` nach ``warning``) ist keine Wiederholung: sie geht raus und
+    uebernimmt das Fenster.
     """
     if severity not in IMMEDIATE_SEVERITIES and severity not in DIGEST_SEVERITIES:
         return "skipped"
@@ -156,13 +196,23 @@ async def notify_event(
         # naechsten erlaubten Senden als "+N" nachgereicht werden koennen —
         # ein String-Key kann nicht beides: Sperre UND ueberlebenden Zaehler.
         # critical (oben) sieht keinen der beiden Keys.
-        dedup_key = f"{ALERT_DEDUP_KEY_PREFIX}{_affected_key(event_type, detail, title)}"
-        count_key = f"{ALERT_DEDUP_COUNT_PREFIX}{_affected_key(event_type, detail, title)}"
-        if await redis.exists(dedup_key):
-            await redis.incr(count_key)
-            return "suppressed"
+        affected = _affected_key(event_type, detail, title)
+        dedup_key = f"{ALERT_DEDUP_KEY_PREFIX}{affected}"
+        count_key = f"{ALERT_DEDUP_COUNT_PREFIX}{affected}"
+        opened_by = await redis.get(dedup_key)
+        escalation = False
+        if opened_by is not None:
+            # Gleiche oder leisere Stufe: Wiederholung. Dringendere Stufe
+            # (error nach warning): Neuigkeit — sie geht raus und uebernimmt
+            # das Fenster, statt als Wiederholung verschluckt zu werden.
+            if _SEVERITY_RANK[severity] <= _window_rank(opened_by):
+                await redis.incr(count_key)
+                return "suppressed"
+            escalation = True
         repeats = int(await redis.getdel(count_key) or 0)
-        await redis.set(dedup_key, 1, ex=ALERT_DEDUP_TTL_SECONDS)
+        await redis.set(dedup_key, severity, ex=ALERT_DEDUP_TTL_SECONDS)
+        if escalation:
+            await _drop_superseded(redis, affected)
 
         # repeats > 0: das vorige Fenster hat Wiederholungen angesammelt —
         # sie werden hier nachgereicht. Sonst erste Meldung, kein Anhang.
@@ -178,6 +228,7 @@ async def notify_event(
             "event_type": event_type,
             "severity": severity,
             "repeats": repeats,
+            "key": affected,  # damit eine Eskalation sie zurueckziehen kann
         }))
         return "queued"
     except Exception as e:  # noqa: BLE001 — Benachrichtigung ist best-effort

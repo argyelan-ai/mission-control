@@ -6,3 +6,6 @@
 livekit-agents[openai,xai]==1.8.1
 httpx>=0.27
 python-dotenv>=1.0
+# CA bundle floor for httpx (verifies against certifi, not the OS store):
+# 2026.10.19 drops trust in the compromised eMudhra intermediates (Oct 2026).
+certifi>=2026.10.19

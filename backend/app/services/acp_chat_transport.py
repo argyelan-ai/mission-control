@@ -7,10 +7,12 @@ ein kleines Protokoll mit dem Chat-Daemon, der die eine lange ACP-Sitzung
 haelt:
 
 ===============  ======================================  ==========================
-``prompt``       ``{"text": "...", "mode"?: "queue"}``   ``{"ok":true,"turn":n}`` ·
+``prompt``       ``{"text": "...", "mode"?: "queue",``   ``{"ok":true,"turn":n}`` ·
+                 ``"origin"?: "operator"}``
                                                          ``{"ok":true,"queued":true,...}`` ·
                                                          ``{"ok":false,"error":"busy"}``
-``new_session``  ``{"mode"?: "queue"}``                  ``{"ok":true,"previousSessionId":...}``
+``new_session``  ``{"mode"?: "queue",``                 ``{"ok":true,"previousSessionId":...}``
+                 ``"requestId"?: "…"}``
 ``queue_clear``  —                                       ``{"ok":true,"dropped":[...]}``
 ``cancel``       —                                       ``{"ok":true}``
 ``config``       ``{"id":"thinking","value":"high"}``    ``{"ok":true,"configOptions":[...]}``
@@ -19,6 +21,10 @@ haelt:
                  ``"content"?:{...}}`` (P3)              ``{"ok":false,"error":"not_pending"}`` ·
                                                          ``{"ok":false,"error":"bad_content",...}``
 ===============  ======================================  ==========================
+
+``config`` traegt die id, die der Agent selbst meldet: die Denk-Stufe heisst
+bei omp ``thinking``, bei Hermes ``reasoning_effort`` (beide Kategorie
+``thought_level``, ``agent_chat_input._acp_thinking_option``).
 
 Plan-Modus braucht keine eigene Op: ``config`` mit ``{"id":"mode","value":
 "plan"|"default"}`` (omp meldet ``mode`` in ``configOptions``).
@@ -49,6 +55,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Any, Protocol
 
 import httpx
@@ -87,6 +94,40 @@ def _with_mode(payload: dict[str, Any], mode: str | None) -> dict[str, Any]:
     return {**payload, "mode": mode} if mode else payload
 
 
+#: ``prompt``'s ``origin`` for the operator's own message (the composer) —
+#: the daemon's ``acp_chat.ORIGIN_OPERATOR``; the only text a card ever
+#: offers to send again.
+ORIGIN_OPERATOR = "operator"
+
+
+def _prompt_payload(text: str, mode: str | None, origin: str | None,
+                    context: str | None = None) -> dict[str, Any]:
+    """``prompt``: ``origin`` says who wrote the text — ``"operator"`` for the
+    composer. The chat daemon offers "Send again" on a card only for the
+    operator's own text (fail-closed: no origin = unknown = no button). Only
+    when set — without it the request stays byte-identical (an older daemon
+    ignores the field anyway).
+
+    ``context`` (``chat_run_context``): a block the daemon puts in front of
+    ``text`` on the way to the model only — the chat bubble stays ``text``
+    (round-1 user test t1, MUST-1). Only when set; an older daemon ignores
+    it, the server-side guard holds either way."""
+    payload: dict[str, Any] = {"text": text}
+    if origin:
+        payload["origin"] = origin
+    if context:
+        payload["context"] = context
+    return _with_mode(payload, mode)
+
+
+def _new_session_payload(mode: str | None, request_id: str | None) -> dict[str, Any]:
+    """``new_session``: ``requestId`` names MC's request in the daemon's card
+    and its ``resets`` record (incident 21.10.2026, ``chat_reset_audit``).
+    Only when set — an older daemon ignores the field anyway."""
+    payload: dict[str, Any] = {"requestId": request_id} if request_id else {}
+    return _with_mode(payload, mode)
+
+
 class AcpChatUnreachableError(Exception):
     """Der Chat-Daemon hat nicht geantwortet — Container weg, Socket tot,
     Bridge aus. NICHT dasselbe wie ``{"ok": false}``: dort hat der Daemon
@@ -98,9 +139,11 @@ class ChatTransport(Protocol):
     Daemons als ``dict`` (inkl. ``ok:false``) oder wirft
     ``AcpChatUnreachableError``."""
 
-    async def prompt(self, text: str, mode: str | None = None) -> dict: ...
+    async def prompt(self, text: str, mode: str | None = None,
+                     origin: str | None = None, context: str | None = None) -> dict: ...
 
-    async def new_session(self, mode: str | None = None) -> dict: ...
+    async def new_session(self, mode: str | None = None,
+                          request_id: str | None = None) -> dict: ...
 
     async def queue_clear(self) -> dict: ...
 
@@ -225,11 +268,13 @@ class DockerCtlTransport:
             )
         return answer
 
-    async def prompt(self, text: str, mode: str | None = None) -> dict:
-        return await self._call("prompt", _with_mode({"text": text}, mode))
+    async def prompt(self, text: str, mode: str | None = None,
+                     origin: str | None = None, context: str | None = None) -> dict:
+        return await self._call("prompt", _prompt_payload(text, mode, origin, context))
 
-    async def new_session(self, mode: str | None = None) -> dict:
-        return await self._call("new_session", _with_mode({}, mode))
+    async def new_session(self, mode: str | None = None,
+                          request_id: str | None = None) -> dict:
+        return await self._call("new_session", _new_session_payload(mode, request_id))
 
     async def queue_clear(self) -> dict:
         return await self._call("queue_clear")
@@ -281,11 +326,13 @@ class HttpCtlTransport:
             raise AcpChatUnreachableError(f"hermes bridge {op}: kein JSON-Objekt")
         return answer
 
-    async def prompt(self, text: str, mode: str | None = None) -> dict:
-        return await self._call("prompt", _with_mode({"text": text}, mode))
+    async def prompt(self, text: str, mode: str | None = None,
+                     origin: str | None = None, context: str | None = None) -> dict:
+        return await self._call("prompt", _prompt_payload(text, mode, origin, context))
 
-    async def new_session(self, mode: str | None = None) -> dict:
-        return await self._call("new_session", _with_mode({}, mode))
+    async def new_session(self, mode: str | None = None,
+                          request_id: str | None = None) -> dict:
+        return await self._call("new_session", _new_session_payload(mode, request_id))
 
     async def queue_clear(self) -> dict:
         return await self._call("queue_clear")
@@ -354,7 +401,76 @@ def read_acp_chat_state(agent) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def read_acp_turn_status(agent, *, with_questions: bool = False) -> str | None:
+#: The omp bridge's task phase file (docker/omp-bridge/bridge.py::
+#: TaskStateFile), at the ROOT of the sessions tree (task runs use many cwds).
+_TASK_STATE_FILENAME = "acp-task-state.json"
+#: The bridge's heartbeater re-stamps the file every ~30 s while a run lasts;
+#: older than this = the bridge died mid-run, the phase no longer holds.
+_TASK_STATE_MAX_AGE_S = 120.0
+#: Clock skew between the agent container and the backend we still accept.
+_TASK_STATE_MAX_SKEW_S = 60.0
+
+
+def _read_acp_task_state(agent) -> dict | None:
+    """The bridge's task-state record (``acp-task-state.json``) when it is
+    live: phase ``working``/``delivered`` and a fresh ``updatedAt``. None
+    for idle and for a missing, garbled, stale or future-dated file. Never
+    raises."""
+    from datetime import datetime, timezone
+
+    from app.services.omp_chat import resolve_transcript_dir
+
+    root = resolve_transcript_dir(agent)
+    if root is None:
+        return None
+    try:
+        data = json.loads((root / _TASK_STATE_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("phase") not in ("working", "delivered"):
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(data.get("updatedAt")).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - stamp).total_seconds()
+    if age > _TASK_STATE_MAX_AGE_S or age < -_TASK_STATE_MAX_SKEW_S:
+        return None
+    return data
+
+
+def read_acp_task_phase(agent) -> str | None:
+    """``"working"`` / ``"delivered"`` / ``None`` — what the agent's TASK
+    channel does right now (follow-up to ADR-097: while a task ran, the chat
+    said "Ready", because only the chat daemon's ``busy`` was read; a task
+    runs through the bridge's own ACP client). None for idle and for a
+    missing, garbled, stale or future-dated file. Never raises."""
+    data = _read_acp_task_state(agent)
+    return data["phase"] if data is not None else None
+
+
+def read_acp_task_run_id(agent) -> str | None:
+    """The id of the task the agent's live run works on, from the same
+    record — or None (no live run, no record, not an ACP agent).
+
+    A worker's ``current_task_id`` is never set for a review card, so it
+    cannot tell WHICH delivered review a busy reviewer works. "Stop run" on
+    review card B used to stop run A (round-4 K5, r1 N2); the task card asks
+    this instead. Never raises."""
+    data = _read_acp_task_state(agent)
+    if data is None:
+        return None
+    task_id = data.get("taskId")
+    return str(task_id) if isinstance(task_id, str) and task_id else None
+
+
+def read_acp_turn_status(
+    agent, *, with_questions: bool = False, with_task: bool = False,
+) -> str | None:
     """``"working"`` / ``"idle"`` / ``None`` — der Zug-Zustand eines
     kopflosen ACP-Agenten, direkt aus ``busy`` in ``read_acp_chat_state``.
 
@@ -373,6 +489,17 @@ def read_acp_turn_status(agent, *, with_questions: bool = False) -> str | None:
     Statuszeile zeigte trotzdem fortwaehrend "Status unknown — check the
     terminal" ueber dem Composer."""
     state = read_acp_chat_state(agent)
+    # with_task (opt-in, the chat's status line): a task runs through the
+    # bridge's own ACP client, not the chat daemon. Its phase file says
+    # "working" (the model answered -> "task_working", NOT "working": the
+    # chat itself is free, so no Stop button and no "queued" echo) or
+    # "delivered" (picked up, the model has not answered ->
+    # "waiting_model"). A busy CHAT turn still wins.
+    if with_task:
+        chat_busy = isinstance(state, dict) and state.get("busy") is True
+        task_phase = None if chat_busy else read_acp_task_phase(agent)
+        if task_phase is not None:
+            return "task_working" if task_phase == "working" else "waiting_model"
     if state is None:
         return None
     busy = state.get("busy")
@@ -385,3 +512,84 @@ def read_acp_turn_status(agent, *, with_questions: bool = False) -> str | None:
         # plain working/idle answer.
         return "waiting_input"
     return "working" if busy else "idle"
+
+
+#: How long the chat's model facts (a card waiting in the inbox, does the
+#: model answer) are kept per agent. The tailer probes every ~2 s per open
+#: chat; the readiness itself is cached in Redis for 15 s anyway.
+_MODEL_WAIT_CACHE_S = 10.0
+_model_wait_cache: dict[str, tuple[float, bool, bool]] = {}
+
+
+async def _model_wait_facts(agent) -> tuple[bool, bool]:
+    """(an assigned card waits in the agent's inbox, the agent's model
+    answers). The card is one the poll would deliver by itself
+    (``run_control`` empty, same filter as the poll claim); the readiness
+    is the poll's own gate (``runtime_ready_for_agent``, local runtimes
+    included, cached, fail-open) as a read: no timeline note."""
+    from sqlmodel import select
+
+    import app.database
+    from app.models.task import Task
+    from app.services.runtime_readiness import runtime_ready_for_agent
+
+    async with app.database.async_session_maker() as session:
+        card = (
+            await session.exec(
+                select(Task.id).where(
+                    Task.assigned_agent_id == agent.id,
+                    Task.status == "inbox",
+                    Task.run_control.is_(None),
+                ).limit(1)
+            )
+        ).first()
+        # Pool hygiene: the gate awaits Redis and maybe an HTTP probe —
+        # release the read transaction first (nothing uncommitted).
+        await session.commit()
+        ready, _reason = await runtime_ready_for_agent(
+            agent, session, include_local=True, notify=False,
+        )
+    return card is not None, bool(ready)
+
+
+async def refine_status_by_model(agent, status: str | None) -> str | None:
+    """The chat's status, corrected by what MC knows about the agent's MODEL
+    (review Z2/Z5 of the ADR-097 follow-up, 20.10.2026). The bridge's phase
+    file is not the whole truth:
+
+    * ``idle`` while an assigned card waits in the inbox and the model does
+      not answer -> ``waiting_model``. omp gave up on the dead endpoint,
+      MC's ACK ladder returned the card for the model and the poll gate
+      holds it — the chat said "Ready", the task card "waiting for the
+      model" (the 19.10. case: box off).
+    * ``task_working`` while the model does not answer -> ``waiting_model``.
+      The engine died after the claim (task 43788774): omp retries for
+      minutes and the phase stays "working".
+
+    Every other status passes through (a busy chat turn, a question, an
+    unknown state). An agent without a runtime has nothing to wait for and
+    costs no read. Cached per agent (``_MODEL_WAIT_CACHE_S``); any error
+    keeps ``status`` — a broken read never invents a state."""
+    if status not in ("idle", "task_working"):
+        return status
+    if not getattr(agent, "runtime_id", None):
+        return status
+    key = str(getattr(agent, "id", ""))
+    now = time.monotonic()
+    hit = _model_wait_cache.get(key)
+    if hit is not None and now - hit[0] < _MODEL_WAIT_CACHE_S:
+        waiting_card, ready = hit[1], hit[2]
+    else:
+        try:
+            waiting_card, ready = await _model_wait_facts(agent)
+        except Exception as e:  # noqa: BLE001 — never break the status line
+            logger.debug("chat model facts skipped for %s: %s", key, e)
+            return status
+        if len(_model_wait_cache) > 512:
+            _model_wait_cache.clear()
+        _model_wait_cache[key] = (now, waiting_card, ready)
+    if ready:
+        return status
+    if status == "task_working" or waiting_card:
+        return "waiting_model"
+    return status

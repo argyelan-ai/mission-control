@@ -397,6 +397,15 @@ async def test_stop_clears_review_decision(make_board, make_agent, make_task):
 
     from tests.conftest import test_engine
 
+    # A review card is stopped only when the reviewer's run is this card
+    # (round-4 K5, R-stop-only-own-run): point the reviewer at it.
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.agent import Agent
+        a = await s.get(Agent, reviewer.id)
+        a.current_task_id = task.id
+        s.add(a)
+        await s.commit()
+
     with (
         # Phase 29 / Wave 4 cleanup: app.services.operations.rpc gone.
         # stop_task_run no longer touches any RPC — it only mutates the
@@ -456,7 +465,8 @@ async def test_resume_clears_review_decision(make_board, make_agent, make_task):
 
 @pytest.mark.asyncio
 async def test_review_creates_comment(make_board, make_agent, make_task):
-    """execute_review_decision creates a comment with comment_type=review."""
+    """execute_review_decision creates the decision note — on approve with
+    comment_type=review_approved (record-only, never delivered to an agent)."""
     board = await make_board(name="Comment Board", slug="comment-board")
     reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
     task = await make_task(
@@ -483,7 +493,7 @@ async def test_review_creates_comment(make_board, make_agent, make_task):
             result = await s.exec(
                 select(TaskComment).where(
                     TaskComment.task_id == task.id,
-                    TaskComment.comment_type == "review",
+                    TaskComment.comment_type == "review_approved",
                 )
             )
             comments = result.all()

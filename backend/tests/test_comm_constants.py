@@ -14,7 +14,9 @@ def test_thread_kinds():
     # (thread-anchor fix 2026-08-05).
     # "group": Multi-Agent-Gruppenchat — Teilnahme über group_members statt
     # Thread.agent_id, Zustellung mention-gefiltert (ADR-075, 2026-08-20).
-    assert THREAD_KINDS == ("task", "side", "dm", "chat", "group")
+    # "session": a conversation between two principals across harnesses,
+    # written only through POST /agent/comms/send (ADR-100, 2026-11-01).
+    assert THREAD_KINDS == ("task", "side", "dm", "chat", "group", "session")
 
 def test_waiting_timeout_two_hours():
     assert WAITING_TIMEOUT_SECONDS == 7200

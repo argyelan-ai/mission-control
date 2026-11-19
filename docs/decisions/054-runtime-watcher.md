@@ -83,7 +83,8 @@ entire reason this path restarts instead of respawning.
 **Busy agents stay flagged until a later watcher tick — no `task_lifecycle`
 hook.** An agent with `current_task_id` set is skipped by
 `sync_pending_agents` and simply stays `pending_runtime_sync = true`; the
-next tick (≤ `runtime_watcher_interval`, i.e. ≤ 90 s after the task ends)
+next tick (≤ `runtime_watcher_interval`, i.e. ≤ 90 s after the task ends;
+≤ 30 s since the amendment of 2026-10-20)
 picks it up. Wiring a dedicated hook into `task_lifecycle` was considered
 and rejected — the watcher already runs a sync pass every tick, so a hook
 would only shave off a worst-case 90 s latency at the cost of a new
@@ -119,10 +120,12 @@ instead of waiting for the next tick or task end.
   `/internal/bootstrap`.
 - **`task_lifecycle` hook for busy-agent sync.** Rejected — the watcher's
   own per-tick sync pass already retries pending agents; a dedicated hook
-  only trades a ≤90 s latency win for a new coupling between task
+  only trades a ≤90 s (≤30 s since the amendment of 2026-10-20) latency
+  win for a new coupling between task
   completion and runtime propagation, adding a failure surface without a
   clear benefit.
-- **Sub-30 s polling interval.** Rejected — 90 s keeps LAN GET volume
+- **Sub-30 s polling interval.** Rejected (the tick is 30 s since the
+  amendment of 2026-10-20) — 90 s keeps LAN GET volume
   negligible while still being fast enough that drift-to-detection latency
   is imperceptible relative to normal task durations; the design explicitly
   avoids scope creep into MC-side engine control (still out of scope, see
@@ -134,7 +137,8 @@ instead of waiting for the next tick or task end.
 - `/runtimes` reflects what the engine is actually serving, not just what
   MC last wrote — closes the exact gap D-22 left open.
 - Drift and propagation are fully automatic for idle agents (no operator
-  action) and bounded to one extra tick (≤90 s) for busy agents.
+  action) and bounded to one extra tick (≤90 s; ≤30 s since the amendment
+  of 2026-10-20) for busy agents.
 - Two-probe confirmation + down-detection thresholding keeps the activity
   feed quiet during normal engine warm-up/restart noise.
 - Circuit breaker prevents a broken container from being restart-looped
@@ -148,7 +152,8 @@ instead of waiting for the next tick or task end.
   HTTP requests per interval where `N` = probeable runtimes) — negligible
   at current fleet size, worth re-checking if the runtime count grows by
   an order of magnitude.
-- Busy-agent sync latency is bounded by the watcher interval (≤90 s), not
+- Busy-agent sync latency is bounded by the watcher interval (≤90 s; ≤30 s
+  since the amendment of 2026-10-20), not
   by task completion directly — an intentional trade-off (see Alternativen)
   that trades a small window for coupling avoidance.
 - A `docker restart` is heavier than `respawn_window_only` (full container
@@ -156,6 +161,37 @@ instead of waiting for the next tick or task end.
   restart guarantees a fresh `OPENAI_MODEL`.
 - Migration `0141` adds `agents.pending_runtime_sync` (nullable-safe bool,
   default false) — one more column on an already-wide table.
+
+## Amendment 2026-10-20 — tick 30 s instead of 90 s
+
+Operator decision 2026-10-20, the follow-up named with ADR-096 §11.2: since
+the engine-death fast path declares a death at the next probe, the tick is
+the detection time. `runtime_watcher_interval` now defaults to **30 s**.
+What changes and what deliberately does not:
+
+- **Still counted in probes:** the alarm threshold (point 5: 3 consecutive
+  probes — now 60–90 s into an outage instead of 180–270 s; the stage card
+  turns "failed" at the same count) and the drift confirmation (point 3:
+  two identical probes — now 30–60 s).
+- **Kept in wall-clock time:** what one tick leaves for the readers between
+  ticks (live snapshot, both drift candidates, members mark) lives 3 ticks
+  but at least 270 s; the outage counter 10 ticks but at least 900 s; the
+  engine-death check (ADR-096 §11.2) asks the anchor up to 270 s into an
+  outage; a failed agent sync or CLI recreate waits at least 90 s for its
+  next attempt (`SYNC_RETRY_SPACING`), so its 3 attempts still span at
+  least 3 minutes. The watcher lock is tick − 5 s, at least half the tick.
+- **Busy-agent sync latency** (above): ≤ 30 s after the task ends.
+- Every "≤ tick" here means "≤ tick plus the tick's own run time": the loop
+  sleeps a full tick after each pass, and agent sync, CLI recreate and an
+  auto-recovery start run inside the pass (health waits and the memory-prep
+  wait of up to 180 s each). Running those as their own tasks outside the
+  probe loop would make the cadence exact; it is not part of this change.
+- **Load:** at most 2 ticks per minute instead of 0.67 — up to 3× the
+  `/v1/models` probes (a short model list, no GPU work) and up to 3× the
+  per-probe SSH checks while an outage lasts.
+- **Rollback:** revert and deploy. `backend` and `mc-worker` do not read
+  `.env` for this setting (`docker-compose.yml` has no `env_file` and no
+  `RUNTIME_WATCHER_INTERVAL` line), so setting it in `.env` changes nothing.
 
 ## Referenzen
 

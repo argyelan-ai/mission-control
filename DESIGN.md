@@ -120,6 +120,7 @@ Dieses System lehnt explizit ab: das generische AI-Tool-Lila, Farb-Gradients, Ne
 - Neutrale Off-Black-Schichtung (#0A0A0A → #2C2C2C) — Tiefe durch Flächenton, nie durch Schatten
 - Ein Akzent, achromatisch hell (#EBE8DE): trägt über Helligkeit + Fläche, ≤10% jeder Fläche; Text darauf immer dunkel (#151411)
 - Farbe = Status. Nur vier bunte Töne existieren (Grün/Ocker/Rot/Blau); Fehler schlägt Warnung über Buntheit, nicht Helligkeit
+- Ein normaler Ablauf ist kein Warnfall: „Wartet auf das Modell“ steht beim Start neutral (grau) und wird erst Ocker, wenn es länger als die Frist dauert (`WAITING_MODEL_GRACE_MS`, 20 s ab Zustellung).
 - Runde Radien (6–28px) für Anfassbares, 4px im Raster; 1px-Linien, Corner-Ticks als Positionsmarken
 - JetBrains Mono als Signatur: Micro-Labels (`.label-sys`), IDs, Stats, Datastream — Clash Display für Titel/Wordmark, General Sans für UI-Text
 - Ruhige Motion: kurze Fades/Slides mit ease-out, kein Bounce, kein Glow
@@ -202,6 +203,17 @@ Farbe und Form regelt der Rest dieser Datei. Dieser Abschnitt regelt, **wie viel
 | **K13** | **Signatur bleibt.** Ruhe heisst nicht beliebig: Off-Cream ist der einzige Akzent; Mono steht nur bei Maschinenwerten, dort aber sorgfältig (Tabellenziffern, Kopier-Symbol); Clash Display nur für Seitentitel; unterhalb des Kopfes darf pro Bereich eine Abschnittsmarke (`label-sys`) stehen. Ein Entwurf, der wie eine beliebige SaaS-Seite aussieht, ist durchgefallen. |
 | **K14** | **Zahlen sind ein Boden, kein Ziel — Aufbau braucht den Blick des Operators.** Grüne Messwerte heissen nur „nicht durchgefallen". Wer alles auf eine Grösse setzt, um K5 zu erfüllen, hat die Regel verletzt. Änderungen am **Aufbau** (neuer Block, neue Seite, Umbau eines Kopfbereichs) werden erst gemergt, wenn der Operator das Handy-Bild (390 px, vorher/nachher) gesehen hat. Kein Agent ändert diesen Abschnitt still; neue Regeln werden mit ID vorgeschlagen. |
 
+**Vorgeschlagen (Spec A „Aufgaben-Schritte im Chat", gelten erst, wenn der Operator die Bilder gesehen hat — bis dahin Vorschlag, K14):**
+
+| ID | Regel |
+|---|---|
+| **K15** | **Arbeitsschritte dürfen kürzen.** In Arbeitsschritt-Zeilen (Kapitel-Satz, Werkzeug-Titel, Zusammenfassung) ist `…` erlaubt, wenn der volle Text einen Tipp entfernt ist. Ausnahme zu K3 „`…` nur beim Titel". |
+| **K16** | **Kapitel statt Symbol-Teppich.** Eine Denkphase ist eine Kapitel-Zeile: erster sinnvoller Satz, ohne Symbol, nicht kursiv, auf der Textkante; darunter die ersten 1–2 Werkzeuge + „+N". Symbole nur bei Werkzeug- und Systemzeilen. Agenten-Inhalt bleibt in seiner Sprache (K10 gilt für die Oberfläche), `dir="auto"`. |
+| **K17** | **Abgeschlossene Dauern in der Dauer-Form.** Dauern erst ab 1 min, immer mit `formatDuration` („15 min", „1 h 4 min"); Spannen „seit/vor" mit `formatSpan`. Nie `m:ss` für eine abgeschlossene Dauer. Die laufende Denk-Uhr bleibt eine Stoppuhr. |
+| **K18** | **Lange Arbeit hat Marken.** Innerhalb einer Aufgabe steht eine leise Uhrzeit nach ≥ 15 min ohne Zeitangabe; jeder weitere Versuch beginnt mit „Versuch n · hh:mm". |
+| **K19** | **Eine Zeitleiste, nichts wächst über dem Neuesten.** Aufgaben-Schritte stehen zu ihrer Zeit im Chat; was nach einer Nachricht des Operators entsteht, steht unter ihr (Band und Kapitel werden nur dort geteilt — Werkzeug-, Denk- und Antwortzeilen der Chat-Sitzung stehen unter dem offenen Band, sie teilen es nicht). Ein Folge-Band sagt „läuft weiter“ nur, solange die Aufgabe arbeitet; sonst nur den Titel. Senden springt ans Ende. Aufklappen lässt die angetippte Zeile stehen. Die Form einer Aufgabe (Karte oder Abschnitt) wechselt nie, solange die Ansicht offen ist. Eine Aufgabe, die vor der nächsten Nachricht des Operators endete, endet in ihrem letzten Band — eine neue Frage holt sie nie als weiteres Band nach unten. Der haftende Kopf ist einzeilig. Das Eingabefeld sagt, wohin eine Nachricht geht. |
+| **K20** | **Fehlschritt ist kein Fehler** *(Operator-Bild nötig)*. Ein fehlgeschlagener Zwischenschritt zeigt nur einen Warn-Punkt (Ocker), Titel bleibt sekundär, kein roter Rahmen; Rot bleibt dem Scheitern der Aufgabe / des Zugs. Ein Aufgaben-Abschnitt hat zwei Bereiche (`chat-task-head`, `chat-task-steps`) mit je ≤ 1 Statusfarbe: im Schritt-Bereich sind „läuft" neutral und Diff-Zahlen gedämpft. Umschalter: `STEP_FAILED_TONE` in `colors.ts` (eine Zeile). |
+
 Ablauf, Rubrik und Anti-Slop-Liste: [`docs/design/ui-craft.md`](docs/design/ui-craft.md).
 
 **Noch offen (Operator entscheidet, bis dahin gilt der alte Stand):** Schriftstärken-Fix #326 · `label-sys` ausserhalb des Kopfbereichs zurückstufen · Schriftskala und ob 2/6/20 px zur Abstandsskala gehören · die Variante für den Kopf der Task-Detailseite.
@@ -277,6 +289,8 @@ Werkzeuge, keine Schmuckstücke: zurückhaltend im Ruhezustand, eindeutig im akt
 - **Style:** bg-deep (#1C1C1C) Fläche, 1px `border`, md/xl-Radius, Text primary, Platzhalter text-muted
 - **Focus:** Rahmen → `${accent}66` + weicher Ring `box-shadow: 0 0 0 3px rgba(235,232,222,0.10)` (Akzent-Alpha, kein bunter Glow). Einfache Felder setzen den Rahmen auf `border-accent`.
 - **Label:** `.label-sys` (mono uppercase) oder text-muted, oberhalb des Felds, immer mit `htmlFor`/`id` oder `aria-label`. Zahlenfelder tragen Mono-Einheiten-Suffixe.
+- **Auswahlfeld:** `NativeSelect` (`components/shared/NativeSelect.tsx`) statt eines nackten `<select>`: `appearance: none`, eigener Pfeil (lucide `ChevronDown`, text-muted), gleiche Höhe wie die Textfelder daneben (≥ 44 px). WebKit (jedes iPhone) ignoriert sonst `min-height` und zeichnet 27 px. Die native Auswahl (Rad am iPhone) bleibt. Der Rahmen um Auswahl und Pfeil ist genau so hoch wie die Auswahl (`h-fit`): steht im Raster daneben ein Feld mit Meldung, bleibt der Pfeil mittig.
+- **Grenzen und Fehler:** Hat das Backend eine Längengrenze, trägt das Feld `maxLength`; ab 90 % zeigt ein Zähler `181/200` (text-muted, rechts unter dem Feld). Lehnt der Server ein Feld ab (422), steht der Grund in der UI-Sprache **unter diesem Feld** (`STATUS_TEXT.error`, Rahmen in derselben Farbe, `aria-invalid` + `aria-describedby`), und der Fokus springt dorthin. Ein Toast nur für das, wofür es kein Feld gibt. Tippen ins Feld nimmt die Meldung weg. Eigene Ablehnungen des Servers kommen in derselben Form (`[{loc, type, msg, ctx}]`) mit einem festen `type`; die Oberfläche formuliert den Text aus dem `type`, das englische `msg` wird nie gezeigt.
 
 ### Switch / Toggle
 - Track 36×20px, `full`-Radius. An = `accent`-Fläche + `accent`-Rahmen, Thumb 14×14 in `on-accent`. Aus = bg-elevated + `border`, Thumb in text-muted. `role="switch"` + `aria-checked` + `aria-label`.

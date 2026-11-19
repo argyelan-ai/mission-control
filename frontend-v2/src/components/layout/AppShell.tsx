@@ -27,9 +27,15 @@ export default function AppShell({
   fullHeight = false,
   mobileChromeless = false,
   mobileHideAppBar = false,
+  wide = false,
 }: {
   children: React.ReactNode;
   fullHeight?: boolean;
+  /** Let the page use the whole width beside the sidebar instead of the
+   *  centred 1600 px column. Only for pages that lay out their own panes and
+   *  cap their own reading widths (Benchmark: list · result · rail). Every
+   *  other page keeps the column, so their left edges stay where they are. */
+  wide?: boolean;
   /** Auf dem Handy die App-Leiste UND die Tab-Leiste zurücktreten lassen,
    *  weil der Bildschirm seine eigene Kopfzeile mitbringt (Sessions-Chat).
    *
@@ -157,7 +163,7 @@ export default function AppShell({
               mobileChromeless || mobileHideAppBar ? "md:pt-6" : "main-content-pt"
             }`}
           >
-            <div className="mx-auto w-full max-w-[1600px] flex flex-col flex-1 min-h-0">
+            <div className={`mx-auto w-full ${wide ? "" : "max-w-[1600px]"} flex flex-col flex-1 min-h-0`}>
               {children}
             </div>
           </main>
@@ -165,7 +171,7 @@ export default function AppShell({
           <main
             className="flex-1 overflow-y-auto overflow-x-hidden main-content-pt main-content-pb px-4 md:px-6 lg:px-8"
           >
-            <div className="mx-auto w-full max-w-[1600px]">
+            <div className={`mx-auto w-full ${wide ? "" : "max-w-[1600px]"}`}>
               {children}
             </div>
           </main>

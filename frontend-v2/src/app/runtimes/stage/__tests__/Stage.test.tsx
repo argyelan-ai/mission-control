@@ -74,6 +74,80 @@ describe("Stage — title + corner", () => {
     expect(screen.queryByText(/up \d/)).not.toBeInTheDocument();
   });
 
+  // Engine death (ADR-096 §11): the watcher's existing fields — status
+  // "failed" + reason — plus reason_code / box / at. Reason, box and time
+  // instead of a bare "unreachable"; whether MC restarts it; the work waits.
+  it("a dead engine shows reason, box, time, autostart and waiting tasks", async () => {
+    const rt = makeRuntime({ display_name: "DeepSeek V4.1", state: "stopped", host: { id: "spark", slug: "spark", display_name: "DGX Spark" } });
+    const at = new Date();
+    at.setHours(17, 20, 0, 0);
+    const live = {
+      reachable: false, served_model: null, latency_ms: null, last_probe_at: "", consecutive_failures: 1, drift: false,
+      status: "failed", reason: "DeepSeek gestoppt …", reason_code: "exit", exit_code: 137,
+      box: "Box A", at: at.toISOString(), log_line: "Killed", autostart: false, tasks_commented: 2,
+    };
+    renderWithQuery(<Stage runtime={rt} live={live} members={[{ host: makeHost({ slug: "spark", display_name: "DGX Spark" }), role: "head" }]} onOpenCockpit={() => {}} />);
+    expect(await screen.findByText("down")).toBeInTheDocument();
+    const line = screen.getByTestId("stage-now-line");
+    expect(line).toHaveTextContent("Down since 17:20 on Box A · engine exited (exit 137), probably out of memory");
+    expect(line).toHaveAttribute("title", "Killed");
+    expect(screen.getByTestId("stage-crash-followup")).toHaveTextContent(
+      "Box autostart off — will not restart by itself · 2 running tasks wait (comment with reason)",
+    );
+    expect(screen.getByTestId("stage-card")).toHaveAttribute("data-status", "failed");
+    // Trouble actions: restart is the primary button.
+    expect(screen.getByTestId("restart-now")).toBeInTheDocument();
+  });
+
+  // Decision 2026-10-20: exit 137 (SIGKILL) adds "probably out of memory" —
+  // only on the "exit" reason; an OOM reason already says it, other exit
+  // codes say nothing about memory.
+  it.each([
+    ["exit", 1, "engine exited (exit 1)"],
+    ["oom", 137, "out of memory (OOM)"],
+    ["kernel_oom", 137, "kernel ran out of memory (OOM)"],
+  ])("reason %s with exit %s: no memory hint added", async (code, exitCode, text) => {
+    const rt = makeRuntime({ display_name: "DeepSeek V4.1", state: "stopped" });
+    const live = {
+      reachable: false, served_model: null, latency_ms: null, last_probe_at: "", consecutive_failures: 1, drift: false,
+      status: "failed", reason: "x", reason_code: code, exit_code: exitCode, box: "Box A", at: null,
+      log_line: null, autostart: false, tasks_commented: 0,
+    };
+    renderWithQuery(<Stage runtime={rt} live={live} members={[{ host: makeHost({}), role: "head" }]} onOpenCockpit={() => {}} />);
+    const line = await screen.findByTestId("stage-now-line");
+    expect(line).toHaveTextContent(`Down on Box A · ${text}`);
+    expect(line).not.toHaveTextContent("probably out of memory");
+  });
+
+  it("a dead duo with autostart on: worker hint, autostart only 'may', unknown reason", async () => {
+    const rt = makeRuntime({ display_name: "DeepSeek V4.1", state: "stopped", host: { id: "spark", slug: "spark", display_name: "DGX Spark" } });
+    const live = {
+      reachable: false, served_model: null, latency_ms: null, last_probe_at: "", consecutive_failures: 2, drift: false,
+      status: "failed", reason: "x", reason_code: "unknown", exit_code: null, box: null, at: null,
+      log_line: null, autostart: true, tasks_commented: 0,
+    };
+    const members = [
+      { host: makeHost({ slug: "spark", display_name: "DGX Spark" }), role: "head" as const },
+      { host: makeHost({ slug: "spark-2", display_name: "DGX Spark 2" }), role: "worker" as const },
+    ];
+    renderWithQuery(<Stage runtime={rt} live={live} members={members} onOpenCockpit={() => {}} />);
+    expect(screen.getByTestId("stage-now-line")).toHaveTextContent("Down · reason unknown");
+    const followUp = await screen.findByTestId("stage-crash-followup");
+    expect(followUp).toHaveTextContent("Box autostart on — MC may try a restart");
+    expect(followUp).toHaveTextContent("The worker on the second box may still be running — Stop clears both boxes");
+    expect(followUp).not.toHaveTextContent("running task");
+  });
+
+  it("a plain failed status without a reason code stays 'unreachable'", async () => {
+    const rt = makeRuntime({ display_name: "Qwen", state: "stopped" });
+    const live = {
+      reachable: false, served_model: null, latency_ms: null, last_probe_at: "", consecutive_failures: 3, drift: false,
+    };
+    renderWithQuery(<Stage runtime={rt} live={live} members={[{ host: makeHost({}), role: "head" }]} onOpenCockpit={() => {}} />);
+    expect(await screen.findByText("unreachable")).toBeInTheDocument();
+    expect(screen.queryByTestId("stage-crash-followup")).not.toBeInTheDocument();
+  });
+
   it("corner shows 'unreachable' for a failed runtime", async () => {
     const rt = makeRuntime({
       display_name: "Qwen3.8 27B", state: "failed",
@@ -265,5 +339,110 @@ describe("Stage — live speed lives in the SPEED tile", () => {
     expect(tile).toHaveTextContent("–");
     expect(tile).toHaveTextContent("Speed · solo");
     expect(screen.getByTestId("stage-now-line")).toHaveTextContent(/^solo · 6 ms$/);
+  });
+});
+
+// Round-2 user test (t4 N8): the card read "73 tok/s" next to "0 working"
+// while an agent was working on a task. Two causes: the heartbeat status is
+// "working" (the card only counted "busy"), and a PAUSED agent was never
+// counted — but pause only means "no new tasks", the running one goes on.
+// When the load really comes from no agent (a bench run, a direct call) the
+// speed tile now says so instead of leaving the reader to guess.
+describe("Stage — who makes the load", () => {
+  const live = { reachable: true, served_model: "m", latency_ms: 6, last_probe_at: "", consecutive_failures: 0, drift: false };
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(api.hosts, "pulse").mockResolvedValue({ points: [{ t: 1, tps: 73 }], now_tps: 73, idle_seconds: 0, available: true });
+    vi.spyOn(api.hosts, "metrics").mockResolvedValue({ reachable: true, gpu_util_pct: 95, vram_used_mb: 1024, vram_total_mb: 8192, gpu_temp_c: 60 });
+    vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
+      runtime_slug: "rt", count: 1, agents: [{ id: "sp", name: "Alpha", agent_runtime: "cli-bridge" }],
+    });
+  });
+
+  it("a paused agent that is still working counts as working", async () => {
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      { id: "sp", name: "Alpha", status: "working", operational_mode: "paused" },
+    ] as never);
+    renderWithQuery(<Stage runtime={makeRuntime({ slug: "rt" })} members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]} live={live} onOpenCockpit={() => {}} />);
+    const tile = await screen.findByTestId("kpi-in-use");
+    await vi.waitFor(() => expect(tile).toHaveTextContent(/^1working/));
+    const speed = screen.getByTestId("kpi-speed");
+    expect(speed).not.toHaveAttribute("title");
+    expect(screen.queryByTestId("kpi-speed-note")).not.toBeInTheDocument();
+  });
+
+  it("load without a working agent is labelled as such", async () => {
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      { id: "sp", name: "Alpha", status: "idle", operational_mode: "paused" },
+    ] as never);
+    renderWithQuery(<Stage runtime={makeRuntime({ slug: "rt" })} members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]} live={live} onOpenCockpit={() => {}} />);
+    const speed = await screen.findByTestId("kpi-speed");
+    await vi.waitFor(() => expect(speed).toHaveTextContent("73 tok/s"));
+    // Round-3 (r2 N2, t3 NICE-3): "SPEED · DUO · NO AGENT" wrapped on a phone
+    // in mono capitals and did not say who loads the box. The machine label
+    // stays "Speed · solo"; a calm sentence below names the likely source.
+    await vi.waitFor(() => expect(screen.getByTestId("kpi-speed-note")).toHaveTextContent(
+      "no agent — e.g. a bench run or an API call",
+    ));
+    expect(speed.querySelector(".label-sys")).toHaveTextContent(/^Speed · solo$/);
+    expect(speed).toHaveAttribute(
+      "title",
+      "No agent on this box is working. The load comes from somewhere else — for example a bench run or a direct API call.",
+    );
+  });
+
+  // PR #960 review SHOULD 3: before the roster lands, bound agents used to
+  // count as "active, connected" — the fast first paint read "+3 connected"
+  // for three paused agents, later "+1". Unknown is "–", not a number.
+  it("shows '–' until the roster has answered", async () => {
+    vi.spyOn(api.agents, "list").mockImplementation(() => new Promise(() => {}));
+    renderWithQuery(<Stage runtime={makeRuntime({ slug: "rt" })} members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]} live={live} onOpenCockpit={() => {}} />);
+    const tile = await screen.findByTestId("kpi-in-use");
+    // Round-3 (t3 NICE-5c): "– · – connected" was a placeholder that read
+    // like a broken figure. Unknown is one "–" over the plain label.
+    await vi.waitFor(() => expect(tile).toHaveTextContent(/^–Agents/));
+    expect(tile).not.toHaveTextContent(/– connected/);
+    expect(tile).not.toHaveTextContent(/\+ 1 connected/);
+    // The tap-popover must not claim "nobody on this box" either.
+    expect(tile).toHaveTextContent("Checking…");
+  });
+
+  it("counts once the roster has answered", async () => {
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      { id: "sp", name: "Alpha", status: "idle", operational_mode: "active" },
+    ] as never);
+    renderWithQuery(<Stage runtime={makeRuntime({ slug: "rt" })} members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]} live={live} onOpenCockpit={() => {}} />);
+    const tile = await screen.findByTestId("kpi-in-use");
+    await vi.waitFor(() => expect(tile).toHaveTextContent(/^0working\+ 1 connected/));
+  });
+});
+
+
+// Round-3 (t3 NICE-4): on a phone the model title was cut mid-version
+// ("DeepSeek V4.1 Flash 1…") — the version is what tells two recipes apart.
+// The title may wrap to a second line instead of being cut.
+describe("Stage — model title on a phone", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(api.hosts, "pulse").mockResolvedValue({ points: [], now_tps: null, idle_seconds: null, available: false });
+    vi.spyOn(api.hosts, "metrics").mockResolvedValue({ reachable: true, gpu_util_pct: 0, vram_used_mb: 0, vram_total_mb: 8192, gpu_temp_c: 40 });
+    vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({ runtime_slug: "rt", count: 0, agents: [] });
+    vi.spyOn(api.agents, "list").mockResolvedValue([] as never);
+  });
+
+  it("wraps instead of cutting the version off", () => {
+    renderWithQuery(
+      <Stage
+        runtime={makeRuntime({ slug: "rt", display_name: "DeepSeek V4.1 Flash 1017 NVFP4 — vLLM (2× Spark)" })}
+        members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]}
+        onOpenCockpit={() => {}}
+      />,
+    );
+    const title = screen.getByTestId("stage-title");
+    expect(title).toHaveTextContent("DeepSeek V4.1 Flash 1017");
+    expect(title.className).not.toMatch(/\btruncate\b/);
+    expect(title.className).toMatch(/line-clamp-2/);
   });
 });

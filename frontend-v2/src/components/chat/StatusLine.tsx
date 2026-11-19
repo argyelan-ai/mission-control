@@ -11,10 +11,13 @@
  * the terminal, the one place that can't lie.
  */
 import { useEffect, useState } from "react";
-import { useTranslations } from "next-intl";
+import Link from "next/link";
+import { useLocale, useTranslations } from "next-intl";
 
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { ChatAliveness, StateEvent } from "@/lib/chatTypes";
+import { capitalize } from "@/lib/taskDetail/stateLine";
+import { parseTs } from "@/lib/taskDetail/format";
 
 interface StatusLineProps {
   state: StateEvent | null;
@@ -34,7 +37,25 @@ interface StatusLineProps {
    *  the tool's own title ("Read poll.sh", "$ git diff"). Only honoured while
    *  the probe says working — a stale activity never outranks the state. */
   activity?: { title: string } | null;
+  /** The live task of a chat that shows task sections (spec A, S5). With it,
+   *  `task_working` says nothing while a task head is on screen (the head
+   *  says it, K3) and otherwise names the task as a link; `waiting_model`
+   *  names it too. Absent = the chat as before (other harnesses). */
+  task?: { taskId: string; title: string; deliveredAt?: string | null } | null;
+  /** A head of the live task's section is in the viewport. */
+  taskHeadVisible?: boolean;
+  /** The chat just opened and no state has arrived yet (round-4 t1 NICE-2).
+   *  Says "Loading…" in neutral tones instead of the ocker warning; the
+   *  caller ends it after a short grace, so a probe that never answers
+   *  still reads as unknown. A real state always wins. */
+  loading?: boolean;
+  /** The agent has a terminal the operator can open. An ACP agent has none
+   *  (`headless_chat`) — its unknown state then does not point at one. */
+  hasTerminal?: boolean;
 }
+
+/** One line, left edge on the message column (px-4 md:px-5). */
+const LINE_CLASS = "flex items-center gap-2 px-4 md:px-5 pb-1.5 text-[12px]";
 
 interface StatusDisplay {
   dotColor: string;
@@ -94,12 +115,49 @@ function useWorkingWord(active: boolean): string {
   return WORKING_WORDS[(seed + tick) % WORKING_WORDS.length];
 }
 
+/** How long "waiting for the model" stays neutral (round-5 t1 NICE-2). A
+ *  model takes a few seconds for its first turn on every start (live ~6 s):
+ *  that is the normal way of a start, not a warning. Ocker only once the
+ *  task has waited this long since its delivery (box off, model loading). */
+export const WAITING_MODEL_GRACE_MS = 20_000;
+
+/** True once `waiting` has lasted past the grace — counted from `sinceIso`
+ *  (the task's delivery) when known, else from when the state came. The
+ *  clock is read in the effect, never in the render (cf. useWorkingWord). */
+function useWaitedTooLong(waiting: boolean, sinceIso: string | null | undefined): boolean {
+  const [late, setLate] = useState(false);
+  const sinceMs = parseTs(sinceIso)?.getTime() ?? null;
+  useEffect(() => {
+    if (!waiting) {
+      setLate(false);
+      return;
+    }
+    const left = (sinceMs ?? Date.now()) + WAITING_MODEL_GRACE_MS - Date.now();
+    if (left <= 0) {
+      setLate(true);
+      return;
+    }
+    setLate(false);
+    const id = setTimeout(() => setLate(true), left);
+    return () => clearTimeout(id);
+  }, [waiting, sinceMs]);
+  return late;
+}
+
 type Labels = (key: string) => string;
 
-const unknownDisplay = (t: Labels): StatusDisplay => ({
+const unknownDisplay = (t: Labels, hasTerminal: boolean): StatusDisplay => ({
   dotColor: C.warning,
   textColor: STATUS_TEXT.warning,
-  label: t("unknown"),
+  label: t(hasTerminal ? "unknown" : "unknownNoTerminal"),
+  pulse: false,
+});
+
+// Before the first state frame: nothing is known yet, and nothing is wrong.
+const loadingDisplay = (t: Labels): StatusDisplay => ({
+  dotColor: C.textDim,
+  textColor: C.textMuted,
+  label: t("loading"),
   pulse: false,
 });
 
@@ -133,6 +191,9 @@ function resolveDisplay(
   workingWord: string,
   activity: { title: string } | null,
   t: Labels,
+  loading = false,
+  hasTerminal = true,
+  modelLate = true,
 ): StatusDisplay {
   // Outranks the pane probe on purpose: right after a send the probe still
   // reports the PREVIOUS state (idle), and showing "Bereit" one frame after the
@@ -143,8 +204,11 @@ function resolveDisplay(
   if (aliveness === "ended") {
     return endedDisplay(t);
   }
+  if (loading && !state) {
+    return loadingDisplay(t);
+  }
   if (!connected || !state || state.status === "unknown") {
-    return unknownDisplay(t);
+    return unknownDisplay(t, hasTerminal);
   }
 
   switch (state.status) {
@@ -155,6 +219,19 @@ function resolveDisplay(
         return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: activity.title, pulse: true };
       }
       return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: `${workingWord}…`, pulse: true };
+    case "task_working":
+      // A task turn of an ACP agent runs through the bridge, not the chat
+      // (follow-up to ADR-097). `activity` is the CHAT's open tool: the
+      // task's tools never reach the chat's events (#898), and the chat is
+      // not busy here — an open chat tool is a stale one (review Z3/UI-2).
+      return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: t("taskWorking"), pulse: true };
+    case "waiting_model":
+      // A task is delivered, the agent's model has not answered yet (box off,
+      // still loading) — honest, and not the agent's fault. Neutral during a
+      // normal start; ocker once it lasts (round-5 t1 NICE-2).
+      return modelLate
+        ? { dotColor: C.warning, textColor: STATUS_TEXT.warning, label: t("waitingForModel"), pulse: false }
+        : { dotColor: C.textDim, textColor: C.textMuted, label: t("waitingForModel"), pulse: false };
     case "waiting_input":
       // An open question (ACP card, P3) or a CLI menu waits on the operator,
       // not on the model — say so instead of "Thinking…" (live 13.10.2026).
@@ -201,22 +278,78 @@ export function StatusLine({
   aliveness = "active",
   sending = false,
   activity = null,
+  task = null,
+  taskHeadVisible = false,
+  loading = false,
+  hasTerminal = true,
 }: StatusLineProps) {
   const t = useTranslations("sessions.status");
+  const tAll = useTranslations();
+  const locale = useLocale();
   // Der Hook muss VOR jedem fruehen Return laufen (Regeln der Hooks); er ist nur
   // aktiv, wenn wirklich gearbeitet wird, und laesst sonst keinen Timer laufen.
   const workingWord = useWorkingWord(connected && state?.status === "working" && !sending);
-  const display = resolveDisplay(state, connected, aliveness, sending, workingWord, activity, t);
+  const modelLate = useWaitedTooLong(connected && state?.status === "waiting_model", task?.deliveredAt);
+  const display = resolveDisplay(state, connected, aliveness, sending, workingWord, activity, t, loading, hasTerminal, modelLate);
   const working = !sending && aliveness !== "ended" && connected && state?.status === "working";
+  // Only a running CHAT turn shows its tool title (mono, one line).
+  const toolRuns = !sending && aliveness !== "ended" && connected && !!activity
+    && state?.status === "working";
   // Buchstaben-Lauf nur fuer das Verb; ein Werkzeug-Titel steht ruhig da
   // (Monospace, eine Zeile, abgeschnitten — nichts springt).
   const showVerb = working && !activity;
+
+  // A task section in the chat (spec A): the task is named, as a link.
+  const live = !sending && aliveness !== "ended" && connected;
+  const status = state?.status;
+  if (task && live && status === "task_working" && taskHeadVisible) return null;
+  if (task && live && (status === "task_working" || status === "waiting_model")) {
+    const waiting = status === "waiting_model";
+    // Ocker only once the model keeps the task waiting (NICE-2).
+    const warn = waiting && modelLate;
+    const word = waiting
+      ? null
+      : capitalize(tAll("tasks.detail.line.task.in_progress"), locale);
+    const marker = "\u0000";
+    const sentence = waiting
+      ? t("waitingForModelTask", { title: marker })
+      : t("taskInProgress", { word: word ?? "", title: marker });
+    const [before, after = ""] = sentence.split(marker);
+    return (
+      <div
+        className={LINE_CLASS}
+        style={{ color: warn ? STATUS_TEXT.warning : C.textMuted }}
+        // "Task in progress" comes and goes as the task head scrolls across
+        // the screen edge — announcing that would talk on every scroll. Only
+        // the waiting sentence (a real state change) is announced.
+        aria-live={waiting ? "polite" : undefined}
+      >
+        <span
+          data-testid="status-dot"
+          data-live="false"
+          className="status-dot relative inline-flex h-1.5 w-1.5 shrink-0 rounded-full"
+          style={{ backgroundColor: warn ? C.warning : C.textDim, ["--status-dot" as string]: warn ? C.warning : C.textDim }}
+        />
+        <span data-testid="status-label" className="min-w-0 flex items-center">
+          <span className="shrink-0 whitespace-pre">{before}</span>
+          <Link
+            href={`/tasks?task=${encodeURIComponent(task.taskId)}`}
+            className="min-w-0 truncate min-h-11 -my-4 flex items-center underline-offset-2 hover:underline"
+            style={{ color: C.textSecondary }}
+          >
+            {task.title}
+          </Link>
+          {after && <span className="shrink-0 whitespace-pre">{after}</span>}
+        </span>
+      </div>
+    );
+  }
 
   return (
     // Left edge lines up with the message column (px-4 md:px-5), so the status
     // reads as the last line of the conversation rather than composer chrome.
     <div
-      className="flex items-center gap-2 px-4 md:px-5 pb-1.5 text-[12px]"
+      className={LINE_CLASS}
       style={{ color: display.textColor }}
       aria-live="polite"
     >
@@ -231,8 +364,8 @@ export function StatusLine({
       />
       <span
         data-testid="status-label"
-        className={activity && working ? "font-mono truncate" : undefined}
-        title={activity && working ? activity.title : undefined}
+        className={toolRuns ? "font-mono truncate" : undefined}
+        title={toolRuns ? activity?.title : undefined}
       >
         {showVerb ? <LetterWord word={workingWord} /> : display.label}
       </span>

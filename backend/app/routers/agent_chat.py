@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -25,7 +25,11 @@ from app.database import get_session, release_session
 from app.models.agent import Agent
 from app.models.task import Task
 from app.redis_client import RedisKeys
-from app.services.acp_chat_transport import AcpChatUnreachableError
+from app.services.acp_chat_transport import (
+    ORIGIN_OPERATOR,
+    AcpChatUnreachableError,
+    headless_chat_kind,
+)
 from app.services.agent_chat_input import (
     AcpChatRefusedError,
     AgentBusyError,
@@ -58,12 +62,16 @@ from app.services.reference_ingest import (
     store_reference,
 )
 from app.models.activity import ActivityEvent
-from app.services import chat_actions, chat_media, commit_llm
+from app.services import chat_actions, chat_media, chat_run_context, chat_task_steps, commit_llm
 from app.services.activity import emit_event
 from app.services.chat_changes import aggregate_changes
 from app.services.chat_diff import capture_texts
+from app.services.chat_reset_audit import CHAT_SESSION_RESET_EVENT, chat_input_event
+from app.services.chat_engine_activity import agent_engine_activity
+from app.services.chat_task_activity import task_activity
 from app.services.sse import _sse_generator, sse_response
-from app.services.transcript_adapters import adapter_for
+from app.services.runtime_window import agent_runtime_window
+from app.services.transcript_adapters import adapter_for, bind_runtime_window
 from app.services.checklist_todo_sync import chat_todo_sync
 from app.services import fresh_session
 from app.services.transcript_chat import (
@@ -179,7 +187,12 @@ async def _resolve_transcript_path(
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    adapter = adapter_for(agent)
+    # The bound runtime's window rides along into the parser: a harness that
+    # reports a different one (Hermes on a stale model name, 22.10.2026) is
+    # shown the runtime's truth. No-op for Claude Code and unbound agents.
+    adapter = bind_runtime_window(
+        adapter_for(agent), await agent_runtime_window(agent, session)
+    )
 
     tdir = adapter.resolve_transcript_dir(agent)
     if tdir is None:
@@ -279,6 +292,154 @@ async def get_chat_history(
     history["todos"] = await chat_todo_sync.chat_todos(session, agent, adapter, history.get("todos"))
     history["capabilities"] = capabilities
     return history
+
+
+@router.get("/agents/{agent_id}/chat/task-activity")
+async def get_chat_task_activity(
+    agent_id: uuid.UUID,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """What the agent's RUNNING task does, for the chat's task block.
+
+    Since #898 the agent chat shows the chat daemon's session only; an ACP
+    task runs in a session of its own, and its delivery, tools and thoughts
+    had left the chat (operator finding 20.10.2026). This read brings them
+    back as one separate block (``chat_task_activity``): ``deliveredAt``,
+    the newest few ``events`` of the task session (same normalized events
+    as the chat), the task session's live ``preview`` (a running thought:
+    ``block: "thinking"``) and ``queued`` = more inbox tasks of this agent.
+    ``{"applies": false}`` when the agent has no task or its harness runs
+    the task inside the chat itself. Reads only (files + one count)."""
+    agent = await _load_agent_or_404(agent_id, session)
+    return await task_activity(session, agent)
+
+
+@router.get("/agents/{agent_id}/chat/engine")
+async def get_chat_engine_activity(
+    agent_id: uuid.UUID,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Is the engine the agent is bound to answering a request right now?
+    The chat's live row asks this once it has gone quiet: a model that holds
+    a tool call's arguments streams nothing for minutes (``chat_engine_activity``).
+    ``{"engine": {busy, running, checkedAt}}`` — per ENGINE, not per agent —
+    or ``{"engine": null}`` when unknown (no/cloud runtime, probe failed).
+    Reads only; one probe per engine per few seconds."""
+    agent = await _load_agent_or_404(agent_id, session)
+    return await agent_engine_activity(session, agent)
+
+
+def _cached_json(answer: "chat_task_steps.Answer") -> Response:
+    """A read answer with its ETag; ``304`` carries headers only."""
+    headers = {"Cache-Control": "no-cache, private"}
+    if answer.etag:
+        headers["ETag"] = answer.etag
+    if answer.status == 304:
+        return Response(status_code=304, headers=headers)
+    return JSONResponse(status_code=answer.status, content=answer.body, headers=headers)
+
+
+_NO_TASK = {"reason": "no_task"}
+
+
+@router.get("/agents/{agent_id}/chat/tasks")
+async def get_chat_tasks(
+    agent_id: uuid.UUID,
+    request: Request,
+    limit: int = Query(20, ge=1, le=50),
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """The tasks of this agent's chat (spec A, variant A: a task's work at
+    its time inside the chat) — task stubs: every LIVE task assigned to the
+    agent, plus the newest ``limit`` finished ones (cards), each with its
+    state, times, outcome line and deliverables count; ``queued`` = more
+    inbox tasks waiting. ``{"applies": false}`` for a harness whose tasks run
+    inside the chat. Reads only; ETag/304."""
+    agent = await _load_agent_or_404(agent_id, session)
+    body = await chat_task_steps.task_stubs(session, agent, limit)
+    tag = chat_task_steps.body_etag(body)
+    if request.headers.get("if-none-match") == tag:
+        return _cached_json(chat_task_steps.Answer(304, None, tag))
+    return _cached_json(chat_task_steps.Answer(200, body, tag))
+
+
+def _open_ids_or_422(raw: str | None) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    ids = tuple(dict.fromkeys(x for x in raw.split(",") if x))
+    if len(ids) > chat_task_steps.MAX_OPEN_IDS or not all(chat_task_steps.ROW_ID_RE.match(i) for i in ids):
+        raise HTTPException(status_code=422, detail="open: up to 50 row ids like 1:13")
+    return ids
+
+
+async def _steps_target(agent_id: uuid.UUID, task_id: uuid.UUID, session: AsyncSession):
+    """(agent, task, live) — or the answer to send instead: ``applies:
+    false`` for a harness whose tasks run inside the chat, ``no_task`` for a
+    task neither assigned to nor worked by this agent (N13)."""
+    agent = await _load_agent_or_404(agent_id, session)
+    if not chat_task_steps.applies(adapter_for(agent)):
+        return JSONResponse(status_code=200, content=dict(chat_task_steps.NOT_APPLICABLE))
+    task = await chat_task_steps.related_task(session, agent, task_id)
+    if task is None:
+        return JSONResponse(status_code=404, content=_NO_TASK)
+    return agent, task, chat_task_steps.is_live(task, agent.id)
+
+
+@router.get("/agents/{agent_id}/chat/tasks/{task_id}/steps")
+async def get_chat_task_steps(
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    request: Request,
+    limit: int = Query(200, ge=1, le=1000),
+    after: str | None = Query(None, max_length=400),
+    open_ids: str | None = Query(None, alias="open", max_length=1200),
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """One task's steps across ALL its attempts, slim (spec A §4.2): one
+    short row per step (a thought's first sentence, a tool's title and state,
+    a comment, a text), oldest first. ``after`` = the cursor of the last
+    page: only rows behind it, at most ``limit``, ``hasMore`` -> fetch again
+    at once. ``open`` = row ids of running tools: their current row comes
+    back in ``updated``. ``liveRow`` = the running thought/text (live task
+    only). Reads only; ETag/304."""
+    target = await _steps_target(agent_id, task_id, session)
+    if isinstance(target, JSONResponse):
+        return target
+    agent, task, live = target
+    query = chat_task_steps.StepsQuery(limit=limit, after=after, open_ids=_open_ids_or_422(open_ids))
+    answer = await asyncio.to_thread(
+        chat_task_steps.task_steps, agent, task, live, query, request.headers.get("if-none-match")
+    )
+    return _cached_json(answer)
+
+
+@router.get("/agents/{agent_id}/chat/tasks/{task_id}/steps/{row_id}")
+async def get_chat_task_step(
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    row_id: str,
+    request: Request,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """One step in full, on tap (spec A §4.3): a thought's text, a tool's
+    command + output (as the bridge stored it), the task text, a text
+    piece; ``live`` = the running thought's end. ``row_id`` is checked by
+    shape and looked up in the discovered attempts — never a path."""
+    if row_id != "live" and not chat_task_steps.ROW_ID_RE.match(row_id):
+        raise HTTPException(status_code=422, detail="row_id: like 1:13, 1:13.0 or live")
+    target = await _steps_target(agent_id, task_id, session)
+    if isinstance(target, JSONResponse):
+        return target
+    agent, task, live = target
+    answer = await asyncio.to_thread(
+        chat_task_steps.step_detail, agent, task, live, row_id, request.headers.get("if-none-match")
+    )
+    return _cached_json(answer)
 
 
 #: Erlaubte Gestalt einer ``runId``. Der Wert wird SYNTAKTISCH geprueft, bevor
@@ -701,8 +862,32 @@ def _refused(e: chat_actions.Refused) -> JSONResponse:
     return JSONResponse(status_code=e.status, content=e.body())
 
 
-def _actor(user: Any) -> dict[str, Any]:
-    return {"actor": "operator", "userId": str(getattr(user, "id", "") or "") or None}
+def _actor(user: Any, request: Request | None = None) -> dict[str, Any]:
+    """Who sent a chat request — the ONE actor shape of every ``chat.*``
+    activity event (committed, PR opened, reverted, refused, session reset).
+
+    ``actor``: ``"operator"`` for a logged-in user; ``"token"`` for
+    ``LOCAL_AUTH_TOKEN`` and ``"service"`` for the host MCP service's JWT —
+    both act as the first admin, and a script must never read as the
+    operator typing (incident 21.10.2026). ``userId`` the account it acts
+    as, ``actorName`` the user's name or the credential's, ``actingAs`` the
+    account's name for a token, ``auth`` the credential kind
+    (``app.auth.AUTH_*``; with ``request``). Senders that are no request —
+    the chat daemon itself, a reset from outside MC — are written by
+    ``services/chat_reset_audit`` with the same ``actor`` key."""
+    from app.auth import AUTH_LOCAL_TOKEN, AUTH_SERVICE_JWT, auth_method
+
+    method = auth_method(request) if request is not None else None
+    user_id = str(getattr(user, "id", "") or "") or None
+    name = getattr(user, "name", None) or None
+    if method == AUTH_LOCAL_TOKEN:
+        who = {"actor": "token", "actorName": "LOCAL_AUTH_TOKEN", "actingAs": name}
+    elif method == AUTH_SERVICE_JWT:
+        who = {"actor": "service", "actorName": "service token", "actingAs": name}
+    else:
+        who = {"actor": "operator", "actorName": name}
+    return {**who, "userId": user_id,
+            **({"auth": method} if method else {})}
 
 
 async def _audit(session: AsyncSession, agent: Agent, event_type: str, title: str,
@@ -720,7 +905,8 @@ def _agent_busy(agent_id: uuid.UUID) -> bool:
     """The chat is mid-turn (as the live stream last saw it): writing into
     its files now would race the agent's own edits."""
     state = tailer_manager.last_state(str(agent_id))
-    return isinstance(state, dict) and state.get("status") == "working"
+    # task_working: a TASK turn edits the same files (follow-up to ADR-097).
+    return isinstance(state, dict) and state.get("status") in ("working", "task_working")
 
 
 async def _recorded_reverts(
@@ -810,6 +996,7 @@ def _action_availability(folders: "_ChatFolders") -> dict[str, Any]:
 async def post_chat_revert(
     agent_id: uuid.UUID,
     body: ChatRevertBody,
+    request: Request,
     current_user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -819,7 +1006,7 @@ async def post_chat_revert(
     overwritten — when the file changed since the chat's last edit
     (``changed_externally``). A repeat after success answers ``already``."""
     agent = await _load_agent_or_404(agent_id, session)
-    audit = {**_actor(current_user), "path": body.path[:500]}
+    audit = {**_actor(current_user, request), "path": body.path[:500]}
     if not body.confirm:
         return JSONResponse(status_code=400, content={"reason": "confirm_required"})
     if _agent_busy(agent_id):
@@ -954,6 +1141,7 @@ async def get_chat_commit_draft(
 async def post_chat_commit(
     agent_id: uuid.UUID,
     body: ChatCommitBody,
+    request: Request,
     current_user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -964,7 +1152,7 @@ async def post_chat_commit(
         return JSONResponse(status_code=400, content={"reason": "confirm_required"})
     if _agent_busy(agent_id):
         return JSONResponse(status_code=409, content={"reason": "agent_busy"})
-    audit = _actor(current_user)
+    audit = _actor(current_user, request)
     try:
         repo, _folders = await _chat_repo_or_refuse(agent, session)
         result = await asyncio.to_thread(chat_actions.commit_all, repo, body.message[:10_000])
@@ -1001,6 +1189,7 @@ async def get_chat_pr_draft(
 async def post_chat_pr(
     agent_id: uuid.UUID,
     body: ChatPrBody,
+    request: Request,
     current_user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -1015,7 +1204,7 @@ async def post_chat_pr(
         return JSONResponse(status_code=400, content={"reason": "title_required"})
     if _agent_busy(agent_id):
         return JSONResponse(status_code=409, content={"reason": "agent_busy"})
-    audit = _actor(current_user)
+    audit = _actor(current_user, request)
     from app.services.git_service import git_service  # lazy: dispatch import cycle
 
     try:
@@ -1075,10 +1264,27 @@ async def _open_pr_for_branch(git_service: Any, cwd: str, branch: str) -> str | 
     return out.strip() or None
 
 
+async def _run_context_for(agent: Agent, session: AsyncSession) -> str | None:
+    """The run-context block for this chat turn (``chat_run_context``), only
+    where chat and task run are different sessions: the omp container's ACP
+    chat (``acp-docker``). Hermes runs its tasks inside its chat; a TUI
+    agent's chat types into the run's own pane. Best effort — a failing
+    lookup costs the hint, never the operator's message (the server-side
+    guard ``chat_session_guard`` holds without it)."""
+    if headless_chat_kind(agent) != "acp-docker":
+        return None
+    try:
+        return await chat_run_context.run_context(session, agent)
+    except Exception:  # noqa: BLE001 — the message must still go out
+        logger.warning("chat run context failed for %s", agent.slug, exc_info=True)
+        return None
+
+
 @router.post("/agents/{agent_id}/chat/input", status_code=204)
 async def post_chat_input(
     agent_id: uuid.UUID,
     body: ChatInputBody,
+    request: Request,
     current_user=Depends(require_role(Role.ADMIN)),
     session: AsyncSession = Depends(get_session),
 ):
@@ -1096,7 +1302,9 @@ async def post_chat_input(
     slash command would install/modify a plugin, marketplace, MCP server or
     skill — the operator-approval-card flow for that does not exist yet
     (decided 12.10.2026), so chat refuses it outright rather than letting
-    the agent's own CLI act on it unsupervised."""
+    the agent's own CLI act on it unsupervised. A ``/new`` or ``/clear`` that
+    became a new chat session is recorded as the activity event
+    ``chat.session_reset`` with who sent it (incident 21.10.2026)."""
     agent = await _load_agent_or_404(agent_id, session)
 
     if not body.text or not body.text.strip():
@@ -1112,7 +1320,12 @@ async def post_chat_input(
         )
 
     try:
-        await send_text(agent, body.text)
+        # The composer: the operator's own text — the only one a chat card
+        # may offer to send again (headless agents; ignored elsewhere).
+        reset = await send_text(
+            agent, body.text, origin=ORIGIN_OPERATOR,
+            context=await _run_context_for(agent, session),
+        )
     except InstallCommandBlockedError as e:
         return JSONResponse(
             status_code=409,
@@ -1138,6 +1351,9 @@ async def post_chat_input(
         return _acp_unreachable(e)
     except BossDeliveryError as e:
         return _boss_delivery_failed(e)
+    if reset is not None:
+        title, detail = chat_input_event(reset, _actor(current_user, request))
+        await _audit(session, agent, CHAT_SESSION_RESET_EVENT, title, detail)
 
 
 @router.post("/agents/{agent_id}/chat/queue/clear")

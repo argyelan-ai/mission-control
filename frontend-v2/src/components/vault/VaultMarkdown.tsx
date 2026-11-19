@@ -1,10 +1,86 @@
 "use client";
 
-import { useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { motion, AnimatePresence } from "framer-motion";
+import { useTranslations } from "next-intl";
+import { Paperclip } from "lucide-react";
 import { useVaultNotePreview } from "@/hooks/useVaultNote";
 import { C, alpha } from "@/lib/colors";
+import { TASK_WIKILINK_RE } from "./wikilinks";
+
+// Internal link schemes the pre-processing below emits. react-markdown's
+// default URL sanitizer blanks every unknown scheme — which turned every
+// [[wikilink]] into <a href=""> (a click reopened the same page, round-3
+// user test t4 N4). They are let through here; everything else still goes
+// through the default sanitizer.
+const WIKILINK = "wikilink:";
+const EMBED = "vault-embed:";
+
+// encodeURIComponent leaves ( ) alone, and a ")" would end the Markdown
+// link early ("Seite (index.html)").
+function encodeTarget(target: string): string {
+  return encodeURIComponent(target).replace(/\(/g, "%28").replace(/\)/g, "%29");
+}
+
+/** Plain text of a link's rendered children (the alias / name). */
+function textOf(children: ReactNode): string {
+  if (typeof children === "string" || typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map(textOf).join("");
+  return "";
+}
+
+function urlTransform(url: string): string {
+  if (url.startsWith(WIKILINK) || url.startsWith(EMBED)) return url;
+  return defaultUrlTransform(url);
+}
+
+
+/**
+ * Drop a leading `# Heading` that only repeats the title the reading panel
+ * already shows above the body (deliverable wrappers start with one).
+ */
+export function stripLeadingTitle(content: string, title: string): string {
+  const m = content.match(/^\s*#\s+(.+?)\s*#*\s*(?:\n|$)/);
+  if (!m) return content;
+  const norm = (v: string) => v.replace(/\s+/g, " ").trim().toLowerCase();
+  if (norm(m[1]) !== norm(title)) return content;
+  return content.slice(m[0].length).replace(/^\s*\n/, "").trimStart();
+}
+
+/** `![[path]]` attachment embed. The file sits behind an authenticated
+ *  endpoint, so it is never an <img src>; the reading panel shows the real
+ *  preview (AttachmentPreview) and this is only a name tag. */
+function EmbedChip({ target }: { target: string }) {
+  const t = useTranslations("vault");
+  const name = target.split("/").pop() || target;
+  return (
+    <span
+      className="inline-flex items-center gap-2 font-mono text-xs"
+      style={{ color: "var(--color-text-muted)" }}
+      title={t("attachment")}
+    >
+      <Paperclip size={12} aria-hidden />
+      <span>{name}</span>
+    </span>
+  );
+}
+
+function TaskLink({ taskId }: { taskId: string }) {
+  const t = useTranslations("vault");
+  return (
+    <Link
+      href={`/tasks?task=${encodeURIComponent(taskId)}`}
+      className="underline font-mono"
+      style={{ color: C.accent }}
+      aria-label={t("taskLink", { id: taskId.slice(0, 8) })}
+      title={t("taskLink", { id: taskId.slice(0, 8) })}
+    >
+      {taskId.slice(0, 8)}
+    </Link>
+  );
+}
 
 // ── Wikilink chip ─────────────────────────────────────────────────────────────
 
@@ -18,11 +94,15 @@ import { C, alpha } from "@/lib/colors";
  */
 function WikilinkChip({
   target,
+  label,
   onWikilinkClick,
 }: {
   target: string;
+  /** Shown text — the alias of `[[name|alias]]`, else the target. */
+  label: string;
   onWikilinkClick?: (target: string) => void;
 }) {
+  const t = useTranslations("vault");
   const [hovered, setHovered] = useState(false);
   const [fetchPath, setFetchPath] = useState<string | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -55,9 +135,9 @@ function WikilinkChip({
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         type="button"
-        aria-label={`Navigate to ${target}`}
+        aria-label={t("wikilinkOpen", { target: label })}
       >
-        [<span>{target}</span>]
+        [<span>{label}</span>]
       </button>
 
       <AnimatePresence>
@@ -102,6 +182,9 @@ function WikilinkChip({
 interface VaultMarkdownProps {
   content: string;
   onWikilinkClick?: (target: string) => void;
+  /** Leave out `![[…]]` attachment embeds — set when the panel already shows
+   *  the attachment preview below the body. */
+  hideEmbeds?: boolean;
 }
 
 /**
@@ -113,17 +196,26 @@ interface VaultMarkdownProps {
  * - No `prose-invert` — custom styles on each element.
  * - Accent-Teal (C.accent) only for: inline code text, blockquote border.
  */
-export function VaultMarkdown({ content, onWikilinkClick }: VaultMarkdownProps) {
+export function VaultMarkdown({ content, onWikilinkClick, hideEmbeds = false }: VaultMarkdownProps) {
   // Pre-process: replace [[name]] with a token react-markdown can handle.
   // We inject a fake markdown link [name](wikilink:name) which we intercept
-  // in the `a` component renderer.
-  const processed = content.replace(
-    /\[\[([^\]]+)\]\]/g,
-    (_, name: string) => `[${name}](wikilink:${encodeURIComponent(name)})`
-  );
+  // in the `a` component renderer. `![[path]]` embeds are handled first —
+  // left alone they became `![…](wikilink:…)`, an empty image box.
+  // `[[name|alias]]` (Obsidian) links to `name` and shows `alias`; an embed's
+  // `|…` part is a display size and is dropped.
+  const processed = content
+    .replace(/!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g, (_, target: string) =>
+      hideEmbeds ? "" : `[${target}](${EMBED}${encodeTarget(target)})`
+    )
+    .replace(
+      /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g,
+      (_, name: string, alias?: string) =>
+        `[${alias ?? name}](${WIKILINK}${encodeTarget(name)})`
+    );
 
   return (
     <ReactMarkdown
+      urlTransform={urlTransform}
       components={{
         h1: ({ children }) => (
           <h1 className="font-bold text-3xl tracking-tight mt-8 mb-4" style={{ color: "var(--color-text-primary)" }}>
@@ -202,10 +294,19 @@ export function VaultMarkdown({ content, onWikilinkClick }: VaultMarkdownProps) 
         ),
         a: ({ href, children }) => {
           // Detect wikilink tokens
-          if (href?.startsWith("wikilink:")) {
-            const target = decodeURIComponent(href.replace("wikilink:", ""));
+          if (href?.startsWith(EMBED)) {
+            return <EmbedChip target={decodeURIComponent(href.slice(EMBED.length))} />;
+          }
+          if (href?.startsWith(WIKILINK)) {
+            const target = decodeURIComponent(href.slice(WIKILINK.length));
+            const task = target.match(TASK_WIKILINK_RE);
+            if (task) return <TaskLink taskId={task[1]} />;
             return (
-              <WikilinkChip target={target} onWikilinkClick={onWikilinkClick} />
+              <WikilinkChip
+                target={target}
+                label={textOf(children) || target}
+                onWikilinkClick={onWikilinkClick}
+              />
             );
           }
           return (

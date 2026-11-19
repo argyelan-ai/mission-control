@@ -8,6 +8,8 @@ import json
 import uuid
 
 import pytest
+
+from app.services.encryption import MASK
 from httpx import AsyncClient
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -71,8 +73,8 @@ class TestAgentCredentialsListEndpoint:
         assert found["name"] == "My Login"
         assert found["credential_type"] == "login"
         assert "data_masked" in found
-        # Password should be masked
-        assert "****" in found["data_masked"]["password"]
+        # Password fully masked: fixed run, no character, no length
+        assert found["data_masked"]["password"] == MASK
         # URL and notes present
         assert found["url"] == "https://example.com"
         assert found["notes"] == "Testnotiz"

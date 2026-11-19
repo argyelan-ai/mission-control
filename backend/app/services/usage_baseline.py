@@ -4,10 +4,11 @@ Reproduces the hand-made table in docs/metrics/2026-09-baseline.md §1 as a
 query, so the baseline stops being a one-off. Every bucket is derived from
 columns the harvester already writes; nothing is guessed:
 
-  operator        host-CLI rows from ``~/.claude/projects/<dir>`` whose <dir>
-                  is not the lead checkout. The harvester books these on the
-                  lead agent's id (token_harvester._should_attribute_boss_path),
-                  so ``agent_id`` alone mixes both — ``source_file`` splits them.
+  operator        the operator's own host Claude Code sessions: rows with
+                  harness ``operator-session`` (the harvester since 22.10.2026),
+                  plus older host-CLI rows from ``~/.claude/projects/<dir>``
+                  whose <dir> is not the lead checkout — those were booked on
+                  the lead agent's id, ``source_file`` splits them.
   lead            every other row of the lead agent (slug ``boss*``, same rule
                   as the harvester): its checkout dir and its own config dir.
   agents:<h>      other persistent agents, by the harness recorded on the row
@@ -23,7 +24,9 @@ overstated.
 
 Cost is the stored ``cost_usd`` — the list-price equivalent from
 ``model_prices`` at harvest time (subscriptions are not invoices). Rows
-without a price are counted in ``unpriced_events``.
+without a price are counted in ``unpriced_events``. ``local_cost_usd`` is the
+part of it from local rows, so cloud cost = ``cost_usd`` − ``local_cost_usd``
+(the Insights switch All · Cloud · Local).
 
 Days and weeks are counted in a zone (``tz``, IANA name). The query groups by
 UTC hour and each hour is moved into the zone here, so one code path serves
@@ -61,8 +64,11 @@ from app.models.agent import Agent
 from app.models.model_usage import ModelUsageEvent
 from app.models.runtime import Runtime
 from app.models.runtime_token import RuntimeTokenCounter, RuntimeTokenHour
-from app.services.token_harvester import _host_home, _slugify_agent_name
-from app.services.transcript_chat import encode_cwd
+from app.services.token_harvester import (
+    OPERATOR_SESSION_HARNESS,
+    _slugify_agent_name,
+    lead_project_dir_name,
+)
 from app.utils import ensure_aware, utcnow
 
 MAX_WEEKS = 26
@@ -94,8 +100,8 @@ def week_starts(weeks: int, now: datetime, tzinfo=timezone.utc) -> list[date]:
 
 
 def _lead_checkout_dir() -> str:
-    # Same checkout the Sessions chat resolves for the lead (transcript_chat).
-    return encode_cwd(str(_host_home() / ".mc" / "checkouts" / "mission-control"))
+    # Same dir the harvester books on the lead and the Sessions chat reads.
+    return lead_project_dir_name()
 
 
 async def _model_locality(session: AsyncSession) -> set[str]:
@@ -116,13 +122,14 @@ async def _lead_ids(session: AsyncSession) -> set:
 
 def _empty() -> dict:
     return {"events": 0, **{f: 0 for f in _TOKEN_FIELDS}, "total_tokens": 0,
-            "generated_tokens": 0, "cost_usd": 0.0, "unpriced_events": 0,
+            "generated_tokens": 0, "cost_usd": 0.0, "local_cost_usd": 0.0, "unpriced_events": 0,
             "local_tokens": 0, "local_output_tokens": 0, "local_generated_tokens": 0}
 
 
 def _finish(bucket: dict) -> dict:
     total, out = bucket["total_tokens"], bucket["output_tokens"]
     bucket["cost_usd"] = round(bucket["cost_usd"], 4)
+    bucket["local_cost_usd"] = round(bucket["local_cost_usd"], 4)
     bucket["local_share"] = bucket["local_tokens"] / total if total else None
     bucket["local_output_share"] = bucket["local_output_tokens"] / out if out else None
     return bucket
@@ -201,6 +208,7 @@ async def _classified(session: AsyncSession, start: datetime, tzinfo,
     adds them into days or weeks with ``_add``."""
     lead_dir = _lead_checkout_dir()
     is_operator = case(
+        (ModelUsageEvent.harness == OPERATOR_SESSION_HARNESS, literal(True)),
         (
             (ModelUsageEvent.harness == "host")
             & ModelUsageEvent.source_file.like("%/.claude/projects/%")
@@ -289,6 +297,7 @@ def _add(bucket: dict, local: bool, tokens: dict, r) -> None:
     bucket["cost_usd"] += float(r.cost or 0.0)
     bucket["unpriced_events"] += int(r.unpriced or 0)
     if local:
+        bucket["local_cost_usd"] += float(r.cost or 0.0)
         bucket["local_tokens"] += total
         bucket["local_output_tokens"] += tokens["output_tokens"]
         bucket["local_generated_tokens"] += generated
@@ -355,6 +364,10 @@ async def compute_weekly_baseline(
             "weeks": result_weeks}
 
 
+def _top(sources: dict[str, int] | None) -> str | None:
+    return max(sources.items(), key=lambda kv: kv[1])[0] if sources else None
+
+
 async def compute_daily_usage(
     session: AsyncSession,
     *,
@@ -365,7 +378,9 @@ async def compute_daily_usage(
     """Tokens and list-price cost per calendar day in ``tz`` for the Insights
     heatmap: every day of the window, oldest first, today last (partial).
     ``generated_tokens`` = input + output (no cache); ``top_source`` is the
-    source bucket with the most generated tokens that day."""
+    source bucket with the most generated tokens that day, and
+    ``top_source_local`` / ``top_source_cloud`` the same over only the local
+    or only the cloud rows (the Insights switch All · Cloud · Local)."""
     tzinfo = zone(tz)
     now = ensure_aware(now) if now is not None else utcnow()
     days = max(1, min(int(days), MAX_DAYS))
@@ -373,7 +388,7 @@ async def compute_daily_usage(
     first = today - timedelta(days=days - 1)
 
     buckets = {first + timedelta(days=i): _empty() for i in range(days)}
-    per_source: dict[date, dict[str, int]] = {}
+    per_source: dict[date, dict[str, dict[str, int]]] = {}
     since = await _box_since(session)
     since_hour = _floor_hour(since)
     mc_local = {d: _box_zero() for d in buckets}
@@ -383,8 +398,10 @@ async def compute_daily_usage(
         if bucket is None:
             continue
         _add(bucket, local, tokens, r)
-        by_source = per_source.setdefault(day, {})
-        by_source[source] = by_source.get(source, 0) + tokens["input_tokens"] + tokens["output_tokens"]
+        generated = tokens["input_tokens"] + tokens["output_tokens"]
+        for scope in ("all", "local" if local else "cloud"):
+            by_source = per_source.setdefault(day, {}).setdefault(scope, {})
+            by_source[source] = by_source.get(source, 0) + generated
         if _counts_against_box(r, local, since_hour):
             _mc_local_add(mc_local[day], tokens)
 
@@ -392,12 +409,13 @@ async def compute_daily_usage(
     since_day = since.astimezone(tzinfo).date() if since is not None else None
     out = []
     for day, bucket in buckets.items():
-        sources = per_source.get(day)
-        top = max(sources.items(), key=lambda kv: kv[1])[0] if sources else None
+        scopes = per_source.get(day, {})
+        top = {scope: _top(scopes.get(scope)) for scope in ("all", "local", "cloud")}
         box = None
         if since_day is not None and day >= since_day:
             box = box_days.get(day, _box_zero())
-        out.append({"date": day.isoformat(), **_finish(bucket), "top_source": top,
+        out.append({"date": day.isoformat(), **_finish(bucket), "top_source": top["all"],
+                    "top_source_local": top["local"], "top_source_cloud": top["cloud"],
                     **box_view(box, mc_local[day])})
     return {"generated_at": now.isoformat(), "start": first.isoformat(), "tz": tz or "UTC",
             "box_tracking_since": since.isoformat() if since is not None else None,

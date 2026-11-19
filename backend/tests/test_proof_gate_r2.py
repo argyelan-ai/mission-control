@@ -366,6 +366,30 @@ async def test_progress_note_is_no_verdict(client, fake_redis, gate_mode):
 
 
 @pytest.mark.asyncio
+async def test_chat_reply_is_no_verdict(client, fake_redis, gate_mode):
+    """The reviewer's chat answering the operator ("looks fine so far") is not
+    the review run's verdict (round-3 re-review S2: ``chat_reply`` in
+    ``_NOT_A_VERDICT`` had no test). The server stores it with that type."""
+    gate_mode("enforce")
+    data = await _seed(status="review", assignee="rev")
+    await _add_comment(data["task"].id, data["rev"].id, "Looks fine so far.", "chat_reply")
+    resp, _ = await _call(client, data, {"status": "done"}, _fake_gh(_pr(), files=_FILES),
+                          token="rev_tok")
+    assert resp.status_code == 422 and "reviewer_silent" in _codes(resp)
+
+
+@pytest.mark.asyncio
+async def test_reviewer_message_is_a_verdict(client, fake_redis, gate_mode):
+    """Counter-probe: the same words as the review run's own ``message`` count."""
+    gate_mode("enforce")
+    data = await _seed(status="review", assignee="rev")
+    await _add_comment(data["task"].id, data["rev"].id, "Looks fine so far.", "message")
+    resp, _ = await _call(client, data, {"status": "done"}, _fake_gh(_pr(), files=_FILES),
+                          token="rev_tok")
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
 async def test_developer_known_without_log_entries(client, fake_redis, gate_mode):
     """Sabotage: the activity log names no developer — the card's assignee
     moving it to done is still the developer."""

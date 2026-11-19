@@ -1,7 +1,36 @@
 FROM python:3.12-slim AS base
 
 # Git + GitHub CLI + Docker CLI (fuer Agent Git-Workflow + PTY Terminal)
-# Node.js 20 via NodeSource (fuer MCPRegistry.install() von npm-basierten MCP-Servern)
+# Node.js via NodeSource (fuer MCPRegistry.install() von npm-basierten MCP-Servern).
+#
+# Node line = 22. The backend's `npm install` writes into ~/.mc/mcp-servers;
+# the AGENT containers run those servers with their own node from the
+# /mc-servers mount (mc-agent-base 22 on musl, mc-claude-agent 22 on bookworm,
+# mc-omp-agent 24 on bookworm). Native addons do not carry over between those
+# images anyway (musl vs glibc, older glibc than this trixie base), so the
+# rule is not "one major everywhere". The rule is: the installer is never
+# NEWER than a runtime that executes the result — npm resolves a package for
+# the node it runs under, so a package that needs node 24 installed here could
+# then fail on a node 22 agent. backend/tests/test_image_security_floor.py
+# guards that (backend major <= every agent node major). 22 also matches
+# frontend-v2 and CI and keeps this change small. Node 20 is end of life (no
+# security fixes); Node 22 support ends 2027-04 (24: 2028-04), so move the
+# backend to 24 once the 22 agent images have moved.
+#
+# NODE_MIN is the security floor: the Node.js 2026-10-21 security release
+# (22.23.4 / 24.22.1 / 26.12.1 — TLS hostname-verification bypasses, Brotli
+# RCE, and the CA store update that distrusts the compromised eMudhra
+# intermediates). The repo line floats so a rebuild picks up later patches;
+# the check after the install fails the build if the mirror ever serves an
+# older one.
+ARG NODE_MAJOR=22
+ARG NODE_MIN=22.23.4
+# ca-certificates floor = the eMudhra fix (Oct 2026: the intermediates' keys
+# leaked). The apt line below upgrades the package and the build FAILS below
+# this version — a stale base image can no longer ship the old bundle, and a
+# cached layer only exists if it passed. backend/tests/test_image_security_floor.py
+# guards the value per distro.
+ARG CA_CERTIFICATES_MIN=20250419+deb13u1
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git curl ca-certificates tmux openssh-client gnupg \
     && mkdir -p /etc/apt/keyrings \
@@ -18,11 +47,17 @@ RUN apt-get update \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && chmod go+r /etc/apt/keyrings/nodesource.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
        > /etc/apt/sources.list.d/nodesource.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends gh docker-ce-cli docker-compose-plugin nodejs \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && node -e 'const [a,b]=[process.versions.node,process.argv[1]].map(v=>v.split(".").map(Number)); \
+         const ok=a[0]===b[0]&&(a[1]>b[1]||(a[1]===b[1]&&a[2]>=b[2])); \
+         console.log("node "+process.versions.node+(ok?" >= ":" < ")+process.argv[1]); process.exit(ok?0:1)' "${NODE_MIN}" \
+    && v="$(dpkg-query -W -f='${Version}' ca-certificates)" \
+    && echo "ca-certificates $v (floor ${CA_CERTIFICATES_MIN})" \
+    && dpkg --compare-versions "$v" ge "${CA_CERTIFICATES_MIN}"
 
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/

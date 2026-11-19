@@ -268,3 +268,136 @@ async def test_negative_cache_on_missing_runtime(
     # Verify sentinel landed in cache
     cached = await patched_redis.get("mc:runtime-model:ghost-runtime")
     assert cached is None or cached == ""  # ghost case: no DB row → no negative cache
+
+
+# ── several enabled runtimes at the Spark endpoint (round-1 P3) ─────────
+
+
+async def _spark_rows(session: AsyncSession) -> dict[str, Runtime]:
+    """The live shape of 23.10.2026: the stopped GLM recipe row comes first
+    in insertion order, then the slot row and the running DeepSeek row —
+    all enabled, all on the same host:port."""
+    rows = {
+        "glm": Runtime(slug="glm-recipe", display_name="GLM", runtime_type="ssh_process",
+                       endpoint="http://192.0.2.10:8000/v1", model_identifier="GLM-5.3-Flash-EXL3",
+                       enabled=True),
+        "slot": Runtime(slug="spark-slot", display_name="Slot", runtime_type="openai_compatible",
+                        endpoint="http://192.0.2.10:8000/v1", model_identifier="DeepSeek-V4.1-Flash-1017",
+                        enabled=True, is_slot=True),
+        "ds": Runtime(slug="deepseek-recipe", display_name="DeepSeek", runtime_type="ssh_process",
+                      endpoint="http://192.0.2.10:8000/v1", model_identifier="DeepSeek-V4.1-Flash-1017",
+                      enabled=True),
+    }
+    for rt in rows.values():
+        session.add(rt)
+        await session.commit()
+    return rows
+
+
+@pytest.mark.asyncio
+async def test_spark_runtime_is_the_one_serving_live_models(async_session: AsyncSession, patched_redis):
+    """Three enabled rows at :8000 — the one whose model the box serves NOW
+    wins (not whichever row the DB happens to return first), and the real
+    recipe row is preferred over the slot row."""
+    await _spark_rows(async_session)
+    with patch.object(resolver, "_live_spark_model_ids",
+                      AsyncMock(return_value=["DeepSeek-V4.1-Flash-1017"])):
+        found = await resolver.get_spark_vllm_runtime(async_session)
+    assert found is not None
+    assert found.slug == "deepseek-recipe"
+
+
+@pytest.mark.asyncio
+async def test_spark_runtime_falls_back_to_the_slot_model_when_box_is_silent(
+    async_session: AsyncSession, patched_redis
+):
+    """Box does not answer /v1/models: the slot row (written on the last
+    confirmed recipe start) says which recipe was switched to last."""
+    await _spark_rows(async_session)
+    with patch.object(resolver, "_live_spark_model_ids", AsyncMock(return_value=None)):
+        found = await resolver.get_spark_vllm_runtime(async_session)
+    assert found is not None
+    assert found.slug == "deepseek-recipe"
+
+
+@pytest.mark.asyncio
+async def test_single_spark_runtime_needs_no_live_probe(
+    async_session: AsyncSession, spark_runtime: Runtime, patched_redis
+):
+    live = AsyncMock(return_value=["whatever"])
+    with patch.object(resolver, "_live_spark_model_ids", live):
+        found = await resolver.get_spark_vllm_runtime(async_session)
+    assert found is not None and found.slug == "qwen-general"
+    live.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_active_spark_model_follows_the_live_box(async_session: AsyncSession, patched_redis):
+    """get_active_spark_model (news worker, vault backfill, bench "auto")
+    names the served model, not the stopped GLM row's."""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _scope():
+        yield async_session
+
+    await _spark_rows(async_session)
+    with patch.object(resolver, "_live_spark_model_ids",
+                      AsyncMock(return_value=["DeepSeek-V4.1-Flash-1017"])), \
+            patch.object(resolver, "session_scope", _scope):
+        model = await resolver.get_active_spark_model()
+    assert model == "DeepSeek-V4.1-Flash-1017"
+
+
+class _SilentBoxClient:
+    """httpx.AsyncClient stand-in for a Spark that does not answer (an
+    offline LAN host hangs for the whole timeout, no quick "refused")."""
+
+    calls = 0
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url):
+        import httpx
+
+        type(self).calls += 1
+        raise httpx.ConnectTimeout("box silent")
+
+
+@pytest.mark.asyncio
+async def test_silent_box_is_cached_so_callers_do_not_wait_each_time(patched_redis):
+    """Review SHOULD-1 (PR #955): a silent box was never cached, so with
+    several rows at the endpoint every get_active_spark_model call (news
+    worker, vault backfill, spark_client) waited the full 3 s timeout.
+    The "no answer" is cached briefly too."""
+    import httpx
+
+    _SilentBoxClient.calls = 0
+    with patch.object(httpx, "AsyncClient", _SilentBoxClient):
+        assert await resolver._live_spark_model_ids() is None
+        assert await resolver._live_spark_model_ids() is None
+    assert _SilentBoxClient.calls == 1
+    ttl = await patched_redis.ttl(f"{resolver._CACHE_PREFIX}:spark-live-models")
+    assert 0 < ttl <= resolver._LIVE_MODELS_TTL
+
+
+@pytest.mark.asyncio
+async def test_answering_box_after_silence_is_seen_once_the_short_cache_ends(patched_redis):
+    """The cached silence is short: after it expires the next call asks the
+    box again (no stale "silent" forever)."""
+    import httpx
+
+    _SilentBoxClient.calls = 0
+    with patch.object(httpx, "AsyncClient", _SilentBoxClient):
+        assert await resolver._live_spark_model_ids() is None
+    await patched_redis.delete(f"{resolver._CACHE_PREFIX}:spark-live-models")
+    with patch.object(httpx, "AsyncClient", _SilentBoxClient):
+        assert await resolver._live_spark_model_ids() is None
+    assert _SilentBoxClient.calls == 2

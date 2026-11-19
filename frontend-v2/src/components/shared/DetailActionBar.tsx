@@ -9,6 +9,9 @@ export type DetailMainAction = {
   label: string;
   icon?: LucideIcon;
   onClick: () => void;
+  /** The mirrored button still waits for input (approve needs a reason):
+   *  shown dimmed like it, a tap brings that input up instead of acting. */
+  waiting?: boolean;
 };
 
 /** One quiet slot: icon over a word, 44 px target (K11: secondary = no frame). */
@@ -71,7 +74,8 @@ export function DetailActionBar({
           type="button"
           onClick={main.onClick}
           data-testid="detail-main-action"
-          className="flex-1 min-w-0 inline-flex items-center justify-center gap-2 h-12 px-4 rounded-md text-base cursor-pointer"
+          data-waiting={main.waiting ? "true" : "false"}
+          className={`flex-1 min-w-0 inline-flex items-center justify-center gap-2 h-12 px-4 rounded-md text-base cursor-pointer transition-opacity ${main.waiting ? "opacity-40" : ""}`}
           style={{ background: C.accent, color: C.onAccent, fontWeight: 600 }}
         >
           {MainIcon && <MainIcon size={18} aria-hidden className="shrink-0" />}

@@ -359,3 +359,32 @@ class TestNewScheduleV2Endpoints:
         data = resp.json()
         assert data["schedule_weekdays"] == [0, 2, 4]
         assert data["schedule_type"] == "weekly_custom"
+
+
+class TestStatsWithoutRuns:
+    """Round-3 user test t4 S8: a paused job showed "Success rate (7d) 0 %"
+    although it had no run in those 7 days — a rate of nothing is no rate."""
+
+    async def test_rate_is_null_without_runs(self, auth_client: AsyncClient):
+        job = await _create_test_job(auth_client)
+        data = (await auth_client.get(f"/api/v1/schedule/jobs/{job['id']}/stats")).json()
+        assert data["success_rate_7d"] is None
+        assert data["success_rate_30d"] is None
+        assert data["total_runs_30d"] == 0
+
+    async def test_rate_counts_only_its_window(self, auth_client: AsyncClient, session):
+        from datetime import datetime, timedelta, timezone
+
+        from app.models.scheduled_job_run import ScheduledJobRun
+
+        job = await _create_test_job(auth_client)
+        now = datetime.now(timezone.utc)
+        # One success 20 days ago: inside 30 days, outside 7.
+        session.add(ScheduledJobRun(
+            job_id=uuid.UUID(job["id"]), started_at=now - timedelta(days=20),
+            finished_at=now - timedelta(days=20) + timedelta(seconds=1), status="success",
+        ))
+        await session.commit()
+        data = (await auth_client.get(f"/api/v1/schedule/jobs/{job['id']}/stats")).json()
+        assert data["success_rate_7d"] is None
+        assert data["success_rate_30d"] == 1.0

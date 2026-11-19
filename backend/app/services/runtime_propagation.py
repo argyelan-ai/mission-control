@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Collection
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -70,6 +71,14 @@ _FAIL_TTL = 3600  # failure counter window (seconds)
 #: steht, wird der Agent uebersprungen: hoechstens EIN Neustart je Vorfall,
 #: danach 15 Minuten Ruhe. Ein erzwungener Sync (Marks Knopf) hebt sie auf.
 _GIVEUP_COOLDOWN = 900
+#: Pause after a failed attempt before the next one (seconds). Sync and
+#: recreate run once per watcher tick — 30 s since 2026-10-20 (was 90 s). A
+#: cause that fails fast (a stalled Docker socket on the Mini) would use all
+#: MAX_SYNC_ATTEMPTS in about a minute and give up for 15 minutes while the
+#: agent keeps the old model. 90 s keeps the old pace: three attempts span at
+#: least three minutes, as they did at the 90 s tick. A forced sync (the
+#: operator's button) never waits.
+SYNC_RETRY_SPACING = 90
 #: Health-Frist des Rueckfall-Neustarts fuer alle Nicht-omp-Harnesses.
 _SYNC_HEALTH_TIMEOUT = 60
 _OMP_READY_SIGNALS = OMP_READY_SIGNALS  # omp TUI glyphs + ACP sentinel (ADR-049, fix omp-acp-no-tui-window)
@@ -153,34 +162,59 @@ def reload_omp_config(agent: Agent, env: dict[str, str] | None = None) -> dict[s
     return {"status": "reloaded", "container": container_name}
 
 
-async def mark_agents_for_sync(session: AsyncSession, runtime: Runtime) -> int:
-    """Flag every cli-bridge agent bound to ``runtime`` for a model re-sync.
+def is_model_sync_target(agent: Agent, runtime: Runtime) -> bool:
+    """Is ``agent`` one that a model sync on ``runtime`` acts on?
 
-    Host agents (launchd-managed) are flagged too when their harness has an
-    adapter registered (ADR-064) — ``_sync_one`` reloads them in place via the
-    adapter. Host agents without an adapter are skipped — the model-changed
-    activity event is their only notification. Returns the number of flagged
-    agents.
+    The ONE filter for both sides of the sync: ``mark_agents_for_sync`` flags
+    only these agents, and the watcher's stale-model net
+    (``runtime_watcher._sync_stale_agent_models``) counts only these as
+    stale. Two filters that drift apart loop: an agent the net counts but no
+    sync can reach stays "stale" forever and re-fires the net every guard
+    window (live 2026-10-20: an archived agent did exactly that, and every
+    round restarted a host bridge).
+
+    * cli-bridge agents: yes.
+    * host (launchd) agents: only when their harness has an adapter
+      registered (ADR-064) — ``_sync_one`` reloads them in place via the
+      adapter. Without one, the model-changed activity event is their only
+      notification.
+    * archived agents: never. Live incident 02.10.2026 (PR #739 fallout): an
+      archived agent's container is stopped on purpose; flagging it meant the
+      next watcher tick (or a force-sync-agents call) restarted it —
+      resurrecting a deliberately shut-down agent. There is nothing to reload.
     """
-    from app.services.host_harness_adapter import get_adapter
+    if agent.archived_at is not None:
+        return False
+    if agent.agent_runtime == "cli-bridge":
+        return True
+    if agent.agent_runtime == "host":
+        from app.services.host_harness_adapter import get_adapter
 
+        return get_adapter(agent.harness or derive_harness(runtime)) is not None
+    return False
+
+
+async def mark_agents_for_sync(
+    session: AsyncSession,
+    runtime: Runtime,
+    *,
+    only_ids: Collection[uuid.UUID] | None = None,
+) -> int:
+    """Flag the agents bound to ``runtime`` for a model re-sync.
+
+    Flags every agent ``is_model_sync_target`` accepts — or, with
+    ``only_ids``, only those of them. A runtime-wide change (new model, new
+    context window) flags everyone; the watcher's stale-model net passes the
+    agents it found stale, so one agent that cannot converge never drags
+    the others through a sync (and a host agent through a process restart)
+    once per guard window. Returns the number of flagged agents.
+    """
     result = await session.exec(select(Agent).where(Agent.runtime_id == runtime.id))
     flagged = 0
     for agent in result.all():
-        if agent.archived_at is not None:
-            # Live incident 02.10.2026 (PR #739 fallout): an archived agent's
-            # container is stopped on purpose. Flagging it for sync meant the
-            # next watcher tick (or a force-sync-agents call) would restart
-            # it — resurrecting a deliberately shut-down agent. Archived
-            # agents get no notification either; there is nothing to reload.
+        if only_ids is not None and agent.id not in only_ids:
             continue
-        if agent.agent_runtime == "cli-bridge":
-            pass
-        elif agent.agent_runtime == "host" and get_adapter(
-            agent.harness or derive_harness(runtime)
-        ) is not None:
-            pass
-        else:
+        if not is_model_sync_target(agent, runtime):
             continue
         agent.pending_runtime_sync = True
         session.add(agent)
@@ -251,6 +285,14 @@ async def _sync_one(session: AsyncSession, agent: Agent, *, force: bool = False)
         session.add(agent)
         await session.commit()
         return
+
+    # ── Pause after a failed attempt (watcher tick 30 s, 2026-10-20) ────────
+    if not force and await _retry_too_soon(RedisKeys.agent_model_sync_fails(str(agent.id))):
+        logger.debug(
+            "model sync for %s waits — the last attempt failed less than %ss ago",
+            agent.name, SYNC_RETRY_SPACING,
+        )
+        return  # stays flagged; a later tick tries again
 
     if agent.agent_runtime == "host":
         # Host agents (launchd) DO go through agent_runtime_switch now
@@ -446,10 +488,29 @@ async def _bump_failures(key: str) -> int:
     try:
         redis = await get_redis()
         fails = int(await redis.incr(key))
+        # Always reset to the full _FAIL_TTL: _retry_too_soon reads the time
+        # since this failure as _FAIL_TTL - ttl. A different lifetime here
+        # (or a conditional expire) breaks the SYNC_RETRY_SPACING pace.
         await redis.expire(key, _FAIL_TTL)
         return fails
     except Exception:  # noqa: BLE001 — Redis optional; worst case we retry forever
         return 1
+
+
+async def _retry_too_soon(fail_key: str) -> bool:
+    """Did the last attempt fail less than ``SYNC_RETRY_SPACING`` ago? Read
+    from the failure counter itself: every failure (``_bump_failures``) sets
+    its lifetime back to ``_FAIL_TTL``, so the seconds since the last failure
+    are ``_FAIL_TTL - ttl``. No counter, no lifetime, or Redis down → False
+    (try, as before)."""
+    try:
+        redis = await get_redis()
+        ttl = int(await redis.ttl(fail_key))
+    except Exception:  # noqa: BLE001 — Redis optional
+        return False
+    if ttl < 0:
+        return False
+    return _FAIL_TTL - ttl < SYNC_RETRY_SPACING
 
 
 async def _key_exists(key: str) -> bool:
@@ -532,10 +593,18 @@ async def recreate_pending_agents(
     for agent in result.all():
         if is_agent_busy(agent) and not force:
             continue
-        await _recreate_one(session, agent)
+        await _recreate_one(session, agent, force=force)
 
 
-async def _recreate_one(session: AsyncSession, agent: Agent) -> None:
+async def _recreate_one(session: AsyncSession, agent: Agent, *, force: bool = False) -> None:
+    # Same pace as the model sync: a failed recreate waits SYNC_RETRY_SPACING.
+    if not force and await _retry_too_soon(RedisKeys.agent_recreate_fails(str(agent.id))):
+        logger.debug(
+            "recreate for %s waits — the last attempt failed less than %ss ago",
+            agent.name, SYNC_RETRY_SPACING,
+        )
+        return  # stays flagged
+
     runtime = (
         await session.get(Runtime, agent.runtime_id) if agent.runtime_id else None
     )

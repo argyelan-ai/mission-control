@@ -17,6 +17,7 @@ from sqlalchemy import or_, and_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.comment_types import REVIEW_NOTE_COMMENT_TYPES, activity_comment_filter
 from app.models.agent import Agent
 from app.models.task import Task, TaskComment, TaskEvent
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
@@ -37,6 +38,13 @@ logger = logging.getLogger("mc.watchdog")
 # should be working), so a deliberately parked card only alerts once the
 # park itself looks forgotten. A whitelist ("never alert on waiting") would
 # silence genuinely forgotten parked cards forever.
+# "Review decision missing" nudges per review round (round-2 user test,
+# t4 S-neu-5: 12 nudges in 5.5 h on one card, also after the escalation).
+# After the lid, or once the round was escalated (lead informed / operator
+# notice), the agent is not reminded again — the escalation owns the card.
+REVIEW_DECISION_NUDGE_CAP = 3
+REVIEW_ROUND_ESCALATION_EVENTS = ("task.review_escalation", "task.review_stuck")
+
 SILENT_CARD_STATUSES = ("in_progress", "waiting")
 SILENT_CARD_THRESHOLD_MINUTES = {
     "in_progress": 30,
@@ -82,6 +90,40 @@ _SILENT_CARD_OPEN_CHILD = frozenset({
 SILENT_MAILBOX_THRESHOLD_MINUTES = 15
 _SILENT_MAILBOX_DELIBERATE_WAIT = frozenset({"waiting", "blocked"})
 _SILENT_MAILBOX_MARKER = "STILLE SCHLANGE"
+
+
+async def _cards_the_system_holds(session: AsyncSession, cards: list[Task]) -> set[uuid.UUID]:
+    """Ids of the ``cards`` that no path may hand out now, or only just can again.
+
+    Held: the MC update drain holds every card (ADR-094); the system mode
+    holds what ``system_mode_refusal`` refuses (HALTED every card, DRAINING
+    every card but the continuation flows). Just released: the ACK ladder
+    marks each held card with ``RedisKeys.dispatch_system_hold`` for one ACK
+    timeout plus margin, so the first poll after the hold can deliver it
+    before anyone reads its old timestamps.
+
+    A Redis error leaves the grace window out: the silent-mailbox alarm then
+    fires as it did before, loud rather than quiet. The system mode itself
+    reads as "active" on a Redis error (``get_system_mode``).
+    """
+    from app.services import update_drain
+    from app.services.operations import get_system_mode, system_mode_refusal
+
+    if (await update_drain.current(session)).active:
+        return {t.id for t in cards}
+    system_mode = await get_system_mode()
+    held = {t.id for t in cards if system_mode_refusal(system_mode, t)}
+    rest = [t for t in cards if t.id not in held]
+    if not rest:
+        return held
+    try:
+        redis = await get_redis()
+        marks = await redis.mget([RedisKeys.dispatch_system_hold(str(t.id)) for t in rest])
+    except Exception as e:  # noqa: BLE001 — report-only, never break the tick
+        logger.debug("system-hold grace marks unreadable (%s) — no grace window", e)
+        return held
+    held.update(t.id for t, mark in zip(rest, marks) if mark)
+    return held
 
 
 def _dt_max(*values: datetime | None) -> datetime | None:
@@ -335,7 +377,8 @@ class TaskMonitorMixin:
 
                     comments = (await session.exec(
                         select(TaskComment)
-                        .where(TaskComment.task_id == child_id)
+                        # the child run's own output, not its chat's replies
+                        .where(TaskComment.task_id == child_id, activity_comment_filter())
                         .order_by(TaskComment.created_at.desc())
                         .limit(5)
                     )).all()
@@ -609,7 +652,7 @@ class TaskMonitorMixin:
                 select(TaskComment)
                 .where(
                     TaskComment.task_id == s.id,
-                    TaskComment.comment_type.in_(["resolution", "review"]),
+                    TaskComment.comment_type.in_(["resolution", *REVIEW_NOTE_COMMENT_TYPES]),
                 )
                 .order_by(TaskComment.created_at.desc())
                 .limit(1)
@@ -845,6 +888,14 @@ class TaskMonitorMixin:
             # Orchestrierungs-Wait: Callback-Resume kuemmert sich, kein Fall
             # fuer Lead oder Operator.
             if task.blocked_by_task_id is not None:
+                continue
+            # Deliberately stopped/held (stop_task_run — e.g. a bench time
+            # limit with changed_by="system" — or mc hold): no agent blocker,
+            # no triage payload, no blocker comment. Escalating built an empty
+            # "Kein Blocker-Kommentar" blocker_decision from the comment
+            # fallback (live 2026-11-02). Resume releases these, not a
+            # blocker card.
+            if task.run_control is not None:
                 continue
 
             # W2-B review fix (B-1): key the escalation clock off the
@@ -1291,6 +1342,65 @@ class TaskMonitorMixin:
                 )
                 logger.warning("Review stuck approval for '%s' (%dmin)", task.title, int(age_minutes))
 
+    async def _review_nudges_exhausted(self, session: AsyncSession, task: Task) -> bool:
+        """True when this review round already had REVIEW_DECISION_NUDGE_CAP
+        decision-missing nudges or an escalation.
+
+        The round starts with the latest status move into ``review``; nudges
+        and escalations of earlier rounds do not count. No such move recorded
+        → the whole history counts (the safe direction: fewer nudges).
+
+        A move into review is either a TaskEvent or — for paths that only
+        emit the ActivityEvent (resolution auto-promote in agent_comments /
+        the task_runner stale check via lock_and_set) — a
+        ``task.status_changed`` ActivityEvent with ``new_status=review``
+        (PR #961 review NICE 1).
+        """
+        from app.models.activity import ActivityEvent
+        from sqlalchemy import func
+
+        task_event_start = (await session.exec(
+            select(func.max(TaskEvent.created_at)).where(
+                TaskEvent.task_id == task.id,
+                TaskEvent.to_status == "review",
+            )
+        )).one()
+        activity_start = (await session.exec(
+            select(func.max(ActivityEvent.created_at)).where(
+                ActivityEvent.task_id == task.id,
+                ActivityEvent.event_type == "task.status_changed",
+                ActivityEvent.detail["new_status"].as_string() == "review",  # type: ignore[index]
+            )
+        )).one()
+        starts = [t for t in (task_event_start, activity_start) if t is not None]
+        round_start = max(starts) if starts else None
+
+        def _in_round(stmt):
+            return stmt.where(ActivityEvent.created_at >= round_start) if round_start else stmt
+
+        escalated = (await session.exec(_in_round(
+            select(func.count()).select_from(ActivityEvent).where(
+                ActivityEvent.task_id == task.id,
+                ActivityEvent.event_type.in_(REVIEW_ROUND_ESCALATION_EVENTS),  # type: ignore[attr-defined]
+            )
+        ))).one()
+        if escalated:
+            logger.info("Decision-missing nudge skipped for '%s' — review already escalated", task.title)
+            return True
+        nudged = (await session.exec(_in_round(
+            select(func.count()).select_from(ActivityEvent).where(
+                ActivityEvent.task_id == task.id,
+                ActivityEvent.event_type == "task.review_decision_missing",
+            )
+        ))).one()
+        if nudged >= REVIEW_DECISION_NUDGE_CAP:
+            logger.info(
+                "Decision-missing nudge skipped for '%s' — %d nudges this round (cap %d)",
+                task.title, nudged, REVIEW_DECISION_NUDGE_CAP,
+            )
+            return True
+        return False
+
     async def _check_review_decision_missing(
         self,
         session: AsyncSession,
@@ -1311,12 +1421,14 @@ class TaskMonitorMixin:
         from app.models.task import TaskComment
         from sqlalchemy import func
 
-        # 4. Has the reviewer commented?
+        # 4. Has the reviewer commented? Its chat session's reply is no
+        # review activity (round-5 r1 N5) — only the review run's own words.
         reviewer_comments = await session.exec(
             select(TaskComment)
             .where(
                 TaskComment.task_id == task.id,
                 TaskComment.author_agent_id == task.assigned_agent_id,
+                activity_comment_filter(),
             )
             .order_by(TaskComment.created_at.desc())
             .limit(1)
@@ -1345,6 +1457,10 @@ class TaskMonitorMixin:
         dedup_key = f"mc:watchdog:review_decision_missing:{task.id}"
         if await redis.get(dedup_key):
             return  # Already nudged, cooldown running
+
+        # 7. Lid per review round: N nudges, none after an escalation.
+        if await self._review_nudges_exhausted(session, task):
+            return
 
         # ── Fresh status check BEFORE nudging (identity-map trap) ──
         # `task` was fetched once at the top of _check_review_tasks and, with
@@ -1669,6 +1785,10 @@ class TaskMonitorMixin:
         - A `waiting` or `blocked` card for the same agent → deliberate
           wait, excluded explicitly, regardless of how long the inbox card
           has sat.
+        - A card the system holds (HALTED, DRAINING for a non-continuation
+          card, the MC update drain) or only just released does not count:
+          the poll answers ``idle`` for it on purpose, so an agent with only
+          held cards is not silent (ADR-089 Nachtrag 2026-10-20 (c)).
 
         Episode boundary: the agent picking up a card (in_progress > 0) or
         the queue going empty (inbox == 0) each remove the agent from the
@@ -1693,6 +1813,14 @@ class TaskMonitorMixin:
         if not inbox_candidates:
             return
 
+        # rule: R-system-mode-holds-poll - a card the system holds is not a dead mailbox
+        # The poll, push dispatch, the undispatched-card watcher and pull
+        # dispatch all refuse to hand such a card out, so nobody pulling
+        # it is the system's doing. Counted, it reached the Board Lead 15
+        # minutes into every hold and the operator 30 minutes later
+        # (_check_lead_notify_escalations). Same skip as the ACK ladder.
+        held_by_system = await _cards_the_system_holds(session, inbox_candidates)
+
         now = utcnow()
         threshold = timedelta(minutes=SILENT_MAILBOX_THRESHOLD_MINUTES)
 
@@ -1705,10 +1833,12 @@ class TaskMonitorMixin:
 
         for (agent_id, board_id), inbox_tasks in grouped.items():
             # A card an operator explicitly paused/stopped isn't "queued
-            # work the agent should have pulled" — don't count it.
+            # work the agent should have pulled" — don't count it. Neither
+            # is a card the system holds (above).
             active_inbox = [
                 t for t in inbox_tasks
                 if t.run_control not in ("stopped", "manual_hold")
+                and t.id not in held_by_system
             ]
             if not active_inbox:
                 continue
@@ -1863,6 +1993,8 @@ class TaskMonitorMixin:
                 Task.assigned_agent_id == agent.id,
                 Task.board_id == board_id,
                 TaskComment.author_type != "system",
+                # A chat reply proves the chat, not the mailbox (round-3 r1 S3).
+                activity_comment_filter(),
             )
             .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
             .limit(1)
@@ -1903,7 +2035,9 @@ class TaskMonitorMixin:
         """Explicit definition of "the Lead reacted" (task card, 2026-09-12).
 
         Reaction means, AFTER ``since`` (the stage-1 message):
-        - the Board Lead posted ANY comment on the card himself, or
+        - the Board Lead posted ANY comment on the card himself (his chat
+          session's ``chat_reply`` excluded — answering the operator in the
+          chat is not acting on the card), or
         - the card's status changed with the Board Lead as the author
           (``mc review``/``mc done``/PATCH — every real status change is a
           TaskEvent row).
@@ -1916,6 +2050,9 @@ class TaskMonitorMixin:
                 TaskComment.task_id == task.id,
                 TaskComment.author_agent_id == lead.id,
                 TaskComment.author_type == "agent",
+                # The Lead's chat answering the operator is not the Lead
+                # acting on the card (round-5 r1 N5): escalate anyway.
+                activity_comment_filter(),
                 TaskComment.created_at > since,  # type: ignore[union-attr]
             )
             .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
@@ -2351,6 +2488,13 @@ class TaskMonitorMixin:
         (host) are handled via dispatch.auto_dispatch_task (see TODO below).
         """
         from app.services.dispatch import _build_dispatch_message
+        from app.services.operations import get_system_mode, system_mode_refusal
+
+        # System mode, read once per pass. core.py runs this watcher only
+        # when the system is not HALTED and no MC update drains it; DRAINING
+        # still reaches here. The cli-bridge branch below never asks
+        # check_dispatch_allowed, so the rule is asked here for every branch.
+        system_mode = await get_system_mode()
 
         # Grace: don't touch tasks created/promoted in the last 5s.
         # Prevents a race with auto_dispatch_task (background task after promote).
@@ -2381,8 +2525,22 @@ class TaskMonitorMixin:
             if task.assigned_agent_id in dispatched_agents:
                 continue
 
+            # rule: R-system-mode-holds-poll - the watcher leaves a card the system holds untouched
+            # A card the system mode holds stays untouched: no workspace
+            # preparation, no dispatched_at for the ACK ladder to count, no
+            # "Nachdispatcht" note for auto_dispatch_task to refuse anyway.
+            # The first pass after the hold picks it up.
+            if system_mode_refusal(system_mode, task):
+                continue
+
             agent = await session.get(Agent, task.assigned_agent_id)
             if not agent:
+                continue
+            # rule: R-paused-holds-poll - no preparation for a paused agent's card
+            # The poll holds it (ADR-089 Nachtrag 2026-11-13); preparing it
+            # now would show the agent as running. The first pass after the
+            # operator sets the agent active picks it up.
+            if (agent.operational_mode or "active") == "paused":
                 continue
 
             agent_runtime = getattr(agent, "agent_runtime", "openclaw")

@@ -119,12 +119,22 @@ services:
       # Genau EIN Prozess traegt den Flag true (Worker); config.py-Default
       # bleibt True (Rueckweg fuer compose-freie Installs).
       ENABLE_BACKGROUND_SERVICES: "false"
+      # Operator's IANA time zone for day-counting (bench video date, Insights
+      # default, engine-death report) — config.usage_timezone. Default UTC;
+      # set USAGE_TIMEZONE in .env (e.g. Europe/Zurich).
+      USAGE_TIMEZONE: ${USAGE_TIMEZONE:-UTC}
       # Head launcher switch (docs/specs/head-launcher.md) — off unless set in .env
       HEADS_ENABLED: ${HEADS_ENABLED:-false}
       # Head watchdog: stop after N min without progress; hard limit = emergency brake
       HEADS_NO_PROGRESS_MIN: ${HEADS_NO_PROGRESS_MIN:-20}
       HEADS_HARD_LIMIT_LOCAL_S: ${HEADS_HARD_LIMIT_LOCAL_S:-28800}
       HEADS_HARD_LIMIT_CLOUD_S: ${HEADS_HARD_LIMIT_CLOUD_S:-7200}
+      # Bench W1: the operator's handle in the footer of the result card,
+      # video and X-Kit texts (w1_kit.footer). Empty by default — set it in
+      # .env, never in the repo. Read in the API process (kit texts and the
+      # W1 runner, a vertical background loop); the worker carries the same
+      # value so both containers stay alike.
+      MC_BENCH_FOOTER: ${MC_BENCH_FOOTER:-}
       # Beweis-Tor (services/proof_gate.py) — runs in the API process on every
       # agent status change to review/done. off | warn | enforce; the date
       # flips warn to enforce by itself once MIN_CHECKS transitions were checked.
@@ -320,6 +330,10 @@ services:
       # renderer) needs it INSIDE the container; the volume interpolation
       # below only resolves it on the host.
       MC_REPO_PATH: ${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}
+      # The lead host agent's working dir (docker/shared/ensure-checkout.sh).
+      # Empty = its default under HOME_HOST. The token harvester books only
+      # this checkout's ~/.claude project dir on the lead.
+      MC_CHECKOUT_PATH: ${MC_CHECKOUT_PATH:-}
       # Agent image naming for the compose renderer (see .env.example).
       # Default = published GHCR images (since v0.2.0); "" = bare local names.
       MC_AGENT_IMAGE_PREFIX: ${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}
@@ -476,12 +490,22 @@ services:
         condition: service_started
     environment:
       ENABLE_BACKGROUND_SERVICES: "true"
+      # Operator's IANA time zone for day-counting (bench video date, Insights
+      # default, engine-death report) — config.usage_timezone. Default UTC;
+      # set USAGE_TIMEZONE in .env (e.g. Europe/Zurich).
+      USAGE_TIMEZONE: ${USAGE_TIMEZONE:-UTC}
       # Head launcher switch (docs/specs/head-launcher.md) — off unless set in .env
       HEADS_ENABLED: ${HEADS_ENABLED:-false}
       # Head watchdog: stop after N min without progress; hard limit = emergency brake
       HEADS_NO_PROGRESS_MIN: ${HEADS_NO_PROGRESS_MIN:-20}
       HEADS_HARD_LIMIT_LOCAL_S: ${HEADS_HARD_LIMIT_LOCAL_S:-28800}
       HEADS_HARD_LIMIT_CLOUD_S: ${HEADS_HARD_LIMIT_CLOUD_S:-7200}
+      # Bench W1: the operator's handle in the footer of the result card,
+      # video and X-Kit texts (w1_kit.footer). Empty by default — set it in
+      # .env, never in the repo. Read in the API process (kit texts and the
+      # W1 runner, a vertical background loop); the worker carries the same
+      # value so both containers stay alike.
+      MC_BENCH_FOOTER: ${MC_BENCH_FOOTER:-}
       # W2 (Rex-Review PR #500): Migrationen macht der backend-Container
       # (depends_on: backend: service_healthy stellt die Reihenfolge sicher).
       # Ein zweiter alembic-Lauf hier waere ein Migrations-Wettlauf gegen
@@ -593,6 +617,7 @@ services:
       DOCKER_HOST: tcp://docker-socket-proxy:2375
       HOME_HOST: ${HOME}
       MC_REPO_PATH: ${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}
+      MC_CHECKOUT_PATH: ${MC_CHECKOUT_PATH:-}
       MC_AGENT_IMAGE_PREFIX: ${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}
       MC_AGENT_IMAGE_TAG: ${MC_AGENT_IMAGE_TAG:-latest}
       HOST_UID: ${HOST_UID:-502}
@@ -716,6 +741,7 @@ services:
       - "${MC_BIND_ADDRESS:-127.0.0.1}:443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/maintenance:/etc/caddy/maintenance:ro
       - ./caddy/certs:/etc/caddy/certs:ro
       - caddy_data:/data
       - caddy_config:/config
@@ -725,7 +751,15 @@ services:
   # ueber `mc verify` CLI oder direkt POST /verify hier auf, schreibt
   # Screenshots in gemeinsames Volume das Backend als Deliverables registriert.
   mc-playwright:
-    build: ./docker/mc-playwright
+    build:
+      context: ./docker/mc-playwright
+      args:
+        # The image build embeds the bench-video brand fonts and FAILS when
+        # Fontshare/Google Fonts cannot be reached (a silently missing font
+        # was the old failure mode). Offline/firewalled install: set
+        # BENCH_FONTS_OPTIONAL=1 in .env — the visual verifier still builds,
+        # bench videos then use system fonts.
+        BENCH_FONTS_OPTIONAL: ${BENCH_FONTS_OPTIONAL:-0}
     # Optional: nur mit COMPOSE_PROFILES=browser (Visual-Verify fuer Agents).
     profiles: ["browser"]
     restart: unless-stopped
