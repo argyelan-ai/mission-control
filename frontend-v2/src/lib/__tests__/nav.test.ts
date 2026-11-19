@@ -57,8 +57,8 @@ describe("nav model", () => {
 
 describe("resolveNav", () => {
   it("returns the pinned items in the user's order", () => {
-    const { pinned } = resolveNav(["/inbox", "/"]);
-    expect(pinned.map((i) => i.href)).toEqual(["/inbox", "/"]);
+    const { pinned } = resolveNav(["/inbox", "/home"]);
+    expect(pinned.map((i) => i.href)).toEqual(["/inbox", "/home"]);
   });
 
   it("never shows a pinned destination a second time inside a group", () => {
@@ -88,8 +88,9 @@ describe("resolveNav", () => {
   });
 
   it("ignores unknown routes in the pin list", () => {
-    const { pinned } = resolveNav(["/", "/does-not-exist"]);
-    expect(pinned.map((i) => i.href)).toEqual(["/"]);
+    // "/" is the start redirect since 2026-11-18, no longer a destination
+    const { pinned } = resolveNav(["/home", "/", "/does-not-exist"]);
+    expect(pinned.map((i) => i.href)).toEqual(["/home"]);
   });
 
   it("treats a missing pin list as nothing pinned rather than crashing", () => {

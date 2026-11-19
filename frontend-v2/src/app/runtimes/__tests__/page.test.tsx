@@ -10,7 +10,12 @@ import type { Runtime, Host, RuntimeAgentsResponse, RuntimesLiveResponse } from 
 // auth/localStorage/SSE dependency chain (same pattern as
 // src/app/sessions/__tests__/SessionsPage.test.tsx).
 vi.mock("@/components/layout/AppShell", () => ({
-  default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  default: ({ children, mobileTitle }: { children: React.ReactNode; mobileTitle?: string }) => (
+    <div>
+      <div data-testid="shell-mobile-title">{mobileTitle}</div>
+      {children}
+    </div>
+  ),
 }));
 
 import RuntimesPage from "../page";
@@ -260,6 +265,20 @@ describe("RuntimesPage", () => {
     expect(within(card).getByTestId("wake-box")).toBeInTheDocument();
     expect(card).not.toHaveTextContent("Start model");
     expect(container.querySelector('[data-testid="free-box"][data-host-slug="wake-box"]')).not.toBeInTheDocument();
+  });
+
+  // Operator pictures 18.11.2026: the Models tab opened a page called
+  // "Runtimes" under "SYSTEM · RUNTIMES", with a sub-tab "Models" as well.
+  it("is the Models page: one 'Models', no Runtimes heading, sub-tab renamed", async () => {
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [] });
+    vi.spyOn(api.hosts, "list").mockResolvedValue([]);
+    renderPage();
+    await screen.findByTestId("page-tab-fleet");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/^Models$/);
+    expect(screen.getByTestId("shell-mobile-title")).toHaveTextContent(/^Models$/);
+    expect(screen.queryByText(/System · Runtimes/i)).toBeNull();
+    expect(screen.getByTestId("page-tab-models")).toHaveTextContent("Library");
+    expect(screen.queryAllByText(/^Models$/)).toHaveLength(2); // the h1 + the phone bar title, never a tab
   });
 
   it("(d) page tabs switch the lower area; openModelsTab lands on the Models tab", async () => {

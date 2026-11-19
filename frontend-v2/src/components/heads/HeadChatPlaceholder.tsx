@@ -22,6 +22,8 @@
 import { useTranslations } from "next-intl";
 import { ChevronLeft } from "lucide-react";
 import { C } from "@/lib/colors";
+import { DrawerButton } from "@/components/layout/ChatDrawer";
+import { useMobileNavOptional } from "@/components/layout/MobileNav";
 
 const TOUCH_TARGET = "min-w-touch min-h-touch -m-1";
 
@@ -33,6 +35,10 @@ export function HeadChatPlaceholder({
   onBack?: () => void;
 }) {
   const t = useTranslations("heads");
+  // Inside the shell the drawer icon replaces the back chevron on the phone,
+  // the same as in an agent chat (shell review A3). On its own (tests, no
+  // shell) the chevron stays.
+  const inShell = !!useMobileNavOptional();
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden" data-testid="head-chat-placeholder" data-variant={variant}>
@@ -42,7 +48,7 @@ export function HeadChatPlaceholder({
         className="relative flex items-center gap-2 pl-1 pr-2 md:px-4 py-2 md:py-3 pt-safe-top md:pt-3 border-b shrink-0 bg-[var(--color-bg-surface)]"
         style={{ borderColor: C.border }}
       >
-        {onBack && (
+        {inShell ? <DrawerButton className="md:hidden -m-1" /> : onBack && (
           <button
             type="button"
             onClick={onBack}

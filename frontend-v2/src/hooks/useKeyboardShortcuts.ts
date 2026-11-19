@@ -6,7 +6,6 @@ import { useAppStore } from "@/lib/store";
 
 export function useKeyboardShortcuts() {
   const router = useRouter();
-  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const setCommandPaletteOpen = useAppStore((s) => s.setCommandPaletteOpen);
   const chordRef = useRef<string | null>(null);
   const chordTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -33,10 +32,8 @@ export function useKeyboardShortcuts() {
             e.preventDefault();
             setCommandPaletteOpen(true);
             break;
-          case "b":
-            e.preventDefault();
-            toggleSidebar();
-            break;
+          // ⌘B left with the new shell: the chat column does not collapse
+          // (shell review B3) — a shortcut that does nothing is a lie.
         }
         return;
       }
@@ -47,7 +44,7 @@ export function useKeyboardShortcuts() {
         if (chordTimeoutRef.current) clearTimeout(chordTimeoutRef.current);
 
         switch (e.key) {
-          case "h": router.push("/"); break;
+          case "h": router.push("/home"); break; // the dashboard left "/" (2026-11-18)
           case "t": router.push("/tasks"); break;
           case "a": router.push("/agents"); break;
           case "i": router.push("/inbox"); break;
@@ -80,5 +77,5 @@ export function useKeyboardShortcuts() {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [router, toggleSidebar, setCommandPaletteOpen]);
+  }, [router, setCommandPaletteOpen]);
 }

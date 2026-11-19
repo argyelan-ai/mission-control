@@ -705,7 +705,7 @@ describe("ChatView — task state from the freshest source (round 3)", () => {
     await waitFor(() => expect(screen.getByTestId("chat-task-head")).toHaveTextContent("Review"));
     expect(screen.queryByText("Working on a task")).toBeNull();
     expect(screen.queryByText(/Task in progress · Build the report page/)).toBeNull();
-    expect(screen.getByText("Ready")).toBeInTheDocument();
+    expect(screen.getByTestId("status-label")).toHaveTextContent("Ready");
   });
 
   it("NICE-1: the new band under the operator's message says 'Thinking' at once, not empty", async () => {

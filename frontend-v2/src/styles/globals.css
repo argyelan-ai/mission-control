@@ -1117,6 +1117,16 @@ option {
 }
 .tab-strip::-webkit-scrollbar { display: none; }
 
+/* Scroll list over a fixed foot (desktop chat column): the last rows fade
+   out instead of being cut by the hard edge of the nav block (operator
+   pictures 18.11.2026). The list pads its end by the same 32 px, so the last
+   row can always scroll clear of the fade. */
+.fade-bottom {
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 32px), transparent 100%);
+  mask-image: linear-gradient(to bottom, black calc(100% - 32px), transparent 100%);
+  padding-bottom: 32px;
+}
+
 /* Scroll-snap je Kind-Element */
 .tab-strip > * {
   scroll-snap-align: start;

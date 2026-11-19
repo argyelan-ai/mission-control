@@ -266,7 +266,10 @@ export function mergeTimeline(input: MergeInput): MergeResult {
       const key = `chat:${item.kind}:${evs[0] ? evKey(evs[0]) : ""}`;
       const old = prevChat.get(key);
       const ms = rowMs(evs[0]?.ts);
-      if (old && old.item.kind === item.kind && sameArray(itemEvents(old.item), evs)) out.push(old);
+      // An activity run keeps its events when its closing reply arrives —
+      // only its end time changes, and that must not be lost to reuse.
+      const sameEnd = old?.item.kind !== "activity" || item.kind !== "activity" || old.item.endTs === item.endTs;
+      if (old && old.item.kind === item.kind && sameEnd && sameArray(itemEvents(old.item), evs)) out.push(old);
       else out.push({ kind: "chat", key, ms, item });
     }
   };

@@ -282,3 +282,32 @@ describe("ToolGroup — a running tool stays visible when collapsed (chat packag
     expect(screen.queryByText("Read a.py")).toBeNull();
   });
 });
+
+describe("ToolGroup — how long the grouped work took", () => {
+  const run = () => [
+    tool({ ts: "2026-08-17T10:00:00Z", title: "Read a.py" }),
+    tool({ ts: "2026-08-17T10:01:30Z", title: "Read b.py" }),
+  ];
+
+  it("names the span from the first step to the reply that closed the run", () => {
+    render(<ToolGroup events={run()} endTs="2026-08-17T10:02:14Z" />);
+    expect(screen.getByTestId("tool-group-duration")).toHaveTextContent("· 2 min");
+  });
+
+  it("says nothing under a minute (abgeschlossene Dauern erst ab 1 min)", () => {
+    render(<ToolGroup events={run().slice(0, 1).concat(tool({ ts: "2026-08-17T10:00:20Z" }))} endTs="2026-08-17T10:00:40Z" />);
+    expect(screen.queryByTestId("tool-group-duration")).toBeNull();
+  });
+
+  it("says nothing without a closing reply — an open run has no end yet", () => {
+    render(<ToolGroup events={run()} />);
+    expect(screen.queryByTestId("tool-group-duration")).toBeNull();
+  });
+
+  it("says nothing when a timestamp is unreadable or runs backwards", () => {
+    const { rerender } = render(<ToolGroup events={run()} endTs="not a time" />);
+    expect(screen.queryByTestId("tool-group-duration")).toBeNull();
+    rerender(<ToolGroup events={run()} endTs="2026-08-17T09:00:00Z" />);
+    expect(screen.queryByTestId("tool-group-duration")).toBeNull();
+  });
+});

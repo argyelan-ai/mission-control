@@ -7,6 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChatOptionsSheet } from "./ChatOptionsSheet";
+import de from "../../../messages/de.json";
 
 function renderSheet(props: Partial<React.ComponentProps<typeof ChatOptionsSheet>> = {}) {
   return render(
@@ -78,6 +79,16 @@ describe("ChatOptionsSheet", () => {
     expect(screen.getByRole("radio", { name: "Normal" })).toHaveAttribute("aria-checked", "true");
     await user.click(screen.getByRole("radio", { name: "Verbose" }));
     expect(onDetailLevelChange).toHaveBeenCalledWith("verbose");
+  });
+
+  it("offers the fourth level 'Answer only' (EN and DE label in the catalog)", async () => {
+    const onDetailLevelChange = vi.fn();
+    const user = userEvent.setup();
+    renderSheet({ onDetailLevelChange });
+
+    await user.click(screen.getByRole("radio", { name: "Answer only" }));
+    expect(onDetailLevelChange).toHaveBeenCalledWith("answer");
+    expect(de.sessions.detailAnswer).toBe("Nur Antwort");
   });
 
   it("hides the detail level in terminal view — there is no timeline to filter", () => {

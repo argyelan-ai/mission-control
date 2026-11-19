@@ -30,8 +30,8 @@ function splitPath(path: string): { dir: string; base: string } {
   return i < 0 ? { dir: "", base: path } : { dir: path.slice(0, i), base: path.slice(i + 1) };
 }
 
-/** +a −d, each only when non-zero (K3). */
-function Counts({ file }: { file: Pick<ChatChangeFile, "additions" | "deletions"> }) {
+/** +a −d, each only when non-zero (K3). Also the inline row's totals. */
+export function Counts({ file }: { file: Pick<ChatChangeFile, "additions" | "deletions"> }) {
   if (file.additions === 0 && file.deletions === 0) return null;
   return (
     <span className="shrink-0 flex items-center gap-2 font-mono text-xs tabular-nums">

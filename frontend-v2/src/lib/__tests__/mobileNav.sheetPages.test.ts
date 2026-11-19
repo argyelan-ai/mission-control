@@ -21,7 +21,8 @@ describe("sheetPages", () => {
 
   it("Used most follows phoneRank, Others are alphabetical by the given label", () => {
     const { usedMost, others } = sheetPages();
-    expect(hrefs(usedMost)).toEqual(["/runtimes", "/agents", "/insights", "/memory"]);
+    // Runtimes is the Models tab now, so it is not offered again
+    expect(hrefs(usedMost)).toEqual(["/agents", "/insights", "/memory"]);
     const labels = others.map((i) => i.label);
     expect(labels).toEqual([...labels].sort((a, b) => a.localeCompare(b)));
     // German labels sort differently — the caller's label decides

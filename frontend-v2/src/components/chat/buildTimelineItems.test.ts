@@ -1,6 +1,8 @@
 /**
  * buildTimelineItems — helpers (subagents) of one working stretch share one
- * quiet line, and a helper's own report is shown inside that line, not twice.
+ * quiet line, and a helper's own report is shown inside that line, not twice;
+ * and the end time of an activity run (`endTs`): the time of the agent's own
+ * next event that closed it, so the group can say how long the work took.
  */
 import { describe, it, expect } from "vitest";
 import { buildTimelineItems } from "./buildTimelineItems";
@@ -93,5 +95,46 @@ describe("buildTimelineItems — a helper's report is shown in its line, not twi
     const items = buildTimelineItems([call, report, stranger]);
     expect(items.map((i) => i.kind)).toEqual(["helpers", "single"]);
     expect(items[1].kind === "single" && items[1].event.uuid).toBe("n2");
+  });
+});
+
+describe("buildTimelineItems — endTs of an activity run", () => {
+  it("takes the time of the assistant reply that closed the run", () => {
+    const items = buildTimelineItems([
+      msg("2026-08-17T09:59:00Z", "user"),
+      tool("2026-08-17T10:00:00Z"),
+      tool("2026-08-17T10:01:00Z"),
+      msg("2026-08-17T10:02:14Z", "assistant"),
+    ]);
+    const group = items.find((i) => i.kind === "activity");
+    expect(group && group.kind === "activity" && group.endTs).toBe("2026-08-17T10:02:14Z");
+  });
+
+  it("takes the time of a delegated job that closed the run", () => {
+    const items = buildTimelineItems([
+      tool("2026-08-17T10:00:00Z"),
+      tool("2026-08-17T10:01:00Z"),
+      tool("2026-08-17T10:03:00Z", { name: "Agent", title: "Agent: research" }),
+    ]);
+    const group = items.find((i) => i.kind === "activity");
+    expect(group && group.kind === "activity" && group.endTs).toBe("2026-08-17T10:03:00Z");
+  });
+
+  it("has no end while the run is still the newest thing", () => {
+    const items = buildTimelineItems([tool("2026-08-17T10:00:00Z"), tool("2026-08-17T10:01:00Z")]);
+    const group = items.find((i) => i.kind === "activity");
+    expect(group && group.kind === "activity" && group.endTs).toBeNull();
+  });
+
+  it("has no end when the operator (or another session) spoke next", () => {
+    for (const role of ["user", "teammate"] as const) {
+      const items = buildTimelineItems([
+        tool("2026-08-17T10:00:00Z"),
+        tool("2026-08-17T10:01:00Z"),
+        msg("2026-08-17T12:00:00Z", role),
+      ]);
+      const group = items.find((i) => i.kind === "activity");
+      expect(group && group.kind === "activity" && group.endTs).toBeNull();
+    }
   });
 });

@@ -48,7 +48,7 @@ import { ChatChangesList } from "./ChatChangesList";
 import { CommitSheet, PrSheet, RevertSheet, type RevertTarget } from "./ChangesActions";
 
 type DiffScope = "worktree" | "last-commit";
-type ChangesTab = "chat" | DiffScope;
+export type ChangesTab = "chat" | DiffScope;
 
 const TAB_STORAGE_KEY = "mc.chat.changestab";
 
@@ -67,7 +67,9 @@ function loadTab(): ChangesTab {
   }
 }
 
-function saveTab(tab: ChangesTab) {
+/** Also used by the inline "files changed" row: it opens the panel on
+ *  "This chat", whatever tab was remembered. */
+export function saveTab(tab: ChangesTab) {
   try {
     localStorage.setItem(TAB_STORAGE_KEY, tab);
   } catch {}

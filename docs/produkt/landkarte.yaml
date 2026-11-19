@@ -49,6 +49,7 @@ journeys:
     job: "When I stored a rule, note or run record, I want to find and reread it."
     source: "operator decision 2026-09-29; ADR-085 section 2 (vault stays); ADR-034 (vault as source of truth)"
     steps:
+      - {feature: F-knowledge}  # /knowledge: the Knowledge tab, one tap to memory or skills
       - {feature: F-memory}  # /memory and /memory/graph: notes, search, graph, topics
     end_state: "The operator has the rule, note or run record back in front of them"
     test: e2e/journeys/J-vault.spec.ts
@@ -64,7 +65,9 @@ journeys:
 features:
   - id: F-home
     name: "Home: what needs me, last night's report"
-    ui: {route: /}
+    # "/" redirects to the last chat since ADR-102 principle 1 ("MC opens in
+    # the last chat"); the dashboard itself lives at /home (Settings > More).
+    ui: {route: [/, /home]}
     api:
       # Activity feed and live stream on Home (ActivityHistoryPanel,
       # SystemHealthSection, useActivityStream); the agent detail page also
@@ -378,6 +381,13 @@ features:
       - config_checks
       # system_updates = the self-update history the update card lists.
       - system_updates
+  - id: F-knowledge
+    name: "Knowledge: the tab that leads to memory and skills"
+    ui: {route: /knowledge}
+    status: active
+    source: "ADR-102 principle 1 (few menus: chat, models, knowledge) and principle 6"
+    # A landing only: counts from the vault notes list and the skills list,
+    # both owned by F-memory / F-skills.
   - id: F-memory
     name: "Memory: the vault"
     ui: {route: [/memory, /memory/graph]}

@@ -7,10 +7,10 @@ import { useBoardsBootstrap } from "@/lib/boards";
 import { api, getToken, getStoredUser, setStoredUser } from "@/lib/api";
 import { SETUP_PATH, shouldRedirectToSetup } from "@/lib/firstRun";
 import { AmbientBackground } from "./AmbientBackground";
-import Sidebar from "./Sidebar";
 import MobileNav, { MobileNavProvider } from "./MobileNav";
 import { MobileTabBar } from "./MobileTabBar";
-import { QuickSheet } from "./QuickSheet";
+import { ChatDrawer } from "./ChatDrawer";
+import { ChatSidebar } from "./ChatSidebar";
 import CommandPalette from "@/components/shared/CommandPalette";
 import ToastRenderer from "@/components/shared/ToastRenderer";
 import { VoiceProvider, VoiceOverlay } from "@/components/voice/VoiceWidget";
@@ -28,8 +28,15 @@ export default function AppShell({
   mobileChromeless = false,
   mobileHideAppBar = false,
   wide = false,
+  mobileTitle,
+  mobileAction,
 }: {
   children: React.ReactNode;
+  /** Phone: the page title in the app bar, read like the chat header (the
+   *  three tab pages). The page then hides its own h1 below md. */
+  mobileTitle?: string;
+  /** Phone: the page's one action in the app bar, in place of voice. */
+  mobileAction?: React.ReactNode;
   fullHeight?: boolean;
   /** Let the page use the whole width beside the sidebar instead of the
    *  centred 1600 px column. Only for pages that lay out their own panes and
@@ -128,17 +135,19 @@ export default function AppShell({
       <AmbientBackground />
 
       {/* Phone: top app bar (wordmark + voice) */}
-      {!mobileChromeless && <MobileNav showBar={!mobileHideAppBar} />}
+      {!mobileChromeless && <MobileNav showBar={!mobileHideAppBar} title={mobileTitle} action={mobileAction} />}
 
-      {/* Phone: the ⊕ menu sheet of the tab bar — the one phone menu
-          (variant B „Zwei Ebenen"). md:hidden inside. */}
-      <QuickSheet />
+      {/* Phone: the chat drawer — the one phone menu (operator decision
+          2026-11-18, variant A's menu), opened by the sidebar icon in the
+          chat header and in the app bar. md:hidden inside. */}
+      <ChatDrawer />
 
-      {/* Desktop: one column carries board, search, navigation and status
-          (Shell v4). The former WorkspaceSwitcher rail, TopBar and StatusBar
-          folded into it — see components/layout/Sidebar.tsx. */}
+      {/* Desktop: one column — the chats, then Chat · Models · Knowledge,
+          More and the user (components/layout/ChatSidebar.tsx). The Shell v4
+          page tree (Sidebar.tsx) left the shell; its pages sit in
+          Settings › More. */}
       <div className="hidden md:flex h-full relative z-10 p-2 pr-0">
-        <Sidebar />
+        <ChatSidebar />
       </div>
 
       {/* Main content area — deliberately NO z-index: a z-index here would

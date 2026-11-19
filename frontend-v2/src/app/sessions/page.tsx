@@ -25,7 +25,7 @@ import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
 import { useElementWidth } from "@/hooks/useElementWidth";
 import { PanelResizeHandle } from "@/components/chat/PanelResizeHandle";
 import { clampPanelWidth, defaultPanelWidth, loadPanelWidth, panelOverlays, savePanelWidth } from "@/lib/panelWidth";
-import { rememberChat } from "@/lib/recentChats";
+import { loadRecentChats, rememberChat } from "@/lib/recentChats";
 import { CHAT_ENTRY_PARAM, chatUrl, isPhoneViewport, takeDirectLoad, usePhoneViewport, type ChatKind } from "@/lib/chatHistory";
 import { useHeadRuns } from "@/components/heads/useHeadRuns";
 import { HeadChatPlaceholder } from "@/components/heads/HeadChatPlaceholder";
@@ -155,11 +155,16 @@ function agentHasTranscript(agent: AgentWithState | null | undefined): boolean {
 
 function SessionsPageContent() {
   const t = useTranslations("sessions");
+  const tCockpit = useTranslations("cockpit");
   const qc = useQueryClient();
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname() ?? "/sessions";
   const { activeBoardId } = useAppStore();
+  // "New chat" (drawer and desktop column) opens this page as a picker: the
+  // list of who to talk to, plus groups and heads. Until chats stop being
+  // bound to agents (ADR-102 stage 1) a new chat starts by picking one.
+  const picking = searchParams.get("pick") === "1";
   const [selected, setSelected] = useState<AgentWithState | null>(null);
   // Gruppen-Auswahl liegt bewusst NEBEN der Agenten-Auswahl statt in einer
   // Union: wer aus einer Gruppe zurück zu seinem Agenten springt, landet
@@ -386,19 +391,38 @@ function SessionsPageContent() {
     if (agents.length === 0 || selected) return;
     const paramId = searchParams.get("agent");
     const paramAgent = paramId ? agents.find((a) => a.id === paramId) : undefined;
-    // A deep link names one session, so it opens it: on mobile that means
-    // going straight to the chat screen. A merely *remembered* selection does
-    // not — the phone opens on the list, which is the overview, and one tap
-    // reaches the remembered session (still highlighted there).
+    // MC opens in the last chat (ADR-102, operator decision 2026-11-18): a
+    // deep link and a remembered selection alike go straight to the chat
+    // screen on the phone. The list is one tap away in the drawer. Only the
+    // picker ("New chat", ?pick=1) stays on the list.
+    const open = searchParams.get("pick") !== "1";
     if (paramAgent) { setSelected(paramAgent); setMobileView("chat"); return; }
 
-    const storedId = loadLastAgentId();
+    // ONE source for "the last chat": lib/recentChats (written on every
+    // pick, drawer link and deep link). The old per-kind keys only fill in
+    // for a device that has no recent list yet. Two competing keys opened
+    // the wrong chat (shell review A1, operator pictures 18.11.2026).
+    const last = loadRecentChats()[0];
+    const storedId = last ? (last.kind === "agent" ? last.id : loadLastAgentId()) : loadLastAgentId();
     const storedAgent = storedId ? agents.find((a) => a.id === storedId) : undefined;
-    if (storedAgent) { setSelected(storedAgent); return; }
+    if (storedAgent) { setSelected(storedAgent); if (open) setMobileView("chat"); return; }
 
     const running = agents.find((a) => agentIsRunning(a));
-    setSelected(running ?? agents[0]);
+    const fallback = running ?? agents[0];
+    setSelected(fallback);
+    if (open) setMobileView("chat");
+    // The chat on screen is the last chat from now on — the drawer marks it.
+    if (!last || last.kind === "agent") rememberChat({ kind: "agent", id: fallback.id });
   }, [agents, selected, searchParams]);
+
+  // The picker opens and closes through the URL: "New chat" adds ?pick=1,
+  // the Chat tab (plain /sessions) takes it away and returns to the chat.
+  const wasPicking = useRef(picking);
+  useEffect(() => {
+    if (picking === wasPicking.current) return;
+    wasPicking.current = picking;
+    setMobileView(picking ? "list" : "chat");
+  }, [picking]);
 
   // Remember the selection for the next visit.
   useEffect(() => {
@@ -460,6 +484,7 @@ function SessionsPageContent() {
       handledParam.current = key;
       setSelected(agent);
       setSelectedGroupId(null);
+      saveLastGroupId(null);
       setSelectedHeadId(null);
       setMobileView("chat");
       rememberChat({ kind: "agent", id: agent.id });
@@ -468,6 +493,7 @@ function SessionsPageContent() {
       if (!groups.some((g) => g.id === groupParam)) return;
       handledParam.current = key;
       setSelectedGroupId(groupParam);
+      saveLastGroupId(groupParam);
       setSelectedHeadId(null);
       setMobileView("chat");
       rememberChat({ kind: "group", id: groupParam });
@@ -525,6 +551,13 @@ function SessionsPageContent() {
     // A pick from the list settles how the page was entered — even if the
     // linked chat never loaded (deleted), its list must not go in later.
     arrival.current = "none";
+    // A pick from the "New chat" picker replaces it: the picker is a step,
+    // not a place back goes to — and on the desktop the URL must lose
+    // ?pick=1, or the picker would stay over the chat.
+    if (picking) {
+      router.replace(chatUrl(kind, id), { scroll: false });
+      return;
+    }
     if (!isPhoneViewport()) return;
     if (replace) router.replace(chatUrl(kind, id), { scroll: false });
     else router.push(chatUrl(kind, id), { scroll: false });
@@ -593,8 +626,13 @@ function SessionsPageContent() {
       setMobileView("chat");
       return;
     }
-    const storedId = loadLastGroupId();
-    if (storedId && groups.some((g) => g.id === storedId)) setSelectedGroupId(storedId);
+    // Only when the last chat WAS this group (one source, see above).
+    const last = loadRecentChats()[0];
+    const storedId = last ? (last.kind === "group" ? last.id : null) : loadLastGroupId();
+    if (storedId && groups.some((g) => g.id === storedId)) {
+      setSelectedGroupId(storedId);
+      if (searchParams.get("pick") !== "1") setMobileView("chat");
+    }
   }, [groups, selectedGroupId, searchParams]);
 
   // Eine gelöschte oder verschwundene Gruppe darf die Seite nicht leer lassen.
@@ -649,7 +687,9 @@ function SessionsPageContent() {
     : null;
 
   return (
-    <AppShell fullHeight mobileChromeless={onChatScreen}>
+    // On the chat screen the chat header replaces the app bar; the tab bar
+    // stays under the composer (variant C, operator decision 2026-11-18).
+    <AppShell fullHeight mobileHideAppBar={onChatScreen}>
       {/* Full-bleed on mobile: AppShell's <main> pads the content column so
           ordinary pages breathe (px-4, 1rem bottom, and a top inset of
           safe-area + 5.5rem against a fixed header that is only safe-area +
@@ -693,10 +733,22 @@ function SessionsPageContent() {
               into — not the dropdown sheet it used to be, which had no content
               area of its own and left the page blank whenever a restored
               selection kept `mobileView` on "list". */}
+          {/* Desktop: the shell's left column lists the chats, so this list
+              shows only as the "New chat" picker, in place of the chat. */}
           <div
-            className={`${onChatScreen ? "hidden" : "flex"} md:hidden flex-1 min-h-0 overflow-hidden`}
+            className={`${onChatScreen ? "hidden" : "flex"} ${picking ? "md:flex md:rounded-xl md:border md:border-[var(--color-border)]" : "md:hidden"} flex-col flex-1 min-h-0 overflow-hidden`}
             data-testid="session-list-mobile"
+            style={picking ? { background: C.bgSurface } : undefined}
           >
+            {picking && (
+              <h1
+                data-testid="chat-picker-title"
+                className="shrink-0 px-4 pt-4 pb-2 text-base font-semibold"
+                style={{ color: C.textPrimary }}
+              >
+                {tCockpit("pickTitle")}
+              </h1>
+            )}
             <SessionSidebar
               agents={agents}
               tasks={tasks}
@@ -717,48 +769,10 @@ function SessionsPageContent() {
               selectedHeadId={selectedHeadId}
             />
           </div>
-          {/* `hidden md:flex` already gates this to desktop-only — the island
-              chrome doesn't need its own `md:` prefixes to stay mobile-inert,
-              but keeps them anyway for a diff that reads consistently with
-              the chat/panel islands below (which ARE visible on both). No
-              background override here: SessionSidebar's rail variant already
-              paints its own `bg-surface` — its self-drawn `border-right` was
-              dropped instead (this wrapper's border now owns that edge). */}
-          {/* Islands sit a tonal step ABOVE the page ground: page stays bg-deep,
-              every island is bg-surface, raised controls inside them (composer
-              pill, user bubbles, group cards) go to bg-elevated. This reverses
-              the earlier one-surface pass — operator-directed: reading a long
-              transcript on near-black was tiring, and the lighter panel is what
-              gives the eye somewhere to rest. Border + gap stay, but the border
-              returns to the spec step (0.10): with a visible tonal difference
-              doing the separating, 0.16 was louder than it needed to be. */}
-          <div
-            className="hidden md:flex shrink-0 md:rounded-xl md:overflow-hidden md:border md:border-[var(--color-border)]"
-            data-testid="sidebar-desktop"
-          >
-            <SessionSidebar
-              agents={agents}
-              tasks={tasks}
-              projects={projects}
-              selectedId={selectedGroupId || selectedHeadId ? null : selectedLive?.id ?? null}
-              onSelect={handleSelect}
-              groups={activeGroups}
-              selectedGroupId={selectedGroupId}
-              onSelectGroup={handleSelectGroup}
-              onCreateGroup={() => setCreateGroupOpen(true)}
-              archivedGroups={archivedGroups}
-              onUnarchiveGroup={handleUnarchiveGroup}
-              variant="rail"
-              hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
-              collapsed={sidebarCollapsed}
-              onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-              heads={sortedHeadRuns}
-              archivedCount={headArchivedCount}
-              onSelectHead={(runId) => handleSelectHead(runId)}
-              selectedHeadId={selectedHeadId}
-            />
-          </div>
-
+          {/* The desktop rail of this page (SessionSidebar "rail") left with
+              the new shell: its chats stand in the shell's left column
+              (ChatSidebar), the rest — groups, heads, archive — in the
+              "New chat" picker above. */}
           {/* Mobile stack, screen 2 (and the desktop island): the chat itself.
               ChatView paints no background of its own, so this wrapper supplies
               the island tone — on mobile it IS the whole screen, edge to edge,
@@ -773,7 +787,7 @@ function SessionsPageContent() {
               Fast-Schwarz war anstrengend). */}
           <div
             ref={islandRef}
-            className={`${onChatScreen || activePanel ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:flex-row md:relative md:rounded-xl md:border md:border-[var(--color-border)]`}
+            className={`${onChatScreen || activePanel ? "flex" : "hidden"} ${picking ? "md:hidden" : "md:flex"} flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:flex-row md:relative md:rounded-xl md:border md:border-[var(--color-border)]`}
             data-testid="chat-island"
           >
           <div

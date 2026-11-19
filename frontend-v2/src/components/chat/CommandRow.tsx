@@ -18,13 +18,14 @@ import { useEffect, useState } from "react";
 import { ChevronRight, Terminal } from "lucide-react";
 import { C } from "@/lib/colors";
 import type { CommandEvent } from "@/lib/chatTypes";
+import type { DetailLevel } from "./chatOptions";
 
 export function CommandRow({
   ev,
   detailLevel = "normal",
 }: {
   ev: CommandEvent;
-  detailLevel?: "compact" | "normal" | "verbose";
+  detailLevel?: DetailLevel;
 }) {
   const [expanded, setExpanded] = useState(detailLevel === "verbose");
   // Same re-sync as ToolRow/ThinkingRow/ToolGroup (review finding I-3).

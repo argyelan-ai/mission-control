@@ -15,7 +15,7 @@
  * verbatim move covered by its own future test surface / manual live-gate).
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   ChatView,
@@ -120,6 +120,14 @@ const navMock = vi.hoisted(() => ({ params: new URLSearchParams() }));
 vi.mock("next/navigation", () => ({
   useSearchParams: () => navMock.params,
 }));
+// The drawer button needs the shell's MobileNavProvider; its own behaviour is
+// tested in components/layout/__tests__/ChatDrawer.test.tsx. Here only where
+// the chat header puts it.
+vi.mock("@/components/layout/ChatDrawer", () => ({
+  DrawerButton: ({ className = "" }: { className?: string }) => (
+    <button type="button" aria-label="Open chats" data-testid="drawer-button" className={className} />
+  ),
+}));
 // Die echte VoiceButton haengt an <VoiceProvider>, und der baut beim Mounten
 // einen LiveKit-Room auf — fuer einen Kopfzeilen-Test viel zu schwer. Der Stub
 // haelt genau das fest, was ChatView zu verantworten hat: dass auf dem Handy
@@ -129,6 +137,14 @@ vi.mock("@/components/voice/VoiceWidget", () => ({
     <button type="button" aria-label="Start voice assistant">
       mic
     </button>
+  ),
+}));
+// The inline "files changed" row asks the backend through react-query —
+// stubbed here (ChatChangesInline.test.tsx covers it with a real client);
+// the stub keeps what ChatView decides: where it stands and what it gets.
+vi.mock("./ChatChangesInline", () => ({
+  ChatChangesInline: ({ working, onOpen }: { working: boolean; onOpen: () => void }) => (
+    <button type="button" data-testid="changes-inline-stub" data-working={String(working)} onClick={onOpen} />
   ),
 }));
 vi.mock("./TerminalPanel", async () => {
@@ -713,6 +729,51 @@ describe("ChatView", () => {
     expect(screen.queryByTestId("tool-group")).not.toBeInTheDocument();
   });
 
+  it("Answer only shows the agent's last reply of the turn, no machinery", () => {
+    const first = { ...MSG, uuid: "u0", text: "Let me look" };
+    mockUseChatStream.mockReturnValue(mkStream({ events: [first, TOOL, THINKING, MSG] }));
+    renderChatView({ detailLevel: "answer" });
+
+    expect(screen.getByText("Hallo!")).toBeInTheDocument();
+    expect(screen.queryByText("Let me look")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tool-group")).not.toBeInTheDocument();
+    expect(screen.queryByText("Read foo.py")).not.toBeInTheDocument();
+  });
+
+  it("puts the 'files changed' row under the latest answer only, and it opens the Changes panel", async () => {
+    const last = { ...MSG, uuid: "u9", text: "Fertig." };
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG, TOOL, last] }));
+    const onOpenPanel = vi.fn();
+    const user = userEvent.setup();
+    renderChatView({ onOpenPanel });
+
+    const rows = screen.getAllByTestId("changes-inline-stub");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveAttribute("data-working", "false");
+    // Directly below the last answer, not below the first one.
+    const answer = screen.getByText("Fertig.");
+    expect(answer.compareDocumentPosition(rows[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("Hallo!").compareDocumentPosition(rows[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("Read foo.py").compareDocumentPosition(rows[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await user.click(rows[0]);
+    expect(onOpenPanel).toHaveBeenCalledWith("diff");
+  });
+
+  it("tells the 'files changed' row while the agent is still working", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({ events: [MSG], state: { kind: "state", status: "working", prompt: null } }),
+    );
+    renderChatView({ onOpenPanel: vi.fn() });
+    expect(screen.getByTestId("changes-inline-stub")).toHaveAttribute("data-working", "true");
+  });
+
+  it("has no 'files changed' row where no Changes panel can open", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    expect(screen.queryByTestId("changes-inline-stub")).toBeNull();
+  });
+
   it("Normal collapses a run of tool/thinking events into one group chip", async () => {
     mockUseChatStream.mockReturnValue(mkStream({ events: [MSG, TOOL, THINKING] }));
     const user = userEvent.setup();
@@ -1238,14 +1299,16 @@ describe("ChatView", () => {
     expect(screen.queryByRole("button", { name: "Back to chats" })).not.toBeInTheDocument();
   });
 
-  it("the back chevron reports the intent to return to the list", async () => {
+  // Variant C (operator decision 2026-11-18): the chats are one tap away in
+  // the drawer — the sidebar icon replaces the back chevron on the phone.
+  it("puts the drawer icon where the back chevron was — phone only", () => {
     mockUseChatStream.mockReturnValue(mkStream());
-    const onBack = vi.fn();
-    const user = userEvent.setup();
-    renderChatView({ onBack });
-
-    await user.click(screen.getByRole("button", { name: "Back to chats" }));
-    expect(onBack).toHaveBeenCalled();
+    renderChatView({ onBack: vi.fn() });
+    const header = screen.getByTestId("chat-header");
+    const drawer = within(header).getByTestId("drawer-button");
+    expect(drawer.className).toContain("md:hidden");
+    expect(header.firstElementChild).toBe(drawer);
+    expect(screen.queryByRole("button", { name: "Back to chats" })).toBeNull();
   });
 
   it("shows the running task as one quiet row that links to the task", () => {
@@ -2353,17 +2416,17 @@ describe("ChatView", () => {
       mockUseChatStream.mockReturnValue(mkStream());
     });
 
-    it("legt den Namen in einen eigenen Block, der aus dem Fluss genommen ist", () => {
+    // Variant C: the title sits left next to the drawer icon, in the flow,
+    // with one muted subline under it (it was centred and absolute before).
+    it("legt Titel und Unterzeile links neben das Schubladen-Symbol", () => {
+      mockUseChatStream.mockReturnValue(mkStream({ state: { kind: "state", status: "idle", prompt: null } }));
       renderChatView({ onBack: vi.fn() });
       const title = screen.getByTestId("chat-header-title");
-      // Absolut, damit die Knopfgruppen seine Position nicht verschieben; die
-      // Zentrierung traegt `items-center` (siehe eigener Test).
-      expect(title.className).toContain("absolute");
-      expect(title.className).toContain("items-center");
-      // `text-center` stand hier frueher — tote Klasse: die beiden Spannen
-      // sind `whitespace`-frei umbruchlos und schrumpfen auf ihren Inhalt,
-      // eine Textausrichtung hat daran nichts auszurichten (nachgemessen).
-      expect(title.className).not.toContain("text-center");
+      expect(title.className).not.toContain("absolute");
+      expect(title.className).toContain("flex-1");
+      expect(title.className).toContain("flex-col");
+      expect(title.previousElementSibling).toBe(screen.getByTestId("drawer-button"));
+      expect(within(title).getByTestId("chat-header-subline")).toBeInTheDocument();
     });
 
     it("hält oben den Notch frei, weil keine App-Leiste mehr darüber liegt", () => {
@@ -2410,11 +2473,10 @@ describe("ChatView", () => {
       expect(GLOBALS_CSS).toMatch(/\.bg-surface\s*\{\s*background-color:\s*var\(--color-bg-surface\)/);
     });
 
-    it("gibt Zurück und Optionen eine runde Form", () => {
+    it("gibt Optionen eine runde Form", () => {
       renderChatView({ onBack: vi.fn() });
       // Der Kreis ist das SICHTBARE Element im Knopf, nicht der Knopf selbst —
       // der ist die (groessere, unsichtbare) Trefferflaeche, siehe unten.
-      expect(circleOf("Back to chats").className).toContain("rounded-full");
       expect(circleOf("Chat options").className).toContain("rounded-full");
     });
 
@@ -2426,11 +2488,9 @@ describe("ChatView", () => {
       // <button> nicht: `min-w-touch`/`min-h-touch` sind die WCAG-Utilities
       // aus globals.css, der Kreis liegt als Kind mittig darin.
       renderChatView({ onBack: vi.fn() });
-      for (const label of ["Back to chats", "Chat options"]) {
-        const btn = phoneLabeled(label);
-        expect(btn.className).toContain("min-w-touch");
-        expect(btn.className).toContain("min-h-touch");
-      }
+      const btn = phoneLabeled("Chat options");
+      expect(btn.className).toContain("min-w-touch");
+      expect(btn.className).toContain("min-h-touch");
       // Zweite Haelfte der Zusicherung: die Utility muss auch wirklich 44px
       // sein. Ohne diese Zeile koennte jemand `.min-h-touch` auf 36px setzen
       // und alle Klassen-Pruefungen blieben gruen.
@@ -2446,9 +2506,10 @@ describe("ChatView", () => {
       // Handy-Blaetter (Optionen/Kontext) ihre Oberkante. Waere der Kopf
       // gewachsen, bliebe unter dem Blatt ein Streifen Gespraech stehen.
       renderChatView({ onBack: vi.fn() });
-      for (const label of ["Back to chats", "Chat options"]) {
-        expect(phoneLabeled(label).className).toContain("-m-1");
-      }
+      // Both 44-px buttons reach into the header's padding — the drawer icon
+      // (w-11 h-11, ChatDrawer.tsx) as much as the options button.
+      expect(phoneLabeled("Chat options").className).toContain("-m-1");
+      expect(screen.getByTestId("drawer-button").className).toContain("-m-1");
       expect(GLOBALS_CSS).toContain(
         "--mobile-chat-topbar-h: calc(env(safe-area-inset-top) + 3.6875rem)"
       );
@@ -2468,35 +2529,19 @@ describe("ChatView", () => {
       // haette.
       renderChatView({ onBack: vi.fn() });
       const title = screen.getByTestId("chat-header-title");
-      expect(title.className).toContain("items-center");
+      // Phone: a column (title over subline); desktop: one baseline row.
+      expect(title.className).toContain("flex-col");
+      expect(title.className).toContain("md:flex-row");
       expect(title.className).toContain("md:items-baseline");
-      expect(title.className).not.toContain("justify-center");
+      expect(title.className).not.toContain("items-center");
     });
 
-    it("behält auf dem Handy einen Zugang zur Sprachbedienung", () => {
-      // Der Chat-Schirm blendet die App-Leiste aus (AppShell `mobileChromeless`),
-      // und deren Knopf war der EINZIGE Zugang zur Sprachbedienung auf dem
-      // Handy — Sidebar ist `hidden md:flex`, ein Tastenkuerzel gibt es nicht.
-      // Ohne Ersatz war die Sprachbedienung auf dem Telefon schlicht weg.
+    // Variant C: the header carries only drawer icon, title and ⋯. Voice in a
+    // chat is the composer's live-voice mic (ADR-102); the assistant's mic
+    // stays in the app bar of every other page.
+    it("trägt kein Sprach-Mikro mehr im Kopf", () => {
       renderChatView({ onBack: vi.fn() });
-      const mic = screen.getByLabelText("Start voice assistant");
-      expect(mic).toBeInTheDocument();
-      // Nur auf dem Handy: auf dem Desktop steht der Knopf in der Sidebar,
-      // zweimal derselbe Schalter waere ein Duplikat im Dokument.
-      expect(mic.parentElement?.className).toContain("md:hidden");
-    });
-
-    it("blendet das Jarvis-Mikro aus, solange in DIESEM Chat ein Stimm-Anruf laeuft (voice PR 2)", async () => {
-      const { setVoiceLiveActive } = await import("@/components/voice/live/voiceLiveActivity");
-      renderChatView({ onBack: vi.fn() });
-      expect(screen.getByLabelText("Start voice assistant")).toBeInTheDocument();
-      act(() => setVoiceLiveActive("other-agent", true));
-      expect(screen.getByLabelText("Start voice assistant")).toBeInTheDocument();
-      act(() => setVoiceLiveActive("agent-1", true));
-      expect(screen.queryByLabelText("Start voice assistant")).toBeNull();
-      act(() => setVoiceLiveActive("agent-1", false));
-      act(() => setVoiceLiveActive("other-agent", false));
-      expect(screen.getByLabelText("Start voice assistant")).toBeInTheDocument();
+      expect(within(screen.getByTestId("chat-header")).queryByLabelText("Start voice assistant")).toBeNull();
     });
 
     it("zeigt die laufende Aufgabe als Zeile unter dem Kopf, nicht im Titel", () => {
@@ -2520,6 +2565,20 @@ describe("ChatView — headless chat", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     navMock.params = new URLSearchParams();
+  });
+
+  // Operator pictures 18.11.2026 (also on main): a stop square next to
+  // "Ready". ACP reports its own turn state, so idle is known there.
+  it("an idle headless (ACP) host agent offers Send, not Stop", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG], state: { kind: "state", status: "idle", prompt: null } }));
+    renderChatView({ agent: mkAgent({ headless_chat: true, agent_runtime: "host" }) });
+    expect(screen.queryByTestId("stop-button-prominent")).toBeNull();
+  });
+
+  it("a working headless agent still offers Stop", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG], state: { kind: "state", status: "working", prompt: null } }));
+    renderChatView({ agent: mkAgent({ headless_chat: true, agent_runtime: "host" }) });
+    expect(screen.getByTestId("stop-button-prominent")).toHaveAttribute("data-reason", "working");
   });
 
   it("renders no Chat/Terminal toggle for a headless agent", () => {
@@ -2884,7 +2943,8 @@ describe("ChatView — one header on the phone", () => {
     const { container } = renderChatView({ onBack: noop });
     expect(container.querySelector("[data-testid='detail-action-bar']")).toBeNull();
     expect(screen.queryByRole("button", { name: /^reply$|antworten/i })).toBeNull();
-    expect(screen.getAllByRole("button", { name: /back|zurück/i }).length).toBe(1);
+    // Variant C: no back button at all — the drawer icon replaced it.
+    expect(screen.queryAllByRole("button", { name: /back|zurück/i })).toEqual([]);
   });
 });
 
@@ -2893,7 +2953,7 @@ describe("ChatView — talking across harnesses (ADR-100 2d)", () => {
     directoryMock.data = undefined;
   });
 
-  it("the header says how many are reachable and opens the directory sheet", () => {
+  it("the ⋯ menu says how many are reachable and opens the directory sheet (moved out of the header)", () => {
     directoryMock.data = {
       warming_up: false,
       sessions: [
@@ -2905,8 +2965,10 @@ describe("ChatView — talking across harnesses (ADR-100 2d)", () => {
     };
     mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
     renderChatView();
-    const btn = screen.getByTestId("reachable-button");
-    expect(screen.getByTestId("chat-header-title")).toContainElement(btn);
+    expect(screen.queryByTestId("reachable-button")).toBeNull();
+    expect(screen.getByTestId("chat-header-title")).not.toHaveTextContent("reachable");
+    fireEvent.click(screen.getByTestId("chat-options-desktop"));
+    const btn = screen.getByTestId("menu-reachable");
     expect(btn).toHaveTextContent("1 reachable");
     expect(screen.queryByTestId("directory-sheet")).toBeNull();
     fireEvent.click(btn);
@@ -2914,10 +2976,28 @@ describe("ChatView — talking across harnesses (ADR-100 2d)", () => {
     expect(screen.getAllByTestId("directory-row")).toHaveLength(2);
   });
 
-  it("no directory (loading, or not allowed): no number in the header", () => {
+  it("no directory (loading, or not allowed): no reachable row in the ⋯ menu", () => {
     mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
     renderChatView();
-    expect(screen.queryByTestId("reachable-button")).toBeNull();
+    fireEvent.click(screen.getByTestId("chat-options-desktop"));
+    expect(screen.queryByTestId("menu-reachable")).toBeNull();
+  });
+
+  it("the phone's options sheet carries the reachable row too", () => {
+    directoryMock.data = {
+      warming_up: false,
+      sessions: [
+        { address: "lead", kind: "agent", label: "Lead", harness: "omp", machine: null, alive: "yes",
+          listening: true, busy: false, accept: "accept", task: null, last_seen: null },
+      ],
+    };
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ onBack: noop });
+    fireEvent.click(phoneLabeled("Chat options"));
+    const row = screen.getByTestId("sheet-reachable");
+    expect(row).toHaveTextContent("1 reachable");
+    fireEvent.click(row);
+    expect(screen.getByTestId("directory-sheet")).toBeInTheDocument();
   });
 
   it("an `mc send` tool call renders as a send card, not a tool row", () => {

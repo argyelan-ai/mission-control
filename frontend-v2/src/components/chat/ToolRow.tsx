@@ -12,6 +12,7 @@ import { ToolDiffView } from "./ToolDiffView";
 import { ToolImages } from "./ToolImages";
 import { useToolOutput } from "./toolOutputStore";
 import { useAnchoredToggle } from "./useScrollAnchor";
+import type { DetailLevel } from "./chatOptions";
 
 /* Claude Code names its tools in PascalCase, omp/ACP in lower case (the
    bridge maps ACP kinds onto omp's names: bash, read, edit, write, grep). */
@@ -72,7 +73,7 @@ function LiveOutput({ text }: { text: string }) {
   );
 }
 
-type DetailLevelProp = "compact" | "normal" | "verbose";
+type DetailLevelProp = DetailLevel;
 
 /** A row whose body is fetched on open (task sections, spec A §4.3). */
 export interface LazyToolDetail {

@@ -31,6 +31,8 @@ import { GroupStatusLine } from "@/components/groupchat/GroupStatusLine";
 import { RoundDivider } from "@/components/groupchat/RoundDivider";
 import { FinishGroupDialog } from "@/components/groupchat/FinishGroupDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { DrawerButton } from "@/components/layout/ChatDrawer";
+import { useMobileNavOptional } from "@/components/layout/MobileNav";
 
 interface GroupChatViewProps {
   group: GroupDetail;
@@ -50,6 +52,10 @@ export function GroupChatView({
   onGroupGone,
 }: GroupChatViewProps) {
   const t = useTranslations("sessions.groups");
+  // Inside the shell the drawer icon replaces the back chevron on the phone,
+  // the same as in an agent chat (shell review A3). On its own (tests, no
+  // shell) the chevron stays.
+  const inShell = !!useMobileNavOptional();
   const stream = useGroupStream(group.id);
   const [rounds, setRounds] = useState<GroupRoundInfo[]>([]);
   const [busy, setBusy] = useState(false);
@@ -225,7 +231,7 @@ export function GroupChatView({
         className="shrink-0 flex items-center gap-2 px-3 py-2 pt-safe-top md:pt-2 border-b bg-[var(--color-bg-surface)]"
         style={{ borderColor: C.border }}
       >
-        {onBack && (
+        {inShell ? <DrawerButton className="md:hidden -m-1" /> : onBack && (
           <button
             type="button"
             onClick={onBack}

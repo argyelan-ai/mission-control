@@ -31,6 +31,7 @@ import {
   Library,
   Clapperboard,
   Cpu,
+  BookOpen,
   type LucideIcon,
 } from "lucide-react";
 import { VERTICALS } from "./verticals";
@@ -62,7 +63,8 @@ export type NavGroup = {
 
 /** Every destination the shell knows, flat. */
 export const NAV_ITEMS: NavItem[] = [
-  { href: "/", icon: Home, label: "Home", labelKey: "home" },
+  // The dashboard moved off "/" (ADR-102: MC opens in the last chat).
+  { href: "/home", icon: Home, label: "Home", labelKey: "home" },
   { href: "/tasks", icon: FolderKanban, label: "Tasks", labelKey: "tasks" },
   { href: "/agents", icon: Bot, label: "Agents", labelKey: "agents", phoneRank: 2 },
   { href: "/office", icon: Building2, label: "Office", labelKey: "office" },
@@ -76,6 +78,7 @@ export const NAV_ITEMS: NavItem[] = [
     : []),
   { href: "/repos", icon: FolderGit2, label: "Repos", labelKey: "repos" },
   { href: "/skills", icon: Puzzle, label: "Skills", labelKey: "skills" },
+  { href: "/knowledge", icon: BookOpen, label: "Knowledge", labelKey: "knowledge" },
   { href: "/runtimes", icon: Server, label: "Runtimes", labelKey: "runtimes", phoneRank: 1 },
   { href: "/sessions", icon: MessageSquareCode, label: "Sessions", labelKey: "sessions" },
   { href: "/loops", icon: Repeat, label: "Loops", labelKey: "loops" },
@@ -106,7 +109,7 @@ export const NAV_TREE: NavGroup[] = [
     label: "OVERVIEW",
     labelKey: "groupOverview",
     rowLabelKey: "navGroupOverview",
-    children: pick(["/", "/insights", "/office"]),
+    children: pick(["/home", "/insights", "/office"]),
   },
   {
     key: "work",
@@ -122,7 +125,7 @@ export const NAV_TREE: NavGroup[] = [
     label: "KNOWLEDGE",
     labelKey: "groupKnowledge",
     rowLabelKey: "navGroupKnowledge",
-    children: pick(["/memory", "/files", "/repos", "/skills"]),
+    children: pick(["/knowledge", "/memory", "/files", "/repos", "/skills"]),
   },
   {
     key: "studio",
@@ -152,7 +155,7 @@ export const CHROME_ITEMS: string[] = ["/settings"];
 
 /** Startbelegung — overridable per user, persisted in the app store. */
 export const DEFAULT_PINS: string[] = [
-  "/",
+  "/home",
   "/tasks",
   "/sessions",
   "/agents",

@@ -33,7 +33,7 @@ const agent = {
 } as unknown as AgentWithState;
 
 function App({ locale }: { locale: "de" | "en" }) {
-  const [detailLevel, setDetailLevel] = useState<"compact" | "normal" | "verbose">("normal");
+  const [detailLevel, setDetailLevel] = useState<"answer" | "compact" | "normal" | "verbose">("normal");
   const [centerView, setCenterView] = useState<"chat" | "terminal">("chat");
   const [qc] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }));
   return (
