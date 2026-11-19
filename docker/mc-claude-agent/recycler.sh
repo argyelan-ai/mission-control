@@ -104,8 +104,11 @@ while true; do
         fi
     fi
 
-    # Find target process PID — exact basename match (Pitfall 4)
-    PID=$(pgrep -x "$PROCESS_NAME" 2>/dev/null | head -1 || true)
+    # Find target process PID — exact basename match (Pitfall 4), and only
+    # inside window 0's pane: that is the pane do_recycle respawns. A further
+    # chat's claude (chats-<slug> session, chats S3) must neither decide nor
+    # block window 0's recycle (review blocker on #1044).
+    PID=$(window_cli_pid "${SESSION}:0" "$PROCESS_NAME")
     if [ -z "$PID" ]; then
         # process not running yet (mid-restart, or Sparky's openclaude case) — skip
         continue
