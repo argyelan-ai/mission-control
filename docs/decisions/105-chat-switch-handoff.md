@@ -78,7 +78,41 @@ model text through the `context` of a `session/prompt`.
    `PUT /api/v1/chat-record/agent/me/chats/{id}/switch/{event_id}/result`
    (agent token, scope `chat:write`); that report is the one legitimate
    re-pin of a pinned chat.
-7. **Routes** (admin, like the other chat writes): `POST …/chats/{id}/switch`
+7. **A chat keeps its former sessions.** ADR-103 routes a native session
+   nobody pinned to the agent's default chat. After a switch the old
+   session is no longer pinned, so routing (`chat_record.pinned_chat_id`,
+   used by the importer and the live sink) also asks which non-default
+   chat recorded that session: that chat stays its owner, and a re-import
+   never copies the old conversation into the default chat. A pin or a
+   switch report that names another chat's former session is refused
+   (409 `pinned_by_other_chat`).
+8. **Settling and races.**
+   - The background pass of `ChatRecordSync` runs `chat_switch.sweep_orphans`
+     right after each import, so model-only switches and orphans settle
+     without anyone opening the switch API.
+   - A `done` that arrives after the orphan cutoff (cold model load) is
+     still applied — the new process runs — and is flagged `lateReport`;
+     if the chat moved on since (a newer switch row), it is refused with
+     409 `switch_superseded`.
+   - A new switch or switch-back replaces a pending **model-only** switch
+     (`failed` / `superseded`): a dead process never answers, and the chat
+     must not stay blocked. A pending restart still blocks (409
+     `switch_pending`).
+   - One request per chat at a time: a per-chat lock in the (single)
+     backend process, plus `SELECT … FOR UPDATE` on the chat row on
+     Postgres until the pending row is committed. A double tap gets one
+     switch and one 409 `switch_pending`, never a 500.
+   - After `stop_and_switch`, the stopped turn may still write a `usage`
+     line with the old model; one such mismatch is let through before a
+     model-only switch counts as `model_not_applied`.
+   - The model name is checked (`chat_switch.MODEL_PATTERN`, no whitespace
+     or control characters) before it is typed into a pane as `/model`.
+   - `PUT …/native-session` does **not** re-pin while a switch is pending
+     (409 `switch_pending`): a re-pin before the new session answered would
+     move the chat off its old session early (point 4). The switch's result
+     route is the one re-pin path; plan S3 §4 item B's "pin accepts a
+     re-pin" is replaced by this.
+9. **Routes** (admin, like the other chat writes): `POST …/chats/{id}/switch`
    `{harness, runtimeId, model, mode?}`, `POST …/chats/{id}/switch-back`,
    `GET …/chats/{id}/switch/{event_id}` (state and package text for the
    switch card). All answer 404 `chat_record_disabled` while the flag is off.
