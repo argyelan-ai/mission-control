@@ -433,7 +433,8 @@ async def _supersede_model_switches(session: AsyncSession, chat: Chat) -> None:
 
 
 #: One switch request per chat at a time inside this process (the backend
-#: runs one worker); the row lock below covers a second process on Postgres.
+#: runs one worker). The row lock below, taken before the pending check,
+#: makes a second process on Postgres wait and then see the new row.
 _CHAT_LOCKS: dict[uuid.UUID, asyncio.Lock] = {}
 
 
@@ -445,9 +446,11 @@ def _chat_lock(chat_id: uuid.UUID) -> asyncio.Lock:
 
 
 async def _lock_chat_row(session: AsyncSession, chat: Chat) -> None:
-    """``SELECT … FOR UPDATE`` on the chat (Postgres; SQLite ignores it):
+    """``SELECT … FOR UPDATE`` on the chat (Postgres; SQLite ignores it).
+    Taken BEFORE the pending check in :func:`_settle_before_request` and
     held until :func:`_open_row` commits the pending row, so a parallel
-    request sees that row and gets 409 instead of a second switch."""
+    request waits, then sees that row and gets 409 instead of a second
+    switch."""
     await session.exec(select(Chat.id).where(Chat.id == chat.id).with_for_update())
 
 

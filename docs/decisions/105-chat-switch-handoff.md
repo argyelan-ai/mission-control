@@ -96,12 +96,20 @@ model text through the `context` of a `session/prompt`.
      409 `switch_superseded`.
    - A new switch or switch-back replaces a pending **model-only** switch
      (`failed` / `superseded`): a dead process never answers, and the chat
-     must not stay blocked. A pending restart still blocks (409
-     `switch_pending`).
-   - One request per chat at a time: a per-chat lock in the (single)
-     backend process, plus `SELECT … FOR UPDATE` on the chat row on
-     Postgres until the pending row is committed. A double tap gets one
-     switch and one 409 `switch_pending`, never a 500.
+     must not stay blocked. This happens only after every guard of the new
+     request has passed, in the same commit as the new switch row. A
+     refused request (409 `turn_running`, 423 `box_locked`,
+     409 `nothing_to_switch_back_to` …) leaves the model-only switch
+     pending, so its answer still settles the header model. A pending
+     restart still blocks (409 `switch_pending`).
+   - One request per chat at a time: a per-chat lock in the backend
+     process (production runs one worker). On Postgres the request also
+     takes `SELECT … FOR UPDATE` on the chat row first and only then reads
+     the pending rows, holding the lock until the new pending row is
+     committed, so a second process would wait and then see that row.
+     This multi-process path is not covered by a test (the test database
+     is SQLite, which ignores `FOR UPDATE`). A double tap gets one switch
+     and one 409 `switch_pending`, never a 500.
    - After `stop_and_switch`, the stopped turn may still write a `usage`
      line with the old model; one such mismatch is let through before a
      model-only switch counts as `model_not_applied`.
@@ -112,6 +120,10 @@ model text through the `context` of a `session/prompt`.
      move the chat off its old session early (point 4). The switch's result
      route is the one re-pin path; plan S3 §4 item B's "pin accepts a
      re-pin" is replaced by this.
+   - Open contract point for items A and C: after a harness switch the
+     chat is still owned through `chats.legacy_agent_id` (the result
+     route's ownership check). Whether ownership follows the new harness'
+     agent is decided there, not here.
 9. **Routes** (admin, like the other chat writes): `POST …/chats/{id}/switch`
    `{harness, runtimeId, model, mode?}`, `POST …/chats/{id}/switch-back`,
    `GET …/chats/{id}/switch/{event_id}` (state and package text for the
