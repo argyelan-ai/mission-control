@@ -223,15 +223,18 @@ async function applyStartupLocale(opts: { lookup: boolean; prefetched?: SavedLoo
   return plan;
 }
 
-/** Runs once per full page load (<LocaleSync> in the root layout). */
-export async function syncLocaleOnLoad(): Promise<void> {
+/**
+ * Runs once per full page load (<LocaleSync> in the root layout).
+ * `reload` is injectable: jsdom's `location.reload` cannot be replaced.
+ */
+export async function syncLocaleOnLoad(reload: () => void = () => window.location.reload()): Promise<void> {
   // No authenticated call on /login: a stale token would answer 401, and
   // lib/api.ts then reloads the login page (critic 19.11.2026). The saved
   // language is taken over right after login (adoptSavedLocaleAfterLogin).
   const plan = await applyStartupLocale({ lookup: !onLoginPage() });
   if (plan.reload && readLocaleCookie() === plan.locale && get("sessionStorage", LOCALE_RELOAD_KEY) !== plan.locale) {
     put("sessionStorage", LOCALE_RELOAD_KEY, plan.locale);
-    window.location.reload(); // stays hidden if the head script hid it
+    reload(); // stays hidden if the head script hid it
     return;
   }
   reveal();

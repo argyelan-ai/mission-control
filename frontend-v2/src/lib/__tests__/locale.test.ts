@@ -115,13 +115,15 @@ describe("planStartupLocale", () => {
 });
 
 describe("runtime", () => {
-  let reload: ReturnType<typeof vi.fn>;
+  let reload: ReturnType<typeof vi.fn<() => void>>;
 
   beforeEach(() => {
     vi.stubGlobal("localStorage", memoryStorage());
     vi.stubGlobal("sessionStorage", memoryStorage());
-    reload = vi.fn();
-    vi.stubGlobal("location", { ...window.location, reload });
+    // The test's global IS jsdom's window (vmForks pool): `location` cannot be
+    // stubbed, so the reload is passed in and the path set via history.
+    reload = vi.fn<() => void>();
+    window.history.replaceState(null, "", "/");
     clearCookies();
     settingsGet.mockReset();
     settingsSet.mockReset().mockResolvedValue({});
@@ -137,7 +139,7 @@ describe("runtime", () => {
   it("first load without cookie: the user's saved German applies and the cookie is set afterwards", async () => {
     localStorage.setItem("mc_auth_token", "t");
     settingsGet.mockResolvedValue(savedRow("de"));
-    await syncLocaleOnLoad();
+    await syncLocaleOnLoad(reload);
     expect(settingsGet).toHaveBeenCalledWith(UI_LANGUAGE_SETTING_KEY);
     expect(readLocaleCookie()).toBe("de");
     expect(localStorage.getItem(LOCALE_CACHE_KEY)).toBe("de");
@@ -147,9 +149,9 @@ describe("runtime", () => {
   it("does not reload twice in a row for the same language (no loop when cookies are blocked)", async () => {
     localStorage.setItem("mc_auth_token", "t");
     settingsGet.mockResolvedValue(savedRow("de"));
-    await syncLocaleOnLoad();
+    await syncLocaleOnLoad(reload);
     clearCookies();
-    await syncLocaleOnLoad();
+    await syncLocaleOnLoad(reload);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
@@ -158,7 +160,7 @@ describe("runtime", () => {
     html().setAttribute(LOCALE_PENDING_ATTR, "");
     html().style.visibility = "hidden";
     settingsGet.mockImplementation(notFound);
-    await syncLocaleOnLoad();
+    await syncLocaleOnLoad(reload);
     expect(readLocaleCookie()).toBe("en");
     expect(reload).not.toHaveBeenCalled();
     expect(settingsSet).not.toHaveBeenCalled();
@@ -167,7 +169,7 @@ describe("runtime", () => {
   });
 
   it("logged out: no API call at all, cookie still set", async () => {
-    await syncLocaleOnLoad();
+    await syncLocaleOnLoad(reload);
     expect(settingsGet).not.toHaveBeenCalled();
     expect(readLocaleCookie()).toBe("en");
   });
@@ -177,7 +179,7 @@ describe("runtime", () => {
     document.cookie = "NEXT_LOCALE=de; path=/";
     html().lang = "de";
     settingsGet.mockImplementation(notFound);
-    await syncLocaleOnLoad();
+    await syncLocaleOnLoad(reload);
     expect(settingsSet).toHaveBeenCalledWith(UI_LANGUAGE_SETTING_KEY, { language: "de" });
     expect(reload).not.toHaveBeenCalled();
   });
@@ -185,11 +187,11 @@ describe("runtime", () => {
   it("an automatic cookie from earlier gives way to the language saved later", async () => {
     localStorage.setItem("mc_auth_token", "t");
     settingsGet.mockImplementation(notFound);
-    await syncLocaleOnLoad(); // nothing saved yet -> auto cookie "en"
+    await syncLocaleOnLoad(reload); // nothing saved yet -> auto cookie "en"
     expect(readLocaleCookie()).toBe("en");
     sessionStorage.clear(); // a later visit (new tab / session)
     settingsGet.mockReset().mockResolvedValue(savedRow("de"));
-    await syncLocaleOnLoad();
+    await syncLocaleOnLoad(reload);
     expect(readLocaleCookie()).toBe("de");
     expect(localStorage.getItem(LOCALE_CACHE_KEY)).toBe("de");
     expect(reload).toHaveBeenCalledTimes(1);
@@ -200,29 +202,29 @@ describe("runtime", () => {
     settingsGet.mockRejectedValue(new Error("API 502: Bad Gateway"));
     html().setAttribute(LOCALE_PENDING_ATTR, "");
     html().style.visibility = "hidden";
-    await syncLocaleOnLoad();
+    await syncLocaleOnLoad(reload);
     expect(readLocaleCookie()).toBeNull();
     expect(localStorage.getItem(LOCALE_AUTO_KEY)).toBeNull();
     expect(html().style.visibility).toBe(""); // shown again anyway
     settingsGet.mockReset().mockResolvedValue(savedRow("de"));
-    await syncLocaleOnLoad();
+    await syncLocaleOnLoad(reload);
     expect(readLocaleCookie()).toBe("de");
   });
 
   it("automatic cookie and nothing saved: at most one lookup per browser session", async () => {
     localStorage.setItem("mc_auth_token", "t");
     settingsGet.mockImplementation(notFound);
-    await syncLocaleOnLoad();
-    await syncLocaleOnLoad();
-    await syncLocaleOnLoad();
+    await syncLocaleOnLoad(reload);
+    await syncLocaleOnLoad(reload);
+    await syncLocaleOnLoad(reload);
     expect(settingsGet).toHaveBeenCalledTimes(1);
   });
 
   it("on /login no authenticated lookup is made (a stale token must not bounce the page)", async () => {
     localStorage.setItem("mc_auth_token", "stale");
-    vi.stubGlobal("location", { ...window.location, reload, pathname: "/login" });
+    window.history.replaceState(null, "", "/login");
     settingsGet.mockResolvedValue(savedRow("de"));
-    await syncLocaleOnLoad();
+    await syncLocaleOnLoad(reload);
     expect(settingsGet).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
   });
@@ -263,14 +265,15 @@ describe("runtime", () => {
 });
 
 describe("LOCALE_INIT_SCRIPT (runs in <head> before first paint)", () => {
-  const run = () => new Function(LOCALE_INIT_SCRIPT)();
-  let reload: ReturnType<typeof vi.fn>;
+  // The script calls the bare global `location`, which jsdom's window does not
+  // let us replace; a `location` parameter shadows it inside the script.
+  const run = () => new Function("location", LOCALE_INIT_SCRIPT)({ reload });
+  let reload: ReturnType<typeof vi.fn<() => void>>;
 
   beforeEach(() => {
     vi.stubGlobal("localStorage", memoryStorage());
     vi.stubGlobal("sessionStorage", memoryStorage());
-    reload = vi.fn();
-    vi.stubGlobal("location", { ...window.location, reload });
+    reload = vi.fn<() => void>();
     clearCookies();
     html().lang = "en";
     html().removeAttribute(LOCALE_PENDING_ATTR);
