@@ -598,6 +598,27 @@ async def test_concurrent_sends_open_one_window(box, monkeypatch):
     assert {n for s, n in docker2.windows if s == "chats-rex"} == {f"chat-{a}", f"chat-{b}"}
 
 
+async def test_window_opened_elsewhere_after_the_check_is_not_doubled(box, monkeypatch):
+    """The lock is per backend process. A window of the same name that
+    appears after the check (a second process, a hand start) is selected by
+    ``new-window -S`` — never a second claude on the same session id."""
+    chat, native = str(uuid.uuid4()), str(uuid.uuid4())
+
+    class _Stale(_Docker):
+        async def __call__(self, argv):
+            if "list-windows" in argv:
+                answer = await super().__call__(argv)
+                # Someone else opens it right after our check.
+                self.windows.append(("chats-rex", f"chat-{chat}"))
+                return answer
+            return await super().__call__(argv)
+
+    docker = _Stale(windows=(("rex", "0"), ("chats-rex", "chat-other")))
+    monkeypatch.setattr(runner, "_docker", docker)
+    await runner.ensure_window(_Agent(), chat, native)
+    assert docker.windows.count(("chats-rex", f"chat-{chat}")) == 1
+
+
 async def test_failed_handoff_plan_does_not_kill_running_window(box, monkeypatch):
     """A switch whose launch cannot be planned (package too large, prompt
     file not writable) must leave the running process alone."""
