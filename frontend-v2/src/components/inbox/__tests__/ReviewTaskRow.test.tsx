@@ -78,7 +78,12 @@ function mkTask(overrides: Partial<Task> = {}): Task {
   };
 }
 
-function renderRow(task: Task, headRun: HeadRun | null = null, agent?: Parameters<typeof ReviewTaskRow>[0]["agent"]) {
+function renderRow(
+  task: Task,
+  headRun: HeadRun | null = null,
+  agent?: Parameters<typeof ReviewTaskRow>[0]["agent"],
+  agentMap: Parameters<typeof ReviewTaskRow>[0]["agentMap"] = {},
+) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -86,7 +91,7 @@ function renderRow(task: Task, headRun: HeadRun | null = null, agent?: Parameter
         task={task}
         boardId="board-1"
         agent={agent}
-        agentMap={{}}
+        agentMap={agentMap}
         headRun={headRun}
         onDecision={vi.fn()}
       />
@@ -197,5 +202,23 @@ describe("ReviewTaskRow — head chip (heads-sichtbar PR 3, bauplan §4)", () =>
     // still collapsed — the chip's own stopPropagation held, and it is a
     // sibling of the title button now, not nested inside it.
     expect(header).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+describe("ReviewTaskRow — round-2 Q5", () => {
+  it("the operator's review names the agent that delivered the card", () => {
+    renderRow(
+      mkTask({ human_review_required: true, assigned_agent_id: null, delivered_by_agent_id: "s1" }),
+      null,
+      undefined,
+      { s1: { id: "s1", name: "Beta", emoji: null } as never },
+    );
+    expect(screen.getByTestId("review-row-deliverer")).toHaveTextContent("Delivered by Beta");
+  });
+
+  it("the decision buttons wrap on a narrow phone instead of running off the screen", () => {
+    renderRow(mkTask({ human_review_required: true }));
+    const hold = screen.getByRole("button", { name: "Hold" });
+    expect(hold.parentElement?.className).toContain("flex-wrap");
   });
 });

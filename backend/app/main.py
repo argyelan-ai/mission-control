@@ -56,6 +56,8 @@ from app.routers import (
     activity,
     agent_chat,
     agent_comments,
+    agent_comms,
+    comms,
     agent_scoped,
     agent_task_status,
     agent_thread_attachments,
@@ -77,6 +79,7 @@ from app.routers import (
     cli_terminal,
     consensus,
     credentials,
+    deliverable_view,
     groups,
     deploy,
     hosts,
@@ -128,6 +131,7 @@ from app.background import (
     TELEGRAM_TOPIC_RETENTION_DAYS,
 )
 from app.routers import vault as vault_router_module
+from app.routers import chat_record as chat_record_router_module
 # Architektur E Teil 2 (Rex-Review PR #500, B1): die Seed-Helfer leben
 # in app.seeds (geteilt mit app.background.prepare_process) — app.main
 # importiert sie von dort, damit der Worker app.main nicht mehr anziehen muss.
@@ -233,7 +237,17 @@ async def lifespan(app: FastAPI):
         )
     except Exception as e:
         logger.error("Telegram topic purge loop failed to schedule: %s", e, exc_info=True)
+
+    # ── Vertical background loops (ADR-044) ───────────────────────────
+    # Loops a vertical registered in hooks.background_loops (e.g. the bench
+    # orphan sweep). API process only, unconditional: the worker does not
+    # load verticals, and the verticals' own state machines run here.
+    from app.verticals import hooks as _vertical_hooks
+    app.state.vertical_loop_tasks = _vertical_hooks.start_background_loops()
     yield
+    await _vertical_hooks.stop_background_loops(
+        getattr(app.state, "vertical_loop_tasks", None) or []
+    )
     # Shutdown — stop Telegram + Intelligence + Task Runner + Watchdog.
     # Phase 29 (ADR-039): Gateway RPC lifecycle removed (no socket to drain).
     # B6 (Rex-Review PR #500): jarvis_briefing_task cancel restored — it was
@@ -420,9 +434,12 @@ app.include_router(run_record.router)  # /api/v1/tasks/{id}/run-record — Laufa
 app.include_router(heads.router)  # /api/v1/heads — Head launcher (docs/specs/head-launcher.md), behind heads_enabled
 app.include_router(night_shift.router)  # /api/v1/night-shift — run marked tasks as heads tonight (ROADMAP E2), behind heads_enabled
 app.include_router(files.router)  # /api/v1/files — global Files browser (portable, sandboxed)
+app.include_router(deliverable_view.router)  # /api/v1/deliverable-view — multi-file HTML deliverables in a sandboxed frame
 app.include_router(agents.router)
 app.include_router(agent_templates.router)
 app.include_router(agent_scoped.router)
+app.include_router(agent_comms.router)  # ADR-100 — talking across harnesses
+app.include_router(comms.router)  # ADR-100 — guest cards (admin)
 app.include_router(agent_comments.router)  # REF-02 step 3 — extracted from agent_scoped (Plan 04-08 finalizes)
 app.include_router(agent_task_status.router)  # REF-02 step 4 — extracted from agent_scoped (Plan 04-08 finalizes)
 app.include_router(agent_thread_attachments.router)  # /api/v1/agent/threads/{id}/attachment — Agenten-Anhänge (Gruppenchat, 07.09.2026)
@@ -474,6 +491,7 @@ app.include_router(schedule.router)
 app.include_router(voice.router)
 app.include_router(voice_live.router)
 app.include_router(usage.router)  # /api/v1/usage/page|pages — E0 page-usage beacon
+app.include_router(chat_record_router_module.router)  # /api/v1/chat-record — MC's own chat record (ADR-103), flag CHAT_RECORD_ENABLED
 
 # ── Verticals (optional, strippable feature bundles — ADR-044) ──────────────
 # Discovery loads every subpackage of app/verticals/ with register(app).

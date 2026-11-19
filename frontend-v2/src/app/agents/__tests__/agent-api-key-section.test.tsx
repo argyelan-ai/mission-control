@@ -12,6 +12,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AgentApiKeySection } from "../[id]/AgentApiKeySection";
 import { api } from "@/lib/api";
+import { useAppStore } from "@/lib/store";
 import type { Agent, Runtime, SecretEntry } from "@/lib/types";
 
 function renderWithQuery(ui: React.ReactElement) {
@@ -45,10 +46,32 @@ describe("AgentApiKeySection", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(api.secrets, "list").mockResolvedValue(SECRETS);
+    useAppStore.setState({ currentUser: { id: "u1", role: "admin" } as never });
+  });
+
+  it("viewer: does not ask for the key list (403 since ADR-098) and says who may change the key", async () => {
+    useAppStore.setState({ currentUser: { id: "u2", role: "viewer" } as never });
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({ runtimes: [rt({})] } as never);
+    const list = vi.spyOn(api.secrets, "list");
+    renderWithQuery(<AgentApiKeySection agent={agent({ secret_id: "s-ollama" })} agentId="agent-1" />);
+    await screen.findByText(/Only operators and admins can see or change the API key/);
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Saved key \(not found\)/)).not.toBeInTheDocument();
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("operator: still gets the key picker", async () => {
+    useAppStore.setState({ currentUser: { id: "u3", role: "operator" } as never });
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
+      runtimes: [rt({ agent_key_used: true, agent_key_provider: "ollama" })],
+    } as never);
+    renderWithQuery(<AgentApiKeySection agent={agent()} agentId="agent-1" />);
+    const select = await screen.findByRole("combobox", { name: "API key (provider)" });
+    await waitFor(() => expect(optionLabels(select).some((l) => l.includes("Cloud model key"))).toBe(true));
   });
 
   it("offers only keys of the runtime's provider — never other agents' tokens", async () => {
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
       runtimes: [rt({ agent_key_used: true, agent_key_provider: "ollama" })],
     } as never);
     renderWithQuery(<AgentApiKeySection agent={agent()} agentId="agent-1" />);
@@ -60,7 +83,7 @@ describe("AgentApiKeySection", () => {
   });
 
   it("offers no keys when the runtime signs in on its own, and says so", async () => {
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
       runtimes: [rt({ agent_key_used: false, agent_key_provider: null })],
     } as never);
     renderWithQuery(<AgentApiKeySection agent={agent()} agentId="agent-1" />);
@@ -70,7 +93,7 @@ describe("AgentApiKeySection", () => {
   });
 
   it("shows the SAVED key as selected even when it does not fit, marked as such", async () => {
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
       runtimes: [rt({ agent_key_used: false, agent_key_provider: null })],
     } as never);
     renderWithQuery(<AgentApiKeySection agent={agent({ secret_id: "s-ollama" })} agentId="agent-1" />);
@@ -80,7 +103,7 @@ describe("AgentApiKeySection", () => {
   });
 
   it("never shows an unsaved value while data is still loading", async () => {
-    vi.spyOn(api.runtimes, "list").mockReturnValue(new Promise(() => {}) as never);
+    vi.spyOn(api.runtimes, "listRows").mockReturnValue(new Promise(() => {}) as never);
     vi.spyOn(api.secrets, "list").mockReturnValue(new Promise(() => {}) as never);
     renderWithQuery(<AgentApiKeySection agent={agent({ secret_id: "s-ollama" })} agentId="agent-1" />);
     const select = (await screen.findByRole("combobox", { name: "API key (provider)" })) as HTMLSelectElement;
@@ -88,7 +111,7 @@ describe("AgentApiKeySection", () => {
   });
 
   it("openai-protocol runtime of an unknown vendor: offers every LLM provider key, still no tokens/chat keys", async () => {
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
       runtimes: [rt({ runtime_type: "vllm_docker", agent_key_used: true, agent_key_provider: null })],
     } as never);
     renderWithQuery(<AgentApiKeySection agent={agent()} agentId="agent-1" />);
@@ -104,7 +127,7 @@ describe("AgentApiKeySection", () => {
   });
 
   it("a saved key on such a runtime is shown as a normal choice, not as 'does not fit'", async () => {
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({
       runtimes: [rt({ runtime_type: "vllm_docker", agent_key_used: true, agent_key_provider: null })],
     } as never);
     renderWithQuery(<AgentApiKeySection agent={agent({ secret_id: "s-ollama" })} agentId="agent-1" />);
@@ -113,7 +136,7 @@ describe("AgentApiKeySection", () => {
   });
 
   it("no runtime bound: still offers LLM provider keys (the backend sends the agent key then)", async () => {
-    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [] } as never);
+    vi.spyOn(api.runtimes, "listRows").mockResolvedValue({ runtimes: [] } as never);
     renderWithQuery(<AgentApiKeySection agent={agent({ runtime_id: null } as Partial<Agent>)} agentId="agent-1" />);
     const select = await screen.findByRole("combobox", { name: "API key (provider)" });
     await waitFor(() => expect(optionLabels(select).some((l) => l.includes("OpenAI key"))).toBe(true));

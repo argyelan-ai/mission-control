@@ -62,6 +62,9 @@ function toDotStatus(status: AgentStatus): DotStatus {
       return "warning";
     case "archived":
       return "offline";
+    case "working":
+      // The heartbeat's word for a running turn — the dot's "busy".
+      return "busy";
     default:
       return status;
   }

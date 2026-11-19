@@ -284,6 +284,196 @@ describe("Live-Vorschau (preview) — eigenes Fach, nie Zeitachse", () => {
     state = chatReducer(state, { kind: "session_changed" });
     expect(state.preview).toBeNull();
   });
+
+  // Review Z3: a chat turn that ends while a TASK turn runs (the operator
+  // stops it mid answer) reports task_working / waiting_model, not idle —
+  // the chat is at rest all the same, its half answer must not stay.
+  it.each(["task_working", "waiting_model"] as const)(
+    "verfaellt auch, wenn der Chat ruht und nur eine Aufgabe laeuft (%s)",
+    (status) => {
+      let state = chatReducer(createInitialChatState(), preview("Halbe Antw"));
+      state = chatReducer(state, { kind: "state", status: "working", prompt: null });
+      state = chatReducer(state, { kind: "state", status, prompt: null });
+      expect(state.preview).toBeNull();
+    },
+  );
+});
+
+describe("laufender Gedanke (preview.block = thinking, 20.10.2026)", () => {
+  const thought = (text: string): PreviewEvent => ({
+    kind: "preview", uuid: null, ts: "2026-10-20T09:00:00Z", text, source: "acp",
+    block: "thinking", chars: text.length, startedAt: "2026-10-20T08:59:00Z",
+  });
+  const answer = (text: string): PreviewEvent =>
+    ({ kind: "preview", uuid: null, ts: "2026-10-20T09:00:01Z", text, source: "acp" });
+  const tool: ToolEvent = {
+    kind: "tool", uuid: "t1", ts: "2026-10-20T09:00:02Z", name: "bash", title: "$ ls",
+    detail: null, result: null, status: "pending", toolUseId: "call-1",
+  } as unknown as ToolEvent;
+  const done: ThinkingEvent = {
+    kind: "thinking", uuid: "th1", ts: "2026-10-20T09:00:02Z", text: "fertig gedacht",
+    sidechain: false, durationMs: 60_000,
+  };
+
+  it("liegt im Vorschau-Fach mit Groesse und Beginn", () => {
+    const state = chatReducer(createInitialChatState(), thought("ich denke"));
+    expect(state.preview?.block).toBe("thinking");
+    expect(state.preview?.startedAt).toBe("2026-10-20T08:59:00Z");
+    expect(state.events).toHaveLength(0);
+  });
+
+  it("endet mit dem naechsten Werkzeugaufruf", () => {
+    let state = chatReducer(createInitialChatState(), thought("ich denke"));
+    state = chatReducer(state, tool);
+    expect(state.preview).toBeNull();
+    expect(state.events).toHaveLength(1);
+  });
+
+  it("endet, wenn der fertige Gedanke im Verlauf steht — nie doppelt", () => {
+    let state = chatReducer(createInitialChatState(), thought("ich denke"));
+    state = chatReducer(state, done);
+    expect(state.preview).toBeNull();
+    expect(state.events.map((e) => e.kind)).toEqual(["thinking"]);
+  });
+
+  it("wird von der beginnenden Antwort ersetzt", () => {
+    let state = chatReducer(createInitialChatState(), thought("ich denke"));
+    state = chatReducer(state, answer("Die Antwort"));
+    expect(state.preview?.block).toBeUndefined();
+    expect(state.preview?.text).toBe("Die Antwort");
+  });
+
+  it("eine Antwort-Vorschau ueberlebt einen Werkzeugaufruf weiter wie bisher", () => {
+    let state = chatReducer(createInitialChatState(), answer("Ich schaue nach"));
+    state = chatReducer(state, tool);
+    expect(state.preview?.text).toBe("Ich schaue nach");
+  });
+});
+
+/* Spec A PR-0 (M6): the preview file and the transcript are two files without
+   a shared order. The tailer reads the preview file BEFORE the transcript in
+   each tick, so a snapshot of text that has just become a permanent line can
+   arrive AFTER that line — and stood under it as a second copy until the next
+   snapshot (after a tool call: minutes). Once the bridge writes one line per
+   text segment (PR-1) this race happens once per segment. Same rule as
+   `seedSequence` and the server's task block: a snapshot not newer than the
+   newest assistant line / finished thought is overtaken. */
+describe("veraltete Vorschau nach einer festen Zeile (Spec A PR-0, M6)", () => {
+  const pv = (text: string, ts: string | null, block?: "thinking"): PreviewEvent =>
+    ({ kind: "preview", uuid: null, ts, text, source: "acp", ...(block ? { block } : {}) } as PreviewEvent);
+  const said = (uuid: string, text: string, ts: string): MessageEvent =>
+    ({ ...msg(uuid, text, "assistant"), ts });
+  const thought = (uuid: string, ts: string): ThinkingEvent =>
+    ({ kind: "thinking", uuid, ts, text: "fertig gedacht", sidechain: false });
+
+  it("verwirft einen Schnappschuss, der aelter ist als die neueste Antwortzeile (kein Doppeltext)", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, said("a1", "Ich schaue mir die Datei an.", "2026-10-22T10:00:05.000Z"));
+    st = chatReducer(st, pv("Ich schaue mir die Datei an.", "2026-10-22T10:00:04.900Z"));
+    expect(st.preview).toBeNull();
+    expect(st.events).toHaveLength(1);
+  });
+
+  it("verwirft auch einen Schnappschuss mit genau dem Zeitstempel der Zeile", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, said("a1", "Text", "2026-10-22T10:00:05.000Z"));
+    st = chatReducer(st, pv("Text", "2026-10-22T10:00:05.000Z"));
+    expect(st.preview).toBeNull();
+  });
+
+  it("verwirft einen Schnappschuss, der aelter ist als der neueste fertige Gedanke", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, said("a1", "Erst das.", "2026-10-22T10:00:01.000Z"));
+    st = chatReducer(st, thought("th1", "2026-10-22T10:00:08.000Z"));
+    st = chatReducer(st, pv("ich denke noch", "2026-10-22T10:00:07.000Z", "thinking"));
+    expect(st.preview).toBeNull();
+  });
+
+  it("behaelt einen Schnappschuss, der neuer ist als Antwort und Gedanke (Agent schreibt weiter)", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, said("a1", "Erst das.", "2026-10-22T10:00:01.000Z"));
+    st = chatReducer(st, thought("th1", "2026-10-22T10:00:02.000Z"));
+    st = chatReducer(st, pv("Jetzt der naechste Abschnitt", "2026-10-22T10:00:03.000Z"));
+    expect(st.preview?.text).toBe("Jetzt der naechste Abschnitt");
+  });
+
+  it("vergleicht Zeitpunkte, nicht Zeichenketten (Formate von Schreiber und Tailer weichen ab)", () => {
+    // As strings "…05.500Z" < "…05Z" ('.' sorts before 'Z') — the snapshot
+    // would count as older although it is half a second NEWER.
+    let st = createInitialChatState();
+    st = chatReducer(st, said("a1", "Erst das.", "2026-10-22T10:00:05Z"));
+    st = chatReducer(st, pv("weiter", "2026-10-22T10:00:05.500Z"));
+    expect(st.preview?.text).toBe("weiter");
+    // ...and an offset form of an OLDER instant still counts as older.
+    st = chatReducer(st, said("a2", "Dann das.", "2026-10-22T10:00:09.000Z"));
+    st = chatReducer(st, pv("Dann das.", "2026-10-22T10:00:08.123456+00:00"));
+    expect(st.preview).toBeNull();
+  });
+
+  it("ein veralteter Schnappschuss ersetzt keine laufende neuere Vorschau", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, said("a1", "Abschnitt eins.", "2026-10-22T10:00:05.000Z"));
+    st = chatReducer(st, pv("Abschnitt zwei laeuft", "2026-10-22T10:00:06.000Z"));
+    st = chatReducer(st, pv("Abschnitt eins.", "2026-10-22T10:00:04.000Z"));
+    expect(st.preview?.text).toBe("Abschnitt zwei laeuft");
+  });
+
+  it.each([null, "", "kein Datum"])(
+    "behaelt einen Schnappschuss ohne lesbaren Zeitstempel (%s) — nie eine fehlende laufende Antwort",
+    (ts) => {
+      let st = createInitialChatState();
+      st = chatReducer(st, said("a1", "Erst das.", "2026-10-22T10:00:05.000Z"));
+      st = chatReducer(st, pv("laeuft", ts));
+      expect(st.preview?.text).toBe("laeuft");
+    },
+  );
+
+  // Review PR #933: the bridge stamps a finished thought and the first answer
+  // snapshot after it in the same call (`_map_one`) — the same millisecond.
+  // Across kinds only an OLDER stamp is stale; the same stamp is new text.
+  it("behaelt eine Antwort-Vorschau mit genau dem Zeitstempel des fertigen Gedankens", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, thought("th1", "2026-10-22T10:00:05.123Z"));
+    st = chatReducer(st, pv("Die Antwort beginnt", "2026-10-22T10:00:05.123Z"));
+    expect(st.preview?.text).toBe("Die Antwort beginnt");
+  });
+
+  it("behaelt einen laufenden Gedanken mit genau dem Zeitstempel der Antwortzeile", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, said("a1", "Abschnitt eins.", "2026-10-22T10:00:05.123Z"));
+    st = chatReducer(st, pv("ich denke weiter", "2026-10-22T10:00:05.123Z", "thinking"));
+    expect(st.preview?.text).toBe("ich denke weiter");
+  });
+
+  it("verwirft ueber die Art hinweg nur einen AELTEREN Schnappschuss", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, thought("th1", "2026-10-22T10:00:05.123Z"));
+    st = chatReducer(st, pv("alte Antwort", "2026-10-22T10:00:05.122Z"));
+    expect(st.preview).toBeNull();
+  });
+
+  // Review PR #933: a pane preview (Claude Code) carries the BACKEND clock,
+  // transcript lines the agent's. The tailer already cuts the pane text off
+  // behind the last permanent line (pane anchor), in the same loop that reads
+  // the transcript — the reducer must not compare the two clocks.
+  it("prueft keine Bildschirm-Vorschau (andere Uhr; der Tailer schneidet sie selbst ab)", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, said("a1", "Erst das.", "2026-10-22T10:00:05.000Z"));
+    st = chatReducer(st, { ...pv("Jetzt das naechste", "2026-10-22T10:00:04.400+00:00"), source: "pane" });
+    expect(st.preview?.text).toBe("Jetzt das naechste");
+  });
+
+  it("eine Zeile des Operators und ein Werkzeug beenden nichts", () => {
+    let st = createInitialChatState();
+    st = chatReducer(st, said("a1", "Erst das.", "2026-10-22T10:00:01.000Z"));
+    st = chatReducer(st, { ...msg("u1", "und weiter?", "user"), ts: "2026-10-22T10:00:09.000Z" });
+    st = chatReducer(st, {
+      kind: "tool", uuid: "t1", ts: "2026-10-22T10:00:09.500Z", name: "bash", title: "$ ls",
+      detail: null, result: null, status: "pending", toolUseId: "call-9",
+    } as unknown as ToolEvent);
+    st = chatReducer(st, pv("Antwort laeuft", "2026-10-22T10:00:02.000Z"));
+    expect(st.preview?.text).toBe("Antwort laeuft");
+  });
 });
 
 describe("gemischte Bloecke unter einer uuid (omp)", () => {
@@ -384,6 +574,15 @@ describe("seedSequence — veraltete Preview-Zeilen sterben beim Seed", () => {
     for (const ev of seedSequence([answer], [live])) st = chatReducer(st, ev);
 
     expect(st.preview?.text).toBe("naechster Zug laeuft…");
+  });
+
+  it("vergleicht Zeitpunkte, nicht Zeichenketten (…05.500Z ist NACH …05Z)", () => {
+    const answer = msg("a1", "Fertig.", "assistant");
+    answer.ts = "2026-08-15T00:00:05Z";
+    const live = pv("naechster Zug laeuft…", "2026-08-15T00:00:05.500Z");
+    expect(seedSequence([answer], [live])).toContain(live);
+    const older = pv("Fertig.", "2026-08-15T00:00:04.999+00:00");
+    expect(seedSequence([answer], [older])).not.toContain(older);
   });
 
   it("behält Previews, wenn die History noch keine assistant-message hat", () => {
@@ -826,6 +1025,13 @@ describe("Live-Werkzeugausgabe (tool_output) — eigenes Fach je Werkzeugaufruf"
     expect(chatReducer(st, idle).toolOutputs).toEqual({});
     const rollover: SessionChangedEvent = { kind: "session_changed" };
     expect(chatReducer(st, rollover).toolOutputs).toEqual({});
+    // Review Z3: the chat at rest while a task runs counts the same.
+    for (const status of ["task_working", "waiting_model"] as const) {
+      expect(chatReducer(st, { kind: "state", status, prompt: null }).toolOutputs).toEqual({});
+    }
+    // A question or an approval belongs to a running chat turn: kept.
+    expect(chatReducer(st, { kind: "state", status: "permission_prompt", prompt: null }).toolOutputs)
+      .toEqual(st.toolOutputs);
   });
 
   it("Seed: History-Werkzeug mit Ergebnis vor gepufferter Live-Ausgabe -> nichts Veraltetes", () => {

@@ -116,13 +116,14 @@ async def test_nothing_chat_capable_reports_neither(mock_models_endpoint):
     mock_models_endpoint(
         {"data": [{"id": "text-embedding-3-large", "max_model_len": 8192}]}
     )
-    assert await ars.probe_runtime_model_info(_rt()) == ars.ProbedModel(None, None)
+    # Something answered (ADR-096 §11.2: "http", never the refused fast path).
+    assert await ars.probe_runtime_model_info(_rt()) == ars.ProbedModel(None, None, ars.FAIL_HTTP)
 
 
 @pytest.mark.asyncio
 async def test_unreachable_endpoint_reports_neither(mock_models_endpoint):
     mock_models_endpoint({"error": "nope"}, status_code=503)
-    assert await ars.probe_runtime_model_info(_rt()) == ars.ProbedModel(None, None)
+    assert await ars.probe_runtime_model_info(_rt()) == ars.ProbedModel(None, None, ars.FAIL_HTTP)
 
 
 @pytest.mark.asyncio

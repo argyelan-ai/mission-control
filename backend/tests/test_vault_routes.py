@@ -264,3 +264,49 @@ async def test_track_view_returns_error_when_activity_not_initialized(
     )
     assert r.status_code == 200, r.text
     assert r.json() == {"ok": False, "error": "activity not initialized"}
+
+
+async def test_vault_notes_names_every_agent_not_just_the_page(
+    vault_client: AsyncClient, vault_path: Path
+):
+    """Round-4 t4 SHOULD-1: the memory header said "4 agents" and the agent
+    filter offered only those 4, because both were built from the first page
+    of 50 notes. The list response carries the agents of the WHOLE filtered
+    set (agent filter left out, so the filter can still switch agents)."""
+    _seed_vault(vault_path)  # sparky + cody, one lesson each
+    for i in range(60):  # a busy agent fills the first page on its own
+        p = vault_path / "agents" / "researcher" / "knowledge" / f"r{i}.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            frontmatter.dumps(
+                frontmatter.Post(
+                    f"finding {i}",
+                    id=f"r{i}",
+                    type="knowledge",
+                    agent="researcher",
+                    date="2026-10-20T10:00:00Z",
+                )
+            )
+        )
+    r = await vault_client.post("/api/v1/vault/_admin/rebuild")
+    assert r.status_code == 200, r.text
+
+    r = await vault_client.get("/api/v1/vault/notes", params={"limit": 50})
+    data = r.json()
+    assert data["count"] == 62
+    assert {n["agent"] for n in data["notes"]} == {"researcher"}  # the page
+    assert data["agents"] == [
+        {"agent": "cody", "count": 1},
+        {"agent": "researcher", "count": 60},
+        {"agent": "sparky", "count": 1},
+    ]
+
+    # An agent filter narrows the notes, not the agent choice.
+    r = await vault_client.get("/api/v1/vault/notes", params={"agent": "sparky"})
+    data = r.json()
+    assert data["count"] == 1
+    assert [a["agent"] for a in data["agents"]] == ["cody", "researcher", "sparky"]
+
+    # A type filter does narrow it: only agents that have such notes.
+    r = await vault_client.get("/api/v1/vault/notes", params={"type": "lesson"})
+    assert [a["agent"] for a in r.json()["agents"]] == ["cody", "sparky"]

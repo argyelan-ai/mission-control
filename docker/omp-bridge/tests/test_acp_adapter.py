@@ -402,13 +402,18 @@ def test_acp_error_stop_reason_model_error():
     print("PASS test_acp_error_stop_reason_model_error")
 
 
-def test_acp_max_tokens_classifies_maxtime():
+def test_acp_max_tokens_classifies_output_cap():
+    # 28.10.2026: the output cap is its own kind (continue in the same
+    # session first, see test_acp_output_cap_continue.py); only the wall
+    # clock ("maxtime") stays ABORT_MAXTIME.
     o = bridge.RunOutcome()
     o.saw_session = True
     o.saw_agent_end = True
     o.final_stop_reason = "max_tokens"
+    assert bridge.classify_acp(o).kind is bridge.Kind.ABORT_OUTPUT_CAP
+    o.final_stop_reason = "maxtime"
     assert bridge.classify_acp(o).kind is bridge.Kind.ABORT_MAXTIME
-    print("PASS test_acp_max_tokens_classifies_maxtime")
+    print("PASS test_acp_max_tokens_classifies_output_cap")
 
 
 def test_acp_no_session_classifies_launch_preflight():

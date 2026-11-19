@@ -1,6 +1,8 @@
 # ADR-090 — The MC chat is the operator's remote control; the chat may grow again; omp stays the local harness
 
-**Status:** Accepted (2026-10-12) · amends ADR-085 §4 and ADR-089 §4 / §9 (the chat exception) and PRINCIPLES §2 rule 4 · touches ADR-084 (capability row for omp)
+**Status:** Accepted (2026-10-12) · amends ADR-085 §4 and ADR-089 §4 / §9 (the chat exception) and PRINCIPLES §2 rule 4 · touches ADR-084 (capability row for omp) · partially superseded by [ADR-102](102-cockpit-direction.md) (2026-11-17) — the chat is the home of the product, no longer a remote control limited to two fixed agents and a closed list (§1); §2, §3 and omp over ACP stay
+**Amended by:** [ADR-099](099-chat-workspace.md) — §1 feature list gains the header buttons changes / browser and a resizable side panel; see the note at the end
+**Re-justified by:** [ADR-100](100-foundation-and-cross-harness-comms.md) §5 — the chat stays for harnesses without their own phone app; see the note at the end
 **Datum:** 2026-10-12
 **Scope:** Architecture/Direction · Frontend/Pages · Backend/Services · Docker/Agent-Images
 
@@ -213,6 +215,23 @@ profile. The unfreeze itself is undone by a new ADR.
 
 Nothing is removed. New features ship behind existing switches or at L3;
 installations that do nothing keep today's behaviour.
+
+## Note (2026-11-01) — amended by ADR-099
+
+[ADR-099 — Chat workspace](099-chat-workspace.md) adds two items to the
+closed feature list of §1, approved by the operator on 2026-11-01: the
+changes / browser buttons in the chat header (detail level into ⋯) and a
+resizable side panel. Layout only; the text above is not rewritten.
+
+## Note (2026-11-01) — re-justified by ADR-100
+
+[ADR-100 — MC is the foundation under every harness](100-foundation-and-cross-harness-comms.md)
+§5: the context line "a desktop coding client cannot be reached from the
+phone" no longer holds for the coding CLI, whose vendor ships a remote
+control. The chat stays the remote control for harnesses **without** their
+own phone app — the local omp agent, the lead agent, and Hermes until its own
+app is stable. MC chat features for coding-CLI sessions are parked. The text
+above is not rewritten.
 
 ## References
 

@@ -45,9 +45,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 import uuid
 from datetime import datetime, timezone
+from shlex import quote as shlex_quote
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -59,17 +61,27 @@ from app.services import address_classify
 from app.services.activity import emit_event
 from app.services.agent_runtime_switch import (
     _PROBEABLE_RUNTIME_TYPES,
+    FAIL_REFUSED,
     probe_runtime_model_info,
 )
-from app.services import host_memory_prep
+from app.services import engine_death, host_memory_prep
 from app.services.host_resolver import resolve_host_for_runtime, ssh_capable
 from app.services.runtime_grace import (
+    INTENT_CRASH_LOOP,
     PHASE_LOADING,
     SOURCE_AUTO_RECOVERY,
     SOURCE_SWITCH,
+    STOP_INTENT_SETTLE,
+    clear_evicted,
+    clear_start_pending,
+    clear_stop_intent,
     clear_switching,
     get_evicted,
+    get_start_pending,
+    get_stop_intent,
     get_switching,
+    marker_age_seconds,
+    mark_stop_intent,
     mark_switching,
 )
 from app.services.runtime_manager import DOCKER_ENGINE_TYPES, SSH_PROCESS_TYPE
@@ -78,17 +90,59 @@ from app.services.runtime_model_resolver import (
     session_scope,
 )
 from app.services.runtime_propagation import (
+    is_model_sync_target,
     mark_agents_for_sync,
     recreate_pending_agents,
     sync_pending_agents,
 )
+from app.services.runtime_window import apply_window, window_would_change
+from app.utils import ensure_aware
 
 logger = logging.getLogger(__name__)
 
 # Emit runtime.unreachable only after this many consecutive failed probes
 # (transient blips and engine restarts must not spam the activity feed).
+# Counted in PROBES, not seconds — deliberately kept when the tick went from
+# 90 to 30 s (2026-10-20): ADR-054 point 5 and ADR-096 §11.2 define it as
+# "3 consecutive probes", and the stage card turns "failed" at the same count
+# (frontend Stage.tsx, ``consecutive_failures >= 3``) — so do the "since when"
+# clock, the death check on a timeout and auto-recovery. A blip shorter than
+# two ticks still never alarms; a real outage now alarms 60–90 s after it
+# began instead of 180–270 s.
 UNREACHABLE_EVENT_THRESHOLD = 3
 _STARTUP_GRACE = 20  # seconds — let DB/Redis/other services come up first
+
+#: What one tick writes for the readers between ticks — the live snapshot
+#: (runtimes page, dispatch readiness gate, runtime pulse, auto-recovery's
+#: sibling check), the two drift candidates and the members mark — lives
+#: 3 ticks, but never less than 270 s: its lifetime at the old 90 s tick.
+#: A tick is not as short as the pause after it when it does real work: an
+#: auto-recovery start waits up to ``memory_prep_wait_timeout_seconds``
+#: (180 s) for free memory, a crash-loop stop spends up to ~130 s on SSH, a
+#: stalling box adds its timeouts. The gap between two writes is that run
+#: time plus the tick. With a plain 3 × 30 s every other runtime's snapshot
+#: would expire inside one such tick: cards go blank, the readiness gate reads
+#: "never probed" and lets work through, and a model seen once just before it
+#: could never be confirmed by the second probe.
+STATE_TTL_FLOOR = 270
+#: The outage counter lives 10 ticks, but never less than 900 s (its lifetime
+#: at the old tick). It has to outlast the longest gap between two probes of
+#: the same runtime in one outage (a long tick; a switch window reads it
+#: without bumping it). A reset mid-outage would start the count again: the
+#: card falls back from "failed" to "unreachable (1)" and the threshold steps
+#: run a second time for the same outage.
+FAIL_COUNT_TTL_FLOOR = 900
+#: How long into an outage the death check may still ask the row's anchor
+#: (ADR-096 §11.2) — 270 s, its window at the old 90 s tick (probes 1..3).
+#: Counted in probes it would shrink to 60–90 s at 30 s, and two real cases
+#: would lose their cause: an engine whose container outlives its closed port
+#: (slow teardown, a duo shutting down) and a wedged engine killed later. So
+#: the probe count follows the tick: max(3, ceil(270 s / tick)) — 9 at 30 s,
+#: 3 at 90 s (unchanged). Connection refused is checked at every probe in the
+#: window; a timeout only at the threshold, as before (a stalling box looks
+#: the same, and SSH to it is what stalls). Each check is bounded
+#: (_ANCHOR_CHECK_TIMEOUT); past the window the box is never asked again.
+DEATH_CHECK_WINDOW_S = 270
 
 # Auto-recovery (PR5). One attempt per runtime per cooldown window; after this
 # many consecutive attempts that did not bring the engine back, stop and hand
@@ -183,11 +237,57 @@ def _last_error_line(logs: str) -> str | None:
     return None
 
 
+#: ADR-096 §11.2/§11.3: the death check is bounded so a stalling box cannot
+#: hold the tick — anchor check (node-agent / one SSH ``docker inspect`` / one
+#: handle check) plus the log read stay under 30 s from the failed probe.
+_ANCHOR_SSH_TIMEOUT = 8
+_ANCHOR_CHECK_TIMEOUT = 15
+_EXPLAIN_TIMEOUT = 10
+
+
+def _parse_state_inspect(stdout: str) -> dict:
+    """``status|exit|oomkilled|finished|started`` → dict. Docker's "never"
+    timestamp (``0001-…``) reads as ``None``."""
+    parts = (stdout or "").strip().split("|")
+
+    def _ts(i: int) -> str | None:
+        raw = parts[i].strip() if len(parts) > i else ""
+        return None if not raw or raw.startswith("0001-") else raw
+
+    try:
+        exit_code = int(parts[1]) if len(parts) > 1 else None
+    except ValueError:
+        exit_code = None
+    return {
+        "status": parts[0].strip() if parts else "",
+        "exit_code": exit_code,
+        "oom_killed": (parts[2].strip().lower() == "true") if len(parts) > 2 else None,
+        "finished_at": _ts(3),
+        "started_at": _ts(4),
+    }
+
+
 class RuntimeWatcher:
     def __init__(self, interval: int | None = None) -> None:
         self._interval = interval or settings.runtime_watcher_interval
         self._task: asyncio.Task | None = None
         self._running = False
+
+    def _state_ttl(self) -> int:
+        """Lifetime of what a tick writes for the next one and for readers
+        between ticks: 3 ticks, never under ``STATE_TTL_FLOOR``."""
+        return max(self._interval * 3, STATE_TTL_FLOOR)
+
+    def _fail_count_ttl(self) -> int:
+        """Lifetime of the outage counter: 10 ticks, never under
+        ``FAIL_COUNT_TTL_FLOOR``."""
+        return max(self._interval * 10, FAIL_COUNT_TTL_FLOOR)
+
+    def _death_check_probes(self) -> int:
+        """Up to which failed probe of an outage the death check may ask the
+        anchor: ``DEATH_CHECK_WINDOW_S`` of wall-clock, never under the
+        threshold."""
+        return max(UNREACHABLE_EVENT_THRESHOLD, math.ceil(DEATH_CHECK_WINDOW_S / self._interval))
 
     async def start(self) -> None:
         if not settings.runtime_watcher_enabled:
@@ -220,13 +320,20 @@ class RuntimeWatcher:
             await asyncio.sleep(self._interval)
 
     async def _acquire_lock(self) -> bool:
-        """One worker per tick. Redis down → run anyway (single-worker default)."""
+        """One worker per tick. Redis down → run anyway (single-worker default).
+
+        Never released — it simply expires. So it follows the tick and stays
+        BELOW it: a lock that outlived the tick would make this worker's own
+        next tick find it and skip, stretching the tick it stands for. Tick
+        minus 5 s, but at least half the tick (and 1 s) — never a fixed floor,
+        which would outlive a short tick (the setting has no lower bound).
+        """
         try:
             redis = await get_redis()
             return bool(
                 await redis.set(
                     RedisKeys.runtime_watcher_lock(), "1",
-                    nx=True, ex=max(self._interval - 5, 10),
+                    nx=True, ex=max(self._interval - 5, self._interval // 2, 1),
                 )
             )
         except Exception:  # noqa: BLE001
@@ -241,11 +348,16 @@ class RuntimeWatcher:
             await self._tick_inner(own_session)
 
     async def _tick_inner(self, session: AsyncSession) -> None:
+        # Recipe rows before slot rows (ADR-096 §11.4): a death found at the
+        # threshold (timeout path) must be declared before the slot row on the
+        # same port reaches the same threshold — otherwise the port gets a
+        # plain alarm AND the death. It also lets a loading recipe refresh its
+        # slot row's grace before that slot row is probed in the same tick.
         result = await session.exec(
             select(Runtime).where(
                 Runtime.enabled.is_(True),
                 Runtime.runtime_type.in_(sorted(_PROBEABLE_RUNTIME_TYPES)),
-            )
+            ).order_by(Runtime.is_slot)
         )
         runtimes = result.all()
         for idx, runtime in enumerate(runtimes):
@@ -320,7 +432,7 @@ class RuntimeWatcher:
         for item in findings:
             await redis.setex(
                 RedisKeys.runtime_members_issue(item.slug),
-                self._interval * 3,
+                self._state_ttl(),
                 json.dumps({"code": item.code, "sentence": item.sentence}),
             )
             first = await redis.set(
@@ -368,6 +480,7 @@ class RuntimeWatcher:
                 # produced the notification storm on every switch. The 20-min
                 # TTL on the marker guarantees we fall back to normal
                 # alerting even if nobody ever clears it.
+                remembered = await engine_death.last_answer(redis, runtime.slug)
                 await self._write_live(
                     redis, runtime.slug,
                     reachable=False, served_model=None, latency_ms=None,
@@ -375,6 +488,8 @@ class RuntimeWatcher:
                     status="switching",
                     phase=switching.get("phase"),
                     switch_source=switching.get("source"),
+                    last_served_model=remembered.get("served_model"),
+                    was_own=bool(remembered.get("own")),
                 )
                 # ADR-078: solange DIESE Instanz lädt, lädt auch die Box —
                 # also bekommt die Slot-Zeile der Box denselben Marker mit
@@ -385,44 +500,81 @@ class RuntimeWatcher:
                 # jedem langsamen Wechsel (Review 05.09.2026, M1).
                 await self._refresh_slot_grace(session, runtime, switching)
                 return
+            # What did the port say last, and was it THIS row's own answer?
+            # (ADR-096 §11.2): only a row whose last healthy probe was its own
+            # answer can die — the GLM row that never ran on the shared :8000
+            # cannot. Read from the durable answer memory, not the live
+            # snapshot: that one expires after minutes (_state_ttl), so a backend that
+            # was down longer would forget who held the port.
+            remembered = await engine_death.last_answer(redis, runtime.slug)
+            last_served = remembered.get("served_model")
+            was_own = bool(remembered.get("own"))
             fails = await self._bump_failures(redis, runtime.slug)
+            failure = getattr(probed, "failure", None)
+            if fails in (1, UNREACHABLE_EVENT_THRESHOLD):
+                # Root cause of the silent 23 minutes on 19.10.: every failed
+                # probe was logged at DEBUG only. The first and the threshold
+                # probe of an outage now leave a line.
+                logger.info(
+                    "runtime %s: probe failed (%s) — %d in a row",
+                    runtime.slug, failure or "no answer", fails,
+                )
+            death = await engine_death.get_death(redis, runtime.slug)
+            if death is None and settings.runtime_engine_death_enabled:
+                try:
+                    death = await self._maybe_declare_death(
+                        session, redis, runtime,
+                        fails=fails, failure=failure, was_own=was_own,
+                        last_served=last_served,
+                    )
+                except Exception:  # noqa: BLE001 — never let it cost the alarm
+                    logger.exception("engine-death handling failed for %s", runtime.slug)
+                    death = None
             await self._write_live(
                 redis, runtime.slug,
                 reachable=False, served_model=None, latency_ms=None,
                 consecutive_failures=fails,
+                failure=failure,
+                last_served_model=last_served,
+                was_own=was_own,
+                **(engine_death.live_fields(death) if death else {}),
             )
-            if fails == UNREACHABLE_EVENT_THRESHOLD:
-                message = (
-                    f"{runtime.slug}: endpoint unreachable "
-                    f"({fails} consecutive probes)"
-                )
-                detail: dict = {"slug": runtime.slug, "endpoint": runtime.endpoint}
-                # Live incident this closes: an endpoint pointing at a box's
-                # LAN IP can fail from a host agent while the box itself is
-                # fine — a Tailscale route on the Mac hijacks that LAN IP
-                # (spark-tailscale-route-hijack-host-agents). If the host has
-                # a Tailscale address on file, say so with the exact fix
-                # instead of leaving the operator to rediscover it by hand.
-                try:
-                    host = await resolve_host_for_runtime(session, runtime)
-                except Exception:  # noqa: BLE001 — the alert must fire either way
-                    host = None
-                suggestion = address_classify.suggest_endpoint_fix(
-                    runtime.endpoint, getattr(host, "tailscale_host", None)
-                )
-                if suggestion:
-                    detail["suggested_endpoint"] = suggestion
-                    message += (
-                        f" — Endpoint ist eine LAN-Adresse, Host hat eine "
-                        f"Tailscale-Adresse: '{suggestion}' probieren"
+            if fails == UNREACHABLE_EVENT_THRESHOLD and death is None:
+                if await self._plain_alarm_wanted(
+                    session, redis, runtime, was_own=was_own,
+                ):
+                    message = (
+                        f"{runtime.slug}: endpoint unreachable "
+                        f"({fails} consecutive probes)"
                     )
-                await emit_event(
-                    session,
-                    "runtime.unreachable",
-                    message,
-                    severity="warning",
-                    detail=detail,
-                )
+                    detail: dict = {"slug": runtime.slug, "endpoint": runtime.endpoint,
+                                    "failure": failure}
+                    # Live incident this closes: an endpoint pointing at a box's
+                    # LAN IP can fail from a host agent while the box itself is
+                    # fine — a Tailscale route on the Mac hijacks that LAN IP
+                    # (spark-tailscale-route-hijack-host-agents). If the host has
+                    # a Tailscale address on file, say so with the exact fix
+                    # instead of leaving the operator to rediscover it by hand.
+                    try:
+                        host = await resolve_host_for_runtime(session, runtime)
+                    except Exception:  # noqa: BLE001 — the alert must fire either way
+                        host = None
+                    suggestion = address_classify.suggest_endpoint_fix(
+                        runtime.endpoint, getattr(host, "tailscale_host", None)
+                    )
+                    if suggestion:
+                        detail["suggested_endpoint"] = suggestion
+                        message += (
+                            f" — Endpoint ist eine LAN-Adresse, Host hat eine "
+                            f"Tailscale-Adresse: '{suggestion}' probieren"
+                        )
+                    await emit_event(
+                        session,
+                        "runtime.unreachable",
+                        message,
+                        severity="warning",
+                        detail=detail,
+                    )
                 # Laufzeit-Anzeige (W3): dieselbe Schwelle, die den Alarm
                 # auslöst, beendet auch die "seit wann erreichbar"-Uhr — drei
                 # Fehlproben sind derselbe Vertrauensverlust, ob er als
@@ -456,11 +608,50 @@ class RuntimeWatcher:
         await redis.delete(RedisKeys.runtime_restart_baseline(runtime.slug))
         await redis.delete(self._fail_key(runtime.slug))
         await redis.delete(RedisKeys.runtime_recovery_failures(runtime.slug))
+        # The port answers again: this row's death record and the endpoint's
+        # one-death / one-alarm keys are history (the event stays in the
+        # feed). A stop intent is NOT touched — a neighbour's answer on a
+        # shared port says nothing about whether this row was stopped on
+        # purpose (ADR-096 §11.1: only its own start lifts it).
+        await engine_death.endpoint_answered(redis, runtime)
+        # Is this answer THIS row's own engine (ADR-096 §11.2)? Same question
+        # and same SSH round trip the probe guard below always asked when the
+        # answer does not match the row — asked once here, used twice: by the
+        # guard, and remembered so a later outage knows whether this row was
+        # up at all. A matching answer (or a slot row) is own — unless another
+        # row on this port carries the same model id (two recipe variants of
+        # one model): then only the anchor can tell whose engine answered.
+        ctx_mismatch = served_ctx is not None and self._context_would_change(runtime, served_ctx)
+        anchor_checked = False
+        if runtime.is_slot:
+            own_answer = True
+        elif (
+            served == (runtime.model_identifier or "")
+            and not ctx_mismatch
+            and not await self._model_id_shared_on_port(session, runtime)
+        ):
+            own_answer = True
+        else:
+            own_answer = await self._served_answer_is_own(session, runtime)
+            anchor_checked = True
+        await engine_death.remember_answer(redis, runtime.slug, served=served, own=own_answer)
+        if not runtime.is_slot:
+            # Whoever answers, a start of this row is no longer pending: its
+            # own engine came up, or another engine holds the port now.
+            await clear_start_pending(runtime.slug, redis)
+            try:
+                await self._maybe_lift_stop_intent(
+                    session, redis, runtime,
+                    own_verified=own_answer if anchor_checked else None,
+                )
+            except Exception:  # noqa: BLE001 — bookkeeping may not cost the probe
+                logger.exception("stop-intent check failed for %s", runtime.slug)
         await self._write_live(
             redis, runtime.slug,
             reachable=True, served_model=served, latency_ms=latency_ms,
             served_context_len=served_ctx,
             consecutive_failures=0,
+            own_answer=own_answer,
         )
         # Laufzeit-Anzeige (W3): erste erfolgreiche Probe nach einem
         # Ausfall/Start setzt die Uhr — NUR wenn sie leer ist. Ein bereits
@@ -498,7 +689,7 @@ class RuntimeWatcher:
             # geschrieben, wenn der Anker wirklich läuft; sonst gehört die
             # Antwort dem fremden Motor, der den Port gerade hält (so bekamen
             # ds4 und omp-qwen das Qwen-Modell samt 1M-Fenster verpasst).
-            if not await self._served_answer_is_own(session, runtime):
+            if not own_answer:
                 logger.info(
                     "runtime %s: drift ignored — own anchor not running, the "
                     "shared-endpoint answer (%r) belongs to another engine",
@@ -552,10 +743,20 @@ class RuntimeWatcher:
         bound = (
             await session.exec(select(Agent).where(Agent.runtime_id == runtime.id))
         ).all()
+        # Stale and flagged are the SAME set (live 2026-10-20: a host bridge
+        # restarted every ~10.5 min, all day):
+        # * counted are only agents a sync can reach (is_model_sync_target,
+        #   the filter mark_agents_for_sync uses too) — an archived agent with
+        #   the previous model was never synced, stayed "stale" forever and
+        #   re-fired the net once per guard window;
+        # * flagged are only the stale ones (only_ids) — flagging the whole
+        #   runtime sent every converged agent through a sync, and a host
+        #   agent through a process restart (adapter reload), each window for
+        #   as long as ONE agent could not converge.
         stale = [
             agent
             for agent in bound
-            if agent.agent_runtime == "cli-bridge"
+            if is_model_sync_target(agent, runtime)
             and not agent.pending_runtime_sync
             and (agent.model or "").strip()
             and agent.model.strip() != model
@@ -570,11 +771,14 @@ class RuntimeWatcher:
         )
         if not claimed:
             return
-        flagged = await mark_agents_for_sync(session, runtime)
+        flagged = await mark_agents_for_sync(
+            session, runtime, only_ids={agent.id for agent in stale}
+        )
         logger.info(
-            "runtime %s: %s Agent(en) trugen noch ein anderes Modell als %r — "
-            "%s für den Sync geflaggt",
-            runtime.slug, len(stale), model, flagged,
+            "runtime %s: %s Agent(en) trugen noch ein anderes Modell als %r "
+            "(%s) — %s für den Sync geflaggt",
+            runtime.slug, len(stale), model,
+            ", ".join(agent.name for agent in stale), flagged,
         )
 
     async def _refresh_slot_grace(
@@ -624,6 +828,16 @@ class RuntimeWatcher:
         """
         if not runtime.is_slot or runtime.host_id is None or not served:
             return None
+        # The instance row serving this slot is the truth first (live
+        # 23.10.2026): an operator who patched the instance's window must not
+        # see the slot dragged back to the recipe's older number every tick.
+        from app.services.slot_runtimes import serving_instance_for_slot
+
+        if (runtime.model_identifier or "").strip().lower() == served.strip().lower():
+            instance = await serving_instance_for_slot(session, runtime)
+            inst_ctx = instance.max_context_len if instance is not None else None
+            if isinstance(inst_ctx, int) and not isinstance(inst_ctx, bool) and inst_ctx > 0:
+                return inst_ctx
         from app.models.host import Host
         from app.models.local_recipe import LocalRecipe
 
@@ -643,15 +857,11 @@ class RuntimeWatcher:
 
     @staticmethod
     def _context_would_change(runtime: Runtime, served_ctx: int) -> bool:
-        """Mirror of ``_handle_context_drift``'s no-op guard, evaluated BEFORE
-        the ownership check so a row that matches the served window anyway
-        never pays for an SSH round trip."""
-        old_max = runtime.max_context_len
-        old_preferred = runtime.preferred_context_len
-        return not (
-            old_max == served_ctx
-            and (old_preferred is None or old_preferred <= served_ctx)
-        )
+        """``_handle_context_drift``'s no-op guard, evaluated BEFORE the
+        ownership check so a row that matches the served window anyway never
+        pays for an SSH round trip. Same function as the write itself
+        (``runtime_window``), so the guard and the write cannot drift apart."""
+        return window_would_change(runtime, served_ctx)
 
     async def _served_answer_is_own(
         self, session: AsyncSession, runtime: Runtime
@@ -747,7 +957,7 @@ class RuntimeWatcher:
         if candidate != served:
             # First sighting (or the engine flapped to yet another model):
             # remember the candidate and wait for one confirming probe.
-            await redis.setex(key, self._interval * 3, served)
+            await redis.setex(key, self._state_ttl(), served)
             return
 
         await redis.delete(key)
@@ -887,6 +1097,9 @@ class RuntimeWatcher:
             f"{delta} Neustarts im Startfenster"
         )
 
+        # ADR-096 §11.1: intent BEFORE the stop (same rule as stop_runtime) —
+        # no probe may ever see this container gone without it.
+        await mark_stop_intent(runtime.slug, INTENT_CRASH_LOOP, by="runtime_watcher")
         try:
             await _ssh_run(f"docker update --restart=no {container}", host=host, timeout=20)
             _, stop_err, stop_code = await _ssh_run(
@@ -907,12 +1120,30 @@ class RuntimeWatcher:
         await clear_switching(runtime.slug)
         await redis.delete(RedisKeys.runtime_restart_baseline(runtime.slug))
         await self._finish_memory_prep(session, runtime, success=False)
+        # ADR-096 §11.1: MC's own crash-loop stop is a stop with intent — its
+        # runtime.crash_loop_stopped below stays THE report; the silence that
+        # follows is never counted as an engine death a second time (the
+        # intent was set before `docker stop` above). The record keeps the card on "failed — restart loop" across later ticks
+        # and keeps the rows sharing the port from alarming.
+        loop_doc = {
+            "reason": reason,
+            "reason_en": f"{runtime.display_name}: restart loop ({delta} restarts), stopped by MC",
+            "reason_code": engine_death.CRASH_LOOP,
+            "box": getattr(host, "display_name", None) or getattr(host, "slug", None),
+            "at": _utcnow_iso(),
+            "detected_at": _utcnow_iso(),
+            "exit_code": None,
+            "log_line": _last_error_line(logs),
+            "autostart": False,
+        }
+        await engine_death.claim_death(redis, runtime, loop_doc)
         await self._write_live(
             redis, runtime.slug,
             reachable=False, served_model=None, latency_ms=None,
             consecutive_failures=await self._read_failures(redis, runtime.slug),
             status="failed",
             reason=reason,
+            reason_code=engine_death.CRASH_LOOP,
             restart_count=restart_count,
             container_stopped=stopped,
         )
@@ -1025,9 +1256,7 @@ class RuntimeWatcher:
         """
         old_max = runtime.max_context_len
         old_preferred = runtime.preferred_context_len
-        if old_max == served_ctx and (
-            old_preferred is None or old_preferred <= served_ctx
-        ):
+        if not window_would_change(runtime, served_ctx):
             return
 
         key = RedisKeys.runtime_context_drift_candidate(runtime.slug)
@@ -1035,13 +1264,11 @@ class RuntimeWatcher:
         if isinstance(candidate, bytes):
             candidate = candidate.decode()
         if candidate != str(served_ctx):
-            await redis.setex(key, self._interval * 3, str(served_ctx))
+            await redis.setex(key, self._state_ttl(), str(served_ctx))
             return
 
         await redis.delete(key)
-        runtime.max_context_len = served_ctx
-        if old_preferred is None or old_preferred == old_max or old_preferred > served_ctx:
-            runtime.preferred_context_len = served_ctx
+        apply_window(runtime, served_ctx)
         session.add(runtime)
         await session.commit()
         await session.refresh(runtime)
@@ -1070,6 +1297,442 @@ class RuntimeWatcher:
         # pending_runtime_sync is a boolean, and _tick_inner's single
         # sync_pending_agents pass runs after every runtime has been probed.
         await mark_agents_for_sync(session, runtime)
+        # The slot row serving this instance follows at once (the slot's own
+        # probe would get there after two more probes).
+        if not runtime.is_slot:
+            slug = runtime.slug
+            try:
+                from app.services.slot_runtimes import mirror_instance_window_to_slot
+
+                await mirror_instance_window_to_slot(session, runtime)
+            except Exception:  # noqa: BLE001 — a mirror may not cost the tick
+                # The rest of the tick shares this session — never leave it
+                # in a failed transaction.
+                await session.rollback()
+                logger.exception("slot window mirror failed for %s", slug)
+
+    # ── Engine death (ADR-096 §11) ───────────────────────────────────────
+
+    async def _maybe_declare_death(
+        self,
+        session: AsyncSession,
+        redis,
+        runtime: Runtime,
+        *,
+        fails: int,
+        failure: str | None,
+        was_own: bool,
+        last_served: str | None,
+    ) -> dict | None:
+        """Declare an engine death — or return ``None`` and leave the existing
+        threshold of 3 to the plain ``runtime.unreachable``.
+
+        Candidate (§11.1/§11.2): not a slot row (it reports through its recipe
+        row), its last healthy probe was its OWN answer, ``serving_since`` set,
+        no stop intent (operator stop, switched away, schedule, idle unload,
+        crash-loop stop) and no eviction marker.
+
+        When to ask the box, at most once per probe and only while the outage
+        is young (``DEATH_CHECK_WINDOW_S``, 270 s — 9 probes at 30 s, 3 at
+        90 s): at every probe on ``connection refused`` (nothing listens — the
+        fast path), and once, at the threshold, on any other failure (a
+        timeout is what a stalling box produces too, so the threshold of 3
+        applies unchanged — ADR-096 §11.2). The row's own anchor decides:
+        exited / gone → death at THIS probe; running, or not checkable (box
+        mid-stall, SSH down) → no death now, the plain threshold alarm at
+        probe 3. A death the anchor confirms later in the window (a container
+        that outlives its closed port, a wedged engine killed later) follows
+        that alarm as the error with the cause. Never starts or stops anything.
+        """
+        if runtime.is_slot or not was_own:
+            return None
+        if fails > self._death_check_probes():
+            return None  # the window is over — no SSH every tick of a long outage
+        if failure != FAIL_REFUSED and fails != UNREACHABLE_EVENT_THRESHOLD:
+            return None  # a timeout: asked once, at the threshold
+        if runtime.serving_since is None:
+            # Up to the threshold an empty clock means the row was not up.
+            # Past it, this outage's own threshold emptied it (the plain-alarm
+            # path) — unless MC launched the row and it never answered: a
+            # start that never came up ends in its one plain alarm (§11.2),
+            # never in a death, even when its container exits while loading.
+            if fails <= UNREACHABLE_EVENT_THRESHOLD:
+                return None
+            if await get_start_pending(runtime.slug, redis) is not None:
+                return None
+        if await get_stop_intent(runtime.slug, redis) is not None:
+            return None
+        if await get_evicted(runtime.slug, redis) is not None:
+            return None
+        if await engine_death.endpoint_had_death(redis, runtime.endpoint):
+            return None  # one engine death = one death on that port
+        dark_since = await self._last_dark_probe_at(redis, runtime.slug)
+        try:
+            anchor = await asyncio.wait_for(
+                self._anchor_exit_state(session, runtime, running_report_after=dark_since),
+                timeout=_ANCHOR_CHECK_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.info("runtime %s: anchor check timed out — no verdict", runtime.slug)
+            return None
+        if anchor.get("state") not in ("exited", "gone"):
+            return None
+        # Explain once, bounded: the crash-loop readers, current boot only.
+        marker = None
+        log_line = None
+        container = anchor.get("container")
+        if container and anchor.get("host") is not None:
+            try:
+                logs = await asyncio.wait_for(
+                    self._read_container_logs(
+                        container, anchor["host"], since=anchor.get("started_at"),
+                    ),
+                    timeout=_EXPLAIN_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logs = ""
+            patterns = CRASH_LOOP_LOG_PATTERNS + engine_death.DEATH_LOG_PATTERNS
+            marker = next((p for p in patterns if p in logs), None)
+            log_line = _last_error_line(logs) or (
+                next(
+                    (ln.strip()[:500] for ln in reversed(logs.splitlines())
+                     if marker and marker in ln),
+                    None,
+                )
+            )
+        code = engine_death.classify(
+            oom_killed=anchor.get("oom_killed"),
+            exit_code=anchor.get("exit_code"),
+            marker=marker,
+            process_gone=anchor.get("process_gone", False),
+        )
+        at = anchor.get("finished_at") or _utcnow_iso()
+        box = anchor.get("box")
+        reason_de, reason_en = engine_death.sentences(
+            code, display=runtime.display_name, box=box, at=at,
+            exit_code=anchor.get("exit_code"), marker=marker,
+        )
+        autostart_host, autostart_recipe = await self._autostart_target(session, runtime)
+        doc = {
+            "reason": reason_de,
+            "reason_en": reason_en,
+            "reason_code": code,
+            "box": box,
+            "at": at,
+            "detected_at": _utcnow_iso(),
+            "exit_code": anchor.get("exit_code"),
+            "oom_killed": anchor.get("oom_killed"),
+            "log_line": log_line,
+            "anchor": anchor.get("name"),
+            "anchor_source": anchor.get("source"),
+            "model": last_served,
+            "failure": failure,
+            "probes": fails,
+            "autostart": bool(
+                settings.runtime_auto_recovery_enabled
+                and autostart_host is not None
+                and autostart_recipe is not None
+            ),
+        }
+        if not await engine_death.claim_death(redis, runtime, doc):
+            return None
+        # Plain values: the comment pass commits, and nothing below may
+        # depend on expired ORM state.
+        slug, endpoint, runtime_id = runtime.slug, runtime.endpoint, runtime.id
+        try:
+            commented = await engine_death.comment_running_tasks(
+                session, runtime, reason_de=reason_de,
+            )
+        except Exception:  # noqa: BLE001 — the alarm must fire either way
+            logger.exception("engine-death: task comments failed for %s", slug)
+            commented = []
+            try:
+                await session.rollback()
+                await session.refresh(runtime)
+            except Exception:  # noqa: BLE001
+                logger.exception("engine-death: refresh of %s failed", slug)
+        doc["tasks_commented"] = len(commented)
+        try:
+            await redis.set(
+                RedisKeys.runtime_death(slug), json.dumps(doc), xx=True,
+                ex=engine_death.DEATH_TTL,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning(
+            "runtime %s: engine death (%s, probe %d, %s) — %s",
+            slug, code, fails, failure or "no answer", reason_de,
+        )
+        # §11.4: the one notification — runtime.unreachable, with the cause,
+        # for the dead row only (rows sharing the port add none).
+        await emit_event(
+            session,
+            "runtime.unreachable",
+            reason_de,
+            severity="error",
+            detail={
+                "slug": slug,
+                "runtime_id": str(runtime_id),
+                "endpoint": endpoint,
+                "engine_death": True,
+                "reason_code": code,
+                "reason": reason_de,
+                "reason_en": reason_en,
+                "box": box,
+                "at": at,
+                "exit_code": doc["exit_code"],
+                "oom_killed": doc["oom_killed"],
+                "log_line": log_line,
+                "anchor": doc["anchor"],
+                "model": last_served,
+                "failure": failure,
+                "consecutive_failures": fails,
+                "autostart": doc["autostart"],
+                "commented_task_ids": commented,
+            },
+        )
+        if runtime.serving_since is not None:
+            runtime.serving_since = None
+            session.add(runtime)
+            await session.commit()
+        return doc
+
+    async def _last_dark_probe_at(self, redis, slug: str) -> datetime | None:
+        """When the previous probe of this row found the port dark — read from
+        the live snapshot before this probe overwrites it. ``None`` when that
+        probe got an answer (this is the outage's first failed probe) or
+        nothing is known."""
+        try:
+            raw = await redis.get(RedisKeys.runtime_live(slug))
+            doc = json.loads(raw) if raw else None
+        except Exception:  # noqa: BLE001
+            return None
+        if not isinstance(doc, dict) or doc.get("reachable") is not False:
+            return None
+        try:
+            return ensure_aware(datetime.fromisoformat(doc["last_probe_at"]))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    async def _anchor_exit_state(
+        self, session: AsyncSession, runtime: Runtime, *,
+        running_report_after: datetime | None = None,
+    ) -> dict:
+        """Is this row's own engine still there? Read-only.
+
+        ``state``: ``running`` | ``exited`` (with exit code / OOMKilled /
+        finish time when Docker knows them) | ``gone`` (container removed or
+        host process not alive) | ``unknown`` (no anchor, box not askable,
+        Docker not readable). The node-agent report (§3.2) is asked first —
+        a "running" there needs no SSH, but only when it was reported after
+        ``running_report_after`` (the previous probe that found the port
+        dark). A report counts as fresh for 120 s and arrives every 15 s: one
+        taken just before the death still says "running" and would hide the
+        death for a tick. ``None`` (the outage's first failed probe) → the
+        one SSH inspect decides.
+        """
+        from app.models.host import Host
+        from app.services import device_state
+        from app.services.runtime_manager import (  # noqa: SLF001
+            _ssh_run,
+            anchor_running,
+            runtime_anchor_names,
+        )
+
+        handles = {
+            "runtime_type": runtime.runtime_type,
+            "process_name": runtime.process_name,
+            "container_name": runtime.container_name,
+        }
+        names = runtime_anchor_names(handles)
+        if not names:
+            return {"state": "unknown", "why": "no_anchor"}
+        out: dict = {"name": names[0], "source": "ssh"}
+        host_row = None
+        if runtime.host_id is not None:
+            try:
+                host_row = await session.get(Host, runtime.host_id)
+            except Exception:  # noqa: BLE001
+                host_row = None
+        reported = device_state.ANCHOR_UNKNOWN
+        if host_row is not None:
+            out["box"] = host_row.display_name or host_row.slug
+            reported = device_state.handle_status(
+                host_row.agent_device_state, host_row.agent_device_state_updated_at, names,
+            )
+            reported_at = host_row.agent_device_state_updated_at
+            if (
+                reported == device_state.ANCHOR_RUNNING
+                and running_report_after is not None
+                and reported_at is not None
+                and ensure_aware(reported_at) > running_report_after
+            ):
+                return {**out, "state": "running", "source": "node_agent"}
+        # A fresh node-agent "stopped" (every handle, both kinds) is evidence
+        # on its own when SSH cannot add the exit details.
+        agent_gone = {**out, "state": "gone", "source": "node_agent"} \
+            if reported == device_state.ANCHOR_STOPPED else None
+        try:
+            host = await resolve_host_for_runtime(session, runtime)
+        except Exception:  # noqa: BLE001
+            host = None
+        if host is not None and "box" not in out:
+            out["box"] = getattr(host, "display_name", None) or getattr(host, "slug", None)
+        if host is None or not ssh_capable(host):
+            return agent_gone or {**out, "state": "unknown", "why": "no_ssh"}
+        out["host"] = host
+        docker_unreadable = False
+        for name in names:
+            try:
+                stdout, stderr, ec = await _ssh_run(
+                    'docker inspect --format '
+                    '"{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}|'
+                    '{{.State.FinishedAt}}|{{.State.StartedAt}}" '
+                    f"{shlex_quote(name)}",
+                    host=host, timeout=_ANCHOR_SSH_TIMEOUT,
+                )
+            except Exception as exc:  # noqa: BLE001 — box stalling = cannot tell
+                logger.debug("engine-death: inspect failed for %s: %s", runtime.slug, exc)
+                return agent_gone or {**out, "state": "unknown", "why": "ssh_failed"}
+            if ec == 0 and (stdout or "").strip():
+                parsed = _parse_state_inspect(stdout)
+                if parsed["status"] in ("running", "restarting", "created", "paused"):
+                    # "restarting" is the crash-loop check's case, not a death.
+                    return {**out, "name": name, "state": "running"}
+                return {**out, **parsed, "name": name, "container": name, "state": "exited"}
+            if "no such" not in f"{stdout} {stderr}".lower():
+                docker_unreadable = True
+        if runtime.runtime_type == SSH_PROCESS_TYPE:
+            try:
+                alive = await anchor_running(handles, host=host)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("engine-death: handle check failed for %s: %s", runtime.slug, exc)
+                return {**out, "state": "unknown", "why": "handle_check_failed"}
+            if alive:
+                return {**out, "state": "running"}
+            return {**out, "state": "gone", "process_gone": True}
+        if docker_unreadable:
+            return {**out, "state": "unknown", "why": "docker_unreadable"}
+        return {**out, "state": "gone"}
+
+    async def _stopped_on_purpose(self, slug: str, redis) -> bool:
+        """MC stopped this row on purpose: a stop intent, or a (1 h) eviction
+        marker from a switch (ADR-096 §11.1)."""
+        if await get_stop_intent(slug, redis) is not None:
+            return True
+        return await get_evicted(slug, redis) is not None
+
+    async def _plain_alarm_wanted(
+        self, session: AsyncSession, redis, runtime: Runtime, *, was_own: bool,
+    ) -> bool:
+        """The plain ``runtime.unreachable`` at the threshold — once per
+        endpoint outage, never for planned silence (ADR-096 §11.1/§11.4).
+
+        Quiet only for what MC KNOWS is planned:
+        - this row was stopped on purpose (stop intent or eviction marker);
+        - a death on this endpoint already said it, with its cause;
+        - the port's holder was stopped on purpose. Holders are the recipe
+          rows whose last healthy probe was their OWN answer (durable answer
+          memory) plus rows MC launched that never answered (pending start —
+          a switch whose new recipe never came up is NOT planned, whatever
+          the grace said before it ran out);
+        - a recipe row that is not a holder, while a holder is not stopped on
+          purpose: that holder (or the slot row) speaks for the port — the
+          GLM row that never ran on 19.10. adds nothing.
+        Nothing known about the holder (memory gone) → the alarm fires, as on
+        main. Exactly one row per endpoint outage raises it.
+        """
+        if await self._stopped_on_purpose(runtime.slug, redis):
+            return False
+        if await engine_death.endpoint_had_death(redis, runtime.endpoint):
+            return False
+        rows = [] if runtime.is_slot else [runtime]
+        if runtime.endpoint:
+            rows += list((await session.exec(
+                select(Runtime).where(
+                    Runtime.enabled.is_(True),
+                    Runtime.endpoint == runtime.endpoint,
+                    Runtime.id != runtime.id,
+                    Runtime.is_slot.is_(False),
+                )
+            )).all())
+        holders: list[Runtime] = []
+        for row in rows:
+            if row.id == runtime.id:
+                own = was_own
+            else:
+                own = bool((await engine_death.last_answer(redis, row.slug)).get("own"))
+            if own or await get_start_pending(row.slug, redis) is not None:
+                holders.append(row)
+        if holders:
+            wanted = [h for h in holders if not await self._stopped_on_purpose(h.slug, redis)]
+            if not wanted:
+                return False
+            if not runtime.is_slot and all(h.id != runtime.id for h in wanted):
+                return False
+        return await engine_death.claim_endpoint_alarm(redis, runtime)
+
+    async def _model_id_shared_on_port(self, session: AsyncSession, runtime: Runtime) -> bool:
+        """Does another enabled recipe row on this endpoint carry the same
+        ``model_identifier``? Then a matching answer proves nothing."""
+        if not runtime.endpoint or not runtime.model_identifier:
+            return False
+        other = (await session.exec(
+            select(Runtime.id).where(
+                Runtime.enabled.is_(True),
+                Runtime.endpoint == runtime.endpoint,
+                Runtime.id != runtime.id,
+                Runtime.is_slot.is_(False),
+                Runtime.model_identifier == runtime.model_identifier,
+            ).limit(1)
+        )).first()
+        return other is not None
+
+    async def _maybe_lift_stop_intent(
+        self, session: AsyncSession, redis, runtime: Runtime, *, own_verified: bool | None,
+    ) -> bool:
+        """ADR-096 §11.1: a stop intent ends with the row's own next start —
+        also one MC did not issue (``start.sh`` by hand after a stop via MC, a
+        ``--restart always`` container after a box reboot). Without this, the
+        old stop would silence that engine's next real death for good.
+
+        Evidence, all of it: the row has an anchor, the anchor runs and the
+        port answers (checked by the same probe guard as drift), and the stop
+        was asked at least ``STOP_INTENT_SETTLE`` ago — an engine still
+        answering while its stop runs is not a start. A neighbour's answer on
+        a shared port never counts (its anchor is not this row's). Lifts the
+        eviction marker with it: the switch it described is undone.
+        """
+        intent = await get_stop_intent(runtime.slug, redis)
+        evicted = await get_evicted(runtime.slug, redis)
+        if intent is None and evicted is None:
+            return False
+        ages = [
+            marker_age_seconds(intent, "since") if intent is not None else None,
+            marker_age_seconds(evicted, "at") if evicted is not None else None,
+        ]
+        known = [a for a in ages if a is not None]
+        if known and min(known) < STOP_INTENT_SETTLE:
+            return False
+        from app.services.runtime_manager import runtime_anchor_names
+
+        if not runtime_anchor_names({
+            "runtime_type": runtime.runtime_type,
+            "process_name": runtime.process_name,
+            "container_name": runtime.container_name,
+        }):
+            return False  # nothing on the box to tell this row's engine apart
+        own = own_verified if own_verified is not None else \
+            await self._served_answer_is_own(session, runtime)
+        if not own:
+            return False
+        await clear_stop_intent(runtime.slug)
+        await clear_evicted(runtime.slug)
+        logger.info(
+            "runtime %s: stop intent lifted (%s) — its own engine answers again, "
+            "started outside MC", runtime.slug, (intent or {}).get("why") or "evicted",
+        )
+        return True
 
     # ── Auto-recovery ────────────────────────────────────────────────────
 
@@ -1118,6 +1781,17 @@ class RuntimeWatcher:
             # keinen Startbefehl, keinen Anker. Ohne diesen Riegel meldeten
             # Slot- UND Rezeptzeile denselben Ausfall und es liefen ZWEI
             # Startpfade auf dieselbe Box (Betriebs-Review 05.09.2026, A3).
+            return
+        intent = await get_stop_intent(runtime.slug, redis)
+        if intent is not None:
+            # ADR-096 §11.1: MC stopped this on purpose (operator, switch,
+            # schedule, idle unload, crash-loop stop). That intent has no
+            # expiry and only the runtime's own next start lifts it — a
+            # restart from here would overwrite the operator's decision.
+            logger.info(
+                "auto-recovery: skipping %s — stopped on purpose (%s)",
+                runtime.slug, intent.get("why"),
+            )
             return
         evicted = await get_evicted(runtime.slug, redis)
         if evicted is not None:
@@ -1663,7 +2337,7 @@ class RuntimeWatcher:
 
     async def _bump_failures(self, redis, slug: str) -> int:
         fails = int(await redis.incr(self._fail_key(slug)))
-        await redis.expire(self._fail_key(slug), self._interval * 10)
+        await redis.expire(self._fail_key(slug), self._fail_count_ttl())
         return fails
 
     async def _read_failures(self, redis, slug: str) -> int:
@@ -1697,7 +2371,7 @@ class RuntimeWatcher:
     async def _write_live(self, redis, slug: str, **fields) -> None:
         payload = {"last_probe_at": _utcnow_iso(), **fields}
         await redis.setex(
-            RedisKeys.runtime_live(slug), self._interval * 3, json.dumps(payload)
+            RedisKeys.runtime_live(slug), self._state_ttl(), json.dumps(payload)
         )
 
 

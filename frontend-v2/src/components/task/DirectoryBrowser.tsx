@@ -1,19 +1,27 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Folder, FileText, ChevronRight, Loader2, AlertCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import { FilePreview } from "./FilePreview";
 import { C } from "@/lib/colors";
+import { HOST_ONLY_CLASS } from "@/lib/hostOnly";
 
 interface DirectoryBrowserProps {
   boardId: string;
   taskId: string;
   deliverableId: string;
-  /** Optional — only provided when revealing in Finder is available here
-   *  (macOS host). On mobile/remote it's omitted and the Finder links hide. */
+  /** Optional — only provided while revealing in Finder may work here:
+   *  the card passes it only for a viewer at the Mac MC runs on (MC opened
+   *  via localhost) and drops it once the backend says no. The links also
+   *  need a mouse (HOST_ONLY_CLASS): Finder opens on that Mac, never on the
+   *  phone or laptop in hand. */
   onOpenInFinder?: (subpath?: string) => void;
+  /** Called when the folder cannot be listed (gone, 404) — the deliverable
+   *  card then drops its Mac buttons too (round-2 user test t3 N2). */
+  onLoadError?: () => void;
 }
 
 export function DirectoryBrowser({
@@ -21,7 +29,9 @@ export function DirectoryBrowser({
   taskId,
   deliverableId,
   onOpenInFinder,
+  onLoadError,
 }: DirectoryBrowserProps) {
+  const t = useTranslations("deliverableCard");
   const [currentSubpath, setCurrentSubpath] = useState("");
   const [selectedFile, setSelectedFile] = useState<string | null>(null); // subpath of selected file
 
@@ -29,6 +39,17 @@ export function DirectoryBrowser({
     queryKey: ["deliverable-dir", deliverableId, currentSubpath],
     queryFn: () => api.tasks.deliverables.directory(boardId, taskId, deliverableId, currentSubpath || undefined),
   });
+
+  // Only the folder itself failing counts — not a sub-folder the reader
+  // opened later.
+  const rootFailed = isError && currentSubpath === "";
+  const onLoadErrorRef = useRef(onLoadError);
+  useLayoutEffect(() => {
+    onLoadErrorRef.current = onLoadError;
+  });
+  useEffect(() => {
+    if (rootFailed) onLoadErrorRef.current?.();
+  }, [rootFailed]);
 
   // Breadcrumb parts from currentSubpath
   const parts = currentSubpath ? currentSubpath.split("/") : [];
@@ -59,7 +80,7 @@ export function DirectoryBrowser({
     return (
       <div className="flex items-center gap-2 py-4 px-2">
         <AlertCircle size={14} style={{ color: C.error }} />
-        <span className="text-xs" style={{ color: C.textMuted }}>Failed to load directory</span>
+        <span className="text-xs" style={{ color: C.textMuted }}>{t("folderFailed")}</span>
       </div>
     );
   }
@@ -79,7 +100,7 @@ export function DirectoryBrowser({
           className="hover:underline cursor-pointer"
           style={{ color: parts.length > 0 ? C.accent : C.textMuted }}
         >
-          {data.root_path.split("/").pop() ?? "root"}
+          {data.root_path.split("/").pop() || t("folderRoot")}
         </button>
         {parts.map((part, i) => (
           <span key={i} className="flex items-center gap-1">
@@ -97,7 +118,7 @@ export function DirectoryBrowser({
 
       {/* File list */}
       {data.entries.length === 0 ? (
-        <p className="text-xs py-2" style={{ color: C.textMuted }}>Directory is empty</p>
+        <p className="text-xs py-2" style={{ color: C.textMuted }}>{t("folderEmpty")}</p>
       ) : (
         <div className="flex flex-col gap-0.5">
           {data.entries.map((entry) => {
@@ -135,7 +156,7 @@ export function DirectoryBrowser({
                   {entry.name}
                 </span>
                 {entry.type === "file" && entry.size !== null && (
-                  <span className="text-[10px] shrink-0 font-mono" style={{ color: C.textMuted }}>
+                  <span className="text-xs shrink-0 font-mono" style={{ color: C.textMuted }}>
                     {entry.size < 1024
                       ? `${entry.size} B`
                       : entry.size < 1024 * 1024
@@ -155,21 +176,26 @@ export function DirectoryBrowser({
       {/* Inline file preview when a file is selected */}
       {selectedFile && selectedFileUrl && (
         <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-mono" style={{ color: C.textMuted }}>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="text-xs font-mono break-all" style={{ color: C.textMuted }}>
               {selectedFilePath}
             </span>
             {onOpenInFinder && (
               <button
+                type="button"
                 onClick={() => onOpenInFinder(selectedFile)}
-                className="text-[10px] cursor-pointer hover:underline"
-                style={{ color: C.accent }}
+                className={`${HOST_ONLY_CLASS} shrink-0 text-xs cursor-pointer hover:underline`}
+                style={{ color: C.textSecondary }}
               >
-                In Finder ↗
+                {t("showFileInFinder")}
               </button>
             )}
           </div>
-          <FilePreview fileUrl={selectedFileUrl} path={selectedFilePath} />
+          <FilePreview
+            fileUrl={selectedFileUrl}
+            path={selectedFilePath}
+            htmlFolderUrl={() => api.tasks.deliverables.viewUrl(boardId, taskId, deliverableId, selectedFile)}
+          />
         </div>
       )}
 
@@ -177,11 +203,12 @@ export function DirectoryBrowser({
       {onOpenInFinder && (
         <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
           <button
+            type="button"
             onClick={() => onOpenInFinder()}
-            className="text-[10px] cursor-pointer hover:underline"
-            style={{ color: C.textMuted }}
+            className={`${HOST_ONLY_CLASS} text-xs cursor-pointer hover:underline`}
+            style={{ color: C.textSecondary }}
           >
-            Open folder in Finder ↗
+            {t("showFolderInFinder")}
           </button>
         </div>
       )}

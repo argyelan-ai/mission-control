@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 \"$MC_REPO/scripts/comms/claude-code/mc-comms-hook.py\""}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 \"$MC_REPO/scripts/comms/claude-code/mc-comms-hook.py\""}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "python3 \"$MC_REPO/scripts/comms/claude-code/mc-comms-hook.py\""}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "python3 \"$MC_REPO/scripts/comms/claude-code/mc-comms-hook.py\""}]}]
+  }
+}

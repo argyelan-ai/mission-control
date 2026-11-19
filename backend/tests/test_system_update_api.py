@@ -213,6 +213,20 @@ async def test_managed_install_answers_409_on_every_route(users, door, monkeypat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_managed_409_tells_the_ui_whether_the_switch_is_on(users, door, monkeypatch, enabled):
+    """The Settings card shows its "updated through the deploy procedure"
+    note only once the feature switch is on (update plan PR 5: nothing new on
+    screen before the acceptance) — the 409 says which of the two it is."""
+    monkeypatch.setattr(app.config.settings, "mc_update_managed", "deploy")
+    monkeypatch.setattr(app.config.settings, "mc_self_update_enabled", enabled)
+    r = await users.get("/api/v1/system/update/status", headers=_bearer())
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["managed"] is True
+    assert r.json()["detail"]["enabled"] is enabled
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("method,path,body", ROUTES)
 async def test_feature_switch_off_answers_404(users, door, monkeypatch, method, path, body):
     monkeypatch.setattr(app.config.settings, "mc_self_update_enabled", False)

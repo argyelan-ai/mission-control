@@ -29,11 +29,13 @@ Spec: docs/specs/chat-over-acp.md. Contract in one picture:
                                             ChatSession
                                               │      │
                           transcript *.jsonl ◄┘      └─► previews/*.jsonl
-                          (what the backend chat reader tails)
+                          (what the backend chat reader tails — both under
+                          `<session folder>/.mc/`, where omp never looks)
 
 Everything the operator must SEE is a transcript line, written through the
 SAME mapper the task path uses (`acp_chat_events.ACPEventMapper`): the user
-turn, the streamed preview, exactly ONE final assistant line — and failures
+turn, the streamed preview, one assistant text line per text segment (the
+turn's last one with stop reason + usage) — and failures
 as `chat_error` lines, because an error only the log knows about is an error
 the operator debugs blind.
 
@@ -42,6 +44,7 @@ Run: `python3 acp_chat.py --serve [--socket PATH]` (tmux window 3).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -54,13 +57,15 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Iterator, Mapping, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import acp_chat_events  # noqa: E402
 import acp_client  # noqa: E402
 import acp_model  # noqa: E402
+import model_errors  # noqa: E402
+import sink_migration  # noqa: E402
 
 logger = logging.getLogger("acp_chat")
 
@@ -78,6 +83,14 @@ _PREVIEW_INTERVAL_S = 0.25
 
 _STATE_VERSION = 1
 
+#: Session updates that only change the daemon's STATE (mirrored into
+#: acp-chat-state.json), never a chat line of their own. While omp replays a
+#: loaded session they are the only updates applied (`_muted_replay`).
+_STATE_UPDATES = frozenset({
+    "config_option_update", "available_commands_update",
+    "current_mode_update", "session_info_update",
+})
+
 #: `prompt`/`new_session` modes. `now` refuses while a turn runs — the
 #: contract of the machine callers (bridge wake-ups retry on their own poll).
 #: `queue` holds the job and runs it when the running turn ends — the chat.
@@ -90,9 +103,138 @@ _MODES = (MODE_NOW, MODE_QUEUE)
 MAX_QUEUE = 20
 #: The state mirror shows a held message's text up to this length.
 _QUEUE_PREVIEW_CHARS = 2000
+#: How much of omp's own session file the end of a turn reads at most
+#: (S1-R6): one turn's lines, written moments ago.
+_OMP_TURN_READ_BYTES = 2 * 1024 * 1024
+#: The longest text a card offers to send again (`data.retryText`, the
+#: backend's `_RETRY_TEXT_MAX_CHARS`). A longer one is left out — never cut:
+#: "Send again" must send exactly what the operator wrote (S1-R5, F3).
+RETRY_TEXT_MAX_CHARS = 8000
+
+#: The card when a daemon restart cut a running reply off (S1-R5). Nothing
+#: is ever sent again on its own; the card offers the text instead.
+TURN_INTERRUPTED = "turn_interrupted"
+_TURN_INTERRUPTED_TEXT = (
+    "The chat restarted while a reply was running — nothing was resent "
+    "automatically."
+)
+#: The same card for a turn the operator did not write (or nobody knows who
+#: did): no claim about resending — hermes-bridge delivers a task again on
+#: its own after a restart.
+_TURN_INTERRUPTED_NEUTRAL_TEXT = "The chat restarted while a reply was running."
+
+#: The card when the model's endpoint does not answer (S1-R6): omp gave up
+#: and its error line is the turn's only "answer". The chat itself is at
+#: rest again — there is no "waiting for the model" chat state; the card
+#: says it. Like `turn_interrupted`, the promise about the message only for
+#: the operator's own text, which the card then offers to send again.
+MODEL_UNREACHABLE = model_errors.MODEL_UNREACHABLE
+_MODEL_UNREACHABLE_TEXT = (
+    "The model is not answering — check the Runtimes page. "
+    "Your message is not lost."
+)
+_MODEL_UNREACHABLE_NEUTRAL_TEXT = "The model is not answering — check the Runtimes page."
+
+#: Who wrote a prompt (`prompt(..., origin=)`, the control protocol's
+#: `origin` field). ORIGIN_OPERATOR: the operator's own message (the
+#: composer) — the only text a card ever offers to send again. "task" /
+#: "nudge": Mission Control wrote it (the names of the task path,
+#: `ACPEventMapper.map_user_prompt`); the chat line is then an MC event, not
+#: an operator bubble. Anything else, or nothing (an older caller,
+#: hermes-bridge's dispatch): unknown — shown as before, never offered
+#: again. Fail-closed: a caller that forgets to say who wrote it costs a
+#: button, never a second run of a task.
+ORIGIN_OPERATOR = "operator"
+_MC_ORIGINS = ("task", "nudge")
+#: A busy refusal of these writes no card — only for a caller that keeps the
+#: prompt pending and retries on its own: the omp bridge's wake-up
+#: ("nudge", re-sent on every poll until delivered). "task" is NOT here: no
+#: caller sends it to the chat daemon today, and one that did without a
+#: retry would lose the prompt without a trace — so it gets the card.
+_QUIET_BUSY_ORIGINS = ("nudge",)
+#: Run context (round-1 user test t1, MUST-1, 22.10.2026): the backend may
+#: send a block saying what this agent's own task RUN is doing — the run is
+#: another session; asked "how far are you?" the chat once did the whole task
+#: a second time. The model gets the block in front of the operator's text;
+#: the chat transcript (the operator's bubble) never does. Capped so a broken
+#: caller cannot blow up a turn.
+CONTEXT_MAX_CHARS = 8000
+
+#: The chat's `omp acp` child is marked as the chat (backend
+#: app/services/chat_session_guard.py): the `mc` CLI sends MC_SESSION_ROLE as
+#: `X-MC-Session-Role`, and the server refuses every write to the run state
+#: of the agent's own task from it. It also gets its OWN task-context file:
+#: the bridge writes the run's TASK_ID / attempt id to /tmp/mc-context.env,
+#: and the CLI lets that file win over the env — the chat would otherwise
+#: act with the run's identity. The run ids of the boot env go too.
+CHAT_SESSION_ROLE = "chat"
+CHAT_CONTEXT_ENV_PATH = "/tmp/mc-chat-context.env"
+_RUN_CONTEXT_KEYS = ("TASK_ID", "BOARD_ID", "X_DISPATCH_ATTEMPT_ID")
+
 _STATE_FILENAME = "acp-chat-state.json"
 _PERSIST_FILENAME = "acp-chat.json"
 _DEFAULT_SOCKET_NAME = "acp-chat.sock"
+
+#: omp (since 18.6.3) refuses `session/load` under ACP when the session's
+#: last model is not in models.yml — no fallback without a UI (omp 18.10.1:
+#: `throw new Error(`Could not restore model ${provider/id}`)`). Every model
+#: switch makes the open conversation unloadable after a restart (ADR-086;
+#: P4 decides the fix). The model is the first word after the sentence.
+_MODEL_MISSING_RE = re.compile(r"Could not restore model\b[ \t]*(?P<model>[^\s()\"'`,;]*)")
+
+#: Where `start()` found the session to resume (`_read_persisted`).
+RESUME_POINTER = "pointer"
+RESUME_STATE = "state"
+RESUME_NONE = "none"
+
+#: The `chat_notice` when nothing names the open conversation but the tree
+#: holds an earlier chat (frontend: chat.notice.chat_started_fresh).
+CHAT_STARTED_FRESH = "chat_started_fresh"
+_CHAT_STARTED_FRESH_TEXT = (
+    "The chat could not tell which conversation was open — a new one "
+    "started. Earlier conversations are kept."
+)
+
+#: The `chat_notice` on top of a conversation the daemon opened IN PLACE of
+#: another one (incident 21.10.2026: a `new_session` job left the operator
+#: an empty chat and nothing said why). Frontend: chat.notice.new_conversation
+#: ("New conversation started · 17:07 · the previous one is saved").
+#: `previous`/`current` are the two session ids — the slot the later "show
+#: previous" link (P4) reads —, `via` says how (VIA_*), `reason` why a resume
+#: failed, `requestId` which request of MC's backend asked (none: not MC).
+#: `kept` says whether the previous conversation's copy is on disk: only then
+#: does the card promise that it is saved — but it comes either way, no reset
+#: is silent.
+NEW_CONVERSATION = "new_conversation"
+_NEW_CONVERSATION_TEXT = "New conversation started — the previous one is saved."
+_NEW_CONVERSATION_NOT_KEPT_TEXT = "New conversation started."
+#: `via` of a reset (card and the state mirror's `resets`): the control op
+#: (`/new`, `/clear`), a daemon start that could not resume (daemon restart,
+#: container recreate), a respawned omp child that could not resume.
+VIA_NEW_SESSION = "new_session"
+VIA_START = "start"
+VIA_CHILD_RESTART = "child_restart"
+_VIAS = (VIA_NEW_SESSION, VIA_START, VIA_CHILD_RESTART)
+#: What became of a reset (`resets[].outcome`): a new conversation began;
+#: omp refused `session/new` (the current one goes on); a held `/new` was
+#: taken back (`queue_clear`); a restart dropped it before it ran.
+RESET_DONE = "done"
+RESET_FAILED = "failed"
+RESET_WITHDRAWN = "withdrawn"
+RESET_LOST = "lost"
+_RESET_OUTCOMES = (RESET_DONE, RESET_FAILED, RESET_WITHDRAWN, RESET_LOST)
+#: How many resets the state mirror keeps (`resets`, newest last). The
+#: backend reads them into activity events every few seconds; a burst
+#: larger than this between two reads loses the oldest from the mirror.
+RESET_HISTORY_MAX = 20
+#: Shapes the daemon accepts for what it keeps about a reset. The request id
+#: comes from whoever reaches the socket, the history from a file on the
+#: agent's own mount: anything else is dropped, never stored.
+_REQUEST_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_RESET_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,32}")
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+_REASON_RE = re.compile(r"[a-z_]{1,40}")
+_AT_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
 
 def _now_iso() -> str:
@@ -167,6 +309,11 @@ class ChatSession:
 
         self._client: Any = None
         self._session_id: Optional[str] = None
+        # Where the last `_connect` found the session it tried to resume:
+        # RESUME_POINTER / RESUME_STATE / RESUME_NONE ("restart" after a
+        # crash of the omp child). Logged; the live check after a deploy
+        # reads it from the log.
+        self._resume_source = RESUME_NONE
         self._mapper = acp_chat_events.ACPEventMapper()
         # Entry ids are the tailer's dedup key. A fresh mapper starts at
         # seq=0, so a restarted daemon appending to the SAME transcript file
@@ -185,11 +332,32 @@ class ChatSession:
         self._busy = False
         self._turn = 0
         self._config_options: list[dict] = []
+        # Counts every option list the agent hands over on its own (session
+        # result, config_option_update). config() compares it across its
+        # request: a push that arrived meanwhile beats the reply.
+        self._config_pushes = 0
+        # One config request at a time, request AND apply: replies are not
+        # ordered against each other, only against pushes. Never held by the
+        # ACP reader thread (it only takes `_lock` for pushes), so waiting
+        # for a reply under it cannot block that reply. Taken before `_lock`.
+        self._config_lock = threading.Lock()
         self._commands: list[dict] = []
         self._last_error: Optional[dict] = None
         # Jobs waiting behind the running turn, oldest first:
         # {"id", "kind": "prompt"|"new_session", "text", "at"}.
         self._queue: list[dict] = []
+        # The job running right now, as the state mirror shows it
+        # (`_current_entry`), None when idle. A daemon that stops mid-turn
+        # leaves it on disk; the next start turns it into a card (S1-R5).
+        self._current: Optional[dict] = None
+        # The job a PREVIOUS daemon was running when it stopped, from its
+        # mirror, until start() has written its card: the mirror keeps it as
+        # `interrupted` meanwhile, so a stop in between never loses it.
+        # `{}` = busy without `current` (an image before S1-R5).
+        self._unreported: Optional[dict] = None
+        # omp's own session file and its size when the running prompt was
+        # claimed — the turn's lines start there (S1-R6, `_omp_turn_line`).
+        self._omp_mark: tuple[Optional[Path], int] = (None, 0)
         self._worker: Optional[threading.Thread] = None
         self._closed = False
 
@@ -202,9 +370,27 @@ class ChatSession:
         # Last `session_info_update` (title/updatedAt) — mirrored into the
         # state file, never a chat line.
         self._session_info: dict = {}
+        # Latest context fill from the agent's `usage_update` ({used, size,
+        # pct}) — what the chat ring shows, kept here so the host bridge can
+        # report the SAME figure on its heartbeat (Hermes has no TUI pane to
+        # scrape under ACP). None = no reading yet in this session.
+        self._context: Optional[dict] = None
+        # Every reset job and what became of it, and every reset the daemon
+        # did on its own (`_record_reset`), newest last, at most
+        # RESET_HISTORY_MAX — mirrored as `resets`. Taken over from the
+        # previous daemon's mirror at start, so a restart does not hide one
+        # from the backend's activity feed (incident 21.10.2026).
+        self._resets: list[dict] = []
 
         self._full_text: list[str] = []
         self._throttle: dict = {"chars": -10 ** 9, "at": 0.0, "pending": None}
+        # True while `session/load` runs (`_muted_replay`). omp answers a
+        # load by replaying the WHOLE stored conversation as session/update
+        # notifications before it replies (live 20.10.2026: 96 for one chat,
+        # 66 of them tool lines). Nothing of it is new: none of it may reach
+        # the transcript, the preview or the turn text. Counted per kind.
+        self._replaying = False
+        self._replayed: dict[str, int] = {}
         # P1: trailing flush of withheld live tool output (see
         # acp_chat_events.ToolOutputPump) — one per daemon, started in
         # start(), stopped in close().
@@ -218,19 +404,63 @@ class ChatSession:
         """Spawn the child, handshake, and resume or open the ACP session."""
         self._state_dir.mkdir(parents=True, exist_ok=True)
         self._sessions_dir.mkdir(parents=True, exist_ok=True)
+        # S1-R3: MC copies an older image left next to omp's files move into
+        # `.mc/` BEFORE the pointer is read (`_connect` remaps it). Only a
+        # safety net — the real move runs on the host in the deploy window.
+        migration_problem = self._migrate_sinks()
         persisted = self._read_persisted()
         # Read BEFORE anything rewrites the mirror: the queue lives in memory,
         # so whatever a previous daemon still held is gone after a restart.
         lost = self._previous_queue()
         lost_questions = self._previous_elicitations()
+        # The same for the job it was running: its reply never came (S1-R5).
+        # It stays in the mirror (`interrupted`) until its card is written —
+        # _connect rewrites the mirror long before that.
+        interrupted = self._previous_current()
+        resets = self._previous_resets()
+        with self._lock:
+            self._unreported = interrupted
+            self._resets = resets
+        if interrupted is not None and interrupted.get("kind") == "new_session":
+            # A `/new` that never ran is one more job the restart dropped —
+            # it belongs on the card that lists those, first in line.
+            lost = [{"kind": "new_session", "text": "",
+                     "requestId": interrupted.get("requestId")}, *lost]
+            interrupted = None
+        for job in lost:
+            if job.get("kind") == "new_session":
+                # On record too: whoever asked for it must not read "runs
+                # when the reply ends" for ever (the backend's event).
+                self._record_reset(VIA_NEW_SESSION, RESET_LOST,
+                                   previous=persisted.get("sessionId"),
+                                   request_id=job.get("requestId"))
         self._connect(persisted)
         self._write_state()
+        if migration_problem:
+            # Visible, not only a log line (F7): old copies still sit where
+            # omp can mistake them for its own sessions.
+            self._emit_notice(
+                "sink_migration_skipped",
+                "Older chat copies could not be moved out of omp's session "
+                f"folder ({migration_problem}). The chat works; resuming an "
+                "older conversation can fail until the move has run.",
+                {"reason": migration_problem},
+            )
         if self._pump is None:
             self._pump = acp_chat_events.ToolOutputPump(
                 self._mapper, self._emit_preview
             ).start()
+        if interrupted is not None:
+            # The running turn came before anything held behind it.
+            self._report_interrupted_turn(interrupted)
         if lost:
             self._report_lost_queue(lost)
+        if self._unreported is not None:
+            # Its card is on disk now. A stop right here shows it once more
+            # on the next start — twice is better than never.
+            with self._lock:
+                self._unreported = None
+            self._write_state()
         for elicitation_id in lost_questions:
             # Their JSON-RPC request died with the old child: the card must
             # say "no longer open" instead of offering buttons that can
@@ -238,6 +468,35 @@ class ChatSession:
             self._emit_transcript(
                 self._mapper.map_elicitation_result(elicitation_id, "expired")
             )
+
+    def _migrate_sinks(self) -> Optional[str]:
+        """Move MC's old copies under the sessions root into `.mc/`
+        (`sink_migration.migrate`). Returns why it did not run — `locked`,
+        `error` — or None. Never raises: a failed move must not cost the
+        chat."""
+        root = self._sessions_dir.parent
+        try:
+            report = sink_migration.migrate(root, runner="daemon")
+        except Exception as exc:  # noqa: BLE001 — the chat starts anyway
+            logger.warning("sink migration under %s failed: %s: %s",
+                           root, type(exc).__name__, exc)
+            return "error"
+        counts = report.counts()
+        if report.status != "ok":
+            logger.warning("sink migration under %s did not run: %s (%s)",
+                           root, report.status, report.detail)
+            return report.status
+        unsafe = [e["path"] for e in report.skipped if e.get("reason") == "unsafe_target"]
+        if unsafe:
+            # A symlink or a file where `.mc/` belongs: nothing moved there,
+            # and new copies cannot be written there either.
+            logger.warning("sink migration under %s refused unsafe targets: %s",
+                           root, ", ".join(unsafe))
+        if counts["moved"] or counts["media"] or counts["skipped"]:
+            logger.info("sink migration: moved %d copies (%d mixed, %d task), "
+                        "%d pictures, skipped %d", counts["moved"], counts["mixed"],
+                        counts["task"], counts["media"], counts["skipped"])
+        return None
 
     def _connect(self, persisted: dict) -> None:
         client = self._client_factory()
@@ -258,61 +517,273 @@ class ChatSession:
 
         stored_id = persisted.get("sessionId")
         stored_transcript = persisted.get("transcript")
+        self._resume_source = persisted.get("source") or RESUME_NONE
         reset_detail = ""
-        if stored_id and stored_transcript and Path(stored_transcript).exists():
-            try:
-                client.load_session(stored_id, self._cwd)
-                self._session_id = stored_id
-                self._mapper.set_session_id(stored_id)
-                self._sink = acp_chat_events.ChatEventSink.appending(
-                    Path(stored_transcript), stored_id
-                )
-            except Exception as exc:  # noqa: BLE001 — any load failure is a reset
-                reset_detail = f"{type(exc).__name__}: {exc}"
-        if self._session_id is None:
-            self._session_id = client.new_session(self._cwd)
-            self._mapper.set_session_id(self._session_id)
-            self._sink = acp_chat_events.ChatEventSink(
-                self._sessions_dir, self._session_id
+        reset_text = ("Previous chat session could not be loaded — "
+                      "started a new one (history starts over).")
+        reset_data: dict = {}
+        # The copy of the conversation that could not be resumed — on disk,
+        # so the new conversation's card may say it is kept. None when it is
+        # gone (`transcript_missing`): the card comes without the promise.
+        previous_copy: Optional[Path] = None
+        started_fresh = False
+        session_id: Optional[str] = None
+        sink: Optional[acp_chat_events.ChatEventSink] = None
+        if stored_id and stored_transcript:
+            # A pointer written before the move names the old place.
+            transcript = _find_transcript(stored_transcript)
+            if transcript is not None:
+                try:
+                    with self._muted_replay():
+                        client.load_session(stored_id, self._cwd)
+                    sink = acp_chat_events.ChatEventSink.appending(transcript, stored_id)
+                    session_id = stored_id
+                except Exception as exc:  # noqa: BLE001 — any load failure is a reset
+                    previous_copy = transcript
+                    model = missing_model(f"{exc}")
+                    if model is None:
+                        reset_detail = f"{type(exc).__name__}: {exc}"
+                    else:
+                        reset_detail, reset_text = "model_missing", _model_missing_text(model)
+                        # The card in the UI language fills the name into its
+                        # own sentence; it never shows the English text.
+                        reset_data = {"model": acp_model.display_name(model) or None}
+            else:
+                # Neither at the named place nor in `.mc/`: the chat cannot
+                # show this conversation — say so instead of starting over
+                # silently. omp's own file may still hold it; loading it
+                # with an empty chat view is P4's job, not a restart's.
+                reset_detail = "transcript_missing"
+                reset_text = ("The history of the last conversation was not "
+                              "found — a new conversation started.")
+        elif not persisted:
+            # Nothing names the open conversation (start without pointer).
+            # Decided BEFORE the new session writes its own copy.
+            started_fresh = self._earlier_chat_exists()
+        logger.info("chat session to resume: %s (from %s)%s", stored_id or "none",
+                    self._resume_source, f" — {reset_detail}" if reset_detail else "")
+        if session_id is None or sink is None:
+            session_id = client.new_session(self._cwd)
+            sink = acp_chat_events.ChatEventSink(self._sessions_dir, session_id)
+        # ONE locked step: switch AND pointer. The socket threads write the
+        # state mirror under this lock (a `prompt` while the omp child is
+        # respawned); none may name the new session before the pointer does,
+        # or a crash right then resumes the previous one (critic S1-R4).
+        # The pointer comes before the model pin below, which writes the
+        # mirror too.
+        with self._lock:
+            self._session_id = session_id
+            self._mapper.set_session_id(session_id)
+            self._sink = sink
+            # Next to the transcript in use — the backend reads the preview
+            # from the transcript's folder. A resumed copy the move skipped
+            # still sits at the old place; its preview must sit there too.
+            self._preview = acp_chat_events.PreviewEventSink.beside(sink.path, session_id)
+            self._write_persisted()
+        if reset_detail:
+            # First line of the new conversation: it began, and whether the
+            # old one is kept (incident 21.10.2026). The red card below says
+            # why the old one did not resume.
+            self._note_new_conversation(
+                stored_id, session_id,
+                VIA_CHILD_RESTART if self._resume_source == "restart" else VIA_START,
+                reason=reset_detail if reset_detail in ("model_missing", "transcript_missing")
+                else "load_failed",
+                previous_copy=previous_copy,
             )
-        self._preview = acp_chat_events.PreviewEventSink(
-            self._sessions_dir, self._session_id
-        )
+        elif started_fresh:
+            # Its own card below (`chat_started_fresh`) — no id to name.
+            self._note_new_conversation(None, session_id, VIA_START, reason="no_pointer")
         self._absorb_session_result(getattr(client, "last_session_result", None))
         self._pin_model()
-        self._write_persisted()
         if reset_detail:
             # The operator loses the old history here — that is an EVENT,
             # not a log line (Boss: errors must be visible in the chat).
-            self._emit_error(
-                "session_reset",
-                reset_detail,
-                text="Previous chat session could not be loaded — "
-                     "started a new one (history starts over).",
+            self._emit_error("session_reset", reset_detail, text=reset_text, data=reset_data)
+        elif started_fresh:
+            self._emit_notice(CHAT_STARTED_FRESH, _CHAT_STARTED_FRESH_TEXT)
+
+    def _earlier_chat_exists(self) -> bool:
+        """True when the sessions tree holds an earlier CHAT: MC's copy (header
+        `bridge: "acp"`) without a `taskId`, in any session folder under the
+        root or its `.mc/`. A task's copy is no earlier chat, omp's own files
+        are not MC's chat, and a brand-new agent has neither — no card then.
+        Read-only, never follows a symlink, never raises."""
+        root = self._sessions_dir.parent
+        try:
+            folders = sorted(p for p in root.iterdir()
+                             if not p.name.startswith(".") and not p.is_symlink() and p.is_dir())
+        except OSError:
+            return False
+        for folder in folders:
+            for place in (folder / acp_chat_events.MC_SINK_DIRNAME, folder):
+                try:
+                    if place.is_symlink() or not place.is_dir():
+                        continue
+                    names = sorted(place.iterdir())
+                except OSError:
+                    continue
+                for path in names:
+                    if path.name.startswith(".") or not path.name.endswith(".jsonl") \
+                            or path.is_symlink():
+                        continue
+                    header = acp_chat_events.session_header(path)
+                    if acp_chat_events.is_mc_header(header) and not header.get("taskId"):
+                        return True
+        return False
+
+    @contextlib.contextmanager
+    def _muted_replay(self) -> Iterator[None]:
+        """Mute the chat while omp replays a session it loads.
+
+        The ACP client handles stdout strictly in order on its reader thread
+        and calls the event callbacks synchronously; omp replies to
+        `session/load` only after the last replayed update. So everything
+        `_on_event` sees inside this block is replay: only state updates are
+        applied (`_STATE_UPDATES`), nothing goes through the mapper.
+
+        Every caller of `_connect` gets this — start() after a daemon
+        restart AND `_restart_child` after a crash of the omp child, where
+        the transcript is the one the chat already shows (before S1-R2 the
+        reload appended every old tool line to it a second time).
+
+        `finally`: the switch also closes when the load fails, or the next
+        session's turns would be muted for good. After it, no turn is in
+        flight, so the mapper's turn buffers are emptied: the next card
+        (queue_lost, session_reset, ...) must never carry a thought that
+        was open before the load (#902 flushes a thought before a card)."""
+        with self._lock:
+            self._replaying = True
+            self._replayed = {}
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._replaying = False
+                counts, self._replayed = self._replayed, {}
+            self._mapper.begin_turn()
+            muted = {k: v for k, v in counts.items() if k not in _STATE_UPDATES}
+            kept = {k: v for k, v in counts.items() if k in _STATE_UPDATES}
+            logger.info(
+                "load replayed %d updates (muted): %s%s",
+                sum(counts.values()), _format_counts(muted) or "none",
+                f"; applied as state: {_format_counts(kept)}" if kept else "",
             )
 
     def _previous_queue(self) -> list[dict]:
-        """The jobs a previous daemon was holding, from its state mirror."""
-        try:
-            with open(self.state_file, "r", encoding="utf-8") as fh:
-                queue = (json.load(fh) or {}).get("queue")
-        except (OSError, ValueError, AttributeError):
+        """The jobs a previous daemon was holding, from its state mirror.
+        Never blocks (a FIFO in its place on the mount), never raises."""
+        queue = _read_json_object(self.state_file).get("queue")
+        return [j for j in queue if isinstance(j, dict)] if isinstance(queue, list) else []
+
+    def _previous_current(self) -> Optional[dict]:
+        """The job a previous daemon was running when it stopped: the state
+        mirror's `current` while `busy` was true. `{}` when it was busy but
+        names no job (an image before S1-R5 wrote no `current`) — None when
+        it was idle, or the mirror is missing or unreadable. An
+        `interrupted` job a start before could not report yet comes first
+        (no prompt is served before start() returns, so both cannot be
+        set). Never blocks, never raises."""
+        state = _read_json_object(self.state_file)
+        pending = state.get("interrupted")
+        if isinstance(pending, dict):
+            return dict(pending)
+        if state.get("busy") is not True:
+            return None
+        current = state.get("current")
+        return dict(current) if isinstance(current, dict) else {}
+
+    def _report_interrupted_turn(self, current: dict) -> None:
+        """One card for the reply a restart cut off. It offers the text
+        (`retryText`) only when the operator wrote it and the mirror kept all
+        of it; nothing is ever sent again on its own — not here, not
+        anywhere in start(). Only for the operator's turn does the card say
+        that nothing was resent: a task hermes-bridge dispatched comes again
+        on its own, and an older image did not say who wrote the turn."""
+        turn = current.get("turn")
+        detail = f"turn {turn}" if isinstance(turn, int) and not isinstance(turn, bool) \
+            else "turn unknown"
+        by_operator = current.get("kind") == "prompt" \
+            and current.get("origin") == ORIGIN_OPERATOR
+        self._emit_error(
+            TURN_INTERRUPTED, detail,
+            text=_TURN_INTERRUPTED_TEXT if by_operator else _TURN_INTERRUPTED_NEUTRAL_TEXT,
+            data=retry_data(current.get("text")) if by_operator else None,
+        )
+
+    def _previous_resets(self) -> list[dict]:
+        """`resets` of a previous daemon's state mirror — only rows in the
+        shape this daemon writes (`_clean_reset_row`), at most
+        RESET_HISTORY_MAX. Never raises."""
+        rows = _read_json_object(self.state_file).get("resets")
+        if not isinstance(rows, list):
             return []
-        return [j for j in queue or [] if isinstance(j, dict)]
+        cleaned = (_clean_reset_row(r) for r in rows[-RESET_HISTORY_MAX:])
+        return [r for r in cleaned if r is not None]
+
+    def _record_reset(self, via: str, outcome: str, *, previous: Any = None,
+                      current: Any = None, reason: Optional[str] = None,
+                      request_id: Any = None, kept: Optional[bool] = None) -> None:
+        """One row of `resets` (the mirror is written by the caller's next
+        `_write_state`). Every field in the shape `_clean_reset_row` keeps;
+        a value of another shape is left out, never stored."""
+        row = _clean_reset_row({
+            "id": uuid.uuid4().hex[:16], "at": _now_iso(), "via": via,
+            "outcome": outcome, "previousSessionId": previous, "sessionId": current,
+            "reason": reason, "requestId": _request_id_of(request_id), "kept": kept,
+        }, partial=True)
+        if row is None:
+            return
+        with self._lock:
+            self._resets = [*self._resets, row][-RESET_HISTORY_MAX:]
+
+    def _note_new_conversation(self, previous: Optional[str], current: str, via: str,
+                               reason: Optional[str] = None,
+                               previous_copy: Optional[Path] = None,
+                               request_id: Optional[str] = None) -> None:
+        """A new conversation replaced `previous` (incident 21.10.2026).
+
+        Always a row in `resets` and a log line — the backend turns the row
+        into an activity event. The card (`new_conversation`, the FIRST line
+        of the new transcript) whenever there WAS a previous conversation;
+        it promises "the previous one is saved" only while that copy is on
+        disk (`kept`) — without it, it still says that a new one began: no
+        reset is silent. Called right after the switch, before the model pin
+        can write a notice of its own."""
+        kept = False
+        if previous_copy is not None:
+            try:
+                kept = previous_copy.is_file()
+            except OSError:
+                kept = False
+        request_id = _request_id_of(request_id)
+        self._record_reset(via, RESET_DONE, previous=previous, current=current,
+                           reason=reason, request_id=request_id,
+                           kept=kept if previous else None)
+        logger.info("new conversation %s (was %s) via %s%s%s", current, previous or "none",
+                    via, f" — {reason}" if reason else "",
+                    f" — request {request_id}" if request_id else " — no request id")
+        if not previous or previous == current:
+            return
+        self._emit_notice(
+            NEW_CONVERSATION,
+            _NEW_CONVERSATION_TEXT if kept else _NEW_CONVERSATION_NOT_KEPT_TEXT,
+            {"previous": previous, "current": current, "via": via, "reason": reason,
+             "kept": kept, "requestId": request_id},
+        )
 
     def _previous_elicitations(self) -> list[str]:
         """Card ids a previous daemon still held open, from its state mirror."""
-        try:
-            with open(self.state_file, "r", encoding="utf-8") as fh:
-                rows = (json.load(fh) or {}).get("elicitations")
-        except (OSError, ValueError, AttributeError):
+        rows = _read_json_object(self.state_file).get("elicitations")
+        if not isinstance(rows, list):
             return []
-        return [str(r["id"]) for r in rows or []
+        return [str(r["id"]) for r in rows
                 if isinstance(r, dict) and isinstance(r.get("id"), str) and r["id"]]
 
     def _report_lost_queue(self, lost: list[dict]) -> None:
         """One card naming what a restart dropped — the operator typed it and
-        must see that it never ran (spec: the queue is in memory only)."""
+        must see that it never ran (spec: the queue is in memory only). A
+        `/new` that was running when the daemon stopped is listed first."""
         texts = ["/new" if j.get("kind") == "new_session" else str(j.get("text") or "")
                  for j in lost]
         listed = "\n".join(f"- {t}" for t in texts if t)
@@ -380,18 +851,38 @@ class ChatSession:
     # control ops (the socket protocol)
     # ------------------------------------------------------------------
 
-    def prompt(self, text: str, mode: str = MODE_NOW) -> dict:
+    def prompt(self, text: str, mode: str = MODE_NOW, origin: Any = None,
+               context: Any = None) -> dict:
         """Start ONE turn — or, with `mode="queue"` while a turn runs, hold
         the message and run it when that turn ends. Returns immediately; turns
-        run in the worker."""
+        run in the worker.
+
+        `origin`: who wrote it — ORIGIN_OPERATOR, "task"/"nudge", or nothing
+        (unknown). Only the operator's text is ever offered to send again
+        (`_origin_of`). A busy refusal of a wake-up ("nudge") is quiet — its
+        caller retries; everyone else (also "task") gets one `busy` card.
+
+        `context`: MC's run-context block (see CONTEXT_MAX_CHARS) — the model
+        reads it in front of `text`, the chat shows `text` alone. Anything
+        that is not a non-empty string is no context."""
         text = str(text or "")
         mode = mode or MODE_NOW
+        origin = _origin_of(origin)
+        context = _context_of(context)
         if mode not in _MODES:
             return {"ok": False, "error": "bad_mode", "detail": str(mode)}
         with self._lock:
             if self._busy:
                 if mode == MODE_QUEUE and not self._closed:
-                    return self._enqueue_locked("prompt", text)
+                    return self._enqueue_locked("prompt", text, origin, context=context)
+                if origin in _QUIET_BUSY_ORIGINS:
+                    # Mission Control's wake-up: its caller (the omp
+                    # bridge's poll) keeps it pending and tries again on its
+                    # next poll — nothing is lost, so no card. A card per retry flooded the chat
+                    # (one every 5 s while a reply ran, up to 206 a day) and
+                    # each one flushed the open thought and text segment,
+                    # cutting the running reply into pieces (22.10.2026).
+                    return {"ok": False, "error": "busy"}
                 # Rejected, and the operator sees why — silently dropping a
                 # typed message is the worst possible failure here.
                 self._emit_error(
@@ -401,12 +892,12 @@ class ChatSession:
                 return {"ok": False, "error": "busy"}
             if self._closed or self._client is None:
                 return {"ok": False, "error": "not_started"}
-            job = self._claim_locked({"kind": "prompt", "text": text})
+            job = self._claim_locked(_job("prompt", text, origin, context=context))
         self._write_state()
         self._spawn(job)
         return {"ok": True, "turn": job["turn"]}
 
-    def new_session(self, mode: str = MODE_NOW) -> dict:
+    def new_session(self, mode: str = MODE_NOW, request_id: Any = None) -> dict:
         """`/new` and `/clear`: open a fresh ACP session (`session/new`) with
         its own transcript file. The old file stays as it is — the chat view
         follows the new one as a rollover, the history is not deleted.
@@ -415,19 +906,25 @@ class ChatSession:
         omp connects MCP servers), so it never overlaps one: while a turn
         runs it is refused (`busy`), or held in the queue with
         `mode="queue"`. A failure keeps the current session and lands as a
-        `new_session_failed` card."""
+        `new_session_failed` card.
+
+        `request_id`: the id MC's backend sends with the op — it names the
+        activity event of the request, and the job carries it to the card and
+        to `resets`. Nothing (a shell, the agent's own tools) means "not MC";
+        a value of another shape counts as nothing (`_request_id_of`)."""
         mode = mode or MODE_NOW
         if mode not in _MODES:
             return {"ok": False, "error": "bad_mode", "detail": str(mode)}
+        request_id = _request_id_of(request_id)
         with self._lock:
             if self._closed or self._client is None:
                 return {"ok": False, "error": "not_started"}
             if self._busy:
                 if mode == MODE_QUEUE:
-                    return self._enqueue_locked("new_session", "")
+                    return self._enqueue_locked("new_session", "", request_id=request_id)
                 return {"ok": False, "error": "busy"}
             previous = self._session_id
-            job = self._claim_locked({"kind": "new_session"})
+            job = self._claim_locked(_job("new_session", "", request_id=request_id))
         self._write_state()
         self._spawn(job)
         return {"ok": True, "previousSessionId": previous}
@@ -438,6 +935,13 @@ class ChatSession:
         without the operator seeing it."""
         with self._lock:
             dropped, self._queue = self._queue, []
+            current = self._session_id
+        for job in dropped:
+            if job.get("kind") == "new_session":
+                # It never ran: on record, so whoever asked does not read
+                # "runs when the reply ends" for ever.
+                self._record_reset(VIA_NEW_SESSION, RESET_WITHDRAWN, previous=current,
+                                   request_id=job.get("requestId"))
         if dropped:
             self._write_state()
         return {"ok": True, "dropped": [dict(job) for job in dropped]}
@@ -459,9 +963,38 @@ class ChatSession:
         `mode` is refused while a question is open or a turn runs (P3 live
         test 13.10.2026): switching plan mode off under an open plan card
         left omp's request unanswered, the turn hung until the prompt
-        timeout, and the model then looped on a proposal nobody awaited."""
+        timeout, and the model then looped on a proposal nobody awaited.
+
+        The reply is ACP's `configOptions`: the full option set after the
+        change. A model switch changes more than its own row — the new model
+        brings its own thinking levels. The reply's set is taken unless the
+        agent pushed a `config_option_update` while the request was out or
+        right after it: that push is the agent's own word and stays. Live
+        20.10.2026: omp 18.10.1 drops the push when a model switch starts
+        inside its 50 ms bootstrap guard — the pin in `_pin_model` right
+        after session/new — and the effort chip kept the levels of the
+        model the session opened on. A reply without a full set (`{}`, or
+        `[]` from an agent with no typed options) keeps today's way: only
+        the value just set is written into the known list.
+
+        When the push stays, the value written into it is the one the reply
+        names, not the requested one: an agent may run another value than
+        asked (omp clamps a level the model lacks — `medium` on a
+        low/high/max model comes back as `low`), and only the reported value
+        is on the ladder. The requested value is the fallback.
+
+        Calls run one at a time (`_config_lock`): with two requests out at
+        once — the operator's chip while `_pin_model` runs — a thinking
+        reply built before a model switch could land after the model reply
+        and bring back the old model and its ladder."""
+        with self._config_lock:
+            return self._config_locked(option_id, value)
+
+    def _config_locked(self, option_id: str, value: Any) -> dict:
+        """config() body. Caller holds `_config_lock`, not `_lock`."""
         with self._lock:
             client, sid = self._client, self._session_id
+            pushes = self._config_pushes
             if option_id == "mode":
                 if self._elicitations:
                     return {"ok": False, "error": "question_open"}
@@ -470,17 +1003,26 @@ class ChatSession:
         if client is None or not sid:
             return {"ok": False, "error": "not_started"}
         try:
-            client.set_config_option(sid, option_id, value)
+            answer = client.set_config_option(sid, option_id, value)
         except Exception as exc:  # noqa: BLE001 — any failure is chat-visible
             detail = f"{exc}"
             code = "provider_error" if _PROVIDER_ERROR_RE.search(detail) else "rpc_error"
             self._emit_error(code, detail,
                              text=f"Einstellung {option_id}={value!r} abgelehnt: {detail}")
             return {"ok": False, "error": code, "detail": detail}
+        reply = self._full_option_set(answer, option_id)
         with self._lock:
-            for opt in self._config_options:
-                if opt.get("id") == option_id:
-                    opt["currentValue"] = value
+            if reply is not None and self._config_pushes == pushes:
+                self._config_options = reply
+            else:
+                current = next(
+                    (o.get("currentValue") for o in reply or []
+                     if o.get("id") == option_id and o.get("currentValue") is not None),
+                    value,
+                )
+                for opt in self._config_options:
+                    if opt.get("id") == option_id:
+                        opt["currentValue"] = current
             options = json.loads(json.dumps(self._config_options))
         self._write_state()
         return {"ok": True, "configOptions": options}
@@ -567,14 +1109,20 @@ class ChatSession:
                 "configOptions": json.loads(json.dumps(self._config_options)),
                 "commands": json.loads(json.dumps(self._commands)),
                 "queue": [
-                    {**job, "text": job["text"][:_QUEUE_PREVIEW_CHARS]}
+                    {**{k: v for k, v in job.items() if k != "context"},
+                     "text": job["text"][:_QUEUE_PREVIEW_CHARS]}
                     for job in self._queue
                 ],
+                "current": dict(self._current) if self._current else None,
+                "interrupted": dict(self._unreported)
+                if self._unreported is not None else None,
                 "elicitations": [
                     {"id": e["id"], "at": e["at"], "message": e["message"][:200]}
                     for e in self._elicitations.values()
                 ],
                 "sessionInfo": dict(self._session_info),
+                "context": dict(self._context) if self._context else None,
+                "resets": [dict(r) for r in self._resets],
                 "updatedAt": _now_iso(),
                 "lastError": json.loads(json.dumps(self._last_error))
                 if self._last_error else None,
@@ -608,7 +1156,9 @@ class ChatSession:
     # the worker: one job, then everything queued behind it
     # ------------------------------------------------------------------
 
-    def _enqueue_locked(self, kind: str, text: str) -> dict:
+    def _enqueue_locked(self, kind: str, text: str, origin: Optional[str] = None,
+                        request_id: Optional[str] = None,
+                        context: Optional[str] = None) -> dict:
         """Hold one job behind the running turn. Caller holds `_lock`."""
         if len(self._queue) >= MAX_QUEUE:
             self._emit_error(
@@ -617,7 +1167,7 @@ class ChatSession:
                      "Wait for the reply or take some back.",
             )
             return {"ok": False, "error": "queue_full"}
-        job = {"id": uuid.uuid4().hex[:12], "kind": kind, "text": text,
+        job = {"id": uuid.uuid4().hex[:12], **_job(kind, text, origin, request_id, context),
                "at": _now_iso()}
         self._queue.append(job)
         position = len(self._queue)
@@ -627,12 +1177,18 @@ class ChatSession:
 
     def _claim_locked(self, job: dict) -> dict:
         """Mark the session busy for `job`; a prompt gets its turn number
-        here, when it STARTS — not when it was queued. Caller holds `_lock`."""
+        here, when it STARTS — not when it was queued. `job` becomes the
+        mirror's `current` (S1-R5). Caller holds `_lock`."""
         self._busy = True
         self._idle.clear()
         if job["kind"] == "prompt":
             self._turn += 1
             job = {**job, "turn": self._turn}
+            # omp is idle between jobs: its file ends where this turn's
+            # lines will start (S1-R6). Taken here, not in the worker, so
+            # the turn itself starts no later than before.
+            self._omp_mark = self._omp_file_mark()
+        self._current = _current_entry(job)
         return job
 
     def _spawn(self, job: dict) -> None:
@@ -650,13 +1206,16 @@ class ChatSession:
         while job is not None:
             try:
                 if job["kind"] == "new_session":
-                    self._renew_session()
+                    self._renew_session(job)
                 else:
-                    self._run_turn(job["text"], job["turn"])
+                    self._run_turn(job["text"], job["turn"], job.get("origin"),
+                                   job.get("context"))
             except Exception:  # noqa: BLE001 — one broken job must not strand the queue busy
                 logger.exception("chat job %s failed", job.get("kind"))
             with self._lock:
                 closed = self._closed
+                # The job is over; the next queued one (if any) is current.
+                self._current = None
                 if closed or not self._queue:
                     self._busy = False
                     job = None
@@ -664,7 +1223,9 @@ class ChatSession:
                     job = self._claim_locked(self._queue.pop(0))
             if closed:
                 # A retired session touches nothing shared (see the closed
-                # branch in _run_turn) — only the idle flag opens.
+                # branch in _run_turn) — only the idle flag opens. Its
+                # mirror keeps `busy` + `current`: that is how the next
+                # daemon learns which reply never came (S1-R5).
                 break
             # The mirror must be on disk BEFORE the idle flag opens: a waiter
             # that reads acp-chat-state.json the moment it wakes would
@@ -673,7 +1234,7 @@ class ChatSession:
             self._write_state()
         self._idle.set()
 
-    def _renew_session(self) -> None:
+    def _renew_session(self, job: Optional[dict] = None) -> None:
         """The `new_session` job: a fresh `session/new` on the same child.
 
         Model and thinking level carry over — `/clear` forgets the
@@ -685,15 +1246,23 @@ class ChatSession:
         is created. The chat view follows the file whose LAST entry is newest
         (omp_chat.find_active_session), and omp may still persist into the old
         session's own file while disposing it — the new header must be later
-        than anything that teardown writes."""
+        than anything that teardown writes.
+
+        `job["requestId"]`: who asked (MC's backend) — on the card and in
+        `resets`, whatever the outcome."""
+        request_id = (job or {}).get("requestId")
         # A question of the old session can never be answered in the new one.
         self._expire_elicitations()
         with self._lock:
             client, previous = self._client, self._session_id
-            thinking = self._config_value("thinking")
+            previous_copy = self.transcript_path
+            thinking_id = self._thinking_option_id()
+            thinking = self._config_value(thinking_id) if thinking_id else None
         try:
             new_id = client.new_session(self._cwd)
         except Exception as exc:  # noqa: BLE001 — the old session keeps serving
+            self._record_reset(VIA_NEW_SESSION, RESET_FAILED, previous=previous,
+                               request_id=request_id)
             self._emit_error(
                 "new_session_failed", f"{exc}",
                 text="Could not start a new session — the current one continues.",
@@ -707,15 +1276,40 @@ class ChatSession:
                 logger.warning("session/close %s failed: %s", previous, exc)
         with self._lock:
             self._session_id = new_id
+            # A fresh conversation has no fill yet — never report the old one.
+            self._context = None
             self._mapper.set_session_id(new_id)
             self._sink = acp_chat_events.ChatEventSink(self._sessions_dir, new_id)
-            self._preview = acp_chat_events.PreviewEventSink(self._sessions_dir, new_id)
+            self._preview = acp_chat_events.PreviewEventSink.beside(self._sink.path, new_id)
+            # Inside the same locked step, before the pin and the thinking
+            # carry-over below write the mirror — see _connect.
+            self._write_persisted()
+        # The first line of the new conversation (incident 21.10.2026: the
+        # chat was empty and nothing said why).
+        self._note_new_conversation(previous, new_id, VIA_NEW_SESSION,
+                                    previous_copy=previous_copy, request_id=request_id)
         self._absorb_session_result(result)
         self._pin_model()
-        offered = self._config_value("thinking")
+        offered = self._config_value(thinking_id) if thinking_id else None
         if thinking is not None and offered is not None and offered != thinking:
-            self.config("thinking", thinking)
-        self._write_persisted()
+            self.config(thinking_id, thinking)
+
+    def _thinking_option_id(self) -> Optional[str]:
+        """The id of the thinking-level option, harness-neutral: omp's
+        `thinking` first (as before), else the first option with the ACP
+        standard category `thought_level` (Hermes: `reasoning_effort`).
+        None when the agent offers no thinking level. Twin of the backend's
+        `agent_chat_input._acp_thinking_option` — the chip reads and writes
+        the same row this carry-over keeps."""
+        with self._lock:
+            rows = [o for o in self._config_options if isinstance(o, dict)]
+        for opt in rows:
+            if opt.get("id") == "thinking":
+                return "thinking"
+        for opt in rows:
+            if opt.get("category") == "thought_level" and isinstance(opt.get("id"), str):
+                return opt["id"]
+        return None
 
     def _config_value(self, option_id: str) -> Any:
         """`currentValue` of one config option, None when not offered."""
@@ -729,17 +1323,44 @@ class ChatSession:
     # the turn
     # ------------------------------------------------------------------
 
-    def _run_turn(self, text: str, turn: int) -> None:
+    def _run_turn(self, text: str, turn: int, origin: Optional[str] = None,
+                  context: Optional[str] = None) -> None:
         result = None
         error_text = ""
+        # True once a reload in this turn failed: its `process_exit` card
+        # already told the operator — no second card for the same cause.
+        restart_failed = False
         self._mapper.begin_turn()
         self._full_text = []
         self._throttle = {"chars": -10 ** 9, "at": time.monotonic(), "pending": None}
+        # Where omp's own file of this session ended when the job was
+        # claimed: what omp writes after it is this turn (S1-R6).
+        with self._lock:
+            omp_mark, self._omp_mark = self._omp_mark, (None, 0)
         try:
-            with self._lock:
-                client, sid = self._client, self._session_id
-            self._emit_transcript(self._mapper.map_user_prompt(text))
-            result = client.prompt(sid, text, timeout=self._prompt_timeout)
+            # The child died while idle (SIGTERM, recycler): nothing of this
+            # turn is lost yet — reload the session quietly, then prompt.
+            # A prompt to a dead child would only fail (incident 13.11.2026).
+            if not self._client_alive():
+                logger.info("omp child gone before turn %d — reloading the session", turn)
+                restart_failed = not self._restart_child()
+            # A prompt Mission Control wrote is its event in the chat, not
+            # an operator bubble — the same line the task path writes.
+            self._emit_transcript(self._mapper.map_user_prompt(
+                text, origin=origin if origin in _MC_ORIGINS else None))
+            # The run context goes to the model only; the line above wrote
+            # the operator's own text (t1 MUST-1).
+            try:
+                result = self._prompt_once(text, context)
+            except Exception as exc:  # noqa: BLE001
+                if not self._session_unknown(exc):
+                    raise
+                # A live child that does not know our session (it was
+                # respawned without session/load): reload, retry ONCE. A
+                # second miss falls through to the error card below.
+                logger.warning("omp child lost the session (%s) — reloading, one retry", exc)
+                restart_failed = not self._restart_child()
+                result = self._prompt_once(text, context)
         except Exception as exc:  # noqa: BLE001 — a dead turn must still report
             error_text = f"{exc}"
         finally:
@@ -777,23 +1398,74 @@ class ChatSession:
 
         final_text = "".join(self._full_text)
         stop_reason = getattr(result, "stopReason", "") if result is not None else ""
+        alive = self._client_alive()
+        # Did the model answer at all (S1-R6)? Decided BEFORE the reply line
+        # is written: omp's error line is cut off the end of the reply (the
+        # card below says it instead); when nothing is left, there is no
+        # reply bubble.
+        verdict = self._judge_turn(
+            stop_reason, final_text, error_text,
+            getattr(result, "usage", None) if result is not None else None, omp_mark,
+        ) if alive else model_errors.NOTHING
         if result is not None:
             self._mapper.set_prompt_usage(getattr(result, "usage", None))
+            # An empty text still goes through the mapper: it writes no
+            # bubble but closes a thought that is still open (#902). After
+            # text segments (D7) the mapper writes its own unflushed rest;
+            # the verdict then only cuts omp's line off that rest's end.
             self._emit_transcript(self._mapper.map_final_assistant_message(
-                final_text, stop_reason="stop" if stop_reason == "end_turn" else "",
+                final_text if verdict.reply is None else verdict.reply,
+                stop_reason="stop" if stop_reason == "end_turn" else "",
+                cut_forms=verdict.cut_forms,
             ))
+        else:
+            # No reply (the prompt failed, the child died): the open thought
+            # and text segment land before the card below (N11).
+            self._emit_transcript(self._mapper.flush_on_abort())
 
-        if not self._client_alive():
+        if not alive and not restart_failed:
+            # The card offers the text of the turn that died — the
+            # operator's, and only when its reply never came (`result` is
+            # None): a child that exits right after a complete reply leaves
+            # nothing to send again. The respawn below only reloads the
+            # session — it never sends it again.
+            offer = result is None and origin == ORIGIN_OPERATOR
             self._emit_error(
                 "process_exit",
                 error_text or f"child exited during turn {turn}",
                 text="The ACP process died — reconnecting the session.",
+                data=retry_data(text) if offer else None,
             )
             self._restart_child()
         else:
-            code, detail = _classify_turn(stop_reason, final_text, error_text)
-            if code:
+            code, detail = _classify_turn(stop_reason, final_text, error_text, verdict)
+            if code == MODEL_UNREACHABLE:
+                # Same rule as `turn_interrupted`: only the operator's own
+                # text is offered again (and only whole).
+                operator = origin == ORIGIN_OPERATOR
+                self._emit_error(
+                    code, detail,
+                    text=_MODEL_UNREACHABLE_TEXT if operator else _MODEL_UNREACHABLE_NEUTRAL_TEXT,
+                    data=retry_data(text) if operator else None,
+                )
+            elif code and not restart_failed:
                 self._emit_error(code, detail)
+
+    def _prompt_once(self, text: str, context: Optional[str]):
+        with self._lock:
+            client, sid = self._client, self._session_id
+        if sid is None:
+            # `_restart_child()` failed and left no session to prompt.
+            raise acp_client.ACPError("no chat session — the omp child could not be restarted")
+        return client.prompt(sid, _model_text(text, context), timeout=self._prompt_timeout)
+
+    def _session_unknown(self, exc: BaseException) -> bool:
+        """True when omp answered "Resource not found" for OUR session id —
+        the child runs but never loaded the session."""
+        message = f"{exc}"
+        with self._lock:
+            sid = self._session_id
+        return bool(sid) and "Resource not found" in message and sid in message
 
     def _client_alive(self) -> bool:
         """False only when a REAL child process died. An injected/in-memory
@@ -806,8 +1478,9 @@ class ChatSession:
         except Exception:  # noqa: BLE001
             return False
 
-    def _restart_child(self) -> None:
-        """Respawn the child and re-`session/load` — history keeps its file."""
+    def _restart_child(self) -> bool:
+        """Respawn the child and re-`session/load` — history keeps its file.
+        False when the respawn failed (its `process_exit` card is out)."""
         self._expire_elicitations()
         try:
             self._client.close()
@@ -816,6 +1489,7 @@ class ChatSession:
         persisted = {
             "sessionId": self._session_id,
             "transcript": str(self.transcript_path) if self.transcript_path else "",
+            "source": "restart",
         }
         self._session_id = None
         try:
@@ -823,6 +1497,8 @@ class ChatSession:
         except Exception as exc:  # noqa: BLE001 — a failed respawn stays visible
             logger.error("child restart failed: %s", exc)
             self._emit_error("process_exit", f"restart failed: {exc}")
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # ACP events
@@ -832,34 +1508,27 @@ class ChatSession:
         try:
             update = params.get("update") or {}
             su = update.get("sessionUpdate")
-            if su in ("agent_message_chunk", "agent_thought_chunk"):
+            with self._lock:
+                replaying = self._replaying
+                if replaying:
+                    kind = su if isinstance(su, str) and su else "unknown"
+                    self._replayed[kind] = self._replayed.get(kind, 0) + 1
+            # isinstance first: `su` comes from the agent, and a list or a
+            # dict there would make the set lookup raise.
+            if isinstance(su, str) and su in _STATE_UPDATES:
+                self._apply_state_update(update, su)
+            if su == "usage_update":
+                # State, not a chat line: a load's replay ends on the
+                # session's current fill, which is exactly the reading.
+                self._apply_context_fill(update)
+            if replaying:
+                # A load's replay (see _muted_replay): state only — no
+                # mapper, no transcript, no preview, no turn text.
+                return
+            if su == "agent_message_chunk":
                 content = update.get("content") or {}
-                if content.get("type") == "text" and su == "agent_message_chunk":
+                if content.get("type") == "text":
                     self._full_text.append(content.get("text") or "")
-            elif su == "config_option_update":
-                self._set_config_options(update.get("configOptions"))
-                self._write_state()
-            elif su == "available_commands_update":
-                self._set_commands(update.get("availableCommands"))
-                self._write_state()
-            elif su == "current_mode_update":
-                # P3: plan mode on/off. The configOptions row is what the
-                # backend's mode capabilities read; the mapper below also
-                # writes a quiet `acp-mode` line for the live chip.
-                mode_id = update.get("currentModeId")
-                if isinstance(mode_id, str) and mode_id:
-                    with self._lock:
-                        for opt in self._config_options:
-                            if opt.get("id") == "mode":
-                                opt["currentValue"] = mode_id
-                    self._write_state()
-            elif su == "session_info_update":
-                info = {k: update.get(k) for k in ("title", "updatedAt")
-                        if isinstance(update.get(k), str)}
-                if info:
-                    with self._lock:
-                        self._session_info = {**self._session_info, **info}
-                    self._write_state()
 
             for entry in self._mapper.map_update(params, stream=True):
                 if not acp_chat_events.is_volatile(entry):
@@ -882,6 +1551,48 @@ class ChatSession:
                     self._throttle["pending"] = entry
         except Exception:  # noqa: BLE001 — a broken update must not kill the turn
             logger.exception("event handling failed")
+
+    def _apply_context_fill(self, update: dict) -> None:
+        """`usage_update` -> `_context`. Same validation as the task path
+        (bridge.py G5) and the chat mapper: ints, size > 0, 0 <= used <= size.
+        Anything else is ignored — it never replaces a good reading."""
+        size, used = update.get("size"), update.get("used")
+        if isinstance(size, bool) or isinstance(used, bool):
+            return
+        if not (isinstance(size, int) and size > 0
+                and isinstance(used, int) and 0 <= used <= size):
+            return
+        with self._lock:
+            self._context = {"used": used, "size": size,
+                             "pct": round(used / size * 100.0, 1)}
+
+    def _apply_state_update(self, update: dict, su: str) -> None:
+        """One of `_STATE_UPDATES` -> in-memory state + the state mirror.
+        No chat line here: outside a replay the mapper writes the quiet
+        `acp-mode` line for `current_mode_update` (the live chip)."""
+        if su == "config_option_update":
+            self._set_config_options(update.get("configOptions"))
+            self._write_state()
+        elif su == "available_commands_update":
+            self._set_commands(update.get("availableCommands"))
+            self._write_state()
+        elif su == "current_mode_update":
+            # P3: plan mode on/off. The configOptions row is what the
+            # backend's mode capabilities read.
+            mode_id = update.get("currentModeId")
+            if isinstance(mode_id, str) and mode_id:
+                with self._lock:
+                    for opt in self._config_options:
+                        if opt.get("id") == "mode":
+                            opt["currentValue"] = mode_id
+                self._write_state()
+        elif su == "session_info_update":
+            info = {k: update.get(k) for k in ("title", "updatedAt")
+                    if isinstance(update.get(k), str)}
+            if info:
+                with self._lock:
+                    self._session_info = {**self._session_info, **info}
+                self._write_state()
 
     def _on_permission(self, params: dict) -> str:
         """Delegate to the bridge's policy helper — ONE decision path for
@@ -925,13 +1636,23 @@ class ChatSession:
     _NAME_LOOKUP_WAIT_S = 0.05
 
     def _omp_session_file(self) -> Optional[Path]:
-        """omp's OWN file of the current session: same folder, same session
-        id in the name, not the bridge sink's file."""
+        """omp's OWN file of the current session: the file named after the
+        session in the session folder. Since S1-R3 MC's copy lives in `.mc/`,
+        so that folder holds only omp's files. In a tree not moved yet MC's
+        old copy can still sit there (same id, often the younger file):
+        neither our own sink nor any file with MC's header is taken. Only
+        regular files: this runs during a turn, and opening a FIFO named
+        like the session would stall it."""
         sid, own = self._session_id, self.transcript_path
         if not sid:
             return None
+        suffix = f"_{sid}.jsonl"
         try:
-            candidates = [p for p in self._sessions_dir.glob(f"*_{sid}.jsonl") if p != own]
+            candidates = [
+                p for p in self._sessions_dir.iterdir()
+                if p.name.endswith(suffix) and p != own and p.is_file()
+                and not acp_chat_events.is_mc_sink(p)
+            ]
             return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
         except OSError:
             return None
@@ -944,6 +1665,57 @@ class ChatSession:
             if attempt + 1 < self._NAME_LOOKUP_TRIES:
                 time.sleep(self._NAME_LOOKUP_WAIT_S)
         return None
+
+    #: How often and how long the end of a turn waits for omp's final line
+    #: of that turn (S1-R6). omp writes it when the message ends; whether
+    #: that is always on disk before the prompt reply is not proven.
+    _OMP_LINE_TRIES = 5
+    _OMP_LINE_WAIT_S = 0.1
+
+    def _omp_file_mark(self) -> tuple[Optional[Path], int]:
+        """omp's own file of this session and its size now — the next
+        turn's lines start there. `(None, 0)` when omp has no file yet (the
+        session's first turn: then the whole file is this turn)."""
+        path = self._omp_session_file()
+        if path is None:
+            return None, 0
+        try:
+            return path, path.stat().st_size
+        except OSError:
+            return None, 0
+
+    def _omp_turn_line(self, mark: tuple[Optional[Path], int]
+                       ) -> "Optional[model_errors.OmpTurnEnd]":
+        """omp's line that ended this turn (and its retried attempts), from
+        omp's OWN session file — None when there is none (no file,
+        unreadable, a file that shrank, or no final line within the short
+        wait)."""
+        for attempt in range(self._OMP_LINE_TRIES):
+            path = self._omp_session_file()
+            if path is not None:
+                start = mark[1] if mark[0] == path else 0
+                lines = _read_lines_from(path, start)
+                if lines is not None:
+                    end = model_errors.omp_turn_end(lines)
+                    if end is not None:
+                        return end
+            if attempt + 1 < self._OMP_LINE_TRIES:
+                time.sleep(self._OMP_LINE_WAIT_S)
+        return None
+
+    def _judge_turn(self, stop_reason: str, final_text: str, error_text: str,
+                    usage: Any, mark: tuple[Optional[Path], int]
+                    ) -> "model_errors.ChatTurnVerdict":
+        """`model_errors.classify_chat_turn` with omp's line of this turn —
+        read only for a turn that ends like a lost model or has no text."""
+        end = None
+        if model_errors.needs_omp_line(stop_reason, final_text, error_text):
+            end = self._omp_turn_line(mark)
+        return model_errors.classify_chat_turn(
+            stop_reason=stop_reason, final_text=final_text, error_text=error_text,
+            usage=usage, omp_line=end.message if end is not None else None,
+            omp_retried=end.retried if end is not None else (),
+        )
 
     def _on_elicitation(self, rpc_id: Any, params: dict) -> None:
         """P3: omp asks (`elicitation/create`). Called on the ACP reader
@@ -978,30 +1750,49 @@ class ChatSession:
     # ------------------------------------------------------------------
 
     def _emit_transcript(self, entries: list[dict]) -> None:
-        if not entries or self._sink is None:
+        """Under `_lock`, like `_write_state`: once close() has set
+        `_closed`, no thread of this session — the worker, the ACP reader,
+        the pump — writes into the transcript the next session shares."""
+        if not entries:
             return
-        try:
-            # P2: tool pictures land next to the transcript (media/), the
-            # line keeps only their reference.
-            self._sink.write(acp_chat_events.ACPEventMapper.dump(
-                entries, media_writer=self._sink.write_media
-            ))
-        except Exception:  # noqa: BLE001 — the chat view never kills the turn
-            logger.exception("transcript write failed")
+        with self._lock:
+            if self._closed or self._sink is None:
+                return
+            try:
+                # P2: tool pictures land next to the transcript (media/), the
+                # line keeps only their reference.
+                self._sink.write(acp_chat_events.ACPEventMapper.dump(
+                    entries, media_writer=self._sink.write_media
+                ))
+            except Exception:  # noqa: BLE001 — the chat view never kills the turn
+                logger.exception("transcript write failed")
+            # D7: a text segment is on record — a withheld snapshot of it
+            # never follows it into the preview channel, and the next
+            # segment's first snapshot goes out at once.
+            if any(acp_chat_events.is_text_line(e) for e in entries):
+                self._throttle["pending"] = None
+                self._throttle["chars"] = -10 ** 9
 
     def _emit_preview(self, entries: list[dict]) -> None:
-        if not entries or self._preview is None:
+        if not entries:
             return
-        try:
-            self._preview.write(acp_chat_events.ACPEventMapper.dump(entries))
-        except Exception:  # noqa: BLE001
-            logger.exception("preview write failed")
+        with self._lock:
+            if self._closed or self._preview is None:
+                return
+            try:
+                self._preview.write(acp_chat_events.ACPEventMapper.dump(entries))
+            except Exception:  # noqa: BLE001
+                logger.exception("preview write failed")
 
-    def _emit_error(self, code: str, detail: str = "", text: Optional[str] = None) -> None:
+    def _emit_error(self, code: str, detail: str = "", text: Optional[str] = None,
+                    data: Optional[dict] = None) -> None:
+        """`data`: extra fields of the card (e.g. `model` for
+        `session_reset`/`model_missing`, `retryText`) — never `code` or
+        `detail`, never a None value (`ACPEventMapper.map_chat_error`)."""
         with self._lock:
             self._last_error = {"code": code, "detail": str(detail)[:2000],
                                 "at": _now_iso()}
-        self._emit_transcript(self._mapper.map_chat_error(code, detail, text))
+        self._emit_transcript(self._mapper.map_chat_error(code, detail, text, data=data))
         self._write_state()
 
     def _emit_notice(self, code: str, text: str, data: Optional[dict] = None) -> None:
@@ -1024,6 +1815,24 @@ class ChatSession:
         copied = json.loads(json.dumps([o for o in options if isinstance(o, dict)]))
         with self._lock:
             self._config_options = copied
+            self._config_pushes += 1
+
+    @staticmethod
+    def _full_option_set(answer: Any, option_id: str) -> Optional[list]:
+        """The option set from a `session/set_config_option` reply, as a
+        copy — or `None` when the reply carries no full set.
+
+        A full set names the option that was just set. Anything else is a
+        placeholder, not the agent's state: `hermes acp` answers every set
+        with `configOptions: []` (no typed options yet), and taking that
+        would wipe the model row and the effort chip."""
+        options = answer.get("configOptions") if isinstance(answer, dict) else None
+        if not isinstance(options, list):
+            return None
+        rows = [o for o in options if isinstance(o, dict)]
+        if not any(o.get("id") == option_id for o in rows):
+            return None
+        return json.loads(json.dumps(rows))
 
     def _set_commands(self, commands: Any) -> None:
         if not isinstance(commands, list):
@@ -1040,9 +1849,16 @@ class ChatSession:
         sharing ONE tmp file truncated each other's half-written file and
         renamed it into place (torn JSON, review #777). The lock also keeps
         snapshot and rename in order, so an older snapshot can never land
-        after a newer one."""
+        after a newer one.
+
+        A retired session (`_closed`) writes nothing — from any thread. Its
+        ACP reader still hands over buffered updates while close() waits
+        for the child; one of them rewriting the mirror with `busy: false`
+        would hide the reply it cut off from the next start (S1-R5)."""
         target = self.state_file
         with self._lock:
+            if self._closed:
+                return
             payload = self.state()
             tmp = target.with_name(f"{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
             try:
@@ -1058,34 +1874,296 @@ class ChatSession:
                     pass
 
     def _read_persisted(self) -> dict:
-        try:
-            with open(self.persist_file, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}
+        """The session to resume at start: `{"sessionId", "transcript",
+        "source"}`, or `{}` when nothing names one (S1-R4).
+
+        A chain — the first source naming BOTH a session id and a
+        transcript wins:
+
+        1. the pointer `acp-chat.json` in `state_dir`. The container keeps it
+           in the sessions folder, on the mount (`build_session`), so it
+           survives a recreate; Hermes keeps it in its workspace.
+        2. the state mirror `acp-chat-state.json` next to it — the way over
+           the deploy of S1-R4: the old image kept its pointer in the
+           unmounted `$OMP_HOME`, but already wrote this file on the mount.
+
+        One exception: a state mirror strictly NEWER than the pointer that
+        names ANOTHER session wins over it (the pointer went stale, see
+        below). A newer mirror naming the same session is normal operation
+        and changes nothing.
+
+        The old place `$OMP_HOME/acp-chat.json` is never read: a new image
+        always means a recreate, so it is empty there — and a stale one
+        must never win over the mirror. The caller follows a moved
+        transcript (`sink_migration.remap`)."""
+        pointer, pointer_at = _named_session(self.persist_file)
+        mirror, mirror_at = _named_session(self.state_file)
+        if pointer and mirror and mirror[0] != pointer[0] and mirror_at > pointer_at:
+            # The pointer went stale. Every switch writes it first, so a
+            # NEWER mirror naming ANOTHER session means it stopped being
+            # written: a rollback to an image that writes only the mirror
+            # (and a forward deploy after it), or a pointer write that
+            # failed (only a log line). Reopening the pointer's session would
+            # silently undo the conversation the operator had open last.
+            logger.warning("the pointer names %s, the newer state mirror %s — "
+                           "following the state mirror", pointer[0], mirror[0])
+            pointer = None
+        for source, named in ((RESUME_POINTER, pointer), (RESUME_STATE, mirror)):
+            if named is not None:
+                return {"sessionId": named[0], "transcript": named[1], "source": source}
+        return {}
 
     def _write_persisted(self) -> None:
-        payload = {
-            "sessionId": self._session_id,
-            "transcript": str(self.transcript_path) if self.transcript_path else "",
-        }
-        try:
-            self._state_dir.mkdir(parents=True, exist_ok=True)
-            tmp = self.persist_file.with_suffix(".json.tmp")
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False)
-            os.replace(tmp, self.persist_file)
-        except OSError:
-            logger.warning("session id not persisted: %s", self.persist_file)
+        """Point at the current session. Only `sessionId` and `transcript`
+        are rewritten: fields this daemon does not know (P4 adds
+        `homeSessionId`) stay as they are. Never copies the state mirror."""
+        target = self.persist_file
+        with self._lock:
+            if self._closed:
+                # Retired: the pointer belongs to the next session now.
+                return
+            payload = _read_json_object(target)
+            payload["sessionId"] = self._session_id
+            payload["transcript"] = str(self.transcript_path) if self.transcript_path else ""
+            tmp = target.with_suffix(".json.tmp")
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(payload, fh, ensure_ascii=False)
+                os.replace(tmp, target)
+            except OSError:
+                logger.warning("session id not persisted: %s", target)
 
 
-def _classify_turn(stop_reason: str, final_text: str, error_text: str) -> tuple[
+def retry_data(text: Any) -> dict:
+    """`{"retryText": text}` for a card that offers "Send again" — only for
+    a non-empty text of at most RETRY_TEXT_MAX_CHARS; `{}` otherwise. Never
+    a shortened text: the button sends exactly what the operator wrote, or
+    the card has no button."""
+    if isinstance(text, str) and text.strip() and len(text) <= RETRY_TEXT_MAX_CHARS:
+        return {"retryText": text}
+    return {}
+
+
+def _origin_of(value: Any) -> Optional[str]:
+    """A prompt's `origin` as the session keeps it: ORIGIN_OPERATOR, one of
+    `_MC_ORIGINS`, or None (unknown — anything else, a missing field, a
+    value of the wrong type from the socket)."""
+    if value == ORIGIN_OPERATOR or value in _MC_ORIGINS:
+        return str(value)
+    return None
+
+
+def _job(kind: str, text: str, origin: Optional[str] = None,
+         request_id: Optional[str] = None, context: Optional[str] = None) -> dict:
+    """A job for the worker; `origin`, `requestId` and `context` only when
+    known, so a job of an unknown author looks exactly as it did before."""
+    job = {"kind": kind, "text": text}
+    if origin is not None:
+        job["origin"] = origin
+    if request_id is not None:
+        job["requestId"] = request_id
+    if context:
+        job["context"] = context
+    return job
+
+
+def _context_of(value: Any) -> Optional[str]:
+    """A prompt's run context as the session keeps it: a non-empty string,
+    at most CONTEXT_MAX_CHARS, or None (missing, empty, wrong type)."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:CONTEXT_MAX_CHARS]
+
+
+def _model_text(text: str, context: Optional[str]) -> str:
+    """What the model reads for one turn: the run context first, then the
+    operator's text — or the text unchanged when there is no context."""
+    return f"{context}\n\n{text}" if context else text
+
+
+def chat_child_env(base: "Mapping[str, str]") -> dict:
+    """The environment of the chat's `omp acp` child: ``base`` marked as the
+    chat (MC_SESSION_ROLE), with its own task-context file and without the
+    run ids of the boot env (see CHAT_SESSION_ROLE). ``base`` is not
+    changed."""
+    env = {k: v for k, v in base.items() if k not in _RUN_CONTEXT_KEYS}
+    env["MC_SESSION_ROLE"] = CHAT_SESSION_ROLE
+    env["MC_CONTEXT_ENV_PATH"] = CHAT_CONTEXT_ENV_PATH
+    return env
+
+
+def _request_id_of(value: Any) -> Optional[str]:
+    """A `new_session` request id as the daemon keeps it: a short token
+    (`_REQUEST_ID_RE`) or None. Anyone who reaches the socket picks it, and
+    it lands in the mirror and on the card."""
+    if isinstance(value, str) and _REQUEST_ID_RE.fullmatch(value):
+        return value
+    return None
+
+
+def _clean_reset_row(raw: Any, partial: bool = False) -> Optional[dict]:
+    """One `resets` row in the shape the daemon writes, or None.
+
+    Required: `id`, `via` (VIA_*), `outcome` (RESET_*). Optional: `at`,
+    `previousSessionId`, `sessionId`, `reason`, `requestId`, `kept` (bool).
+    Unknown keys are dropped. A known key of another shape drops the whole
+    row (a row the previous daemon left on the mount) — or, with `partial`
+    (a row this daemon is writing), only that value."""
+    if not isinstance(raw, dict):
+        return None
+    shapes = (
+        ("id", _RESET_ID_RE), ("at", _AT_RE), ("previousSessionId", _SESSION_ID_RE),
+        ("sessionId", _SESSION_ID_RE), ("reason", _REASON_RE), ("requestId", _REQUEST_ID_RE),
+    )
+    row: dict = {}
+    for key, shape in shapes:
+        value = raw.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and shape.fullmatch(value):
+            row[key] = value
+        elif not partial:
+            return None
+    if raw.get("via") not in _VIAS or raw.get("outcome") not in _RESET_OUTCOMES \
+            or "id" not in row:
+        return None
+    row["via"], row["outcome"] = raw["via"], raw["outcome"]
+    kept = raw.get("kept")
+    if isinstance(kept, bool):
+        row["kept"] = kept
+    elif kept is not None and not partial:
+        return None
+    return row
+
+
+def _current_entry(job: dict) -> dict:
+    """The mirror's `current` for a claimed job: `{kind, turn, text,
+    truncated, startedAt, origin}`. `text` is the whole prompt, or None with
+    `truncated: true` when it is longer than RETRY_TEXT_MAX_CHARS. Same
+    protection class as the held texts in `queue`. `origin` decides at the
+    next start whether the card may offer the text again."""
+    kind = job.get("kind")
+    text = str(job.get("text") or "") if kind == "prompt" else ""
+    whole = len(text) <= RETRY_TEXT_MAX_CHARS
+    return {
+        "kind": kind,
+        "turn": job.get("turn"),
+        "text": text if whole else None,
+        "truncated": not whole,
+        "startedAt": _now_iso(),
+        "origin": job.get("origin"),
+        **({"requestId": job["requestId"]} if job.get("requestId") else {}),
+    }
+
+
+def _read_lines_from(path: Path, start: int) -> Optional[list[str]]:
+    """The lines of `path` from byte `start` on (at most the last
+    `_OMP_TURN_READ_BYTES`, without a cut first line), or None when the file
+    is unreadable, no regular file, or shorter than `start` (rewritten: its
+    end no longer marks this turn). Never blocks (`open_regular`)."""
+    fh = acp_chat_events.open_regular(path)
+    if fh is None:
+        return None
+    try:
+        with fh:
+            raw = fh.buffer
+            size = os.fstat(raw.fileno()).st_size
+            if size < start:
+                return None
+            begin = max(start, size - _OMP_TURN_READ_BYTES)
+            raw.seek(begin)
+            data = raw.read(size - begin)
+    except (OSError, ValueError):
+        return None
+    lines = data.decode("utf-8", errors="replace").split("\n")
+    return lines[1:] if begin > start else lines
+
+
+def _format_counts(counts: Mapping[str, int]) -> str:
+    """`{"tool_call": 33, ...}` -> `"tool_call=33, ..."`, sorted by kind."""
+    return ", ".join(f"{kind}={count}" for kind, count in sorted(counts.items()))
+
+
+def _read_json_object(path: Path) -> dict:
+    """A JSON object from `path`, `{}` when the file is missing, unreadable,
+    no regular file or holds anything else. Never blocks: the pointer and
+    the state mirror sit in the sessions folder, the agent's own mount,
+    where a FIFO in their place would otherwise stall the chat's start
+    (`open_regular`)."""
+    return _read_json_stamped(path)[0]
+
+
+def _read_json_stamped(path: Path) -> tuple[dict, int]:
+    """`_read_json_object` plus the file's mtime in ns (0 when unread),
+    taken from the same open file."""
+    fh = acp_chat_events.open_regular(path)
+    if fh is None:
+        return {}, 0
+    try:
+        with fh:
+            stamp = os.fstat(fh.fileno()).st_mtime_ns
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}, 0
+    return (data, stamp) if isinstance(data, dict) else ({}, 0)
+
+
+def _named_session(path: Path) -> tuple[Optional[tuple[str, str]], int]:
+    """`(sessionId, transcript)` a pointer or state mirror names — None
+    unless both are non-empty strings — and the file's mtime in ns."""
+    data, stamp = _read_json_stamped(path)
+    sid, transcript = data.get("sessionId"), data.get("transcript")
+    if isinstance(sid, str) and sid and isinstance(transcript, str) and transcript:
+        return (sid, transcript), stamp
+    return None, stamp
+
+
+def _find_transcript(stored: str) -> Optional[Path]:
+    """The stored transcript, followed to `.mc/` (`sink_migration.remap`),
+    or None when it is in neither place — or the file system refuses the
+    path (too long, a folder the daemon may not enter): a missing
+    transcript then, never a crash at boot."""
+    try:
+        transcript = sink_migration.remap(stored)
+        return transcript if transcript.exists() else None
+    except (OSError, ValueError) as exc:
+        logger.warning("stored transcript unusable (%s): %.200s", type(exc).__name__, stored)
+        return None
+
+
+def missing_model(error: str) -> Optional[str]:
+    """omp's "Could not restore model X" in a load failure: the selector X
+    (`""` when the sentence names none), None for any other failure."""
+    match = _MODEL_MISSING_RE.search(error or "")
+    if match is None:
+        return None
+    return match.group("model").rstrip(".:")
+
+
+def _model_missing_text(selector: str) -> str:
+    """The card sentence for `model_missing`, naming the model when known."""
+    name = acp_model.display_name(selector)
+    model = f"the model {name}" if name else "a model"
+    return (f"The last conversation ran on {model}, which is not set up for "
+            "this agent right now — a new conversation started. The old one "
+            "is kept.")
+
+
+def _classify_turn(stop_reason: str, final_text: str, error_text: str,
+                   verdict: Optional["model_errors.ChatTurnVerdict"] = None) -> tuple[
         Optional[str], str]:
     """Turn outcome -> (chat_error code, detail). `None` = nothing to report.
 
-    `cancelled` is deliberately NOT an error: the operator pressed Stop.
+    `cancelled` is deliberately NOT an error: the operator pressed Stop —
+    and neither is a turn omp's own line calls aborted. The model not
+    answering (`verdict`, S1-R6) comes first: before `provider_error`,
+    `rpc_error` and `empty_turn`.
     """
+    if verdict is not None and verdict.kind == MODEL_UNREACHABLE:
+        return MODEL_UNREACHABLE, verdict.detail
+    if verdict is not None and verdict.kind == model_errors.ABORTED:
+        return None, ""
     if error_text:
         code = "provider_error" if _PROVIDER_ERROR_RE.search(error_text) else "rpc_error"
         return code, error_text
@@ -1249,9 +2327,16 @@ def dispatch(session: ChatSession, request: dict) -> dict:
     """One control request -> one response (spec's op table)."""
     op = request.get("op")
     if op == "prompt":
-        return session.prompt(request.get("text") or "", request.get("mode") or MODE_NOW)
+        # `origin` (optional): who wrote the text — see ORIGIN_OPERATOR.
+        # `context` (optional): MC's run-context block — model only. Passed
+        # only when sent, so the call stays as before without it.
+        extra = {"context": request["context"]} if request.get("context") is not None else {}
+        return session.prompt(request.get("text") or "", request.get("mode") or MODE_NOW,
+                              origin=request.get("origin"), **extra)
     if op == "new_session":
-        return session.new_session(request.get("mode") or MODE_NOW)
+        # `requestId` (optional): which request of MC's backend asked.
+        return session.new_session(request.get("mode") or MODE_NOW,
+                                   request_id=request.get("requestId"))
     if op == "queue_clear":
         return session.queue_clear()
     if op == "cancel":
@@ -1391,9 +2476,13 @@ def build_session() -> ChatSession:
             "OMP_HOME+OMP_PROFILE nor PI_CODING_AGENT_DIR is set (the "
             "entrypoint exports them)"
         )
-    state_dir = Path(os.environ.get("OMP_HOME") or "/home/agent/.omp")
+    # The pointer (acp-chat.json) sits next to the state mirror in the
+    # sessions folder — on the mount, so it survives a recreate. $OMP_HOME
+    # is not mounted: every new image used to start the chat over (S1-R4).
+    state_dir = sessions_dir
     return ChatSession(
-        client_factory=lambda: acp_client.ACPClient(cwd=cwd),
+        # Marked as the chat, with its own task-context file (t1 MUST-1).
+        client_factory=lambda: acp_client.ACPClient(cwd=cwd, env=chat_child_env(os.environ)),
         cwd=cwd,
         state_dir=state_dir,
         sessions_dir=sessions_dir,

@@ -29,17 +29,19 @@ class _FakeTransport:
 
     def __init__(self, answers: dict | None = None):
         self.calls: list[tuple] = []
+        self.request_ids: list = []
         self._answers = answers or {}
 
     def _answer(self, op: str) -> dict:
         return self._answers.get(op, {"ok": True})
 
-    async def prompt(self, text: str, mode: str | None = None) -> dict:
+    async def prompt(self, text: str, mode: str | None = None, origin: str | None = None) -> dict:
         self.calls.append(("prompt", text, mode))
         return self._answer("prompt")
 
-    async def new_session(self, mode: str | None = None) -> dict:
+    async def new_session(self, mode: str | None = None, request_id: str | None = None) -> dict:
         self.calls.append(("new_session", mode))
+        self.request_ids.append(request_id)
         return self._answer("new_session")
 
     async def queue_clear(self) -> dict:
@@ -183,8 +185,13 @@ async def test_send_text_new_and_clear_open_a_real_new_session(
     running turn), never a prompt."""
     from app.services import agent_chat_input
 
-    await agent_chat_input.send_text(acp_agent, typed)
+    reset = await agent_chat_input.send_text(acp_agent, typed)
     assert fake_transport.calls == [("new_session", "queue")]
+    # The request names itself, so the daemon's card and its record point at
+    # the activity event of who asked (incident 21.10.2026).
+    (request_id,) = fake_transport.request_ids
+    assert reset is not None and reset.request_id == request_id
+    assert reset.command == typed.strip().lower()
 
 
 async def test_send_text_new_goes_to_the_agent_when_it_advertises_new(
@@ -260,7 +267,7 @@ async def test_router_maps_acp_refusal_to_409(auth_client, make_agent, monkeypat
 
     agent = await make_agent(name="Acp One", agent_runtime="cli-bridge")
 
-    async def _refused(a, text):
+    async def _refused(a, text, **_kw):
         raise AcpChatRefusedError("bad_mode")
 
     monkeypatch.setattr(agent_chat_mod, "send_text", _refused)
@@ -435,6 +442,152 @@ async def test_effort_capabilities_without_state(acp_agent, monkeypatch):
     assert caps["effortReason"] == "acp_state_missing"
 
 
+# ── Denk-Stufe harness-neutral: id "thinking" ODER category "thought_level" ──
+#
+# Hermes (upstream PR "reasoning effort as an ACP session config option")
+# meldet seine Stufe als ``reasoning_effort`` mit der ACP-Standardkategorie
+# ``thought_level`` — omp als ``thinking``. Bis 22.10.2026 las MC nur die id
+# ``thinking``: bei Hermes kein Chip, und als Grund ``acp_state_missing``,
+# obwohl die Zustandsdatei frisch da war.
+
+#: Genau die Zeile, die Hermes' ACP-Server nach dem Upstream-PR meldet
+#: (gateway_session_meta.config_options): Profil-Standard, aus, dann die
+#: ``--reasoning``-Stufen der CLI.
+_HERMES_REASONING_OPTION = {
+    "type": "select",
+    "id": "reasoning_effort",
+    "name": "Reasoning effort",
+    "category": "thought_level",
+    "currentValue": "high",
+    "options": [
+        {"value": "default", "name": "Default", "description": "The profile's agent.reasoning_effort"},
+        {"value": "none", "name": "None", "description": "Thinking off"},
+        {"value": "minimal", "name": "minimal"},
+        {"value": "low", "name": "low"},
+        {"value": "medium", "name": "medium"},
+        {"value": "high", "name": "high"},
+        {"value": "xhigh", "name": "xhigh"},
+        {"value": "max", "name": "max"},
+    ],
+}
+
+_HERMES_MODE_OPTION = {
+    "type": "select",
+    "id": "edit_approval_policy",
+    "name": "Mode",
+    "category": "mode",
+    "currentValue": "session",
+    "options": [{"value": "session", "name": "Session"}],
+}
+
+
+@pytest.fixture
+def hermes_agent(monkeypatch):
+    from app import config
+
+    monkeypatch.setattr(config.settings, "hermes_driver", "acp")
+    return _StubAgent(slug="hermes", agent_runtime="host", harness="hermes")
+
+
+def _state(monkeypatch, options):
+    from app.services import agent_chat_input
+
+    state = {"version": 1, "driver": "hermes", "busy": False, "configOptions": options}
+    monkeypatch.setattr(agent_chat_input, "read_acp_chat_state", lambda agent: state)
+    return state
+
+
+async def test_effort_capabilities_hermes_reasoning_effort_is_switchable(hermes_agent, monkeypatch):
+    from app.services import agent_chat_input
+
+    _state(monkeypatch, [_HERMES_MODE_OPTION, _HERMES_REASONING_OPTION])
+    caps = await agent_chat_input.effort_capabilities(hermes_agent)
+    assert caps["canSwitchEffort"] is True
+    assert caps["effortLevels"] == [
+        "default", "none", "minimal", "low", "medium", "high", "xhigh", "max",
+    ]
+    assert caps["effort"] == "high"
+    assert caps["effortReason"] is None
+
+
+async def test_effort_capabilities_acp_level_is_session_scoped(hermes_agent, monkeypatch):
+    """An ACP config option belongs to the session: nothing is written into
+    the agent's own settings (``_set_effort_acp`` only sets the option; the
+    chat daemon carries it over a /new). The composer must not promise
+    "becomes the default" — harness-neutral, omp-over-ACP included."""
+    from app.services import agent_chat_input
+
+    _state(monkeypatch, [_HERMES_MODE_OPTION, _HERMES_REASONING_OPTION])
+    caps = await agent_chat_input.effort_capabilities(hermes_agent)
+    assert caps["effortScope"] == "session"
+
+
+async def test_set_effort_hermes_sends_the_matched_option_id(hermes_agent, fake_transport, monkeypatch):
+    """Zurueck geht die ECHTE id der gefundenen Zeile — ein hart kodiertes
+    ``thinking`` lehnt Hermes nicht einmal ab, es bedeutet dort nichts."""
+    from app.services import agent_chat_input
+
+    _state(monkeypatch, [_HERMES_MODE_OPTION, _HERMES_REASONING_OPTION])
+    await agent_chat_input.set_effort(hermes_agent, "xhigh")
+    assert fake_transport.calls == [("config", "reasoning_effort", "xhigh")]
+
+
+async def test_effort_capabilities_state_without_thinking_level_is_harness_no_effort(
+    hermes_agent, monkeypatch,
+):
+    """Hermes vor dem Upstream-PR: Zustandsdatei frisch da, aber keine
+    Denk-Stufe im Angebot. Das ist NICHT ``acp_state_missing`` — der Grund
+    nennt den Harness, damit das UI "Hermes bietet keine Denkstufe an" sagen
+    kann statt "Terminal fehlt"."""
+    from app.services import agent_chat_input
+
+    _state(monkeypatch, [])
+    caps = await agent_chat_input.effort_capabilities(hermes_agent)
+    assert caps["canSwitchEffort"] is False
+    assert caps["effortLevels"] == []
+    assert caps["effortReason"] == "harness_no_effort"
+    assert caps["effortHarness"] == "hermes"
+
+    _state(monkeypatch, [_HERMES_MODE_OPTION])
+    caps = await agent_chat_input.effort_capabilities(hermes_agent)
+    assert caps["effortReason"] == "harness_no_effort"
+
+
+async def test_effort_capabilities_hermes_without_state_file_is_acp_state_missing(
+    hermes_agent, monkeypatch,
+):
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(agent_chat_input, "read_acp_chat_state", lambda agent: None)
+    caps = await agent_chat_input.effort_capabilities(hermes_agent)
+    assert caps["effortReason"] == "acp_state_missing"
+
+
+async def test_set_effort_state_without_thinking_level_is_not_supported(
+    hermes_agent, fake_transport, monkeypatch,
+):
+    from app.services import agent_chat_input
+
+    _state(monkeypatch, [_HERMES_MODE_OPTION])
+    with pytest.raises(agent_chat_input.InputNotSupportedError):
+        await agent_chat_input.set_effort(hermes_agent, "high")
+    assert fake_transport.calls == []
+
+
+async def test_omp_thinking_without_category_still_matches(acp_agent, fake_transport, monkeypatch):
+    """omp bleibt wie heute: die id ``thinking`` allein reicht (aeltere
+    Zustandsdateien tragen keine Kategorie)."""
+    from app.services import agent_chat_input
+
+    _state(monkeypatch, [{"id": "thinking", "currentValue": "low",
+                          "options": [{"value": "low"}, {"value": "high"}]}])
+    caps = await agent_chat_input.effort_capabilities(acp_agent)
+    assert caps["effortLevels"] == ["low", "high"]
+    assert caps["effort"] == "low"
+    await agent_chat_input.set_effort(acp_agent, "high")
+    assert fake_transport.calls == [("config", "thinking", "high")]
+
+
 async def test_slash_commands_from_state(acp_agent, acp_state):
     from app.services import agent_chat_input
 
@@ -501,7 +654,7 @@ async def test_router_maps_busy_to_409(auth_client, make_agent, monkeypatch):
 
     agent = await make_agent(name="Acp One", agent_runtime="cli-bridge")
 
-    async def _busy(a, text):
+    async def _busy(a, text, **_kw):
         raise AgentBusyError()
 
     monkeypatch.setattr(agent_chat_mod, "send_text", _busy)
@@ -521,7 +674,7 @@ async def test_router_maps_unreachable_to_502(auth_client, make_agent, monkeypat
 
     agent = await make_agent(name="Acp One", agent_runtime="cli-bridge")
 
-    async def _dead(a, text):
+    async def _dead(a, text, **_kw):
         raise AcpChatUnreachableError("socket weg")
 
     monkeypatch.setattr(agent_chat_mod, "send_text", _dead)

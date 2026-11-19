@@ -83,14 +83,20 @@ backend/tests/test_omp_chat.py):
 
   * ACP PREVIEW (Vorschau-Kanal, Folge-PR zu #471): agent text/thought
     chunks NEVER touch this transcript file. They stream into a SIBLING
-    file — ``previews/<ts>_<sessionId>_<uniq>.jsonl`` in the SAME session
-    directory — that the backend's tailer (transcript_chat.ChatTailerManager
+    file — ``previews/<ts>_<sessionId>_<uniq>.jsonl`` next to the
+    transcript copy (both under ``<session folder>/.mc/``) — that the
+    backend's tailer (transcript_chat.ChatTailerManager
     via omp_chat.preview_channel) tails as a pure volatile channel,
     broadcasting ``kind: "preview", source: "acp"`` SSE frames. Nothing
     preview-shaped is ever written here, so read_history and the permanent
     timeline stay clean by construction (before: custom_message
     "acp-preview" lines lived in this JSONL and every reader had to filter
     them out).
+
+  * WHERE (S1-R3): the copy, its ``previews/`` and its ``media/`` live in
+    ``<session folder>/.mc/``, never next to omp's own file of the same
+    session — omp would take the copy for its session and load it
+    (``MC_SINK_DIRNAME``). ``sink_migration.py`` moves older copies there.
 
 FAIL-CLOSED PRIVACY: session_dir() derives the target directory from
 PI_CODING_AGENT_DIR + the pinned OMP_ACP_CWD only; nothing from prompt,
@@ -104,10 +110,13 @@ notice, a parser must not die on them).
 """
 from __future__ import annotations
 
+import errno
 import json
 import math
 import os
 import re
+import stat
+import sys
 import threading
 import time
 import uuid
@@ -140,7 +149,39 @@ CHAT_ERROR_CUSTOM_TYPE = "chat_error"
 #: A notice the operator must see, not an error (map_chat_notice).
 CHAT_NOTICE_CUSTOM_TYPE = "chat_notice"
 
+#: MC's display copy of a session (``ChatEventSink``), its preview channel
+#: and its pictures live in ``<session folder>/.mc/`` — never next to omp's
+#: own session file (S1-R3, docs/specs/chat-over-acp.md "Storage").
+#: omp 18.10.1 takes every ``*.jsonl`` whose first line is
+#: ``{"type": "session", "id": <string>}`` for one of its sessions (MC's
+#: header passes) and finds them with ``Bun.Glob("*.jsonl")`` per folder
+#: (``SessionManager.list``) and ``Bun.Glob("*/*.jsonl")`` over the root
+#: (``listAll``). Load and resume take the YOUNGER of two files with one id
+#: — often MC's copy: live 20.10.2026 the current chat failed to load ("ACP
+#: session load was cancelled") and silently started over. Two levels below
+#: the root, ``.mc/`` is outside both globs — that alone keeps omp 18.10.1
+#: away from it. The leading dot is a second guard for a recursive search
+#: some later omp might run: Bun's docs say ``Bun.Glob`` skips dot names
+#: unless ``dot: true`` (a local Bun 1.3 agrees; NOT checked at the Bun
+#: build inside omp's binary — an assumption). The
+#: backend reads the same name (``omp_chat._MC_SINK_DIRNAME``, pinned by
+#: backend/tests/test_mc_sink_dirname_contract.py); ``sink_migration.py``
+#: moves the copies written before.
+MC_SINK_DIRNAME = ".mc"
+#: The longest session header line read (a header is a few hundred bytes).
+_HEADER_BYTES = 65536
+
 _TITLE_TRUNCATE_LEN = 200
+
+#: A thought's preview line carries only the END of the thought (operator
+#: finding 20.10.2026): every line used to carry the WHOLE thought — 1 097
+#: lines / 33 MB of preview file in five minutes of DeepSeek reasoning — and
+#: the chat only ever shows the last lines of a running thought anyway.
+#: ``data.chars`` keeps the full size, so the chat can still say how much.
+THINKING_PREVIEW_TAIL_CHARS = 2000
+#: A finished thought kept in the transcript is capped: head + tail survive
+#: (the plan at the start, the conclusion at the end), the middle is cut.
+_THINKING_KEEP_CHARS = 12000
 
 # Chat package P3 — question cards and plan mode.
 # A question omp asks over ACP (`elicitation/create`, form mode): ONE
@@ -277,11 +318,55 @@ def strip_ansi(text: str) -> str:
     return _CTRL_RE.sub("", s)
 
 
+#: Updates that end a running thought (the model moved on). Bookkeeping
+#: updates (usage, config, commands, session info) do not: omp can send them
+#: in the middle of a long thought.
+_THOUGHT_ENDING_UPDATES = frozenset({
+    "agent_message_chunk", "tool_call", "tool_call_update", "plan",
+})
+
+#: Updates that end a text SEGMENT (stream mode, spec A D7): the agent's
+#: words written so far land as their own permanent line before the tool
+#: call, the new thought or the plan — the chat reads them where they were
+#: written. Not ``tool_call_update`` (a running tool's output is not a new
+#: step) and not the bookkeeping updates (usage, config, mode).
+_TEXT_ENDING_UPDATES = frozenset({"tool_call", "agent_thought_chunk", "plan"})
+
+#: Chunk updates that are a boundary only when they carry words: an empty
+#: or non-text chunk writes nothing, so it must not end a segment or a
+#: thought either (review #936 S1 — empty reasoning deltas would otherwise
+#: break the chat into mid-word bubbles).
+_CHUNK_UPDATES = frozenset({"agent_message_chunk", "agent_thought_chunk"})
+
+
+def _carries_text(update: dict[str, Any]) -> bool:
+    """True when a chunk update holds a non-empty text block."""
+    content = update.get("content")
+    if not isinstance(content, dict) or content.get("type") != "text":
+        return False
+    text = content.get("text")
+    return isinstance(text, str) and bool(text)
+
+
 def is_volatile(entry: dict[str, Any]) -> bool:
     """True for lines that belong on the PREVIEW channel, never the
     transcript: text previews and live tool output. Both callers
     (bridge.run_acp_once and the chat daemon) route on this."""
     return entry.get("customType") in (PREVIEW_CUSTOM_TYPE, TOOL_OUTPUT_CUSTOM_TYPE)
+
+
+def is_text_line(entry: dict[str, Any]) -> bool:
+    """True for a permanent assistant TEXT line (a segment or the turn's
+    final line). Both callers reset their preview throttle when one is
+    written: a withheld snapshot of that text must never reach the preview
+    channel after it (D7 — it would show the same words twice)."""
+    if entry.get("type") != "message":
+        return False
+    message = entry.get("message") or {}
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return False
+    return any(isinstance(b, dict) and b.get("type") == "text"
+               for b in message.get("content") or [])
 
 # ACP toolCall status values that settle a tool call.
 _TERMINAL_STATUSES = ("completed", "failed", "error")
@@ -326,12 +411,142 @@ def omp_tool_name(session_file: Optional[Path], tool_call_id: str) -> Optional[s
     return match.group(1) if match else None
 
 
+#: How much of omp's own session file the live context read takes (from the
+#: end): the last assistant call sits near the end, but a single tool result
+#: (a big file read, a long log) can push it back by a few hundred KB.
+_FILL_LOOKUP_TAIL_BYTES = 1024 * 1024
+
+
+def omp_own_session_file(folder: Optional[Path], session_id: Optional[str]) -> Optional[Path]:
+    """omp's OWN file of session ``session_id`` in session folder ``folder``
+    (``<ts>_<id>.jsonl``), never MC's display copy (``.mc/`` or, in a tree
+    not migrated yet, a file with MC's header next to it). Only regular
+    files — this runs during a turn, and opening a FIFO would stall it.
+    The newest by mtime when several match. Never raises."""
+    if folder is None or not session_id:
+        return None
+    suffix = f"_{session_id}.jsonl"
+    try:
+        candidates = [
+            p for p in Path(folder).iterdir()
+            if p.name.endswith(suffix) and p.is_file() and not is_mc_sink(p)
+        ]
+        return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+    except OSError:
+        return None
+
+
+def _nonneg_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value) if value >= 0 else None
+
+
+def omp_prompt_tokens(session_file: Optional[Path]) -> Optional[int]:
+    """The prompt size of the session's LAST model call, read from omp's own
+    session file — the live context fill while a turn is still running.
+
+    WHY: omp 18.10.1 sends ACP ``usage_update`` only at ``agent_end``, i.e.
+    once per prompt turn (``AcpAgent`` emits it after the turn, verified in
+    the shipped binary). A task turn runs for tens of minutes and hundreds of
+    model calls, so the context figure froze at the reset value for the
+    whole run (live 30.10.2026: heartbeat 0 %, real fill 38 %). omp writes
+    every assistant message with its usage as it ends, so the file has the
+    figure the moment a call returns.
+
+    Same anchor omp's own context meter uses (``getContextBreakdown``):
+    ``contextSnapshot.promptTokens`` minus ``historyRewriteTokensRemoved``;
+    without a snapshot ``usage.contextTokens``; else ``input + cacheRead +
+    cacheWrite``. omp adds an estimate of the messages after that call (tool
+    results); this does not — a slight underestimate, never an invented
+    number. ``None`` when there is no such line. Never raises."""
+    if session_file is None:
+        return None
+    try:
+        with open(session_file, "rb") as fh:
+            size = fh.seek(0, 2)
+            fh.seek(max(0, size - _FILL_LOOKUP_TAIL_BYTES))
+            chunk = fh.read()
+    except OSError:
+        return None
+    for raw in reversed(chunk.split(b"\n")):
+        if b'"assistant"' not in raw or b'"usage"' not in raw:
+            continue
+        try:
+            d = json.loads(raw.decode("utf-8", errors="replace"))
+        except ValueError:
+            continue  # the cut first line, or a line being written
+        msg = d.get("message") if isinstance(d, dict) else None
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        usage = msg.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        snap = msg.get("contextSnapshot")
+        if isinstance(snap, dict) and _nonneg_int(snap.get("promptTokens")) is not None:
+            removed = _nonneg_int(snap.get("historyRewriteTokensRemoved")) or 0
+            return max(0, int(snap["promptTokens"]) - removed)
+        ctx = _nonneg_int(usage.get("contextTokens"))
+        if ctx is not None:
+            return ctx
+        parts = [_nonneg_int(usage.get(k)) for k in ("input", "cacheRead", "cacheWrite")]
+        total = sum(p for p in parts if p is not None)
+        if total > 0:
+            return total
+        # A line without any prompt figure (an error turn): look further back.
+    return None
+
+
+_CONTEXT_WINDOW_RE = re.compile(r"^\s*contextWindow:\s*(\d+)\s*$", re.MULTILINE)
+
+
+def configured_context_window(agent_dir: Optional[str] = None) -> Optional[int]:
+    """The context window MC rendered into omp's ``models.yml``
+    (``render-omp-config.sh``: ``contextWindow: ${OMP_CONTEXT_WINDOW}``, from
+    the runtime row, re-rendered on a runtime switch) — the window omp itself
+    divides by. Read fresh on every call: a switch rewrites the file inside
+    the running container. ``None`` when unreadable. Never raises."""
+    base = agent_dir or _profile_agent_dir() or os.environ.get("PI_CODING_AGENT_DIR")
+    if not base:
+        return None
+    try:
+        text = (Path(base) / "models.yml").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = _CONTEXT_WINDOW_RE.search(text)
+    if not match:
+        return None
+    window = int(match.group(1))
+    return window if window > 0 else None
+
+
 def _now_iso() -> str:
     return (
         datetime.now(timezone.utc)
         .isoformat(timespec="milliseconds")
         .replace("+00:00", "Z")
     )
+
+
+def _tail_on_boundary(text: str, limit: int) -> str:
+    """The last ``limit`` chars of ``text``, starting at a line or word
+    boundary when one is near (a preview should not open mid-word)."""
+    if len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    # The EARLIEST boundary in reach (review R3: max() skipped the cut
+    # whenever the first newline lay deeper than the window).
+    cuts = [i for i in (tail.find("\n"), tail.find(" ")) if 0 <= i < 200]
+    if cuts:
+        tail = tail[min(cuts) + 1:]
+    return tail
+
+
+def _keep_thought(text: str) -> str:
+    if len(text) <= _THINKING_KEEP_CHARS:
+        return text
+    half = _THINKING_KEEP_CHARS // 2
+    return text[:half] + "\n…\n" + text[-half:]
 
 
 def _trunc(text: Any, limit: int = _RESULT_TRUNCATE_LEN) -> str:
@@ -437,6 +652,51 @@ def _clean_cost(raw: Any) -> Optional[dict[str, Any]]:
     return {"amount": float(amount), "currency": currency}
 
 
+def _input_includes_cache(
+    input_tokens: int,
+    output_tokens: int,
+    cache_read: int,
+    cache_write: int,
+    total: Any,
+) -> bool:
+    """Does this ACP ``Usage`` count cached tokens INSIDE ``inputTokens``?
+
+    The ACP spec names the fields but not their convention, and the two
+    harnesses we drive differ:
+
+    * omp (acp-agent.ts ``#buildTurnUsage``, v18.10.1): input is the UNCACHED
+      part; ``totalTokens`` = input + output + cacheRead + cacheWrite.
+    * Hermes (acp_adapter/server.py, 0.18.0): input is ``prompt_tokens`` =
+      uncached + cacheRead + cacheWrite; ``totalTokens`` = input + output.
+
+    The backend computes the hit rate as cacheRead / (cacheRead + input) —
+    omp's convention. Fed Hermes' numbers it counted the cache twice (live
+    22.10.2026: 44 % shown, 80 % true). Decided from the DATA, not from the
+    harness name: when something was cached, the two conventions give
+    different totals, and ``total == input + output`` only holds when the
+    cache sits inside ``input``. No total, nothing cached, or an input too
+    small to contain the cache -> leave the numbers exactly as reported (omp
+    and every unknown harness stay byte-identical).
+    """
+    cached = cache_read + cache_write
+    if cached <= 0 or isinstance(total, bool) or not isinstance(total, (int, float)):
+        return False
+    return int(total) == input_tokens + output_tokens and input_tokens >= cached
+
+
+def _cut_rest(text: str, cut_forms: tuple) -> str:
+    """The final line's rest after the chat's verdict (S1): ``()`` hides it
+    all, else omp's error line (in any of ``cut_forms``) is cut off its END
+    only. Segments written earlier are never touched — they are on screen."""
+    if not cut_forms:
+        if text.strip():
+            sys.stderr.write("[acp] verdict hides the reply rest; earlier segments stay\n")
+        return ""
+    import model_errors  # noqa: PLC0415 — sibling module, only for this cut
+
+    return model_errors.reply_without_omp_line(text, cut_forms)
+
+
 @dataclass
 class ACPEventMapper:
     """Accumulates one ACP run's events into omp-format transcript line dicts.
@@ -444,22 +704,38 @@ class ACPEventMapper:
     One instance per bridge run (= one ACP session). Consumed by
     bridge.run_acp_once via a ChatEventSink; also usable standalone in tests.
 
-    Review #465, Mark's Option b — streaming contract:
+    Streaming contract (Review #465 Option b, narrowed by spec A D7 —
+    docs/specs/chat-over-acp.md "Text segments"):
     - ``map_update(params, stream=True)`` maps agent text chunks into
       PREVIEW lines (``custom_message``/``acp-preview`` carrying the growing
-      snapshot). The chat reducer treats preview as replace-me; it never
-      stacks bubbles.
-    - ``map_final_assistant_message(text)`` emits exactly ONE ``message``
-      line with the complete text + usage + model — the only assistant
-      entry that lands in the permanent transcript.
-    - ``usage`` is stamped ONLY on that final line (never 0/0 per chunk).
+      snapshot of the CURRENT segment). The chat reducer treats preview as
+      replace-me; it never stacks bubbles. Previews never enter the
+      transcript.
+    - ONE permanent assistant text line per text SEGMENT. A segment ends at
+      a tool call, the start of a thought, a plan, a permission/elicitation
+      card, a chat notice/error line (``_flush_text``) or the turn end
+      (``map_final_assistant_message``). A turn without such a boundary
+      still writes exactly one line.
+    - ``usage`` + ``stopReason`` are stamped ONLY on the turn's last
+      assistant line (never 0/0 per chunk); when no text is left for it,
+      that line has ``content: []``. The final line never repeats flushed
+      text and never contains thought text.
     - ``set_session_id`` carries the REAL ``session/new`` id into the sink
       (file name + session header), replacing the "acp-session" stub.
     """
 
     seq: int = 0
-    # agent_message_chunk accumulation: messageId -> full text so far.
+    # agent_message_chunk accumulation: messageId -> text of the open
+    # segment so far. Cleared when the segment is written (``_flush_text``).
     _text_by_message: dict[str, str] = field(default_factory=dict)
+    # The keys of ``_text_by_message`` in chunk-arrival order (D7: a
+    # segment is joined in the order it was written, never by dict order).
+    _text_order: list[str] = field(default_factory=list)
+    # This turn already wrote a text segment line / a thinking line: the
+    # final line then carries only the mapper's own unflushed rest, and
+    # always exists (``content: []`` when empty) to carry stopReason+usage.
+    _turn_flushed_any: bool = False
+    _turn_thought_any: bool = False
     _thought_by_message: dict[str, str] = field(default_factory=dict)
     # toolCallId -> {"name", "title", "arguments"} as seeded by tool_call.
     _tools: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -475,6 +751,10 @@ class ACPEventMapper:
     _live: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Injectable monotonic clock (tests drive the throttle deterministically).
     clock: Callable[[], float] = field(default=time.monotonic)
+    # The thought being streamed right now (stream mode): its messageId key,
+    # its start (ISO for the chat, monotonic for the duration). It is kept
+    # ONCE in the transcript when it ends — see ``_flush_thought``.
+    _open_thought: Optional[dict[str, Any]] = None
     # map_update runs on the ACP reader thread, ToolOutputPump on its own:
     # one re-entrant lock keeps the live state and the entry ids consistent.
     _lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
@@ -524,6 +804,25 @@ class ACPEventMapper:
 
     def _map_one(self, update: dict[str, Any], stream: bool) -> list[dict[str, Any]]:
         su = update.get("sessionUpdate")
+        if su in _CHUNK_UPDATES and not _carries_text(update):
+            # An empty (or non-text) chunk writes nothing and ends nothing:
+            # neither the open text segment nor the open thought.
+            return self._map_one_inner(update, su, stream)
+        # The agent's words so far end where a tool call, a thought or a
+        # plan begins (D7): they land as their own line first.
+        pre = self._flush_text() if stream and su in _TEXT_ENDING_UPDATES else []
+        if su in _THOUGHT_ENDING_UPDATES or (
+            su == "agent_thought_chunk" and self._other_thought(update)
+        ):
+            # The model stopped thinking (it answers, calls a tool, plans) or
+            # began a new thought: keep the finished one first, so the
+            # transcript reads in the order it happened.
+            return pre + self._flush_thought() + self._map_one_inner(update, su, stream)
+        return pre + self._map_one_inner(update, su, stream)
+
+    def _map_one_inner(
+        self, update: dict[str, Any], su: Any, stream: bool
+    ) -> list[dict[str, Any]]:
         if su == "agent_message_chunk":
             if stream:
                 return self._preview_chunk(update, "text")
@@ -553,6 +852,90 @@ class ACPEventMapper:
         # (the chat daemon mirrors them into its state file instead).
         return []
 
+    def _other_thought(self, update: dict[str, Any]) -> bool:
+        if self._open_thought is None:
+            return False
+        message_id = update.get("messageId")
+        key = message_id if isinstance(message_id, str) and message_id else "_anon"
+        return key != self._open_thought["key"]
+
+    def _flush_thought(self) -> list[dict[str, Any]]:
+        """The open thought -> ONE permanent assistant ``thinking`` line
+        (``durationMs`` = how long the model thought), or [] when none is
+        open. Called when the thought ends: the next answer chunk, tool call
+        or plan, the turn's final line, a chat error. The backend parser
+        (omp_chat) already turns a ``thinking`` block into the chat's
+        ``thinking`` event — the history keeps "thought for 1:45"."""
+        open_thought, self._open_thought = self._open_thought, None
+        if open_thought is None:
+            return []
+        text = self._thought_by_message.pop(open_thought["key"], "")
+        if not text.strip():
+            return []
+        duration_ms = max(0, int(round((self.clock() - open_thought["mono"]) * 1000)))
+        self._turn_thought_any = True
+        return [
+            {
+                "type": "message",
+                "id": self._next_id(),
+                "parentId": None,
+                "timestamp": _now_iso(),
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "thinking",
+                        "thinking": _keep_thought(text),
+                        "durationMs": duration_ms,
+                    }],
+                    "model": None,
+                },
+            }
+        ]
+
+    def _take_text(self) -> str:
+        """The open segment's text in chunk-arrival order; clears it, so the
+        next preview snapshot holds only what comes after."""
+        with self._lock:
+            keys = self._text_order + [k for k in self._text_by_message
+                                       if k not in self._text_order]
+            self._text_order = []
+            return "".join(self._text_by_message.pop(k, "") for k in keys)
+
+    def _flush_text(self) -> list[dict[str, Any]]:
+        """The open text segment -> ONE permanent assistant text line
+        (stream mode, D7), or [] when there is none or it is only
+        whitespace. No ``stopReason`` and no ``usage``: both belong to the
+        turn's last line only (``map_final_assistant_message``)."""
+        with self._lock:
+            text = self._take_text()
+            if not text.strip():
+                return []
+            self._turn_flushed_any = True
+            return [
+                {
+                    "type": "message",
+                    "id": self._next_id(),
+                    "parentId": None,
+                    "timestamp": _now_iso(),
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": text}],
+                        "model": None,
+                        "stopReason": None,
+                    },
+                }
+            ]
+
+    def flush_on_abort(self) -> list[dict[str, Any]]:
+        """A run that ends without a prompt result (error, abort): the open
+        thought and the open text segment still land as lines — never lost
+        with the run (N11). Neither carries a stop reason. Never raises."""
+        try:
+            with self._lock:
+                return self._flush_thought() + self._flush_text()
+        except Exception:  # noqa: BLE001 — the error path must not break
+            return []
+
     def map_mode(self, mode_id: Any) -> list[dict[str, Any]]:
         """``current_mode_update`` -> one quiet ``custom``/``acp-mode`` line.
         Not a card: the composer's mode chip reads it (newest wins)."""
@@ -577,7 +960,7 @@ class ACPEventMapper:
         ``custom_message``/``acp-elicitation`` line. ``schema`` is the
         already-cleaned ``requestedSchema`` (see acp_chat.clean_schema)."""
         text = str(message or "").strip() or "?"
-        return [
+        return self._flush_text() + [
             {
                 "type": "custom_message",
                 "customType": ELICITATION_CUSTOM_TYPE,
@@ -669,8 +1052,12 @@ class ACPEventMapper:
         deduplicated away.
         """
         self._text_by_message.clear()
+        self._text_order.clear()
         self._thought_by_message.clear()
+        self._open_thought = None
         self._prompt_usage = None
+        self._turn_flushed_any = False
+        self._turn_thought_any = False
 
     def set_session_id(self, session_id: Optional[str]) -> None:
         """Carry the REAL `session/new` sessionId into the sink (Review
@@ -714,7 +1101,7 @@ class ACPEventMapper:
         named = [o for o in options if o]
         if named:
             question += " [" + " | ".join(named) + "]"
-        return [
+        return self._flush_text() + [
             {
                 "type": "custom_message",
                 "customType": "acp-permission",
@@ -808,7 +1195,7 @@ class ACPEventMapper:
         localized sentence; ``content`` is the English fallback text."""
         payload = {"code": code}
         payload.update({k: v for k, v in (data or {}).items() if v is not None})
-        return [
+        return self._flush_text() + [
             {
                 "type": "custom_message",
                 "customType": CHAT_NOTICE_CUSTOM_TYPE,
@@ -823,7 +1210,8 @@ class ACPEventMapper:
         ]
 
     def map_chat_error(
-        self, code: str, detail: str = "", text: Optional[str] = None
+        self, code: str, detail: str = "", text: Optional[str] = None,
+        data: Optional[dict] = None,
     ) -> list[dict[str, Any]]:
         """A chat-visible failure -> ONE ``chat_error`` custom_message line.
 
@@ -832,10 +1220,19 @@ class ACPEventMapper:
         ``data`` carries the machine-readable pair the frontend styles on
         (``code`` chip + ``detail`` body); ``content`` is the human text.
         Codes: rpc_error, provider_error, empty_turn, process_exit, busy,
-        session_reset.
+        session_reset, turn_interrupted, queue_lost, ...
+
+        The ``data`` argument adds fields of the card (``retryText`` for the
+        "Send again" button, ``model`` for ``model_missing``). They never
+        replace ``code`` or ``detail``, a None value is left out, and they
+        are not cut: a text cut short is a text the operator never wrote.
+        Without it the line is exactly what it always was.
         """
         body = text or detail or code
-        return [
+        payload: dict[str, Any] = {"code": code, "detail": str(detail)[:_RESULT_TRUNCATE_LEN]}
+        payload.update({k: v for k, v in (data or {}).items()
+                        if v is not None and k not in payload})
+        return self._flush_text() + self._flush_thought() + [
             {
                 "type": "custom_message",
                 "customType": CHAT_ERROR_CUSTOM_TYPE,
@@ -845,7 +1242,7 @@ class ACPEventMapper:
                 "id": self._next_id(),
                 "parentId": None,
                 "timestamp": _now_iso(),
-                "data": {"code": code, "detail": str(detail)[:_RESULT_TRUNCATE_LEN]},
+                "data": payload,
             }
         ]
 
@@ -888,11 +1285,19 @@ class ACPEventMapper:
             return None
         usage = self._prompt_usage or {}
         window = self._usage_window or {}
+        input_tokens = int(usage.get("inputTokens") or 0)
+        cache_read = int(usage.get("cachedReadTokens") or 0)
+        cache_write = int(usage.get("cachedWriteTokens") or 0)
+        output = int(usage.get("outputTokens") or 0)
+        if _input_includes_cache(
+            input_tokens, output, cache_read, cache_write, usage.get("totalTokens")
+        ):
+            input_tokens -= cache_read + cache_write
         block: dict[str, Any] = {
-            "input": int(usage.get("inputTokens") or 0),
-            "cacheRead": int(usage.get("cachedReadTokens") or 0),
-            "cacheWrite": int(usage.get("cachedWriteTokens") or 0),
-            "output": int(usage.get("outputTokens") or 0),
+            "input": input_tokens,
+            "cacheRead": cache_read,
+            "cacheWrite": cache_write,
+            "output": output,
             "contextWindow": window.get("size"),
             "usedTokens": window.get("used"),
         }
@@ -945,9 +1350,9 @@ class ACPEventMapper:
         customType every flush so the chat's preview slot replaces (never
         stacks). These lines NEVER enter the transcript JSONL —
         bridge.run_acp_once routes them to the preview sink — so the
-        permanent timeline holds exactly ONE final assistant line (Option
-        b) and the volatile channel holds the growing snapshot. No usage,
-        no fresh message identity per chunk."""
+        permanent timeline holds one assistant line per text segment (D7)
+        and the volatile channel holds the growing snapshot of the open
+        segment. No usage, no fresh message identity per chunk."""
         content = update.get("content") or {}
         if not isinstance(content, dict) or content.get("type") != "text":
             return []
@@ -957,27 +1362,59 @@ class ACPEventMapper:
         message_id = update.get("messageId")
         key = message_id if isinstance(message_id, str) and message_id else "_anon"
         store = self._text_by_message if block_type == "text" else self._thought_by_message
+        if block_type == "text" and key not in store:
+            self._text_order.append(key)
         store[key] = store.get(key, "") + text
-        return [
-            {
-                "type": "custom_message",
-                "customType": PREVIEW_CUSTOM_TYPE,
-                "content": store[key],
-                "display": True,
-                "attribution": "agent",
-                "id": self._next_id(),
-                "parentId": None,
-                "timestamp": _now_iso(),
+        line: dict[str, Any] = {
+            "type": "custom_message",
+            "customType": PREVIEW_CUSTOM_TYPE,
+            "content": store[key],
+            "display": True,
+            "attribution": "agent",
+            "id": self._next_id(),
+            "parentId": None,
+            "timestamp": _now_iso(),
+        }
+        if block_type == "thinking":
+            # The chat must SAY the model is thinking (20.10.2026: minutes of
+            # reasoning looked like "nothing happens"): mark the line, carry
+            # the size and the start, and only the end of the text.
+            if self._open_thought is None or self._open_thought["key"] != key:
+                self._open_thought = {
+                    "key": key, "iso": line["timestamp"], "mono": self.clock(),
+                }
+            whole = store[key]
+            line["content"] = _tail_on_boundary(whole, THINKING_PREVIEW_TAIL_CHARS)
+            line["data"] = {
+                "block": "thinking",
+                "chars": len(whole),
+                "startedAt": self._open_thought["iso"],
             }
-        ]
+        return [line]
 
     def map_final_assistant_message(
-        self, final_text: str, *, stop_reason: str = "stop"
+        self, final_text: str, *, stop_reason: str = "stop",
+        cut_forms: Optional[tuple] = None,
     ) -> list[dict[str, Any]]:
-        """Review #465, Mark's Option b: EXACTLY ONE permanent assistant
-        line per turn — the complete text, real usage (never 0/0), and the
-        mapper's model=None. Empty text -> [] (a turn that produced no
-        visible text leaves no empty bubble).
+        """The turn's LAST assistant line: the text not written yet, real
+        usage (never 0/0) and the mapper's model=None.
+
+        - No text segment was written this turn: exactly the line Review
+          #465 Option b defined — ``final_text`` (the caller's; the chat
+          passes its verdict's ``reply``), and no line at all when it is
+          empty and the turn wrote nothing else (a turn that produced
+          nothing leaves no empty bubble).
+        - Segments were written (D7): the text is the mapper's OWN unflushed
+          rest, never a prefix computation on the caller's string (S1).
+          ``cut_forms`` (the chat's verdict, ``ChatTurnVerdict.cut_forms``)
+          cuts omp's error line off the END of that rest
+          (``model_errors.reply_without_omp_line``); ``()`` hides the whole
+          rest. Segments already written stay — they are on screen.
+        - When nothing is left, the line still comes with ``content: []``
+          so that stopReason + usage end the turn (the parser yields only
+          ``usage`` for it: no bubble). The same holds for a turn whose only
+          output was thinking: the thought is its own line, never glued into
+          this one (F1).
 
         ``stop_reason`` stamps `message.stopReason` — the backend's
         ``omp_chat.transcript_suggests_turn_ended`` probe reads it to decide
@@ -985,9 +1422,21 @@ class ACPEventMapper:
         terminal reasons land here: a cancelled/error turn keeps the probe
         conservative via the non-terminal default the caller passes.
         """
-        text = str(final_text or "")
-        if not text.strip():
-            return []
+        with self._lock:
+            thought = self._flush_thought()
+            # The turn's open text ends here either way: nothing of it may
+            # come back later (a card's flush, the next turn's notice).
+            rest = self._take_text()
+            if self._turn_flushed_any:
+                text = rest if cut_forms is None else _cut_rest(rest, cut_forms)
+            else:
+                text = str(final_text or "")
+            if text.strip():
+                content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+            elif self._turn_flushed_any or self._turn_thought_any:
+                content = []
+            else:
+                return thought
         entry: dict[str, Any] = {
             "type": "message",
             "id": self._next_id(),
@@ -995,7 +1444,7 @@ class ACPEventMapper:
             "timestamp": _now_iso(),
             "message": {
                 "role": "assistant",
-                "content": [{"type": "text", "text": text}],
+                "content": content,
                 "model": None,
                 "stopReason": stop_reason if stop_reason == "stop" else None,
             },
@@ -1003,7 +1452,7 @@ class ACPEventMapper:
         usage = self._usage_block()
         if usage is not None:
             entry["message"]["usage"] = usage
-        return [entry]
+        return thought + [entry]
 
     def _tool_seed(self, update: dict[str, Any]) -> list[dict[str, Any]]:
         tool_call_id = update.get("toolCallId")
@@ -1341,10 +1790,117 @@ def session_dir(
     return path
 
 
+def mc_sink_dir(folder: Path) -> Path:
+    """``<folder>/.mc`` (``MC_SINK_DIRNAME``) — created, then returned.
+
+    Raises OSError when it cannot be created (a file in its place, a
+    read-only tree) or is not a real folder (a symlink — the session folder
+    is the agent's own mount, and MC never writes where a link points); the
+    sinks catch that and degrade to a no-op, like an unwritable sessions
+    tree."""
+    target = Path(folder) / MC_SINK_DIRNAME
+    target.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink() or not target.is_dir():
+        raise OSError(errno.ENOTDIR, "not a real folder", str(target))
+    return target
+
+
+def open_regular(path: Path) -> Optional[Any]:
+    """``path`` opened for reading as text when it is a regular file, else
+    None. Never blocks: a FIFO named like a session would hang a plain
+    ``open()`` until a writer comes (non-blocking open, then a type check on
+    the open file). The caller closes the handle. Never raises."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            if hasattr(os, "set_blocking"):
+                os.set_blocking(fd, True)  # from here on an ordinary handle
+            return os.fdopen(fd, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+    os.close(fd)
+    return None
+
+
+def session_header(path: Path) -> Optional[dict]:
+    """The session header of a JSONL file — line 1, or line 2 when line 1 is
+    a ``{"type": "title"}`` line (omp's own rule) — or None when the file has
+    none (not a session for omp either) or is no regular file. Never raises,
+    never blocks."""
+    fh = open_regular(path)
+    if fh is None:
+        return None
+    try:
+        with fh:
+            first, second = fh.readline(_HEADER_BYTES), fh.readline(_HEADER_BYTES)
+    except (OSError, ValueError):
+        return None
+    lines = []
+    for raw in (first, second):
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            value = None
+        lines.append(value if isinstance(value, dict) else None)
+    header = lines[1] if lines[0] is not None and lines[0].get("type") == "title" else lines[0]
+    if header is None or header.get("type") != "session" or not isinstance(header.get("id"), str):
+        return None
+    return header
+
+
+def is_mc_header(header: Optional[dict]) -> bool:
+    """A session header MC wrote: it names the bridge (``"bridge": "acp"``,
+    written by ``ChatEventSink``). omp never writes that key (live
+    20.10.2026: 266 copies with it, 468 omp files without)."""
+    return header is not None and header.get("bridge") == "acp"
+
+
+def is_mc_sink(path: Path) -> bool:
+    """MC's display copy: a regular file whose session header names the
+    bridge (``is_mc_header``)."""
+    return is_mc_header(session_header(path))
+
+
+def find_sink(folder: Path, session_id: str) -> Optional[Path]:
+    """MC's copy of session ``session_id`` in session folder ``folder``.
+
+    ``<folder>/.mc/`` first, then the old place next to omp's file (a tree
+    ``sink_migration`` has not moved yet). Only a file whose header names
+    the bridge counts, so omp's own file is never returned. Several copies
+    of one id: the newest by modification time. The id is compared as text
+    (never a glob pattern). The one lookup for P4's list, resume and fork
+    (chat package Stage 1), so they never pick omp's file by mistake."""
+    if not session_id:
+        return None
+    suffix = f"_{session_id}.jsonl"
+    for place in (Path(folder) / MC_SINK_DIRNAME, Path(folder)):
+        try:
+            names = [p for p in place.iterdir()
+                     if p.name.endswith(suffix) and not p.name.startswith(".")]
+        except OSError:
+            continue
+        dated = []
+        for path in names:
+            if not is_mc_sink(path):
+                continue
+            try:
+                dated.append((path.stat().st_mtime, str(path), path))
+            except OSError:
+                continue
+        if dated:
+            return max(dated)[2]
+    return None
+
+
 class ChatEventSink:
     """Appends mapped events as JSONL into the omp sessions tree, one file per
-    ACP session (``<ts>_<sessionId>.jsonl``, the same shape omp writes so
-    find_active_session ranks it like any native session).
+    ACP session: ``<session folder>/.mc/<ts>_<sessionId>.jsonl``
+    (``MC_SINK_DIRNAME`` explains why not next to omp's own file). The
+    header is the one the bridge always wrote — every backend reader of it
+    (``bridge``, ``taskId``, ``cwd``) stays the same.
 
     - append-only, whole lines, one ``write`` call per batch (the tailer
       polls at 0.3 s and reads byte-wise — partial multi-byte UTF-8 across
@@ -1357,9 +1913,10 @@ class ChatEventSink:
         self, directory: Optional[Path], session_id: str, task_id: Optional[str] = None
     ):
         """``task_id``: set for a TASK run (bridge serve loop), ``None`` for
-        the chat daemon. It lands in the session header as ``taskId``: every
-        attempt of a task (continue nudge, reflection retry) is a NEW ACP
-        session without the dispatch prompt, and the backend's todo ->
+        the chat daemon. It lands in the session header as ``taskId``: a
+        fresh retry of a task is a NEW ACP session (a continue nudge resumes
+        the previous one via ``session/load`` since 28.10.2026, or falls back
+        to a new one when the load fails), and the backend's todo ->
         checklist sync finds the task's plan by this tag — not by "newest
         session", which is the chat (live 12.10.2026)."""
         self._dir = directory
@@ -1367,7 +1924,6 @@ class ChatEventSink:
         self._path: Optional[Path] = None
         if directory is not None:
             ts = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
-            candidate = directory / f"{ts}_{self._session_id}.jsonl"
             header = {
                 "type": "session",
                 "version": 3,
@@ -1379,6 +1935,7 @@ class ChatEventSink:
             if task_id:
                 header["taskId"] = task_id
             try:
+                candidate = mc_sink_dir(directory) / f"{ts}_{self._session_id}.jsonl"
                 with open(candidate, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps(header, ensure_ascii=False) + "\n")
                 self._path = candidate
@@ -1412,7 +1969,10 @@ class ChatEventSink:
 
     def write_media(self, name: str, data: bytes) -> bool:
         """One tool picture into ``<transcript dir>/media/<name>`` (chat
-        package P2). ``name`` must be ``<sha256>.<png|jpg|webp|gif>`` — the
+        package P2) — ``<session folder>/.mc/media/`` for a copy in ``.mc/``,
+        the old ``<session folder>/media/`` for a copy a not yet moved tree
+        resumed (``appending``): the backend looks next to the transcript.
+        ``name`` must be ``<sha256>.<png|jpg|webp|gif>`` — the
         hash the mapper computed, so the same picture is one file. Atomic
         (temp file + rename), idempotent, never raises: False = not stored
         (the caller then drops the reference)."""
@@ -1479,7 +2039,12 @@ class ChatEventSink:
 
 class PreviewEventSink:
     """The VOLATILE preview channel (Folge-PR zu #471): appends the mapper's
-    preview flushes to ``<session_dir>/previews/<ts>_<sessionId>_<uniq>.jsonl``
+    preview flushes to
+    ``<session_dir>/.mc/previews/<ts>_<sessionId>_<uniq>.jsonl`` (S1-R3:
+    always next to the transcript copy in use, see ``beside`` — under
+    ``.mc/`` for a new copy, the old ``previews/`` for an old copy resumed
+    in place; the move never touches ``previews/``, it only ever held a few
+    volatile files)
     — a SIBLING of the transcript file, in a subdirectory
     ``find_active_session``/``_SESSION_GLOBS`` never scan, so the backend's
     history/rollover logic cannot mistake preview lines for transcript
@@ -1510,12 +2075,22 @@ class PreviewEventSink:
     #: retention policy.
     _KEEP = 3
 
-    def __init__(self, directory: Optional[Path], session_id: str):
+    def __init__(
+        self,
+        directory: Optional[Path],
+        session_id: str,
+        *,
+        previews_dir: Optional[Path] = None,
+    ):
+        """``directory``: the session folder — the file goes to
+        ``<directory>/.mc/previews/``. ``previews_dir``: the exact folder
+        instead (``beside``)."""
         self._session_id = session_id or "acp-session"
         self._path: Optional[Path] = None
-        if directory is not None:
+        if directory is not None or previews_dir is not None:
             try:
-                pdir = directory / "previews"
+                pdir = (Path(previews_dir) if previews_dir is not None
+                        else mc_sink_dir(directory) / "previews")
                 pdir.mkdir(parents=True, exist_ok=True)
                 self._prune(pdir)
                 ts = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
@@ -1523,6 +2098,18 @@ class PreviewEventSink:
                 self._path = pdir / f"{ts}_{self._session_id}_{uniq}.jsonl"
             except OSError:
                 self._path = None
+
+    @classmethod
+    def beside(cls, transcript: Optional[Path], session_id: str) -> "PreviewEventSink":
+        """The preview channel next to the transcript copy IN USE:
+        ``<transcript folder>/previews/`` — where the backend looks
+        (``omp_chat.preview_channel``). For a new copy that is
+        ``.mc/previews/``; for an old copy the daemon resumed in place
+        (``ChatEventSink.appending``, the move did not run) it is the old
+        ``<session folder>/previews/``. No transcript: a no-op sink."""
+        if transcript is None:
+            return cls(None, session_id)
+        return cls(None, session_id, previews_dir=Path(transcript).parent / "previews")
 
     @staticmethod
     def _prune(pdir: Path) -> None:

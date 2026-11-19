@@ -28,6 +28,21 @@ While an update runs, MC hands out no new work: running tasks and group-chat
 rounds finish, nothing new starts, and scheduled jobs that come due are run
 right after the update instead.
 
+**What the card shows** (Settings → About, admins only, only while
+`MC_SELF_UPDATE_ENABLED` is on): *Check for the update* runs the checks on the
+machine and lists them as lights — red ones first, each with one sentence and,
+where only the machine can help, the command to copy. *Update now* asks for
+your password again (step-up) and starts. Then: waiting for running work, a
+five-step bar (download → back up → switch → restart → check), and while MC
+restarts the open page keeps asking for up to 25 minutes — a moment without
+an answer is "restarting", never "failed". The end is one of: running the new
+version (with the date of the backup, kept 14 days, and *Back to …*), set back
+automatically (with the journal's last lines and *Copy log*), interrupted
+(resumed by the bridge, or the command `./install.sh --resume`), or — rarely —
+the way back failed (`./install.sh --rollback`). The history lists every run,
+including those started in the terminal. An account without a password gets
+the terminal command instead of the button.
+
 ## The short way
 
 ```bash

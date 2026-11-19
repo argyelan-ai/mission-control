@@ -37,8 +37,13 @@ from fastapi import FastAPI, HTTPException
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from pydantic import BaseModel, Field
 from media import (
+    CHROMIUM_LAUNCH_KWARGS,
+    RENDERER_FEATURES,
     VIEWPORTS,
+    W1_VIDEO_SIZE,
     BrandingSpec,
+    CardRequest,
+    CardResponse,
     ComposeRequest,
     ComposeResponse,
     LoginSpec,
@@ -47,7 +52,13 @@ from media import (
     TranscodeRequest,
     TranscodeResponse,
     build_branded_compose_cmd,
+    build_w1_compose_cmd,
+    is_blank_page,
+    png_with_text,
+    render_card_html,
+    render_frame_w1_html,
     build_compose_cmd,
+    build_frame_tokens,
     build_pipe_encode_cmd,
     build_storage_state,
     build_transcode_poster_cmd,
@@ -56,9 +67,18 @@ from media import (
     compose_branded_timeout_s,
     fill_bench_template,
     load_deterministic_shim,
-    render_outro_rows_html,
+    render_outro_html,
     resolve_contained_path,
 )
+from record_network import (
+    LOCAL_LIBRARY_HEADERS,
+    RecordNetworkGuard,
+    detect_inlined_libraries,
+    load_record_network_guard_script,
+    record_proxy_settings,
+    route_decision,
+)
+from record_three import LocalThree, inject_import_map, needs_import_map
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mc.playwright_service")
@@ -67,6 +87,13 @@ app = FastAPI(title="mc-playwright visual verifier", version="1.1.0")
 
 # Shared Volume — Backend + dieser Service schreiben/lesen beide hier.
 SHARED_DELIVERABLES = Path(os.environ.get("SHARED_DELIVERABLES", "/shared-deliverables"))
+
+
+async def _launch_chromium(p) -> Browser:
+    """The one way this service starts a browser: the full browser in new
+    headless mode, which reads the managed eMudhra distrust policy (the
+    headless shell does not) — see media.CHROMIUM_LAUNCH_KWARGS."""
+    return await p.chromium.launch(**CHROMIUM_LAUNCH_KWARGS)
 
 
 def _safe_filename(name: str) -> str:
@@ -358,7 +385,12 @@ async def _prepare_page(
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "service": "mc-playwright", "version": "1.1.0"}
+    return {
+        "ok": True,
+        "service": "mc-playwright",
+        "version": "1.2.0",
+        "features": list(RENDERER_FEATURES),
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -520,7 +552,7 @@ async def generate_pdf(req: PdfRequest):
             pdf_kwargs["footer_template"] = req.footer_html
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await _launch_chromium(p)
         try:
             context = await browser.new_context()
             page = await context.new_page()
@@ -563,7 +595,7 @@ async def snapshot(req: SnapshotRequest):
     vp = VIEWPORTS[req.viewport]
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await _launch_chromium(p)
         try:
             context = await _new_context_with_auth(browser, vp, req.url, req.auth_token)
             page = await context.new_page()
@@ -594,7 +626,7 @@ async def metrics(req: SnapshotRequest):
     """
     t0 = time.monotonic()
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await _launch_chromium(p)
         total_bytes = 0
         status_code = 0
 
@@ -674,7 +706,7 @@ async def verify(req: VerifyRequest):
     }
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await _launch_chromium(p)
         try:
             for vp_name in req.viewports:
                 vp = VIEWPORTS[vp_name]
@@ -778,11 +810,11 @@ RECORD_CAPTURE_TIMEOUT_S = 900
 # docker/mc-playwright/templates/bench/).
 BENCH_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "bench"
 BENCH_FRAME_VIEWPORT = {"width": 1920, "height": 1080}
-BENCH_MODE_LINE = "side by side"  # frame.html's fixed {{MODE_LINE}} value
-BENCH_MODE_LINE_SINGLE = "solo run"  # frame_single.html's fixed {{MODE_LINE}} value
 
 
-async def _screenshot_bench_card(html_text: str, out_png: Path) -> None:
+async def _screenshot_bench_card(
+    html_text: str, out_png: Path, viewport: dict | None = None, scale: int = 2
+) -> None:
     """Writes a filled bench template to a scratch dir alongside its shared
     assets (shared.css, fonts/ — referenced via relative href in the
     template) and screenshots it at the canonical 1920x1080 CSS viewport,
@@ -798,13 +830,23 @@ async def _screenshot_bench_card(html_text: str, out_png: Path) -> None:
         html_path.write_text(html_text, encoding="utf-8")
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await _launch_chromium(p)
             try:
                 context = await browser.new_context(
-                    viewport=BENCH_FRAME_VIEWPORT, device_scale_factor=2
+                    viewport=viewport or BENCH_FRAME_VIEWPORT, device_scale_factor=scale
                 )
                 page = await context.new_page()
                 await page.goto(html_path.as_uri(), wait_until="networkidle", timeout=30000)
+                # W1 templates fit the model name once the fonts are in
+                # (data-fit="done"); older templates have nothing to fit.
+                try:
+                    await page.wait_for_function(
+                        "document.documentElement.dataset.fit === 'done'"
+                        " || !document.querySelector('[data-fit]')",
+                        timeout=10000,
+                    )
+                except Exception:  # noqa: BLE001 — a late fit is still a card
+                    logger.warning("bench card: fit script did not finish, screenshot anyway")
                 await page.screenshot(path=str(out_png))
             finally:
                 await browser.close()
@@ -815,45 +857,36 @@ async def _render_branding_assets(branding: BrandingSpec, render_dir: Path) -> t
     with the branding payload and screenshots both to PNGs inside render_dir.
     Returns (frame_png, outro_png)."""
     outro_template = (BENCH_TEMPLATES_DIR / "outro.html").read_text(encoding="utf-8")
-
-    if len(branding.models) == 2:
-        frame_template = (BENCH_TEMPLATES_DIR / "frame.html").read_text(encoding="utf-8")
-        model_a, model_b = branding.models
-        frame_tokens = {
-            "TITLE": branding.title,
-            "RUN_LABEL": branding.run_label,
-            "MODEL_A": model_a.label,
-            "TAG_A": model_a.tag,
-            "MODEL_B": model_b.label,
-            "TAG_B": model_b.tag,
-            "PROMPT_LINE": branding.prompt_line,
-            "MODE_LINE": BENCH_MODE_LINE,
-        }
-    else:
-        frame_template = (BENCH_TEMPLATES_DIR / "frame_single.html").read_text(encoding="utf-8")
-        (model,) = branding.models
-        frame_tokens = {
-            "TITLE": branding.title,
-            "RUN_LABEL": branding.run_label,
-            "MODEL": model.label,
-            "TAG": model.tag,
-            "PROMPT_LINE": branding.prompt_line,
-            "MODE_LINE": BENCH_MODE_LINE_SINGLE,
-        }
-    frame_html = fill_bench_template(frame_template, frame_tokens)
-
-    outro_tokens = {"RUN_LABEL": branding.run_label}
-    outro_html = fill_bench_template(outro_template, outro_tokens)
-    # ROWS is a markup block (already html-escaped per-cell by
-    # render_outro_rows_html), not a plain scalar token — filled separately
-    # so fill_bench_template's blanket html.escape() doesn't double-escape it.
-    outro_html = outro_html.replace("{{ROWS}}", render_outro_rows_html(branding.outro_rows))
+    frame_name = "frame.html" if len(branding.models) == 2 else "frame_single.html"
+    frame_template = (BENCH_TEMPLATES_DIR / frame_name).read_text(encoding="utf-8")
+    # Token values + outro markup are built in media.py (pure, unit-tested).
+    frame_html = fill_bench_template(frame_template, build_frame_tokens(branding))
+    outro_html = render_outro_html(outro_template, branding)
 
     frame_png = render_dir / "frame.png"
     outro_png = render_dir / "outro.png"
     await _screenshot_bench_card(frame_html, frame_png)
     await _screenshot_bench_card(outro_html, outro_png)
     return frame_png, outro_png
+
+
+async def _render_w1_assets(req: ComposeRequest, render_dir: Path) -> tuple[Path, Path]:
+    """Bench W1: the recording frame (chips above the panes) and the 16:9
+    receipt card — both at 1920×1080, device scale 1 (= the output size,
+    no ffmpeg scaling of text). The card comes from card.html, the SAME
+    template as the 1080×1350 PNG of POST /card."""
+    w, h = W1_VIDEO_SIZE
+    frame_html = render_frame_w1_html(
+        (BENCH_TEMPLATES_DIR / "frame_w1.html").read_text(encoding="utf-8"), req.w1.frame
+    )
+    card_html = render_card_html(
+        (BENCH_TEMPLATES_DIR / "card.html").read_text(encoding="utf-8"), req.w1.card, "wide"
+    )
+    frame_png = render_dir / "frame.png"
+    card_png = render_dir / "card.png"
+    await _screenshot_bench_card(frame_html, frame_png, {"width": w, "height": h}, 1)
+    await _screenshot_bench_card(card_html, card_png, {"width": w, "height": h}, 1)
+    return frame_png, card_png
 
 
 def _require_shared_path(raw: str, what: str) -> Path:
@@ -1149,14 +1182,54 @@ async def record(req: RecordRequest):
         fps=RECORD_FPS,
     )
 
+    # W0.9: the page is model-written code — no network except the page
+    # document itself (record_network.py). Routing decides + counts, the dead
+    # proxy catches whatever routing does not see, the init script stubs
+    # WebRTC, service workers are off (they would bypass routing).
+    guard = RecordNetworkGuard(req.target_url)
+    # lib:three-local: a CDN request for three.js is answered with the pinned
+    # local copy (record_three.py) instead of being blocked. A bare
+    # `import … from 'three'` without an import map gets MC's map injected.
+    three = LocalThree()
+    page_body: str | None = None
+    libraries: list[str] = []
+    html_bytes: int | None = None
+    if req.html_path:
+        html_text = html.read_text(encoding="utf-8", errors="replace")
+        html_bytes = html.stat().st_size
+        libraries = detect_inlined_libraries(html_text)
+        if three.available and needs_import_map(html_text):
+            page_body = inject_import_map(html_text)
+            three.import_map_injected = True
+
+    async def _route(route):
+        action = route_decision(route.request.url, route.request.resource_type,
+                                guard=guard, three=three, page_body=page_body)
+        if action[0] == "fulfill":
+            await route.fulfill(status=200, body=action[1], content_type=action[2],
+                                headers=LOCAL_LIBRARY_HEADERS)
+        elif action[0] == "continue":
+            await route.continue_()
+        else:
+            await route.abort("blockedbyclient")
+
+    async def _route_ws(ws):
+        guard.note_blocked(ws.url)
+        await ws.close(code=1008, reason="network disabled in the benchmark recorder")
+
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await _launch_chromium(p)
         try:
             context = await browser.new_context(
                 viewport=RECORD_VIEWPORT,
                 device_scale_factor=RECORD_DEVICE_SCALE,
+                service_workers="block",
+                proxy=record_proxy_settings(req.target_url),
             )
+            await context.route("**/*", _route)
+            await context.route_web_socket(re.compile(".*"), _route_ws)
             page = await context.new_page()
+            await page.add_init_script(load_record_network_guard_script())
             await page.add_init_script(load_deterministic_shim())
             try:
                 await page.goto(req.target_url, wait_until="load", timeout=30000)
@@ -1191,20 +1264,56 @@ async def record(req: RecordRequest):
                 # (every subprocess/browser failure surfaces as a clean 502
                 # with context, see _run_ffmpeg / _do_form_login / etc.).
                 raise HTTPException(502, f"deterministic capture failed: {e}")
+            # WebRTC attempts the init script stopped (main frame; counted
+            # best-effort — routing/proxy cover every other channel).
+            try:
+                rtc = int(await page.evaluate("() => window.__mcNetBlocked || 0"))
+            except Exception:  # noqa: BLE001 — a crashed page has nothing to add
+                rtc = 0
+            guard.note_blocked("webrtc:", count=rtc)
+            # W1 page check: visible text + media elements of the page as
+            # it stands after the capture (deterministic clock).
+            try:
+                seen = await page.evaluate(
+                    "() => ({text: document.body ? document.body.innerText.trim().length : 0,"
+                    " media: document.querySelectorAll('canvas,svg,img,video').length})"
+                )
+            except Exception:  # noqa: BLE001 — a crashed page is checked by the frame alone
+                seen = {"text": 0, "media": 0}
         finally:
             await browser.close()
 
-    logger.info(
-        "record: %s -> %s (%ds, %d frames @ %dfps, %dx%d)",
-        req.target_url, video_path, req.duration_s, n_frames, RECORD_FPS,
-        RECORD_OUTPUT_WIDTH, RECORD_OUTPUT_HEIGHT,
+    net = guard.report()
+    lib = three.report()
+    page_blank = is_blank_page(
+        screenshot_path.stat().st_size if screenshot_path.exists() else None,
+        int(seen.get("text") or 0), int(seen.get("media") or 0),
     )
+    logger.info(
+        "record: %s -> %s (%ds, %d frames @ %dfps, %dx%d) network_attempts=%d libraries=%s lib=%s",
+        req.target_url, video_path, req.duration_s, n_frames, RECORD_FPS,
+        RECORD_OUTPUT_WIDTH, RECORD_OUTPUT_HEIGHT, net["network_attempts"], libraries, lib,
+    )
+    if net["network_attempts"]:
+        logger.info("record: blocked %s", net["blocked_requests"])
     return RecordResponse(
         video_path=str(video_path),
         # "" wenn die Thumbnail-Aufnahme uebersprungen wurde (best-effort)
         screenshot_path=str(screenshot_path) if screenshot_path.exists() else "",
         duration_s=req.duration_s,
         bytes=video_path.stat().st_size,
+        network_blocked=net["network_blocked"],
+        network_attempts=net["network_attempts"],
+        network_blocked_scripts=net["network_blocked_scripts"],
+        blocked_requests=net["blocked_requests"],
+        libraries_inlined=libraries,
+        lib_track=lib["lib_track"],
+        libraries_provided=lib["libraries_provided"],
+        three_requested=lib.get("three_requested"),
+        three_version_mismatch=lib.get("three_version_mismatch"),
+        three_import_map_injected=lib.get("three_import_map_injected"),
+        html_bytes=html_bytes,
+        page_blank=page_blank,
     )
 
 
@@ -1227,7 +1336,18 @@ async def compose(req: ComposeRequest):
     out_path = _require_shared_path(req.output_path, "output_path")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if req.branding is not None:
+    if req.w1 is not None:
+        with tempfile.TemporaryDirectory() as render_tmp:
+            render_dir = Path(render_tmp)
+            frame_png, card_png = await _render_w1_assets(req, render_dir)
+            cmd = build_w1_compose_cmd(
+                req.inputs, str(frame_png), str(card_png), str(out_path),
+                checksum=req.w1.checksum,
+            )
+            timeout = compose_branded_timeout_s(req.duration_s, floor_s=FFMPEG_TIMEOUT_S)
+            await asyncio.to_thread(_run_ffmpeg, cmd, timeout)
+        logger.info("compose (w1): %d inputs -> %s", len(req.inputs), out_path)
+    elif req.branding is not None:
         with tempfile.TemporaryDirectory() as render_tmp:
             render_dir = Path(render_tmp)
             frame_png, outro_png = await _render_branding_assets(req.branding, render_dir)
@@ -1253,6 +1373,28 @@ async def compose(req: ComposeRequest):
         bytes=out_path.stat().st_size,
         inputs=len(req.inputs),
     )
+
+
+@app.post("/card", response_model=CardResponse)
+async def card(req: CardRequest):
+    """Bench W1 result card PNG (default 1080×1350) from card.html — the same
+    template the video's receipt card uses. The PNG carries the record
+    checksum in a tEXt chunk (every artefact names the receipts it shows)."""
+    out_path = _require_shared_path(req.output_path, "output_path")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    shape = "tall" if req.height >= req.width else "wide"
+    html_text = render_card_html(
+        (BENCH_TEMPLATES_DIR / "card.html").read_text(encoding="utf-8"), req.card, shape
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        raw = Path(tmp) / "card.png"
+        await _screenshot_bench_card(html_text, raw, {"width": req.width, "height": req.height}, 1)
+        data = raw.read_bytes()
+    if req.checksum:
+        data = png_with_text(data, "bench-record", req.checksum)
+    out_path.write_bytes(data)
+    logger.info("card: %s (%dx%d, %d bytes)", out_path, req.width, req.height, len(data))
+    return CardResponse(output_path=str(out_path), bytes=len(data), width=req.width, height=req.height)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

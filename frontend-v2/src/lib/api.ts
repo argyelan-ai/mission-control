@@ -1,3 +1,4 @@
+import type { Directory as CommsDirectory, Conversation as CommsConversation, CommsMessage } from "./comms";
 import type {
   ActivityEvent,
   ClaudeAccountStatus,
@@ -133,6 +134,9 @@ import { withStreamTicket } from "./streamTicket";
 export { AUTH_TOKEN_KEY, BASE_URL, getToken };
 export const USER_INFO_KEY = "mc_user";
 
+/** The signed folder-view route (backend routers/deliverable_view.py). */
+const DELIVERABLE_VIEW_PREFIX = "/api/v1/deliverable-view/";
+
 export function clearToken() {
   if (typeof window !== "undefined") {
     localStorage.removeItem(AUTH_TOKEN_KEY);
@@ -192,6 +196,36 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+/**
+ * A read with `If-None-Match`: `null` on 304 (nothing changed — the caller
+ * keeps its last answer), otherwise the body and the `ETag` to send back
+ * next time. Same handling as `api.heads.history`, as a helper because the
+ * chat's task reads (spec A) poll three such endpoints.
+ */
+export async function requestWithEtag<T>(
+  path: string,
+  etag?: string | null,
+): Promise<{ data: T; etag: string | null } | null> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${getToken()}`,
+      ...(etag ? { "If-None-Match": etag } : {}),
+    },
+  });
+  if (res.status === 304) return null;
+  if (res.status === 401 && typeof window !== "undefined") {
+    clearToken();
+    window.location.href = "/login";
+    throw new Error("Session abgelaufen");
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`API ${res.status}: ${text}`);
+  }
+  return { data: (await res.json()) as T, etag: res.headers.get("ETag") };
 }
 
 /** Like request(), but returns the raw response body as text (Markdown etc.). */
@@ -273,6 +307,15 @@ export const api = {
     /** Is the first-run setup wizard still due for the caller? (admins only;
      *  installs older than the marker are never pending — see lib/firstRun.ts) */
     firstRun: () => request<{ wizard_pending: boolean }>("/api/v1/auth/first-run"),
+    /** Can this session confirm a dangerous action with its password? */
+    stepUpAvailability: () => request<import("./mcUpdate").StepUpAvailability>("/api/v1/auth/step-up"),
+    /** Confirm the password again → a single-use token (5 min) for ONE
+     *  dangerous request. Wrong password = 401 under /auth/ (no sign-out). */
+    stepUp: (password: string) =>
+      request<{ step_up_token: string; expires_in: number }>("/api/v1/auth/step-up", {
+        method: "POST",
+        body: JSON.stringify({ password }),
+      }),
     completeFirstRun: () =>
       request<{ wizard_pending: boolean }>("/api/v1/auth/first-run/complete", { method: "POST" }),
     updateProfile: (data: { name?: string; preferred_name?: string; timezone?: string; current_password?: string; new_password?: string }) =>
@@ -304,6 +347,42 @@ export const api = {
         method: "PUT",
         body: JSON.stringify({ mode, reason }),
       }),
+    /** Self-update from Settings (ADR-094, routers/system_update.py). Admin
+     *  only; 404 while the feature switch is off, 409 on a managed install.
+     *  `start` and `rollback` need a fresh step-up token (auth.stepUp). */
+    update: {
+      preflight: (expectedTarget?: string | null) =>
+        request<import("./mcUpdate").UpdatePreflight>("/api/v1/system/update/preflight", {
+          method: "POST",
+          body: JSON.stringify(expectedTarget ? { expected_target: expectedTarget } : {}),
+        }),
+      status: () => request<import("./mcUpdate").UpdateStatus>("/api/v1/system/update/status"),
+      history: (limit = 20) =>
+        request<{ runs: import("./mcUpdate").UpdateHistoryRun[] }>(`/api/v1/system/update/history?limit=${limit}`),
+      start: (expectedTarget: string, stepUpToken: string) =>
+        request<{ run_id?: string; state?: string; target?: string; started?: boolean; up_to_date?: boolean; current?: string }>(
+          "/api/v1/system/update/start",
+          {
+            method: "POST",
+            headers: { "X-MC-Step-Up": stepUpToken },
+            body: JSON.stringify({ expected_target: expectedTarget }),
+          },
+        ),
+      rollback: (runId: string | null, stepUpToken: string) =>
+        request<{ run_id?: string; state?: string; phase?: string; cancel_requested?: boolean; ok?: boolean }>(
+          "/api/v1/system/update/rollback",
+          {
+            method: "POST",
+            headers: { "X-MC-Step-Up": stepUpToken },
+            body: JSON.stringify(runId ? { run_id: runId } : {}),
+          },
+        ),
+      resume: (runId: string | null) =>
+        request<{ resumed?: boolean; run_id?: string; state?: string }>("/api/v1/system/update/resume", {
+          method: "POST",
+          body: JSON.stringify(runId ? { run_id: runId } : {}),
+        }),
+    },
   },
 
   // ── Intelligence ──────────────────────────────────────────────────────────────
@@ -759,6 +838,26 @@ export const api = {
         request<import("./types").DeliverableDirectory>(
           `/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${deliverableId}/directory${subpath ? `?subpath=${encodeURIComponent(subpath)}` : ""}`,
         ),
+      /** Signed, short-lived URL of an HTML page's FOLDER, for the sandboxed
+       *  preview frame of a multi-file page (its CSS, images, scripts load
+       *  from the same folder). `subpath` = the page inside a folder
+       *  deliverable; left out for a single-file deliverable. The frame
+       *  only ever gets a URL of the view route — anything else throws. */
+      viewUrl: async (
+        boardId: string,
+        taskId: string,
+        deliverableId: string,
+        subpath?: string,
+      ): Promise<string> => {
+        const { url } = await request<{ url: string; expires_in: number }>(
+          `/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${deliverableId}/view-url`,
+          { method: "POST", body: JSON.stringify({ subpath: subpath ?? null }) },
+        );
+        if (typeof url !== "string" || !url.startsWith(DELIVERABLE_VIEW_PREFIX)) {
+          throw new Error("unexpected view URL");
+        }
+        return `${BASE_URL}${url}`;
+      },
     },
     workspace: {
       list: (boardId: string, taskId: string, subpath?: string) =>
@@ -783,6 +882,9 @@ export const api = {
       list: (boardId: string, taskId: string) =>
         request<TaskChecklistItem[]>(`/api/v1/boards/${boardId}/tasks/${taskId}/checklist`),
     },
+    /** Is this assigned inbox task waiting for its agent's model? */
+    modelWait: (boardId: string, taskId: string) =>
+      request<import("./types").TaskModelWait>(`/api/v1/boards/${boardId}/tasks/${taskId}/model-wait`),
     gitInfo: (boardId: string, taskId: string) =>
       request<TaskGitInfo>(`/api/v1/boards/${boardId}/tasks/${taskId}/git-info`),
     gitDiff: (boardId: string, taskId: string, commit: string) =>
@@ -837,6 +939,43 @@ export const api = {
      *  `thumb` = small WebP for the card, `full` = metadata-free original. */
     mediaUrl: (agentId: string, mediaId: string, variant: "thumb" | "full" = "thumb"): string =>
       `${BASE_URL}/api/v1/agents/${encodeURIComponent(agentId)}/chat/media/${encodeURIComponent(mediaId)}?variant=${variant}`,
+    /** Is the engine the agent is bound to answering a request right now?
+     *  Asked only while a live row is quiet; per ENGINE, not per agent.
+     *  `engine: null` = unknown (never read as busy). */
+    engine: (agentId: string) =>
+      request<import("./chatTypes").ChatEngineActivity>(
+        `/api/v1/agents/${encodeURIComponent(agentId)}/chat/engine`,
+      ),
+    /** The tasks of this chat (spec A): live ones + the newest finished
+     *  ones as cards. `null` = 304, keep the last answer. */
+    tasks: (agentId: string, params: { limit?: number; etag?: string | null } = {}) =>
+      requestWithEtag<import("./chatTypes").ChatTasksResponse>(
+        `/api/v1/agents/${encodeURIComponent(agentId)}/chat/tasks${params.limit != null ? `?limit=${params.limit}` : ""}`,
+        params.etag,
+      ),
+    /** One task's steps, slim, across all attempts. `after` = the last
+     *  cursor; `open` = ids of rows whose current form is wanted back. */
+    taskSteps: (
+      agentId: string,
+      taskId: string,
+      params: { limit?: number; after?: string | null; open?: string[]; etag?: string | null } = {},
+    ) => {
+      const q = new URLSearchParams();
+      if (params.limit != null) q.set("limit", String(params.limit));
+      if (params.after) q.set("after", params.after);
+      if (params.open && params.open.length > 0) q.set("open", params.open.slice(0, 50).join(","));
+      const qs = q.toString();
+      return requestWithEtag<import("./chatTypes").TaskStepsResponse>(
+        `/api/v1/agents/${encodeURIComponent(agentId)}/chat/tasks/${encodeURIComponent(taskId)}/steps${qs ? `?${qs}` : ""}`,
+        params.etag,
+      );
+    },
+    /** One step in full (`rowId` like `1:13`, or `live`). */
+    taskStepDetail: (agentId: string, taskId: string, rowId: string, params: { etag?: string | null } = {}) =>
+      requestWithEtag<import("./chatTypes").TaskStepDetail | import("./chatTypes").TaskStepLiveDetail>(
+        `/api/v1/agents/${encodeURIComponent(agentId)}/chat/tasks/${encodeURIComponent(taskId)}/steps/${encodeURIComponent(rowId)}`,
+        params.etag,
+      ),
     history: (agentId: string, params?: { limit?: number; beforeUuid?: string }) => {
       const qs = new URLSearchParams();
       if (params?.limit != null) qs.set("limit", String(params.limit));
@@ -1314,6 +1453,17 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify({ status, resolver_note: note }),
       }),
+  },
+
+  // ── Talking across harnesses (ADR-100 §4) — operator, read-only ─────────────
+  comms: {
+    directory: () => request<CommsDirectory>("/api/v1/comms/directory"),
+    conversations: () =>
+      request<{ conversations: CommsConversation[] }>("/api/v1/comms/conversations"),
+    messages: (threadId: string) =>
+      request<{ conversation: CommsConversation; messages: CommsMessage[] }>(
+        `/api/v1/comms/conversations/${encodeURIComponent(threadId)}/messages`,
+      ),
   },
 
   // ── Install Requests ────────────────────────────────────────────────────────
@@ -1855,6 +2005,15 @@ export const api = {
         method: "PUT",
         body: JSON.stringify({ value }),
       }),
+    // Fleet default languages for NEW agents (Settings → Language). Existing
+    // agents keep their own operator_language / work_language.
+    agentLanguage: () =>
+      request<import("./types").AgentLanguageDefaultsResponse>("/api/v1/settings/agent-language"),
+    setAgentLanguage: (data: Partial<import("./types").AgentLanguageDefaults>) =>
+      request<import("./types").AgentLanguageDefaultsResponse>("/api/v1/settings/agent-language", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
     autonomy: () =>
       request<import("./types").AutonomyConfig>("/api/v1/settings/autonomy"),
     updateAutonomy: (levels: Record<string, string>) =>
@@ -1914,6 +2073,14 @@ export const api = {
   runtimes: {
     list: (): Promise<RuntimesResponse> =>
       request("/api/v1/runtimes"),
+    // The same rows straight from the DB, without the live probes (round-2
+    // user test: the probed list waits for the slowest box — 5.1 s for one
+    // sleeping box). Every row comes back state "unknown" with
+    // container_status "not_probed". For readers that only need the row
+    // (model, box, window) and for the runtimes page's first paint — never
+    // for anything that decides on a state.
+    listRows: (): Promise<RuntimesResponse> =>
+      request("/api/v1/runtimes?probe=false"),
     // ADR-056 — harness x runtime compatibility matrix for the harness
     // selector in RuntimeSwitchModal.
     compatMatrix: (): Promise<import("@/lib/types").CompatMatrix> =>
@@ -2400,6 +2567,11 @@ export const api = {
       request(`/api/v1/hosts/${id}`, { method: "DELETE" }),
     metrics: (id: string): Promise<HostMetrics> =>
       request(`/api/v1/hosts/${id}/metrics`),
+    // Wake a power-managed box via Wake-on-LAN from its host row (round-5
+    // re-check L1) — no runtime row needs the flag. Operator/admin only;
+    // 400 with a sentence when the box is not power-managed or has no MAC.
+    wake: (id: string): Promise<{ ok: boolean; message: string }> =>
+      request(`/api/v1/hosts/${id}/wake`, { method: "POST" }),
     // Telemetrie-Verlauf 1h (Bühne v2 §6/§7 PR 3) — Ring gefüllt vom obigen
     // metrics()-Poll, kein eigener Sammler. Leerer Host (noch kein Poll) →
     // {points: []}, nie ein Fehler.

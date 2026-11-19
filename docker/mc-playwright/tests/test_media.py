@@ -14,6 +14,7 @@ from media import (
     CELL_WIDTH,
     DEJAVU_BOLD,
     DETERMINISTIC_SHIM_PATH,
+    OUTRO_DURATION_S,
     SLOT_A_XY,
     SLOT_B_XY,
     SLOT_BG_COLOR,
@@ -165,8 +166,9 @@ def test_compose_branded_timeout_s_floor_matches_old_flat_timeout():
 
 
 def test_compose_branded_timeout_s_scales_up_for_longer_recordings():
-    # 15 * (60 + 2) = 930, between the 300 floor and the 1100 cap.
-    assert compose_branded_timeout_s(60, floor_s=300) == 930
+    # 15 * (60 + 4.5) = 967.5 (outro 4.5 s since 2026-10-22), between the
+    # 300 floor and the 1100 cap — the longest recording still fits the cap.
+    assert compose_branded_timeout_s(60, floor_s=300) == 967.5
 
 
 def test_compose_branded_timeout_s_caps_at_1100():
@@ -355,7 +357,7 @@ def _branding(n_models: int = 2) -> BrandingSpec:
     ][:n_models]
     return BrandingSpec(
         title="SVG timeline animation",
-        run_label="019",
+        date_label="2026-10-21",
         prompt_line="single HTML file · timeline animation",
         models=models,
         outro_rows=[
@@ -378,7 +380,7 @@ def test_branding_spec_allows_two_models_side_by_side():
 def test_branding_spec_rejects_zero_models():
     with pytest.raises(ValidationError):
         BrandingSpec(
-            title="t", run_label="001", prompt_line="p", models=[], outro_rows=[]
+            title="t", date_label="2026-10-21", prompt_line="p", models=[], outro_rows=[]
         )
 
 
@@ -386,7 +388,7 @@ def test_branding_spec_rejects_more_than_two_models():
     with pytest.raises(ValidationError):
         BrandingSpec(
             title="t",
-            run_label="001",
+            date_label="2026-10-21",
             prompt_line="p",
             models=[
                 BrandingModelSpec(label="A", tag="A"),
@@ -468,7 +470,7 @@ def test_fill_bench_template_leaves_unknown_placeholders_untouched():
 def test_fill_bench_template_all_frame_tokens_replaced():
     tokens = {
         "TITLE": "SVG timeline animation",
-        "RUN_LABEL": "019",
+        "DATE_LABEL": "2026-10-21",
         "MODEL_A": "Qwen 3.6 35B A3B",
         "TAG_A": "LOCAL · SPARK",
         "MODEL_B": "Grok 4.5",
@@ -486,7 +488,7 @@ def test_fill_bench_template_all_frame_tokens_replaced():
 def test_fill_bench_template_all_frame_single_tokens_replaced():
     tokens = {
         "TITLE": "SVG timeline animation",
-        "RUN_LABEL": "019",
+        "DATE_LABEL": "2026-10-21",
         "MODEL": "Qwen 3.6 35B A3B",
         "TAG": "LOCAL · SPARK",
         "PROMPT_LINE": "single HTML file · timeline animation",
@@ -502,13 +504,14 @@ def test_fill_bench_template_all_frame_single_tokens_replaced():
 def test_frame_single_html_template_has_all_expected_tokens():
     """Contract pin: frame_single.html's placeholders must match exactly what
     service.py's _render_branding_assets fills for a 1-model BrandingSpec —
-    TITLE/RUN_LABEL/MODEL/TAG/PROMPT_LINE/MODE_LINE (2026-07-13)."""
+    TITLE/DATE_LABEL/MODEL/TAG/PROMPT_LINE/MODE_LINE (2026-07-13; DATE_LABEL
+    replaced the RUN_LABEL counter 2026-10-22)."""
     from pathlib import Path
 
     template = (
         Path(__file__).resolve().parent.parent / "templates" / "bench" / "frame_single.html"
     ).read_text(encoding="utf-8")
-    for token in ("TITLE", "RUN_LABEL", "MODEL", "TAG", "PROMPT_LINE", "MODE_LINE"):
+    for token in ("TITLE", "DATE_LABEL", "MODEL", "TAG", "PROMPT_LINE", "MODE_LINE"):
         assert f"{{{{{token}}}}}" in template, f"missing {{{{{token}}}}} in frame_single.html"
 
 
@@ -522,8 +525,10 @@ def test_render_outro_rows_html_two_rows():
     ]
     html = render_outro_rows_html(rows)
     assert html.count('class="row"') == 2
-    assert "Qwen 3.6 35B" in html and "12.8 min" in html and "48 KB" in html
-    assert "Grok 4.5" in html and "9.4 min" in html and "61 KB" in html
+    assert "Qwen 3.6 35B" in html and "12.8 min" in html
+    assert "Grok 4.5" in html and "9.4 min" in html
+    # SIZE left the card (concept W0.5, 2026-10-22)
+    assert "48 KB" not in html and "61 KB" not in html
     # No winner-highlight styling (Mark's decision 2026-07-12 — neutral table).
     assert "row win" not in html
     assert "●" not in html
@@ -550,7 +555,7 @@ def test_render_outro_rows_html_includes_tokens_column():
                           cost="$0.42", tokens="12.4k → 1.8k"),
     ]
     html = render_outro_rows_html(rows)
-    assert html.count('class="val"') == 4
+    assert html.count('class="val"') == 3  # time, cost, tokens
     assert "12.4k → 1.8k" in html
 
 
@@ -582,9 +587,10 @@ def test_build_branded_compose_cmd_concat_structure():
     # "-loop 1 -i frame.png" — the token right after "-loop 1" is "-i", not "-t".
     loop_idx = cmd.index("-loop")
     assert cmd[loop_idx:loop_idx + 3] == ["-loop", "1", "-i"]
-    # outro loops for a fixed duration: the second "-loop 1" is followed by "-t 2.0".
+    # outro loops for a fixed duration: the second "-loop 1" is followed by
+    # "-t 4.5" (2.0 until 2026-10-22, concept W0.5).
     second_loop_idx = cmd.index("-loop", loop_idx + 1)
-    assert cmd[second_loop_idx:second_loop_idx + 4] == ["-loop", "1", "-t", "2.0"]
+    assert cmd[second_loop_idx:second_loop_idx + 4] == ["-loop", "1", "-t", "4.5"]
 
 
 def test_build_branded_compose_cmd_inputs_order():
@@ -678,7 +684,7 @@ def test_build_branded_compose_cmd_two_input_output_unchanged_by_single_support(
         "-loop", "1", "-i", "/d/frame.png",
         "-i", "/d/a.mp4",
         "-i", "/d/b.mp4",
-        "-loop", "1", "-t", "2.0", "-i", "/d/outro.png",
+        "-loop", "1", "-t", str(OUTRO_DURATION_S), "-i", "/d/outro.png",
         "-filter_complex",
         ";".join([
             f"[1:v]scale={SLOT_WIDTH}:{SLOT_HEIGHT}:force_original_aspect_ratio=decrease,"

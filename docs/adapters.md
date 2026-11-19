@@ -125,3 +125,6 @@ or gate the bare-`❯` idle check on absence of `esc to interrupt`). Tracked as 
 - `tools/record-pane-fixtures.sh` — fixture recorder
 - `backend/tests/test_adapter_tck.py` + `backend/tests/fixtures/panes/` — the TCK
 - ADR-071 — W2.1 Delivery Foundation (native signals, pull delivery, this TCK)
+- [`docs/harness-matrix.md`](harness-matrix.md) — what each harness can do in MC
+  and how mature it is (generated from `docs/harness-matrix.json`; a CLI you
+  onboard here gets its column there)

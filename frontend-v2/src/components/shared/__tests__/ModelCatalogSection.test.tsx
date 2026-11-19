@@ -205,6 +205,178 @@ describe("ModelCatalogSection", () => {
     expect(screen.getByTestId("catalog-provider")).toHaveAttribute("data-status", "unreachable");
   });
 
+  // Round-3 user test (t4 S3): a box the runtime watcher already knows is
+  // dark is not probed (the tab waited 30.7 s for two sleeping providers).
+  // It says so in plain words — calm, not an error, and not "no models".
+  it("status asleep: says the box is asleep or off, calmly, and how to ask anyway", async () => {
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "openai:sleepy-box",
+          protocol: "openai",
+          display_name: undefined as unknown as string,
+          label: "Sleepy Box",
+          status: "asleep",
+          reason: null,
+          models: [],
+          new_count: 0,
+        }),
+      ]),
+    );
+    renderSection();
+
+    const banner = await screen.findByTestId("catalog-status-banner");
+    expect(banner).toHaveTextContent(/asleep or off/);
+    expect(banner).toHaveTextContent(/Refetch/);
+    expect(banner).not.toHaveTextContent(/Runtime offline/);
+    expect(screen.getByTestId("catalog-provider")).toHaveAttribute("data-status", "asleep");
+    // The provider's own name, not its internal key "openai:sleepy-box".
+    expect(screen.getByText("Sleepy Box")).toBeInTheDocument();
+    expect(screen.queryByText("openai:sleepy-box")).not.toBeInTheDocument();
+    // Nothing to list, nothing to unfold: the group stays closed.
+    expect(screen.queryByText(/No list available/)).not.toBeInTheDocument();
+  });
+
+  // Round-4 user test (t3 S1, r2 S1): an awake box whose model port is dark
+  // read "asleep or off" while the Fleet tab said "free · ready".
+  it("status no_model: says the box is awake and runs no model — not asleep", async () => {
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "openai:wake-box",
+          protocol: "openai",
+          display_name: undefined as unknown as string,
+          label: "Wake Box",
+          status: "no_model" as ModelCatalogProvider["status"],
+          reason: "no_model",
+          cached_at: null,
+          models: [],
+          new_count: 0,
+        }),
+      ]),
+    );
+    renderSection();
+
+    const banner = await screen.findByTestId("catalog-status-banner");
+    expect(banner).toHaveTextContent(/awake/);
+    expect(banner).toHaveTextContent(/no model/);
+    expect(banner).not.toHaveTextContent(/asleep/);
+    expect(screen.getByTestId("catalog-provider")).toHaveAttribute("data-status", "no_model");
+    expect(screen.getByTestId("catalog-provider-row")).toHaveTextContent(/awake · no model/);
+    // The code itself never shows (it is the status, said once in words).
+    expect(screen.queryByTestId("catalog-status-reason")).not.toBeInTheDocument();
+  });
+
+  // t3 NICE-3 / r2 S1: raw codes under the sentence, and "checked < 1 min
+  // ago" next to "not queried".
+  it("never shows a raw status code and no check time for a box it did not ask", async () => {
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "openai:sleepy-box", protocol: "openai", label: "Sleepy Box",
+          status: "asleep", reason: "asleep", cached_at: null, models: [], new_count: 0,
+        }),
+        mkProvider({
+          key: "grok", protocol: "grok", display_name: "Grok",
+          status: "credential_missing", reason: "credential_missing", models: [], new_count: 0,
+        }),
+      ]),
+    );
+    renderSection();
+
+    await screen.findAllByTestId("catalog-status-banner");
+    const page = document.body.textContent ?? "";
+    expect(page).not.toMatch(/\basleep\b(?! or off)/);
+    expect(page).not.toContain("credential_missing");
+    const sleepy = screen.getAllByTestId("catalog-provider").find((el) => el.getAttribute("data-provider") === "openai:sleepy-box")!;
+    expect(within(sleepy).queryByText(/^checked/)).not.toBeInTheDocument();
+  });
+
+  it("says a reason code in words: the kimi list came from its config because the credential is gone", async () => {
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "kimi", protocol: "kimi", display_name: "Kimi Code",
+          status: "cli_config", reason: "credential_missing", models: [mkModel("k3")], new_count: 1,
+        }),
+      ]),
+    );
+    renderSection();
+
+    const reason = await screen.findByTestId("catalog-status-reason");
+    expect(reason).toHaveTextContent(/credentials are missing or were rejected/);
+    expect(document.body.textContent).not.toContain("credential_missing");
+  });
+
+  // PR #964 review: the slot name "<box> :8000 (aktuell: <model>)" repeated the
+  // model that is listed right below it, and was cut on the phone.
+  it("drops the slot's '(aktuell: …)' suffix while the models are listed", async () => {
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "openai:slot-box",
+          protocol: "openai",
+          display_name: undefined as unknown as string,
+          label: "Slot Box :8000 (aktuell: Some-Model-1017)",
+          models: [mkModel("Some-Model-1017", true)],
+          new_count: 0,
+        }),
+      ]),
+    );
+    renderSection();
+
+    expect(await screen.findByText("Slot Box :8000")).toBeInTheDocument();
+    expect(screen.queryByText(/aktuell:/)).not.toBeInTheDocument();
+  });
+
+  // PR #971 review: "kein Modell" three times in one block — slot suffix,
+  // status label and banner. For no_model the suffix goes too.
+  it("drops the slot's '(aktuell: kein Modell)' suffix for an awake box without a model", async () => {
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "openai:slot-box",
+          protocol: "openai",
+          display_name: undefined as unknown as string,
+          label: "Slot Box :8000 (aktuell: kein Modell)",
+          status: "no_model" as ModelCatalogProvider["status"],
+          reason: "no_model",
+          cached_at: null,
+          models: [],
+          new_count: 0,
+        }),
+      ]),
+    );
+    renderSection();
+
+    expect(await screen.findByText("Slot Box :8000")).toBeInTheDocument();
+    expect(screen.queryByText(/aktuell:/)).not.toBeInTheDocument();
+  });
+
+  // PR #971 review: the fallback for an unknown code had no test of its own —
+  // every code the "never raw" test used is mapped. Free text still shows.
+  it("hides an unknown reason code but keeps a free-text reason", async () => {
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "grok", protocol: "grok", display_name: "Grok",
+          status: "unreachable", reason: "some_future_code", models: [], new_count: 0,
+        }),
+        mkProvider({
+          key: "kimi", protocol: "kimi", display_name: "Kimi Code",
+          status: "unreachable", reason: "HTTP 502 from upstream", models: [], new_count: 0,
+        }),
+      ]),
+    );
+    renderSection();
+
+    await screen.findAllByTestId("catalog-status-banner");
+    expect(document.body.textContent).not.toContain("some_future_code");
+    const reasons = screen.getAllByTestId("catalog-status-reason");
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toHaveTextContent("HTTP 502 from upstream");
+  });
+
   it("status cli_config: names the CLI config as the source, not 'live' and not 'Manifest'", async () => {
     vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
       mkList([

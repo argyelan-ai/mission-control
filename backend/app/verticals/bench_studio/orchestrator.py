@@ -1,7 +1,8 @@
 """Benchmark Studio orchestrator — the production state machine.
 
 Challenge lifecycle:  generating -> rendering -> composing -> review
-                      (-> drafted -> published via drafts.py + core hooks)
+                      (drafted/published only on challenges from before the
+                       W1 kill list — MC no longer drafts X posts)
 Entry lifecycle:      pending -> generating -> generated -> rendered | failed
 
 Design rules (spec §7):
@@ -14,6 +15,7 @@ Design rules (spec §7):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -22,6 +24,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import HTTPException
@@ -57,10 +60,14 @@ RECORD_TIMEOUT_S = 900.0
 # (media.compose_branded_timeout_s) for a 60s input, so the client-side
 # HTTP timeout must cover that plus request/response overhead.
 COMPOSE_TIMEOUT_S = 1200.0
-# Reasoning models (Laguna) spend minutes thinking before the HTML comes out
-# (~10k tokens at ~25 tok/s) — 300s cut those runs off mid-generation.
-SPARK_TIMEOUT_S = 900.0
+#: Wall clock one generation may take (operator decision 25.10.2026): a
+#: visual test must let the model finish the page, so TIME ends a run, not a
+#: token cap. Shared by the W1 runner (``w1_common.RUN_TIME_LIMIT_MIN``) and
+#: the legacy W0 retry below. Was 900 s scaled by max_tokens.
+GENERATION_TIME_LIMIT_S = 2 * 60 * 60
+SPARK_TIMEOUT_S = float(GENERATION_TIME_LIMIT_S)
 SPARK_MAX_TOKENS = 16384
+SPARK_TEMPERATURE = 0.7
 
 GENERATION_SYSTEM_PROMPT = (
     "You are a one-shot frontend generator. Output a single complete "
@@ -82,6 +89,159 @@ def challenge_dir(challenge_id: uuid.UUID) -> Path:
     return SHARED_DELIVERABLES / f"bench-{challenge_id}"
 
 
+def entry_dir(entry: BenchEntry) -> Path:
+    """Artifact folder of ONE entry: ``<challenge dir>/<label>-<entry id 8>/``.
+
+    The label alone was the folder until round-1 user tests (23.10.2026):
+    two rows with the same model (effort Off vs Max) got the same label,
+    so the second run overwrote the first one's index.html and recording
+    without a trace. The id suffix makes the folder unique per entry; the
+    label stays in front so a human browsing the share can still read it.
+
+    Once a run has written the folder (``artifact_path`` points into it),
+    the entry keeps that folder: renaming the entry afterwards used to put
+    the next recording into a fresh folder and orphan the old one (round-2
+    review r1 NICE-7). Only a folder of this entry counts — inside this
+    challenge's root and ending in this entry's id — never a legacy
+    label-only folder that same-label rows shared."""
+    root = challenge_dir(entry.challenge_id)
+    suffix = f"-{entry.id.hex[:8]}"
+    if entry.artifact_path:
+        stored = Path(entry.artifact_path).parent
+        if stored.parent == root and stored.name.endswith(suffix):
+            return stored
+    return root / f"{_safe_label(entry.model_label)}{suffix}"
+
+
+def entry_order_key(entry: BenchEntry) -> tuple[int, str]:
+    """Sort key for entries everywhere they are listed or composed: the
+    operator's row order from the create dialog (``position``), the label
+    only as a tie-break. Was the label alone until round-2 user tests —
+    "DeepSeek · Max" then always came before "DeepSeek · Off"."""
+    return (entry.position or 0, entry.model_label)
+
+
+#: The effort word in the video ("Off", "Max", "Default"). English on
+#: purpose: the video is public and English (operator decision 23.10.2026,
+#: "benchvideo englisch ja"); the MC UI shows the same level through i18n.
+EFFORT_WORDS = {
+    "default": "Default", "off": "Off", "on": "On", "low": "Low",
+    "medium": "Medium", "high": "High", "max": "Max",
+}
+
+#: Renderer feature (mc-playwright GET /health ``features``): the branding
+#: payload may carry ``effort`` as its own value per model and outro row.
+RENDERER_FEATURE_BRANDING_EFFORT = "branding_effort"
+_RENDERER_HEALTH_TIMEOUT_S = 3.0
+
+
+def entry_effort_level(entry: BenchEntry) -> str | None:
+    """The effort a direct-API entry asked for, or None for "default" (the
+    server decides, nothing was sent) and for agent entries (their level is
+    recorded from the session, not chosen)."""
+    if entry.source_kind != "spark":
+        return None
+    level = (entry.metrics or {}).get("effort_requested") or "default"
+    return None if level == "default" else level
+
+
+def display_label(label: str, effort: str | None) -> str:
+    """The label as the UI and the video show it: without a trailing
+    " · <effort word>" that names the entry's OWN level.
+
+    Before round-2 Q2 create appended that word to labels that would
+    otherwise collide ("DeepSeek · Off" / "DeepSeek · Max"). Those labels
+    are still stored; now that the effort is shown as its own pill they
+    would read "DeepSeek · Off" + "Aus", "… · Max · Max" in the plain grid.
+    Only the exact form create wrote counts (" · " + the English word of
+    this entry's level, case ignored) — a model literally called "Qwen Max",
+    or "DeepSeek · Max" on an Off entry, keeps its text. Stored data is not
+    touched; a rename stores the clean label."""
+    level = effort or "default"
+    suffix = f" · {EFFORT_WORDS.get(level, level.capitalize())}".casefold()
+    stripped = label.strip()
+    if len(stripped) > len(suffix) and stripped.casefold().endswith(suffix):
+        return stripped[: -len(suffix)].rstrip()
+    return label
+
+
+def entry_display_label(entry: BenchEntry) -> str:
+    """:func:`display_label` for a stored entry."""
+    return display_label(entry.model_label, (entry.metrics or {}).get("effort_requested"))
+
+
+def entry_label_key(label: str, source_kind: str, effort: str | None) -> tuple[str, str]:
+    """What makes two entries of a challenge the same: label (case and outer
+    spaces ignored) AND effort. The effort is its own field since round-2
+    Q2 — "DeepSeek" Off and "DeepSeek" Max are two different entries, the
+    label is not rewritten to tell them apart. Agent rows have no chosen
+    effort. The label is compared as shown (:func:`display_label`), so an
+    old "DeepSeek · Max" and a new "DeepSeek", both Max, are the same."""
+    level = (effort or "default") if source_kind == "spark" else "default"
+    return (display_label(label, level).strip().casefold(), level)
+
+
+def video_effort_words(entries: list[BenchEntry]) -> dict[uuid.UUID, str]:
+    """English effort word per entry for the video, "" for none.
+
+    Only when at least one direct-API entry chose a level: then every
+    direct-API entry names its level, a default one as "Default" — "Off"
+    next to nothing would leave the viewer guessing what the other one ran
+    at. No chosen level anywhere: no effort in the video at all (the
+    pre-effort look). Agent entries never carry one: their level is
+    recorded from the session, not chosen."""
+    chosen = any(entry_effort_level(e) for e in entries)
+    words: dict[uuid.UUID, str] = {}
+    for e in entries:
+        if not chosen or e.source_kind != "spark":
+            words[e.id] = ""
+            continue
+        level = entry_effort_level(e) or "default"
+        words[e.id] = EFFORT_WORDS.get(level, level.capitalize())
+    return words
+
+
+def video_label(entry: BenchEntry, effort_word: str = "") -> str:
+    """The entry's name on the plain grid video (3+ entries, speed-label
+    variant): the label plus " · Max" when the entry has an effort word."""
+    label = entry_display_label(entry)
+    return f"{label} · {effort_word}" if effort_word else label
+
+
+def _legacy_video_label(entry: BenchEntry) -> str:
+    """Outro name for a renderer without ``branding_effort``: the text form
+    of PR #955 ("DeepSeek · effort max") so an older image still shows the
+    effort. Not repeated when the label already ends with that word as a
+    separate word (labels of runs from before round-2 Q2 carry it, "DeepSeek
+    · Max", cut by :func:`display_label`; "Qwen max" by the check below).
+    Drop once every renderer image announces the feature."""
+    label = entry_display_label(entry)
+    level = entry_effort_level(entry)
+    if not level:
+        return label
+    word = EFFORT_WORDS.get(level, level).lower()
+    # Only a separate trailing word counts ("DeepSeek · Max", "Qwen max") —
+    # not letters at the end of a name ("Qwen-Python" with effort On).
+    if re.split(r"[\s·]+", label.strip().lower())[-1] == word:
+        return label
+    return f"{label} · effort {level}"
+
+
+async def renderer_features() -> set[str]:
+    """Features the mc-playwright renderer announces on GET /health.
+    Fails closed: unreachable, an error or an older image without the list
+    -> empty set, and the caller sends the old payload form."""
+    try:
+        async with httpx.AsyncClient(timeout=_RENDERER_HEALTH_TIMEOUT_S) as cli:
+            resp = await cli.get(f"{PLAYWRIGHT_BASE}/health")
+            resp.raise_for_status()
+            features = resp.json().get("features") or []
+        return {str(f) for f in features}
+    except Exception as exc:  # noqa: BLE001 — never blocks a compose
+        logger.info("bench renderer features unknown (%s) — old branding form", exc)
+        return set()
+
+
 def _versioned_output_name(prefix: str = "grid") -> str:
     """Cache-busting filename for a compose output: '<prefix>-<8 hex>.mp4'.
 
@@ -90,35 +250,6 @@ def _versioned_output_name(prefix: str = "grid") -> str:
     the old fixed 'grid.mp4' name was indistinguishable to the browser's
     HTTP cache from run to run (incident 2026-07-13, hit Mark twice)."""
     return f"{prefix}-{uuid.uuid4().hex[:8]}.mp4"
-
-
-async def pending_x_post_approval(session: AsyncSession, challenge_id: uuid.UUID):
-    """The pending x_post Approval referencing this challenge, if any — None
-    otherwise. Filter pending x_post approvals in SQL; match
-    bench_challenge_id in Python (JSON column, avoids DB-specific operators).
-
-    Shared guard: drafts.create_draft uses it to reject a second draft while
-    one is still pending; routers.rerender_challenge/recompose_challenge use
-    it (inverted) to block overwriting the video a pending post approval
-    still points at — Approval.payload.media_paths freezes a path at draft
-    time, and a later recompose/rerender both renames AND deletes the old
-    file (_cleanup_old_compose), so approving the post days later would try
-    to post a file that no longer exists (2026-07-13 incident)."""
-    from app.models.approval import Approval
-
-    pending = (
-        await session.exec(
-            select(Approval).where(
-                Approval.action_type == "x_post",
-                Approval.status == "pending",
-            )
-        )
-    ).all()
-    for approval in pending:
-        payload = approval.payload or {}
-        if payload.get("bench_challenge_id") == str(challenge_id):
-            return approval
-    return None
 
 
 def _cleanup_old_compose(old_path: str | None, new_path: str | None) -> None:
@@ -189,16 +320,31 @@ def extract_html(raw: str | None) -> str:
     return text.strip()
 
 
-async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str, dict]:
+async def _spark_generate(
+    prompt: str,
+    model_override: str | None,
+    effort_fields: dict | None = None,
+    max_tokens: int = SPARK_MAX_TOKENS,
+) -> tuple[str, dict]:
     """One-shot HTML generation against the Spark vLLM endpoint.
 
     Reuses SparkClient for URL + active-model resolution, but calls
     /chat/completions directly because SparkClient.complete() drops the
     usage block — the studio needs tokens/tok_per_s metrics (spec §3).
 
+    ``effort_fields``: the probed thinking key for the requested effort
+    (``effort_probe.level_fields``) — ``None``/empty sends nothing, the
+    serving default governs. No model-name guard any more: the old
+    "qwen in the name -> enable_thinking false" switch silently ran every
+    Qwen bench without thinking and never said so (bench W0.6).
+    ``max_tokens`` is scaled by the caller for deep effort levels (this
+    legacy W0 retry keeps the v0 budget so a retried entry stays comparable
+    with its siblings); the HTTP wait is the 2 h generation time limit.
+
     Returns (content, metrics). Raises on HTTP errors — the caller converts
     that into entry.status = "failed".
     """
+    from app.services import reasoning_params
     from app.services.spark_client import SparkClient
 
     spark = SparkClient(timeout=SPARK_TIMEOUT_S)
@@ -210,27 +356,46 @@ async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str,
             {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": SPARK_MAX_TOKENS,
-        "temperature": 0.7,
+        "max_tokens": max_tokens,
+        "temperature": SPARK_TEMPERATURE,
+        **(effort_fields or {}),
     }
-    # Qwen3 thinking mode returns content=null; disable it there (same guard
-    # as SparkClient.complete). Other models (Laguna/poolside) need thinking
-    # for benchmark-grade output — omit the kwarg so the serving default
-    # governs and the reasoning parser strips the think block from content.
-    if "qwen" in model.lower():
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
-    async with httpx.AsyncClient(timeout=spark.timeout) as cli:
-        resp = await cli.post(f"{spark.llm_url}/chat/completions", json=payload)
-        resp.raise_for_status()
+    # One line per run with what went on the wire for effort, so a live
+    # check can read it from the backend log (not only from the entry).
+    logger.info(
+        "bench spark request model=%s effort_sent=%s max_tokens=%s",
+        model, reasoning_params.wire_fields(effort_fields or {}), max_tokens,
+    )
+    try:
+        async with httpx.AsyncClient(timeout=spark.timeout) as cli:
+            resp = await cli.post(f"{spark.llm_url}/chat/completions", json=payload)
+            resp.raise_for_status()
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(
+            f"time_limit: no answer within the {SPARK_TIMEOUT_S / 3600:g} h generation time limit"
+        ) from exc
     duration_ms = int((time.monotonic() - started) * 1000)
     data = resp.json()
-    content = data["choices"][0]["message"]["content"] or ""
+    choice = data["choices"][0]
+    message = choice.get("message") or {}
+    content = message.get("content") or ""
 
     # The actually-served model per the response body wins over the
     # requested name — the resolver can be stale by the time the request
     # lands (recipe swap mid-flight). Falls back to the requested model
     # since some backends echo it verbatim or omit the field.
     metrics: dict = {"duration_ms": duration_ms, "model": data.get("model") or model}
+    # What was asked and what came back (bench §7.2 names): the request
+    # knobs, the effort key=value actually sent (None = nothing), whether
+    # the answer shows thinking, and why generation stopped ("length" =
+    # max_tokens ran out — thinking can eat the whole budget).
+    finish_reason = choice.get("finish_reason")
+    metrics["temperature"] = SPARK_TEMPERATURE
+    metrics["max_tokens"] = max_tokens
+    metrics["effort_sent"] = reasoning_params.wire_fields(effort_fields or {})
+    metrics["effort_observed"] = reasoning_params.reasoning_of(message, data.get("usage"))
+    metrics["finish_reason"] = finish_reason
+    metrics["truncated"] = finish_reason == "length"
     usage = data.get("usage") or {}
     if usage:
         tokens_out = usage.get("completion_tokens")
@@ -244,65 +409,6 @@ async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str,
         if cached:
             metrics["cache_read_tokens"] = cached
     return content, metrics
-
-
-SPARK_MODELS_PROBE_TIMEOUT_S = 3.0  # Bench #21: the dialog must never hang on an unreachable box.
-# Covers the /v1/models GET (bounded by SPARK_MODELS_PROBE_TIMEOUT_S itself)
-# PLUS the _resolve_llm_model() leg after it, which can fall through to its
-# own live re-probe (runtime_model_resolver._probe_live_spark_model) on a
-# DEFAULT — unbounded-by-us — httpx timeout. Wrapping the whole body is the
-# only way to guarantee this function itself never outlives ~4s (review
-# finding, Bench #21).
-_SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S = 4.0
-
-
-async def _probe_spark_models() -> dict:
-    """The actual probe body — see spark_models_status for the timeout
-    wrapper and docstring."""
-    from app.services.spark_client import SparkClient
-
-    spark = SparkClient(timeout=SPARK_MODELS_PROBE_TIMEOUT_S)
-    try:
-        async with httpx.AsyncClient(timeout=spark.timeout) as cli:
-            resp = await cli.get(f"{spark.llm_url}/models")
-            resp.raise_for_status()
-            models = sorted({m["id"] for m in resp.json().get("data", [])})
-    except (httpx.HTTPError, KeyError, ValueError):
-        return {"reachable": False, "models": [], "active": None}
-    active = await spark._resolve_llm_model()
-    return {"reachable": True, "models": models, "active": active or None}
-
-
-async def spark_models_status() -> dict:
-    """Live probe of the Spark vLLM server for the bench dialog's vanilla
-    model picker (Bench #21) — GET /v1/models with a short timeout so the
-    dialog never hangs. Reuses SparkClient for URL + active-model
-    resolution (same source of truth _spark_generate uses).
-
-    Never raises: an unreachable Spark is a normal, expected state here
-    (operator might be mid-benchmark on something else), not a router 500 —
-    a timeout on the whole body (see _SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S)
-    is treated exactly like an unreachable box.
-    """
-    try:
-        return await asyncio.wait_for(_probe_spark_models(), timeout=_SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S)
-    except (TimeoutError, asyncio.TimeoutError):
-        return {"reachable": False, "models": [], "active": None}
-
-
-async def resolve_spark_model_or_422() -> str:
-    """Resolves the live active Spark model for a create-time spec with an
-    empty/None spark_model (routers.create_challenge, Bench #21 vanilla
-    "auto" option) — freezes it into the entry so the outro/label never end
-    up empty regardless of later model switches on the box.
-
-    Raises HTTPException(422) when Spark can't be reached right now and
-    there is nothing to freeze.
-    """
-    status = await spark_models_status()
-    if not status["reachable"] or not status["active"]:
-        raise HTTPException(422, "Spark nicht erreichbar — Modell nicht auflösbar")
-    return status["active"]
 
 
 async def _record_spark_usage_event(session: AsyncSession, entry: BenchEntry, metrics: dict) -> None:
@@ -379,6 +485,64 @@ async def _record_spark_usage_event(session: AsyncSession, entry: BenchEntry, me
         logger.warning("bench entry %s: spark usage event write failed", entry.id, exc_info=True)
 
 
+async def _spark_effort_request(
+    session: AsyncSession, entry: BenchEntry
+) -> tuple[dict, int, dict]:
+    """(request fields, max_tokens, metrics to store) for the effort the
+    entry asked for (``metrics["effort_requested"]``, set at create time).
+
+    "default" sends nothing and never probes. It keeps today's max_tokens —
+    unless a STORED probe (no extra request) saw that this server thinks by
+    default: then "default" behaves like "on" and gets the same budget, or a
+    model that thinks by default (Qwen) runs out of tokens before the page.
+    Any other level re-reads the probe for the engine as it runs NOW (cached
+    per serving_since): a model restarted between create and run gets probed
+    again, and a level it no longer offers fails the entry with the reason
+    instead of silently running on the default."""
+    from app.services import reasoning_params
+
+    from . import effort_probe
+
+    level = (entry.metrics or {}).get("effort_requested") or "default"
+    if level == "default":
+        cached = await effort_probe.cached_probe(session, entry.spark_model or "")
+        if cached is None or cached.default_observed != "on":
+            return {}, SPARK_MAX_TOKENS, {"effort_requested": "default"}
+        runtime = await effort_probe.spark_runtime(session)
+        limit = getattr(runtime, "max_context_len", None) if runtime is not None else None
+        return {}, reasoning_params.max_tokens_for("on", SPARK_MAX_TOKENS, limit), {
+            "effort_requested": "default",
+            "default_observed": "on",
+        }
+    probe = await effort_probe.get_or_probe(session, entry.spark_model or "")
+    fields = effort_probe.level_fields(probe, level)
+    runtime = await effort_probe.spark_runtime(session)
+    limit = getattr(runtime, "max_context_len", None) if runtime is not None else None
+    max_tokens = reasoning_params.max_tokens_for(level, SPARK_MAX_TOKENS, limit)
+    return fields, max_tokens, {
+        "effort_requested": level,
+        "thinking_key": probe.effort_param or probe.thinking_key,
+    }
+
+
+# Direct-API runs this process is executing right now. They run as
+# asyncio tasks inside the API process (start_challenge / retry_entry,
+# uvicorn ``--workers 1``), so a restart ends them without a trace: the
+# entry stayed `generating` forever and the effort check answered 409 for
+# good (review SHOULD-2, PR #955). The sweep heals every `generating`
+# Spark entry that is not in this set.
+_SPARK_RUNS_IN_FLIGHT: set[uuid.UUID] = set()
+
+SPARK_RUN_INTERRUPTED = (
+    "run interrupted — the backend restarted while the Spark was generating; "
+    "retry this entry"
+)
+
+
+def spark_run_in_flight(entry_id: uuid.UUID) -> bool:
+    return entry_id in _SPARK_RUNS_IN_FLIGHT
+
+
 async def generate_spark_entry(
     session: AsyncSession, entry: BenchEntry, prompt: str
 ) -> None:
@@ -386,24 +550,60 @@ async def generate_spark_entry(
 
     Never raises — failures land as entry.status='failed' + error text.
     """
+    # Registered BEFORE the entry turns `generating`, released after its
+    # final write: the sweep never sees a live run as orphaned.
+    _SPARK_RUNS_IN_FLIGHT.add(entry.id)
+    try:
+        await _generate_spark_entry(session, entry, prompt)
+    finally:
+        _SPARK_RUNS_IN_FLIGHT.discard(entry.id)
+
+
+async def _generate_spark_entry(
+    session: AsyncSession, entry: BenchEntry, prompt: str
+) -> None:
+    from app.services import reasoning_params
+
     entry.status = "generating"
     session.add(entry)
     await session.commit()
     try:
-        content, metrics = await _spark_generate(prompt, entry.spark_model)
+        effort_fields, max_tokens, run_params = await _spark_effort_request(session, entry)
+        # Store what goes on the wire BEFORE the request: a run can think for
+        # many minutes, and the detail page read "sent: nothing" the whole
+        # time (round-1 user test). The response below overwrites it with
+        # the same value.
+        entry.metrics = {
+            **(entry.metrics or {}),
+            **run_params,
+            "effort_sent": reasoning_params.wire_fields(effort_fields or {}),
+        }
+        session.add(entry)
+        await session.commit()
+        content, metrics = await _spark_generate(
+            prompt, entry.spark_model, effort_fields=effort_fields, max_tokens=max_tokens
+        )
         # Tokens were spent the moment the API call returned, independent of
         # whether the HTML below turns out to be valid — record usage now,
         # not after the extract_html/write-to-disk steps that can still fail.
         await _record_spark_usage_event(session, entry, metrics)
+        # Same for what was sent and observed (effort, finish_reason): a run
+        # that thought until max_tokens and produced no HTML must still show
+        # why (bench W0.6).
+        entry.metrics = {**(entry.metrics or {}), **run_params, **metrics}
         html = extract_html(content)
         if not html:
+            if metrics.get("finish_reason") == "length":
+                raise ValueError(
+                    f"model returned no HTML content — stopped at max_tokens "
+                    f"({metrics.get('max_tokens')}) before the page"
+                )
             raise ValueError("model returned no HTML content")
-        out_dir = challenge_dir(entry.challenge_id) / _safe_label(entry.model_label)
+        out_dir = entry_dir(entry)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "index.html"
         out_path.write_text(html, encoding="utf-8")
         entry.artifact_path = str(out_path)
-        entry.metrics = {**(entry.metrics or {}), **metrics}
         entry.status = "generated"
         entry.error = None
     except Exception as exc:  # noqa: BLE001 — every failure must land in the DB
@@ -418,16 +618,217 @@ async def generate_spark_entry(
 
 AGENT_BRIEF_TEMPLATE = """One-shot benchmark task (Benchmark Studio).
 
-Build EXACTLY ONE self-contained `index.html` for the prompt below, then
-register it as a deliverable on this task (deliverable_type "file", path
-pointing at the index.html). Hard requirements:
+Build EXACTLY ONE self-contained `index.html` for the prompt below.
+
+Write it to exactly this path — the bench collects the page from here and
+nowhere else:
+    {deliverable_path}
+Then register it: `mc deliverable --title "index.html" --path {deliverable_path}`
+and set the task status to review.
+
+Hard requirements:
 - A single complete HTML document, all CSS/JS inline, no external requests.
 - One shot: do NOT ask clarifying questions, do NOT create subtasks.
-- After registering the deliverable, set the task status to review.
+- Your working folder starts empty on purpose — there is nothing to read,
+  clone or commit.
+- Time limit: {time_limit_min} min. Write the file early and improve it in
+  place: when the time is up, the newest version at that path is kept and
+  shown as an incomplete result.
 
 PROMPT:
 {prompt}
 """
+
+#: The path placeholder the brief checksum is taken over — the same brief for
+#: every task ("same brief (sha …)" on the card), whatever its task id.
+BRIEF_PATH_PLACEHOLDER = "<deliverables>/index.html"
+
+
+def agent_brief(prompt: str, deliverable_path: str, time_limit_min: int) -> str:
+    return AGENT_BRIEF_TEMPLATE.format(
+        prompt=prompt, deliverable_path=deliverable_path, time_limit_min=time_limit_min,
+    )
+
+
+async def _backend_view(session: AsyncSession, agent, agent_path: str) -> str | None:
+    """The backend's path of a file the agent writes at ``agent_path`` —
+    through fs_service, the one runtime-aware resolver (slug injection for
+    containerized agents, the host form for host workers)."""
+    from types import SimpleNamespace
+
+    from app.services.fs_service import resolve_deliverable
+
+    return await resolve_deliverable(
+        SimpleNamespace(path=agent_path, agent_id=getattr(agent, "id", None)), session, target="container",
+    )
+
+
+async def deliverable_target(session: AsyncSession, agent, task_id: uuid.UUID) -> tuple[str, Path | None]:
+    """(agent view, backend view) of the ONE index.html the brief names and
+    the collector reads — so the agent's output is always found."""
+    from app.services.deliverable_paths import agent_deliverable_dir
+
+    agent_path = f"{agent_deliverable_dir(agent, task_id)}/index.html"
+    backend = await _backend_view(session, agent, agent_path)
+    return agent_path, (Path(backend) if backend else None)
+
+
+def _plan_time_limit_min(challenge: BenchChallenge, entry: BenchEntry) -> int:
+    from .w1_common import AGENT_TIME_LIMIT_MIN
+
+    for pc in (challenge.plan or {}).get("contestants") or []:
+        if pc.get("position") == entry.position and pc.get("time_limit_min"):
+            return int(pc["time_limit_min"])
+    return AGENT_TIME_LIMIT_MIN
+
+
+#: Folder (under the agent's workspace) that holds one empty folder per
+#: bench task — see bench_task_workspace.
+BENCH_WORKSPACE_DIR = "bench"
+
+
+async def bench_task_workspace(session: AsyncSession, task, agent) -> str | None:
+    """hooks.task_workspace_providers: a bench task starts in an EMPTY
+    folder of its own, ``<agent workspace>/bench/<task id>/`` — never in a
+    worktree of the shared ad-hoc scratch repo, whose unrelated files
+    distract the agent and make runs unfair (live finding 28.10.2026).
+
+    Self-filtering on the bench auto_reason (never the title). Idempotent:
+    a re-dispatch of the same task gets the same folder with its work kept.
+    No agent workspace → None, the core's normal path decides."""
+    from .callbacks import BENCH_AUTO_REASON_PREFIX
+
+    if not (getattr(task, "auto_reason", None) or "").startswith(BENCH_AUTO_REASON_PREFIX):
+        return None
+    base = getattr(agent, "workspace_path", None)
+    if not base:
+        return None
+    folder = Path(base) / BENCH_WORKSPACE_DIR / str(task.id)
+    folder.mkdir(parents=True, exist_ok=True)
+    return str(folder)
+
+
+# ── Incomplete page on a time-limit stop ─────────────────────────────────
+
+_SALVAGE_MAX_BYTES = 5 * 1024 * 1024
+_SALVAGE_SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__", ".next", "dist", "build"}
+_SALVAGE_MAX_DEPTH = 4
+_SALVAGE_MAX_FILES = 5000
+
+
+def _inside(path: Path, root: Path) -> bool:
+    """``path`` (symlinks followed) stays inside ``root`` and is no symlink
+    itself — the guard for every agent-written path the backend reads."""
+    try:
+        return not path.is_symlink() and path.resolve().is_relative_to(root.resolve())
+    except OSError:
+        return False
+
+
+def _is_bench_workspace(ws: Path, agent, task_id) -> bool:
+    """Only the task's own bench folder is searched — never a scratch-repo
+    worktree with unrelated pages (e.g. a task dispatched before the bench
+    workspace provider existed, or one whose provider fell back)."""
+    base = getattr(agent, "workspace_path", None)
+    if not base:
+        return False
+    expected = Path(base) / BENCH_WORKSPACE_DIR / str(task_id)
+    return ws == expected and _inside(ws, Path(base))
+
+
+def _safe_page(path: Path, root: Path) -> bool:
+    return path.is_file() and _inside(path, root)
+
+
+def _html_candidates(root: Path, source: str) -> list[tuple[Path, str]]:
+    """Every *.html below ``root`` (bounded depth/count, no VCS or package
+    folders, no symlinks out of it)."""
+    out: list[tuple[Path, str]] = []
+    if not root.is_dir():
+        return out
+    base = root.resolve()
+    seen = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_depth = len(Path(dirpath).relative_to(root).parts)
+        dirnames[:] = [d for d in dirnames if d not in _SALVAGE_SKIP_DIRS and rel_depth < _SALVAGE_MAX_DEPTH]
+        for name in filenames:
+            seen += 1
+            if seen > _SALVAGE_MAX_FILES:
+                return out
+            if not name.lower().endswith((".html", ".htm")):
+                continue
+            p = Path(dirpath) / name
+            try:
+                if p.is_symlink() or not p.resolve().is_relative_to(base):
+                    continue
+                if p.stat().st_size > _SALVAGE_MAX_BYTES:
+                    continue
+            except OSError:
+                continue
+            out.append((p, source))
+    return out
+
+
+async def salvage_incomplete_page(session: AsyncSession, entry: BenchEntry, task) -> bool:
+    """Keep the newest page the agent wrote before its run was stopped.
+
+    Looked at: the task's deliverables folder (the one the brief names) and
+    its bench working folder. The newest page (by file time; ``index.html``
+    wins a tie) is copied into the entry's own folder. The entry stays
+    ``failed`` — it is never ranked like a finished run — but carries
+    ``metrics.incomplete_page`` so the result page can offer it, clearly
+    marked incomplete. Returns True when a page was kept.
+
+    Agent-written paths are untrusted: a symlinked task folder or file that
+    points out of the agent's own deliverables root / bench folder is never
+    followed (it could expose any file the backend can read)."""
+    from app.models.agent import Agent
+
+    agent = await session.get(Agent, entry.agent_id) if entry.agent_id else None
+    candidates: list[tuple[Path, str]] = []
+    if agent is not None:
+        _agent_path, backend = await deliverable_target(session, agent, task.id)
+        if backend is not None:
+            folder = backend.parent
+            # The agent owns <root>/<task id>/ but not <root> itself.
+            if _inside(folder, folder.parent):
+                candidates += _html_candidates(folder, "deliverables")
+    ws = getattr(task, "workspace_path", None)
+    if ws and agent is not None and _is_bench_workspace(Path(ws), agent, task.id):
+        candidates += _html_candidates(Path(ws), "workspace")
+
+    best: tuple[float, int, Path, str] | None = None
+    for path, source in candidates:
+        try:
+            key = (path.stat().st_mtime, 1 if path.name.lower() == "index.html" else 0)
+        except OSError:
+            continue
+        if best is None or key > best[:2]:
+            best = (key[0], key[1], path, source)
+    if best is None:
+        return False
+    _mtime, _is_index, src, source = best
+    out_dir = entry_dir(entry)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "index.html"
+    # O_NOFOLLOW: the file cannot be swapped for a link between the check
+    # above and this copy (the agent may still be writing when a stop failed).
+    try:
+        fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False
+    with os.fdopen(fd, "rb") as fh, open(out_path, "wb") as out:
+        shutil.copyfileobj(fh, out, length=_SALVAGE_MAX_BYTES)
+    entry.artifact_path = str(out_path)
+    entry.metrics = {
+        **(entry.metrics or {}),
+        "incomplete_page": True,
+        "incomplete_source": source,
+        # Not "html_bytes": that key means a finished page in the receipt.
+        "incomplete_bytes": out_path.stat().st_size,
+    }
+    session.add(entry)
+    return True
 
 
 async def dispatch_agent_entry(
@@ -451,11 +852,14 @@ async def dispatch_agent_entry(
         await session.commit()
         return
 
+    task_id = uuid.uuid4()
+    deliverable_path, _backend = await deliverable_target(session, agent, task_id)
     task = Task(
-        id=uuid.uuid4(),
+        id=task_id,
         board_id=agent.board_id,
-        title=f"[Bench] {challenge.title} — {entry.model_label}"[:200],
-        description=AGENT_BRIEF_TEMPLATE.format(prompt=challenge.prompt_text),
+        title=f"[Bench] {challenge.title} — {entry_display_label(entry)}"[:200],
+        description=agent_brief(challenge.prompt_text, deliverable_path,
+                                _plan_time_limit_min(challenge, entry)),
         status="inbox",
         priority="medium",
         assigned_agent_id=agent.id,
@@ -500,6 +904,13 @@ async def task_work_duration_ms(session: AsyncSession, task_id: uuid.UUID) -> in
     `in_progress -> review` event by the working agent (work end — the
     one-shot artifact exists at that moment; everything after is review
     ping-pong). Returns None when either endpoint is missing.
+
+    Time the task sat outside in_progress inside that span (blocked on an
+    operator answer overnight, put back into the inbox) is not work and is
+    subtracted — a run blocked for 21 h showed "1363.6 min" in the video
+    (live, 2026-10-19). A pause only counts once its re-entry into
+    in_progress is recorded; a leave without a recorded return stays work
+    time (event logs of older runs miss some re-entries).
     """
     from app.models.task import TaskEvent
 
@@ -523,7 +934,18 @@ async def task_work_duration_ms(session: AsyncSession, task_id: uuid.UUID) -> in
     )
     if start is None or end is None or end.created_at <= start.created_at:
         return None
-    return int((end.created_at - start.created_at).total_seconds() * 1000)
+    paused_s = 0.0
+    left_at = None
+    for e in events:
+        if e.created_at <= start.created_at or e.created_at > end.created_at:
+            continue
+        if e.from_status == "in_progress" and e.to_status != "in_progress":
+            left_at = e.created_at
+        elif e.to_status == "in_progress" and left_at is not None:
+            paused_s += (e.created_at - left_at).total_seconds()
+            left_at = None
+    worked_s = (end.created_at - start.created_at).total_seconds() - paused_s
+    return int(worked_s * 1000)
 
 
 async def task_cost_usd(session: AsyncSession, task_id: uuid.UUID) -> float | None:
@@ -666,6 +1088,16 @@ async def on_task_done(session: AsyncSession, task) -> None:
         if not await _readopt_reopened_entry(session, entry):
             return
 
+    # Agent-path effort is recorded, not set (bench W0.7): which thinking
+    # level the task's own omp session really ran on.
+    from .agent_effort import observed_agent_effort
+
+    entry.metrics = {
+        **(entry.metrics or {}),
+        "effort_requested": (entry.metrics or {}).get("effort_requested") or "default",
+        "effort_observed": await observed_agent_effort(session, entry, task),
+    }
+
     rows = (
         await session.exec(
             select(TaskDeliverable).where(TaskDeliverable.task_id == task.id)
@@ -690,12 +1122,23 @@ async def on_task_done(session: AsyncSession, task) -> None:
                     break
             if html_src:
                 break
+    if html_src is None:
+        # Not registered, but written where the brief said: the brief and
+        # the collector name the same file (live finding 28.10.2026).
+        from app.models.agent import Agent
+
+        agent = await session.get(Agent, entry.agent_id) if entry.agent_id else None
+        if agent is not None:
+            _agent_path, backend = await deliverable_target(session, agent, task.id)
+            # Untrusted path: no symlink out of the agent's deliverables root.
+            if backend is not None and _safe_page(backend, backend.parent.parent):
+                html_src = backend
 
     if html_src is None:
         entry.status = "failed"
         entry.error = "task done, but no index.html deliverable found (or path not readable)"
     else:
-        out_dir = challenge_dir(entry.challenge_id) / _safe_label(entry.model_label)
+        out_dir = entry_dir(entry)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "index.html"
         shutil.copyfile(html_src, out_path)
@@ -712,6 +1155,9 @@ async def on_task_done(session: AsyncSession, task) -> None:
         if duration_ms is not None:
             metrics["duration_ms"] = duration_ms
         entry.metrics = metrics
+        # Tokens/cost/locality as far as already harvested (the outro
+        # refreshes them at compose time) — the UI shows them right away.
+        await snapshot_entry_usage(session, entry)
         entry.status = "generated"
         entry.error = None
     session.add(entry)
@@ -728,7 +1174,7 @@ async def record_entry(entry: BenchEntry, challenge: BenchChallenge) -> dict:
     Uses the challenge's operator-chosen record_duration_s (Bench #18) when
     set, else the legacy RECORD_DURATION_S default — same fallback the
     NewChallengeDialog documents (None -> 10s)."""
-    out_dir = str(challenge_dir(entry.challenge_id) / _safe_label(entry.model_label))
+    out_dir = str(entry_dir(entry))
     duration_s = (
         challenge.record_duration_s
         if challenge.record_duration_s is not None
@@ -748,16 +1194,58 @@ async def record_entry(entry: BenchEntry, challenge: BenchChallenge) -> dict:
         return resp.json()
 
 
-def format_speed_label(metrics: dict) -> str:
-    """'42 s · 87 tok/s' — optional per-model overlay for the grid (spec §4)."""
-    parts: list[str] = []
-    duration_ms = metrics.get("duration_ms")
-    if duration_ms:
-        parts.append(f"{duration_ms / 1000:.0f} s")
-    tok_per_s = metrics.get("tok_per_s")
-    if tok_per_s:
-        parts.append(f"{tok_per_s:.0f} tok/s")
-    return " · ".join(parts)
+DIRECT_API_TAG = "LOCAL · DIRECT API"
+
+
+def _published_episode_no(challenge_id: uuid.UUID) -> int | None:
+    """Episode number of a published run, else None.
+
+    The (private) catalog publisher writes
+    ``<challenge dir>/publish/state.json`` with ``episode_no`` on a
+    successful publish and removes it on unpublish — absent means "not
+    published". Read-only and defensive: anything unexpected is None."""
+    path = challenge_dir(challenge_id) / "publish" / "state.json"
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    episode_no = state.get("episode_no") if isinstance(state, dict) else None
+    if isinstance(episode_no, bool) or not isinstance(episode_no, int) or episode_no < 1:
+        return None
+    return episode_no
+
+
+def _branding_date_label(challenge: BenchChallenge) -> str:
+    """"2026-10-21", or "episode 4 · 2026-10-21" once published.
+
+    The date is the operator's calendar day (``settings.usage_timezone``,
+    the zone Insights counts days in; UTC when unset or unknown)."""
+    from app.config import settings
+
+    created = challenge.created_at or datetime.now(timezone.utc)
+    if created.tzinfo is None:  # SQLite hands back naive UTC
+        created = created.replace(tzinfo=timezone.utc)
+    try:
+        tz = ZoneInfo(settings.usage_timezone) if settings.usage_timezone else timezone.utc
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = timezone.utc
+    label = created.astimezone(tz).date().isoformat()
+    episode_no = _published_episode_no(challenge.id)
+    return f"episode {episode_no} · {label}" if episode_no else label
+
+
+async def _legacy_run_label(session: AsyncSession, challenge: BenchChallenge) -> str:
+    """The pre-W0.5 "RUN 0xx" value (zero-padded count of challenges created
+    at-or-before this one) — only for a not-yet-rebuilt renderer image, see
+    the run_label comment in _build_branding_payload."""
+    prior_ids = (
+        await session.exec(
+            select(BenchChallenge.id).where(
+                BenchChallenge.created_at <= challenge.created_at
+            )
+        )
+    ).all()
+    return f"{len(prior_ids):03d}"
 
 
 def _first_prompt_line(prompt_text: str, max_len: int = 110) -> str:
@@ -771,21 +1259,45 @@ def _first_prompt_line(prompt_text: str, max_len: int = 110) -> str:
 
 
 def _format_outro_time(duration_ms: int | None) -> str:
+    """'45 s' / '1 min 35 s' / '1 h 4 min' — the same form as the MC page
+    (round-2 t2 NICE-3: "1.6 min" in the video, "1 min" in the UI for one
+    95-second run)."""
     if not duration_ms:
         return "—"
-    return f"{duration_ms / 60000:.1f} min"
+    total = round(duration_ms / 1000)
+    hours, rest = divmod(total, 3600)
+    minutes, seconds = divmod(rest, 60)
+    if hours:
+        return f"{hours} h {minutes} min" if minutes else f"{hours} h"
+    if minutes:
+        return f"{minutes} min {seconds} s" if seconds else f"{minutes} min"
+    return f"{seconds} s"
 
 
-def _format_outro_cost(cost_usd: float | None, source_kind: str) -> str:
-    """Outro cost cell. Spark entries run on the local DGX — no per-token
-    cost, shown as "local" (clearer than a fake $0). Agent entries show the
-    attributed sum when model_usage_events has one, else "—" (most agent
-    runs today — see task_cost_usd coverage note)."""
-    if source_kind == "spark":
+def _format_outro_cost(
+    cost_usd: float | None, source_kind: str, locality: str | None = None
+) -> str:
+    """Outro cost cell — never a number that was not spent.
+
+    - Spark entries and agents on a local runtime (our own box): "local".
+      model_usage_events may still carry an API list price for the same
+      model name (the price table is keyed by model, not by where it ran);
+      showing it would read as real spend.
+    - No attributed cost, or a sum of 0 (the catch-all price row prices an
+      unknown model at 0/0 — "price unknown", not "free"): "—".
+    - Below one cent: "<$0.01" instead of a misleading "$0.00".
+    - Otherwise "~$0.42": the sum is the API list price of the tokens
+      (model_prices), not an invoice — cloud runs mostly go through a
+      subscription (Grok, Claude Code). "~" (not "≈") because the outro's
+      JetBrains Mono is the Google Fonts latin subset, which has no U+2248.
+    """
+    if source_kind == "spark" or locality == "local":
         return "local"
-    if cost_usd is None:
+    if cost_usd is None or cost_usd <= 0:
         return "—"
-    return f"${cost_usd:.2f}"
+    if cost_usd < 0.01:
+        return "<$0.01"
+    return f"~${cost_usd:.2f}"
 
 
 def _format_tok_count(n: int) -> str:
@@ -818,8 +1330,66 @@ def _format_outro_size(artifact_path: str | None) -> str:
         return "—"
 
 
+async def entry_locality(session: AsyncSession, entry: BenchEntry) -> str | None:
+    """"local" | "cloud" | None for where an entry's model ran.
+
+    Spark entries are local by definition. Agent entries: the agent's bound
+    runtime — local when it sits on one of our own boxes and speaks the
+    OpenAI protocol (``heads.pairs.is_local``, the same rule as the pair
+    table and head runs). None when the agent or runtime is gone."""
+    if entry.source_kind == "spark":
+        return "local"
+    if entry.agent_id is None:
+        return None
+    from app.models.agent import Agent
+    from app.models.runtime import Runtime
+    from app.services.heads.pairs import is_local
+
+    agent = await session.get(Agent, entry.agent_id)
+    if agent is None or agent.runtime_id is None:
+        return None
+    runtime = await session.get(Runtime, agent.runtime_id)
+    if runtime is None:
+        return None
+    return "local" if is_local(runtime) else "cloud"
+
+
+async def snapshot_entry_usage(session: AsyncSession, entry: BenchEntry) -> dict:
+    """Store an agent entry's attributed usage on ``entry.metrics`` and
+    return the metrics dict — one source of truth for the video outro, the
+    Bench Studio UI and the episode export.
+
+    Writes ``tokens_in``/``tokens_out``/``cost_usd`` from model_usage_events
+    when the task has attributed rows (never deletes a value an earlier
+    snapshot stored), and ``locality`` once — at task-done time, so a later
+    runtime switch of the agent does not relabel an old run. Spark entries
+    are left alone: their tokens come from the engine response directly."""
+    metrics = dict(entry.metrics or {})
+    if entry.source_kind == "spark":
+        return metrics
+    if "locality" not in metrics:
+        locality = await entry_locality(session, entry)
+        if locality is not None:
+            metrics["locality"] = locality
+    if entry.task_id is not None:
+        usage = await task_token_usage(session, entry.task_id)
+        if usage is not None:
+            metrics["tokens_in"], metrics["tokens_out"] = usage
+        cost = await task_cost_usd(session, entry.task_id)
+        if cost is not None:
+            metrics["cost_usd"] = cost
+    if metrics != (entry.metrics or {}):
+        entry.metrics = metrics
+        session.add(entry)
+    return metrics
+
+
 async def _build_branding_payload(
-    session: AsyncSession, challenge: BenchChallenge, ordered: list[BenchEntry]
+    session: AsyncSession,
+    challenge: BenchChallenge,
+    ordered: list[BenchEntry],
+    *,
+    effort_field: bool = False,
 ) -> dict:
     """Video-branding payload (spec: bench-video-branding, 2026-07-12; single-
     video-branding 2026-07-13) for the mc-playwright /compose branded path —
@@ -827,19 +1397,28 @@ async def _build_branding_payload(
     mode, or a side_by_side run degraded to 1 survivor) or 2 entries
     (side_by_side). `models`/`outro_rows` are built generically off `ordered`
     so the length just flows through — mc-playwright picks frame.html vs
-    frame_single.html based on len(models)."""
+    frame_single.html based on len(models).
+
+    ``effort_field`` (the renderer announced ``branding_effort``): the
+    effort goes as its own English word per model and outro row, the label
+    and tag stay clean, and the templates draw it as a pill that never
+    wraps (round-2 Q2). Without it the old text form is sent — "· EFFORT
+    MAX" in the tag, "· effort max" in the outro name — which an older
+    image still shows."""
     from app.models.agent import Agent
 
-    # run_label: zero-padded 3-digit count of bench_challenges created
-    # at-or-before this one — a stable per-series run number.
-    prior_ids = (
-        await session.exec(
-            select(BenchChallenge.id).where(
-                BenchChallenge.created_at <= challenge.created_at
-            )
-        )
-    ).all()
-    run_label = f"{len(prior_ids):03d}"
+    effort_words = video_effort_words(ordered)
+
+    # date_label: the run's date (+ "episode N" once published) — replaces the
+    # old RUN 0xx row counter (concept W0.5, 2026-10-22).
+    date_label = _branding_date_label(challenge)
+    # run_label: the old counter, still sent for ONE release — a renderer
+    # image built before W0.5 requires it (BrandingSpec.run_label: str, a
+    # 422 on every compose without it) and the image build can now fail by
+    # design when Fontshare/Google is down, so backend and renderer may be
+    # live in different versions for a while. The new renderer ignores it.
+    # Drop once every renderer image is W0.5 or newer.
+    run_label = await _legacy_run_label(session, challenge)
 
     models: list[dict] = []
     outro_rows: list[dict] = []
@@ -848,7 +1427,12 @@ async def _build_branding_payload(
             # Operator override (bench_entries.display_tag) always wins.
             tag = entry.display_tag
         elif entry.source_kind == "spark":
-            tag = "VLLM · SPARK"
+            # What MC knows for sure about a direct-API run: the local
+            # OpenAI-compatible endpoint, no agent in between. Engine and
+            # hardware are not known here (the endpoint can serve vLLM,
+            # SGLang or EXL3 recipes) — omitted rather than guessed
+            # (concept W0.5; the W1 receipt derives them from the recipe).
+            tag = DIRECT_API_TAG
         else:
             # Agent entries: harness-derived default (e.g. omp -> "OMP",
             # grok -> "GROK"); agent name as fallback when no harness is set.
@@ -860,43 +1444,51 @@ async def _build_branding_payload(
                         tag = agent.harness.upper()
                     elif agent.name:
                         tag = agent.name.upper()
-        models.append({"label": entry.model_label, "tag": tag})
+        model: dict = {"label": entry_display_label(entry), "tag": tag}
+        if effort_field:
+            model["effort"] = effort_words[entry.id]
+        else:
+            effort = entry_effort_level(entry)
+            if effort and not entry.display_tag:
+                # Two rows of the same model (Off vs Max) looked identical in
+                # the video (round-1 user test). An operator tag stays verbatim.
+                model["tag"] = f"{tag} · EFFORT {effort.upper()}"
+        models.append(model)
+
+        # Fresh snapshot of the attributed usage (agent entries; the
+        # harvester may have attributed more turns since task-done — a
+        # recompose picks them up). Spark entries carry tokens_in/out from
+        # the engine response (_spark_generate) and have no fleet task.
+        metrics = await snapshot_entry_usage(session, entry)
 
         # Time: stored metrics first; for agent entries without a stored
         # value (old runs, hook races) derive defensively from task_events.
-        duration_ms = (entry.metrics or {}).get("duration_ms")
+        duration_ms = metrics.get("duration_ms")
         if duration_ms is None and entry.task_id is not None:
             duration_ms = await task_work_duration_ms(session, entry.task_id)
 
-        cost_usd = None
-        if entry.source_kind != "spark" and entry.task_id is not None:
-            cost_usd = await task_cost_usd(session, entry.task_id)
+        cost_usd = metrics.get("cost_usd") if entry.source_kind != "spark" else None
 
-        # Token usage: spark entries have no fleet Task (task_id is always
-        # NULL for them, see _record_spark_usage_event), so they can never
-        # be attributed via task_token_usage/model_usage_events — read the
-        # tokens_in/out _spark_generate already captured into entry.metrics
-        # directly instead (Task 5). Agent entries keep the existing
-        # task-attributed sum.
         token_usage = None
-        if entry.source_kind == "spark":
-            tokens_in = (entry.metrics or {}).get("tokens_in")
-            tokens_out = (entry.metrics or {}).get("tokens_out")
-            if tokens_in is not None and tokens_out is not None:
-                token_usage = (int(tokens_in), int(tokens_out))
-        elif entry.task_id is not None:
-            token_usage = await task_token_usage(session, entry.task_id)
+        tokens_in = metrics.get("tokens_in")
+        tokens_out = metrics.get("tokens_out")
+        if tokens_in is not None and tokens_out is not None:
+            token_usage = (int(tokens_in), int(tokens_out))
 
-        outro_rows.append({
-            "name": entry.model_label,
+        row = {
+            "name": entry_display_label(entry) if effort_field else _legacy_video_label(entry),
             "time": _format_outro_time(duration_ms),
             "size": _format_outro_size(entry.artifact_path),
-            "cost": _format_outro_cost(cost_usd, entry.source_kind),
+            "cost": _format_outro_cost(cost_usd, entry.source_kind, metrics.get("locality")),
             "tokens": _format_outro_tokens(token_usage),
-        })
+        }
+        if effort_field:
+            row["effort"] = effort_words[entry.id]
+        outro_rows.append(row)
 
     return {
         "title": challenge.title,
+        "date_label": date_label,
         "run_label": run_label,
         "prompt_line": _first_prompt_line(challenge.prompt_text),
         "models": models,
@@ -909,45 +1501,40 @@ async def compose_challenge(
     challenge: BenchChallenge,
     rendered: list[BenchEntry],
     *,
-    speed_labels: bool = False,
     output_name: str | None = None,
 ) -> str:
-    """POST /compose on mc-playwright (PR 1) — grid video with model labels,
-    or (1 or 2 rendered entries) the branded frame + outro video (spec:
-    bench-video-branding, 2026-07-12; single-video-branding 2026-07-13).
-    Returns the composed video_path. Raises on failure.
+    """POST /compose on mc-playwright — the branded frame + outro video for
+    1 (solo) or 2 (side by side) recorded entries (spec: bench-video-branding,
+    2026-07-12; single-video-branding 2026-07-13). Returns the composed
+    video_path. Raises on failure.
+
+    Bench W1 kill list: the unbranded 3-6 grid and the speed-label
+    X-draft variant are gone — a video shows at most two contestants; an old
+    challenge with more recordings keeps the video it has.
 
     output_name defaults to a fresh versioned filename (_versioned_output_name)
-    so every compose produces a distinct file — callers that need a stable
-    name (drafts.py's "grid-speeds.mp4") pass it explicitly."""
+    so every compose produces a distinct file."""
     if output_name is None:
         output_name = _versioned_output_name()
-    ordered = sorted(rendered, key=lambda e: e.model_label)
+    ordered = sorted(rendered, key=entry_order_key)
+    if len(ordered) not in (1, 2):
+        raise ValueError(f"a bench video shows 1 or 2 contestants, not {len(ordered)}")
+    effort_words = video_effort_words(ordered)
     duration_s = (
         challenge.record_duration_s
         if challenge.record_duration_s is not None
         else RECORD_DURATION_S
     )
+    effort_field = RENDERER_FEATURE_BRANDING_EFFORT in await renderer_features()
     payload: dict = {
         "inputs": [e.video_path for e in ordered],
-        "labels": [e.model_label for e in ordered],
+        "labels": [video_label(e, effort_words[e.id]) for e in ordered],
         "layout": "grid",
         "output_path": str(challenge_dir(challenge.id) / output_name),
-        # Bench #18: scales the sidecar's branded-compose ffmpeg timeout
-        # (media.compose_branded_timeout_s) — a no-op for the plain grid
-        # path, which doesn't read this field.
+        # Bench #18: scales the sidecar's branded-compose ffmpeg timeout.
         "duration_s": duration_s,
+        "branding": await _build_branding_payload(session, challenge, ordered, effort_field=effort_field),
     }
-    if speed_labels:
-        payload["speed_labels"] = [format_speed_label(e.metrics or {}) for e in ordered]
-    # speed_labels re-compose (drafts.py "grid-speeds.mp4" for X posts with
-    # per-model metric overlays) stays on the plain grid path — branding is
-    # only for the primary review composition, not the metrics variant.
-    # 1 or 2 entries -> branded (solo/side-by-side); 3-4 entries (side_by_side
-    # models list beyond the branded pair) fall through to the plain grid
-    # path unchanged (pre-existing behaviour, regression-safe).
-    if not speed_labels and len(ordered) in (1, 2):
-        payload["branding"] = await _build_branding_payload(session, challenge, ordered)
     async with httpx.AsyncClient(timeout=COMPOSE_TIMEOUT_S) as cli:
         resp = await cli.post(f"{PLAYWRIGHT_BASE}/compose", json=payload)
         resp.raise_for_status()
@@ -970,8 +1557,7 @@ async def _render_and_compose(
     for entry in generated:
         try:
             result = await record_entry(entry, challenge)
-            entry.video_path = result.get("video_path")
-            entry.screenshot_path = result.get("screenshot_path")
+            _apply_record_result(entry, result)
             entry.status = "rendered"
             entry.error = None
             rendered.append(entry)
@@ -994,9 +1580,10 @@ async def _render_and_compose(
     # composes its 1 entry into the branded solo frame (2026-07-13,
     # single-video-branding — previously single mode never composed and
     # shipped the raw, unbranded recording).
-    should_compose = (
-        (challenge.mode == "side_by_side" and len(rendered) >= 1)
-        or (challenge.mode == "single" and len(rendered) == 1)
+    # W1 kill list: no 3-6 grid — 1 or 2 recordings compose into the
+    # branded frame, more keep their single recordings (old challenges).
+    should_compose = len(rendered) in (1, 2) and (
+        challenge.mode == "side_by_side" or len(rendered) == 1
     )
     if should_compose:
         challenge.status = "composing"
@@ -1016,6 +1603,34 @@ async def _render_and_compose(
     await session.commit()
 
 
+# W0.9: recorder network report -> entry.metrics (§7.2 receipt names). The
+# sidecar's URL sample (blocked_requests) stays in its log, not in the record.
+# network_blocked_scripts (25.10.2026): how many of the attempts were
+# scripts/modules — the page's code could not run (W1 gate needs_network).
+# lib_track & co. (lane lib:three-local, 25.10.2026): the recorder served its
+# own pinned three.js for the page's CDN request — what it served and which
+# version the page asked for (docker/mc-playwright/record_three.py).
+LIB_LANE_KEYS = ("lib_track", "libraries_provided", "three_requested",
+                 "three_version_mismatch", "three_import_map_injected")
+_RECORD_REPORT_KEYS = ("network_blocked", "network_attempts", "network_blocked_scripts",
+                       "libraries_inlined", "html_bytes", *LIB_LANE_KEYS)
+
+
+def _apply_record_result(entry: BenchEntry, result: dict) -> None:
+    """Store one /record response on the entry. A response without the
+    network fields (a sidecar older than the block) removes earlier values
+    instead of keeping them, so an entry never claims a block its current
+    recording did not have."""
+    entry.video_path = result.get("video_path")
+    entry.screenshot_path = result.get("screenshot_path")
+    metrics = {k: v for k, v in (entry.metrics or {}).items() if k not in _RECORD_REPORT_KEYS}
+    for key in _RECORD_REPORT_KEYS:
+        if key in result:
+            metrics[key] = result[key]
+    metrics["recorded_at"] = datetime.now(timezone.utc).isoformat()
+    entry.metrics = metrics
+
+
 async def maybe_advance(session: AsyncSession, challenge_id: uuid.UUID) -> None:
     """Advance once every entry finished generating.
 
@@ -1024,6 +1639,11 @@ async def maybe_advance(session: AsyncSession, challenge_id: uuid.UUID) -> None:
     """
     challenge = await session.get(BenchChallenge, challenge_id)
     if challenge is None or challenge.status != "generating":
+        return
+    if (challenge.protocol_version or "v0") == "v1":
+        # Bench W1 tests are driven by the W1 runner (w1_runner.run_test):
+        # it records only run 1 and composes with the W1 templates. The
+        # legacy all-entries render would record every repetition.
         return
     entries = (
         await session.exec(
@@ -1182,7 +1802,8 @@ async def retire_blocked_entry_task(
 async def reconcile_challenge(
     session: AsyncSession, challenge: BenchChallenge, entries: list[BenchEntry]
 ) -> None:
-    """GET-time fallback sweep: agent tasks that ended in `failed` or
+    """Fallback sweep for one challenge (run by reconcile_open_challenges in
+    the background, never from a GET): agent tasks that ended in `failed` or
     `aborted` never fire the task_done hook — mark their entries failed so
     nothing hangs silently (spec §7, lesson from the Grok review: uncaught
     -> eternal in_progress; `aborted` added 2026-10-19). If such a task is
@@ -1197,12 +1818,21 @@ async def reconcile_challenge(
 
     Also self-heals entries whose task was deleted (FK SET NULL on
     tasks.id): task_id=None means the task_done hook can never fire for that
-    entry again, so it would otherwise hang at `generating` forever."""
+    entry again, so it would otherwise hang at `generating` forever.
+
+    Direct-API (Spark) entries: `generating` without a live run in this
+    process means a restart cut the run off — marked failed (retryable)."""
     from app.models.task import Task
 
     changed = False
     for entry in entries:
-        if entry.status != "generating" or entry.source_kind != "agent":
+        if entry.status != "generating":
+            continue
+        if entry.source_kind == "spark":
+            if await _heal_interrupted_spark_entry(session, entry):
+                changed = True
+            continue
+        if entry.source_kind != "agent":
             continue
         if entry.task_id is None:
             entry.status = "failed"
@@ -1221,6 +1851,92 @@ async def reconcile_challenge(
         await maybe_advance(session, challenge.id)
 
 
+async def _heal_interrupted_spark_entry(session: AsyncSession, entry: BenchEntry) -> bool:
+    """A `generating` direct-API entry no run in this process owns was cut
+    off by a restart — mark it failed so the challenge moves on and the
+    Spark counts as idle again. Re-read first: the run may have finished
+    since the sweep loaded the row (it leaves the in-flight set only after
+    its final write)."""
+    if spark_run_in_flight(entry.id):
+        return False
+    await session.refresh(entry)
+    if entry.status != "generating" or spark_run_in_flight(entry.id):
+        return False
+    entry.status = "failed"
+    entry.error = SPARK_RUN_INTERRUPTED
+    session.add(entry)
+    logger.info("bench sweep: spark entry %s had no live run — marked failed", entry.id)
+    return True
+
+
+# ── Background orphan sweep (W0.8) ────────────────────────────────────────
+# reconcile_challenge used to run only inside GET /challenges/{id}: a GET
+# that wrote, and a list that never healed. Three challenges sat at
+# `generating` from 19.10. on because their tasks were deleted and nobody
+# opened them. The sweep below runs in the vertical itself (registered via
+# hooks.background_loops, ADR-044) and keeps both GETs read-only.
+
+RECONCILE_INTERVAL_S = 60
+# Let the API finish booting before the first sweep (DB pool, other loops).
+RECONCILE_INITIAL_DELAY_S = 15
+
+
+async def reconcile_open_challenges() -> int:
+    """One sweep over every `generating` challenge (archived ones included:
+    archiving only hides a row, its state must still be honest). Each
+    challenge gets its own session, so one broken row never stops the rest.
+    Returns how many challenges left `generating` in this sweep."""
+    from app.database import engine
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        # W1 tests heal through the W1 runner (w1_runner.heal_after_restart):
+        # their agent runs are watched by the runner itself.
+        ids = (
+            await session.exec(
+                select(BenchChallenge.id).where(
+                    BenchChallenge.status == "generating",
+                    BenchChallenge.protocol_version != "v1",
+                )
+            )
+        ).all()
+
+    healed = 0
+    for challenge_id in ids:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            try:
+                challenge = await session.get(BenchChallenge, challenge_id)
+                if challenge is None or challenge.status != "generating":
+                    continue
+                entries = (
+                    await session.exec(
+                        select(BenchEntry).where(BenchEntry.challenge_id == challenge_id)
+                    )
+                ).all()
+                await reconcile_challenge(session, challenge, entries)
+                await session.refresh(challenge)
+                if challenge.status != "generating":
+                    healed += 1
+                    logger.info(
+                        "bench sweep: challenge %s -> %s", challenge_id, challenge.status
+                    )
+            except Exception:  # noqa: BLE001 — one bad row never stops the sweep
+                logger.exception("bench sweep: challenge %s reconcile failed", challenge_id)
+                await session.rollback()
+    return healed
+
+
+async def reconcile_loop() -> None:
+    """Runs reconcile_open_challenges every RECONCILE_INTERVAL_S until
+    cancelled. Errors are logged; the loop keeps going."""
+    await asyncio.sleep(RECONCILE_INITIAL_DELAY_S)
+    while True:
+        try:
+            await reconcile_open_challenges()
+        except Exception:  # noqa: BLE001 — a DB hiccup must not end the loop
+            logger.exception("bench sweep failed")
+        await asyncio.sleep(RECONCILE_INTERVAL_S)
+
+
 # ── Operator lifecycle: stop + artifact cleanup (2026-07-12) ───────────────
 
 STOPPED_BY_OPERATOR = "stopped by operator"
@@ -1234,7 +1950,7 @@ async def stop_challenge(
     Non-terminal entries (pending/generating) -> failed with a stop marker;
     rendered/generated entries keep their state. The challenge itself goes to
     `failed` (deliberate reuse: every existing gate — entry retry, rerender,
-    drafts — already treats `failed` correctly; a new "stopped" status would
+    the old draft path — already treats `failed` correctly; a new "stopped" status would
     have to be threaded through all of them for zero benefit).
 
     Open fleet tasks of stopped agent entries are stopped through the same
@@ -1377,6 +2093,9 @@ async def rerender_challenge(challenge_id: uuid.UUID) -> None:
                     e
                     for e in entries
                     if e.artifact_path and e.status in ("generated", "rendered", "failed")
+                    # A page kept at a time-limit stop is incomplete — it
+                    # must never be promoted to "generated" (ranked) here.
+                    and not (e.metrics or {}).get("incomplete_page")
                 ]
                 if not candidates:
                     challenge.status = "failed"
@@ -1504,8 +2223,7 @@ async def rerender_entry(entry_id: uuid.UUID, challenge_id: uuid.UUID) -> None:
 
                 try:
                     result = await record_entry(entry, challenge)
-                    entry.video_path = result.get("video_path")
-                    entry.screenshot_path = result.get("screenshot_path")
+                    _apply_record_result(entry, result)
                     entry.status = "rendered"
                     entry.error = None
                 except Exception as exc:  # noqa: BLE001

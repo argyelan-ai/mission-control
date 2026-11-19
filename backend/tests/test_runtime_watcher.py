@@ -14,7 +14,7 @@ from app.services.runtime_watcher import RuntimeWatcher
 
 def test_watcher_settings_and_keys_exist():
     assert settings.runtime_watcher_enabled is True
-    assert settings.runtime_watcher_interval == 90
+    assert settings.runtime_watcher_interval == 30  # was 90 until 2026-10-20
     assert RedisKeys.runtime_watcher_lock() == "mc:runtime-watcher:lock"
     assert RedisKeys.runtime_live("qwen-general") == "mc:runtime-live:qwen-general"
     assert RedisKeys.runtime_drift_candidate("x") == "mc:runtime-drift:x"

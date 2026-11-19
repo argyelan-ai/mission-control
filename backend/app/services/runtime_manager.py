@@ -31,6 +31,7 @@ import uuid
 from pathlib import Path
 import asyncio
 from shlex import quote as shlex_quote
+from urllib.parse import urlparse
 
 import asyncssh
 import httpx
@@ -479,11 +480,26 @@ def join_probe_url(endpoint: str, healthcheck_path: str) -> str:
     return base + path
 
 
+#: TCP connect limit of one HTTP probe — separate from the 5 s answer limit.
+#: A box that drops packets (asleep, off, unplugged) never refuses the
+#: connect; before this limit every probe to it waited the full 5 s, and the
+#: runtimes list, the agent page and every box's recipe list waited with it
+#: (round-2 user test, 23.10.2026: 5.1 s per list, 10.9 s for the Models
+#: tab). Measured the same day: a live box connects in 5–30 ms on the LAN,
+#: a cloud endpoint incl. TLS in ~170 ms — 2 s is still >10x headroom.
+_PROBE_CONNECT_TIMEOUT_S = 2.0
+_PROBE_TIMEOUT = httpx.Timeout(5.0, connect=_PROBE_CONNECT_TIMEOUT_S)
+
+
 async def _probe_http(endpoint: str, healthcheck_path: str) -> bool:
-    """Checks whether the runtime's HTTP endpoint responds."""
+    """Checks whether the runtime's HTTP endpoint responds.
+
+    A connected engine keeps the full 5 s to answer (a busy engine answers
+    late, not never); only the connect itself is cut short.
+    """
     url = join_probe_url(endpoint, healthcheck_path)
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT) as client:
             resp = await client.get(url)
             return resp.status_code == 200
     except Exception:
@@ -1537,12 +1553,15 @@ async def stop_ssh_process(runtime: dict, *, host: ResolvedHost | None = None) -
 # idle. These helpers are the flask_wol analogue to _ssh_run / DGX checks.
 
 
-async def _control_server_reachable(control_url: str) -> bool:
+async def _control_server_reachable(control_url: str, timeout: float = 3.0) -> bool:
     """True if the box's :5555 control server answers — i.e. the box is awake and
-    logged in (work-ready). Fails fast (3s) when the box is asleep."""
-    url = control_url.rstrip("/") + "/health"
+    logged in (work-ready). Fails fast (3s) when the box is asleep.
+
+    The one definition of "a flask_wol box is awake": host_liveness asks the
+    same question with a shorter limit for page loads (PR #971 review)."""
+    url = control_url.strip().rstrip("/") + "/health"
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(url)
             return resp.status_code == 200
     except Exception:
@@ -2034,6 +2053,12 @@ async def _free_exclusive_targets(
     stopped: list[str] = []
     for other, other_dict, other_host in live:
         logger.info("exclusive: stopping %s to free the box for %s", other.slug, slug)
+        # ADR-096 §11.1: "switched away" — durable, BEFORE the stop (the
+        # watcher may probe mid-stop), lifted only by a start of ``other``.
+        # The 1 h eviction marker below keeps its own job (auto-recovery).
+        await runtime_grace.mark_stop_intent(
+            other.slug, runtime_grace.INTENT_SWITCHED_AWAY, by=slug
+        )
         if _is_multi_box_instance(other) and (other.stop_command or "").strip():
             # Ein Verbund lebt auf mehreren Boxen; nur sein eigener Stopp-Befehl
             # kennt den Worker (ADR-077: das Rezept orchestriert seine zweite
@@ -2049,7 +2074,10 @@ async def _free_exclusive_targets(
         elif other.runtime_type == SSH_PROCESS_TYPE:
             result = await stop_ssh_process(other_dict, host=other_host)
         else:
-            result = await stop_runtime(other_dict, host=other_host)
+            result = await stop_runtime(
+                other_dict, host=other_host,
+                stop_intent=runtime_grace.INTENT_SWITCHED_AWAY, stop_by=slug,
+            )
 
         if not result.get("ok"):
             return {
@@ -2213,6 +2241,11 @@ async def start_runtime(
         # Someone chose THIS runtime again — a switch that stopped it earlier
         # no longer speaks for the operator.
         await runtime_grace.clear_evicted(slug)
+        # ADR-096 §11.1: the one place a stop intent ends — this runtime's
+        # own start. (Auto-recovery never reaches here with an intent set:
+        # the watcher refuses to recover a runtime MC stopped on purpose.)
+        await runtime_grace.clear_stop_intent(slug)
+    await runtime_grace.clear_death_record(slug)
 
     if is_docker or is_ssh_process:
         already = await already_running(runtime, host=host)
@@ -2228,6 +2261,16 @@ async def start_runtime(
             return {"ok": False, "message": exclusive["message"]}
 
     if is_docker or is_ssh_process:
+        # ADR-096 §11.2: from here on this row is the port's wanted holder
+        # until it answers — the grace marker below ends after 20 min, this
+        # one does not, so a start that never comes up ends in the plain
+        # alarm instead of silence. Not cleared when the call fails: the old
+        # engine is already gone then, and the dark port is an outage.
+        # It also closes the port's previous outage (one death / one alarm
+        # each): this start gets its own alarm if it never comes up.
+        await runtime_grace.mark_start_pending(
+            slug, grace_source, endpoint=runtime.get("endpoint")
+        )
         await runtime_grace.mark_switching(
             slug, runtime_grace.PHASE_LAUNCHING, grace_source
         )
@@ -2626,7 +2669,13 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
     return {"ok": False, "message": f"Unbekannter runtime_type: {runtime_type}"}
 
 
-async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
+async def stop_runtime(
+    runtime: dict,
+    *,
+    host: ResolvedHost | None = None,
+    stop_intent: str = runtime_grace.INTENT_OPERATOR_STOP,
+    stop_by: str | None = None,
+) -> dict:
     """Stops a runtime.
 
     vllm_docker / llamacpp_docker: docker stop via SSH
@@ -2636,6 +2685,16 @@ async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
     """
     runtime_type = runtime["runtime_type"]
     host = host or resolve_host_from_runtime_fields(runtime)
+    # ADR-096 §11.1: every stop MC issues (button, schedule, idle unload,
+    # eviction, restart) leaves a durable stop intent — the watcher never
+    # reads the silence that follows as an engine death, and auto-recovery
+    # never undoes it. Set BEFORE the stop so the first failed probe already
+    # sees it; only this runtime's own next start lifts it. A stop is also
+    # the operator's acknowledgement of an earlier death on the card.
+    # Registry dicts carry the slug as "id" (Runtime.to_registry_dict) —
+    # _grace_slug is the key every other grace marker uses.
+    await runtime_grace.mark_stop_intent(_grace_slug(runtime), stop_intent, by=stop_by)
+    await runtime_grace.clear_death_record(_grace_slug(runtime))
 
     if runtime_type == "lmstudio":
         lms_id = runtime.get("lms_identifier", "")
@@ -2749,7 +2808,16 @@ async def restart_runtime(
     """
     slug = _grace_slug(runtime)
     is_docker = runtime.get("runtime_type") in DOCKER_ENGINE_TYPES
+    if grace_source != runtime_grace.SOURCE_AUTO_RECOVERY:
+        # A restart is this runtime's own start (ADR-096 §11.1). The stop+start
+        # paths below set and lift the intent themselves; `docker restart`
+        # never passes stop_runtime, so it is lifted here.
+        await runtime_grace.clear_stop_intent(slug)
+    await runtime_grace.clear_death_record(slug)
     if is_docker:
+        await runtime_grace.mark_start_pending(
+            slug, grace_source, endpoint=runtime.get("endpoint")
+        )
         await runtime_grace.mark_switching(
             slug, runtime_grace.PHASE_LAUNCHING, grace_source
         )
@@ -2897,21 +2965,143 @@ async def _restart_runtime_impl(
     return {"ok": False, "message": f"Unbekannter runtime_type: {runtime_type}"}
 
 
-async def wake_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
-    """Wake a power_managed runtime's host via Wake-on-LAN.
+# The host-side wake watcher runs on every new file (WatchPaths) and at least
+# every 30 s (StartInterval) and retires each request at once. A request still
+# waiting after this long means nobody reads the folder: the helper is not
+# installed or not running (round-5 re-check L1 review, MUST 1).
+WAKE_HELPER_STALE_S = 120
+
+# The watcher's positive sign of life (round-7 re-check, L5): it touches this
+# file in the request folder on every run, also when nothing waits. The stale
+# request above is only a trace a dead helper MAY leave — an empty folder said
+# "Waking…" although nothing read it. Must match HEARTBEAT_NAME in the
+# wake watcher script under scripts/ (pinned by its watcher test).
+WAKE_HELPER_HEARTBEAT_NAME = "watcher.alive"
+# Three missed 30 s runs. Beyond that the helper stopped (or never ran).
+WAKE_HELPER_HEARTBEAT_S = 90
+
+
+def _stale_wake_request_age(wake_dir: Path) -> float | None:
+    """Age in seconds of the oldest request the watcher left waiting, if any."""
+    import time as _time
+
+    now = _time.time()
+    oldest: float | None = None
+    try:
+        for req in wake_dir.glob("*.request.json"):
+            try:
+                age = now - req.stat().st_mtime
+            except OSError:
+                continue
+            if age > WAKE_HELPER_STALE_S and (oldest is None or age > oldest):
+                oldest = age
+    except OSError:
+        return None
+    return oldest
+
+
+def _wake_helper_heartbeat_age(wake_dir: Path) -> float | None:
+    """Seconds since the watcher's last run — ``None`` when it never left one."""
+    import time as _time
+
+    try:
+        mtime = (wake_dir / WAKE_HELPER_HEARTBEAT_NAME).stat().st_mtime
+    except OSError:
+        return None
+    # A clock a little ahead of the host's (Docker VM) must not read as "old".
+    return max(0.0, _time.time() - mtime)
+
+
+# rule: R-wake-needs-helper-heartbeat - an empty folder said "Waking…" with no helper installed
+def _wake_helper_down(wake_dir: Path) -> tuple[str, str] | None:
+    """Why no helper reads ``wake_dir`` — ``(reason, German detail)`` — or None.
+
+    Two signals: no fresh heartbeat (the watcher does not run), else a request
+    nobody retired (it runs but cannot work the folder, e.g. no write access).
+    """
+    beat_age = _wake_helper_heartbeat_age(wake_dir)
+    if beat_age is None:
+        return "no_heartbeat", "kein Lebenszeichen"
+    if beat_age > WAKE_HELPER_HEARTBEAT_S:
+        return "heartbeat_stale", f"letztes Lebenszeichen vor {int(beat_age // 60)} min"
+    stale_age = _stale_wake_request_age(wake_dir)
+    if stale_age is not None:
+        return "request_waiting", f"eine Weck-Anfrage wartet seit {int(stale_age // 60)} min"
+    return None
+
+
+def _write_wake_request(*, slug: str, label: str, mac: str, ip: str | None) -> dict:
+    """Drop the Wake-on-LAN trigger file — the ONE wake path (runtime or host).
 
     The backend runs in Docker and cannot send an L2 broadcast magic packet, so
     it drops a trigger file into settings.wake_request_dir (under the ~/.mc host
     bind-mount). A launchd watcher on the Mac host picks it up and runs the wake
     script configured for the watcher. See the WoL host-helper docs.
 
+    The backend cannot see the watcher process, but it sees what the watcher
+    writes: its heartbeat ``WAKE_HELPER_HEARTBEAT_NAME`` (every run), and no
+    request left waiting longer than ``WAKE_HELPER_STALE_S``. If either is
+    missing, no request is written and the answer is ``ok: False,
+    helper_down: True`` plus a ``reason`` — "Waking…" for a box nobody wakes
+    would be false (round-5 L1 review, round-7 L5).
+    A request for the same box that is still fresh is left as it is: the wake
+    is already on its way, and rewriting it would hide its real age.
+    """
+    import datetime as _dt
+
+    safe_slug = re.sub(r"[^A-Za-z0-9._-]", "_", str(slug))
+    wake_dir = Path(settings.wake_request_dir)
+    down = _wake_helper_down(wake_dir)
+    if down is not None:
+        reason, why = down
+        logger.warning(
+            "Weck-Helfer läuft nicht (%s, %s in %s) — kein Wake für %s",
+            reason, why, wake_dir, slug,
+        )
+        return {
+            "ok": False,
+            "helper_down": True,
+            "reason": reason,
+            "message": f"Weck-Helfer auf dem Mac läuft nicht ({why}). "
+            f"{label} wurde nicht geweckt.",
+        }
+    pending = wake_dir / f"{safe_slug}.request.json"
+    if pending.exists():
+        return {
+            "ok": True,
+            "message": f"Wake-on-LAN für {label} ist schon unterwegs. "
+            "Box braucht ~1-2 Min bis erreichbar.",
+        }
+    payload = {
+        "slug": slug,
+        "mac": mac,
+        "ip": ip or settings.wol_lan_ip,
+        "broadcast": settings.wol_broadcast,
+        "requested_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+    }
+    try:
+        wake_dir.mkdir(parents=True, exist_ok=True)
+        target = pending
+        target.write_text(json.dumps(payload), encoding="utf-8")
+        logger.info("Wake-on-LAN Trigger geschrieben: %s (mac=%s)", target, mac)
+        return {
+            "ok": True,
+            "message": f"Wake-on-LAN ausgelöst für {label}. "
+            "Box braucht ~1-2 Min bis erreichbar.",
+        }
+    except Exception as e:
+        logger.error("Wake-Trigger schreiben fehlgeschlagen für %s: %s", slug, e)
+        return {"ok": False, "message": f"Konnte Wake-Trigger nicht schreiben: {e}"}
+
+
+async def wake_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
+    """Wake a power_managed runtime's host via Wake-on-LAN.
+
     host: resolved host (ADR-048) — registry values (power_managed, MAC, IP)
     take precedence, legacy runtime fields + settings remain as fallback.
 
     Returns {"ok": bool, "message": str}.
     """
-    import datetime as _dt
-
     if not (runtime.get("power_managed") or (host is not None and host.power_managed)):
         return {"ok": False, "message": "Runtime ist nicht power_managed — kein Wake-on-LAN."}
     mac = (
@@ -2923,33 +3113,37 @@ async def wake_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
         return {"ok": False, "message": "Keine wol_mac_address konfiguriert."}
 
     slug = runtime.get("slug") or runtime.get("id") or "runtime"
-    safe_slug = re.sub(r"[^A-Za-z0-9._-]", "_", str(slug))
-    payload = {
-        "slug": slug,
-        "mac": mac,
+    return _write_wake_request(
+        slug=str(slug),
+        label=str(runtime.get("display_name", slug)),
+        mac=mac,
         # Registry-first like mac above — the legacy runtime.host field is
         # still set for bound runtimes and must not override a host-row edit
         # (box moved, IP maintained in the hosts UI).
-        "ip": (host.ssh_host if host else None)
-        or runtime.get("host")
-        or settings.wol_lan_ip,
-        "broadcast": settings.wol_broadcast,
-        "requested_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
-    }
-    try:
-        wake_dir = Path(settings.wake_request_dir)
-        wake_dir.mkdir(parents=True, exist_ok=True)
-        target = wake_dir / f"{safe_slug}.request.json"
-        target.write_text(json.dumps(payload), encoding="utf-8")
-        logger.info("Wake-on-LAN Trigger geschrieben: %s (mac=%s)", target, mac)
-        return {
-            "ok": True,
-            "message": f"Wake-on-LAN ausgelöst für {runtime.get('display_name', slug)}. "
-            "Box braucht ~1-2 Min bis erreichbar.",
-        }
-    except Exception as e:
-        logger.error("Wake-Trigger schreiben fehlgeschlagen für %s: %s", slug, e)
-        return {"ok": False, "message": f"Konnte Wake-Trigger nicht schreiben: {e}"}
+        ip=(host.ssh_host if host else None) or runtime.get("host"),
+    )
+
+
+async def wake_host(host: ResolvedHost) -> dict:
+    """Wake a power-managed BOX via Wake-on-LAN — from its host row alone.
+
+    Round-5 re-check (L1): a box can carry ``power_managed`` on its host row
+    while none of its runtime rows does; waking must not need a runtime. Same
+    trigger file and watcher as ``wake_runtime`` (one wake path), keyed by the
+    host slug. The address is the box's SSH address, else its control server's.
+
+    Returns {"ok": bool, "message": str}.
+    """
+    if not host.power_managed:
+        return {"ok": False, "message": "Host ist nicht power_managed — kein Wake-on-LAN."}
+    mac = host.wol_mac_address or settings.wol_mac
+    if not mac:
+        return {"ok": False, "message": "Keine wol_mac_address konfiguriert."}
+    ip = host.ssh_host
+    if not ip and host.control_url:
+        ip = urlparse(host.control_url).hostname
+    slug = host.slug or (str(host.host_id) if host.host_id else "host")
+    return _write_wake_request(slug=slug, label=host.display_name or slug, mac=mac, ip=ip)
 
 
 # ── LM Studio Dynamic Model Discovery ────────────────────────────────────────

@@ -136,3 +136,68 @@ describe("phone action bar", () => {
     await waitFor(() => expect(screen.getByRole("tab", { name: "Timeline" })).toHaveAttribute("aria-selected", "true"));
   });
 });
+
+describe("phone action bar — the operator's review (round-2 Q5)", () => {
+  it("one Approve: the bar's waits (dimmed) until a reason is given", async () => {
+    mockApi();
+    renderBody(taskFixture({ status: "review", human_review_required: true }), { onBack: () => {} });
+    const bar = await screen.findByRole("toolbar", { name: "Actions" });
+    const main = await within(bar).findByTestId("detail-main-action");
+    expect(main).toHaveTextContent("Approve");
+    expect(main).toHaveAttribute("data-waiting", "true");
+
+    // the panel's own Approve steps aside on the phone (CSS below md)
+    const head = document.querySelector('[data-region="task-head"]') as HTMLElement;
+    expect((head.querySelector("button.main-action") as HTMLElement).className).toContain("max-md:hidden");
+
+    fireEvent.click(screen.getByRole("button", { name: "Tests passed" }));
+    await waitFor(() => expect(main).toHaveAttribute("data-waiting", "false"));
+  });
+});
+
+describe("a card in the operator's review keeps who delivered it (round-2 Q5)", () => {
+  it("the Agent property and the times name the delivery, not 'Unassigned / not dispatched'", async () => {
+    const rr = runRecordFixture();
+    mockApi({ runRecord: { ...rr, zeiten: { ...rr.zeiten, dispatched: null, abgeschlossen: null } } });
+    const delivered = new Date(Date.now() - 2 * 3600_000).toISOString();
+    renderBody(
+      taskFixture({ status: "review", human_review_required: true, delivered_by_agent_id: "agent-2", delivered_at: delivered }),
+      { agents: [agentFixture(), agentFixture({ id: "agent-2", name: "beta" })] },
+    );
+    const fact = await screen.findByTestId("fact-agent");
+    expect(fact).toHaveTextContent("beta (delivered)");
+    expect(fact).not.toHaveTextContent("Unassigned");
+    expect(await screen.findByText(/delivered 2 h/)).toBeInTheDocument();
+    expect(screen.queryByText(/not dispatched/)).toBeNull();
+  });
+});
+
+describe("task tabs on a narrow phone show that more sections exist (round-2 Q5, t4 N9)", () => {
+  it("a 'More sections' button scrolls the strip while tabs hide on the right", async () => {
+    mockApi();
+    const proto = HTMLElement.prototype;
+    const sw = Object.getOwnPropertyDescriptor(proto, "scrollWidth");
+    const cw = Object.getOwnPropertyDescriptor(proto, "clientWidth");
+    Object.defineProperty(proto, "scrollWidth", {
+      configurable: true,
+      get() { return (this as HTMLElement).getAttribute("role") === "tablist" ? 545 : 0; },
+    });
+    Object.defineProperty(proto, "clientWidth", {
+      configurable: true,
+      get() { return (this as HTMLElement).getAttribute("role") === "tablist" ? 390 : 0; },
+    });
+    try {
+      renderBody(taskFixture({ status: "done" }), { onBack: () => {} });
+      const more = await screen.findByRole("button", { name: "More sections" });
+      const strip = screen.getByRole("tablist");
+      const scrollBy = vi.fn();
+      (strip as HTMLElement & { scrollBy: typeof scrollBy }).scrollBy = scrollBy;
+      fireEvent.click(more);
+      expect(scrollBy).toHaveBeenCalledTimes(1);
+      expect(scrollBy.mock.calls[0][0].left).toBeGreaterThan(0);
+    } finally {
+      if (sw) Object.defineProperty(proto, "scrollWidth", sw);
+      if (cw) Object.defineProperty(proto, "clientWidth", cw);
+    }
+  });
+});

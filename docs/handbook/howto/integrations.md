@@ -123,6 +123,7 @@ lean default boot. Enable it in `.env`:
 
 ```bash
 COMPOSE_PROFILES=voice          # add ,browser for the Playwright sidecars
+                                # (offline host: also BENCH_FONTS_OPTIONAL=1)
 ```
 
 That brings up two services: a LiveKit server and the voice worker that joins

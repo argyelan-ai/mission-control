@@ -79,6 +79,14 @@ describe("deriveStateCard", () => {
     });
   });
 
+  it("in_progress → the last step is the run's, never the chat's reply (round-3 r1 S3)", () => {
+    const task = taskFixture({ status: "in_progress" });
+    const step = commentFixture({ comment_type: "progress", content: "Running the test suite", created_at: "2026-09-22T08:10:00Z" });
+    const reply = commentFixture({ id: "c-chat", comment_type: "chat_reply", content: "Still on step 2 as of 10:12", created_at: "2026-09-22T08:12:00Z" });
+    const card = deriveStateCard({ task, approvals: [], comments: [step, reply], runRecord: null });
+    expect(card).toMatchObject({ kind: "running", lastStep: "Running the test suite" });
+  });
+
   it("done → RESULT with resolution, PR fallback, evidence count and duration", () => {
     const task = taskFixture({ status: "done", pr_url: "https://example.test/pr/638", pr_number: 638 });
     const resolution = commentFixture({ comment_type: "resolution", content: "Fixed the scroll.\nAdded a test." });
@@ -116,6 +124,13 @@ describe("deriveStateCard", () => {
     const system = commentFixture({ id: "c3", author_type: "system", comment_type: "reflection", content: "auto", created_at: "2026-09-21T11:00:00Z" });
     const card = deriveStateCard({ task, approvals: [], comments: [note, reflection, system], runRecord: null });
     expect(card).toMatchObject({ kind: "result", resolution: "Merged and verified live.", resolutionIsFallback: true });
+  });
+
+  it("done without a resolution also falls back to an agent reviewer's approve note", () => {
+    const task = taskFixture({ status: "done" });
+    const approve = commentFixture({ comment_type: "review_approved", content: "Ship-ready, checked live.", created_at: "2026-09-21T09:00:00Z" });
+    const card = deriveStateCard({ task, approvals: [], comments: [approve], runRecord: null });
+    expect(card).toMatchObject({ kind: "result", resolution: "Ship-ready, checked live.", resolutionIsFallback: true });
   });
 
   it("done with a resolution uses it and is not a fallback", () => {

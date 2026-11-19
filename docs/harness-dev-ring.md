@@ -10,6 +10,13 @@ integrieren moechten."*
 Diese Datei ist die Handreichung dazu; der Wächter ist
 `backend/tests/test_harness_dev_ring.py` (zwei Richtungen, siehe dort).
 
+> **Where the declarations live (since 2026-11-02):** in the `ring` section of
+> [`docs/harness-matrix.json`](harness-matrix.json) — the one source that also
+> renders the per-harness overview [**harness-matrix.md**](harness-matrix.md)
+> (`python3 tools/render-harness-matrix.py`, guard
+> `backend/tests/test_harness_matrix.py`). Status words are English there:
+> `yes` = `da`, `no` = `fehlt-bewusst`, `open` = `offen`.
+
 ## Die Grundgesamtheit — gezählt, nicht geschätzt
 
 **Layer A — mechanische Dispatch-Ebene** (5). Was das System einem Agenten
@@ -52,7 +59,7 @@ Harnesses (HARNESS_CAPABILITIES, harness_compat.py:296-337) × zwei Orte =
 Fassung sind entfernt — `_decl()` nimmt die erste Zeile, ein Edit an einer
 Zweitkopie hätte still wirkungslos sein können). Der Wächter zählt die
 Spalten nach — „gefällt mir" ist dort kein Argument, nur
-`da`/`fehlt-bewusst`/`offen` + Beweis.
+`yes`/`no`/`open` (früher `da`/`fehlt-bewusst`/`offen`) + Beweis.
 
 **Registries sind gemeinsam bewacht** (Nacharbeit 16.09.): ein Harness, der
 nur in `HARNESSES` (runtimes.py iteriert die cli-bridge-Matrix darüber) oder
@@ -64,18 +71,19 @@ ssh-push-Claim wird gegen die **getrackte** Markierung
 Claim, wird der Test rot statt still grün (Nacharbeit: vacuous-in-CI
 geschlossen).
 
-## Matrix (Ist-Stand, Seed: claude/container)
+## Matrix (current state)
 
-| Fähigkeit | claude/container | sonstige Zellen |
-|-----------|------------------|-----------------|
-| dispatch-prompt … heartbeat-context | `da` (start-claude.sh; settings_extras=True harness_compat.py:303; poll.sh:180/:1615; statusLine) | **Wächter rot bis deklariert** — das ist gewollt: jede Zeile wird mit Fundstelle nachgezogen, nicht gebulldozed |
-| ssh-push | `fehlt-bewusst` (seit 2026-09-15, Recheck: credential-scope; Grund: agent credential ohne workflow scope, Fork-Gegenprobe identisch) | je Harness |
-| container-place | `da` (docker/mc-claude-agent/) | je Harness |
+The seed table that stood here (claude/container only) is replaced by the
+generated overview **[harness-matrix.md](harness-matrix.md)**: one column per
+harness, a dev-ring score per place, and the capability groups around it
+(runtime, task loop, MC chat, cross-harness comms, extensions, operations).
+Edit `docs/harness-matrix.json`, never the generated file.
 
-`fehlt` vs `unbelegt`: `fehlt-bewusst` trägt `since` + `recheck` und wird in
-Richtung 2 des Wächters **jederzeit neu abgeleitet** (Container-Claim gegen
-`docker/mc-<h>-agent/`, Scope-Claim gegen die Credential-Wirklichkeit). Ein
-`offen` ist eine offene Lücke mit Zähler — sichtbar, aber kein Mock-Beweis.
+`no` vs `open`: a `no` carries `since` + `recheck` and is **re-derived on every
+run** by direction 2 of the guard (container place against
+`compose_renderer.HARNESS_IMAGES`, host place against `HOST_ADAPTERS`, the
+scope claim against the credential marker). An `open` is a counted gap —
+visible, never a mock proof.
 
 ## Neuer Harness — die Schritte, jeder mit Beweis
 
@@ -84,7 +92,9 @@ Richtung 2 des Wächters **jederzeit neu abgeleitet** (Container-Claim gegen
    ersetzt nichts.
 1. **Registry-Einträge:** HARNESS_CAPABILITIES + (host) HOST_ADAPTERS bzw.
    (container) Image. → Der Wächter wird **sofort rot** (Richtung 1) und
-   listet die fehlenden Aussagen. Das ist die Arbeitsliste.
+   listet die fehlenden Aussagen. Das ist die Arbeitsliste — die Aussagen
+   gehören in `docs/harness-matrix.json` (Ring + neue Matrix-Spalte), danach
+   `python3 tools/render-harness-matrix.py`.
 2. **Layer A mechanisch:** Turn-Grenze + Signale + Heartbeat (Adapter bzw.
    poll.sh-Verdrahtung). Beweis je Stufe: Signal feuert im Container,
    detect_turn_state schaltet, ACK-Kette (§7a: Dispatch→ACK→Antwort, kein

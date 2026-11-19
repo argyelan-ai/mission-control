@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.services.visual_proof import (
+    _EVIDENCE_HOME,
     ALLOWED_EVIDENCE_ROOTS,
     ALLOWED_EXTENSIONS,
     MIN_SCREENSHOT_BYTES,
@@ -114,8 +115,17 @@ def test_arbitrary_absolute_path_rejected():
 
 
 def test_home_directory_file_rejected():
-    """File in home directory (but not in allowed root) → rejected."""
-    path = _create_valid_file(os.path.expanduser("~/Desktop"), "fake-evidence.png")
+    """File in the host home (but not in an allowed root) → rejected.
+
+    The host home is the one the validator itself uses (_EVIDENCE_HOME, from
+    HOME_HOST) — in tests the stand-in from conftest, never the real
+    ~/Desktop (this test wrote a 20 KB file there on every run)."""
+    desktop = os.path.join(_EVIDENCE_HOME, "Desktop")
+    real_home = os.path.realpath(os.path.expanduser("~"))
+    # Checked before the write: with the isolation broken this fails
+    # without touching the real home.
+    assert not os.path.realpath(desktop).startswith(real_home + os.sep), desktop
+    path = _create_valid_file(desktop, "fake-evidence.png")
     try:
         valid, reason = validate_evidence_file(path)
         assert valid is False

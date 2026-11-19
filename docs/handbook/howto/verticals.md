@@ -51,7 +51,13 @@ actual contract:
   hold the matching scope, which is how a vertical adds instructions to an
   agent's `TOOLS.md` without editing a core template.
 
-If the vertical is removed, both lists stay empty and the app boots unchanged.
+Further registries follow the same pattern (see `backend/app/verticals/hooks.py`),
+for example `completion_callback_skip_hooks` — async `(session, task) -> bool`;
+return `True` for your own tasks when your vertical handles their follow-up
+itself, and the board lead gets no completion callback for them. A raising
+predicate counts as `False`, so the callback runs as before.
+
+If the vertical is removed, all lists stay empty and the app boots unchanged.
 
 ## Building one
 
@@ -62,6 +68,11 @@ The tutorial walks these steps with working code:
    API surface disappears when the vertical is stripped.
 2. Expose `register(app)` in the package `__init__.py`: include the router,
    append to the hook registries.
+   A vertical that needs a long-running job appends a zero-argument factory
+   to `background_loops`; the API lifespan starts each loop once at boot and
+   cancels it on shutdown (API process only, never the worker). The loop
+   handles its own errors; a factory that raises is logged and skipped.
+   `bench_studio` uses this for its orphan sweep.
 3. Add tests at the boundary — a router smoke test, a `register(app)` test
    proving routes and hooks land, and a core test that patches
    `app.verticals.hooks.task_done_hooks` rather than importing the vertical.

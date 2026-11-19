@@ -3,7 +3,11 @@
 # CDP (--cdp-endpoint, see docker-compose.yml), so no browser is downloaded and
 # the image is ~0.37 GB instead of the 1.7 GB of mcr.microsoft.com/playwright/mcp.
 # The npm version is pinned exactly; MCR had no image for it (newest v0.0.82).
-FROM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
+# Base pinned by version tag AND digest (the digest is what Docker uses; the
+# tag says which Node it is). 22.23.4 = the Node.js 2026-10-21 security
+# release. Refresh: `docker buildx imagetools inspect node:<ver>-bookworm-slim`
+# -> the top-level (multi-arch index) "Digest:".
+FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
 
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 NODE_ENV=production
 RUN npm install -g @playwright/mcp@0.0.83 && npm cache clean --force

@@ -10,6 +10,7 @@ import {
   AudioLines,
   ChevronLeft,
   ChevronRight,
+  FlaskConical,
   LayoutGrid,
   MessagesSquare,
   Mic,
@@ -23,6 +24,7 @@ import { C, alpha } from "@/lib/colors";
 import { sheetPages } from "@/lib/mobileNav";
 import type { NavItem } from "@/lib/nav";
 import { chatHref, type ChatRef } from "@/lib/recentChats";
+import { benchEnabled, benchTestHref } from "@/lib/benchLinks";
 import { CreateTaskModal } from "@/components/shared/CreateTaskModal";
 import { useVoiceContext } from "@/components/voice/VoiceWidget";
 import { useVoiceLiveCall } from "@/components/voice/live/VoiceLiveCall";
@@ -102,7 +104,8 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
  *   Level 1 (start something)        Level 2 „Pages" (go somewhere)
  *   ▶ New job          (primary)     ‹ Pages
  *   🎙 Voice command                   Used most: Runtimes · Agents · …
- *   💬 Continue with <last chat>      Others:    the rest, alphabetical
+ *   ⚗ Test a model     (bench W1)     Others:    the rest, alphabetical
+ *   💬 Continue with <last chat>
  *   ─────
  *   ▦ Pages ›
  *   ⚙ Settings ›   (board, account and log out live there on the phone)
@@ -121,6 +124,7 @@ export function QuickSheet() {
   const { activeBoardId } = useAppStore();
   const voice = useVoiceContext();
   const tVoice = useTranslations("voiceLive");
+  const tBench = useTranslations("benchHome.quick");
   // Since voice PR 5 the top-bar mic calls the lead agent; Jarvis (unchanged)
   // is this row then. With the live voice off the row stays as it was.
   const jarvisMoved = !!useVoiceLiveCall()?.lead;
@@ -297,6 +301,18 @@ export function QuickSheet() {
                       <RowBody icon={Mic} label={t("quick.voice")} hint={t("quick.voiceHint")} />
                     )}
                   </button>
+                  {/* Bench W1 P2: test the running model — the sheet fills in
+                      everything (subject = the most recently started runtime). */}
+                  {benchEnabled && (
+                    <Link
+                      href={benchTestHref({ trigger: "quick" })}
+                      onClick={close}
+                      className={`${rowClass} min-h-16 py-2`}
+                      data-testid="quick-bench-test"
+                    >
+                      <RowBody icon={FlaskConical} label={tBench("row")} hint={tBench("hint")} />
+                    </Link>
+                  )}
                   {lastChat && (
                     <Link
                       href={chatHref(lastChat.ref)}

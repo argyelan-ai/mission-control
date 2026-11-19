@@ -28,15 +28,148 @@ stderr is logged separately, never parsed.
 from __future__ import annotations
 
 import atexit
+import errno
 import json
 import logging
 import os
+import stat
 import subprocess
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 logger = logging.getLogger("acp_client")
+
+#: Where MC tells a container agent to put its results: the ADR-022 mount
+#: (``~/.mc/deliverables/<slug>:/deliverables``, compose_renderer) and the
+#: first path the backend accepts for a deliverable
+#: (``/deliverables/<task_id>/``, deliverable_paths.accepted_path_prefixes).
+#: The fs jail serves it next to the session cwd, so omp's write tool can put
+#: a result where the dispatch prompt asks for it. Only used when the folder
+#: exists — the host (Hermes) has no such mount and stays at the cwd.
+DEFAULT_DELIVERABLES_DIR = "/deliverables"
+
+#: Override for the deliverables root: one or more absolute folders,
+#: separated by ``os.pathsep``. Set but empty = no extra root (cwd only).
+DELIVERABLES_DIR_ENV = "MC_DELIVERABLES_DIR"
+
+#: The container's own scratch folder, served next to the session cwd and
+#: the deliverables root: its /tmp. omp's bash writes there anyway — the
+#: jail only kept its read/write tools out (a task in a worktree cwd, or a
+#: chat turn, writing a scratch file to /tmp). Same realpath check as every
+#: root: a link out of /tmp (to /etc, to ~/.omp, to the mounts /workspace,
+#: /workspace-ref or /vault) resolves outside and stays refused. /tmp lies
+#: on the container's own filesystem next to ~/.omp, so a file served only
+#: through a scratch root must also be a regular file with one link
+#: (:func:`_open_served`) — a hard link passes realpath.
+#:
+#: /workspace (``~/.mc/workspaces/<slug>:/workspace``, compose_renderer) is
+#: NOT a scratch root: a task's cwd is its own worktree there, and the jail
+#: is what keeps the file tools out of the main clone and the other tasks'
+#: worktrees next to it (wrong-checkout edits were refused 2026-09-14..18).
+#: A chat session already has /workspace itself as its cwd (acp_chat).
+#:
+#: Only served inside a container (:data:`CONTAINER_MARKER`): the host's
+#: /tmp is the whole machine's, so the host keeps cwd + deliverables.
+DEFAULT_SCRATCH_DIRS = ("/tmp",)
+
+#: Override for the scratch roots: one or more absolute folders, separated
+#: by ``os.pathsep`` — used as given, in a container or not. Set but empty
+#: = no scratch root.
+SCRATCH_DIRS_ENV = "MC_FS_SCRATCH_DIRS"
+
+#: The file Docker puts into every container (backend nodes.py uses the
+#: same test). Without it :data:`DEFAULT_SCRATCH_DIRS` is not served.
+CONTAINER_MARKER = "/.dockerenv"
+
+
+def _usable_roots(candidates: Iterable[str], kind: str = "deliverables") -> tuple[str, ...]:
+    """realpath of every candidate that is an absolute, existing folder.
+
+    Stored resolved, so the jail compares final paths with final paths. The
+    filesystem root is refused: it would open every path on the box.
+    """
+    roots: list[str] = []
+    for raw in candidates:
+        cand = raw.strip()
+        if not cand:
+            continue
+        if not os.path.isabs(cand):
+            logger.warning("fs jail: ignoring relative %s root %r", kind, cand)
+            continue
+        real = os.path.realpath(cand)
+        if real == os.path.realpath(os.sep):
+            logger.warning("fs jail: refusing %r as a %s root", cand, kind)
+            continue
+        if os.path.isdir(real) and real not in roots:
+            roots.append(real)
+    return tuple(roots)
+
+
+def deliverables_roots(environ: Optional[Mapping[str, str]] = None) -> tuple[str, ...]:
+    """The deliverables folder(s) the fs jail serves besides the session cwd.
+
+    ``MC_DELIVERABLES_DIR`` when set, else :data:`DEFAULT_DELIVERABLES_DIR`.
+    """
+    env = os.environ if environ is None else environ
+    raw = env.get(DELIVERABLES_DIR_ENV)
+    if raw is None:
+        return _usable_roots([DEFAULT_DELIVERABLES_DIR])
+    return _usable_roots(raw.split(os.pathsep))
+
+
+def scratch_roots(environ: Optional[Mapping[str, str]] = None) -> tuple[str, ...]:
+    """The scratch folders the fs jail serves besides the session cwd.
+
+    ``MC_FS_SCRATCH_DIRS`` when set, else :data:`DEFAULT_SCRATCH_DIRS` —
+    those only inside a container, and only the ones that exist.
+    """
+    env = os.environ if environ is None else environ
+    raw = env.get(SCRATCH_DIRS_ENV)
+    if raw is not None:
+        return _usable_roots(raw.split(os.pathsep), "scratch")
+    if not os.path.exists(CONTAINER_MARKER):
+        return ()
+    return _usable_roots(DEFAULT_SCRATCH_DIRS, "scratch")
+
+
+class _FsRefused(Exception):
+    """A path the jail lets through, but whose file it will not serve."""
+
+
+def _open_served(path: str, real: str, flags: int, single_link: bool) -> int:
+    """Open ``real`` (already checked against the roots) for one fs request.
+
+    Opened without waiting (``O_NONBLOCK``) and kept only when it is a
+    regular file: the request is answered on the ACP reader thread, and a
+    FIFO would block it with no reply. ``single_link`` (a file served only
+    through a scratch root): a file with more than one link is refused —
+    /tmp shares the container's filesystem with ~/.omp, and a hard link
+    into /tmp passes the realpath check. Nothing is truncated here, so a
+    refused write leaves the file as it was.
+    """
+    try:
+        fd = os.open(real, flags | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0), 0o666)
+    except OSError as exc:
+        if exc.errno == errno.ENXIO:  # a FIFO opened for writing, no reader
+            raise _FsRefused(f"path {path!r} is not a regular file") from exc
+        raise
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise _FsRefused(f"path {path!r} is not a regular file")
+        if single_link and st.st_nlink > 1:
+            raise _FsRefused(
+                f"path {path!r} has {st.st_nlink} hard links; a file in a scratch "
+                "folder is only served with one")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _inside(real: str, root: str) -> bool:
+    return real == root or real.startswith(root + os.sep)
 
 # Permission shortcuts -> optionId omp understands ($ys map in omp's
 # permission handler). Option ids come from the request's `options` list, so
@@ -112,6 +245,13 @@ class ACPClient:
         self._command = command or default_command()
         self._cwd = cwd
         self._fs_jail: Optional[str] = None  # realpath(cwd) — fs/* restricted here (Review #464 Major)
+        # Served too once a session exists: the deliverables root(s) and,
+        # in a container, the scratch root /tmp — read here once (the
+        # mounts are there from container start). Kept apart: a file served
+        # only through a scratch root gets the one-link check.
+        self._fs_deliverables_roots: tuple[str, ...] = deliverables_roots()
+        self._fs_scratch_roots: tuple[str, ...] = tuple(
+            root for root in scratch_roots() if root not in self._fs_deliverables_roots)
         self._env = env
         self._proc: Optional[subprocess.Popen] = None
         self._reader: Optional[threading.Thread] = None
@@ -297,46 +437,105 @@ class ACPClient:
         return choice
 
     def _handle_fs_request(self, msg: dict) -> None:
+        """Answer one fs/* request with exactly one reply.
+
+        omp waits for this answer; the reader loop only logs an exception
+        and sends nothing, so an unanswered request would hang the tool call.
+        Whatever breaks (a file that is not UTF-8, a NUL byte in the path,
+        params of the wrong shape) becomes an error reply instead — omp then
+        falls back to its own disk access.
+        """
         rid = msg["id"]
-        params = msg.get("params") or {}
         method = msg.get("method", "")
+        try:
+            reply = self._fs_reply(method, msg.get("params") or {})
+        except Exception as exc:  # noqa: BLE001 — one reply per request, whatever broke
+            logger.warning("fs request %s failed: %s: %s", method, type(exc).__name__, exc)
+            reply = {"error": {"code": -32000, "message": str(exc) or type(exc).__name__}}
+        self._send_raw({"jsonrpc": "2.0", "id": rid, **reply})
+
+    def _fs_reply(self, method: str, params: Any) -> dict:
+        """The reply body (``result`` or ``error``) for one fs/* request."""
+        if method not in ("fs/read_text_file", "fs/write_text_file"):
+            return {"error": {"code": -32601, "message": f"unhandled {method}"}}
         # Review #464 Major: fs/read_text_file + fs/write_text_file are
-        # restricted to the session's realpath(cwd). A symlink or `..`
-        # escape resolves through realpath, so the check is on the FINAL
-        # path, not the textual one. No jail (no session yet) -> reject.
+        # restricted to the session's realpath(cwd) plus the extra roots
+        # (/deliverables, and in a container the scratch root /tmp). A
+        # symlink or `..` escape resolves through realpath, so the check is
+        # on the FINAL path, not the textual one — out of the cwd and out of
+        # every extra root alike. No jail (no session yet) -> reject,
+        # whatever the extra roots are.
         jail = self._fs_jail
         path = params.get("path")
-        if method in ("fs/read_text_file", "fs/write_text_file"):
-            if not jail or not isinstance(path, str) or not path:
-                self._send_raw({"jsonrpc": "2.0", "id": rid,
-                                "error": {"code": -32002,
-                                          "message": "fs request before session/new (no cwd jail)"}})
-                return
-            real = os.path.realpath(path)
-            if real != jail and not real.startswith(jail + os.sep):
-                self._send_raw({"jsonrpc": "2.0", "id": rid,
-                                "error": {"code": -32002,
-                                          "message": f"path {path!r} outside session cwd {jail!r}"}})
-                return
+        if not jail or not isinstance(path, str) or not path:
+            return {"error": {"code": -32002,
+                              "message": "fs request before session/new (no cwd jail)"}}
+        real = os.path.realpath(path)
+        if _inside(real, jail) or any(_inside(real, root)
+                                      for root in self._fs_deliverables_roots):
+            scratch_only = False
+        elif any(_inside(real, root) for root in self._fs_scratch_roots):
+            scratch_only = True
+        else:
+            return {"error": {"code": -32002,
+                              "message": self._fs_outside_message(path, jail)}}
+        if method == "fs/read_text_file":
+            try:
+                fd = _open_served(path, real, os.O_RDONLY, scratch_only)
+            except _FsRefused as exc:
+                return {"error": {"code": -32002, "message": str(exc)}}
+            with os.fdopen(fd, "r", encoding="utf-8") as f:
+                return {"result": {"content": f.read()}}
+        content = params.get("content", "")
+        if not isinstance(content, str):
+            return {"error": {"code": -32602,
+                              "message": "fs/write_text_file: content must be a string"}}
+        # Encode first: text that is no valid UTF-8 (a lone surrogate passes
+        # json.loads) fails here, before any folder or file is made.
+        data = content.encode("utf-8")
+        # The first file of a task goes to /deliverables/<task_id>/, a folder
+        # nobody made yet (and a new subfolder of the cwd, the same). `real`
+        # passed the check above and realpath leaves no `..` and no symlink
+        # in its missing tail, so every folder made here lies inside an
+        # allowed root.
+        os.makedirs(os.path.dirname(real), exist_ok=True)
         try:
-            if method == "fs/read_text_file":
-                with open(real, "r", encoding="utf-8") as f:
-                    self._send_raw({"jsonrpc": "2.0", "id": rid,
-                                    "result": {"content": f.read()}})
-            elif method == "fs/write_text_file":
-                with open(real, "w", encoding="utf-8") as f:
-                    f.write(params.get("content", ""))
-                self._send_raw({"jsonrpc": "2.0", "id": rid, "result": {}})
-            else:
-                self._send_raw({"jsonrpc": "2.0", "id": rid,
-                                "error": {"code": -32601,
-                                          "message": f"unhandled {method}"}})
-        except OSError as exc:
-            self._send_raw({"jsonrpc": "2.0", "id": rid,
-                            "error": {"code": -32000, "message": str(exc)}})
+            fd = _open_served(path, real, os.O_WRONLY | os.O_CREAT, scratch_only)
+        except _FsRefused as exc:
+            return {"error": {"code": -32002, "message": str(exc)}}
+        with os.fdopen(fd, "wb") as f:
+            f.truncate(0)  # only now: a refused file keeps its content
+            f.write(data)
+        return {"result": {}}
+
+    def _fs_outside_message(self, path: str, jail: str) -> str:
+        """The refusal for a path outside every root. It names the folders
+        the model may use instead, each for what it is for: results go to
+        the deliverables root (MC collects them there), /tmp is scratch.
+        The first words stay "path ... outside session cwd ..." — transcript
+        scans of the refusals match on them."""
+        message = f"path {path!r} outside session cwd {jail!r}"
+        if self._fs_deliverables_roots:
+            message += "; results go to " + " or ".join(
+                repr(os.path.join(root, "<task_id>") + os.sep)
+                for root in self._fs_deliverables_roots)
+        if self._fs_scratch_roots:
+            message += ("; scratch only (MC never collects it, and /tmp is "
+                        "wiped on every container recreate): " + ", ".join(
+                            repr(root) for root in self._fs_scratch_roots))
+        return message
 
     def _send_raw(self, obj: dict) -> None:
-        proc = self._ensure_process()
+        # The first write may start the child. A child that already ran and
+        # exited is NOT replaced here: a fresh `omp acp` has no initialize
+        # and no loaded session, so the next session/prompt would only get
+        # "Resource not found". The caller sees the exit and reconnects
+        # (ChatSession._restart_child -> session/load).
+        proc = self._proc
+        if proc is None:
+            proc = self._ensure_process()
+        elif proc.poll() is not None:
+            raise ACPError(f"omp acp child exited (code {proc.returncode})")
         assert proc.stdin
         data = json.dumps(obj)
         with self._writer_lock:
@@ -417,7 +616,9 @@ class ACPClient:
         self.last_session_result = result
         # Review #464 Major: fs/read_text_file + fs/write_text_file are
         # jailed to the session's realpath(cwd) — the child must never read
-        # or write outside the working directory it was granted.
+        # or write outside the working directory it was granted, except in
+        # the deliverables root MC itself sends it to and the container's
+        # own scratch folder (_fs_deliverables_roots, _fs_scratch_roots).
         try:
             self._fs_jail = os.path.realpath(cwd)
         except OSError:

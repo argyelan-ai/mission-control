@@ -14,7 +14,7 @@
  * TerminalPanel's xterm/WebSocket machinery is out of scope here (it's a
  * verbatim move covered by its own future test surface / manual live-gate).
  */
-import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -25,12 +25,17 @@ import {
   ACTIVITY_GROUP_MIN_SIZE,
   headerSideReservation,
   MOBILE_HEADER_METRICS,
+  FIRST_STATE_GRACE_MS,
 } from "./ChatView";
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
+import { useHeadTranscript } from "@/hooks/useHeadTranscript";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { mkRun } from "@/lib/__tests__/headFixtures";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import type { AgentWithState } from "./TerminalPanel";
 import type { MessageEvent, PreviewEvent, SubagentRun, ThinkingEvent, TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
+import { C } from "@/lib/colors";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,13 +51,34 @@ const GLOBALS_CSS = readFileSync(
 );
 
 /** Der sichtbare Kreis IM Knopf (der Knopf selbst ist die Trefferflaeche). */
+/** The PHONE header button with this label. Since ADR-099 the desktop
+ *  header has its own ⋯ ("Chat options") next to it in the DOM; the two never
+ *  show at once (`md:hidden` / `hidden md:flex`). */
+function phoneLabeled(label: string): HTMLElement {
+  const all = screen.getAllByLabelText(label);
+  return all.find((el) => el.className.includes("md:hidden")) ?? all[0];
+}
 function circleOf(label: string): HTMLElement {
-  const el = screen.getByLabelText(label).firstElementChild;
+  const el = phoneLabeled(label).firstElementChild;
   if (!(el instanceof HTMLElement)) throw new Error(`kein Kreis in "${label}"`);
   return el;
 }
 
 vi.mock("@/hooks/useChatStream", () => ({ useChatStream: vi.fn() }));
+// The task block (20.10.2026) asks the backend on its own — stubbed, so these
+// tests keep running without a QueryClientProvider.
+// Task sections (spec A) ask the backend through react-query — stubbed here
+// (no agent in this file is an omp agent; ChatView.tasks.test.tsx covers them
+// with a real QueryClient).
+vi.mock("@/hooks/useChatTasks", () => ({ useChatTasks: vi.fn(() => ({ data: null, settled: false, error: false })) }));
+vi.mock("@/hooks/useTaskSteps", () => ({ useTaskSteps: vi.fn(() => new Map()) }));
+// The live thinking row asks the engine once it is quiet (31.10.2026) —
+// stubbed "not busy"; LiveThinkingRow.test.tsx covers it with a real client.
+vi.mock("@/hooks/useEngineActivity", () => ({ useEngineBusy: vi.fn(() => false) }));
+// The header's "N reachable" (ADR-100 2d) asks the directory through
+// react-query — stubbed "unknown" (nothing shown); one test below sets rows.
+const directoryMock = vi.hoisted(() => ({ data: undefined as unknown, isError: false }));
+vi.mock("@/hooks/useCommsDirectory", () => ({ useCommsDirectory: vi.fn(() => directoryMock) }));
 // Heads-in-Chats (PR 2) branch: no test in this file passes a `head` prop
 // (that's ChatView.head.test.tsx's job), but every render still calls this
 // hook unconditionally (rules of hooks) — mocked the same way
@@ -267,6 +293,7 @@ const THINKING: ThinkingEvent = {
 };
 
 const noop = () => {};
+const LIVE_LABEL = "Live — working right now";
 
 // ── Grouping logic ─────────────────────────────────────────────────────────
 // Pure function, tested directly: the render tests below only need to prove
@@ -641,14 +668,11 @@ describe("ChatView", () => {
     expect(screen.queryByRole("button", { name: "Compact" })).not.toBeInTheDocument();
   });
 
-  it("shows the detail-level switcher in chat mode", () => {
-    // Seit 19.08.2026 ist der Umschalter EIN Knopf mit Klappliste statt drei
-    // Segmenten (Operator-Wunsch, Kopfzeile entlasten). Die Stufen sind erst
-    // nach dem Klick da — die Abdeckung dafuer steht in
-    // "Desktop-Kopfzeile — Detailgrad eingeklappt".
+  it("offers the detail level behind the desktop ⋯ in chat mode, not in the header (ADR-099 E1)", () => {
     mockUseChatStream.mockReturnValue(mkStream());
     renderChatView({ centerView: "chat" });
-    expect(screen.getByTestId("detail-level-trigger")).toBeInTheDocument();
+    expect(screen.queryByTestId("detail-level-trigger")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-options-desktop")).toBeInTheDocument();
   });
 
   it("no-transcript agents force terminal mode and disable the Chat segment", () => {
@@ -683,7 +707,7 @@ describe("ChatView", () => {
 
     expect(screen.getByText("Hallo!")).toBeInTheDocument();
     expect(screen.queryByText("Read foo.py")).not.toBeInTheDocument();
-    expect(screen.queryByText("Denkt nach…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Thought")).not.toBeInTheDocument();
     // No group chip either — Kompakt hides the activity entirely, it doesn't
     // trade a wall of rows for a wall of chips.
     expect(screen.queryByTestId("tool-group")).not.toBeInTheDocument();
@@ -702,11 +726,11 @@ describe("ChatView", () => {
     const chip = screen.getByRole("button", { name: /tool used/ });
     expect(chip).toHaveTextContent(/thought/);
     expect(screen.queryByText("Read foo.py")).not.toBeInTheDocument();
-    expect(screen.queryByText("Denkt nach…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Thought")).not.toBeInTheDocument();
 
     await user.click(chip);
     expect(screen.getByText("Read foo.py")).toBeInTheDocument();
-    expect(screen.getByText("Denkt nach…")).toBeInTheDocument();
+    expect(screen.getByText("Thought")).toBeInTheDocument();
     // Rows themselves are still collapsed at Normal — that's Ausführlich's job.
     expect(screen.queryByText(/file_path/)).not.toBeInTheDocument();
   });
@@ -733,8 +757,8 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ onDetailLevelChange: onChange });
 
-    await user.click(screen.getByTestId("detail-level-trigger"));
-    await user.click(screen.getByRole("option", { name: "Verbose" }));
+    await user.click(screen.getByTestId("chat-options-desktop"));
+    await user.click(screen.getByRole("menuitemradio", { name: "Verbose" }));
     expect(onChange).toHaveBeenCalledWith("verbose");
   });
 
@@ -1185,7 +1209,15 @@ describe("ChatView", () => {
       expect(screen.getByRole("button", { name: /Jump to bottom/ })).not.toHaveTextContent(/new/);
 
       mockUseChatStream.mockReturnValue(
-        mkStream({ events: [MSG, mkMsg({ uuid: "n1", text: "Neu 1" }), mkMsg({ uuid: "n2", text: "Neu 2" })] })
+        // New = a NEWER time than the newest entry when following stopped
+        // (spec A S7) — no longer a count difference.
+        mkStream({
+          events: [
+            MSG,
+            mkMsg({ uuid: "n1", text: "Neu 1", ts: "2026-08-15T10:01:00Z" }),
+            mkMsg({ uuid: "n2", text: "Neu 2", ts: "2026-08-15T10:02:00Z" }),
+          ],
+        })
       );
       rerender(
         <ChatView agent={mkAgent()} hasTranscript detailLevel="normal" onDetailLevelChange={noop} centerView="chat" onCenterViewChange={noop} />
@@ -1239,7 +1271,7 @@ describe("ChatView", () => {
     renderChatView();
 
     expect(screen.queryByTestId("chat-options-sheet")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Chat options" }));
+    await user.click(phoneLabeled("Chat options"));
     expect(screen.getByTestId("chat-options-sheet")).toBeInTheDocument();
   });
 
@@ -1248,7 +1280,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ hasTranscript: false, centerView: "chat" });
 
-    await user.click(screen.getByRole("button", { name: "Chat options" }));
+    await user.click(phoneLabeled("Chat options"));
     expect(screen.getByRole("radio", { name: /Chat/ })).toBeDisabled();
     expect(screen.getByRole("radio", { name: /Terminal/ })).toHaveAttribute("aria-checked", "true");
   });
@@ -1396,6 +1428,31 @@ describe("ChatView", () => {
     );
   });
 
+  it("zeigt einen laufenden Gedanken als Denkzeile, nicht als Antwort-Vorschau", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [MSG],
+        state: { kind: "state", status: "working", prompt: null },
+        preview: {
+          kind: "preview", uuid: null, ts: "2026-10-20T09:00:00Z", source: "acp",
+          text: "Plan: erst lesen.", block: "thinking", chars: 400, startedAt: "2026-10-20T08:59:00Z",
+        },
+      })
+    );
+    renderChatView();
+    expect(screen.queryByTestId("preview-row")).not.toBeInTheDocument();
+    const row = screen.getByTestId("live-thinking");
+    expect(row).toHaveTextContent("Thinking");
+    expect(row).toHaveTextContent("≈100 tokens");
+    expect(screen.getByText("Hallo!").compareDocumentPosition(row)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  // The old "From the task" block is gone (unmounted since #937, removed):
+  // spec A shows the task's steps as sections in the timeline instead —
+  // covered by ChatView.tasks.test.tsx ("never renders the old task block").
+
   it("deckelt die ACP-Vorschau in der Hoehe, damit nichts springt", () => {
     mockUseChatStream.mockReturnValue(
       mkStream({
@@ -1496,8 +1553,8 @@ describe("ChatView", () => {
     // beweisen das, ohne die Bedienung nachzubauen (die testet Composer selbst).
     const slider = screen.getByTestId("effort-slider");
     expect(slider).toHaveAttribute("max", "2");
-    expect(screen.getByTestId("effort-menu")).toHaveTextContent("low");
-    expect(screen.getByTestId("effort-menu")).toHaveTextContent("max");
+    expect(screen.getByTestId("effort-menu")).toHaveTextContent("Low");
+    expect(screen.getByTestId("effort-menu")).toHaveTextContent("Max");
   });
 
   // ── Queued / starting echoes ──────────────────────────────────────────────
@@ -1852,14 +1909,21 @@ describe("ChatView", () => {
 
   // ── Session badge semantics ───────────────────────────────────────────────
 
-  it('shows the "live" badge for an active session', () => {
+  it('shows an active session as a green dot before the name, not the word "live" (ADR-099)', () => {
     mockUseChatStream.mockReturnValue(
       mkStream({ session: { sessionId: "s1", live: true, startedAt: null, aliveness: "active" } })
     );
     renderChatView();
     const badge = screen.getByTestId("session-badge");
     expect(badge).toHaveAttribute("data-aliveness", "active");
-    expect(badge).toHaveTextContent("live");
+    // No word — the meaning lives in the spoken label and the tooltip (i18n).
+    expect(badge).toHaveTextContent("");
+    expect(badge).toHaveAttribute("aria-label", LIVE_LABEL);
+    expect(badge).toHaveAttribute("title", LIVE_LABEL);
+    expect(badge.style.background).toBe(C.online);
+    // It belongs to the name, not to the button group on the right.
+    expect(screen.getByTestId("chat-header-title")).toContainElement(badge);
+    expect(screen.queryByText("live")).not.toBeInTheDocument();
   });
 
   it("shows no alarming word for an IDLE session — only a quiet dot", () => {
@@ -1870,15 +1934,18 @@ describe("ChatView", () => {
     const badge = screen.getByTestId("session-badge");
     expect(badge).toHaveAttribute("data-aliveness", "idle");
     expect(badge).toHaveTextContent("");
-    expect(screen.queryByText("beendet")).not.toBeInTheDocument();
+    expect(screen.queryByText("ended")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-header-title")).toContainElement(badge);
   });
 
-  it('keeps "beendet" for a session the server actually calls ended', () => {
+  it('keeps "ended" as a word for a session the server actually calls ended — from the catalog', () => {
     mockUseChatStream.mockReturnValue(
       mkStream({ session: { sessionId: "s1", live: false, startedAt: null, aliveness: "ended" } })
     );
     renderChatView();
-    expect(screen.getByTestId("session-badge")).toHaveTextContent("beendet");
+    // A warning stays a word (ADR-099); it used to be hard-wired German.
+    expect(screen.getByTestId("session-badge")).toHaveTextContent("ended");
+    expect(screen.getByTestId("chat-header-title")).not.toContainElement(screen.getByTestId("session-badge"));
     expect(
       screen.getByText("Session ended — a new message starts the next session")
     ).toBeInTheDocument();
@@ -1892,7 +1959,62 @@ describe("ChatView", () => {
     );
     renderChatView();
     expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "idle");
-    expect(screen.queryByText("beendet")).not.toBeInTheDocument();
+    expect(screen.queryByText("ended")).not.toBeInTheDocument();
+  });
+
+  it('says "live" only while the chat works — "Bereit" in the status line means the quiet dot (r1 NICE-2)', () => {
+    // Round-1 user test: right after a reply the header said "live" (transcript
+    // written < 60 s ago) while the status line already said "Bereit"; seconds
+    // later the same state showed the grey dot. One state, one sign.
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        session: { sessionId: "s1", live: true, startedAt: null, aliveness: "active" },
+        state: { kind: "state", status: "idle", prompt: null, aliveness: "active" },
+      })
+    );
+    const { unmount } = renderChatView();
+    expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "idle");
+    expect(screen.getByTestId("session-badge")).not.toHaveTextContent("live");
+    unmount();
+
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        session: { sessionId: "s1", live: true, startedAt: null, aliveness: "active" },
+        state: { kind: "state", status: "working", prompt: null, aliveness: "active" },
+      })
+    );
+    renderChatView();
+    expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "active");
+    expect(screen.getByTestId("session-badge")).toHaveAttribute("aria-label", LIVE_LABEL);
+  });
+
+  it('says "live" while a task turn runs, though the chat transcript is quiet (round-4 t1 NICE-4)', () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        session: { sessionId: "s1", live: false, startedAt: null, aliveness: "idle" },
+        state: { kind: "state", status: "task_working", prompt: null, aliveness: "idle" },
+      })
+    );
+    renderChatView();
+    expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "active");
+    expect(screen.getByTestId("session-badge")).toHaveAttribute("aria-label", LIVE_LABEL);
+  });
+
+  it('opens with a neutral "Loading…" until the first state — never "check the terminal" (round-4 t1 NICE-2)', () => {
+    vi.useFakeTimers();
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ state: null, connected: false }));
+      renderChatView();
+      expect(screen.getByTestId("status-label")).toHaveTextContent("Loading…");
+      expect(screen.queryByText(/check the terminal/)).not.toBeInTheDocument();
+      // A probe that never answers is a real unknown again after the grace.
+      act(() => {
+        vi.advanceTimersByTime(FIRST_STATE_GRACE_MS + 10);
+      });
+      expect(screen.getByTestId("status-label")).toHaveTextContent("Status unknown — check the terminal");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("follows the LIVE state frame over a stale history session (badge must not freeze)", () => {
@@ -1908,7 +2030,7 @@ describe("ChatView", () => {
     );
     renderChatView();
     expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "ended");
-    expect(screen.getByTestId("session-badge")).toHaveTextContent("beendet");
+    expect(screen.getByTestId("session-badge")).toHaveTextContent("ended");
   });
 
   it("offers a Send (not a Stop) on an idle session — the morph follows the agent, not the session", () => {
@@ -2003,88 +2125,108 @@ describe("ChatView", () => {
   // ══════════════════════════════════════════════════════════════════════════
 
 
-  describe("Desktop-Kopfzeile — Detailgrad eingeklappt", () => {
+  describe("Desktop-Kopfzeile — Detailgrad im ⋯-Menü (ADR-099 E1)", () => {
     beforeEach(() => {
       mockUseChatStream.mockReturnValue(mkStream());
     });
 
-    it("zeigt statt drei Segmenten einen Knopf mit dem aktuellen Wert", () => {
-      // Operator-Wunsch 19.08.2026: "diese viele buttons und switche rechts
-      // oben irgendwie verpacken". Der Detailgrad wird einmal eingestellt und
-      // selten angefasst — Chat/Terminal dagegen staendig, das bleibt offen.
-      renderChatView({ detailLevel: "normal" });
-      const trigger = screen.getByTestId("detail-level-trigger");
-      expect(trigger.textContent).toContain("Normal");
-      // Die anderen Stufen sind erst nach dem Klick da.
-      expect(screen.queryByRole("option", { name: "Compact" })).toBeNull();
-    });
-
-    it("beschriftet Knopf und Liste aus dem Katalog, nicht deutsch fest verdrahtet", async () => {
-      // Der Review-Befund zu PR #331: `aria-label="Detailgrad"` stand deutsch
-      // in der englischen Standard-Oberflaeche. Vorleseprogramme lesen genau
-      // dieses Label vor — es muss durch t() laufen wie jeder andere UI-Text
-      // (docs/i18n.md). Der Test rendert gegen messages/en.json.
+    it("steht nicht mehr im Kopf; ⋯ öffnet ihn, die Stufen erst nach dem Klick", async () => {
       const user = userEvent.setup();
-      renderChatView({ detailLevel: "verbose" });
-
-      expect(screen.getByTestId("detail-level-trigger")).toHaveAttribute(
-        "aria-label",
-        "Detail level: Verbose"
-      );
-      await user.click(screen.getByTestId("detail-level-trigger"));
-      expect(screen.getByRole("listbox")).toHaveAttribute("aria-label", "Detail level");
+      renderChatView({ detailLevel: "normal" });
+      expect(screen.queryByTestId("detail-level-trigger")).toBeNull();
+      expect(screen.queryByRole("menuitemradio", { name: "Compact" })).toBeNull();
+      const more = screen.getByTestId("chat-options-desktop");
+      expect(more).toHaveAttribute("aria-label", "Chat options");
+      expect(more).toHaveAttribute("aria-expanded", "false");
+      await user.click(more);
+      expect(more).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByRole("menu")).toHaveAccessibleName("Chat options");
+      expect(screen.getByRole("group", { name: "Detail level" })).toBeInTheDocument();
     });
 
-    it("oeffnet die Liste erst auf Klick und meldet die Wahl", async () => {
+    it("meldet die Wahl und schliesst das Menü", async () => {
       const onDetailLevelChange = vi.fn();
       const user = userEvent.setup();
       renderChatView({ detailLevel: "normal", onDetailLevelChange });
-
-      await user.click(screen.getByTestId("detail-level-trigger"));
-      await user.click(screen.getByRole("option", { name: "Verbose" }));
-
+      await user.click(screen.getByTestId("chat-options-desktop"));
+      await user.click(screen.getByRole("menuitemradio", { name: "Verbose" }));
       expect(onDetailLevelChange).toHaveBeenCalledWith("verbose");
+      expect(screen.queryByRole("menu")).toBeNull();
     });
 
     it("markiert die aktive Stufe fuer Vorleseprogramme", async () => {
       const user = userEvent.setup();
       renderChatView({ detailLevel: "compact" });
-
-      await user.click(screen.getByTestId("detail-level-trigger"));
-
-      expect(screen.getByRole("option", { name: "Compact" })).toHaveAttribute("aria-selected", "true");
-      expect(screen.getByRole("option", { name: "Normal" })).toHaveAttribute("aria-selected", "false");
+      await user.click(screen.getByTestId("chat-options-desktop"));
+      expect(screen.getByRole("menuitemradio", { name: "Compact" })).toHaveAttribute("aria-checked", "true");
+      expect(screen.getByRole("menuitemradio", { name: "Normal" })).toHaveAttribute("aria-checked", "false");
     });
 
-    it("lässt den Hover der Einträge wirklich durch", async () => {
-      // Inline-Stil schlaegt jede Klasse, auch `hover:`. Mit
-      // `backgroundColor: "transparent"` an jedem Eintrag war
-      // `hover:bg-[var(--color-bg-hover)]` ein Nichts — im Browser
-      // gegengeprueft: gehovert meldet getComputedStyle rgba(0,0,0,0) statt
-      // der Hover-Farbe, ohne Inline-Stil dagegen die Farbe.
-      // jsdom rechnet keine Kaskade, also wird hier die URSACHE geprueft:
-      // nicht gewaehlte Eintraege tragen gar keine Inline-Flaeche.
-      const user = userEvent.setup();
-      renderChatView({ detailLevel: "normal" });
-      await user.click(screen.getByTestId("detail-level-trigger"));
+    it("zeigt am ⋯ einen kleinen Punkt nur, wenn nicht Normal eingestellt ist", () => {
+      const { unmount } = renderChatView({ detailLevel: "normal" });
+      expect(screen.queryByTestId("detail-level-dot")).toBeNull();
+      unmount();
+      renderChatView({ detailLevel: "verbose" });
+      expect(screen.getByTestId("detail-level-dot")).toBeInTheDocument();
+      // The ⋯ says why it carries a dot.
+      expect(screen.getByTestId("chat-options-desktop")).toHaveAttribute("title", "Detail level: Verbose");
+    });
 
-      const gewaehlt = screen.getByRole("option", { name: "Normal" });
-      const andere = screen.getByRole("option", { name: "Compact" });
-      expect(andere.style.backgroundColor).toBe("");
-      // Die Auswahl muss dagegen immer sichtbar bleiben.
-      expect(gewaehlt.style.backgroundColor).not.toBe("");
+    it("schliesst mit Escape und Klick daneben", async () => {
+      const user = userEvent.setup();
+      renderChatView({});
+      await user.click(screen.getByTestId("chat-options-desktop"));
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).toBeNull();
+      await user.click(screen.getByTestId("chat-options-desktop"));
+      fireEvent.pointerDown(document.body);
+      expect(screen.queryByRole("menu")).toBeNull();
     });
 
     it("gibt es im Terminal-Modus gar nicht", () => {
-      // Der Detailgrad betrifft nur die geparste Chat-Ansicht.
+      // Der Detailgrad betrifft nur die geparste Chat-Ansicht — ein leeres
+      // Menü wäre ein Knopf ohne Wirkung.
       renderChatView({ centerView: "terminal" });
-      expect(screen.queryByTestId("detail-level-trigger")).toBeNull();
+      expect(screen.queryByTestId("chat-options-desktop")).toBeNull();
     });
 
     it("laesst Chat/Terminal sichtbar", () => {
       renderChatView({});
       expect(screen.getByRole("button", { name: "Terminal" })).toBeTruthy();
       expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy();
+    });
+  });
+
+  describe("Desktop-Kopfzeile — Änderungen und Browser (ADR-099)", () => {
+    beforeEach(() => {
+      mockUseChatStream.mockReturnValue(mkStream());
+    });
+
+    it("trägt die Panel-Knöpfe, wenn die Seite Panels anbietet", async () => {
+      const onTogglePanel = vi.fn();
+      const user = userEvent.setup();
+      renderChatView({ activePanel: null, onTogglePanel });
+      const header = screen.getByTestId("chat-header");
+      const changes = screen.getByRole("button", { name: "Changes" });
+      expect(header).toContainElement(changes);
+      expect(changes).toHaveAttribute("aria-pressed", "false");
+      await user.click(changes);
+      expect(onTogglePanel).toHaveBeenCalledWith("diff");
+    });
+
+    it("zeigt das offene Panel gedrückt; erneuter Klick schliesst es", async () => {
+      const onTogglePanel = vi.fn();
+      const user = userEvent.setup();
+      renderChatView({ activePanel: "browser", onTogglePanel });
+      const browser = screen.getByRole("button", { name: "Browser" });
+      expect(browser).toHaveAttribute("aria-pressed", "true");
+      await user.click(browser);
+      expect(onTogglePanel).toHaveBeenCalledWith(null);
+    });
+
+    it("ohne Panels (Kopf eines Aufrufers ohne Panel-Spalte) keine Knöpfe", () => {
+      renderChatView({});
+      expect(screen.queryByTestId("header-panel-buttons")).toBeNull();
     });
   });
 
@@ -2136,14 +2278,18 @@ describe("ChatView", () => {
       expect(r.right).toBeGreaterThan(56);
     });
 
-    it("gibt den Platz wieder frei, wenn das Abzeichen schrumpft", () => {
+    it("gibt den Platz wieder frei: Punkte stehen am Namen, rechts nur noch \"beendet\"", () => {
+      // ADR-099: "live" is a dot now, and like the idle dot it sits before the
+      // name — the right group keeps only mic + ⋯ (+ the "ended" word).
       const ended = headerSideReservation({ hasBack: true, badge: "ended" });
+      const live = headerSideReservation({ hasBack: true, badge: "live" });
       const dot = headerSideReservation({ hasBack: true, badge: "dot" });
       const none = headerSideReservation({ hasBack: true, badge: "none" });
-      expect(dot.right).toBeLessThan(ended.right);
-      expect(none.right).toBeLessThan(dot.right);
-      // Ohne Abzeichen bleiben genau Mikrofon + "…" plus Polster.
-      expect(none.right).toBe(M.headerPaddingRight + M.control + M.gap + M.control);
+      const bare = M.headerPaddingRight + M.control + M.gap + M.control;
+      expect(none.right).toBe(bare);
+      expect(dot.right).toBe(bare);
+      expect(live.right).toBe(bare);
+      expect(ended.right).toBeGreaterThan(live.right);
     });
 
     it("reserviert links nur, was der Zurück-Pfeil braucht", () => {
@@ -2206,6 +2352,11 @@ describe("ChatView", () => {
         .find((chunk) => chunk.includes(".pt-safe-top"));
       expect(mobileBlock).toBeDefined();
       expect(mobileBlock).toMatch(/padding-top:\s*calc\(env\(safe-area-inset-top\)/);
+      // At least 1rem below the status bar: iOS fades content right under
+      // it, and with 6px the name read grey (operator, 02.11.2026).
+      const gap = mobileBlock!.match(/\.pt-safe-top\s*\{\s*padding-top:\s*calc\(env\(safe-area-inset-top\)\s*\+\s*([\d.]+)rem\)/);
+      expect(gap).not.toBeNull();
+      expect(parseFloat(gap![1])).toBeGreaterThanOrEqual(1);
     });
 
     it("malt die eigene Fläche deckend und mit, nicht neben, dem Notch-Streifen", () => {
@@ -2250,7 +2401,7 @@ describe("ChatView", () => {
       // aus globals.css, der Kreis liegt als Kind mittig darin.
       renderChatView({ onBack: vi.fn() });
       for (const label of ["Back to chats", "Chat options"]) {
-        const btn = screen.getByLabelText(label);
+        const btn = phoneLabeled(label);
         expect(btn.className).toContain("min-w-touch");
         expect(btn.className).toContain("min-h-touch");
       }
@@ -2264,16 +2415,16 @@ describe("ChatView", () => {
     it("macht den Kopf durch die grössere Trefferfläche nicht höher", () => {
       // Die 44px ragen ueber `-m-1` (je 4px) in die Polsterung der Kopfzeile
       // hinein: Aussenmass bleibt 36px, der Kopf also
-      // safe + 6px + 36px + 6px + 1px Linie = safe + 3.0625rem.
+      // safe + 16px + 36px + 6px + 1px Linie = safe + 3.6875rem.
       // Genau diesen Wert fuehrt --mobile-chat-topbar-h, und daran haengen die
       // Handy-Blaetter (Optionen/Kontext) ihre Oberkante. Waere der Kopf
       // gewachsen, bliebe unter dem Blatt ein Streifen Gespraech stehen.
       renderChatView({ onBack: vi.fn() });
       for (const label of ["Back to chats", "Chat options"]) {
-        expect(screen.getByLabelText(label).className).toContain("-m-1");
+        expect(phoneLabeled(label).className).toContain("-m-1");
       }
       expect(GLOBALS_CSS).toContain(
-        "--mobile-chat-topbar-h: calc(env(safe-area-inset-top) + 3.0625rem)"
+        "--mobile-chat-topbar-h: calc(env(safe-area-inset-top) + 3.6875rem)"
       );
     });
 
@@ -2441,6 +2592,224 @@ describe("Naht: Preview-Tick baut die Zeitachse nicht neu (echtes Modul, echte K
   });
 });
 
+// ── S1-R7: "Send again" on a chat error card ───────────────────────────────
+// Bauplan S1-Rest §9: the button travels the composer's own send path (echo
+// + deliver, never a second one), and only the NEWEST error card that holds
+// the operator's text offers it — and only while nothing has been sent after
+// it. Otherwise a reload of the page would offer an old card a second time.
+function mkErrorCard(
+  uuid: string,
+  retryText: string | null,
+  code = "turn_interrupted",
+  ts = "2026-10-20T10:00:00Z",
+): MessageEvent {
+  return {
+    kind: "message",
+    uuid,
+    ts,
+    role: "teammate",
+    teammate: "chat_error",
+    text: "The chat restarted while a reply was running — nothing was resent automatically.",
+    model: null,
+    sidechain: false,
+    source: { kind: "error", title: "chat_error" },
+    error: { code, detail: "turn 4", retryText },
+  };
+}
+
+/** The same element on every call, so a test can re-render ONE mounted view. */
+function chatViewEl(
+  agent: AgentWithState,
+  overrides: Partial<React.ComponentProps<typeof ChatView>> = {},
+) {
+  return (
+    <ChatView
+      agent={agent}
+      hasTranscript
+      detailLevel="normal"
+      onDetailLevelChange={noop}
+      centerView="chat"
+      onCenterViewChange={noop}
+      {...overrides}
+    />
+  );
+}
+
+describe("ChatView — Nochmal senden (S1-R7)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navMock.params = new URLSearchParams();
+    setRole("admin");
+  });
+
+  it("[2] the card's button sends through the composer's path: echo first, then exactly one request with the exact text", () => {
+    const echoSent = vi.fn();
+    vi.mocked(api.chat.sendText).mockResolvedValue(undefined);
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        echoSent,
+        state: { kind: "state", status: "idle", prompt: null },
+        events: [mkMsg({ role: "user", text: "Zähle bis 20" }), mkErrorCard("e1", "Zähle bis 20")],
+      })
+    );
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    const button = screen.getByTestId("chat-error-resend");
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(echoSent).toHaveBeenCalledTimes(1);
+    expect(echoSent).toHaveBeenCalledWith("Zähle bis 20", false);
+    expect(api.chat.sendText).toHaveBeenCalledTimes(1);
+    expect(api.chat.sendText).toHaveBeenCalledWith("agent-1", "Zähle bis 20");
+  });
+
+  it("[3] offers only the newest card with a text, and none once the operator wrote after it or a send is on its way", () => {
+    const older = mkErrorCard("e-old", "first try");
+    const newer = mkErrorCard("e-new", "second try");
+
+    // Newest card with a text, nothing after it -> exactly that card.
+    mockUseChatStream.mockReturnValue(mkStream({ events: [older, mkMsg({ role: "assistant" }), newer] }));
+    const { unmount } = renderChatView({ agent: mkAgent({ headless_chat: true }) });
+    expect(screen.getAllByTestId("chat-error-resend")).toHaveLength(1);
+    expect(screen.getAllByTestId("chat-error-card")[1]).toContainElement(screen.getByTestId("chat-error-resend"));
+    unmount();
+
+    // The operator wrote after the card -> no button anywhere.
+    mockUseChatStream.mockReturnValue(
+      mkStream({ events: [older, newer, mkMsg({ role: "user", text: "next", ts: "2026-10-20T10:01:00Z" })] })
+    );
+    const second = renderChatView({ agent: mkAgent({ headless_chat: true }) });
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+    second.unmount();
+
+    // A send went out AFTER the card showed up (open echo) -> no button either.
+    const agent = mkAgent({ headless_chat: true });
+    mockUseChatStream.mockReturnValue(mkStream({ events: [older, newer] }));
+    const third = render(chatViewEl(agent));
+    expect(screen.getByTestId("chat-error-resend")).toBeInTheDocument();
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [older, newer],
+        pendingEchoes: [{ id: "echo-1", text: "x", sentAt: Date.now(), status: "pending" }],
+      })
+    );
+    third.rerender(chatViewEl(agent));
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+  });
+
+  it("an echo a restart orphaned BEFORE the card arrived does not hide the button (queued follow-up, then queue_lost)", () => {
+    // Critic finding: the queued follow-up B dies with the old daemon. Its echo
+    // goes queued -> pending -> unconfirmed and is never retired — it was sent
+    // before the card, so it says nothing about the card.
+    const agent = mkAgent({ headless_chat: true });
+    const userA = mkMsg({ role: "user", text: "count to 20", ts: "2026-10-20T09:59:00Z" });
+    const orphan = { id: "echo-7", text: "and then the tests", sentAt: Date.now() - 60_000, status: "queued" as const };
+    mockUseChatStream.mockReturnValue(mkStream({ events: [userA], pendingEchoes: [orphan] }));
+    const view = render(chatViewEl(agent));
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+
+    const queueLost = mkErrorCard("e-lost", null, "queue_lost", "2026-10-20T10:00:01Z");
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [userA, mkErrorCard("e-int", "count to 20"), queueLost],
+        pendingEchoes: [{ ...orphan, status: "unconfirmed" }],
+      })
+    );
+    view.rerender(chatViewEl(agent));
+
+    const cards = screen.getAllByTestId("chat-error-card");
+    expect(cards[0]).toContainElement(screen.getByTestId("chat-error-resend"));
+  });
+
+  it("decides by transcript time, not array position: an older card re-seeded after a newer operator line is not offered", () => {
+    // A reconnect re-seed appends the rows the live stream missed at the END.
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [
+          mkMsg({ role: "user", text: "first", ts: "2026-10-20T10:00:00Z" }),
+          mkMsg({ role: "user", text: "second", ts: "2026-10-20T10:05:00Z" }),
+          mkErrorCard("c1", "first", "turn_interrupted", "2026-10-20T10:01:00Z"),
+        ],
+      })
+    );
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    expect(screen.getByTestId("chat-error-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+  });
+
+  it("offers the card that is newest in time even when an older one was appended after it", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [
+          mkMsg({ role: "user", text: "first", ts: "2026-10-20T10:00:00Z" }),
+          mkErrorCard("c2", "second", "model_unreachable", "2026-10-20T10:06:00Z"),
+          mkErrorCard("c1", "first", "turn_interrupted", "2026-10-20T10:01:00Z"),
+        ],
+      })
+    );
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    expect(screen.getAllByTestId("chat-error-resend")).toHaveLength(1);
+    expect(screen.getAllByTestId("chat-error-card")[0]).toContainElement(screen.getByTestId("chat-error-resend"));
+  });
+
+  it("offers nothing in an ended session — the composer cannot send there", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [mkErrorCard("e1", "again")],
+        session: { sessionId: "s1", live: false, startedAt: null, aliveness: "ended" },
+      })
+    );
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    expect(screen.getByTestId("chat-error-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+  });
+
+  it("offers nothing in a head's transcript, even while the agent row is still set", () => {
+    const headHook = vi.mocked(useHeadTranscript);
+    const quiet = headHook.getMockImplementation();
+    headHook.mockImplementation(
+      () => mkStream({ events: [mkErrorCard("e1", "again")] }) as unknown as ReturnType<typeof useHeadTranscript>
+    );
+    try {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [], session: null }));
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+      render(
+        <QueryClientProvider client={qc}>
+          {chatViewEl(mkAgent({ headless_chat: true }), { head: mkRun({ state: "running" }) })}
+        </QueryClientProvider>
+      );
+
+      expect(screen.getByTestId("chat-error-card")).toBeInTheDocument();
+      expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+    } finally {
+      if (quiet) headHook.mockImplementation(quiet);
+    }
+  });
+
+  it("a newer card WITHOUT a text does not hide the offer of the newest card that has one", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({ events: [mkErrorCard("e-text", "please again"), mkErrorCard("e-none", null, "session_reset")] })
+    );
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    const cards = screen.getAllByTestId("chat-error-card");
+    expect(cards[0]).toContainElement(screen.getByTestId("chat-error-resend"));
+  });
+
+  it("offers nothing to a viewer — sending is admin-only", () => {
+    setRole("viewer");
+    mockUseChatStream.mockReturnValue(mkStream({ events: [mkErrorCard("e1", "again")] }));
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    expect(screen.getByTestId("chat-error-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+  });
+});
+
 describe("ChatView — non-admin (session input is admin-only)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -2490,5 +2859,54 @@ describe("ChatView — one header on the phone", () => {
     expect(container.querySelector("[data-testid='detail-action-bar']")).toBeNull();
     expect(screen.queryByRole("button", { name: /^reply$|antworten/i })).toBeNull();
     expect(screen.getAllByRole("button", { name: /back|zurück/i }).length).toBe(1);
+  });
+});
+
+describe("ChatView — talking across harnesses (ADR-100 2d)", () => {
+  afterEach(() => {
+    directoryMock.data = undefined;
+  });
+
+  it("the header says how many are reachable and opens the directory sheet", () => {
+    directoryMock.data = {
+      warming_up: false,
+      sessions: [
+        { address: "lead", kind: "agent", label: "Lead", harness: "omp", machine: null, alive: "yes",
+          listening: true, busy: false, accept: "accept", task: null, last_seen: null },
+        { address: "helper", kind: "agent", label: "Helper", harness: "omp", machine: null, alive: "yes",
+          listening: false, busy: false, accept: "accept", task: null, last_seen: null },
+      ],
+    };
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    const btn = screen.getByTestId("reachable-button");
+    expect(screen.getByTestId("chat-header-title")).toContainElement(btn);
+    expect(btn).toHaveTextContent("1 reachable");
+    expect(screen.queryByTestId("directory-sheet")).toBeNull();
+    fireEvent.click(btn);
+    expect(screen.getByTestId("directory-sheet")).toBeInTheDocument();
+    expect(screen.getAllByTestId("directory-row")).toHaveLength(2);
+  });
+
+  it("no directory (loading, or not allowed): no number in the header", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    expect(screen.queryByTestId("reachable-button")).toBeNull();
+  });
+
+  it("an `mc send` tool call renders as a send card, not a tool row", () => {
+    const send = {
+      kind: "tool" as const, uuid: "s1", ts: "2026-10-12T09:00:01.000Z", name: "Bash",
+      title: "mc send worker", detail: { command: 'mc send worker "Is box one free?"' },
+      toolUseId: "tu-send", result: "sent to worker · next_rest", status: "done" as const,
+      stats: null, sidechain: false,
+    };
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG, send] }));
+    renderChatView();
+    const card = screen.getByTestId("send-card");
+    expect(card).toHaveTextContent("worker");
+    expect(card).toHaveTextContent("Is box one free?");
+    expect(card).toHaveTextContent("info only");
+    expect(screen.queryByText("mc send worker")).toBeNull();
   });
 });

@@ -9,7 +9,7 @@ import re as _re
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -24,7 +24,7 @@ from app.models.runtime import Runtime
 from app.models.runtime_host import RuntimeHost, RUNTIME_HOST_ROLES
 from app.redis_client import RedisKeys, get_redis
 from app.services import (
-    recipe_switcher, runtime_manager, runtime_multinode, runtime_readiness,
+    box_wake, recipe_switcher, runtime_manager, runtime_multinode, runtime_readiness,
     runtime_naming, runtime_stop, slot_runtimes,
 )
 from app.services.agent_runtime_switch import (
@@ -40,6 +40,7 @@ from app.services.host_resolver import (
 from app.services.runtime_manager import add_lmstudio_runtime
 from app.services.runtime_model_resolver import invalidate_cached_model
 from app.services.runtime_propagation import mark_agents_for_sync, sync_pending_agents
+from app.services.runtime_window import runtime_context_window
 from app.services import activity
 from app.services import runtime_membership
 from app.services.runtime_autostart import (
@@ -184,6 +185,18 @@ def _runtime_locality(runtime: Runtime, host: ResolvedHost | None) -> str:
 # ── DB-backed runtime CRUD ───────────────────────────────────────────────────
 
 
+#: Address-like fields that are stored trimmed. Round-3 user test (t4 S3): a
+#: row was saved as " http://<box>:5559/v1" — the wizard's probe trims its URL
+#: (``ProbeEndpointBody``) and succeeded, the save did not, and every later
+#: request to the row failed with "UnsupportedProtocol". Migration 0222
+#: trims the rows saved before this.
+_TRIMMED_FIELDS = ("endpoint", "healthcheck_path", "control_url", "model_identifier")
+
+
+def _trim(v):
+    return v.strip() if isinstance(v, str) else v
+
+
 class RuntimeCreate(BaseModel):
     """Generic runtime creation — supersedes LMS-specific AddLMStudioRuntimeBody."""
     slug: str
@@ -227,6 +240,11 @@ class RuntimeCreate(BaseModel):
     # Rezept-Umschalter (02.09.2026): {"nodes": 1|2, …} — vom Katalog kopiert,
     # wenn die Instanz über /hosts/{id}/recipes/{slug}/start entsteht.
     topology: dict | None = None
+
+    @field_validator(*_TRIMMED_FIELDS, mode="before")
+    @classmethod
+    def _trim_create(cls, v):
+        return _trim(v)
 
     @field_validator("control_url")
     @classmethod
@@ -283,6 +301,11 @@ class RuntimeUpdate(BaseModel):
     autostart_supported: bool | None = None  # ADR-057: Engine Control v0
     autostart_flag_path: str | None = None
     topology: dict | None = None
+
+    @field_validator(*_TRIMMED_FIELDS, mode="before")
+    @classmethod
+    def _trim_update(cls, v):
+        return _trim(v)
 
     @field_validator("control_url")
     @classmethod
@@ -592,8 +615,26 @@ async def _probe_state_with_limit(rt_dict: dict, host) -> dict:
         }
 
 
+#: ``container_status`` of a row that was deliberately not probed
+#: (``GET /runtimes?probe=false``) — same slot ``probe_timeout`` uses, so the
+#: frontend can tell "not asked yet" from "asked, no answer".
+NOT_PROBED_CONTAINER_STATUS = "not_probed"
+_NOT_PROBED_STATE = {
+    "state": "unknown",
+    "http_reachable": False,
+    "container_status": NOT_PROBED_CONTAINER_STATUS,
+}
+
+
 @router.get("")
 async def list_runtimes(
+    probe: bool = Query(
+        True,
+        description=(
+            "false = the rows straight from the DB, no live probe "
+            "(state 'unknown', container_status 'not_probed')."
+        ),
+    ),
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
@@ -601,6 +642,13 @@ async def list_runtimes(
 
     Phase 16 (D-01/D-03): Reads exclusively from the DB table `runtimes`.
     The JSON file `backend/config/runtimes.json` is now only a bootstrap seed.
+
+    ``probe=false`` (round-2 user test, 23.10.2026): the same rows without the
+    live probes — milliseconds instead of the slowest box. For readers that
+    only need the row (the agent page's runtime pill: model, box, window) and
+    for the runtimes page's first paint while the probed list is on its way.
+    Nothing that DECIDES on a state (recipe switcher, start/stop) may read
+    this variant: its state is "unknown" on purpose.
     """
     runtimes = await runtime_manager.list_db_runtimes(session)
 
@@ -651,9 +699,12 @@ async def list_runtimes(
     # 23.09.2026: 29 runtimes, 14.2 s sequential, two unreachable boxes alone
     # cost 5 s each). No cache on purpose: the recipe switcher reads this
     # list and must never act on a stale state.
-    states = await asyncio.gather(
-        *(_probe_state_with_limit(rt_dict, host) for _, rt_dict, host in probe_targets)
-    )
+    if probe:
+        states = await asyncio.gather(
+            *(_probe_state_with_limit(rt_dict, host) for _, rt_dict, host in probe_targets)
+        )
+    else:
+        states = [dict(_NOT_PROBED_STATE) for _ in probe_targets]
 
     result = []
     for (rt, rt_dict, host), state_info in zip(probe_targets, states):
@@ -994,6 +1045,15 @@ async def restart_runtime(
             logger.exception(
                 "serving_since-Reset nach Restart fehlgeschlagen für %s", runtime_row.slug
             )
+        # A restart after a window edit: the slot serving this instance must
+        # carry the instance's window (the instance row is the truth while
+        # the engine reports none).
+        row_slug = runtime_row.slug
+        try:
+            await slot_runtimes.mirror_instance_window_to_slot(session, runtime_row)
+        except Exception:  # noqa: BLE001 — ein erfolgreicher Restart bleibt erfolgreich
+            await session.rollback()
+            logger.exception("slot window mirror failed for %s", row_slug)
     await runtime_readiness.invalidate_readiness(rt.get("slug") or runtime_id)
     return result
 
@@ -1002,21 +1062,27 @@ async def restart_runtime(
 async def wake_runtime(
     runtime_id: str,
     session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
+    current_user=Depends(require_role(Role.OPERATOR)),
 ):
     """Wake a power_managed runtime's host via Wake-on-LAN.
 
     Drops a trigger file for the host-side launchd watcher (the Docker backend
     cannot send an L2 broadcast). Only valid for runtimes with power_managed=true.
+    Same rules as ``POST /hosts/{id}/wake`` (round-7 re-check, L5): waking a
+    box is an operator action, 503 when the wake helper on the Mac is down, and
+    a sent wake drops the box's remembered "asleep" and the readiness of every
+    runtime on it.
     """
     rt, host = await _resolve_runtime_and_host(session, runtime_id)
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
     result = await runtime_manager.wake_runtime(rt, host=host)
-    if not result["ok"]:
-        raise HTTPException(status_code=400, detail=result["message"])
-    # Box is waking → drop any stale "asleep" readiness cache so the next poll re-probes.
-    await runtime_readiness.invalidate_readiness(rt.get("slug") or runtime_id)
+    box_wake.raise_unless_sent(result)
+    await box_wake.forget_box_after_wake(
+        session,
+        host.host_id if host is not None else None,
+        slugs=[rt.get("slug") or runtime_id],
+    )
     return result
 
 
@@ -1406,6 +1472,8 @@ async def update_runtime_db(
     # no watcher, so this PATCH is their only path to a fresh model.
     old_model = rt.model_identifier
     old_vision = rt.supports_vision
+    old_reasoning = rt.supports_reasoning
+    old_window = runtime_context_window(rt)
     for k, v in changes.items():
         setattr(rt, k, v)
     if "host_id" in body.model_fields_set:
@@ -1493,8 +1561,34 @@ async def update_runtime_db(
             },
         )
 
-    if model_changed or vision_changed:
+    # A window edit reaches the rendered env too (OMP_CONTEXT_WINDOW /
+    # MC_CONTEXT_WINDOW) — the agents on this row need the same re-sync. Only
+    # the TOLD window counts (runtime_window.runtime_context_window: the max,
+    # preferred only as its fallback): a preferred edit below a set max
+    # renders nothing new, so it flags nobody and mirrors nothing.
+    window_changed = runtime_context_window(rt) != old_window
+    # The reasoning flag decides omp's thinking cap (routers/internal.py,
+    # omp_thinking_budget -> models.yml compat.extraBody), so an edit must
+    # reach the bound agents like a vision edit does.
+    reasoning_changed = (
+        "supports_reasoning" in changes and rt.supports_reasoning != old_reasoning
+    )
+    if model_changed or vision_changed or window_changed or reasoning_changed:
         await mark_agents_for_sync(session, rt)
+
+    # …and the slot row serving this instance takes the new window (live
+    # 23.10.2026: only the instance was patched, the slot stayed at 1M).
+    if window_changed:
+        rt_slug = rt.slug  # read before: a broken session cannot lazy-load it
+        try:
+            await slot_runtimes.mirror_instance_window_to_slot(session, rt)
+        except Exception:  # noqa: BLE001 — the PATCH itself succeeded
+            # A failed DB operation leaves the session unusable — without the
+            # rollback the refresh below raises and the PATCH answers 500
+            # although the edit is already committed.
+            await session.rollback()
+            logger.exception("slot window mirror failed for %s", rt_slug)
+        await session.refresh(rt)
 
     return await _runtime_row_response(session, rt)
 
@@ -1594,7 +1688,7 @@ async def get_runtime_autostart(
 ):
     """Live status of the autostart flag file on the runtime's bound host.
 
-    On-demand, not part of the 90s watcher tick (ADR-054) — this touches SSH
+    On-demand, not part of the watcher tick (ADR-054) — this touches SSH
     and should only run when someone looks at the /runtimes page or hits the
     button, not on a fleet-wide timer.
     """

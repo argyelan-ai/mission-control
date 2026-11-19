@@ -11,7 +11,8 @@
 // own line, worded from the backend's reason code in the UI language
 // (<CheckReason>, lib/checkReason). The server's English free text appears
 // only for an unknown reason, folded away as a detail.
-import { useEffect, useState, type CSSProperties } from "react";
+import { type CSSProperties } from "react";
+import { useNow } from "@/hooks/useNow";
 import { useTranslations } from "next-intl";
 import { Loader2 } from "lucide-react";
 import type { ConfigCheckItem } from "@/lib/types";
@@ -31,15 +32,6 @@ export function checkPhase(item: ConfigCheckItem | undefined, running = false): 
   return item.value_changed ? "changed" : "never";
 }
 
-/** Re-render every 30 s so "tested just now" turns into "1 min ago". */
-function useNow(intervalMs = 30_000) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
-}
 
 export function CheckAge({ item }: { item: ConfigCheckItem }) {
   const t = useTranslations("checks");

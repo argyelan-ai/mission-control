@@ -441,6 +441,16 @@ class Settings(BaseSettings):
     # True = Quick Mode + Structured Mode active, planning brief for the board lead
     structured_intake_enabled: bool = False
 
+    # MC's own chat record (ADR-103). False = nothing is written to or read
+    # from chats / chat_sessions / chat_events; the chat runs exactly as
+    # before. Env CHAT_RECORD_ENABLED. Way back: false + truncate the tables.
+    chat_record_enabled: bool = False
+    # How often the background services sweep every agent's session files
+    # into the record (services/chat_record_import.ChatRecordSync). The live
+    # sink only writes while somebody has the chat open; this covers the
+    # rest. Unchanged files cost one stat each. Idles while the flag is off.
+    chat_record_import_interval: int = 600
+
     # App
     environment: str = "development"
     # Matches the public release tag (CHANGELOG.md / GitHub Releases).
@@ -458,6 +468,13 @@ class Settings(BaseSettings):
         Path(os.environ.get("HOME_HOST", str(Path.home())))
         / "Workspace" / "Projects" / "mission-control"
     )
+    # The stable host-agent checkout (docker/shared/ensure-checkout.sh,
+    # MC_CHECKOUT_PATH) — the lead host agent's working directory. Its Claude
+    # Code project dir is the ONLY place the token harvester books on the lead
+    # agent; every other ~/.claude/projects dir is the operator's own sessions.
+    # Empty = the script's default, <HOME_HOST>/.mc/checkouts/mission-control,
+    # resolved at call time (token_harvester.lead_checkout_path).
+    mc_checkout_path: str = ""
 
     # ── Plattenplatz ──────────────────────────────────────────────────────
     # Bau-Preflight: ein Bau startet nur, wenn mindestens so viele GB frei
@@ -531,7 +548,16 @@ class Settings(BaseSettings):
 
     # Runtime & Model Management v1 (ADR-054) — background /v1/models probing.
     runtime_watcher_enabled: bool = True
-    runtime_watcher_interval: int = 90  # seconds between probe ticks
+    # Seconds between probe ticks. 30 since 2026-10-20 (operator decision; was
+    # 90; ADR-054 amendment): an engine that dies is declared at the next
+    # probe (ADR-096 §11.2), so the tick (plus the tick's own run time) is the
+    # detection time. What was meant in seconds keeps its old wall-clock value
+    # (runtime_watcher STATE_TTL_FLOOR / FAIL_COUNT_TTL_FLOOR /
+    # DEATH_CHECK_WINDOW_S, runtime_propagation SYNC_RETRY_SPACING); the alarm
+    # threshold stays 3 probes (UNREACHABLE_EVENT_THRESHOLD). The containers
+    # do not read .env for this (no line in docker-compose.yml): going back
+    # means a revert and a deploy.
+    runtime_watcher_interval: int = 30
 
     # Runtimes-Buehne v2, PR 1 (docs/specs/runtimes-buehne-v2.md §6/§7) —
     # Prometheus token-counter poller feeding the card's heat strip.
@@ -549,6 +575,17 @@ class Settings(BaseSettings):
     # to keep the engine strictly operator-started. Does NOT affect the
     # switch-grace state — planned switches stay silent either way.
     runtime_auto_recovery_enabled: bool = True
+
+    # Engine death (ADR-096 §11, runtime_watcher._maybe_declare_death): an
+    # engine whose row served its own answer and is gone without a stop intent
+    # is declared dead — at once on connection refused (and at every later
+    # refused probe up to 270 s into the outage), at the threshold of 3
+    # otherwise (a timeout) — when its own anchor (node-agent / docker inspect /
+    # handle check) confirms it exited. One runtime.unreachable with the cause
+    # (severity error), status "failed" + reason on the card, one comment on
+    # each task in progress (the work stays where it is). Restart stays the
+    # box's autostart switch. Kill switch: back to the plain threshold alarm.
+    runtime_engine_death_enabled: bool = True
 
     # Slot-Runtimes (ADR-078): beim Backend-Start bekommt jede Head-Box eine
     # ankerlose Zeile („<Box> :8000"), an der ihre Agenten hängen, statt an der
@@ -738,6 +775,10 @@ class Settings(BaseSettings):
     # Todo -> checklist sync (services/checklist_todo_sync.py): how often the
     # working agents' chat transcripts are checked for a new todo snapshot.
     chat_todo_sync_interval: int = 20
+    # Chat reset audit (services/chat_reset_audit.py): how often the headless
+    # agents' chat state mirrors are read for resets — who asked, or that MC
+    # did not (incident 21.10.2026). One small file read per agent.
+    chat_reset_audit_interval: int = 30
     # Browser sessions (ADR-088, lifecycle step + operator decisions
     # 2026-10-06). The loop runs in the background-services process.
     # browser_sessions_root holds each session's last image
@@ -812,7 +853,9 @@ class Settings(BaseSettings):
     # Base paths for agent JSONL transcripts (all runtime types).
     # Default: ~/.mc/agents (expanduser happens in the harvester).
     # Boss path (~/.claude/projects) is separately hardcoded in the harvester and
-    # gets mounted into the container as :ro via docker-compose.yml.
+    # gets mounted into the container as :ro via docker-compose.yml. Only the
+    # lead's own project dir there (see mc_checkout_path) is booked on the lead;
+    # the rest is the operator's own usage (harness "operator-session").
     token_harvest_paths: list[str] = ["~/.mc/agents"]
 
     # Token Harvester — Grok source (Bench #18 PR1). Grok Build CLI (host

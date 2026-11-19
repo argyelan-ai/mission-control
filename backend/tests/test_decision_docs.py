@@ -50,7 +50,15 @@ from app.services.decision_docs import (
 # +1 on 2026-10-19: ADR-097 (delivered is not working). 096 is reserved for
 #   the multi-box ADR, so the count skips it until that one lands.
 # +1 on 2026-10-19: ADR-096 (multi-box runtimes) — status Proposed.
-EXPECTED_DECISION_DOCS = 96
+# +1 on 2026-10-23: ADR-098 (credentials Vault admin-only, masks without
+#   length or password characters; PR #962) — Accepted, confirmed on purpose.
+#   098 had been pencilled in for the "chats instead of fixed agents" ADR,
+#   which is not on main; that one takes the next free number when it lands.
+# +1 on 2026-11-01: ADR-099 (chat workspace: header panel buttons, resizable
+#   side panel) — Accepted, operator decision of 2026-11-01.
+# +1 on 2026-11-01: ADR-100 (MC is the foundation under every harness;
+#   talking across harnesses) — Accepted, operator decision of 2026-11-01.
+EXPECTED_DECISION_DOCS = 102
 
 
 def _repo_root() -> Path:

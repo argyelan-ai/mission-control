@@ -19,6 +19,7 @@ from app.utils import utcnow
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -70,7 +71,7 @@ class Thread(SQLModel, table=True):
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    kind: str  # "task" | "side" | "dm" | "chat" | "group" (see comm_constants.THREAD_KINDS)
+    kind: str  # "task" | "side" | "dm" | "chat" | "group" | "session" (see comm_constants.THREAD_KINDS)
     # ondelete=SET NULL (mc-task-delete-guard): a thread survives its task's
     # deletion — same rationale as bench_entries.task_id — so a deleted task
     # never RESTRICTs against a thread that outlives it.
@@ -134,6 +135,19 @@ class Message(SQLModel, table=True):
     # {"awaiting": bool, "to": str, "priority": str, "options": list[str]|None,
     #  "default": str|None, "deadline": iso|None}
     question_meta: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    # Written by an agent's chat session (session-role header), set by the
+    # server only. The run's clocks leave it out: the chat answering the
+    # operator is no sign of life of the run (round-3 re-review M1, migration 0223_message_from_chat).
+    from_chat: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, server_default=text("false"), nullable=False),
+    )
+    # Sender when sender_type == "session": a terminal session principal
+    # (ADR-100 §6 rule 1) — never a row in `agents`, so not sender_id. Set by
+    # the server from the token only (migration 0225_session_conversations).
+    sender_session_id: uuid.UUID | None = Field(
+        default=None, sa_column=Column(Uuid, nullable=True)
+    )
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),

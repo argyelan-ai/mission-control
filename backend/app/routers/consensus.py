@@ -20,6 +20,7 @@ from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import require_agent
+from app.comment_types import activity_comment_filter
 from app.scopes import Scope, require_scope
 from app.database import get_session
 from app.models.agent import Agent
@@ -214,11 +215,13 @@ async def get_consensus_status(
     # Collect responses (last comments of the done subtasks)
     responses: list[dict] = []
     for subtask in subtasks:
-        # Fetch the last comment from the assigned agent
+        # Fetch the last comment from the assigned agent — its run's answer,
+        # not its chat session's reply (comment_types.NOT_ACTIVITY_…)
         comment_result = await session.exec(
             select(TaskComment)
             .where(TaskComment.task_id == subtask.id)
             .where(TaskComment.author_agent_id == subtask.assigned_agent_id)
+            .where(activity_comment_filter())
             .order_by(col(TaskComment.created_at).desc())
             .limit(1)
         )

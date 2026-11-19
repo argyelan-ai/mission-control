@@ -256,7 +256,7 @@ async def test_router_allows_read_only_marketplace_list(auth_client, make_agent,
 
     agent = await make_agent(name="Rex", agent_runtime="cli-bridge", harness="claude")
 
-    async def _fake_send_text(a, text):
+    async def _fake_send_text(a, text, **_kw):
         return None
 
     monkeypatch.setattr(agent_chat_mod, "send_text", _fake_send_text)

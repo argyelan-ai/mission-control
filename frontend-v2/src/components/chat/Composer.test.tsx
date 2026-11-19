@@ -4,11 +4,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Composer } from "./Composer";
+import { Composer, effortReasonText } from "./Composer";
 import type { ChatAttachment, StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
+import en from "../../../messages/en.json";
+
+// Round-2 Q2: the effort menu says the same word per level as the bench —
+// common.effortLevel ("High", not the raw "high").
+const word = (level: string) =>
+  (en.common.effortLevel as Record<string, string>)[level] ?? level;
 
 // Tokens are CSS variables (ADR-087): jsdom keeps the specified inline value,
 // so assertions compare against the token from lib/colors.ts directly.
@@ -494,7 +500,7 @@ describe("Composer", () => {
     );
     expect(screen.queryByTestId("context-panel")).not.toBeInTheDocument();
 
-    const trigger = screen.getByRole("button", { name: /^Context: \d+% used$/ });
+    const trigger = screen.getByRole("button", { name: /^Chat context: \d+% used$/ });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     await user.click(trigger);
 
@@ -509,13 +515,13 @@ describe("Composer", () => {
     const { rerender } = render(
       <Composer agentId="a1" usage={mkUsage({ usedPct: 15 })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.getByRole("button", { name: "Context: 15% used" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat context: 15% used" })).toBeInTheDocument();
 
     rerender(
       <Composer agentId="a1" usage={mkUsage({ usedPct: 92 })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.getByRole("button", { name: "Context: 92% used" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Context: 15% used" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat context: 92% used" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Chat context: 15% used" })).not.toBeInTheDocument();
   });
 
   it("keeps the ring itself a progressbar with its tooltip (quick glance stays)", () => {
@@ -658,12 +664,12 @@ describe("Composer", () => {
     const { rerender } = render(
       <Composer agentId="a1" usage={mkUsage({ effort: null })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.queryByText("high")).not.toBeInTheDocument();
+    expect(screen.queryByText("High")).not.toBeInTheDocument();
 
     rerender(
       <Composer agentId="a1" usage={mkUsage({ effort: "high" })} state={null} onSend={vi.fn()} onStop={vi.fn()} />
     );
-    expect(screen.getByText("high")).toBeInTheDocument();
+    expect(screen.getByText("High")).toBeInTheDocument();
   });
 
   // ── Effort switching ──────────────────────────────────────────────────────
@@ -1044,6 +1050,83 @@ describe("Composer", () => {
       expect(chip.getAttribute("title")).toMatch(/terminal/i);
     });
 
+    describe("kopflose Agenten: Grund am gesperrten Chip (Hermes, 22.10.2026)", () => {
+      const lockedCaps = (reason: string, harness: string | null = null) => ({
+        effortLevels: [],
+        canSwitchEffort: false,
+        effort: null,
+        effortShared: false,
+        effortReason: reason,
+        effortModel: null,
+        effortHarness: harness,
+      });
+      const en = (key: string, values?: Record<string, string>) =>
+        `${key}${values ? JSON.stringify(values) : ""}`;
+
+      it("hat fuer jeden Grund-Code einen eigenen Text — keiner faellt auf den Terminal-Satz zurueck", () => {
+        expect(effortReasonText(lockedCaps("acp_state_missing"), null, en)).toBe("effortLockedStateMissing");
+        expect(effortReasonText(lockedCaps("harness_no_effort", "hermes"), null, en)).toBe(
+          'effortLockedHarnessNoEffort{"harness":"Hermes"}',
+        );
+        // Ohne Harness-Schluessel (aelteres Backend): der allgemeine Satz, kein leerer Name.
+        expect(effortReasonText(lockedCaps("harness_no_effort"), null, en)).toBe(
+          "effortLockedHarnessNoEffortGeneric",
+        );
+        expect(effortReasonText(lockedCaps("no_pane"), null, en)).toBe("effortLockedHint");
+      });
+
+      it("nennt Hermes beim Namen, wenn der Harness keine Denkstufe anbietet", () => {
+        render(
+          <Composer agentId="a1" usage={null} capabilities={lockedCaps("harness_no_effort", "hermes")}
+            state={null} onSend={vi.fn()} onStop={vi.fn()} />,
+        );
+        const chip = screen.getByTestId("effort-chip-static");
+        expect(chip).toHaveAttribute("data-reason", "harness_no_effort");
+        expect(chip.getAttribute("title")).toBe("Hermes doesn't offer a thinking level.");
+      });
+
+      it("sagt bei fehlender Zustandsdatei, dass der Agent noch nichts gemeldet hat", () => {
+        render(
+          <Composer agentId="a1" usage={null} capabilities={lockedCaps("acp_state_missing")}
+            state={null} onSend={vi.fn()} onStop={vi.fn()} />,
+        );
+        const title = screen.getByTestId("effort-chip-static").getAttribute("title") ?? "";
+        expect(title).toMatch(/not reported its settings yet/);
+        expect(title).not.toMatch(/terminal/i);
+      });
+
+      it("zeigt den Grund beim Antippen (Handy kennt kein title) und schliesst mit Escape", async () => {
+        const user = userEvent.setup();
+        render(
+          <Composer agentId="a1" usage={null} capabilities={lockedCaps("harness_no_effort", "hermes")}
+            state={null} onSend={vi.fn()} onStop={vi.fn()} />,
+        );
+        const chip = screen.getByTestId("effort-chip-static");
+        expect(chip.tagName).toBe("BUTTON");
+        expect(chip).toHaveAttribute("aria-expanded", "false");
+        expect(screen.queryByTestId("effort-reason")).not.toBeInTheDocument();
+
+        await user.click(chip);
+        expect(chip).toHaveAttribute("aria-expanded", "true");
+        expect(screen.getByTestId("effort-reason")).toHaveTextContent("Hermes doesn't offer a thinking level.");
+        // Gesperrt bleibt gesperrt: kein Regler, nur der Satz.
+        expect(screen.queryByTestId("effort-slider")).not.toBeInTheDocument();
+
+        await user.keyboard("{Escape}");
+        expect(screen.queryByTestId("effort-reason")).not.toBeInTheDocument();
+      });
+
+      it("hat am Handy ein 44-px-Fingerziel (K11), am Desktop die alte Hoehe", () => {
+        render(
+          <Composer agentId="a1" usage={null} capabilities={lockedCaps("acp_state_missing")}
+            state={null} onSend={vi.fn()} onStop={vi.fn()} />,
+        );
+        const cls = screen.getByTestId("effort-chip-static").className;
+        expect(cls).toMatch(/(^|\s)h-11(\s|$)/);
+        expect(cls).toMatch(/(^|\s)md:h-8(\s|$)/);
+      });
+    });
+
     it("bleibt ohne Grund, ohne Stufen und ohne Wert unsichtbar", () => {
       // Der Chip erscheint NUR, wenn es etwas zu zeigen gibt: eine Stufe, ein
       // Schaltrecht oder eine Erklaerung. Liefert das Backend nichts davon
@@ -1101,7 +1184,7 @@ describe("Composer", () => {
       );
       // No capability block at all (older backend, or still loading): a picker
       // with nothing in it would be worse than an honest read-only value.
-      expect(screen.getByTestId("effort-chip-static")).toHaveTextContent("high");
+      expect(screen.getByTestId("effort-chip-static")).toHaveTextContent("High");
       expect(screen.queryByTestId("effort-chip")).not.toBeInTheDocument();
     });
 
@@ -1127,8 +1210,8 @@ describe("Composer", () => {
       // The real Claude Code 2.1.233 set — six levels, not three, und der
       // Regler faehrt sie in genau dieser Reihenfolge ab.
       expect(slider()).toHaveAttribute("max", "5");
-      expect(shownLevel()).toBe("high"); // steht auf dem aktuellen Wert
-      expect(levelsInOrder(CAPS.effortLevels)).toEqual(CAPS.effortLevels);
+      expect(shownLevel()).toBe("High"); // steht auf dem aktuellen Wert
+      expect(levelsInOrder(CAPS.effortLevels)).toEqual(CAPS.effortLevels.map(word));
     });
 
     it("marks which levels outlive the session and which do not", async () => {
@@ -1184,14 +1267,98 @@ describe("Composer", () => {
       expect(screen.getByTestId("effort-chip-static")).toBeInTheDocument();
     });
 
+    describe("a ladder with a 'default' entry (Hermes over ACP)", () => {
+      // The real option values Hermes reports (reasoning_effort, category
+      // thought_level). `default` is not a level: it hands the session back
+      // to the agent's configured level, so it has no rank on the slider.
+      const HERMES = {
+        effortLevels: ["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"],
+        canSwitchEffort: true,
+        effortLive: true,
+        effortScope: "session" as const,
+      };
+      const RANKED = HERMES.effortLevels.slice(1);
+      const renderHermes = (effort: string) =>
+        render(
+          <Composer
+            agentId="a1"
+            usage={null}
+            capabilities={{ ...HERMES, effort }}
+            state={null}
+            onSend={vi.fn()}
+            onStop={vi.fn()}
+          />
+        );
+
+      it("keeps 'default' off the slider, which runs none..max in order", async () => {
+        const user = userEvent.setup();
+        renderHermes("medium");
+        await user.click(screen.getByTestId("effort-chip"));
+        expect(slider()).toHaveAttribute("max", String(RANKED.length - 1));
+        expect(shownLevel()).toBe("Medium");
+        expect(levelsInOrder(RANKED)).toEqual(RANKED.map(word));
+      });
+
+      it("fills the gauge over the ranked levels only", () => {
+        renderHermes("medium"); // index 3 of 7 -> 4/7
+        expect(screen.getByTestId("effort-gauge-fill").style.height).toBe(`${(4 / 7) * 100}%`);
+      });
+
+      it("keeps the gauge empty on 'default' — no level is claimed", () => {
+        renderHermes("default");
+        expect(screen.getByTestId("effort-gauge-fill").style.height).toBe("0%");
+      });
+
+      it("names 'default' under the slider instead of the slider's first stop", async () => {
+        // The thumb has to rest somewhere; the label must not claim "none"
+        // while the model thinks at its configured level.
+        const user = userEvent.setup();
+        renderHermes("default");
+        await user.click(screen.getByTestId("effort-chip"));
+        expect(shownLevel()).toBe("Default");
+        expect(slider()).toHaveAttribute("aria-valuetext", "Default");
+        expect(screen.getByTestId("effort-default")).toHaveAttribute("aria-pressed", "true");
+        // Dragging previews a real level again.
+        fireEvent.change(slider(), { target: { value: String(RANKED.indexOf("low")) } });
+        expect(shownLevel()).toBe("Low");
+      });
+
+      it("offers 'default' as its own button that sends the value", async () => {
+        const user = userEvent.setup();
+        renderHermes("max");
+        await user.click(screen.getByTestId("effort-chip"));
+        const reset = screen.getByTestId("effort-default");
+        expect(reset).toHaveAttribute("aria-pressed", "false");
+        await user.click(reset);
+        expect(mockSetEffort).toHaveBeenCalledWith("a1", "default");
+      });
+
+      it("says every level lasts for this session only when the scope is the session", async () => {
+        const user = userEvent.setup();
+        renderHermes("medium");
+        await user.click(screen.getByTestId("effort-chip"));
+        for (const level of ["low", "medium", "xhigh"]) {
+          fireEvent.change(slider(), { target: { value: String(RANKED.indexOf(level)) } });
+          expect(screen.getByTestId("effort-menu").textContent).toContain("this session only");
+        }
+      });
+    });
+
+    it("shows no 'default' button for a ladder without one", async () => {
+      const user = userEvent.setup();
+      renderWithEffort("high");
+      await user.click(screen.getByTestId("effort-chip"));
+      expect(screen.queryByTestId("effort-default")).not.toBeInTheDocument();
+    });
+
     it("marks the level the transcript reports as the selected one", async () => {
       const user = userEvent.setup();
       renderWithEffort("high");
       await user.click(screen.getByTestId("effort-chip"));
 
-      expect(shownLevel()).toBe("high");
+      expect(shownLevel()).toBe("High");
       expect(slider().value).toBe(String(CAPS.effortLevels.indexOf("high")));
-      expect(slider()).toHaveAttribute("aria-valuetext", "high");
+      expect(slider()).toHaveAttribute("aria-valuetext", "High");
     });
 
     it("sends the chosen level to the backend", async () => {
@@ -1496,7 +1663,9 @@ describe("Composer", () => {
     );
     expect(screen.getByTestId("context-ring")).toHaveAttribute(
       "title",
-      "≈12k/200k used. Source: CLI. The CLI status line shows what is left until auto-compaction instead — different basis, both correct."
+      // Round-3 (t3 NICE-1): the ring says it measures THIS chat — the agent
+      // page's figure is the agent's work session and may differ.
+      "Chat context (this conversation): ≈12k/200k used. Source: CLI. A running task shows its own figure in its section. The agent page shows the last reported figure of its work session, the CLI status line what is left until auto-compaction — different session or basis, both correct."
     );
   });
 
@@ -1722,19 +1891,82 @@ describe("Composer", () => {
     });
   });
 
-  it("anchors the palette directly above the input via absolute positioning (bottom-full) with a 320px floor", async () => {
-    const user = userEvent.setup();
-    render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
-    const textarea = screen.getByPlaceholderText(/Message the agent/);
-    await user.type(textarea, "/");
-    const palette = screen.getByTestId("slash-palette");
-    // Inline style, not just the class — see the comment in Composer.tsx on
-    // why relying on the Tailwind class alone previously broke this.
-    expect(palette.style.position).toBe("absolute");
-    expect(palette.className).toContain("bottom-full");
-    expect(palette.className).toContain("left-3");
-    expect(palette.className).toContain("right-3");
-    expect(palette.className).toContain("min-w-[320px]");
+  /* ────────────────────────────────────────────────────────────────────────
+   * Chat workspace (ADR-099), PR "anchored popovers": the composer's popovers
+   * hung `absolute bottom-full` inside the chat column, and two ancestors in
+   * the sessions page carry `overflow-hidden` — with the side panel open the
+   * column got narrow and the context box was cut off. Every popover now
+   * renders through a portal at the end of <body> with `position: fixed`, so
+   * no ancestor can clip it.
+   * ──────────────────────────────────────────────────────────────────────── */
+  describe("popovers never sit inside a clipping ancestor", () => {
+    const CAPS6 = { effortLevels: ["low", "medium", "high", "xhigh", "max", "ultracode"], canSwitchEffort: true };
+    const renderClipped = (props: Partial<React.ComponentProps<typeof Composer>> = {}) =>
+      render(
+        <div data-testid="clip" style={{ overflow: "hidden" }}>
+          <Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} {...props} />
+        </div>
+      );
+    const expectUnclipped = (el: HTMLElement) => {
+      expect(screen.getByTestId("clip")).not.toContainElement(el);
+      expect(el.style.position).toBe("fixed");
+    };
+
+    it("slash palette", async () => {
+      const user = userEvent.setup();
+      renderClipped();
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
+      expectUnclipped(screen.getByTestId("slash-palette"));
+    });
+
+    it("model list", async () => {
+      const user = userEvent.setup();
+      renderClipped({ usage: mkUsage() });
+      await user.click(screen.getByTestId("model-chip"));
+      expectUnclipped(screen.getByRole("listbox"));
+    });
+
+    it("effort menu — and a click inside it keeps it open", async () => {
+      const user = userEvent.setup();
+      renderClipped({ usage: mkUsage({ effort: "high" }), capabilities: CAPS6 });
+      await user.click(screen.getByTestId("effort-chip"));
+      const menu = screen.getByTestId("effort-menu");
+      expectUnclipped(menu);
+      // The menu is no longer a DOM child of the chip's box; the outside-click
+      // check must still count it as inside.
+      fireEvent.pointerDown(screen.getByTestId("effort-slider"));
+      expect(screen.getByTestId("effort-menu")).toBeInTheDocument();
+      fireEvent.pointerDown(document.body);
+      expect(screen.queryByTestId("effort-menu")).not.toBeInTheDocument();
+    });
+
+    it("effort reason", async () => {
+      const user = userEvent.setup();
+      renderClipped({
+        usage: mkUsage({ effort: "high" }),
+        capabilities: { effortLevels: ["low", "high"], canSwitchEffort: false, effortReason: "no_pane" },
+      });
+      await user.click(screen.getByTestId("effort-chip-static"));
+      const reason = screen.getByTestId("effort-reason");
+      expect(screen.getByTestId("clip")).not.toContainElement(reason);
+      expect(reason.style.position).toBe("fixed");
+    });
+
+    it("context box", async () => {
+      const user = userEvent.setup();
+      renderClipped({
+        usage: mkUsage({ components: { input: 10_000, cacheRead: 38_000, cacheCreation: 2_000, output: 1_000 } }),
+      });
+      await user.click(screen.getByRole("button", { name: /^Chat context: \d+% used$/ }));
+      const panel = screen.getByTestId("context-panel");
+      expect(screen.getByTestId("clip")).not.toContainElement(panel);
+      // Phone: a bottom sheet (classes); desktop: fixed at the ring's
+      // coordinates, handed over as CSS variables so the sheet classes win
+      // below md.
+      expect(panel.className).toContain("fixed");
+      expect(panel.className).toContain("md:top-(--anchor-top)");
+      expect(panel.className).toContain("md:left-(--anchor-left)");
+    });
   });
 
   /* ────────────────────────────────────────────────────────────────────────

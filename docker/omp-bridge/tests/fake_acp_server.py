@@ -12,6 +12,9 @@ over stdin/stdout, protocol-aware:
   reply before continuing — the permission round-trip is exercised for
   real. For fs/* requests the client under test answers from disk.
 * Notifications (session/update) replay verbatim with a small delay.
+* Strict recorded order: nothing recorded after a reply goes out before that
+  reply, and a reply goes out only once the client sent its request — real
+  omp cannot send a session/update before the request it follows.
 * Every client->server message is recorded to stderr as JSON lines
   {"__client": {...}} for tests that assert the wire side.
 
@@ -47,6 +50,13 @@ def replay(msgs_in: list, fin, fout, *, sink: list | None = None, delay_s: float
     # DURING the turn, before the terminal reply. Without this the reply
     # cursor fires on request arrival and updates land after prompt() returned
     # (synthetic reordering a live server never produces).
+    # The other half (CI flake, 22.10.2026): the walk must not run AHEAD of the
+    # client either. It used to skip every recorded reply and stream the
+    # updates the moment its thread started — with delay 0 before the code
+    # under test had registered its update callback, which then dropped the
+    # turn's first update. Now the walk stops at each recorded reply until
+    # that reply went out (which needs the client's request), so the wire
+    # carries the recording in recorded order, one request at a time.
     _walk_at = [0]               # how many transcript positions the walk emitted
     _reply_positions = {}        # reply index -> walk position in msgs_in
     _pos = 0
@@ -63,6 +73,7 @@ def replay(msgs_in: list, fin, fout, *, sink: list | None = None, delay_s: float
             fout.flush()
 
     _replies = [m for m in msgs_in if "id" in m and "method" not in m]
+    _reply_sent = [threading.Event() for _ in _replies]
     _cursor = [0]
 
     def _reader():
@@ -100,14 +111,31 @@ def replay(msgs_in: list, fin, fout, *, sink: list | None = None, delay_s: float
                         time.sleep(0.005)
                     if i < len(_replies):
                         _send(_replies[i])
+                        _reply_sent[i].set()
 
                 threading.Thread(target=_gated_reply, daemon=True).start()
 
     rt = threading.Thread(target=_reader, daemon=True)
     rt.start()
+    _reply_idx = 0
     for _i, m in enumerate(msgs_in):
         method = m.get("method")
         if "id" in m and "method" not in m:
+            # A recorded reply: let its gated sender go (everything before it
+            # is out), then wait until it is on the wire — bounded like the
+            # reply gate, so a client that never asks cannot hang the walk.
+            # A client that hung up (reader at EOF) will never ask: the walk
+            # ends there, as real omp does when its stdin closes.
+            _walk_at[0] = _i
+            if _reply_idx < len(_reply_sent):
+                sent = _reply_sent[_reply_idx]
+                _deadline = time.time() + 30
+                while not sent.wait(0.01) and rt.is_alive() and time.time() < _deadline:
+                    pass
+                if not sent.is_set() and not rt.is_alive():
+                    break
+            _reply_idx += 1
+            _walk_at[0] = _i + 1
             continue
         if "id" in m and method:
             _pending[m["id"]] = threading.Event()

@@ -39,11 +39,14 @@ import { MemberRowContainer } from "./MemberRow";
 import { ActionBar } from "./ActionBar";
 import { PhaseBar } from "./PhaseBar";
 import { shortModelTitle } from "./modelTitle";
+import { crashLikelyOutOfMemory, crashReasonKey, formatCrashTime } from "./crashFormat";
 import { useAppStore } from "@/lib/store";
 import { headOnBoxes, useHeadOccupancy } from "@/components/heads/HeadOccupancy";
 import { useHeadPairsForLabels } from "@/components/heads/HeadStateCard";
 import { runPairLabel, type HeadBusy } from "@/lib/heads";
 import { fleetCount } from "@/app/agents/fleetCount";
+import { isAgentWorking } from "@/lib/agentStatus";
+import type { BenchRuntimeSummary } from "@/lib/benchLinks";
 
 export interface StageMember {
   host: Host;
@@ -62,6 +65,9 @@ export type StageStatus = "serving" | "quiet" | "switching" | "failed";
 
 export function deriveStageStatus(rt: Runtime, live?: RuntimeLiveStatus): StageStatus {
   if (live?.status === "switching") return "switching";
+  // Engine death / crash-loop stop (ADR-096 §11): the watcher's verdict in
+  // its existing status field — it holds across every later tick.
+  if (live?.status === "failed") return "failed";
   if ((rt.state ?? "unknown") === "failed") return "failed";
   if (live?.reachable === false && (live?.consecutive_failures ?? 0) >= 3) return "failed";
   return "serving";
@@ -79,6 +85,7 @@ export function Stage({
   members,
   live,
   onOpenCockpit,
+  benchSummary = null,
 }: {
   runtime: Runtime;
   members: StageMember[];
@@ -86,6 +93,8 @@ export function Stage({
   /** Cockpit öffnet immer für die Head-Box (Spec §4: "Head-Box bei Duo" —
    *  der Umschalter zu Worker sitzt im Cockpit-Kopf, nicht auf der Karte). */
   onOpenCockpit: (headHostId: string) => void;
+  /** Bench W1 P1: this runtime's "Testen" row (GET /bench/runtime-summary). */
+  benchSummary?: BenchRuntimeSummary | null;
 }) {
   const t = useTranslations("runtimes.stage");
   const locale = useLocale();
@@ -121,7 +130,7 @@ export function Stage({
   // Head-Box (ADR-078), nicht am laufenden Rezept — `runtime` bleibt nur
   // Fallback für Boxen ohne eigene Slot-Zeile (ältere Stände).
   const agentsSlug = (headHost?.slot?.slug ?? headHost?.slot?.id ?? runtime.slug ?? runtime.id) as string;
-  const { data: agentsData } = useQuery({
+  const { data: agentsData, isPending: agentsPending } = useQuery({
     queryKey: ["runtime-agents", agentsSlug],
     queryFn: () => api.runtimes.db.agents(agentsSlug),
     enabled: !!agentsSlug,
@@ -131,7 +140,7 @@ export function Stage({
 
   // The runtime-agents answer has no operational mode — the roster (same
   // query as /agents and the sidebar) says which bound agents are paused.
-  const { data: roster } = useQuery({
+  const { data: roster, isPending: rosterPending } = useQuery({
     queryKey: ["agents"],
     queryFn: () => api.agents.list(),
     staleTime: 15_000,
@@ -139,6 +148,29 @@ export function Stage({
   });
 
   const status = useMemo(() => deriveStageStatus(runtime, live), [runtime, live]);
+  // Engine death (ADR-096 §11): reason, box and time on the card instead of a
+  // bare "unreachable". The watcher writes them into the live snapshot.
+  const crash = status === "failed" && live?.status === "failed" && live.reason_code ? live : null;
+  const crashTime = crash ? formatCrashTime(crash.at, locale) : null;
+  const crashReasonText = crash
+    ? t(`crashReason.${crashReasonKey(crash.reason_code, crash.exit_code)}`, { code: crash.exit_code ?? "" })
+    : null;
+  // Exit 137 (SIGKILL): "…, probably out of memory" — a hint, not a reason.
+  const crashReason =
+    crash && crashReasonText && crashLikelyOutOfMemory(crash.reason_code, crash.exit_code)
+      ? t("crashReasonLikelyOom", { reason: crashReasonText })
+      : crashReasonText;
+  const crashWhere = crash?.box ? t("crashOnBox", { box: crash.box }) : "";
+  const crashFollowUp = crash
+    ? [
+        t(crash.autostart ? "crashAutostartOn" : "crashAutostartOff"),
+        (crash.tasks_commented ?? 0) > 0 ? t("crashTasksCommented", { count: crash.tasks_commented ?? 0 }) : null,
+        // A duo head death can leave the worker rank holding box 2's memory.
+        members.length > 1 ? t("crashDuoWorker") : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : null;
   const idleSeconds = pulse?.available ? pulse?.idle_seconds ?? null : null;
   const flowKind = flowKindFor(status, idleSeconds);
   const isDuo = members.length > 1;
@@ -187,17 +219,24 @@ export function Stage({
   // agent as the same "1" (bauplan `heads-sichtbar` PR 3 §4 — the approved
   // mockup's own annotation: "'2' zählt einen arbeitenden Head und einen
   // ruhenden Agenten gleich."). Split instead into WORKING (heads on this
-  // box + bound agents actually `status === "busy"`) and CONNECTED (the
-  // box's other active-but-idle bound agents) — a paused agent counts as
-  // neither (same split as the /agents page and the sidebar counter). An
-  // agent the roster does not know yet counts as active-and-idle: better
-  // counted as merely connected than missing from a free-looking box.
+  // box + bound agents whose turn runs, `isAgentWorking`, paused or not)
+  // and CONNECTED (the box's other active, idle bound agents) — an idle
+  // paused agent counts as neither (same split as the /agents page and the
+  // sidebar counter). An agent the roster does not know counts as
+  // active-and-idle: better counted as merely connected than missing from a
+  // free-looking box. While the bound list or the roster is still loading,
+  // the tile shows "–" instead (PR #960 review, SHOULD 3: the fast first
+  // paint showed "+3 connected" for paused agents, later "+1").
   const boundAgents = (agentsData?.agents ?? []).map(
     (ref) => roster?.find((a) => a.id === ref.id) ?? ({ ...ref, operational_mode: "active", status: "idle" } as unknown as Agent),
   );
   const agentSplit = fleetCount(boundAgents);
   const activeAgents = boundAgents.filter((a) => a.operational_mode !== "paused");
-  const busyAgents = activeAgents.filter((a) => a.status === "busy");
+  // WORKING = a turn is running, whatever the mode (round-2 user test t4 N8:
+  // "73 tok/s · 0 working" while an agent worked). The heartbeat says
+  // "working", not "busy"; and "paused" only stops NEW tasks — a paused
+  // agent finishing its task is load on this box all the same.
+  const busyAgents = boundAgents.filter((a) => isAgentWorking(a.status));
   // Review fix round 5: only a genuinely reachable, idle agent is CONNECTED —
   // `status !== "busy"` used to also count offline/error/provisioning/
   // restarting agents as connected, which overstated the box's own number.
@@ -206,6 +245,7 @@ export function Stage({
   const pausedNames = boundAgents.filter((a) => a.operational_mode === "paused").map((a) => a.name).filter(Boolean);
   const workingCount = headsOnCard.length + busyAgents.length;
   const connectedCount = connectedAgents.length;
+  const agentsUnknown = agentsPending || (rosterPending && (agentsData?.agents.length ?? 0) > 0);
   // The tooltip keeps its own existing "N heads · N active agents" summary
   // (unchanged by the working/connected split above — it still answers
   // "who, in total, is on this box", heads first since they are the ones
@@ -252,20 +292,30 @@ export function Stage({
           </ul>
         </div>
       )}
-      {workingEntries.length === 0 && connectedEntries.length === 0 && <div>{t("kpiPopoverEmpty")}</div>}
+      {workingEntries.length === 0 && connectedEntries.length === 0 && (
+        <div>{agentsUnknown ? t("checkingLine") : t("kpiPopoverEmpty")}</div>
+      )}
     </>
   );
 
   const endpointPort = runtime.endpoint?.match(/:(\d+)/)?.[1] ?? null;
+  // Tokens flow but nobody on the card works: say where the load is NOT
+  // from, instead of leaving "73 tok/s · 0 working" to guess (t4 N8).
+  const loadWithoutAgent = tps != null && Math.round(tps) > 0 && workingCount === 0;
   const cells: KpiCell[] = [
     { value: fmtCtx(live?.served_context_len ?? runtime.max_context_len), label: t("kpiContext") },
     {
       value: tps != null ? t("tpsValue", { tps: Math.round(tps) }) : "–",
       label: t("kpiSpeedMode", { mode: modeLabel }),
+      // A sentence for people, not a machine value: it used to ride in the
+      // mono-caps label ("SPEED · DUO · NO AGENT") and wrapped on a phone
+      // (round-3 r2 N2) without saying who loads the box (t3 NICE-3).
+      note: loadWithoutAgent ? t("kpiSpeedNoAgentNote") : undefined,
+      title: loadWithoutAgent ? t("kpiSpeedNoAgentHint") : undefined,
       testId: "kpi-speed",
     },
     {
-      value: String(workingCount),
+      value: agentsUnknown ? "–" : String(workingCount),
       // One ICU plural key, not a ternary between two catalog keys (review
       // fix round 6, finding 4): a ternary is only ever exercised by the
       // test suite's hardcoded-English next-intl mock, where "working" is
@@ -274,8 +324,14 @@ export function Stage({
       // green. Real pluralisation (German needs "arbeitet"/"arbeiten") now
       // lives in the message catalog, where a locale-aware render can
       // actually exercise both branches.
-      unit: t("kpiWorkingUnit", { count: workingCount }),
-      label: connectedCount > 0 ? t("kpiConnected", { count: connectedCount }) : t("kpiConnectedNone"),
+      unit: agentsUnknown ? undefined : t("kpiWorkingUnit", { count: workingCount }),
+      // Unknown is one "–" over the plain label — "– · – connected" read
+      // like a broken figure (round-3 t3 NICE-5c).
+      label: agentsUnknown
+        ? t("kpiAgents")
+        : connectedCount > 0
+          ? t("kpiConnected", { count: connectedCount })
+          : t("kpiConnectedNone"),
       title: inUseTitle,
       testId: "kpi-in-use",
       popoverContent: inUsePopover,
@@ -300,10 +356,14 @@ export function Stage({
       <div className="relative px-4 pt-4" style={{ zIndex: 2, opacity: status === "switching" ? 0.75 : 1 }}>
         <div className="flex items-center gap-2.5">
           <span className="w-2 h-2 rounded-full shrink-0" style={{ background: dotColor }} />
+          {/* Wraps to a second line instead of being cut: on a phone the
+              cut fell into the version ("DeepSeek V4.1 Flash 1…"), the one
+              part that tells two recipes apart (round-3 t3 NICE-4). */}
           <span
-            className="display font-semibold text-[22px] sm:text-[28px] flex-1 min-w-0 truncate"
+            className="display font-semibold text-[22px] sm:text-[28px] flex-1 min-w-0 line-clamp-2 break-words leading-tight"
             style={{ color: C.textPrimary }}
             title={runtime.display_name}
+            data-testid="stage-title"
           >
             {shortModelTitle(runtime.display_name)}
           </span>
@@ -317,7 +377,9 @@ export function Stage({
             style={{ fontSize: "10px", letterSpacing: "0.08em", color: C.textMuted }}
           >
             {status === "failed"
-              ? t("cornerUnreachable")
+              ? crash
+                ? t("cornerCrashed")
+                : t("cornerUnreachable")
               : status === "switching"
                 ? t("cornerSwitching")
                 : uptime
@@ -328,15 +390,31 @@ export function Stage({
           </span>
         </div>
         <HeatStrip pulse={pulse} dead={status === "failed"} />
-        <div className="text-xs mt-2 pb-4 font-mono truncate" style={{ color: status === "failed" ? STATUS_TEXT.error : C.textMuted }} data-testid="stage-now-line">
+        {/* A crash line wraps on a phone: the reason is its point and must
+            not be cut after "von aussen beendet (Exit…". */}
+        <div
+          className={`text-xs mt-2 font-mono ${crash ? "break-words" : "truncate pb-4"}`}
+          style={{ color: status === "failed" ? STATUS_TEXT.error : C.textMuted }}
+          data-testid="stage-now-line"
+          title={crash?.log_line ?? undefined}
+        >
           {status === "switching"
             ? t("switchingTo", { model: shortModelTitle(runtime.display_name) })
-            : status === "failed"
+            : crash
+              ? crashTime
+                ? t("crashedLine", { time: crashTime, where: crashWhere, reason: crashReason ?? "" })
+                : t("crashedLineNoTime", { where: crashWhere, reason: crashReason ?? "" })
+              : status === "failed"
               ? t("engineUnreachable")
               : nowLineParts.length > 0
                 ? nowLineParts.join(" · ")
                 : `${typeLabel(runtime.runtime_type)}${runtime.model_identifier ? ` · ${runtime.model_identifier}` : ""}`}
         </div>
+        {crash && (
+          <div className="text-xs mt-1 pb-4" style={{ color: C.textMuted }} data-testid="stage-crash-followup">
+            {crashFollowUp}
+          </div>
+        )}
       </div>
 
       <div className="relative" style={{ zIndex: 2 }}>
@@ -389,6 +467,7 @@ export function Stage({
             variant={status === "failed" ? "trouble" : "normal"}
             onOpenCockpit={() => onOpenCockpit(headHost?.host.id ?? "")}
             headOnBox={workingHead}
+            bench={benchSummary}
           />
         )}
       </div>

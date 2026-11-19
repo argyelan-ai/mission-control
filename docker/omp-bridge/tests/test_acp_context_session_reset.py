@@ -10,10 +10,11 @@ Task 1556064c. Two failed intermediate states shaped this:
     by chance.
 
 Verified against the real code (this is why on_session_id was REJECTED as
-the reset point): run_acp_once opens a NEW ACP session for EVERY attempt
-(`client = make_client()` + `client.new_session(cwd)`) — continue-nudges and
-retries included. On_session_id therefore fires per ATTEMPT; a reset there is
-the per-turn reset #560 measured as broken.
+the reset point): run_acp_once spawns a new omp child for EVERY attempt
+(`client = make_client()`) and opens a new session for every retry
+(`client.new_session(cwd)`); since 28.10.2026 a continue-nudge re-loads the
+previous session (`session/load`). On_session_id fires per ATTEMPT either
+way; a reset there is the per-turn reset #560 measured as broken.
 
 The fix: serve_loop stamps the holder with 0.0 ONCE per task pickup (the
 session change in the display's sense). The value then survives every attempt

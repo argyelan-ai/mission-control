@@ -11,17 +11,21 @@
  */
 
 import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
-import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
+import type { Device, Runtime, RuntimeLiveStatus } from "@/lib/types";
 import type { HostGroup } from "../grouping";
-import { hostProbeTimedOut, pickServing, pickSlot } from "../grouping";
+import { hostProbePending, hostProbeTimedOut, pickServing, pickSlot } from "../grouping";
 import { useDevices } from "../DeviceControl";
 import { Stage, type StageMember } from "./Stage";
 import { FreeBox } from "./FreeBox";
 import { AsleepBox } from "./AsleepBox";
 import { BoxCockpit, type BoxCockpitMember } from "./cockpit/BoxCockpit";
+import { useBenchRuntimeSummary } from "../benchSummary";
+import type { BenchRuntimeSummary } from "@/lib/benchLinks";
 
 export interface BuiltStage {
   runtime: Runtime;
@@ -86,11 +90,13 @@ function StageRow({
   groupsByHostId,
   live,
   onOpenBoxCockpit,
+  benchSummary,
 }: {
   runtime: Runtime;
   hostIds: string[];
   groupsByHostId: Map<string, HostGroup>;
   live?: Record<string, RuntimeLiveStatus>;
+  benchSummary?: BenchRuntimeSummary | null;
   onOpenBoxCockpit: (members: BoxCockpitMember[], runtime: Runtime, activeHostId: string) => void;
 }) {
   const devices = useDevices();
@@ -120,6 +126,7 @@ function StageRow({
       members={stageMembers}
       live={rtLive}
       onOpenCockpit={(headHostId) => onOpenBoxCockpit(members, runtime, headHostId)}
+      benchSummary={benchSummary}
     />
   );
 }
@@ -158,6 +165,53 @@ function EmptyStage({ groups, onOpenCockpit }: { groups: HostGroup[]; onOpenCock
   );
 }
 
+/**
+ * A power-managed box with nothing serving — the "sleeping" row. Whether it
+ * sleeps is the box's own check to say (round-4 t3 S1): until that answers
+ * the card is being checked, and a box that answers is free, not asleep.
+ * Same query key as FreeBox, so switching cards costs no second request.
+ * The HOST flag makes a box this row (round-5 re-check L1) — "Wake" goes to
+ * the host, so no runtime row needs the flag.
+ */
+function SleepingBox({
+  group,
+  device,
+  onOpenCockpit,
+}: {
+  group: HostGroup;
+  device?: Device;
+  onOpenCockpit: () => void;
+}) {
+  const { data: metrics, isError: metricsFailed } = useQuery({
+    queryKey: ["hosts", group.host.id, "metrics"],
+    queryFn: () => api.hosts.metrics(group.host.id),
+    refetchInterval: 5_000,
+  });
+  if (metrics?.reachable === true) {
+    return (
+      <FreeBox
+        host={group.host}
+        slot={pickSlot(group)}
+        device={device}
+        probeTimedOut={hostProbeTimedOut(group)}
+        probePending={hostProbePending(group)}
+        onOpenCockpit={onOpenCockpit}
+      />
+    );
+  }
+  return (
+    // A failed first metrics call (backend 5xx, restart) is no answer from the
+    // box: not "checking" forever, not "asleep" either — the readings are
+    // missing (PR #971 review; FreeBox does the same since PR #960).
+    <AsleepBox
+      host={group.host}
+      checking={metrics == null && !metricsFailed}
+      noReadings={metrics == null && metricsFailed}
+      onOpenCockpit={onOpenCockpit}
+    />
+  );
+}
+
 interface CockpitState {
   members: BoxCockpitMember[];
   runtime: Runtime | null;
@@ -183,6 +237,8 @@ export function FleetStage({
   const { stages, freeHostIds } = useMemo(() => buildStages(stageGroups, live), [stageGroups, live]);
   const groupsByHostId = useMemo(() => new Map(stageGroups.map((g) => [g.host.id, g])), [stageGroups]);
   const devices = useDevices();
+  // Bench W1 P1: which live card gets "Testen" (and which one leads, K11).
+  const benchSummary = useBenchRuntimeSummary();
   // Das Cockpit (Zahnrad, Spec §4) — ersetzt seit PR 5 das alte
   // RuntimeDetailPanel für Stage/FreeBox/AsleepBox. `onOpen` bleibt nur noch
   // für EmptyStage's "Start model" (öffnet den Rezept-Umschalter-Kontext,
@@ -203,7 +259,9 @@ export function FleetStage({
   const freeGroups = stageGroups.filter((g) => freeHostIds.has(g.host.id));
   // A box whose probe timed out is not "free" — its state is unknown. It
   // keeps its own card, so the page never claims "nothing is running".
-  const isFullyEmpty = stages.length === 0 && !freeGroups.some(hostProbeTimedOut);
+  // Same for a box whose rows are not probed yet (first paint, round-2 Q6).
+  const isFullyEmpty =
+    stages.length === 0 && !freeGroups.some((g) => hostProbeTimedOut(g) || hostProbePending(g));
   const reduceMotion = useReducedMotion();
 
   // Duo→Solo-Übergang (Spec, PR 6 "Schliff"): löst sich ein Verbund auf (eine
@@ -235,6 +293,7 @@ export function FleetStage({
                 hostIds={hostIds}
                 groupsByHostId={groupsByHostId}
                 live={live}
+                benchSummary={benchSummary.get(runtime.id) ?? null}
                 onOpenBoxCockpit={(members, rt, activeHostId) => openCockpit({ members, runtime: rt, activeHostId })}
               />
             </motion.div>
@@ -248,6 +307,7 @@ export function FleetStage({
                   slot={slot}
                   device={devices.get(g.host.id)}
                   probeTimedOut={hostProbeTimedOut(g)}
+                  probePending={hostProbePending(g)}
                   onOpenCockpit={() =>
                     openCockpit({
                       members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id), slot }],
@@ -263,14 +323,15 @@ export function FleetStage({
       )}
       <AnimatePresence initial={false}>
         {sleepingGroups.map((g) => {
-          const rt = g.runtimes.find((r) => r.power_managed === true);
-          if (!rt) return null;
+          // The cockpit's runtime: the box's power-managed row if it has one,
+          // else its slot — a box without either still shows (and wakes).
           const slot = pickSlot(g);
+          const rt = g.runtimes.find((r) => r.power_managed === true) ?? slot;
           return (
             <motion.div key={g.host.id} {...cardMotionProps}>
-              <AsleepBox
-                host={g.host}
-                runtime={rt}
+              <SleepingBox
+                group={g}
+                device={devices.get(g.host.id)}
                 onOpenCockpit={() =>
                   openCockpit({
                     members: [{ host: g.host, role: g.host.role, device: devices.get(g.host.id), slot }],

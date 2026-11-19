@@ -7,11 +7,13 @@ import { describe, expect, it } from "vitest";
 import type { MessageEvent, StateEvent, TimelineChatEvent, TodoEvent, ToolEvent } from "@/lib/chatTypes";
 import {
   FINAL_SETTLE_MS,
+  FINAL_TEXT_MAX,
   FINAL_WAIT_MS,
   HEARTBEAT_MS,
   PERIODIC_MS,
   ProgressTracker,
   QUIET_MS,
+  SHORT_REPLY_CHARS,
   SOFT_GAP_MS,
   TOOL_MIN_GAP_MS,
   claimsSuccess,
@@ -244,6 +246,82 @@ describe("ProgressTracker — final (never success before the agent said so)", (
     t.forwarded(false, 0);
     t.observe(snap(state("idle"), [msg("x".repeat(20_000))]), 1000);
     expect((t.tick(1000 + FINAL_SETTLE_MS)[0].req.text ?? "").length).toBeLessThanOrEqual(4000);
+  });
+});
+
+// Spec A PR-0 (S2): a turn's answer can arrive as several assistant lines
+// (Claude Code today, the omp bridge after PR-1). MC speaks only the first one
+// or two sentences of the final text (`summarize_reply`), so the final is read
+// from the END: the closing line, plus the line(s) before it only while the
+// closing text is a short acknowledgement ("Gespeichert.").
+describe("ProgressTracker — final reads the turn's answer from its end", () => {
+  it("a short closing line brings the answer before it, in order", () => {
+    const t = new ProgressTracker();
+    t.observe(snap(state("idle")), 0);
+    t.forwarded(false, 0);
+    t.observe(snap(state("working")), 1000);
+    const first = msg("Die Datei hat drei Fehler, ich behebe sie.");
+    const toolCall = tool({ result: "ok" });
+    const second = msg("Gespeichert.");
+    t.observe(snap(state("working"), [first]), 2000);
+    t.observe(snap(state("working"), [first, toolCall]), 3000);
+    t.observe(snap(state("idle"), [first, toolCall, second]), 4000);
+    const out = t.tick(4000 + FINAL_SETTLE_MS);
+    expect(kinds(out)).toEqual(["final"]);
+    expect(out[0].req.text).toBe("Die Datei hat drei Fehler, ich behebe sie.\n\nGespeichert.");
+  });
+
+  it("leaves out empty segments and replies of an earlier turn", () => {
+    const t = new ProgressTracker();
+    const old = msg("Alte Antwort.");
+    t.observe(snap(state("idle"), [old]), 0);
+    t.forwarded(false, 0);
+    t.observe(snap(state("working"), [old]), 1000);
+    const blank = msg("   ");
+    const a = msg("Eins.");
+    const b = msg("Zwei.");
+    t.observe(snap(state("idle"), [old, a, blank, b]), 2000);
+    expect(t.tick(2000 + FINAL_SETTLE_MS)[0].req.text).toBe("Eins.\n\nZwei.");
+  });
+
+  it("opening line → tool → result: speaks the result, not the plan", () => {
+    const t = new ProgressTracker();
+    t.observe(snap(state("idle")), 0);
+    t.forwarded(false, 0);
+    t.observe(snap(state("working")), 1000);
+    const opening = msg("Ich schaue mir zuerst die Logs an. Danach pruefe ich die Konfiguration.");
+    const toolCall = tool({ result: "ok" });
+    const result = msg("Der Fehler lag im Zeitstempel-Vergleich. Ich habe ihn behoben.");
+    t.observe(snap(state("working"), [opening]), 2000);
+    t.observe(snap(state("working"), [opening, toolCall]), 3000);
+    t.observe(snap(state("idle"), [opening, toolCall, result]), 4000);
+    const out = t.tick(4000 + FINAL_SETTLE_MS);
+    expect(kinds(out)).toEqual(["final"]);
+    expect(out[0].req.text).toBe("Der Fehler lag im Zeitstempel-Vergleich. Ich habe ihn behoben.");
+  });
+
+  it(`stops putting lines in front once the text reaches ${SHORT_REPLY_CHARS} characters`, () => {
+    const t = new ProgressTracker();
+    t.observe(snap(state("idle")), 0);
+    t.forwarded(false, 0);
+    t.observe(snap(state("working")), 1000);
+    const first = msg("Erste Zeile, die nicht mehr gesprochen wird.");
+    const answer = msg("x".repeat(SHORT_REPLY_CHARS - 12));
+    const ack = msg("Gespeichert.");
+    t.observe(snap(state("idle"), [first, answer, ack]), 2000);
+    expect(t.tick(2000 + FINAL_SETTLE_MS)[0].req.text).toBe(`${"x".repeat(SHORT_REPLY_CHARS - 12)}\n\nGespeichert.`);
+  });
+
+  it("the final text is capped, from its start", () => {
+    const t = new ProgressTracker();
+    t.observe(snap(state("idle")), 0);
+    t.forwarded(false, 0);
+    t.observe(snap(state("working")), 1000);
+    const a = msg("a".repeat(5_000));
+    const b = msg("Gespeichert.");
+    t.observe(snap(state("idle"), [a, b]), 2000);
+    const text = t.tick(2000 + FINAL_SETTLE_MS)[0].req.text ?? "";
+    expect(text).toBe("a".repeat(FINAL_TEXT_MAX));
   });
 });
 

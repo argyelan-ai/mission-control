@@ -380,3 +380,27 @@ class TestAutoPromoteAgentCommentsPath:
 
         promoted = await _reload_task(task.id)
         assert promoted.status == "review"
+
+
+@pytest.mark.asyncio
+async def test_chat_reply_after_resolution_does_not_hide_it_from_the_stale_check(
+    make_board, make_agent, make_task, fake_redis,
+):
+    """Round-3 re-review M1: the run wrote its resolution, then the operator
+    asked the chat something. The chat's reply (``chat_reply``) is newer — the
+    stale check's safety net must still see the run's resolution."""
+    board, agent, task = await _setup_resolution_task(
+        make_board, make_agent, make_task, comm_v2=False,
+    )
+    async with _session() as s:
+        s.add(TaskComment(
+            task_id=task.id, author_type="agent", author_agent_id=agent.id,
+            comment_type="chat_reply", content="It is done, see the resolution.",
+            created_at=utcnow() + timedelta(seconds=1),
+        ))
+        await s.commit()
+
+    async with _session() as s:
+        await _run_stale_check(fake_redis, s)
+
+    assert (await _reload_task(task.id)).status == "review"

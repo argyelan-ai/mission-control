@@ -15,6 +15,8 @@ Gates, in this order, on every route:
 1. admin role (403);
 2. ``MC_UPDATE_MANAGED=deploy`` → **409** ``update_managed`` — the
    operator's own install is updated through its deploy procedure only;
+   ``detail.enabled`` carries the feature switch, so the Settings card shows
+   its "managed" note only once the switch is on;
 3. ``MC_SELF_UPDATE_ENABLED`` off (default) → **404** ``update_disabled`` —
    the button stays off until it passed its acceptance (ADR-094 decision 13);
 4. ``start`` and ``rollback``: step-up — a fresh password confirmation
@@ -53,7 +55,7 @@ def _gate() -> None:
     if runner.managed():
         raise _err(409, "update_managed",
                    "This install is updated through its deploy procedure (MC_UPDATE_MANAGED=deploy).",
-                   managed=True)
+                   managed=True, enabled=bool(settings.mc_self_update_enabled))
     if not settings.mc_self_update_enabled:
         raise _err(404, "update_disabled", "The self-update is not enabled on this install.")
 
@@ -98,7 +100,7 @@ def _door_error(reply: DoorReply) -> HTTPException:
                     "The update door rejected MC's token. On the machine, set the bridge up again.",
                     command=runner.CMD_BRIDGE)
     if reply.status == 409 and d.get("managed"):
-        return _err(409, "update_managed", msg, managed=True)
+        return _err(409, "update_managed", msg, managed=True, enabled=bool(settings.mc_self_update_enabled))
     if reply.status == 409:
         return _err(409, "update_refused", msg)
     if reply.status == 422:

@@ -222,6 +222,60 @@ describe("StatusLine — Arbeits-Verb (Render-Reinheit)", () => {
       spy.mockRestore();
     }
   });
+
+  // Follow-up to ADR-097: a task turn of an ACP agent runs through the
+  // bridge, not the chat — the chat must not say "Ready" meanwhile.
+  it('shows "Working on a task" while a task turn runs, with a live dot', () => {
+    render(<StatusLine state={mkState("task_working")} connected />);
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
+    expect(screen.getByTestId("status-label")).toHaveTextContent("Working on a task");
+    expect(screen.getByTestId("status-dot")).toHaveAttribute("data-live", "true");
+  });
+
+  // Review Z3/UI-2: `activity` is the CHAT's last tool without a result. A
+  // task turn's tools never reach the chat's events (#898 pins the chat to
+  // its own session), and while a task turn runs the chat is not busy — so
+  // an open chat tool there is always a stale one (a chat turn stopped mid
+  // tool). It must not pose as the task's running work.
+  it("a task turn never shows a leftover chat tool as running", () => {
+    render(<StatusLine state={mkState("task_working")} connected activity={{ title: "$ npm run build" }} />);
+    const label = screen.getByTestId("status-label");
+    expect(label).toHaveTextContent("Working on a task");
+    expect(label).not.toHaveTextContent("npm run build");
+    expect(label).not.toHaveClass("font-mono");
+  });
+
+  it("waiting for the model never shows a leftover chat tool either", () => {
+    render(<StatusLine state={mkState("waiting_model")} connected activity={{ title: "$ npm run build" }} />);
+    const label = screen.getByTestId("status-label");
+    expect(label).toHaveTextContent("Waiting for the model");
+    expect(label).not.toHaveClass("font-mono");
+  });
+
+  it('shows "Waiting for the model" for a delivered task whose model has not answered', () => {
+    render(<StatusLine state={mkState("waiting_model")} connected />);
+    expect(screen.getByTestId("status-label")).toHaveTextContent("Waiting for the model");
+    expect(screen.getByTestId("status-dot")).toHaveAttribute("data-live", "false");
+  });
+
+  // ── Round-4 t1 NICE-2: the first moments of a chat ────────────────────────
+  it("says it is loading until the first state arrives — no warning, no terminal", () => {
+    render(<StatusLine state={null} connected={false} loading />);
+    expect(screen.getByTestId("status-label").textContent).toBe("Loading…");
+    expect(screen.queryByText(/check the terminal/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("status-dot").style.backgroundColor).toBe(C.textDim);
+  });
+
+  it("an agent without a terminal is never sent to one", () => {
+    render(<StatusLine state={mkState("unknown")} connected hasTerminal={false} />);
+    expect(screen.getByTestId("status-label").textContent).toBe("Status unknown");
+    expect(screen.queryByText(/terminal/i)).not.toBeInTheDocument();
+  });
+
+  it("a real state outranks the loading hint", () => {
+    render(<StatusLine state={mkState("idle")} connected loading />);
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+  });
 });
 
 function workingWordOf() {

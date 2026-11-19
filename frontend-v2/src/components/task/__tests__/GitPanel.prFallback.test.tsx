@@ -64,6 +64,21 @@ describe("GitPanel PR chip", () => {
   it("hides the section when there is neither a branch nor a PR", () => {
     expect(gitSectionInfo(undefined, null)).toBeNull();
     expect(gitSectionInfo({ ...gitInfo, branch: null }, undefined)).toBeNull();
-    expect(gitSectionInfo(gitInfo, null)).toBe(gitInfo);
+  });
+});
+
+describe("GIT section shows the task's own work only (27.10.)", () => {
+  const commit = { hash: "abc1234", message: "feat: lighthouse page", author: "agent", date: "5 minutes ago" };
+
+  it("a fresh task branch with nothing on it gets no section", () => {
+    expect(gitSectionInfo({ ...gitInfo, branch: "task/bench-lighthouse" }, null)).toBeNull();
+  });
+
+  it("a branch with its own commits, open changes or a PR keeps the section", () => {
+    const branch = { ...gitInfo, branch: "task/x" };
+    expect(gitSectionInfo({ ...branch, commits: [commit], ahead: 1 }, null)).not.toBeNull();
+    expect(gitSectionInfo({ ...branch, uncommitted: true }, null)).not.toBeNull();
+    expect(gitSectionInfo({ ...branch, pr_url: "https://github.com/acme/app/pull/1" }, null)).not.toBeNull();
+    expect(gitSectionInfo(branch, "https://github.com/acme/app/pull/632")).not.toBeNull();
   });
 });

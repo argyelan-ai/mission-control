@@ -102,7 +102,13 @@ async def _compute(session: AsyncSession, now) -> dict:
 
 async def _stale_cards(session: AsyncSession, now) -> list[dict]:
     """M1: offene Karten, deren letzte Bewegung (updated_at, letztes
-    TaskEvent, letzter TaskComment) laenger als 4h zurueckliegt."""
+    TaskEvent, letzter TaskComment) laenger als 4h zurueckliegt.
+
+    Die Antwort einer Chat-Sitzung (``chat_reply``) ist keine Bewegung der
+    Karte (Runde 5, r1 S1): „wie weit bist du?" darf eine haengende Karte
+    nicht 4h aus der Liste nehmen."""
+    from app.comment_types import activity_comment_filter
+
     result = await session.exec(select(Task).where(Task.status.in_(_OPEN_STATUSES)))
     tasks = result.all()
     if not tasks:
@@ -118,7 +124,7 @@ async def _stale_cards(session: AsyncSession, now) -> list[dict]:
 
     comment_max_result = await session.exec(
         select(TaskComment.task_id, func.max(TaskComment.created_at))
-        .where(TaskComment.task_id.in_(task_ids))
+        .where(TaskComment.task_id.in_(task_ids), activity_comment_filter())
         .group_by(TaskComment.task_id)
     )
     comment_max = dict(comment_max_result.all())

@@ -23,6 +23,9 @@ body {
 .label { font-family:'JetBrains Mono',monospace; text-transform:uppercase;
   letter-spacing:.08em; font-size:20px; color:var(--text2); }
 .label .accent { color:var(--cyan); }
+/* run date (+ "episode N") in the kicker — the separator only when there is
+   a date, so an empty {{DATE_LABEL}} leaves no dangling dot */
+.label .date:not(:empty)::before { content:" · "; }
 .display { font-family:'Clash Display',sans-serif; letter-spacing:-0.02em; }
 .brandmark { display:flex; align-items:center; gap:14px; }
 .brandmark .sq { width:16px; height:16px; background:var(--cyan); }

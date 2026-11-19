@@ -2,7 +2,6 @@
 
 Vertical test: skipped entirely when the vertical directory is stripped.
 """
-import uuid
 from unittest.mock import AsyncMock
 
 import httpx
@@ -94,13 +93,17 @@ async def test_generate_spark_entry_writes_artifact_and_metrics(
     assert entry.status == "generated"
     assert entry.error is None
     assert entry.artifact_path is not None
-    expected = tmp_path / f"bench-{ch.id}" / "DeepSeek" / "index.html"
+    # One folder per entry: label + entry-id prefix (round-1 P3).
+    expected = tmp_path / f"bench-{ch.id}" / f"DeepSeek-{entry.id.hex[:8]}" / "index.html"
     assert str(expected) == entry.artifact_path
     assert expected.read_text() == "<html><body>ball</body></html>"
     assert entry.metrics["duration_ms"] == 1234
     assert entry.metrics["tok_per_s"] == 72.9
-    # The model override must reach the spark call:
-    orchestrator._spark_generate.assert_awaited_once_with("make a page", "deepseek-x")
+    # The model override must reach the spark call (no effort requested:
+    # nothing extra sent, today's max_tokens):
+    orchestrator._spark_generate.assert_awaited_once_with(
+        "make a page", "deepseek-x", effort_fields={}, max_tokens=orchestrator.SPARK_MAX_TOKENS
+    )
 
 
 @pytest.mark.asyncio
@@ -179,55 +182,14 @@ def _patch_models_probe(monkeypatch, *, reachable: bool, models=None, active=Non
     monkeypatch.setattr(SparkClient, "_resolve_llm_model", AsyncMock(return_value=active))
 
 
-@pytest.mark.asyncio
-async def test_spark_models_status_reachable(monkeypatch):
-    _patch_models_probe(monkeypatch, reachable=True, models=["a", "b"], active="a")
-    assert await orchestrator.spark_models_status() == {
-        "reachable": True, "models": ["a", "b"], "active": "a",
-    }
 
 
-@pytest.mark.asyncio
-async def test_spark_models_status_unreachable(monkeypatch):
-    _patch_models_probe(monkeypatch, reachable=False)
-    assert await orchestrator.spark_models_status() == {
-        "reachable": False, "models": [], "active": None,
-    }
 
 
-@pytest.mark.asyncio
-async def test_spark_models_status_bounds_the_whole_probe(monkeypatch):
-    """Review finding: _resolve_llm_model can fall through to its own
-    unbounded live re-probe — a slow/hanging leg anywhere in the body must
-    still resolve to "unreachable" within _SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S,
-    not hang the dialog indefinitely."""
-    import asyncio
-
-    async def _hangs_forever():
-        await asyncio.sleep(3600)
-        return {"reachable": True, "models": ["a"], "active": "a"}
-
-    monkeypatch.setattr(orchestrator, "_probe_spark_models", _hangs_forever)
-    monkeypatch.setattr(orchestrator, "_SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S", 0.05)
-
-    result = await orchestrator.spark_models_status()
-    assert result == {"reachable": False, "models": [], "active": None}
 
 
-@pytest.mark.asyncio
-async def test_resolve_spark_model_or_422_happy_path(monkeypatch):
-    _patch_models_probe(monkeypatch, reachable=True, models=["a"], active="a")
-    assert await orchestrator.resolve_spark_model_or_422() == "a"
 
 
-@pytest.mark.asyncio
-async def test_resolve_spark_model_or_422_unreachable_raises_422(monkeypatch):
-    from fastapi import HTTPException
-
-    _patch_models_probe(monkeypatch, reachable=False)
-    with pytest.raises(HTTPException) as exc_info:
-        await orchestrator.resolve_spark_model_or_422()
-    assert exc_info.value.status_code == 422
 
 
 # ── Task 5: ModelUsageEvent for vanilla (direct-API) generations ──────────
@@ -313,7 +275,7 @@ async def test_generate_spark_entry_usage_events_not_deduped_across_reruns(
     monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
     ch, entry = await _make_challenge_entry(session, spark_model="deepseek-x")
 
-    async def _mock_generate(prompt, model):
+    async def _mock_generate(prompt, model, **_effort):
         return (
             "<html><body>ok</body></html>",
             {"duration_ms": 100, "tokens_in": 10, "tokens_out": 5, "model": model},
@@ -419,7 +381,7 @@ async def test_build_branding_payload_reads_tokens_from_entry_metrics_for_spark(
     assert payload["outro_rows"][0]["tokens"] == "200 → 50"
 
 
-# ── _spark_generate thinking guard ────────────────────────────────────────
+# ── _spark_generate: no model-name thinking guard ────────────────────────────────────────
 
 
 class _FakeThinkResp:
@@ -435,15 +397,14 @@ class _FakeThinkResp:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "model,expects_guard",
-    [("Qwen/Qwen3.6-35B-A3B-FP8", True), ("poolside/Laguna-S-2.1-NVFP4", False)],
+    "model", ["Qwen/Qwen3.6-35B-A3B-FP8", "poolside/Laguna-S-2.1-NVFP4"]
 )
-async def test_spark_generate_thinking_guard_is_model_aware(
-    monkeypatch, model, expects_guard
-):
-    """Qwen gets enable_thinking=False (content=null guard); other models must
-    NOT send chat_template_kwargs so the serving-side default governs and
-    reasoning models (Laguna) keep their think phase."""
+async def test_spark_generate_has_no_model_name_thinking_guard(monkeypatch, model):
+    """Bench W0.6: the old "qwen in the name -> enable_thinking false"
+    switch is gone — it ran every Qwen bench without thinking and never
+    said so. With no effort requested NO model gets chat_template_kwargs:
+    the serving default governs and is recorded (effort_observed); a level
+    is sent only as the probed key (test_bench_effort.py)."""
     captured = {}
 
     class _FakeClient:
@@ -477,7 +438,5 @@ async def test_spark_generate_thinking_guard_is_model_aware(
     payload = captured["json"]
     assert content == "<html></html>"
     assert payload["max_tokens"] == orchestrator.SPARK_MAX_TOKENS
-    if expects_guard:
-        assert payload["chat_template_kwargs"] == {"enable_thinking": False}
-    else:
-        assert "chat_template_kwargs" not in payload
+    assert "chat_template_kwargs" not in payload
+    assert metrics["effort_sent"] is None

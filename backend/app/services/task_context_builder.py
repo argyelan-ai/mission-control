@@ -20,6 +20,7 @@ from sqlalchemy import and_, func, or_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.comment_types import review_note_filter
 from app.models.agent import Agent
 from app.models.board import Project
 from app.models.memory import BoardMemory
@@ -202,6 +203,17 @@ async def setup_git_workspace_for_dispatch(
     # 2026-09-12: Reviewer bekam einen von PR-Aenderungen leeren Ordner).
     if task.dispatch_intent == "review_handoff":
         return await _setup_review_workspace_for_dispatch(task, agent, session)
+
+    # A vertical may own the workspace of its tasks (hooks.task_workspace_
+    # providers) — e.g. a bench task starts in an empty folder, never in a
+    # worktree of the shared scratch repo. None = the normal path below.
+    from app.verticals.hooks import provide_task_workspace
+    provided = await provide_task_workspace(session, task, agent)
+    if provided:
+        task.workspace_path = provided
+        session.add(task)
+        await session.commit()
+        return True
 
     # Lazy import: dispatch.py contains is_backend_writable_path + _BACKEND_MOUNTED_ROOTS
     # (Pitfall D inseparable triple stays in dispatch.py per CONTEXT D-07 + ADR-025).
@@ -848,7 +860,7 @@ async def _load_dispatch_context(
                 select(TaskComment)
                 .where(
                     TaskComment.task_id == task.id,
-                    TaskComment.comment_type == "review",
+                    review_note_filter(),
                 )
                 .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
                 .limit(1)

@@ -1,6 +1,6 @@
 # ADR-085 — Head per job: one short-lived coding session per job instead of a persistent agent fleet
 
-**Status:** Accepted (direction; first two-week trial running) · partially supersedes ADR-005, ADR-019, ADR-021, ADR-061 §2, ADR-072 (inbound routing)
+**Status:** Accepted (direction; first two-week trial running) · partially supersedes ADR-005, ADR-019, ADR-021, ADR-061 §2, ADR-072 (inbound routing) · partially superseded by [ADR-102](102-cockpit-direction.md) (2026-11-17) — north star, head as the unit of work, vendor surface, chat build stop and stop points no longer hold; the forbidden list, house rules 1, 3, 5–8 and pause-not-delete stay
 **Datum:** 2026-09-22
 **Amended by:** [ADR-086](086-harness-runtime-cross-switch.md) — §6 rule 2 (operator surface is swappable too), §7 decision 1 and §8 stop 1 (local first instead of GPU boxes as helpers)
 **Amended by:** [ADR-089](089-lead-agent-with-hands.md) — §4 (exception for the lead agent's chat input and driver), §5 (fixed agents = lead agent + one local omp agent), §8 stop 3 (answered); see the note at the end

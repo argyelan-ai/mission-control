@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { SlidersHorizontal, X } from "lucide-react";
 import type { VaultNoteType } from "@/lib/types";
 import type { VaultScope } from "@/hooks/useVaultSearch";
+import { noteTypeLabel } from "./VaultNoteRow";
 import { C } from "@/lib/colors";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -32,19 +33,16 @@ const SCOPES: { value: VaultScope; label: string }[] = [
   { value: "agents", label: "agents" },
 ];
 
-const TYPES: { value: VaultNoteType; label: string }[] = [
-  { value: "lesson", label: "lesson" },
-  { value: "knowledge", label: "knowledge" },
-  { value: "reference", label: "reference" },
-  { value: "journal", label: "journal" },
-  { value: "weekly_review", label: "weekly review" },
-  { value: "note", label: "note" },
-  { value: "deliverable", label: "files" },
+// Labels come from the i18n catalog (vault.noteType.*).
+const TYPES: VaultNoteType[] = [
+  "lesson",
+  "knowledge",
+  "reference",
+  "journal",
+  "weekly_review",
+  "note",
+  "deliverable",
 ];
-
-const TYPE_LABELS: Record<string, string> = Object.fromEntries(
-  TYPES.map((t) => [t.value, t.label])
-);
 
 // ── Chip ──────────────────────────────────────────────────────────────────────
 
@@ -166,7 +164,7 @@ export function VaultFilterStrip({
   if (filters.type) {
     activePills.push({
       key: "type",
-      label: TYPE_LABELS[filters.type] ?? filters.type,
+      label: noteTypeLabel(tr, filters.type),
       clear: () => onChange({ type: undefined }),
     });
   }
@@ -288,12 +286,12 @@ export function VaultFilterStrip({
                 style={{ overscrollBehaviorX: "contain" }}
               >
                 <StripLabel>{tr("typeLabel")}</StripLabel>
-                {TYPES.map((t) => (
+                {TYPES.map((type) => (
                   <Chip
-                    key={t.value}
-                    label={t.label}
-                    active={filters.type === t.value}
-                    onClick={() => toggleType(t.value)}
+                    key={type}
+                    label={noteTypeLabel(tr, type)}
+                    active={filters.type === type}
+                    onClick={() => toggleType(type)}
                   />
                 ))}
               </div>

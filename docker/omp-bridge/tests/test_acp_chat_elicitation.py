@@ -445,7 +445,8 @@ def test_tool_name_comes_from_omps_own_session_file(tmp_path):
     omp's own file of the session (same folder, same session id) has the
     real name; the chat daemon looks it up."""
     client, sess = _started(tmp_path)
-    native = sess.transcript_path.parent / "2026-10-13T10-02-56-297Z_sid-1.jsonl"
+    # omp's file sits in the session folder; MC's copy in its .mc/ (S1-R3).
+    native = sess.transcript_path.parent.parent / "2026-10-13T10-02-56-297Z_sid-1.jsonl"
     native.write_text(json.dumps({"type": "message", "message": {"role": "assistant", "content": [
         {"type": "toolCall", "id": "call_ask1", "name": "ask", "arguments": {}}]}},
         separators=(",", ":")) + "\n")

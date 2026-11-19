@@ -16,9 +16,14 @@ Examples:
     acp_chat_ctl.py prompt --json '{"text": "and then this", "mode": "queue"}'
     acp_chat_ctl.py queue_clear
     acp_chat_ctl.py new_session
+    acp_chat_ctl.py new_session --json '{"mode": "queue", "requestId": "…"}'
     acp_chat_ctl.py config --json '{"id": "thinking", "value": "high"}'
     acp_chat_ctl.py cancel
     acp_chat_ctl.py answer --json '{"id": "el-…", "action": "accept", "content": {"value": "Yes"}}'
+
+`requestId` is how MC's backend names its own `new_session` request; a
+reset without one (this shim from a shell, the agent's own tools) is
+recorded in the activity feed as not sent by MC (incident 21.10.2026).
 """
 from __future__ import annotations
 

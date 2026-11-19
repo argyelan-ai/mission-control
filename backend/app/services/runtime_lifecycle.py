@@ -22,6 +22,7 @@ from app.database import engine
 from app.models.agent import Agent
 from app.models.runtime import Runtime
 from app.redis_client import get_redis
+from app.services import runtime_grace
 
 logger = logging.getLogger("mc.runtime_lifecycle")
 
@@ -121,7 +122,9 @@ async def check_and_stop_idle(session: AsyncSession) -> None:
                 continue
             state = await runtime_manager.get_runtime_state(rt.to_registry_dict())
             if state.get("state") == "ready":
-                res = await runtime_manager.stop_runtime(rt.to_registry_dict())
+                res = await runtime_manager.stop_runtime(
+                    rt.to_registry_dict(), stop_intent=runtime_grace.INTENT_IDLE_UNLOAD,
+                )
                 await invalidate_readiness(rt.slug)
                 logger.info(
                     "idle-stop: stopped '%s' after %.0f min idle — %s",

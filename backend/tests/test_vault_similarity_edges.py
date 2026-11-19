@@ -1,80 +1,93 @@
+"""Similarity ("ghost") edges for the memory graph (W3-A).
+
+The graph build already holds every note vector after one Qdrant scroll, so
+the top-K cosine neighbours are computed locally in one matrix pass. The
+earlier one-Qdrant-query-per-note path took ~78 s for ~1,900 notes (round-3
+user test t4 S2) and is gone.
+"""
+
+from __future__ import annotations
+
+import math
+import random
+import time
+
 import pytest
-from unittest.mock import MagicMock
-from app.services.vault_similarity_edges import build_similarity_edges
+
+from app.services.vault_similarity_edges import similarity_edges_from_vectors
 
 
-def test_builds_ghost_edges_above_threshold():
-    """Top-K neighbours with score >= min_score produce ghost edges,
-    deduplicated lexicographically and excluding the source from its own list."""
-    qdrant = MagicMock()
-    # Each search() call gets back a fixed set of hits — but for a 2-node sim
-    # the searches happen twice (once per node).
-    # Hit 1: node "a"'s neighbours — sees self + b above threshold + c above
-    # Hit 2: node "b"'s neighbours — sees self + a above threshold + c below
-    qdrant.search = MagicMock(side_effect=[
-        [
-            MagicMock(id="self-A", score=1.0, payload={"path": "a"}),
-            MagicMock(id="other-B", score=0.85, payload={"path": "b"}),
-            MagicMock(id="other-C", score=0.72, payload={"path": "c"}),
-        ],
-        [
-            MagicMock(id="self-B", score=1.0, payload={"path": "b"}),
-            MagicMock(id="other-A", score=0.85, payload={"path": "a"}),
-            MagicMock(id="other-C", score=0.65, payload={"path": "c"}),  # below threshold
-        ],
-    ])
-    nodes = [
-        {"id": "a", "embedding": [0.1] * 768},
-        {"id": "b", "embedding": [0.2] * 768},
-    ]
-    edges = build_similarity_edges(qdrant, nodes, top_k=3, min_score=0.7)
-    pairs = {(e["source"], e["target"]) for e in edges}
-    assert ("a", "b") in pairs
-    assert ("a", "c") in pairs
-    # No duplicate of a↔b
-    assert len([e for e in edges if {e["source"], e["target"]} == {"a", "b"}]) == 1
-    # All marked similarity
-    assert all(e["kind"] == "similarity" for e in edges)
-    # Weight comes from score
-    ab = next(e for e in edges if {e["source"], e["target"]} == {"a", "b"})
-    assert ab["weight"] == pytest.approx(0.85)
+# ── Local similarity edges ───────────────────────────────────────────────────
 
 
-def test_no_edges_when_all_below_threshold():
-    qdrant = MagicMock()
-    qdrant.search = MagicMock(return_value=[
-        MagicMock(id="other", score=0.5, payload={"path": "other"}),
-    ])
-    nodes = [{"id": "a", "embedding": [0.1] * 768}]
-    edges = build_similarity_edges(qdrant, nodes, top_k=3, min_score=0.7)
-    assert edges == []
+def _unit(v: list[float]) -> list[float]:
+    n = math.sqrt(sum(x * x for x in v)) or 1.0
+    return [x / n for x in v]
 
 
-def test_self_edge_dropped():
-    qdrant = MagicMock()
-    qdrant.search = MagicMock(return_value=[
-        MagicMock(id="self", score=1.0, payload={"path": "a"}),  # same as source
-    ])
-    nodes = [{"id": "a", "embedding": [0.1] * 768}]
-    edges = build_similarity_edges(qdrant, nodes, top_k=3, min_score=0.7)
-    assert edges == []
-
-
-def test_higher_score_wins_when_seen_twice():
-    """If a↔b appears in both searches with different scores, keep the max."""
-    qdrant = MagicMock()
-    qdrant.search = MagicMock(side_effect=[
-        [
-            MagicMock(id="b", score=0.80, payload={"path": "b"}),
-        ],
-        [
-            MagicMock(id="a", score=0.92, payload={"path": "a"}),
-        ],
-    ])
-    nodes = [
-        {"id": "a", "embedding": [0.1] * 768},
-        {"id": "b", "embedding": [0.2] * 768},
-    ]
-    edges = build_similarity_edges(qdrant, nodes, top_k=3, min_score=0.7)
+def test_local_edges_match_cosine_top_k_and_threshold():
+    """a≈b (cos≈0.99), c is orthogonal → one a↔b edge, nothing to c."""
+    vectors = {
+        "a.md": [1.0, 0.0, 0.0],
+        "b.md": [0.99, 0.14, 0.0],
+        "c.md": [0.0, 0.0, 1.0],
+    }
+    edges = similarity_edges_from_vectors(vectors, top_k=3, min_score=0.72)
     assert len(edges) == 1
-    assert edges[0]["weight"] == pytest.approx(0.92)
+    e = edges[0]
+    assert (e["source"], e["target"]) == ("a.md", "b.md")
+    assert e["kind"] == "similarity"
+    expected = sum(x * y for x, y in zip(_unit(vectors["a.md"]), _unit(vectors["b.md"])))
+    assert e["weight"] == pytest.approx(expected, abs=1e-4)
+
+
+def test_local_edges_respect_top_k_per_note():
+    """Five near-identical notes, top_k=1 → each note keeps only its single
+    best neighbour; no note gets more than (its own 1 + incoming) edges and
+    the total is far below the full 10-pair clique."""
+    base = [1.0, 0.0, 0.0, 0.0]
+    vectors = {
+        f"n{i}.md": [1.0, 0.01 * i, 0.0, 0.0] for i in range(5)
+    }
+    vectors["n0.md"] = base
+    edges = similarity_edges_from_vectors(vectors, top_k=1, min_score=0.5)
+    assert 1 <= len(edges) <= 5
+    assert all(e["source"] < e["target"] for e in edges)
+
+
+def test_local_edges_empty_and_single():
+    assert similarity_edges_from_vectors({}, top_k=3, min_score=0.7) == []
+    assert similarity_edges_from_vectors({"a.md": [1.0, 0.0]}, top_k=3, min_score=0.7) == []
+
+
+def test_local_edges_ignore_zero_and_ragged_vectors():
+    """A zero vector or one with the wrong length must not crash the build."""
+    vectors = {
+        "a.md": [1.0, 0.0],
+        "b.md": [1.0, 0.01],
+        "zero.md": [0.0, 0.0],
+        "ragged.md": [1.0, 0.0, 0.0],
+    }
+    edges = similarity_edges_from_vectors(vectors, top_k=3, min_score=0.72)
+    pairs = {(e["source"], e["target"]) for e in edges}
+    assert pairs == {("a.md", "b.md")}
+
+
+def test_local_edges_2000_notes_under_two_seconds():
+    """The live vault has ~1,900 notes at 768 dims. The old path needed
+    ~78 s; the local pass must stay well under 2 s."""
+    rng = random.Random(7)
+    vectors = {
+        f"note-{i}.md": [rng.uniform(-1, 1) for _ in range(768)] for i in range(2000)
+    }
+    t0 = time.perf_counter()
+    similarity_edges_from_vectors(vectors, top_k=3, min_score=0.72)
+    assert time.perf_counter() - t0 < 2.0
+
+
+def test_higher_score_kept_once_per_pair():
+    """a↔b is found from both sides — one edge, canonical order, no self-edge."""
+    vectors = {"b.md": [1.0, 0.05], "a.md": [1.0, 0.0]}
+    edges = similarity_edges_from_vectors(vectors, top_k=3, min_score=0.7)
+    assert [(e["source"], e["target"]) for e in edges] == [("a.md", "b.md")]
+    assert all(e["source"] != e["target"] for e in edges)

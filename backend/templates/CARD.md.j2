@@ -63,6 +63,21 @@ chars total):
 - {{ field }}
 {% endfor %}
 {%- endif %}
+{%- if harness == 'omp' and not (role in ("orchestrator", "lead") or is_board_lead) %}
+
+## Self-check
+
+- `eval` has a global `browser`; never search for or install one. If
+  `omp config get browser.cdpUrl` prints a URL, it is in another container:
+  `file://` and `localhost` do not reach your files. Serve only the task
+  folder (`bash` service named `srv`:
+  `python3 -m http.server 8765 -d /deliverables/<task_id>`), then
+  `tab = await browser.open({name: "c", url: "http://<ip>:8765/"})`
+  (IP: `hostname -i`); `tab.screenshot()`, `tab.errors()` (syntax errors
+  too), `tab.console()`; `write proc://srv/kill` after.
+- **Never** `pip install --break-system-packages`; a missing check tool is
+  noted, not a blocker.
+{%- endif %}
 
 ## More knowledge (`mc docs <topic>`)
 

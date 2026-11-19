@@ -363,35 +363,19 @@ async def pr_number_for_task(session, task) -> int | None:
     """The PR this card produced, or None when it never created one.
 
     Prefers the `task.pr_number` field (written by `handle_review_pr_creation`
-    since 2026-09-13) and falls back to the `PR erstellt:` comment marker —
-    the same greppable contract the merge helpers use (Pitfall H). Cards
-    without either never reach a merge, so they are out of scope by
-    construction.
+    since 2026-09-13) and falls back to MC's own `PR erstellt:` note — the
+    same trusted query the merge helpers use (pr_marker.py, round 8 / L6:
+    never a chat reply or agent note quoting another PR). Cards without
+    either never reach a merge, so they are out of scope by construction.
     """
     pr_number = getattr(task, "pr_number", None)
     if pr_number:
         return int(pr_number)
 
-    import re
+    from app.services.pr_marker import pr_number_in, trusted_pr_note
 
-    from sqlmodel import select
-
-    from app.models.task import TaskComment
-
-    result = await session.exec(
-        select(TaskComment)
-        .where(
-            TaskComment.task_id == task.id,
-            TaskComment.content.like("%PR erstellt:%"),
-        )
-        .order_by(TaskComment.created_at.desc())
-        .limit(1)
-    )
-    comment = result.first()
-    if comment is None:
-        return None
-    match = re.search(r"/pull/(\d+)", comment.content)
-    return int(match.group(1)) if match else None
+    note = await trusted_pr_note(session, task.id)
+    return pr_number_in(note.content) if note else None
 
 
 async def guard_adr_merge(

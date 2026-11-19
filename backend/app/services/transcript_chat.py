@@ -15,7 +15,9 @@ Normalized event shapes (plain dicts, JSON-serializable):
   {"kind":"tool_output","uuid":None,"ts":str,"toolUseId":str,"text":str}
       — VOLATILE (P1): a running tool's output so far, from the ACP preview
         channel; replace-me per toolUseId, never in the history.
-  {"kind":"thinking","uuid":str,"ts":str,"text":str,"sidechain":bool}
+  {"kind":"thinking","uuid":str,"ts":str,"text":str,"sidechain":bool,
+   "durationMs"?:int}  — durationMs only when the harness recorded it
+   (omp bridge, 20.10.2026)
   {"kind":"command","uuid":str,"ts":str,"command":str,"result":str|None}
   {"kind":"todo","uuid":str,"ts":str,"source":str,
    "items":[{"content":str,"status":"pending"|"in_progress"|"completed",
@@ -99,10 +101,19 @@ from app.services import chat_media
 from app.services.chat_todos import todo_event_from_tool
 from app.services.harness_catalog import get_observed_model_windows, observe_model_window
 from app.services.pane_preview import PanePreview
-from app.services.acp_chat_transport import headless_chat_kind, read_acp_turn_status
+from app.services.acp_chat_transport import (
+    headless_chat_kind,
+    read_acp_turn_status,
+    refine_status_by_model,
+)
 from app.services.pane_state import capture_pane, process_alive
 from app.redis_client import RedisKeys
-from app.services.token_harvester import _host_home, _should_attribute_boss_path
+from app.services.token_harvester import (  # noqa: F401 — encode_cwd re-exported
+    _host_home,
+    _should_attribute_boss_path,
+    encode_cwd,
+    lead_checkout_path,
+)
 
 logger = logging.getLogger("mc.transcript_chat")
 
@@ -782,13 +793,6 @@ def _truncate_title(title: str) -> str:
 # sessions before anything from them reaches the frontend.
 
 
-def encode_cwd(cwd: str) -> str:
-    """Replicates Claude Code's own project-directory name encoding: every
-    non-alphanumeric character (including path separators and dots) becomes
-    a literal '-'. Verified against a real session dir name, see tests."""
-    return re.sub(r"[^a-zA-Z0-9]", "-", cwd)
-
-
 def resolve_transcript_dir(agent) -> Path | None:
     """Maps an Agent to the on-disk directory holding its Claude Code JSONL
     transcripts, or None if this agent/runtime has no transcript at all
@@ -814,8 +818,8 @@ def resolve_transcript_dir(agent) -> Path | None:
         )
 
     if runtime == "host" and slug in _BOSS_SLUGS:
-        checkout = str(_host_home() / ".mc" / "checkouts" / "mission-control")
-        return _host_home() / ".claude" / "projects" / encode_cwd(checkout)
+        # Same dir the token harvester books on the lead (lead_checkout_path).
+        return _host_home() / ".claude" / "projects" / encode_cwd(lead_checkout_path(_host_home()))
 
     return None
 
@@ -1872,6 +1876,37 @@ def _stable_prefix(a: str, b: str) -> str:
     return prefix.rstrip()
 
 
+def preview_event(content: str, ts: str, data: Any) -> dict[str, Any]:
+    """One preview snapshot -> the volatile ``preview`` chat event.
+
+    The END of the snapshot is kept (``content[-limit:]``): the chat shows a
+    running preview from its last lines, and keeping the head froze the
+    preview once an answer passed the limit.
+
+    ``data.block == "thinking"`` (the omp bridge marks a thought's preview,
+    20.10.2026) adds ``block``, ``chars`` (the thought's full size — the
+    snapshot itself carries only its end) and ``startedAt``, so the chat
+    shows "Thinking · ≈N tokens · 1:45" instead of a fake answer. Any
+    harness with a preview channel can set it; the event type stays one.
+    """
+    event: dict[str, Any] = {
+        "kind": "preview",
+        "uuid": None,
+        "ts": ts,
+        "text": content[-_RESULT_TRUNCATE_LEN:],
+        "source": "acp",
+    }
+    if isinstance(data, dict) and data.get("block") == "thinking":
+        event["block"] = "thinking"
+        chars = data.get("chars")
+        if isinstance(chars, int) and not isinstance(chars, bool) and chars >= 0:
+            event["chars"] = chars
+        started = data.get("startedAt")
+        if isinstance(started, str) and started:
+            event["startedAt"] = started[:40]
+    return event
+
+
 def _read_preview_channel(state: dict[str, Any]) -> list[dict[str, Any]]:
     """Ein Takt Vorschau-Kanal: neue Zeilen der ACP-Preview-Datei lesen und
     zu ``kind: "preview", source: "acp"``-Ereignissen normalisieren.
@@ -1932,13 +1967,11 @@ def _read_preview_channel(state: dict[str, Any]) -> list[dict[str, Any]]:
                         "text": content[:_RESULT_TRUNCATE_LEN],
                     })
                 continue
-            events.append({
-                "kind": "preview",
-                "uuid": None,
-                "ts": ts if isinstance(ts, str) else datetime.now(timezone.utc).isoformat(),
-                "text": content[:_RESULT_TRUNCATE_LEN],
-                "source": "acp",
-            })
+            events.append(preview_event(
+                content,
+                ts if isinstance(ts, str) else datetime.now(timezone.utc).isoformat(),
+                d.get("data"),
+            ))
 
     # Blocking file I/O off the event loop — same rule as every other disk
     # read in the tailer loop.
@@ -1980,6 +2013,11 @@ class ChatTailerManager:
     # Status erst nach N × Takt. Die Sonde ist ein docker-exec-Rundlauf
     # (gemessen 50 ms): die erste laeuft sofort, danach genuegt der Zeittakt.
     STATE_PROBE_INTERVAL_SECONDS = 2.0
+
+    # Wie oft der Tailer das Kontextfenster der gebundenen Runtime nachliest
+    # (eine kleine DB-Abfrage, nur auf dem Sonden-Takt). Ein Runtime-Wechsel
+    # dauert ohnehin zehn Sekunden und mehr; schneller braucht der Ring nicht.
+    RUNTIME_WINDOW_REFRESH_SECONDS = 15.0
 
     # A transcript that hasn't grown in this long reads as idle for the
     # Boss/host fallback (no pane to capture) and as the transcript_active
@@ -2076,7 +2114,28 @@ class ChatTailerManager:
         # Der Harness des Agenten entscheidet, WIE gelesen wird (Parser,
         # Dedup-Feld, Session-Suche, Pane-Regeln). ``agent`` ist nur in
         # Tests None — dann gilt der Claude-Adapter wie bisher.
-        adapter = adapter_for(agent)
+        #
+        # Das Kontextfenster der gebundenen Runtime faehrt mit in den Parser
+        # (wie auf der History-Seite, agent_chat._resolve_transcript_path) —
+        # sonst zeigte der Live-Strom wieder das Fenster, das der Harness nur
+        # GLAUBT (Hermes 22.10.2026: 202.752 statt 1.048.576), und genau diese
+        # falsche Zahl landete unten auch in der geteilten observed-Map.
+        # Beim Start gelesen und danach auf dem Sonden-Takt nachgelesen
+        # (``RUNTIME_WINDOW_REFRESH_SECONDS``): Hermes behaelt seine ACP-
+        # Session ueber den Bridge-Neustart eines Runtime-Wechsels hinweg
+        # (``restart()`` laedt sie neu) — dieser Tailer laeuft also weiter,
+        # und ohne Nachlesen zeigte der Ring bis zum Trennen des letzten
+        # Zuschauers das Fenster der ALTEN Runtime (Review #939).
+        from app.services.runtime_window import (
+            agent_runtime_window,
+            current_agent_runtime_window,
+        )
+        from app.services.transcript_adapters import bind_runtime_window
+
+        base_adapter = adapter_for(agent)
+        runtime_window = await agent_runtime_window(agent)
+        adapter = bind_runtime_window(base_adapter, runtime_window)
+        last_window_check = time.monotonic()
         # ``new_parser`` darf die Sitzungsdatei LESEN, um seinen Anfangs-
         # zustand zu laden (omp: ``seed_from`` liest die ganze Datei, damit
         # der am Dateiende einsteigende Tailer die Effort-Stufe vom
@@ -2159,6 +2218,14 @@ class ChatTailerManager:
             preview_state["anchor"] = await asyncio.to_thread(
                 _last_message_anchor, current_path, adapter
             )
+        # Created right before the loop so the ``finally`` below always
+        # ends its writer.
+        # MC's own chat record (ADR-103): every published event is also
+        # written to the DB, in the background — ``None`` while the flag is
+        # off, and then this tailer behaves exactly as before.
+        from app.services import chat_record
+
+        recorder = chat_record.live_recorder_for(agent, adapter, initial_path)
         try:
             while True:
                 await asyncio.sleep(self.POLL_INTERVAL)
@@ -2213,6 +2280,22 @@ class ChatTailerManager:
                     probe_due = (now - last_probe_at) >= self.STATE_PROBE_INTERVAL_SECONDS
                     if agent is not None and probe_due:
                         last_probe_at = now
+                        if now - last_window_check >= self.RUNTIME_WINDOW_REFRESH_SECONDS:
+                            last_window_check = now
+                            fresh_window = await current_agent_runtime_window(agent)
+                            if fresh_window != runtime_window:
+                                logger.info(
+                                    "chat tailer: runtime window of %s changed %s -> %s",
+                                    agent_id, runtime_window, fresh_window,
+                                )
+                                runtime_window = fresh_window
+                                # Rollover-Parser kommen ab jetzt mit dem
+                                # neuen Fenster; der laufende bekommt es
+                                # direkt (nur der omp-Parser hat den Haken).
+                                adapter = bind_runtime_window(base_adapter, runtime_window)
+                                setter = getattr(parse_line, "set_runtime_window", None)
+                                if callable(setter):
+                                    setter(runtime_window)
                         # Die Sonde laeuft ohnehin alle paar Sekunden — hier
                         # wird der Strom mitgeprueft (Container-Neustart).
                         if preview_state is not None:
@@ -2355,6 +2438,8 @@ class ChatTailerManager:
                                     media = chat_media.context_for(agent, current_path)
                                     await asyncio.to_thread(_merge_tool_result, tool_ev, ev, media)
                                     await sse.broadcast(channel, "chat_event", tool_ev)
+                                    if recorder is not None:
+                                        recorder.record(current_path, tool_ev, republish=True)
                                 continue
 
                             if ev["kind"] == "_command_result":
@@ -2362,6 +2447,8 @@ class ChatTailerManager:
                                 if cmd_ev is not None:
                                     _merge_command_result(cmd_ev, ev)
                                     await sse.broadcast(channel, "chat_event", cmd_ev)
+                                    if recorder is not None:
+                                        recorder.record(current_path, cmd_ev, republish=True)
                                 continue
 
                             if ev["kind"] == "tool":
@@ -2416,6 +2503,8 @@ class ChatTailerManager:
                                     preview_state["pending"] = None
 
                             await sse.broadcast(channel, "chat_event", ev)
+                            if recorder is not None:
+                                recorder.record(current_path, ev)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -2429,6 +2518,9 @@ class ChatTailerManager:
             # A silently dead tailer looks identical to "no new events yet"
             # from the outside — make every exit visible.
             logger.warning("chat tailer loop exited (agent_id=%s)", agent_id)
+            if recorder is not None:
+                # The writer drains what is queued, then ends on its own.
+                recorder.close()
 
     @staticmethod
     def _is_genuine_rollover(adapter: Any, new_path: Path, current_path: Path) -> bool:
@@ -2757,7 +2849,9 @@ class ChatTailerManager:
         # mtime-Heuristik zurueck wie der pane-lose Boss/host-Zweig unten.
         if headless_chat_kind(agent) is not None:
             status = await asyncio.to_thread(
-                functools.partial(read_acp_turn_status, agent, with_questions=True)
+                functools.partial(
+                    read_acp_turn_status, agent, with_questions=True, with_task=True,
+                )
             )
             if status is None:
                 return {
@@ -2765,6 +2859,9 @@ class ChatTailerManager:
                     "prompt": None,
                     "aliveness": aliveness,
                 }
+            # The model's side (review Z2/Z5): a card held for a model that
+            # does not answer, or a task turn whose engine went away.
+            status = await refine_status_by_model(agent, status)
             return {"status": status, "prompt": None, "aliveness": aliveness}
 
         if pane_text is _PANE_UNSET:

@@ -422,24 +422,23 @@ async def _build_review_message(
             msg += "*(Subtasks are `done` once complete and no longer visible in the board context — loaded explicitly here)*\n\n"
             msg += "\n---\n".join(subtask_sections) + "\n\n"
 
-    # Load PR link (if present)
-    pr_comment = None
+    # Load PR link (if present) — MC's own "PR erstellt:" note, else the
+    # card's PR field. Never a chat reply or agent note that quotes another
+    # PR (round 8 / L6, pr_marker.py): the reviewer must check the PR that
+    # gets merged.
+    pr_line = None
     try:
-        pr_result = await session.exec(
-            select(TaskComment)
-            .where(
-                TaskComment.task_id == task.id,
-                TaskComment.content.like("%PR erstellt:%"),
-            )
-            .order_by(TaskComment.created_at.desc())
-            .limit(1)
-        )
-        pr_comment = pr_result.first()
+        from app.services.pr_marker import trusted_pr_note
+        pr_comment = await trusted_pr_note(session, task.id)
+        if pr_comment is not None:
+            pr_line = pr_comment.content
     except Exception:
         pass
+    if pr_line is None and getattr(task, "pr_url", None):
+        pr_line = f"**PR:** {task.pr_url}"
 
-    if pr_comment:
-        msg += f"## Pull Request\n{pr_comment.content}\n\n"
+    if pr_line:
+        msg += f"## Pull Request\n{pr_line}\n\n"
         msg += f"Use `gh pr diff` or the GitHub UI to check the changes.\n\n"
 
     # Reviewer's process rules (from rules_md)
@@ -1101,13 +1100,23 @@ For large tasks (website, app, feature with multiple steps):
             # instead of the generic "create a feature branch", matching
             # the project branch above.
             _adhoc_task_slug = _slugify_project_adhoc(task.title)
-            git_section = (
-                f"{_repo_line}"
-                f"**Working directory:** `{_ws_view}/`\n"
-                f"Change into it FIRST: `cd {_ws_view}`\n\n"
-                f"**Git:** you're already on `task/{_adhoc_task_slug}` — never commit directly to main.\n"
-                "Commit after every major step. Push to GitHub."
-            )
+            if os.path.isdir(_ws_host) and not os.path.exists(os.path.join(_ws_host, ".git")):
+                # A plain folder (e.g. a bench task's empty workspace from a
+                # vertical's task_workspace_provider): no branch to be on and
+                # nothing to push — never send the agent looking for a repo.
+                git_section = (
+                    f"**Working directory:** `{_ws_view}/`\n"
+                    f"Change into it FIRST: `cd {_ws_view}`\n\n"
+                    "It is a plain folder, not a git repository — nothing to commit or push."
+                )
+            else:
+                git_section = (
+                    f"{_repo_line}"
+                    f"**Working directory:** `{_ws_view}/`\n"
+                    f"Change into it FIRST: `cd {_ws_view}`\n\n"
+                    f"**Git:** you're already on `task/{_adhoc_task_slug}` — never commit directly to main.\n"
+                    "Commit after every major step. Push to GitHub."
+                )
             if task.workspace_port:
                 git_section += (
                     f"\n**Dev server port:** {task.workspace_port} (use this port, NOT the default)\n"
@@ -1186,18 +1195,21 @@ For large tasks (website, app, feature with multiple steps):
         # ${HOME}/.mc into the backend at the same path, so host-path
         # deliverables are fully servable. cli-bridge agents keep the
         # container-absolute form (unchanged, ADR-022).
+        from app.services.deliverable_paths import agent_deliverable_dir
+
         _is_host_agent = agent.agent_runtime == "host"
+        _deliv_dir = agent_deliverable_dir(agent, task.id)
         if _is_host_agent:
             _deliverable_hint = (
                 f'Register a deliverable: `mc deliverable --title "..." --path '
-                f"~/.mc/deliverables/{task.id}/<file>` (host path — /deliverables "
+                f"{_deliv_dir}/<file>` (host path — /deliverables "
                 "is not writable on the host) — or inline: "
                 '`mc deliverable --type document --title "..." --content "..."`'
             )
         else:
             _deliverable_hint = (
                 f'Register a deliverable: `mc deliverable --title "..." --path '
-                f'/deliverables/{task.id}/<file>`  (absolute container path, ADR-022)'
+                f'{_deliv_dir}/<file>`  (absolute container path, ADR-022)'
             )
 
         # ── Host-only reflection contract (2026-07-11) ──────────────────────

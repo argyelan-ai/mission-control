@@ -2,7 +2,7 @@
 
 import { Suspense, useState, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useTranslations, useLocale } from "next-intl";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -44,10 +44,12 @@ import { TelegramTab } from "@/components/settings/TelegramTab";
 import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
 import { ClaudeAccountTab } from "@/components/settings/ClaudeAccountTab";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
+import { LanguageSection } from "@/components/settings/LanguageSection";
 import { NightShiftTab } from "@/components/settings/NightShiftTab";
 import { PhoneAccountPanel } from "@/components/settings/PhoneAccountPanel";
 import { BoardsCard } from "@/components/settings/BoardsCard";
 import { PhoneSectionList } from "@/components/settings/PhoneSectionList";
+import { MCUpdateCard, useUpdateCardGate } from "@/components/settings/MCUpdateCard";
 import { GROUP_ORDER, SECTIONS, sectionHref } from "@/components/settings/sections";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -300,122 +302,6 @@ function SectionMotion({ children, sectionKey }: { children: React.ReactNode; se
 
 // ── Profile Section ───────────────────────────────────────────────────────────
 
-// UI language selector (i18n pattern page). Cookie-based: writes NEXT_LOCALE
-// and refreshes the server tree — no URL change, applies immediately.
-// Distinct from agent response language (per-agent `agents.language` field).
-function LanguageField() {
-  const t = useTranslations("settingsProfile");
-  const locale = useLocale();
-  const router = useRouter();
-
-  function switchLocale(next: string) {
-    document.cookie = `NEXT_LOCALE=${next}; path=/; max-age=31536000; samesite=lax`;
-    router.refresh();
-  }
-
-  return (
-    <div>
-      <FieldLabel>{t("language")}</FieldLabel>
-      <select
-        value={locale}
-        onChange={(e) => switchLocale(e.target.value)}
-        aria-label={t("language")}
-        className={inputBaseClasses}
-        style={{
-          backgroundColor: C.bgDeep,
-          borderWidth: 1,
-          borderStyle: "solid",
-          borderColor: "var(--color-border)",
-          color: "var(--color-text-primary)",
-          cursor: "pointer",
-        }}
-      >
-        <option value="en">{t("languageEn")}</option>
-        <option value="de">{t("languageDe")}</option>
-      </select>
-      <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
-        {t("languageHint")}
-      </p>
-    </div>
-  );
-}
-
-// The key under the generic per-user preference store (routers/settings.py,
-// GET/PUT /api/v1/settings/{key}) — reused rather than a bespoke endpoint.
-// Value shape: {"language": "auto" | "de" | "en" | …}. "auto" (default)
-// follows the interface language above; an explicit choice overrides it,
-// also on the voice call itself (backend/app/services/voice_live.py). Add a
-// language: a new <option> here + the matching key in both messages/*.json
-// + a line in _LANG_LINE server-side.
-const VOICE_LANGUAGE_SETTING_KEY = "voice_language";
-type VoiceLanguagePref = "auto" | "de" | "en";
-
-export function VoiceLanguageField() {
-  const t = useTranslations("settingsProfile");
-  const queryClient = useQueryClient();
-  const [value, setValue] = useState<VoiceLanguagePref>("auto");
-
-  const { data } = useQuery({
-    queryKey: ["voice-language-preference"],
-    queryFn: async (): Promise<VoiceLanguagePref> => {
-      try {
-        const res = await api.settings.get(VOICE_LANGUAGE_SETTING_KEY);
-        const lang = (res.value as { language?: string } | null)?.language;
-        return lang === "de" || lang === "en" ? lang : "auto";
-      } catch {
-        // Nothing saved yet (404) — "auto" is the default, matching the
-        // backend's fallback when no preference row exists.
-        return "auto";
-      }
-    },
-  });
-
-  useEffect(() => {
-    if (data) setValue(data);
-  }, [data]);
-
-  const mutation = useMutation({
-    mutationFn: (next: VoiceLanguagePref) =>
-      api.settings.set(VOICE_LANGUAGE_SETTING_KEY, { language: next }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["voice-language-preference"] });
-    },
-  });
-
-  function handleChange(next: string) {
-    const pref = next as VoiceLanguagePref;
-    setValue(pref);
-    mutation.mutate(pref);
-  }
-
-  return (
-    <div>
-      <FieldLabel>{t("voiceLanguage")}</FieldLabel>
-      <select
-        value={value}
-        onChange={(e) => handleChange(e.target.value)}
-        aria-label={t("voiceLanguageAria")}
-        className={inputBaseClasses}
-        style={{
-          backgroundColor: C.bgDeep,
-          borderWidth: 1,
-          borderStyle: "solid",
-          borderColor: "var(--color-border)",
-          color: "var(--color-text-primary)",
-          cursor: "pointer",
-        }}
-      >
-        <option value="auto">{t("voiceLanguageAuto")}</option>
-        <option value="de">{t("voiceLanguageDe")}</option>
-        <option value="en">{t("voiceLanguageEn")}</option>
-      </select>
-      <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
-        {t("voiceLanguageHint")}
-      </p>
-    </div>
-  );
-}
-
 function ProfileSection() {
   const t = useTranslations("settingsProfile");
   const { currentUser, setCurrentUser } = useAppStore();
@@ -501,12 +387,6 @@ function ProfileSection() {
             placeholder={t("displayNamePlaceholder")}
           />
         </div>
-
-        {/* UI language (i18n pattern) */}
-        <LanguageField />
-
-        {/* Voice language (operator request 13.10.2026) */}
-        <VoiceLanguageField />
 
         {/* Timezone */}
         <div>
@@ -2245,16 +2125,25 @@ function ShortcutsSection() {
 
 function AboutSection() {
   const t = useTranslations("settings.about");
+  const currentUser = useAppStore((s) => s.currentUser);
+  const isAdmin = currentUser?.role === "admin";
   const { data: version } = useQuery({
     queryKey: ["system-version"],
     queryFn: api.system.version,
     staleTime: 60 * 60 * 1000,
   });
+  // The update card (ADR-094) — admins only, and only while the backend's
+  // feature switch is on. While it is on screen it carries the "update
+  // available" line, so the System card below drops its own (K3).
+  const updateGate = useUpdateCardGate(isAdmin);
+  const cardCarriesUpdate = updateGate === "shown" || updateGate === "managed";
   return (
     <SectionMotion sectionKey="about">
       <SectionHeader title={t("title")} description={t("description")} />
 
       <div className="space-y-6">
+        {isAdmin && <MCUpdateCard version={version} />}
+
         {/* System info */}
         <div className="mc-card p-6" style={cardStyle}>
           <h3
@@ -2278,7 +2167,7 @@ function AboutSection() {
                 </span>
               </div>
             ))}
-            {version?.update_available && version.release_url && (
+            {!cardCarriesUpdate && version?.update_available && version.release_url && (
               <div className="flex items-center justify-between pt-2" style={{ borderTop: "1px solid var(--color-border)" }}>
                 <span className="text-sm" style={{ color: "var(--color-warning)" }}>
                   {t("updateAvailable", { version: version.latest ?? "" })}
@@ -2562,6 +2451,11 @@ function SettingsContent() {
               {activeSection === "appearance" && (
                 <SectionMotion sectionKey="appearance">
                   <AppearanceSection />
+                </SectionMotion>
+              )}
+              {activeSection === "language" && (
+                <SectionMotion sectionKey="language">
+                  <LanguageSection isAdmin={isAdmin} />
                 </SectionMotion>
               )}
               {activeSection === "shortcuts" && <ShortcutsSection />}

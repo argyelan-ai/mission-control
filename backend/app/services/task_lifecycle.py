@@ -81,6 +81,7 @@ _SELF_DELIVERING_REASONS: frozenset[str] = frozenset({
     "review_rejection_no_developer",
     "review_rejection_queued",
     "review_rejection_dispatch_blocked",
+    "review_rejection_agent_paused",
     "unblock_requeue_agent_busy",
     # Actor-tracking follow-up (Pruefbericht N3/N4, 21.09.2026): both paths
     # already write their own TaskComment right before this event fires
@@ -233,6 +234,30 @@ def task_still_reactivatable(task: Task, *, expected_status: str | None = None) 
     return True
 
 
+def point_worker_at_task_if_free(agent: Agent, task: Task) -> bool:
+    """A worker in subagent-dispatch mode takes ``current_task_id`` for a task
+    that just became ``in_progress`` — only while the pointer is free.
+
+    For workers the pointer is a hint, not a lock (parallel sessions, the
+    dispatch busy check is skipped). It is still what the chat's "Working on"
+    row, the sessions sidebar, the runtime-switch busy check and ``mc ask`` /
+    ``mc msg`` read. The heartbeat self-heal (``routers/agents.py``
+    ``agent_heartbeat``) sets the same value for workers, but only every 30 s;
+    ADR-097 review Z1 wants it from the first second. First come stays: a
+    pointer that already names another running task is kept, so parallel
+    sessions never flip it back and forth.
+
+    Only for a task that really is ``in_progress`` — a caller that passes
+    ``in_progress`` as a transition label while the card stays elsewhere
+    (``execute_review_decision`` releasing a reviewer) must not point the
+    agent at it. Returns True iff the pointer was set here.
+    """
+    if task.status != "in_progress" or agent.current_task_id is not None:
+        return False
+    agent.current_task_id = task.id
+    return True
+
+
 def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool:
     """Auto-ACK: the first inbound signal from the assigned agent on a
     dispatched task claims it (§3.3 handshake).
@@ -274,16 +299,18 @@ def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool
     task.updated_at = utcnow()
     # Also set the active-task lock. Without this, agent.current_task_id
     # stays None and mc delegate / mc help-request / mc clarification
-    # respond with 409 "Kein aktiver Task". Same skip condition as
-    # PATCH-ACK (PR #103): workers in subagent-dispatch mode have
-    # parallel sessions and don't need the lock. Live bug from Boss's
+    # respond with 409 "Kein aktiver Task". Live bug from Boss's
     # reflection on 2026-04-24: Boss ACKed via comment instead of PATCH,
-    # mc delegate failed.
+    # mc delegate failed. Workers in subagent-dispatch mode (parallel
+    # sessions) take the pointer only while it is free — same rule as the
+    # PATCH ACK (point_worker_at_task_if_free).
     from app.config import settings as _auto_ack_settings
     if not (_auto_ack_settings.use_subagent_dispatch and not agent.is_board_lead):
         if agent.current_task_id != task.id:
             agent.current_task_id = task.id
             session.add(agent)
+    elif point_worker_at_task_if_free(agent, task):
+        session.add(agent)
     session.add(task)
     logger.info("Auto-ACK: %s claimed Task '%s' → ack_at + current_task_id gesetzt", agent.name, task.title[:60])
     return True
@@ -503,8 +530,11 @@ async def update_agent_active_task(
     - task leaves in_progress (review, done, blocked, failed, inbox)
       AND current_task_id == task.id
 
-    With use_subagent_dispatch: workers skip current_task_id tracking
-    (parallel sessions → the field can only represent one task).
+    With use_subagent_dispatch, workers (parallel sessions) keep the field
+    as a hint: → in_progress takes it only while it is free
+    (point_worker_at_task_if_free); leaving in_progress hands it to another
+    in_progress task of the agent, or clears it. Until 22.10.2026 workers
+    skipped it here and only the 30 s heartbeat set it (ADR-097 review Z1).
     """
     from app.config import settings
 
@@ -524,12 +554,17 @@ async def update_agent_active_task(
     if not agent:
         return
 
-    # Workers with isolated sessions: don't set/clear current_task_id
-    # (parallel tasks → field would be immediately inconsistent)
-    # Still update run_state for UI display.
+    # Workers with isolated sessions: current_task_id is a hint, not a lock
+    # (parallel tasks — it can name only one). It still drives the chat's
+    # "Working on" row, the sessions sidebar and the busy checks, so it
+    # follows the status here instead of waiting up to 30 s for the
+    # heartbeat self-heal: first come keeps it, and a task leaving
+    # in_progress hands it to another running task of the agent (or clears
+    # it). run_state as before.
     if settings.use_subagent_dispatch and not agent.is_board_lead:
         if new_status == "in_progress" and old_status != "in_progress":
             agent.run_state = "running"
+            point_worker_at_task_if_free(agent, task)
             session.add(agent)
         elif old_status == "in_progress" and new_status not in ("in_progress", "waiting"):
             # run_state only goes to idle if no other task is still in_progress
@@ -540,6 +575,9 @@ async def update_agent_active_task(
                     Task.status == "in_progress",
                 )
             )).first()
+            if agent.current_task_id == task.id:
+                agent.current_task_id = other_active.id if other_active else None
+                session.add(agent)
             if not other_active:
                 if new_status == "blocked":
                     agent.run_state = "blocked"
@@ -597,24 +635,13 @@ async def _merge_pr_if_exists(
         if not project or not project.github_repo_url:
             return
 
-        pr_result = await session.exec(
-            select(TaskComment)
-            .where(
-                TaskComment.task_id == task.id,
-                TaskComment.content.like("%PR erstellt:%"),
-            )
-            .order_by(TaskComment.created_at.desc())
-            .limit(1)
-        )
-        pr_comment = pr_result.first()
-        if not pr_comment:
+        # Only MC's own "PR erstellt:" note counts — never a chat reply or an
+        # agent note quoting another PR (round 8 / L6, see pr_marker.py).
+        from app.services.pr_marker import pr_number_to_merge
+        pr_number = await pr_number_to_merge(session, task)
+        if pr_number is None:
             return
 
-        pr_match = re.search(r"/pull/(\d+)", pr_comment.content)
-        if not pr_match:
-            return
-
-        pr_number = int(pr_match.group(1))
         project_slug = slugify_project(project.name)
 
         # Find workspace (reviewer or fallback)
@@ -771,10 +798,15 @@ async def stop_running_reviewer_turn(
         return False
 
     task.run_control = "stopped"
+    # On approve the card is finished: the note stays as a record on the card
+    # ("system_notify" is not in DELIVERABLE_SYSTEM_TYPES) instead of being
+    # pasted into the reviewer's session by the poll — the hard interrupt via
+    # run_control above is what ends the turn (operator report 24.10.2026).
+    # request_changes / hold keep the delivered "system" note.
     session.add(TaskComment(
         task_id=task.id,
         author_type="system",
-        comment_type="system",
+        comment_type="system_notify" if decision == "approve" else "system",
         content=(
             "**Operator-Override: dein laufender Review-Zug wurde gestoppt.**\n\n"
             f"Der Operator hat selbst entschieden: `{decision}` "
@@ -942,11 +974,16 @@ async def execute_review_decision(
             stopped_reviewer_id = _holder_id
 
     # ── 1. Comment (always, atomic with the decision) ──────
+    # The approve note gets its own type (comment_types.review_note_comment_type):
+    # the card is finished, so the poll must not wake the agent with it
+    # (operator report 24.10.2026). request_changes / hold stay "review" and
+    # keep reaching the agent.
+    from app.comment_types import review_note_comment_type
     comment = TaskComment(
         task_id=task.id,
         author_type="agent" if actor_agent else "user",
         author_agent_id=actor_agent.id if actor_agent else None,
-        comment_type="review",
+        comment_type=review_note_comment_type(decision),
         content=comment_text,
     )
     session.add(comment)
@@ -1176,6 +1213,7 @@ async def execute_review_decision(
         await handle_review_rejection(
             session, task, board_id, rejecting_agent=actor_agent,
             stopped_reviewer_id=stopped_reviewer_id,
+            from_status=old_status,
         )
 
     elif decision == "hold":
@@ -1313,11 +1351,12 @@ async def record_late_review_note(
     }
     actor_name = actor_agent.name if actor_agent else "Operator"
 
+    from app.comment_types import review_note_comment_type
     session.add(TaskComment(
         task_id=task.id,
         author_type="agent" if actor_agent else "user",
         author_agent_id=actor_agent.id if actor_agent else None,
-        comment_type="review",
+        comment_type=review_note_comment_type(decision),
         content=(
             f"**Nachtrag-Review ({decision_map[decision]})** — abgegeben, "
             f"nachdem die Karte den Status `{task.status}` erreicht hatte. "
@@ -1760,7 +1799,7 @@ async def handle_human_review_handoff(
         author_type="system",
         comment_type="handoff",
         content=(
-            f"Human-Review angefordert fuer '{task.title}' — wartet auf Mark "
+            f"Human-Review angefordert für '{task.title}' — wartet auf Mark "
             "(kein Agent-Reviewer dispatcht)."
         ),
     )
@@ -1874,8 +1913,16 @@ async def handle_review_rejection(
     board_id: uuid.UUID,
     rejecting_agent: Agent | None = None,
     stopped_reviewer_id: uuid.UUID | None = None,
+    from_status: str | None = None,
 ) -> ReviewRejectionResult:
     """Review rejection: send the task back to the original developer.
+
+    from_status: the card's status before the caller's provisional
+    ``in_progress`` (execute_review_decision sets it without an event). The
+    status event then names the real step, ``review → inbox`` — it read
+    ``in_progress → inbox`` although the card stood in review (round-7
+    re-check t1 NICE-2). Callers that already recorded their own step into
+    in_progress leave it out.
 
     stopped_reviewer_id: the reviewer whose running turn the operator
     override just stop-flagged (stop_running_reviewer_turn). That
@@ -1991,7 +2038,7 @@ async def handle_review_rejection(
             ),
         ))
         await record_task_event(
-            session, task.id, _old_status, "inbox",
+            session, task.id, from_status or _old_status, "inbox",
             changed_by="system",
             agent_id=rejecting_agent.id if rejecting_agent else None,
             reason="review_rejection_no_developer",
@@ -2039,30 +2086,54 @@ async def handle_review_rejection(
         task.dispatched_at = None
         task.ack_at = None
         session.add(task)
+        # A paused builder gets no card at all, not even by its own poll
+        # (rule R-paused-holds-poll, ADR-089 Nachtrag 2026-11-13): the card
+        # waits in its inbox until the operator sets it active. The note says
+        # that in words, not "blocked" or a raw PAUSED (round-7 NICE-2).
+        # The refusal text of operations.check_dispatch_allowed step 3 — the
+        # test drives the real check, so a reworded refusal goes red there.
+        paused_pull = reason == f"Agent {original_dev.name} PAUSED"
+        if paused_pull:
+            note = (
+                f"Änderungen angefordert — zurück an {original_dev.name}. "
+                f"{original_dev.name} ist pausiert: Die Karte wartet in der Inbox "
+                "und geht los, sobald du den Agenten wieder aktiv schaltest."
+            )
+            event_reason = "review_rejection_agent_paused"
+            activity = (
+                f"Review abgelehnt: '{task.title}' — zurück an {original_dev.name} "
+                "(pausiert, wartet bis zur Aktivierung)"
+            )
+        else:
+            note = (
+                f"Rework fuer {original_dev.name} angefordert, Dispatch aktuell "
+                f"nicht erlaubt ({reason}). Task wartet in der Inbox — wird "
+                "automatisch zugestellt, sobald Dispatch wieder erlaubt ist."
+            )
+            event_reason = "review_rejection_dispatch_blocked"
+            activity = (
+                f"Review abgelehnt: '{task.title}' — Dispatch fuer {original_dev.name} "
+                f"blockiert ({reason}), wartet in Inbox"
+            )
         session.add(TaskComment(
             task_id=task.id,
             author_type="system",
             comment_type="system",
-            content=(
-                f"Rework fuer {original_dev.name} angefordert, Dispatch aktuell "
-                f"nicht erlaubt ({reason}). Task wartet in der Inbox — wird "
-                "automatisch zugestellt, sobald Dispatch wieder erlaubt ist."
-            ),
+            content=note,
         ))
         await record_task_event(
-            session, task.id, _old_status, "inbox",
+            session, task.id, from_status or _old_status, "inbox",
             changed_by="system",
             agent_id=rejecting_agent.id if rejecting_agent else None,
-            reason="review_rejection_dispatch_blocked",
+            reason=event_reason,
         )
         await session.commit()
         await emit_event(
             session, "task.review_rejected",
-            f"Review abgelehnt: '{task.title}' — Dispatch fuer {original_dev.name} "
-            f"blockiert ({reason}), wartet in Inbox",
+            activity,
             board_id=board_id, task_id=task.id, agent_id=original_dev.id,
             detail={"gefangen_von": caught_by_for_actor(rejecting_agent)},
-            severity="warning",
+            severity="info" if paused_pull else "warning",
         )
         return ReviewRejectionResult(original_dev, "dispatch_blocked")
 
@@ -2094,7 +2165,7 @@ async def handle_review_rejection(
             )
         )).first()
 
-    old_status = task.status  # review or in_progress
+    old_status = from_status or task.status  # review or in_progress
 
     if dev_active:
         await record_task_event(
@@ -2436,7 +2507,14 @@ async def apply_unblock_notify_reset(
     gap by folding the twin's liveness check into this criterion too.
     """
     if old_status == "waiting" and assigned_agent_lock_before_transition == task.id:
-        return
+        # An omp agent with the ACP chat daemon holds no paused run session:
+        # its task turn ended on the question, and only its chat would get a
+        # wake-up — which must not work the task (chat_session_guard, round-1
+        # user test t1 MUST-1). Reset, so the poll starts a new run.
+        from app.services.acp_chat_transport import headless_chat_kind
+        assigned = await session.get(Agent, task.assigned_agent_id) if task.assigned_agent_id else None
+        if assigned is None or headless_chat_kind(assigned) != "acp-docker":
+            return
     task.ack_at = None
     session.add(task)
     await session.commit()
@@ -2501,9 +2579,12 @@ async def trigger_feedback_lesson(
             name=f"feedback:approved:{task.id}",
         )
     elif new_status == "in_progress":
+        from app.comment_types import activity_comment_filter
+        # The feedback that sent the card back — never a chat session's
+        # reply that happened to land last (round-5 r1 N5).
         last_cmt = (await session.exec(
             select(TaskComment)
-            .where(TaskComment.task_id == task.id)
+            .where(TaskComment.task_id == task.id, activity_comment_filter())
             .order_by(TaskComment.created_at.desc())
             .limit(1)
         )).first()
@@ -2558,12 +2639,38 @@ async def _notify_lead_on_completion(
             if not task:
                 return
 
+            # A vertical that owns the follow-up of its own tasks can claim
+            # them here (hooks.completion_callback_skip_hooks) — no comment,
+            # no lead DM, no Telegram. Routing for every other task is
+            # unchanged. W0.11: bench tasks woke the lead (cloud model) only
+            # to classify a result the operator judges in the Bench Studio.
+            # The predicates get a session of their own: a DB error inside one
+            # (failed flush, aborted Postgres transaction) must not poison the
+            # session the fallback callback below runs on — fail-open has to
+            # hold for database errors too, not only for Python exceptions.
+            from app.verticals import hooks as vertical_hooks
+            async with AsyncSession(engine, expire_on_commit=False) as hook_session:
+                skipped_by = await vertical_hooks.completion_callback_skipped_by(
+                    hook_session, task,
+                )
+            if skipped_by:
+                await emit_event(
+                    session, "owner.completion_callback_skipped",
+                    f"Completion-Callback uebersprungen fuer '{task.title}' ({skipped_by})",
+                    board_id=board_id, task_id=task.id,
+                    detail={"skipped_by": skipped_by},
+                )
+                return
+
             # ── Collect evidence ──────────────────────────────
+            from app.comment_types import REVIEW_NOTE_COMMENT_TYPES
             evidence_cmt = (await session.exec(
                 select(TaskComment)
                 .where(
                     TaskComment.task_id == task.id,
-                    TaskComment.comment_type.in_(["resolution", "progress", "review"]),
+                    TaskComment.comment_type.in_(
+                        ["resolution", "progress", *REVIEW_NOTE_COMMENT_TYPES]
+                    ),
                 )
                 .order_by(TaskComment.created_at.desc())
                 .limit(3)

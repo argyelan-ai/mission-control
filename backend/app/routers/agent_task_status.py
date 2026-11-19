@@ -39,6 +39,7 @@ from sqlmodel import select, or_, and_
 from app.auth import require_agent
 from app.scopes import Scope, require_scope
 from app.database import get_session
+from app.comment_types import activity_comment_filter
 from app.models.agent import Agent
 from app.models.approval import Approval
 from app.models.board import Board, Project
@@ -473,7 +474,8 @@ async def dispatch_callback_to_parent(parent_task_id, subtask_id):
         last_comment = (
             await session.exec(
                 select(TaskComment)
-                .where(TaskComment.task_id == subtask.id)
+                # the subtask run's last word, not its chat's reply
+                .where(TaskComment.task_id == subtask.id, activity_comment_filter())
                 .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
                 .limit(1)
             )
@@ -523,7 +525,8 @@ async def dispatch_resume_to_agent(subtask):
 
         comment_q = (
             select(TaskComment)
-            .where(TaskComment.task_id == subtask.id)
+            # the helper run's last word, not its chat's reply
+            .where(TaskComment.task_id == subtask.id, activity_comment_filter())
             .order_by(TaskComment.created_at.desc())
             .limit(1)
         )
@@ -764,12 +767,32 @@ async def get_next_task(
     """Pull-based task dispatch: agent fetches the next available task.
 
     Returns 200 with task + context when work is available.
-    Returns 204 when the agent is busy or there's no work.
+    Returns 204 when the agent is busy or there's no work — including while
+    the system mode (HALTED / DRAINING) or the MC update drain holds it.
     """
     from starlette.responses import Response
 
     if agent.board_id != board_id:
         raise HTTPException(status_code=403, detail="Agent not assigned to this board")
+
+    # rule: R-system-mode-holds-poll - pull dispatch holds cards like push dispatch
+    # This claim sets in_progress itself and never asks
+    # check_dispatch_allowed, so it asks the system-wide gates itself: the
+    # MC update drain (ADR-094) here, the system mode per candidate below.
+    from app.services import update_drain
+    from app.services.operations import get_system_mode, system_mode_refusal
+
+    # rule: R-paused-holds-poll - pull dispatch hands a paused agent nothing
+    # The agent's own pause holds this claim like its poll (ADR-089
+    # Nachtrag 2026-11-13): 204, as for "no work".
+    if (agent.operational_mode or "active") == "paused":
+        return Response(status_code=204)
+    if (await update_drain.current(session)).active:
+        return Response(status_code=204)
+    # Pool hygiene (incident 2026-09-14): the mode lives in Redis — release
+    # the read transaction before awaiting it.
+    await session.commit()
+    system_mode = await get_system_mode()
 
     # 1. Agent busy? (has an active in_progress task)
     active = (await session.exec(
@@ -806,6 +829,10 @@ async def get_next_task(
 
     # 3. Check dependencies + root guard + take the first available task
     for task in candidates:
+        # HALTED holds every card, DRAINING all but the continuation flows.
+        if system_mode_refusal(system_mode, task):
+            continue
+
         if not await _dependencies_met(session, task):
             continue
 
@@ -841,10 +868,15 @@ async def get_next_task(
         task.ack_at = utcnow()  # Pull = impliziter ACK
         task.dispatch_phase = None  # reset the gate (like push dispatch)
         task.updated_at = utcnow()
-        # Set the active-task lock (Board Lead only — workers have parallel sessions)
+        # Set the active-task lock. Workers in subagent-dispatch mode
+        # (parallel sessions) take it only while it is free — same rule as
+        # the PATCH ACK (task_lifecycle.point_worker_at_task_if_free).
         from app.config import settings as _pull_settings
         if not (_pull_settings.use_subagent_dispatch and not agent.is_board_lead):
             agent.current_task_id = task.id
+        else:
+            from app.services.task_lifecycle import point_worker_at_task_if_free
+            point_worker_at_task_if_free(agent, task)
         session.add(task)
         session.add(agent)
         await session.commit()
@@ -1903,6 +1935,15 @@ async def agent_update_task(
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # ── Chat-Session Guard (round-1 user test t1, MUST-1) ─────────
+    # ack / finish / patch of the agent's OWN task belong to its run session;
+    # a chat turn that tries it would run the task a second time.
+    from app.services.chat_session_guard import refuse_chat_task_write
+    _status = getattr(payload, "status", None)
+    await refuse_chat_task_write(
+        session, request, agent, task, f"status {_status}" if _status else "update",
+    )
+
     # ── Run-Control Guard ──────────────────────────────────────────
     # Stopped/held tasks no longer accept agent updates.
     # In-flight Claude calls may still arrive after sessions.reset().
@@ -2269,11 +2310,14 @@ async def agent_update_task(
             is_reviewer = False
 
         if is_reviewer:
+            # The review run's own verdict text: a chat reply ("not approved
+            # yet") must not flip a rework into done (round-5 r1 N5).
             recent_cmt = (await session.exec(
                 select(TaskComment)
                 .where(
                     TaskComment.task_id == task.id,
                     TaskComment.author_agent_id == agent.id,
+                    activity_comment_filter(),
                 )
                 .order_by(TaskComment.created_at.desc())
                 .limit(1)
@@ -2339,7 +2383,11 @@ async def agent_update_task(
     if "status" in updates and old_status == "review" and is_reviewer:
         recent_cmt = (await session.exec(
             select(TaskComment)
-            .where(TaskComment.task_id == task.id, TaskComment.author_agent_id == agent.id)
+            .where(
+                TaskComment.task_id == task.id,
+                TaskComment.author_agent_id == agent.id,
+                activity_comment_filter(),
+            )
             .order_by(TaskComment.created_at.desc())
             .limit(1)
         )).first()
@@ -2709,7 +2757,8 @@ async def agent_update_task(
             # Live bug 2026-04-24 DGX-Spark task: Boss had to use a direct POST /tasks
             # as a workaround. Skip condition identical to pull dispatch:
             # in subagent-dispatch mode, workers have parallel sessions,
-            # the lock stays with Board Leads.
+            # the lock stays with Board Leads. Workers get the pointer as a
+            # hint (only while free) from update_agent_active_task below.
             from app.config import settings as _ack_settings
             if not (_ack_settings.use_subagent_dispatch and not agent.is_board_lead):
                 if agent.current_task_id != task.id:
@@ -3136,7 +3185,11 @@ async def agent_update_task(
 
             blocker_cmt = (await session.exec(
                 select(TaskComment)
-                .where(TaskComment.task_id == task.id, TaskComment.author_agent_id == agent.id)
+                .where(
+                    TaskComment.task_id == task.id,
+                    TaskComment.author_agent_id == agent.id,
+                    activity_comment_filter(),  # the run's blocker, not its chat
+                )
                 .order_by(TaskComment.created_at.desc())
                 .limit(1)
             )).first()
@@ -3318,7 +3371,7 @@ async def agent_update_task(
                     )
                     hint_cmt = (await session.exec(
                         select(TaskComment)
-                        .where(TaskComment.task_id == task.id)
+                        .where(TaskComment.task_id == task.id, activity_comment_filter())
                         .order_by(TaskComment.created_at.desc())
                         .limit(1)
                     )).first()
@@ -3467,6 +3520,7 @@ async def agent_review_decision(
     board_id: uuid.UUID,
     task_id: uuid.UUID,
     body: ReviewDecisionBody,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_WRITE)),
 ):
@@ -3477,6 +3531,12 @@ async def agent_review_decision(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # The reviewer's chat must not decide the review its own review run is
+    # doing (round-3 code review r1 S1: "does the delivery fit?" ended in
+    # `mc review approve` while the review run still worked the card).
+    from app.services.chat_session_guard import refuse_chat_task_write
+    await refuse_chat_task_write(session, request, agent, task, f"review {body.decision}")
 
     # Beweis-Tor: approve is the second road to done. The reviewer's own
     # comment is written atomically by execute_review_decision, so the
@@ -3513,6 +3573,7 @@ async def agent_late_review_note(
     board_id: uuid.UUID,
     task_id: uuid.UUID,
     body: ReviewDecisionBody,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_WRITE)),
 ):
@@ -3529,6 +3590,10 @@ async def agent_late_review_note(
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Same rule as /review (round-3 r1 S1): a verdict is the run's word.
+    from app.services.chat_session_guard import refuse_chat_task_write
+    await refuse_chat_task_write(session, request, agent, task, f"review-note {body.decision}")
 
     from app.services.task_lifecycle import record_late_review_note
     return await record_late_review_note(

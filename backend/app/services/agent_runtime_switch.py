@@ -180,6 +180,47 @@ class ProbedModel(NamedTuple):
 
     model_id: str | None
     context_len: int | None
+    #: Why nothing usable came back (ADR-096 §11.2), ``None`` when it did:
+    #: ``"refused"`` — nothing listens on the port (engine/container gone; the
+    #: watcher's fast path), ``"timeout"`` — no answer in time (a stalling box
+    #: looks like this too), ``"http"`` — something answered, but not 200 with
+    #: a chat model, ``"error"`` — anything else (DNS, TLS, bad JSON).
+    failure: str | None = None
+
+
+FAIL_REFUSED = "refused"
+FAIL_TIMEOUT = "timeout"
+FAIL_HTTP = "http"
+FAIL_ERROR = "error"
+
+
+def classify_probe_error(exc: BaseException) -> str:
+    """``refused`` only for a real ECONNREFUSED somewhere in the cause chain —
+    httpx's ``ConnectError`` also covers DNS and "no route to host", which say
+    nothing about the engine."""
+    import errno
+
+    try:
+        import httpx
+    except ImportError:  # pragma: no cover
+        httpx = None  # type: ignore[assignment]
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, ConnectionRefusedError):
+            return FAIL_REFUSED
+        if isinstance(cur, OSError) and cur.errno == errno.ECONNREFUSED:
+            return FAIL_REFUSED
+        if httpx is not None and isinstance(cur, httpx.TimeoutException):
+            return FAIL_TIMEOUT
+        if isinstance(cur, TimeoutError):
+            return FAIL_TIMEOUT
+        cur = cur.__cause__ or cur.__context__
+    text = str(exc).lower()
+    if "connection refused" in text or "errno 111" in text or "errno 61" in text:
+        return FAIL_REFUSED
+    return FAIL_ERROR
 
 
 def _served_context_len(entry: object) -> int | None:
@@ -280,11 +321,15 @@ async def probe_runtime_model_info(runtime: Runtime) -> ProbedModel:
     except ImportError:
         logger.warning("probe_runtime_model: httpx unavailable")
         return ProbedModel(None, None)
+    # The weakest-to-strongest evidence across the candidate URLs: one
+    # refused URL next to one that answered 404 is "http", not "refused".
+    failures: list[str] = []
     async with httpx.AsyncClient(timeout=5.0) as client:
         for url in candidates:
             try:
                 resp = await client.get(url)
                 if resp.status_code != 200:
+                    failures.append(FAIL_HTTP)
                     continue
                 data = resp.json()
                 items = data.get("data") if isinstance(data, dict) else None
@@ -317,11 +362,17 @@ async def probe_runtime_model_info(runtime: Runtime) -> ProbedModel:
                         runtime.slug,
                         ids,
                     )
-                    return ProbedModel(None, None)
+                    return ProbedModel(None, None, FAIL_HTTP)
+                failures.append(FAIL_HTTP)
             except Exception as e:
-                logger.debug("probe_runtime_model %s failed: %s", url, e)
+                kind = classify_probe_error(e)
+                failures.append(kind)
+                logger.debug("probe_runtime_model %s failed (%s): %s", url, kind, e)
                 continue
-    return ProbedModel(None, None)
+    for kind in (FAIL_HTTP, FAIL_ERROR, FAIL_TIMEOUT):
+        if kind in failures:
+            return ProbedModel(None, None, kind)
+    return ProbedModel(None, None, FAIL_REFUSED if failures else None)
 
 
 async def ensure_runtime_model_identifier(

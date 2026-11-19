@@ -256,18 +256,23 @@ def test_sink_writes_media_next_to_the_transcript(tmp_path):
     sink = acp_chat_events.ChatEventSink(tmp_path, "sid-1")
     name = hashlib.sha256(PNG_1x1).hexdigest() + ".png"
     assert sink.write_media(name, PNG_1x1) is True
-    target = tmp_path / "media" / name
+    # Next to the transcript copy, which lives in <folder>/.mc/ (S1-R3).
+    media = tmp_path / acp_chat_events.MC_SINK_DIRNAME / "media"
+    assert sink.path is not None and sink.path.parent / "media" == media
+    target = media / name
     assert target.read_bytes() == PNG_1x1
     # Idempotent: the same picture twice is one file, no error.
     assert sink.write_media(name, PNG_1x1) is True
-    assert [p.name for p in (tmp_path / "media").iterdir()] == [name]
+    assert [p.name for p in media.iterdir()] == [name]
 
 
 def test_sink_refuses_names_that_could_leave_the_media_folder(tmp_path):
     sink = acp_chat_events.ChatEventSink(tmp_path, "sid-1")
     for bad in ("../x.png", "a/b.png", "x.svg", "short.png", ("A" * 64) + ".png"):
         assert sink.write_media(bad, PNG_1x1) is False
-    assert not (tmp_path / "media").exists() or list((tmp_path / "media").iterdir()) == []
+    media = tmp_path / acp_chat_events.MC_SINK_DIRNAME / "media"
+    assert not media.exists() or list(media.iterdir()) == []
+    assert not (tmp_path / "media").exists()
 
 
 def test_sink_without_a_file_writes_nothing(tmp_path):
@@ -281,15 +286,16 @@ def test_sink_prunes_old_media(tmp_path, monkeypatch):
 
     monkeypatch.setattr(acp_chat_events.ChatEventSink, "_MEDIA_KEEP", 3)
     sink = acp_chat_events.ChatEventSink(tmp_path, "sid-1")
+    media = tmp_path / acp_chat_events.MC_SINK_DIRNAME / "media"
     names = []
     for i in range(5):
         data = PNG_1x1 + bytes([i])
         name = hashlib.sha256(data).hexdigest() + ".png"
         names.append(name)
         assert sink.write_media(name, data)
-        os.utime(tmp_path / "media" / name, (time.time() - 100 + i, time.time() - 100 + i))
+        os.utime(media / name, (time.time() - 100 + i, time.time() - 100 + i))
     sink.write_media(hashlib.sha256(b"x" + PNG_1x1).hexdigest() + ".png", PNG_1x1)
-    left = sorted(p.name for p in (tmp_path / "media").iterdir())
+    left = sorted(p.name for p in media.iterdir())
     assert len(left) == 3
     assert names[0] not in left and names[1] not in left
 
@@ -320,6 +326,7 @@ def test_chat_daemon_writes_the_picture_and_a_small_line(tmp_path):
     raw = _fixture_image_bytes()
     sha = hashlib.sha256(raw).hexdigest()
     transcript = Path(sess.transcript_path)
+    assert transcript.parent.name == acp_chat_events.MC_SINK_DIRNAME
     assert (transcript.parent / "media" / f"{sha}.webp").read_bytes() == raw
     lines = read_lines(transcript)
     tool = [l for l in lines if (l.get("message") or {}).get("role") == "toolResult"]
@@ -362,6 +369,8 @@ def test_task_run_factory_writes_the_picture(tmp_path, monkeypatch):
     sha = hashlib.sha256(raw).hexdigest()
     found = list((tmp_path / "agent" / "sessions").rglob(f"media/{sha}.webp"))
     assert found and found[0].read_bytes() == raw
+    # Under the task's transcript copy in <folder>/.mc/ (S1-R3).
+    assert [f.parent.parent.name for f in found] == [acp_chat_events.MC_SINK_DIRNAME]
 
 
 # ── omp's js browser tool (live 13.10.2026) ────────────────────────────────

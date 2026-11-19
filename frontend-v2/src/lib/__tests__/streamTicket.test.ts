@@ -78,10 +78,15 @@ describe("withStreamTicket", () => {
 describe("no stream URL carries the login token", () => {
   // Static guard over every non-test source file: building a URL with a
   // `token` query parameter from the login token is exactly the leak this
-  // finding closed. The only allowed `?token=` is the bench view link, which
-  // carries a resource-scoped 30-minute view token, never the login JWT.
+  // finding closed. The only allowed `?token=` links are the bench view link
+  // and the bench W1 X-Kit download link (a real <a href> so iOS can save
+  // the file): both carry a resource-scoped short-lived token minted by an
+  // authenticated POST, never the login JWT.
   const SRC = path.resolve(__dirname, "../..");
-  const ALLOWED = new Set([path.join("verticals", "bench_studio", "api.ts")]);
+  const ALLOWED = new Set([
+    path.join("verticals", "bench_studio", "api.ts"),
+    path.join("verticals", "bench_studio", "w1", "api.ts"),
+  ]);
 
   function sourceFiles(dir: string): string[] {
     return readdirSync(dir).flatMap((name) => {

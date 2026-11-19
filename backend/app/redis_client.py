@@ -339,6 +339,18 @@ class RedisKeys:
         in the task.orphaned_run_redispatched event detail."""
         return f"mc:poll:orphan_redispatch_count:{task_id}"
 
+    @staticmethod
+    def poll_delivered(task_id: str) -> str:
+        """Delivery mark: ``<agent id>|<attempt id>|<dispatched_at>`` of the
+        last time /agent/me/poll handed this card out as ``new_task``. A card
+        is in flight while its current dispatch carries this agent's mark and
+        no ACK yet; the system-mode gate lets such a card keep its answer
+        instead of holding it (the bridges read ``idle`` as "card gone").
+        ``dispatched_at`` cannot tell this: push dispatch and the
+        undispatched-card watcher stamp it without delivering. The poll
+        sets the TTL."""
+        return f"mc:task:{task_id}:poll_delivered"
+
     # ── Scheduler ────────────────────────────────────────────────────────
     @staticmethod
     def scheduler_lock() -> str:
@@ -386,6 +398,17 @@ class RedisKeys:
         margin, so a genuinely-never-acked resume still escalates once the
         suppression window elapses."""
         return f"mc:dispatch:resume_suppress:{task_id}"
+
+    @staticmethod
+    def dispatch_system_hold(task_id: str) -> str:
+        """Set by _check_dispatch_ack on every pass while the system mode
+        (HALTED / DRAINING) or the MC update drain holds this card: no path
+        may hand it out, so "not ACKed" / "never delivered" is the system's
+        doing and both ladders wait. TTL = the agent's ack timeout + margin,
+        so the ladders keep waiting that long after the hold ends — the
+        first poll after it delivers the card before a ladder reads its old
+        dispatched_at."""
+        return f"mc:dispatch:system_hold:{task_id}"
 
     @staticmethod
     def dispatch_turn_wait(task_id: str) -> str:
@@ -600,6 +623,14 @@ class RedisKeys:
         return "mc:runtime-pulse:lock"
 
     @staticmethod
+    def host_awake(host_id: str) -> str:
+        """"1"/"0" — the box's own host check (control server /health), kept a
+        few seconds (services/host_liveness.AWAKE_TTL_S). Written by the 5 s
+        metrics poll, read by the model catalog so "model port dark" is never
+        mistaken for "box asleep" (round-4 t3 S1)."""
+        return f"mc:host:{host_id}:awake"
+
+    @staticmethod
     def host_pulse(host_id: str) -> str:
         """Redis LIST of JSON {t, tps} points, LTRIM'd to 180 (15 min @ 5s)."""
         return f"mc:host:{host_id}:pulse"
@@ -667,6 +698,51 @@ class RedisKeys:
     @staticmethod
     def runtime_evicted(slug: str) -> str:
         return f"mc:runtime-evicted:{slug}"
+
+    # runtime_stop_intent (ADR-096 §11.1): "MC stopped this on purpose" —
+    # operator stop, switched away, schedule, idle unload, crash-loop stop.
+    # NO TTL: only the runtime's own next start lifts it (runtime_grace).
+    @staticmethod
+    def runtime_stop_intent(slug: str) -> str:
+        return f"mc:runtime-stop-intent:{slug}"
+
+    # runtime_start_pending (ADR-096 §11.2): MC launched this row and it has
+    # not answered since — it is the port's wanted holder. Outlives the
+    # 20-min switch grace on purpose: a start that never comes up must end
+    # in the plain alarm, not in silence. Cleared by the row's next answer
+    # (own or a neighbour's) and by a stop intent.
+    @staticmethod
+    def runtime_start_pending(slug: str) -> str:
+        return f"mc:runtime-start-pending:{slug}"
+
+    # runtime_last_answer (ADR-096 §11.2): what the port said at this row's
+    # last healthy probe, and whether it was the row's OWN engine. Durable
+    # (days, not the live snapshot's minutes — 3 ticks, at least 270 s): a
+    # backend that was down longer than the snapshot lives must still know
+    # who held the port.
+    @staticmethod
+    def runtime_last_answer(slug: str) -> str:
+        return f"mc:runtime-last-answer:{slug}"
+
+    # runtime_death (ADR-096 §11.3): the explained death of one runtime row
+    # (reason, reason_code, box, at). The watcher mirrors it into the live
+    # snapshot's existing status/reason fields on every silent probe; the
+    # first answering probe or a start/stop of the row removes it.
+    @staticmethod
+    def runtime_death(slug: str) -> str:
+        return f"mc:runtime-death:{slug}"
+
+    # One death / one unreachable alarm per ENDPOINT outage (§11.2, §11.4):
+    # rows sharing a port (Spark :8000) add none. Cleared by the first probe
+    # on that endpoint that gets an answer, and by a start of any row on it
+    # (a new window gets its own one alarm — runtime_grace.mark_start_pending).
+    @staticmethod
+    def runtime_endpoint_death(endpoint: str) -> str:
+        return f"mc:runtime-endpoint-death:{endpoint.rstrip('/')}"
+
+    @staticmethod
+    def runtime_endpoint_alarm(endpoint: str) -> str:
+        return f"mc:runtime-endpoint-alarm:{endpoint.rstrip('/')}"
 
     # One auto-recovery attempt per 15 min per runtime; the SET-nx claim on
     # this key is what keeps two workers from starting the engine twice.

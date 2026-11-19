@@ -178,10 +178,17 @@ export function TaskSummaryTab({
     // ── TIMES ──
     const created = ago(zeiten.erstellt ?? task.created_at);
     const dispatched = ago(zeiten.dispatched ?? task.dispatched_at);
+    // The hand-off to review clears dispatched_at; a delivered card says
+    // when it was delivered instead of "not dispatched" (round-2 Q5).
+    const delivered = ago(task.delivered_at);
     const done = ago(zeiten.abgeschlossen ?? task.completed_at);
     const times = [
       created ? t("detail.timesCreated", { age: created }) : null,
-      dispatched ? t("detail.timesDispatched", { age: dispatched }) : t("detail.timesNotDispatched"),
+      dispatched
+        ? t("detail.timesDispatched", { age: dispatched })
+        : delivered
+          ? t("detail.timesDelivered", { age: delivered })
+          : t("detail.timesNotDispatched"),
       done ? t("detail.timesDone", { age: done }) : t("detail.timesNotDone"),
     ].filter(Boolean);
 

@@ -82,6 +82,8 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import HTTPException
 from sqlmodel import select
 
+from app.comment_types import NOT_ACTIVITY_COMMENT_TYPES, activity_comment_filter
+
 logger = logging.getLogger("mc.proof_gate")
 
 PROOF_GATE_EVENT = "task.proof_gate"
@@ -108,7 +110,9 @@ DEDUP_WINDOW = timedelta(minutes=30)
 #: finish`` writes one right before its PATCH) and status chatter ("schaue
 #: mir das an …") — a verdict is review / feedback / message / handoff / …
 _NOT_A_VERDICT = {"reflection", "system", "progress", "subtask_completed", "checkpoint",
-                  "blocker"}
+                  "blocker",
+                  # a chat session's reply speaks for the chat, not the review run
+                  *NOT_ACTIVITY_COMMENT_TYPES}
 
 #: Commits walked one by one when no diff fingerprint is on record.
 MAX_COMMITS_WALKED = 5
@@ -116,7 +120,6 @@ MAX_COMMITS_WALKED = 5
 #: Branches a PR never runs FROM — a card on these is no PR card.
 _NOT_A_PR_BRANCH = {"main", "master", "deploy-main", "develop"}
 
-_PR_CREATED_MARKER = "PR erstellt:"
 
 _GH_PR_FIELDS = (
     "number,title,body,state,url,author,createdAt,headRefName,headRefOid,changedFiles,statusCheckRollup,commits,"
@@ -737,6 +740,7 @@ async def discover_pr(session, task, token: str) -> tuple[str | None, str]:
     ``(None, "")`` = looked everywhere, nothing there.
     """
     from app.models.task import Task, TaskComment
+    from app.services.pr_marker import trusted_pr_note_filter
     from app.services.pr_merge_monitor import parse_pr_url
 
     source_id = getattr(task, "source_task_id", None)
@@ -747,10 +751,10 @@ async def discover_pr(session, task, token: str) -> tuple[str | None, str]:
             if url and ref:
                 return url, "source_task"
     rows = (await session.exec(
+        # MC's own note only — not its task-done summary quoting an agent's
+        # "PR erstellt:" line (round 8 / L6, pr_marker.py).
         select(TaskComment.content).where(
-            TaskComment.task_id == task.id,
-            TaskComment.author_type == "system",
-            TaskComment.content.like(f"%{_PR_CREATED_MARKER}%"),  # type: ignore[union-attr]
+            *trusted_pr_note_filter(task.id),
         ).order_by(TaskComment.created_at.desc()).limit(1)
     )).all()
     for content in rows:
@@ -980,17 +984,14 @@ async def _pr_tied_to_card(session, task, pr: dict, pr_url: str) -> bool:
     the PR names the card (id prefix in title or body), or MC itself wrote
     the "PR erstellt:" note with this PR on the card."""
     from app.models.task import TaskComment
+    from app.services.pr_marker import trusted_pr_note_filter
 
     text = f"{pr.get('title') or ''}\n{pr.get('body') or ''}".lower()
     ids = [task.id] + ([task.source_task_id] if getattr(task, "source_task_id", None) else [])
     if any(str(i).lower()[:8] in text for i in ids):
         return True
     rows = (await session.exec(
-        select(TaskComment.content).where(
-            TaskComment.task_id == task.id,
-            TaskComment.author_type == "system",
-            TaskComment.content.like(f"%{_PR_CREATED_MARKER}%"),  # type: ignore[union-attr]
-        )
+        select(TaskComment.content).where(*trusted_pr_note_filter(task.id))
     )).all()
     return any(_same_pr(url, pr_url) for content in rows
                for url in _PR_URL_IN_TEXT.findall(content or ""))
@@ -1047,7 +1048,9 @@ async def _review_snapshots(session, task) -> list[tuple[datetime | None, dict]]
 
 
 async def _claimed_pr_urls(session, task, actor_agent, since: datetime | None) -> list[str]:
-    """PR URLs the acting agent quoted in his own comments in this work phase."""
+    """PR URLs the acting agent quoted in his own comments in this work phase.
+
+    His chat session's replies are not the run's claim (round-5 r1 N5)."""
     from app.models.task import TaskComment
 
     if actor_agent is None:
@@ -1056,6 +1059,7 @@ async def _claimed_pr_urls(session, task, actor_agent, since: datetime | None) -
         select(TaskComment.content, TaskComment.created_at).where(
             TaskComment.task_id == task.id,
             TaskComment.author_agent_id == actor_agent.id,
+            activity_comment_filter(),
         )
     )).all()
     urls: list[str] = []

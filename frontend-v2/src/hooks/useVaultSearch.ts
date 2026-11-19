@@ -7,6 +7,10 @@ import type { VaultNoteType, VaultSearchResponse } from "@/lib/types";
 
 export type VaultScope = "episodic" | "semantic" | "agents";
 
+/** Max hits one search returns. A result list of exactly this length means
+ *  "at least this many" — the header shows "100+" then, not "100". */
+export const VAULT_SEARCH_LIMIT = 100;
+
 interface UseVaultSearchParams {
   q: string;
   scope?: VaultScope;
@@ -40,7 +44,7 @@ export function useVaultSearch({ q, scope: _scope, agent, type }: UseVaultSearch
         q: debouncedQ,
         ...(agent ? { agent } : {}),
         ...(type ? { type } : {}),
-        limit: 100,
+        limit: VAULT_SEARCH_LIMIT,
       }),
     enabled,
     staleTime: 30_000,

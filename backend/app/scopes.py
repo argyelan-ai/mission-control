@@ -39,6 +39,14 @@ class Scope(StrEnum):
     # voice template; kept narrow because it can shovel any file from the
     # vault onto the operator's phone.
     TELEGRAM_SEND = "telegram:send"
+    # ADR-100: talk across harnesses — see who is reachable, send to a named
+    # session. Nothing else: a message carries no rights (§6). Opt-in per
+    # agent: it counts only when listed explicitly in agents.scopes (the
+    # empty-list "all scopes" fallback does not grant it) and no migration
+    # grants it — a message is a new way in for prompt injection, so the
+    # operator decides per agent. Terminal sessions get it through a guest
+    # card, never as a row in `agents`.
+    COMMS_TALK = "comms:talk"
 
 
 class AgentRole(StrEnum):

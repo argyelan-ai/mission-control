@@ -7,7 +7,7 @@
  * width and the header labels drifted away from their values.
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { JobsTable } from "../JobsTable";
 import type { ScheduledJob } from "@/lib/types";
 
@@ -65,8 +65,10 @@ describe("JobsTable column grid", () => {
         onDuplicate={noop}
       />,
     );
-    const header = screen.getByText("Name").parentElement;
-    const row = screen.getByText("Morning digest").closest("[class*='grid-cols-']");
+    // The phone card (md:hidden) holds the name too — the grid lives in the table.
+    const table = within(screen.getByRole("region", { name: "Jobs table" }));
+    const header = table.getByText("Name").parentElement;
+    const row = table.getByText("Morning digest").closest("[class*='grid-cols-']");
     const headerCols = gridCols(header);
     expect(headerCols).not.toBe("");
     expect(gridCols(row)).toBe(headerCols);

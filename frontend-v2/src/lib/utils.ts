@@ -13,6 +13,16 @@ export function contextPercent(tokens: number | null | undefined, max: number): 
   return Math.round((tokens / max) * 100);
 }
 
+/** The context fill as text: "2%", "<1%" for a context that holds tokens but
+ *  rounds to zero (round-2 user test: 4,200 of 1M tokens read "0 %" while
+ *  the agent worked), "—" when unknown. */
+export function formatContextPct(tokens: number | null | undefined, max: number): string {
+  const pct = contextPercent(tokens, max);
+  if (pct === null) return "—";
+  if (pct === 0 && (tokens ?? 0) > 0) return "<1%";
+  return `${pct}%`;
+}
+
 /** Context window as a compact "128k" / "1M" label.
  *
  *  Computed, not table-driven: an earlier version was a ladder of the eight

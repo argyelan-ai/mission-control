@@ -306,6 +306,27 @@ export function latencyColor(ms: number): string {
   return C.error;
 }
 
+/**
+ * How a FAILED intermediate step (one tool call that errored while the agent
+ * carried on) looks in the chat — DESIGN.md K20, proposed. "warning" (the
+ * recommendation): an ocker dot, the title stays secondary grey, a neutral
+ * output box; red stays for a failed task or turn. "error": red title, red
+ * dot, red-bordered output (the look before). One token, so the operator can
+ * compare both pictures and the choice is a one-line switch.
+ */
+export const STEP_FAILED_TONE: "warning" | "error" = "warning";
+
+export function stepFailedStyle(tone: "warning" | "error" = STEP_FAILED_TONE): {
+  dot: string;
+  title: string;
+  resultText: string;
+  resultBorder: string;
+} {
+  return tone === "error"
+    ? { dot: STATUS_TEXT.error, title: STATUS_TEXT.error, resultText: STATUS_TEXT.error, resultBorder: C.error }
+    : { dot: C.warning, title: C.textSecondary, resultText: C.textSecondary, resultBorder: C.border };
+}
+
 export function serviceStatusColor(status: string): string {
   switch (status) {
     case "ok": case "running": return C.online;

@@ -39,7 +39,7 @@ class TaskAttemptAudit(SQLModel, table=True):
     # Caller identifies the code path that performed the write — used for
     # forensic grouping. Suggested values match the helper kwargs:
     #   "auto_dispatch", "agent_poll", "agent_subtask_create", "d1_silent_retry",
-    #   "user_stop", "user_resume", "approval", "task_lifecycle",
+    #   "user_stop", "system_stop", "user_resume", "approval", "task_lifecycle",
     #   "watchdog_phase_complete", "watchdog_undispatched_recovery",
     #   "agent_comment"
     caller: str = Field(max_length=64, nullable=False)

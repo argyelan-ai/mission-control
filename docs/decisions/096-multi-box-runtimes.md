@@ -498,7 +498,12 @@ eviction marker expires after an hour (`EVICTED_TTL`); a runtime that was
 switched away therefore also gets a durable intent "not running — switched
 away", **without TTL**, cleared only by its own next start. A transition to
 down **without** an intent is an engine death. Slot rows (ADR-078) report
-through their recipe row only, as today.
+through their recipe row only, as today. "Its own next start" includes a
+start MC only observes (`start.sh` by hand after a stop via MC, a restart-policy
+container after a box reboot): the row's own anchor runs and the port answers,
+at least 10 minutes after the stop was asked (`STOP_INTENT_SETTLE`; an engine
+still answering while its stop runs is not a start). A neighbour's answer on
+a shared port never lifts it.
 
 11.2 **Detect per runtime, not per endpoint.** On the Sparks several rows
 share one endpoint (`:8000`); a dead engine makes all of them unreachable at
@@ -508,7 +513,24 @@ process alive): only a row whose last healthy probe was its **own** answer can
 die. A row whose anchor never ran (the GLM row on 2026-10-19) gets no death,
 no notification and no restart — whether or not its eviction marker has
 expired. One engine death produces exactly one death. The slot row follows its
-recipe row (11.1).
+recipe row (11.1). Whether the last answer was a row's own is remembered
+durably (days), not only in the live snapshot (3 probe intervals, at least
+270 s since the 2026-10-20 note in §11.2), so an
+outage that began while the backend was down is still judged per row. A
+matching model id counts as own only when no other row on the port carries
+the same id; otherwise the anchor decides.
+
+The plain `runtime.unreachable` (no death declared) fires once per endpoint
+outage and stays quiet only for silence MC knows is planned: the row, or the
+port's holder, was stopped on purpose. The holder is the row whose last
+answer was its own, **or a row MC launched that has not answered yet**
+(pending start, no TTL tied to the grace): a switch whose new recipe never
+comes up (it hangs or dies while loading) ends in that one alarm when the
+20-minute grace runs out, as before this section. When nothing is known about
+the holder, the alarm fires. Every start MC issues opens a new window on the
+port: the one-death / one-alarm keys of the outage before it are closed, so
+"Restart now" or "Other model" on a dead card (including an auto-recovery
+start) that never comes up ends in its own one alarm instead of silence.
 
 **Detection target: ≤ 2 probe intervals** after the death (operator
 requirement, 2026-10-19; today up to 3 intervals plus the tick offset, live
@@ -522,6 +544,21 @@ mid-stall must not be declared dead). The fast path never stops or starts
 anything by itself. For member anchors (§3.2) a member death is `degraded`,
 or — if the recipe takes the head down with it — a death with cause
 `member_down`.
+
+*Note 2026-10-20 (watcher tick 30 s instead of 90 s, ADR-054 amendment):*
+the window in which the anchor is asked is wall-clock, not a probe count:
+up to 270 s into an outage (`DEATH_CHECK_WINDOW_S`; probes
+1..max(3, ⌈270 s / tick⌉) — 9 at 30 s, 3 at 90 s as before). Connection
+refused is checked at every probe in that window, a timeout once, at the
+threshold. So an engine whose container outlives its closed port (slow
+teardown, a duo shutting down) and a wedged engine killed later are still
+declared with their cause. Past the threshold the row still counts as "was
+up" when its clock was emptied by this outage's own threshold — not when MC
+launched it and it never answered (pending start: its one plain alarm, never
+a death). A node-agent "running" spares the SSH inspect only when it was
+reported after the previous probe that found the port dark: a report counts
+as fresh for 120 s and arrives every 15 s, so one taken just before the death
+would hide it for a tick. The live snapshot lives 3 ticks, at least 270 s.
 
 11.3 **Explain**, once per death, read-only, best effort, bounded to about
 10 s, by **reusing** the crash-loop readers: `_read_container_logs` (current
@@ -544,7 +581,22 @@ start; rows sharing the endpoint add none) with a reason sentence in DE/EN
 naming the box ("<runtime> stopped on <box>: the recipe's memory guard ended
 the engine at 21:14"); the Runtimes card shows the reason, the time and a link
 to the last log lines; the `runtime.unreachable` event carries the cause and
-fires once, for the dead row.
+fires once, for the dead row. Recipe rows are probed before slot rows in each
+watcher tick, so a death declared at the threshold (timeout path) is never
+preceded by the slot row's plain alarm for the same outage.
+
+*Note 2026-10-20 (tick 30 s):* the plain alarm (3 probes, 60–90 s) can now
+come before a death that the anchor confirms later in the 270 s window. That
+death then follows as the error with the cause: two `runtime.unreachable`
+events for that outage in the activity feed, the first without a cause. At
+the 90 s tick the window ended at the threshold, so this could not happen;
+dropping the death instead would lose its cause and the task comments
+(§11.5). The alert channel still gets **one** notification, the one with the
+cause: both events share the alert-dedup key `runtime.unreachable|<slug>`,
+and the dedup treats a more urgent severity for the same key as news, not as
+a repeat (`discord_notify`). The error is sent at once, takes over the key's
+one-hour window, and the plain warning still waiting in the digest is
+dropped.
 
 11.5 **Work does not fail silently**: agents bound to a dead runtime keep
 their queued work; delivery waits while the runtime is down (relates to open

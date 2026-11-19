@@ -250,9 +250,15 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
     // screenshot — distinct hubs, leaves orbit, tight central form.
 
     const [forcesInitialized, setForcesInitialized] = useState(false);
+    // ForceGraph2D mounts only after the container has been measured (see
+    // below), so on the first commit fgRef is still empty. Without this in
+    // the deps the effect never ran again and the graph kept the library
+    // defaults: loose nodes drifted far out and the framed graph shrank to a
+    // small knot (round-4 review r2 N1).
+    const canvasReady = !!size && size.width > 0 && size.height > 0;
 
     useEffect(() => {
-      if (!fgRef.current || forcesInitialized) return;
+      if (!canvasReady || !fgRef.current || forcesInitialized) return;
       const fg = fgRef.current as unknown as {
         d3Force: (name: string, force?: unknown) => unknown;
         d3ReheatSimulation: () => void;
@@ -276,43 +282,51 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
       fg.d3Force("y", forceY(0).strength(0.4));
       fg.d3ReheatSimulation();
       setForcesInitialized(true);
-    }, [forcesInitialized]);
+    }, [forcesInitialized, canvasReady]);
 
-    // Auto-fit at multiple checkpoints so the brain is reliably framed
-    // regardless of how/when the simulation settles or how the canvas is
-    // resized. didFitOnce guard prevents subsequent reheats (filter toggles,
-    // drags) from yanking the camera away from the user's manual pan/zoom.
-    const didFitOnceRef = useRef(false);
+    // Auto-fit at several checkpoints (1.5 s, 4 s, every time the layout
+    // settles) so the graph is framed for the layout it ends up with, not
+    // for the larger one it had mid-simulation — a single early fit left it
+    // as a knot in ~10 % of the canvas (round-4 review r2 N1). Once the
+    // operator pans, zooms, drags or taps, the camera is theirs: no
+    // checkpoint moves it again.
+    const userMovedRef = useRef(false);
+    const sizeRef = useRef(size);
+    useEffect(() => {
+      sizeRef.current = size;
+    }, [size]);
+    const markUserMoved = useCallback(() => {
+      userMovedRef.current = true;
+    }, []);
 
     const fitNow = useCallback(() => {
-      if (didFitOnceRef.current || !fgRef.current) return;
+      if (userMovedRef.current || !fgRef.current) return;
       const fg = fgRef.current as unknown as {
         zoomToFit: (ms: number, padding: number) => void;
-        centerAt: (x: number, y: number, ms?: number) => void;
       };
       // Two-step framing:
-      //   1. zoomToFit picks the correct zoom level so all nodes fit.
-      //      Padding 220 = the operator wanted "~25% mehr zoom out" room around
-      //      the bbox vs the previous 140.
-      //   2. centerAt(0, +Y) re-centres camera slightly below origin
-      //      AFTER zoom completes. Positive Y in world coords pulls the
-      //      brain upward in the viewport — the operator wanted it "ein bischen
-      //      nach oben". forceX/Y already keeps the dense mass at (0,0)
-      //      so this offset is purely framing.
-      // On a narrow (mobile) canvas a 220px padding is wider than the canvas
-      // itself, so the bbox collapses to a dot. Scale padding + vertical
-      // framing offset down for small viewports.
-      const isMobileViewport =
-        typeof window !== "undefined" && window.innerWidth < 768;
-      fg.zoomToFit(500, isMobileViewport ? 40 : 220);
+      //   1. zoomToFit picks the zoom level so all nodes fit, with room
+      //      around them. The room scales with the canvas: a fixed 220 px
+      //      (the operator's "~25% mehr zoom out" on a large screen) left a
+      //      740 px laptop canvas only 300 px for the graph (round-4 review
+      //      r2 N1). 15 % of the shorter side, never more than 220 px.
+      //   2. centerAt(0, +Y) re-centres the camera slightly below the origin
+      //      AFTER the zoom — the graph sits a little higher in the view
+      //      (operator: "ein bischen nach oben"). The shift is 5 % of the
+      //      canvas height in screen pixels, converted at the zoom just set,
+      //      so it reads the same at every zoom level.
+      const { width = 0, height = 0 } = sizeRef.current ?? {};
+      const padding = Math.max(24, Math.min(220, Math.round(Math.min(width, height) * 0.15)));
+      fg.zoomToFit(500, padding);
       setTimeout(() => {
-        if (fgRef.current) {
-          (fgRef.current as unknown as {
-            centerAt: (x: number, y: number, ms?: number) => void;
-          }).centerAt(0, isMobileViewport ? 40 : 150, 500);
-        }
+        const cam = fgRef.current as unknown as
+          | { centerAt: (x: number, y: number, ms?: number) => void; zoom?: () => number }
+          | undefined;
+        if (!cam || userMovedRef.current) return;
+        const k = typeof cam.zoom === "function" ? cam.zoom() : 1;
+        const shift = (height * 0.05) / (Number.isFinite(k) && k > 0 ? k : 1);
+        cam.centerAt(0, shift, 500);
       }, 520);
-      didFitOnceRef.current = true;
     }, []);
 
     const handleEngineStop = useCallback(() => {
@@ -324,7 +338,8 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
     //     onEngineStop didn't fire (some library versions skip it).
     //   - 4000ms: catches forceX/Y energy injection that prevents alpha
     //     from ever hitting min.
-    // Both go through fitNow() which is idempotent via didFitOnceRef.
+    // Both go through fitNow(), which stands down once the operator moved
+    // the camera.
     useEffect(() => {
       const t1 = setTimeout(() => fitNow(), 1500);
       const t2 = setTimeout(() => fitNow(), 4000);
@@ -558,6 +573,9 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
       <div
         ref={containerRef}
         className={className ? `w-full h-full ${className}` : "w-full h-full"}
+        onWheelCapture={markUserMoved}
+        onPointerDownCapture={markUserMoved}
+        onTouchStartCapture={markUserMoved}
       >
         {/* Only mount ForceGraph2D once we have a real, container-derived
             size — never let it fall through to its own window.innerWidth/

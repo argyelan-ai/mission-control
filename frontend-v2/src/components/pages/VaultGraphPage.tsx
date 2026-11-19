@@ -24,6 +24,7 @@
 
 import { useState, useRef, useMemo, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
+import { useTranslations } from "next-intl";
 import { useQueryClient } from "@tanstack/react-query";
 
 import type { MemoryGraph2DRef } from "@/components/memory/MemoryGraph2D";
@@ -50,13 +51,18 @@ const MemoryGraph2D = dynamic(
   () => import("@/components/memory/MemoryGraph2D").then((m) => m.MemoryGraph2D),
   {
     ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center h-full text-[var(--color-text-secondary)] font-mono text-sm">
-        Loading graph…
-      </div>
-    ),
+    loading: () => <GraphCanvasLoading />,
   }
 );
+
+function GraphCanvasLoading() {
+  const t = useTranslations("vault.graph");
+  return (
+    <div className="flex items-center justify-center h-full text-[var(--color-text-secondary)] font-mono text-sm">
+      {t("loadingCanvas")}
+    </div>
+  );
+}
 
 // ── Filter helpers ────────────────────────────────────────────────────────────
 
@@ -82,6 +88,7 @@ function hasAnyFilter(f: GraphFilter): boolean {
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function PageSkeleton() {
+  const t = useTranslations("vault.graph");
   // h-full so the spinner centres within whatever the parent gives us —
   // standalone /memory/graph uses 100dvh, embedded mode (tab inside
   // VaultMemoryPage) uses the tab pane height. h-[calc(100dvh-4rem)] was
@@ -91,7 +98,7 @@ function PageSkeleton() {
       <div className="flex flex-col items-center gap-3">
         <div className="w-12 h-12 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin" />
         <p className="text-sm font-mono uppercase tracking-widest text-[var(--color-text-muted)]">
-          Building graph…
+          {t("building")}
         </p>
       </div>
     </div>
@@ -99,6 +106,7 @@ function PageSkeleton() {
 }
 
 function ErrorState({ error }: { error: Error | null }) {
+  const t = useTranslations("vault.graph");
   return (
     <div className="flex h-full min-h-[400px] w-full items-center justify-center">
       <div
@@ -109,10 +117,10 @@ function ErrorState({ error }: { error: Error | null }) {
         }}
       >
         <p className="text-sm font-semibold text-[var(--color-error)]">
-          Failed to load memory graph
+          {t("loadFailed")}
         </p>
         <p className="text-xs text-[var(--color-text-muted)] font-mono break-all">
-          {error?.message ?? "Unknown error"}
+          {error?.message ?? t("unknownError")}
         </p>
       </div>
     </div>
@@ -120,6 +128,7 @@ function ErrorState({ error }: { error: Error | null }) {
 }
 
 function EmptyState() {
+  const t = useTranslations("vault.graph");
   return (
     <div className="flex h-[calc(100dvh-4rem)] w-full items-center justify-center">
       <div className="flex flex-col items-center gap-4 text-center max-w-xs">
@@ -131,12 +140,14 @@ function EmptyState() {
         </div>
         <div>
           <p className="text-base font-semibold text-[var(--color-text-primary)]">
-            No vault notes yet
+            {t("emptyTitle")}
           </p>
           <p className="mt-1 text-sm text-[var(--color-text-muted)]">
-            Agents write notes to{" "}
-            <code className="font-mono text-xs bg-[var(--color-overlay)]/5 px-1 py-0.5 rounded-sm">~/.mc/vault/</code>{" "}
-            — the graph will populate as they work.
+            {t.rich("emptyBody", {
+              code: (chunks) => (
+                <code className="font-mono text-xs bg-[var(--color-overlay)]/5 px-1 py-0.5 rounded-sm">{chunks}</code>
+              ),
+            })}
           </p>
         </div>
       </div>
@@ -153,6 +164,7 @@ function VoiceFilterBadge({
   filter: GraphFilter;
   onClear: () => void;
 }) {
+  const t = useTranslations("vault.graph");
   const parts = Object.entries(filter)
     .filter(([, v]) => v !== undefined)
     .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(",") : v}`);
@@ -166,12 +178,12 @@ function VoiceFilterBadge({
       }}
     >
       <span className="text-xs font-mono uppercase tracking-wider" style={{ color: C.accent }}>
-        ⟪ voice: {parts.join(" · ")} ⟫
+        ⟪ {t("voice")}: {parts.join(" · ")} ⟫
       </span>
       <button
         onClick={onClear}
         className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors leading-none"
-        aria-label="Clear voice highlight"
+        aria-label={t("clearVoice")}
       >
         ×
       </button>
@@ -202,6 +214,7 @@ export function VaultGraphPage({
   voiceFilter: voiceFilterProp,
   clearVoiceHighlight: clearVoiceHighlightProp,
 }: VaultGraphPageProps = {}) {
+  const t = useTranslations("vault.graph");
   // ── Filter / toggle state ─────────────────────────────────────────────────
   const [filter, setFilter] = useState<GraphFilter>({});
   const [showHeatmap, setShowHeatmap] = useState(false);
@@ -401,10 +414,10 @@ export function VaultGraphPage({
               color: "var(--color-text-secondary)",
               backdropFilter: "blur(6px)",
             }}
-            aria-label="Node color mode"
+            aria-label={t("colorModeAria")}
           >
-            <option value="community">By community</option>
-            <option value="type">By type</option>
+            <option value="community">{t("colorByCommunity")}</option>
+            <option value="type">{t("colorByType")}</option>
           </select>
         </div>
 

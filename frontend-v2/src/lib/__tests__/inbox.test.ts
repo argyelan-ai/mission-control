@@ -3,7 +3,7 @@
  * Inbox page renders its buckets and the phone tab bar shows its count.
  */
 import { describe, it, expect } from "vitest";
-import { badgeLabel, deriveInbox, openHeadQuestions, type InboxInput } from "../inbox";
+import { badgeLabel, deriveInbox, openHeadQuestions, resolveErrorKey, type InboxInput } from "../inbox";
 import type { Agent, Approval, Task, TaskComment } from "../types";
 import { mkRun } from "./headFixtures";
 
@@ -104,5 +104,17 @@ describe("badgeLabel", () => {
     expect(badgeLabel(17)).toBe("17");
     expect(badgeLabel(99)).toBe("99");
     expect(badgeLabel(100)).toBe("99+");
+  });
+});
+
+describe("resolveErrorKey", () => {
+  it("a stopped card's 409 tells the operator to Resume", () => {
+    const err = new Error('API 409: {"detail":"Task is stopped (run_control set) — approving the blocker would not restart it. Use Resume on the task instead."}');
+    expect(resolveErrorKey(err)).toBe("resolveStopped");
+  });
+  it("any other failure stays generic", () => {
+    expect(resolveErrorKey(new Error("API 409: {\"detail\":\"Approval already resolved\"}"))).toBe("resolveFailed");
+    expect(resolveErrorKey(new Error("API 500: boom"))).toBe("resolveFailed");
+    expect(resolveErrorKey(undefined)).toBe("resolveFailed");
   });
 });

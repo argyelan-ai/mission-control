@@ -34,7 +34,9 @@ import {
   ChevronRight,
   Plus,
   CheckCircle2,
+  CircleDashed,
   FileCode2,
+  Moon,
   Terminal,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -49,6 +51,7 @@ import { SectionOrFragment } from "@/components/shared/Section";
 import { CappedList } from "@/components/shared/CappedList";
 import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { boxLabel } from "@/components/shared/RuntimePill";
 
 // ── Status-Vokabular ─────────────────────────────────────────────────────────
 // Jeder Zustand bekommt eigene Worte. „unreachable" darf NIE wie „leer"
@@ -59,7 +62,7 @@ interface StatusChrome {
   labelKey: string;
   /** Erklärender Satz im Hinweisband (null = kein Band, alles in Ordnung). */
   headlineKey: string | null;
-  tone: "ok" | "warn" | "err";
+  tone: "ok" | "warn" | "err" | "idle";
   Icon: typeof AlertTriangle;
 }
 
@@ -89,6 +92,22 @@ const STATUS_CHROME: Record<ModelCatalogStatus, StatusChrome> = {
     tone: "err",
     Icon: KeyRound,
   },
+  // Round-3 user test (t4 S3): a box the runtime watcher already knows is
+  // dark is not probed — a sleeping box is a normal state, not an error.
+  asleep: {
+    labelKey: "statusAsleepLabel",
+    headlineKey: "statusAsleepHeadline",
+    tone: "idle",
+    Icon: Moon,
+  },
+  // Round-4 user test (t3 S1, r2 S1): the box answers its own check, only
+  // the model port is dark — it runs no model. Not "asleep", not an error.
+  no_model: {
+    labelKey: "statusNoModelLabel",
+    headlineKey: "statusNoModelHeadline",
+    tone: "idle",
+    Icon: CircleDashed,
+  },
   unreachable: {
     labelKey: "statusUnreachableLabel",
     headlineKey: "statusUnreachableHeadline",
@@ -97,16 +116,32 @@ const STATUS_CHROME: Record<ModelCatalogStatus, StatusChrome> = {
   },
 };
 
+/** States the backend answers without asking the provider — no check time,
+ *  nothing to unfold. */
+const UNPROBED: ReadonlySet<ModelCatalogStatus> = new Set<ModelCatalogStatus>(["asleep", "no_model"]);
+
+/** The backend's `reason` is a status code ("credential_missing") or, from
+ *  older entries, free text. A code is said in words — and not at all when it
+ *  only repeats the status (t3 NICE-3: raw "asleep" under the sentence). */
+const REASON_KEYS: Record<string, string> = {
+  credential_missing: "reasonCredentialMissing",
+  unreachable: "reasonUnreachable",
+  asleep: "reasonAsleep",
+  no_model: "reasonNoModel",
+};
+
 const TONE_TEXT: Record<StatusChrome["tone"], string> = {
   ok: "text-ok",
   warn: "text-warn",
   err: "text-err",
+  idle: "text-muted",
 };
 
 const TONE_BANNER: Record<StatusChrome["tone"], string> = {
   ok: "bg-surface border-subtle",
   warn: "bg-warn-subtle border-warn",
   err: "bg-err-subtle border-err",
+  idle: "bg-surface border-subtle",
 };
 
 // ── Modell-Zeile ─────────────────────────────────────────────────────────────
@@ -225,7 +260,17 @@ function ProviderGroup({
 
   // Standard: aufgeklappt, wenn es etwas Neues gibt ODER etwas nicht stimmt —
   // sonst bleibt die Seite ruhig (Anthropic allein liefert 11 Modelle).
-  const [open, setOpen] = useState(newCount > 0 || !probeSucceeded);
+  // A sleeping box has nothing to unfold — its banner says everything.
+  const notAsked = UNPROBED.has(provider.status);
+  const [open, setOpen] = useState(newCount > 0 || (!probeSucceeded && !notAsked));
+  const reasonText =
+    provider.reason == null || provider.reason === provider.status
+      ? null
+      : REASON_KEYS[provider.reason]
+        ? t(REASON_KEYS[provider.reason])
+        : /^[a-z_]+$/.test(provider.reason)
+          ? null // an unknown code: no raw machine word on the page
+          : provider.reason;
 
   return (
     <div
@@ -237,7 +282,9 @@ function ProviderGroup({
       {/* Kopfzeile — eine Zeile: Status, Name, Protokoll, Anzahl, Prüfzeit. */}
       <ListRow
         testId="catalog-provider-row"
-        tone={chrome.tone === "ok" ? "ok" : chrome.tone === "warn" ? "warn" : "error"}
+        tone={
+          chrome.tone === "ok" ? "ok" : chrome.tone === "warn" ? "warn" : chrome.tone === "idle" ? "idle" : "error"
+        }
         className="!border-transparent !bg-transparent"
         onClick={() => setOpen((v) => !v)}
         leading={
@@ -246,7 +293,16 @@ function ProviderGroup({
             className={`shrink-0 text-dim transition-transform ${open ? "rotate-90" : ""}`}
           />
         }
-        name={provider.display_name || provider.key}
+        // The backend names the provider in `label`; the internal key
+        // ("openai:<slug>") was shown as the name (round-3 t4 picture). A slot
+        // name's "(aktuell: <model>)" suffix is dropped while the models are
+        // listed right below it — same rule as RuntimePill (PR #964 review) —
+        // and for `no_model`, whose label and banner already say it (PR #971
+        // review: "kein Modell" three times in one block).
+        name={boxLabel(
+          provider.display_name || provider.label || provider.key,
+          models.length > 0 || provider.status === "no_model",
+        )}
         summary={[provider.protocol, `${models.length}`, t(chrome.labelKey)].join(" · ")}
         chips={
           <>
@@ -263,9 +319,12 @@ function ProviderGroup({
         }
         meta={
           <>
-            <MetaText className="hidden sm:inline shrink-0" title={t(chrome.labelKey)}>
-              {t("checked", { time: timeAgo(provider.cached_at, locale) })}
-            </MetaText>
+            {/* Not asked is not "checked a moment ago" (r2 S1). */}
+            {!notAsked && provider.cached_at && (
+              <MetaText className="hidden sm:inline shrink-0" title={t(chrome.labelKey)}>
+                {t("checked", { time: timeAgo(provider.cached_at, locale) })}
+              </MetaText>
+            )}
             {provider.endpoint && (
               <MetaText mono className="hidden sm:inline max-w-[220px]" title={provider.endpoint}>
                 {provider.endpoint}
@@ -284,12 +343,9 @@ function ProviderGroup({
           <chrome.Icon size={12} className={`mt-px shrink-0 ${TONE_TEXT[chrome.tone]}`} />
           <div className="min-w-0">
             <div>{t(chrome.headlineKey)}</div>
-            {provider.reason && (
-              <div
-                data-testid="catalog-status-reason"
-                className="mt-1 font-mono text-[10px] text-muted break-words"
-              >
-                {provider.reason}
+            {reasonText && (
+              <div data-testid="catalog-status-reason" className="mt-1 text-[11px] text-muted break-words">
+                {reasonText}
               </div>
             )}
           </div>
@@ -500,7 +556,7 @@ export function ModelCatalogSection({ embedded = false }: { embedded?: boolean }
               <div>
                 {t("confirmBodyBefore")}{" "}
                 <span className="font-mono text-primary">{pending.model.id}</span> {t("confirmBodyAt")}{" "}
-                <span className="text-primary">{pending.provider.display_name}</span>{t("confirmBodyAfter")}
+                <span className="text-primary">{pending.provider.display_name || pending.provider.label || pending.provider.key}</span>{t("confirmBodyAfter")}
               </div>
               <div className="text-muted">
                 {t("confirmBodyHint")}

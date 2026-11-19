@@ -483,6 +483,78 @@
         ]
       }
     },
+    "/api/v1/agent/boxes/status": {
+      "get": {
+        "operationId": "agent_box_status_api_v1_agent_boxes_status_get",
+        "summary": "Agent Box Status",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/comms/bye": {
+      "post": {
+        "operationId": "bye_api_v1_agent_comms_bye_post",
+        "summary": "Bye",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
+    "/api/v1/agent/comms/hello": {
+      "post": {
+        "operationId": "hello_api_v1_agent_comms_hello_post",
+        "summary": "Hello",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
+    "/api/v1/agent/comms/inbox": {
+      "get": {
+        "operationId": "session_inbox_api_v1_agent_comms_inbox_get",
+        "summary": "Session Inbox",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
+    "/api/v1/agent/comms/inbox/ack": {
+      "post": {
+        "operationId": "session_inbox_ack_api_v1_agent_comms_inbox_ack_post",
+        "summary": "Session Inbox Ack",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
+    "/api/v1/agent/comms/presence": {
+      "post": {
+        "operationId": "post_presence_api_v1_agent_comms_presence_post",
+        "summary": "Post Presence",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
+    "/api/v1/agent/comms/send": {
+      "post": {
+        "operationId": "send_api_v1_agent_comms_send_post",
+        "summary": "Send",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
+    "/api/v1/agent/comms/who": {
+      "get": {
+        "operationId": "who_api_v1_agent_comms_who_get",
+        "summary": "Who",
+        "tags": [
+          "agent-comms"
+        ]
+      }
+    },
     "/api/v1/agent/config/soul_md": {
       "get": {
         "operationId": "agent_get_own_soul_api_v1_agent_config_soul_md_get",
@@ -1146,6 +1218,15 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/chat/engine": {
+      "get": {
+        "operationId": "get_chat_engine_activity_api_v1_agents__agent_id__chat_engine_get",
+        "summary": "Get Chat Engine Activity",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/chat/history": {
       "get": {
         "operationId": "get_chat_history_api_v1_agents__agent_id__chat_history_get",
@@ -1240,6 +1321,42 @@
       "get": {
         "operationId": "get_subagent_history_api_v1_agents__agent_id__chat_subagent__run_id__get",
         "summary": "Get Subagent History",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/task-activity": {
+      "get": {
+        "operationId": "get_chat_task_activity_api_v1_agents__agent_id__chat_task_activity_get",
+        "summary": "Get Chat Task Activity",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/tasks": {
+      "get": {
+        "operationId": "get_chat_tasks_api_v1_agents__agent_id__chat_tasks_get",
+        "summary": "Get Chat Tasks",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/tasks/{task_id}/steps": {
+      "get": {
+        "operationId": "get_chat_task_steps_api_v1_agents__agent_id__chat_tasks__task_id__steps_get",
+        "summary": "Get Chat Task Steps",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/tasks/{task_id}/steps/{row_id}": {
+      "get": {
+        "operationId": "get_chat_task_step_api_v1_agents__agent_id__chat_tasks__task_id__steps__row_id__get",
+        "summary": "Get Chat Task Step",
         "tags": [
           "agent-chat"
         ]
@@ -1723,17 +1840,19 @@
         ]
       }
     },
+    "/api/v1/bench/auto-tests": {
+      "post": {
+        "operationId": "create_auto_test_api_v1_bench_auto_tests_post",
+        "summary": "Create Auto Test",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
     "/api/v1/bench/challenges": {
       "get": {
         "operationId": "list_challenges_api_v1_bench_challenges_get",
         "summary": "List Challenges",
-        "tags": [
-          "bench-studio"
-        ]
-      },
-      "post": {
-        "operationId": "create_challenge_api_v1_bench_challenges_post",
-        "summary": "Create Challenge",
         "tags": [
           "bench-studio"
         ]
@@ -1766,15 +1885,6 @@
       "post": {
         "operationId": "archive_challenge_api_v1_bench_challenges__challenge_id__archive_post",
         "summary": "Archive Challenge",
-        "tags": [
-          "bench-studio"
-        ]
-      }
-    },
-    "/api/v1/bench/challenges/{challenge_id}/draft": {
-      "post": {
-        "operationId": "create_challenge_draft_api_v1_bench_challenges__challenge_id__draft_post",
-        "summary": "Create Challenge Draft",
         "tags": [
           "bench-studio"
         ]
@@ -1834,6 +1944,15 @@
         ]
       }
     },
+    "/api/v1/bench/contestants": {
+      "get": {
+        "operationId": "list_contestants_api_v1_bench_contestants_get",
+        "summary": "List Contestants",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
     "/api/v1/bench/entries/{entry_id}": {
       "patch": {
         "operationId": "update_entry_api_v1_bench_entries__entry_id__patch",
@@ -1861,12 +1980,118 @@
         ]
       }
     },
-    "/api/v1/bench/spark-models": {
+    "/api/v1/bench/plan": {
       "get": {
-        "operationId": "list_spark_models_api_v1_bench_spark_models_get",
-        "summary": "List Spark Models",
+        "operationId": "get_plan_api_v1_bench_plan_get",
+        "summary": "Get Plan",
         "tags": [
-          "bench-studio"
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/runtime-summary": {
+      "get": {
+        "operationId": "runtime_summary_api_v1_bench_runtime_summary_get",
+        "summary": "Runtime Summary",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests": {
+      "get": {
+        "operationId": "list_tests_api_v1_bench_tests_get",
+        "summary": "List Tests",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      },
+      "post": {
+        "operationId": "create_test_api_v1_bench_tests_post",
+        "summary": "Create Test",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}": {
+      "get": {
+        "operationId": "get_test_api_v1_bench_tests__test_id__get",
+        "summary": "Get Test",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/harvest": {
+      "post": {
+        "operationId": "harvest_test_api_v1_bench_tests__test_id__harvest_post",
+        "summary": "Harvest Test",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/kit": {
+      "get": {
+        "operationId": "get_kit_api_v1_bench_tests__test_id__kit_get",
+        "summary": "Get Kit",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/kit/download-token": {
+      "post": {
+        "operationId": "kit_download_token_api_v1_bench_tests__test_id__kit_download_token_post",
+        "summary": "Kit Download Token",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/kit/files/{name}": {
+      "get": {
+        "operationId": "kit_file_api_v1_bench_tests__test_id__kit_files__name__get",
+        "summary": "Kit File",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/poster": {
+      "get": {
+        "operationId": "test_poster_api_v1_bench_tests__test_id__poster_get",
+        "summary": "Test Poster",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/rerun": {
+      "post": {
+        "operationId": "rerun_test_api_v1_bench_tests__test_id__rerun_post",
+        "summary": "Rerun Test",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/seen": {
+      "post": {
+        "operationId": "mark_seen_api_v1_bench_tests__test_id__seen_post",
+        "summary": "Mark Seen",
+        "tags": [
+          "bench-studio-w1"
+        ]
+      }
+    },
+    "/api/v1/bench/tests/{test_id}/stop": {
+      "post": {
+        "operationId": "stop_test_api_v1_bench_tests__test_id__stop_post",
+        "summary": "Stop Test",
+        "tags": [
+          "bench-studio-w1"
         ]
       }
     },
@@ -2159,6 +2384,15 @@
         ]
       }
     },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/deliverables/{deliverable_id}/view-url": {
+      "post": {
+        "operationId": "mint_deliverable_view_url_api_v1_boards__board_id__tasks__task_id__deliverables__deliverable_id__view_url_post",
+        "summary": "Mint Deliverable View Url",
+        "tags": [
+          "deliverable-view"
+        ]
+      }
+    },
     "/api/v1/boards/{board_id}/tasks/{task_id}/dependencies": {
       "get": {
         "operationId": "get_task_dependencies_api_v1_boards__board_id__tasks__task_id__dependencies_get",
@@ -2208,6 +2442,15 @@
       "get": {
         "operationId": "get_task_hierarchy_api_v1_boards__board_id__tasks__task_id__hierarchy_get",
         "summary": "Get Task Hierarchy",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/model-wait": {
+      "get": {
+        "operationId": "get_task_model_wait_api_v1_boards__board_id__tasks__task_id__model_wait_get",
+        "summary": "Get Task Model Wait",
         "tags": [
           "tasks"
         ]
@@ -2344,6 +2587,33 @@
         ]
       }
     },
+    "/api/v1/chat-record/chats": {
+      "get": {
+        "operationId": "list_record_chats_api_v1_chat_record_chats_get",
+        "summary": "List Record Chats",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
+    "/api/v1/chat-record/chats/{chat_id}/history": {
+      "get": {
+        "operationId": "get_record_history_api_v1_chat_record_chats__chat_id__history_get",
+        "summary": "Get Record History",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
+    "/api/v1/chat-record/search": {
+      "get": {
+        "operationId": "search_record_api_v1_chat_record_search_get",
+        "summary": "Search Record",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
     "/api/v1/claude-account": {
       "get": {
         "operationId": "get_claude_account_api_v1_claude_account_get",
@@ -2466,6 +2736,85 @@
         ]
       }
     },
+    "/api/v1/comms/conversations": {
+      "get": {
+        "operationId": "list_conversations_api_v1_comms_conversations_get",
+        "summary": "List Conversations",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
+    "/api/v1/comms/conversations/{thread_id}/messages": {
+      "get": {
+        "operationId": "conversation_messages_api_v1_comms_conversations__thread_id__messages_get",
+        "summary": "Conversation Messages",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
+    "/api/v1/comms/directory": {
+      "get": {
+        "operationId": "directory_api_v1_comms_directory_get",
+        "summary": "Directory",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
+    "/api/v1/comms/guest-cards": {
+      "get": {
+        "operationId": "list_cards_api_v1_comms_guest_cards_get",
+        "summary": "List Cards",
+        "tags": [
+          "comms"
+        ]
+      },
+      "post": {
+        "operationId": "issue_card_api_v1_comms_guest_cards_post",
+        "summary": "Issue Card",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
+    "/api/v1/comms/guest-cards/revoke-all": {
+      "post": {
+        "operationId": "revoke_all_cards_api_v1_comms_guest_cards_revoke_all_post",
+        "summary": "Revoke All Cards",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
+    "/api/v1/comms/guest-cards/{card_id}/revoke": {
+      "post": {
+        "operationId": "revoke_card_api_v1_comms_guest_cards__card_id__revoke_post",
+        "summary": "Revoke Card",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
+    "/api/v1/comms/sessions": {
+      "get": {
+        "operationId": "list_sessions_api_v1_comms_sessions_get",
+        "summary": "List Sessions",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
+    "/api/v1/comms/sessions/{session_id}/revoke": {
+      "post": {
+        "operationId": "revoke_session_api_v1_comms_sessions__session_id__revoke_post",
+        "summary": "Revoke Session",
+        "tags": [
+          "comms"
+        ]
+      }
+    },
     "/api/v1/config-checks": {
       "get": {
         "operationId": "list_config_checks_api_v1_config_checks_get",
@@ -2529,6 +2878,15 @@
         "summary": "Update Credential",
         "tags": [
           "credentials"
+        ]
+      }
+    },
+    "/api/v1/deliverable-view/{token}/{file_path}": {
+      "get": {
+        "operationId": "serve_deliverable_view_api_v1_deliverable_view__token___file_path__get",
+        "summary": "Serve Deliverable View",
+        "tags": [
+          "deliverable-view"
         ]
       }
     },
@@ -3123,6 +3481,15 @@
       "post": {
         "operationId": "trust_ssh_host_key_api_v1_hosts__host_id__ssh_host_key_trust_post",
         "summary": "Trust Ssh Host Key",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/{host_id}/wake": {
+      "post": {
+        "operationId": "wake_host_api_v1_hosts__host_id__wake_post",
+        "summary": "Wake Host",
         "tags": [
           "hosts"
         ]
@@ -4507,6 +4874,22 @@
       "get": {
         "operationId": "list_settings_api_v1_settings_get",
         "summary": "List Settings",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/agent-language": {
+      "get": {
+        "operationId": "get_agent_language_defaults_api_v1_settings_agent_language_get",
+        "summary": "Get Agent Language Defaults",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "operationId": "put_agent_language_defaults_api_v1_settings_agent_language_put",
+        "summary": "Put Agent Language Defaults",
         "tags": [
           "settings"
         ]

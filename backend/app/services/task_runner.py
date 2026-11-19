@@ -29,6 +29,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.database import engine
 from app.models.agent import Agent
 from app.models.approval import Approval
+from app.comment_types import activity_comment_filter
 from app.models.task import Task, TaskComment
 from app.utils import utcnow, ensure_aware
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
@@ -158,6 +159,34 @@ def active_waiting_seconds(
 # agents would serially starve the other checks. Timeout → Tier 3 failed →
 # Tier 4 operator notification.
 TIER3_DISPATCH_TIMEOUT_SECONDS = 90
+
+
+#: How long a live turn signal may hold off the stale check, as a multiple of
+#: the agent's idle threshold (60 min -> 4 h without a comment/message).
+TURN_SIGNAL_SHIELD_FACTOR = 4
+
+
+def _turn_signal_on_task(agent, task, now) -> bool:
+    """Is `agent` demonstrably mid-turn on `task` right now?
+
+    The turn signal dispatch Guard 3 ("agent_in_turn") and the ACK ladder
+    already use: ``agent.status == "working"`` with a heartbeat younger than
+    TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS — scoped to the card the heartbeat
+    names (``agent.current_task_id``, synced by the heartbeat endpoint).
+    False when the kill switch ``settings.host_turn_signal_enabled`` is off.
+    """
+    from app.config import settings as _settings
+
+    if not _settings.host_turn_signal_enabled:
+        return False
+    if getattr(agent, "status", None) != "working":
+        return False
+    if getattr(agent, "current_task_id", None) != task.id:
+        return False
+    seen = getattr(agent, "last_seen_at", None)
+    if seen is None:
+        return False
+    return (now - ensure_aware(seen)).total_seconds() < TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS
 
 
 def _idle_threshold_for(agent) -> int:
@@ -587,7 +616,18 @@ class TaskRunnerService:
            (skipped in subagent-dispatch mode)
 
         Escalation: create an approval so the operator can decide.
+
+        Neither check runs for a card the system mode (HALTED / DRAINING) or
+        the MC update drain holds, nor for one ACK timeout (+ margin) after
+        the hold ends (RedisKeys.dispatch_system_hold).
         """
+        # Read once per pass. Fail-open like push dispatch: no mode → active.
+        from app.services import update_drain
+        from app.services.operations import get_system_mode, system_mode_refusal
+
+        system_mode = await get_system_mode()
+        update_drained = (await update_drain.current(session)).active
+
         result = await session.exec(
             select(Task).where(
                 Task.status == "inbox",
@@ -608,6 +648,40 @@ class TaskRunnerService:
             if not agent:
                 continue
 
+            redis = await get_redis()
+
+            # rule: R-system-mode-holds-poll - a card the system holds is not "not ACKed"
+            # The system mode or the MC update drain holds this card: the
+            # poll, push dispatch, the undispatched-card watcher and pull
+            # dispatch all refuse to hand it out. Not ACKed / never
+            # delivered is then the system's doing, not the agent's: no
+            # silent retry (a new attempt the poll would hold as well), no
+            # operator escalation, no model-wait return. The key keeps both
+            # ladders waiting one ACK timeout (+ margin) after the hold ends,
+            # so the first poll after it delivers the card before a ladder
+            # reads its old dispatched_at. A genuinely lost card still
+            # escalates once that window has run out.
+            # rule: R-paused-holds-poll - a card waiting on a paused agent is not "not ACKed"
+            # Same for the agent's own pause (ADR-089 Nachtrag 2026-11-13):
+            # the poll holds the card until the operator sets it active.
+            hold_key = RedisKeys.dispatch_system_hold(str(task.id))
+            if (
+                update_drained
+                or system_mode_refusal(system_mode, task)
+                or (agent.operational_mode or "active") == "paused"
+            ):
+                await redis.set(
+                    hold_key, "1",
+                    ex=int((_get_ack_timeout_minutes(agent) + RESUME_SUPPRESS_MARGIN_MINUTES) * 60),
+                )
+                continue
+            if await redis.get(hold_key):
+                logger.debug(
+                    "ACK/pending ladder waits after a system hold: '%s' (%s)",
+                    task.title, agent.name,
+                )
+                continue
+
             # Host-based FreeCode-Bridge agents: own stale check.
             # Do NOT apply to Docker cli-bridge agents — they have their
             # own turn-state check in poll.sh (lib/turn-state.sh).
@@ -625,7 +699,15 @@ class TaskRunnerService:
             if Scope.TASKS_WRITE not in get_agent_effective_scopes(agent):
                 continue
 
-            redis = await get_redis()
+            # Model-wait rule (follow-up to ADR-097): a delivered, unclaimed
+            # task whose agent's model does not answer goes back to the inbox
+            # with the reason. Checked BEFORE the in-turn pause below: the
+            # omp bridge heartbeats "working" while omp retries a dead
+            # endpoint, which would otherwise hold this off for 2x the ACK
+            # timeout.
+            if task.dispatched_at and task.ack_at is None:
+                if await self._return_if_model_unreachable(session, task, agent, now):
+                    continue
 
             # Bauplan Lauf 2 Teil 4 (21.09.2026): the ACK clock pauses while
             # the agent is genuinely mid-turn — same signal Guard 3 (Teil 2)
@@ -717,6 +799,65 @@ class TaskRunnerService:
                 # ── Check 2: dispatch pending ──
                 # This check is skipped in subagent-dispatch mode
                 await self._handle_dispatch_pending(session, task, agent, now, redis)
+
+    async def _return_if_model_unreachable(
+        self, session: AsyncSession, task: Task, agent: Agent, now: datetime,
+    ) -> bool:
+        """Delivered (``dispatched_at`` set, no ACK) for at least half the
+        ACK timeout — where the ladder would rotate — AND the agent's runtime
+        does not answer (``runtime_readiness``, local runtimes included):
+        un-deliver the task with the reason instead of rotating or
+        escalating. The poll gate keeps it in the inbox until the model
+        answers again and then delivers it fresh (new attempt id).
+
+        Returns True when it acted. A runtime that answers, a cloud runtime,
+        a gate error (fail-open) or a younger delivery -> False: the old
+        ladder runs unchanged."""
+        minutes = (now - ensure_aware(task.dispatched_at)).total_seconds() / 60
+        if minutes < _get_ack_timeout_minutes(agent) / 2.0:
+            return False
+        from app.services.runtime_readiness import runtime_ready_for_agent
+
+        ready, reason = await runtime_ready_for_agent(
+            agent, session, include_local=True, notify=False,
+        )
+        if ready:
+            return False
+        from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+
+        reason = reason or "das Modell antwortet nicht"
+        task.dispatched_at = None
+        task.ack_at = None
+        session.add(task)
+        session.add(TaskComment(
+            task_id=task.id,
+            author_type="system",
+            comment_type="watchdog_notify",
+            content=(
+                f"Zurück in die Inbox: an {agent.name} zugestellt, aber das Modell "
+                f"hat in {int(minutes)} min nicht geantwortet ({reason}). Der Task "
+                "wird neu zugestellt, sobald das Modell wieder läuft."
+            ),
+        ))
+        await clear_dispatch_attempt_id(
+            session, task, caller="model_wait", reason="runtime_not_ready",
+        )
+        await emit_event(
+            session,
+            "task.returned_model_unreachable",
+            f"'{task.title[:60]}' zurück in die Inbox — Modell von {agent.name} antwortet nicht",
+            severity="warning",
+            agent_id=agent.id,
+            board_id=task.board_id,
+            task_id=task.id,
+            detail={"reason": reason, "minutes_since_dispatch": int(minutes)},
+        )
+        await session.commit()
+        logger.warning(
+            "model wait: '%s' (%s) returned to inbox after %dmin — %s",
+            task.title[:60], agent.name, int(minutes), reason,
+        )
+        return True
 
     async def _handle_ack_timeout(
         self, session: AsyncSession, task: Task, agent: Agent, now: datetime, redis
@@ -933,7 +1074,8 @@ class TaskRunnerService:
 
         comments_result = await session.exec(
             select(TaskComment)
-            .where(TaskComment.task_id == task.id)
+            # a chat session's reply is no sign of the run (round-5 r1 N5)
+            .where(TaskComment.task_id == task.id, activity_comment_filter())
             .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
             .limit(3)
         )
@@ -1526,11 +1668,41 @@ class TaskRunnerService:
             if structural_activity is not None and structural_activity > last_activity:
                 last_activity = structural_activity
 
+            # Turn signal (live 27./28.10.2026): a local model can think for
+            # 8+ minutes per turn and post no comment for over an hour while
+            # it demonstrably works. The heartbeat then reports status
+            # "working" on THIS card (current_task_id) every 30 s — the same
+            # signal dispatch Guard 3 and the ACK ladder trust ("agent_in_turn":
+            # status working + heartbeat younger than
+            # TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS). It counts as activity, so
+            # tiered recovery never re-prepares the workspace of a running turn
+            # nor raises a false "recovery failed" alarm. A real stall stays
+            # detectable: once the heartbeat goes stale (bridge/process dead)
+            # or the turn moves to another card, the old clock applies again.
+            # Runtime-free; settings.host_turn_signal_enabled is the rollback.
+            # Upper bound (review): "working" only proves the heartbeat thread
+            # lives, not that the turn moves. After TURN_SIGNAL_SHIELD_FACTOR x
+            # the idle threshold without a real activity, recovery runs anyway.
+            _silent_minutes = (now - last_activity).total_seconds() / 60
+            if (
+                _turn_signal_on_task(agent, task, now)
+                and agent.last_seen_at is not None
+                and _silent_minutes < TURN_SIGNAL_SHIELD_FACTOR * _idle_threshold_for(agent)
+            ):
+                _seen = ensure_aware(agent.last_seen_at)
+                if _seen > last_activity:
+                    last_activity = _seen
+
             # Still need the last comment specifically for resolution
-            # auto-promote detection below.
+            # auto-promote detection below. The run's last comment: a chat
+            # reply written after the resolution must not hide it (round-3
+            # re-review M1).
             comments_result = await session.exec(
                 select(TaskComment)
-                .where(TaskComment.task_id == task.id)
+                .where(
+                    TaskComment.task_id == task.id,
+                    activity_comment_filter(),
+                )
                 .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
                 .limit(1)
             )
@@ -1823,9 +1995,15 @@ class TaskRunnerService:
             # A healthy long tool call posts no comment, but if the agent DID post
             # progress inside the stale window it is not silent → skip. Also skip
             # if the last comment is a poll.sh auto-blocker (already handled).
+            # A chat session's reply (``chat_reply``) is left out: "how far
+            # are you?" on a dead run is no progress of the run, it must not
+            # hold off the nudge and the block (round-3 re-review M1).
             comment_result = await session.exec(
                 select(TaskComment)
-                .where(TaskComment.task_id == task.id)
+                .where(
+                    TaskComment.task_id == task.id,
+                    activity_comment_filter(),
+                )
                 .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
                 .limit(1)
             )

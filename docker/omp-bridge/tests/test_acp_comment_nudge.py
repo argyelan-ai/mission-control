@@ -270,7 +270,10 @@ def test_make_acp_chat_prompt_sends_prompt_op_and_maps_answers():
         assert send("wake up") is True
         assert send("wake up again") is False
         t.join(5)
-        assert seen == [{"op": "prompt", "text": "wake up"}, {"op": "prompt", "text": "wake up again"}]
+        # origin "nudge": MC wrote it — an MC event in the chat, and a busy
+        # daemon refuses it without a card (test_acp_nudge_busy_silent).
+        assert seen == [{"op": "prompt", "text": "wake up", "origin": "nudge"},
+                        {"op": "prompt", "text": "wake up again", "origin": "nudge"}]
     print("PASS test_make_acp_chat_prompt_sends_prompt_op_and_maps_answers")
 
 

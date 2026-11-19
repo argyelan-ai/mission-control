@@ -28,14 +28,14 @@ import { useTranslations } from "next-intl";
 import { Check, GitCompare, Globe, MonitorPlay, MessagesSquare, X } from "lucide-react";
 import { C, alpha } from "@/lib/colors";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
-import type { PanelKind } from "./PanelRail";
+import type { PanelKind } from "./PanelButtons";
 
 const VIEW_ICON: Record<CenterView, typeof MonitorPlay> = {
   chat: MessagesSquare,
   terminal: MonitorPlay,
 };
 
-// Labels live in `sessions.panels.*` — the same keys PanelRail uses.
+// Labels live in `sessions.panels.*` — the same keys the desktop header buttons use (PanelButtons.tsx).
 const PANELS: { key: PanelKind; labelKey: "panels.diff" | "panels.browser"; icon: typeof GitCompare }[] = [
   { key: "diff", labelKey: "panels.diff", icon: GitCompare },
   { key: "browser", labelKey: "panels.browser", icon: Globe },

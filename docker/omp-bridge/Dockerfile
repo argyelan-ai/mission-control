@@ -17,9 +17,16 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# ca-certificates floor = the eMudhra fix (Oct 2026: the intermediates' keys
+# leaked). The apt line below upgrades the package and the build FAILS below
+# this version — a stale base image can no longer ship the old bundle, and a
+# cached layer only exists if it passed. backend/tests/test_image_security_floor.py
+# guards the value per distro.
+ARG CA_CERTIFICATES_MIN=20250419~deb12u2
 # Base tools — same surface as mc-agent-base so the container lifecycle
-# (health-check tmux pane, recycler, git workflow) behaves identically. No node:
-# omp bundles its own runtime and the mc CLI is Python; nothing here needs node.
+# (health-check tmux pane, recycler, git workflow) behaves identically. omp
+# bundles its own runtime and the mc CLI is Python; Node.js is installed right
+# below for the AGENT's own work (checking the JS it writes), not for the harness.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
@@ -56,7 +63,57 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
         > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update && apt-get install -y --no-install-recommends gh \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && v="$(dpkg-query -W -f='${Version}' ca-certificates)" \
+    && echo "ca-certificates $v (floor ${CA_CERTIFICATES_MIN})" \
+    && dpkg --compare-versions "$v" ge "${CA_CERTIFICATES_MIN}"
+
+# --- Node.js for the agent's own checks (pinned LTS, verified tarball) ---
+# An omp agent that writes a web page must be able to check its JS itself:
+# `node --check app.js`, `node -e …`, `npx <tool>`. Without node (live
+# 21.10.2026) an agent searched for node/npx/chromium, found nothing, failed to
+# pip-build a JS parser (no compiler here) and fell back to a Python parser.
+# `node --check` reads .js/.mjs/.cjs, not .html: an inline <script> is checked
+# in the browser (omp's browser tool, see the omp card) or extracted first.
+# Not omp's own runtime: `BUN_BE_BUN=1 omp` is Bun, but its `--check` RUNS the
+# file instead of parsing it, and the variable leaks into child processes (an
+# `omp` started from such a script answers as Bun). So: real Node.
+# Official nodejs.org release tarball, linux-arm64 like omp below (the image is
+# arm64-only). NODE_SHA256 = the tarball's line in the release's signed
+# SHASUMS256.txt. Only bin/ and lib/ are unpacked (node, npm, npx, corepack),
+# plus the LICENSE; headers and docs are left out — nothing here compiles
+# native addons.
+# This layer sits BEFORE omp on purpose: a changed layer rebuilds every layer
+# after it, and the in-app CLI update (ADR-058) bumps omp — with Node after
+# omp, every omp bump downloaded Node again and failed when nodejs.org was down.
+# Override at build: --build-arg NODE_VERSION=<ver> --build-arg NODE_SHA256=<sha>
+# tests/test_image_has_node.py guards the pin and, with MC_OMP_IMAGE set, the
+# built image.
+ARG NODE_VERSION=24.22.1
+ARG NODE_SHA256=33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3
+RUN curl -fsSL \
+        "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-arm64.tar.gz" \
+        -o /tmp/node.tar.gz \
+    && echo "${NODE_SHA256}  /tmp/node.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 --no-same-owner \
+        "node-v${NODE_VERSION}-linux-arm64/bin" "node-v${NODE_VERSION}-linux-arm64/lib" \
+    && mkdir -p /usr/local/share/doc/nodejs \
+    && tar -xzf /tmp/node.tar.gz -C /usr/local/share/doc/nodejs --strip-components=1 --no-same-owner \
+        "node-v${NODE_VERSION}-linux-arm64/LICENSE" \
+    && rm /tmp/node.tar.gz \
+    && node --version \
+    && npm --version \
+    && npx --version
+# NPM_CONFIG_UPDATE_NOTIFIER=false: no "new npm version, run npm install -g
+# npm@…" notice after every npx — the agent would read it as a task, and as the
+# agent user a global install into /usr/local fails anyway. The pin above is
+# the update path.
+# NPM_CONFIG_YES=true: omp's bash tool runs a command under a PTY when the model
+# asks for one in the native TUI; there `npx <tool>` stops at "Ok to proceed?
+# (y)" and nobody answers, so the call hangs until its timeout. Without a PTY
+# npm already says yes on its own — this only removes the hang.
+ENV NPM_CONFIG_UPDATE_NOTIFIER=false \
+    NPM_CONFIG_YES=true
 
 # --- omp install (verified GitHub release binary; pin + sha256 overridable) ---
 # The canonical pin lives in docker/cli-versions.json; scripts/build-agent-images.sh
@@ -64,8 +121,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # installs the same binary. sha256 = the GitHub release asset digest of
 # omp-linux-arm64. Override at build:
 #   --build-arg OMP_VERSION=<ver> --build-arg OMP_SHA256=<sha>
-ARG OMP_VERSION=18.10.1
-ARG OMP_SHA256=5cad38a8edee60cec9c0ce91810eba38bda0efe349562157023810343dacb8d5
+ARG OMP_VERSION=18.14.2
+ARG OMP_SHA256=afbdf04be3ddbe34a07e91c913ddb6d335a3a0210f520ac5a197a245888ad63e
 RUN curl -fsSL \
         "https://github.com/can1357/oh-my-pi/releases/download/v${OMP_VERSION}/omp-linux-arm64" \
         -o /usr/local/bin/omp \
@@ -104,6 +161,14 @@ COPY bridge.py            /opt/omp-bridge/bridge.py
 COPY acp_client.py        /opt/omp-bridge/acp_client.py
 COPY acp_chat_events.py   /opt/omp-bridge/acp_chat_events.py
 COPY acp_chat.py          /opt/omp-bridge/acp_chat.py
+# sink_migration.py (S1-R3): acp_chat.py imports it at start — moves MC's old
+# display copies into <folder>/.mc/. Without this line the chat daemon does not
+# start (tests/test_dockerfile_copies_modules.py guards every such import).
+COPY sink_migration.py    /opt/omp-bridge/sink_migration.py
+# model_errors.py (S1-R6): bridge.py AND acp_chat.py import it at start — the
+# "model is not answering" rule. Without this line neither the task driver
+# nor the chat daemon starts.
+COPY model_errors.py      /opt/omp-bridge/model_errors.py
 COPY acp_model.py         /opt/omp-bridge/acp_model.py
 COPY acp_chat_ctl.py      /opt/omp-bridge/acp_chat_ctl.py
 COPY context_detect.py    /opt/omp-bridge/context_detect.py

@@ -42,7 +42,9 @@ class _FakeTransport:
     def __init__(self):
         self.calls: list[tuple] = []
 
-    async def prompt(self, text, mode=None):
+    async def prompt(self, text, mode=None, origin=None):
+        # The voice relay is not the operator's typed text: origin stays unknown.
+        assert origin is None, origin
         self.calls.append(("prompt", text, mode))
         return {"ok": True}
 

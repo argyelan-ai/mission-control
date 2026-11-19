@@ -84,13 +84,13 @@ vi.setConfig({ testTimeout: 20_000 });
 // Written out on purpose, not read from SECTIONS: a section dropped from the
 // registry must turn this test red, not silently shrink the expectation.
 const ALL = [
-  "profile", "security", "appearance", "shortcuts",
+  "profile", "security", "appearance", "language", "shortcuts",
   "autonomy", "intelligence", "costs", "night-shift",
   "claude", "github", "slack", "telegram", "ai-providers",
   "apikeys", "credentials",
   "users", "about",
 ];
-const MEMBER = ["profile", "security", "appearance", "shortcuts", "about"];
+const MEMBER = ["profile", "security", "appearance", "language", "shortcuts", "about"];
 
 const ADMIN = { id: "u1", email: "a@b.com", name: "Admin", role: "admin" };
 const MEMBER_USER = { id: "u2", email: "m@b.com", name: "Member", role: "member" };
