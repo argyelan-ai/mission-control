@@ -118,6 +118,7 @@ KNOWN = {
     "disabledProviders": "array", "images.blockImages": "boolean",
     "images.questionTimeoutMs": "number", "browser.cdpUrl": "string",
     "startup.setupWizard": "boolean", "setupVersion": "number",
+    "compaction.methodOrder": "array",
 }
 args = sys.argv[1:]
 if args == ["--version"]:
