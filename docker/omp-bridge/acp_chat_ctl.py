@@ -22,10 +22,17 @@ Examples:
     acp_chat_ctl.py prompt --json '{"text": "hi", "chatId": "<record chat uuid>"}'
     acp_chat_ctl.py chats
     acp_chat_ctl.py answer --json '{"id": "el-…", "action": "accept", "content": {"value": "Yes"}}'
+    acp_chat_ctl.py stop_for_switch --json '{"chatId": "<chat uuid>"}'
+    acp_chat_ctl.py switch --json '{"chatId": "<chat uuid>", "switchEventId": "<switch row uuid>",
+        "action": "resume", "nativeSessionId": "<id>", "tryNativeLoad": true,
+        "package": "<handoff package>", "model": "<provider/model>"}'
 
 `requestId` is how MC's backend names its own `new_session` request; a
 reset without one (this shim from a shell, the agent's own tools) is
 recorded in the activity feed as not sent by MC (incident 21.10.2026).
+
+`switch` / `stop_for_switch` (S3 item C, ADR-105) act on a further chat
+only (`chatId`); the agent's own chat answers `switch_unsupported`.
 """
 from __future__ import annotations
 
@@ -38,7 +45,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import acp_chat  # noqa: E402
 
-OPS = ("prompt", "cancel", "config", "state", "new_session", "queue_clear", "answer", "chats")
+OPS = ("prompt", "cancel", "config", "state", "new_session", "queue_clear", "answer", "chats",
+       "switch", "stop_for_switch")
 
 EXIT_OK = 0
 EXIT_NOT_OK = 2

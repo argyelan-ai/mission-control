@@ -20,6 +20,11 @@ haelt:
 ``answer``       ``{"id":"el-…","action":"accept",``     ``{"ok":true,"status":"answered"}`` ·
                  ``"content"?:{...}}`` (P3)              ``{"ok":false,"error":"not_pending"}`` ·
                                                          ``{"ok":false,"error":"bad_content",...}``
+``stop_for_``    — (further chat only, S3 item C)       ``{"ok":true,"handedOver":[...],``
+``switch``                                               ``"stopped":bool}``
+``switch``       ``{"switchEventId","action",``          ``{"ok":true,"switching":true,``
+                 ``"nativeSessionId"?,"tryNativeLoad",`` ``"handedOver":[...]}`` ·
+                 ``"package"?,"model"?}``                ``{"ok":false,"error":"busy"}``
 ===============  ======================================  ==========================
 
 ``config`` traegt die id, die der Agent selbst meldet: die Denk-Stufe heisst
@@ -154,6 +159,10 @@ class ChatTransport(Protocol):
     async def state(self) -> dict: ...
 
     async def answer(self, id: str, action: str, content: dict | None = None) -> dict: ...
+
+    async def stop_for_switch(self) -> dict: ...
+
+    async def switch(self, payload: dict[str, Any]) -> dict: ...
 
 
 def _answer_payload(id: str, action: str, content: dict | None) -> dict[str, Any]:
@@ -298,6 +307,19 @@ class DockerCtlTransport:
     async def answer(self, id: str, action: str, content: dict | None = None) -> dict:
         return await self._call("answer", _answer_payload(id, action, content))
 
+    async def stop_for_switch(self) -> dict:
+        """A chat switch with a running turn (S3 item C, ADR-105): the
+        daemon stops it, closes its question cards (``expired_by_switch``)
+        and hands the held queue back (``handedOver``) — MC sends it again
+        after the switch."""
+        return await self._call("stop_for_switch")
+
+    async def switch(self, payload: dict[str, Any]) -> dict:
+        """Moves a further chat to the session ``payload`` names
+        (``acp_chat_chats.OmpChatDriver``); the outcome arrives on MC's
+        switch result route."""
+        return await self._call("switch", payload)
+
 
 class HttpCtlTransport:
     """Steuerkanal zur hermes-bridge auf dem Host (``POST /chat/<op>``).
@@ -357,6 +379,13 @@ class HttpCtlTransport:
         # Die Host-Bruecke routet ``answer`` (noch) nicht — ihr Chat-Daemon
         # fragt auch nie (Elicitation ist dort aus).
         return await self._call("answer", _answer_payload(id, action, content))
+
+    async def stop_for_switch(self) -> dict:
+        # The host bridge holds no further chats — nothing to switch.
+        return {"ok": False, "error": "switch_unsupported"}
+
+    async def switch(self, payload: dict[str, Any]) -> dict:
+        return {"ok": False, "error": "switch_unsupported"}
 
 
 def transport_for(agent, chat_id: str | None = None) -> ChatTransport:

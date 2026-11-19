@@ -633,6 +633,8 @@ The queue lives in the daemon's memory only. A daemon restart (container recreat
 | `config` | `{"op":"config","id":"thinking","value":"high"}` | `{"ok":true,"configOptions":[...]}` / `{"ok":false,"error":"rpc_error","detail":"..."}` |
 | `state` | `{"op":"state"}` | `{"ok":true, ...state}` |
 | `answer` (P3) | `{"op":"answer","id":"el-…","action":"accept"\|"decline"\|"cancel","content"?:{…}}` | `{"ok":true,"status":"answered"\|"declined"\|"cancelled"}` · `{"ok":false,"error":"not_pending"}` (answered elsewhere, turn over, daemon restarted) · `{"ok":false,"error":"bad_content"\|"bad_action","detail":"…"}` (checked against the question's schema before omp sees it) |
+| `stop_for_switch` (S3 item C) | `{"op":"stop_for_switch","chatId":"…"}` — a further chat only | `{"ok":true,"handedOver":[{"text","origin"?,"context"?,"at"?,"id"?}, …],"stopped":bool,"idle":bool}` — the held queue goes back to MC (oldest first, removed from the daemon, never dropped), open question cards end `expired` with `reason: "expired_by_switch"`, a running turn is cancelled and waited for. A chat without a child: `{"ok":true,"handedOver":[],"stopped":false}`. The agent's own chat: `{"ok":false,"error":"switch_unsupported"}` |
+| `switch` (S3 item C) | `{"op":"switch","chatId":"…","switchEventId":"<switch row uuid>","action":"resume"\|"start","nativeSessionId"?:"…","tryNativeLoad"?:bool,"package"?:"…","model"?:"<selector>","handoffText"?:"…"}` | `{"ok":true,"switching":true,"switchEventId":"…","handedOver":[…]}` at once; the switch runs in the worker and its outcome goes to MC (below). `{"ok":false,"error":"busy"}` while a turn runs (F1, nothing changes) · `bad_switch` (+`detail`) · `runtime_env_unsupported` · `switch_unsupported` (the agent's own chat) |
 
 **Question cards and plan mode (chat package P3).** Only the omp container's
 chat daemon advertises `clientCapabilities.elicitation.form` (`ChatSession(...,
@@ -678,6 +680,58 @@ least two).
 ```
 
 Slash commands are sent as prompt text (`/usage`, `/model X`); omp executes them inside `session/prompt`. Exception: `/new` and `/clear` — omp does not advertise them over ACP, so the backend sends them as `new_session` (queued behind a running turn) and the slash palette lists them; a harness that advertises its own `new`/`clear` keeps it. `/model` is additionally offered via `config id=model` so the composer's model picker uses the option list.
+
+### Switching a further chat's pair (S3 item C, ADR-105, 19.11.2026)
+
+Behind `CHAT_RECORD_ENABLED` (default off): the backend sends these ops only
+for a further chat of an omp agent on the container daemon
+(`acp_chat_chats.OmpChatDriver`, `chat_switch`'s driver for harness `omp`;
+the agent's default chat keeps `AgentDefaultDriver`).
+
+1. **Busy (F1).** `switch` is refused while a turn runs. MC's
+   `stop_and_switch` first sends `stop_for_switch`: the held queue comes back
+   to MC, open question cards end `expired` / `expired_by_switch` (F9, the
+   package already names the open question), the turn is cancelled.
+2. **The child ends**, a new `omp acp` child starts with the same cwd and
+   environment. `model` (the pair MC asked for) is pinned instead of the
+   agent's `omp.env` selector.
+3. **Load first.** `action: "resume"` + `tryNativeLoad: true` (same harness,
+   MC holds a pinned id): `session/load <nativeSessionId>`. Success = no
+   package, reported `nativeResume: true`. Failure (e.g. `Could not restore
+   model …`) = `session/new`. `action: "resume"` without `tryNativeLoad` is a
+   switch back (F7): `session/load` of the old id or a failure — never a new
+   session. `action: "start"` = `session/new` directly.
+4. **Handoff turn.** A new session (or a switch back with messages in
+   between) gets one first prompt: text `handoffText`, else env
+   `OMP_ACP_HANDOFF_TEXT`, else `Continue.` (an empty value sends the package
+   alone), `context` = the package, capped at `CONTEXT_MAX_CHARS_HANDOFF`
+   (160 000, env `OMP_ACP_CONTEXT_MAX_CHARS_HANDOFF`; the run context keeps its
+   8 000). The chat shows the text as an MC event (`origin: {kind:
+   "handoff"}`), never the package. **Measurement M2 of the S3 plan is
+   open:** whether omp takes a `context` above 8 000 characters and an empty
+   first text is not measured yet — both are settings, not code.
+5. **Report.** `PUT /api/v1/chat-record/agent/me/chats/{id}/switch/{event}/result`
+   (agent token): `{"status":"done","nativeSessionId","nativeResume","realTokens"?}`
+   after the handoff turn answered (or right after the load), or
+   `{"status":"failed","error":{"code","detail"}}` with `process_start_failed`
+   / `new_session_failed` / `model_unreachable` / `provider_error`. The pin
+   route is never used for it (it refuses a re-pin while a switch is
+   pending). A report MC did not answer is tried again before the chat's
+   next message; MC's orphan sweep marks a switch nobody reported `failed`
+   after 10 minutes.
+6. **Failure (F2, F6).** The new child goes and the old session is loaded
+   again — MC still pins it, so the daemon follows MC. If even that load
+   fails, the chat shows `chat_load_failed` and sends nothing.
+7. **Queue (F8).** MC sends what `stop_for_switch` / `switch` handed back
+   again with `mode: "queue"` right after the `switch` answer; it runs after
+   the handoff turn, in order. If no switch follows the stop (the request was
+   refused after it), MC sends it back to the chat after 30 s.
+
+Not built (open): another runtime than the agent's for one chat (the
+daemon has one `models.yml` + `omp.env` per agent, so `runtimeEnv` is
+refused and the backend driver fails such a switch with `other_runtime`),
+and a chat whose agent has no omp chat daemon (Claude → omp: who owns the
+chat after a harness switch is open, ADR-105 §8) — `no_chat_daemon`.
 
 ### CLI shim `acp_chat_ctl.py`
 

@@ -145,7 +145,11 @@ _MODEL_UNREACHABLE_NEUTRAL_TEXT = "The model is not answering — check the Runt
 #: again. Fail-closed: a caller that forgets to say who wrote it costs a
 #: button, never a second run of a task.
 ORIGIN_OPERATOR = "operator"
-_MC_ORIGINS = ("task", "nudge")
+#: The first prompt of a chat switch (S3 item C, ADR-105): Mission Control
+#: wrote it ("Continue." or what the switch names), the handoff package rides
+#: in its `context`. An MC event in the chat, never an operator bubble.
+ORIGIN_HANDOFF = "handoff"
+_MC_ORIGINS = ("task", "nudge", ORIGIN_HANDOFF)
 #: A busy refusal of these writes no card — only for a caller that keeps the
 #: prompt pending and retries on its own: the omp bridge's wake-up
 #: ("nudge", re-sent on every poll until delivered). "task" is NOT here: no
@@ -159,6 +163,21 @@ _QUIET_BUSY_ORIGINS = ("nudge",)
 #: the chat transcript (the operator's bubble) never does. Capped so a broken
 #: caller cannot blow up a turn.
 CONTEXT_MAX_CHARS = 8000
+#: The handoff package of a chat switch (S3 item C, ADR-105) travels the same
+#: way (`context`, model only), but it is MC's whole budget for the new model
+#: (up to 32k tokens ~ 128k chars): its own, larger cap. The run context
+#: above keeps 8 000. Env OMP_ACP_CONTEXT_MAX_CHARS_HANDOFF overrides it —
+#: measurement M2 of the S3 plan (does omp take a context above 8 000
+#: characters?) is still open, so the number must be changeable without a
+#: new image.
+CONTEXT_MAX_CHARS_HANDOFF = 160_000
+#: The text of a switch's first prompt when the switch names none. Env
+#: OMP_ACP_HANDOFF_TEXT overrides it; set to an empty value it sends the
+#: package alone (M2: whether omp accepts an empty text is not measured).
+HANDOFF_TEXT = "Continue."
+#: A question card closed because its chat switched pair: `status` stays
+#: `expired` (what every reader of the card knows), `reason` says why.
+EXPIRED_BY_SWITCH = "expired_by_switch"
 
 #: The chat's `omp acp` child is marked as the chat (backend
 #: app/services/chat_session_guard.py): the `mc` CLI sends MC_SESSION_ROLE as
@@ -953,6 +972,21 @@ class ChatSession:
         self._spawn(job)
         return {"ok": True, "previousSessionId": previous}
 
+    def switch(self, request: dict) -> dict:
+        """`switch` (S3 item C, ADR-105): only a further chat of the agent
+        moves to another pair (`acp_chat_pool.PinnedChatSession`). The
+        agent's own chat IS the agent's process — moving it is the agent
+        runtime switch, never this op."""
+        return {"ok": False, "error": "switch_unsupported"}
+
+    def stop_for_switch(self) -> dict:
+        """`stop_for_switch`: see :meth:`switch` — the agent's own chat has
+        no switch to stop for."""
+        return {"ok": False, "error": "switch_unsupported"}
+
+    def _run_switch(self, job: dict) -> None:
+        raise NotImplementedError("only a further chat switches")
+
     def queue_clear(self) -> dict:
         """Take every held job back, oldest first. The composer's withdraw
         and Stop put the texts back into the input — nothing held is lost
@@ -1100,11 +1134,12 @@ class ChatSession:
             return {"ok": True, "status": status, "stopped": True}
         return {"ok": True, "status": status}
 
-    def _expire_elicitations(self) -> None:
+    def _expire_elicitations(self, reason: Optional[str] = None) -> None:
         """Close every open card: the turn that asked is over (omp timed the
         question out, or Stop/restart ended it — form mode has no
         `elicitation/complete`). omp gets a `cancel` (it drops a late reply
-        silently), the chat gets an ``expired`` line."""
+        silently), the chat gets an ``expired`` line — with `reason` when
+        the caller knows one (`EXPIRED_BY_SWITCH`)."""
         with self._lock:
             pending, self._elicitations = list(self._elicitations.values()), {}
             client = self._client
@@ -1114,9 +1149,12 @@ class ChatSession:
                     client.respond(item["rpcId"], {"action": "cancel"})
                 except Exception:  # noqa: BLE001 — best effort, omp may be gone
                     pass
-            self._emit_transcript(
-                self._mapper.map_elicitation_result(item["id"], "expired")
-            )
+            entries = self._mapper.map_elicitation_result(item["id"], "expired")
+            if reason:
+                for entry in entries:
+                    if isinstance(entry.get("data"), dict):
+                        entry["data"]["reason"] = reason
+            self._emit_transcript(entries)
         if pending:
             self._write_state()
 
@@ -1231,6 +1269,8 @@ class ChatSession:
             try:
                 if job["kind"] == "new_session":
                     self._renew_session(job)
+                elif job["kind"] == "switch":
+                    self._run_switch(job)
                 else:
                     self._run_turn(job["text"], job["turn"], job.get("origin"),
                                    job.get("context"))
@@ -1348,7 +1388,11 @@ class ChatSession:
     # ------------------------------------------------------------------
 
     def _run_turn(self, text: str, turn: int, origin: Optional[str] = None,
-                  context: Optional[str] = None) -> None:
+                  context: Optional[str] = None) -> dict:
+        """One turn. Returns its outcome — `{"code", "detail", "usage"}`,
+        `code` None for a turn that answered — for a caller that has to
+        report it (the first prompt of a chat switch); everyone else
+        ignores it, the cards below are the operator's report."""
         result = None
         error_text = ""
         # True once a reload in this turn failed: its `process_exit` card
@@ -1414,7 +1458,7 @@ class ChatSession:
             # race the active session's own writes and can clobber its
             # sessionId with this dead session's — kill the turn silently and
             # stop touching anything (_work only opens the idle flag).
-            return
+            return {"code": "closed", "detail": "the chat session was closed", "usage": None}
 
         # A question still open when its turn ends will never be answered
         # (omp's own timeout fired, or Stop) — close its card first.
@@ -1447,6 +1491,8 @@ class ChatSession:
             # and text segment land before the card below (N11).
             self._emit_transcript(self._mapper.flush_on_abort())
 
+        usage = getattr(result, "usage", None) if result is not None else None
+        outcome: dict = {"code": None, "detail": "", "usage": usage}
         if not alive and not restart_failed:
             # The card offers the text of the turn that died — the
             # operator's, and only when its reply never came (`result` is
@@ -1460,9 +1506,12 @@ class ChatSession:
                 text="The ACP process died — reconnecting the session.",
                 data=retry_data(text) if offer else None,
             )
+            outcome.update(code="process_exit", detail=error_text or f"child exited during turn {turn}")
             self._restart_child()
         else:
             code, detail = _classify_turn(stop_reason, final_text, error_text, verdict)
+            if code:
+                outcome.update(code=code, detail=detail)
             if code == MODEL_UNREACHABLE:
                 # Same rule as `turn_interrupted`: only the operator's own
                 # text is offered again (and only whole).
@@ -1474,6 +1523,9 @@ class ChatSession:
                 )
             elif code and not restart_failed:
                 self._emit_error(code, detail)
+        if restart_failed and outcome["code"] is None:
+            outcome.update(code="process_exit", detail="the omp child could not be restarted")
+        return outcome
 
     def _prompt_once(self, text: str, context: Optional[str]):
         with self._lock:
@@ -2000,10 +2052,47 @@ def _context_of(value: Any) -> Optional[str]:
     return value.strip()[:CONTEXT_MAX_CHARS]
 
 
+def handoff_context_cap(env: Optional[Mapping[str, str]] = None) -> int:
+    """The cap of a switch's handoff package: OMP_ACP_CONTEXT_MAX_CHARS_HANDOFF
+    when it is a positive whole number, else CONTEXT_MAX_CHARS_HANDOFF. Read
+    per switch, so a changed value needs no daemon restart."""
+    raw = (os.environ if env is None else env).get("OMP_ACP_CONTEXT_MAX_CHARS_HANDOFF")
+    try:
+        value = int(str(raw).strip()) if raw is not None else 0
+    except ValueError:
+        value = 0
+    return value if value > 0 else CONTEXT_MAX_CHARS_HANDOFF
+
+
+def handoff_context_of(value: Any, env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    """A switch's handoff package as the first prompt carries it: a
+    non-empty string, at most :func:`handoff_context_cap` characters — the
+    run context's 8 000 never applies here — or None."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:handoff_context_cap(env)]
+
+
+def handoff_text_of(value: Any, env: Optional[Mapping[str, str]] = None) -> str:
+    """The text of a switch's first prompt: the switch's own `handoffText`
+    when it sends a string (empty allowed), else OMP_ACP_HANDOFF_TEXT when
+    that is set (empty allowed), else HANDOFF_TEXT."""
+    if isinstance(value, str):
+        return value.strip()[:RETRY_TEXT_MAX_CHARS]
+    configured = (os.environ if env is None else env).get("OMP_ACP_HANDOFF_TEXT")
+    if configured is not None:
+        return configured.strip()[:RETRY_TEXT_MAX_CHARS]
+    return HANDOFF_TEXT
+
+
 def _model_text(text: str, context: Optional[str]) -> str:
     """What the model reads for one turn: the run context first, then the
-    operator's text — or the text unchanged when there is no context."""
-    return f"{context}\n\n{text}" if context else text
+    operator's text — or the text unchanged when there is no context. A
+    switch's first prompt may carry a package and no text (OMP_ACP_HANDOFF_TEXT
+    empty): the model then reads the package alone."""
+    if context and text:
+        return f"{context}\n\n{text}"
+    return context or text
 
 
 def chat_child_env(base: "Mapping[str, str]") -> dict:
@@ -2372,6 +2461,11 @@ def dispatch(session: ChatSession, request: dict) -> dict:
                               request.get("content"))
     if op == "state":
         return {"ok": True, **session.state()}
+    if op == "switch":
+        # S3 item C (ADR-105): a further chat moves to another pair.
+        return session.switch(request)
+    if op == "stop_for_switch":
+        return session.stop_for_switch()
     return {"ok": False, "error": "unknown_op", "detail": str(op)}
 
 

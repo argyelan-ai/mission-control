@@ -17,9 +17,22 @@ and what ``/new`` means once the record is on.
   + pin through the agent-token route).
 * Claude Code agents are not wired yet (their start script does not take a
   per-chat ``--session-id`` / ``--resume``); they keep today's behaviour.
+* Switching a further chat's pair (S3 item C, ADR-105): :class:`OmpChatDriver`
+  is ``chat_switch``'s driver for harness ``omp``. It stops a running turn
+  through the daemon (``stop_for_switch``: the held queue comes back to MC,
+  open question cards end ``expired_by_switch``), changes the model of the
+  chat's own session (``config model``), and starts the switch
+  (``switch``: ``session/load`` first when MC says to try it, else
+  ``session/new`` with the handoff package as the first prompt's
+  ``context``). What the daemon handed back is sent again with
+  ``mode=queue`` right after — it runs after the handoff turn (rule F8).
+  The daemon reports the outcome on the switch result route. The agent's
+  default chat keeps ``chat_switch.AgentDefaultDriver``.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from typing import Any
 
@@ -27,7 +40,9 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
 from app.services import chat_record
-from app.services.acp_chat_transport import headless_chat_kind
+from app.services.acp_chat_transport import AcpChatUnreachableError, headless_chat_kind
+
+logger = logging.getLogger(__name__)
 
 
 class ChatNotFoundError(Exception):
@@ -94,3 +109,190 @@ async def new_chat_for_reset(session: AsyncSession, user: Any, agent: Any, text:
     chat = await chat_record.create_chat(session, user, agent)
     await session.commit()
     return chat_record.chat_out(chat), f"/{reset[0]}"
+
+
+# ── Switch driver (S3 item C, ADR-105) ──────────────────────────────────
+
+#: A queue ``stop_for_switch`` handed back is sent again after the switch.
+#: When no switch or model change follows (the request was refused after the
+#: stop — ``box_locked``, a lost race), it goes back to the chat after this
+#: long instead: never dropped.
+HELD_REPLAY_AFTER_S = 30.0
+
+
+class OmpChatDriver:
+    """``chat_switch.SwitchDriver`` for the further chats of an omp agent
+    whose chat runs on the container daemon (``further_chats_supported``).
+
+    Limits, said out loud instead of pretended (reported as
+    ``process_start_failed`` with the reason): the new session runs on the
+    chat's own agent and its runtime — the daemon has one ``models.yml``
+    per agent, so another runtime than the agent's (``other_runtime``) and
+    a chat whose agent is no omp chat daemon (``no_chat_daemon``, e.g. a
+    Claude chat moving to omp) are refused."""
+
+    def __init__(self) -> None:
+        #: chat id -> (agent slug, held jobs) from ``stop_for_switch``.
+        self._held: dict[str, tuple[str, list[dict]]] = {}
+        self._timers: dict[str, asyncio.TimerHandle] = {}
+
+    @staticmethod
+    def _default():
+        from app.services import chat_switch
+
+        return chat_switch._DEFAULT_DRIVER
+
+    @staticmethod
+    def _transport(agent: Any, chat: Any):
+        from app.services import chat_switch
+        from app.services.acp_chat_transport import DockerCtlTransport
+
+        if agent is None or not further_chats_supported(agent):
+            raise chat_switch.DriverUnavailable("no_chat_daemon")
+        return DockerCtlTransport(agent.slug, chat_id=str(chat.id))
+
+    async def is_busy(self, agent: Any, chat: Any) -> bool | None:
+        if chat.agent_default:
+            return await self._default().is_busy(agent, chat)
+        if agent is None or not further_chats_supported(agent):
+            return False  # nothing of this chat runs on a daemon
+        try:
+            state = await self._transport(agent, chat).state()
+        except AcpChatUnreachableError:
+            return None
+        if state.get("opening"):
+            return True  # its first message is about to run
+        return state.get("busy") is True
+
+    async def stop_turn(self, agent: Any, chat: Any) -> None:
+        from app.services import chat_switch
+
+        if chat.agent_default:
+            await self._default().stop_turn(agent, chat)
+            return
+        try:
+            answer = await self._transport(agent, chat).stop_for_switch()
+        except AcpChatUnreachableError as exc:
+            raise chat_switch.DriverUnavailable("chat_daemon_unreachable") from exc
+        if not answer.get("ok"):
+            raise chat_switch.DriverUnavailable(str(answer.get("error") or "stop_refused"))
+        self._hold(agent.slug, str(chat.id), answer.get("handedOver"))
+
+    async def set_model(self, agent: Any, chat: Any, model: str) -> None:
+        from app.services import chat_switch
+
+        if chat.agent_default:
+            await self._default().set_model(agent, chat, model)
+            return
+        transport = self._transport(agent, chat)
+        try:
+            answer = await transport.config("model", model)
+        except AcpChatUnreachableError as exc:
+            raise chat_switch.DriverUnavailable("chat_daemon_unreachable") from exc
+        finally:
+            await self._replay(agent.slug, str(chat.id))
+        if not answer.get("ok"):
+            # The session refused the model (not offered): chat_switch
+            # records ``model_not_offered``.
+            raise ValueError(str(answer.get("detail") or answer.get("error") or "refused"))
+
+    async def start(self, agent: Any, chat: Any, request: dict[str, Any]) -> None:
+        from app.services import chat_switch
+
+        if chat.agent_default:
+            await self._default().start(agent, chat, request)
+            return
+        to = request.get("to") or {}
+        if to.get("harness") != "omp":
+            raise chat_switch.DriverUnavailable("not_an_omp_switch")
+        transport = self._transport(agent, chat)
+        runtime = to.get("runtimeId")
+        own = getattr(agent, "runtime_id", None)
+        if runtime and str(runtime) != str(own or ""):
+            # One models.yml per agent: the daemon cannot reach another
+            # runtime's endpoint for one chat (open point of item C).
+            await self._replay(agent.slug, str(chat.id))
+            raise chat_switch.DriverUnavailable("other_runtime")
+        payload: dict[str, Any] = {
+            "switchEventId": request["switchEventId"],
+            "action": request["action"],
+            "tryNativeLoad": bool(request.get("tryNativeLoad")),
+        }
+        if request.get("nativeSessionId"):
+            payload["nativeSessionId"] = request["nativeSessionId"]
+        if request.get("package"):
+            payload["package"] = request["package"]
+        if to.get("model"):
+            payload["model"] = to["model"]
+        try:
+            answer = await transport.switch(payload)
+        except AcpChatUnreachableError as exc:
+            await self._replay(agent.slug, str(chat.id))
+            raise chat_switch.DriverUnavailable("chat_daemon_unreachable") from exc
+        if not answer.get("ok"):
+            await self._replay(agent.slug, str(chat.id))
+            raise chat_switch.DriverUnavailable(str(answer.get("error") or "switch_refused"))
+        # F8: what MC holds, then what the daemon still held — after the
+        # handoff turn, in order.
+        self._hold(agent.slug, str(chat.id), answer.get("handedOver"))
+        await self._replay(agent.slug, str(chat.id))
+
+    # -- the held queue ----------------------------------------------------
+
+    def _hold(self, slug: str, chat_id: str, jobs: Any) -> None:
+        jobs = [j for j in (jobs or []) if isinstance(j, dict) and isinstance(j.get("text"), str)]
+        if not jobs:
+            return
+        _, held = self._held.get(chat_id, (slug, []))
+        self._held[chat_id] = (slug, [*held, *jobs])
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        old = self._timers.pop(chat_id, None)
+        if old is not None:
+            old.cancel()
+        self._timers[chat_id] = loop.call_later(
+            HELD_REPLAY_AFTER_S, lambda: asyncio.ensure_future(self._replay(slug, chat_id))
+        )
+
+    async def _replay(self, slug: str, chat_id: str) -> None:
+        """Sends the held jobs again, oldest first, ``mode=queue``: they wait
+        behind a running (handoff) turn. A refused or unreachable send is
+        logged with its text count — never silently gone."""
+        from app.services.acp_chat_transport import DockerCtlTransport
+
+        timer = self._timers.pop(chat_id, None)
+        if timer is not None:
+            timer.cancel()
+        _, jobs = self._held.pop(chat_id, (slug, []))
+        if not jobs:
+            return
+        transport = DockerCtlTransport(slug, chat_id=chat_id)
+        for i, job in enumerate(jobs):
+            try:
+                answer = await transport.prompt(
+                    job["text"], mode="queue", origin=job.get("origin"), context=job.get("context"),
+                )
+            except AcpChatUnreachableError:
+                answer = {"ok": False, "error": "unreachable"}
+            if not answer.get("ok"):
+                logger.error(
+                    "chat %s: %d held message(s) not sent again after a switch (%s)",
+                    chat_id, len(jobs) - i, answer.get("error"),
+                )
+                return
+
+
+def register_switch_driver() -> OmpChatDriver:
+    """Plugs the omp side into ``chat_switch`` (ADR-105 §6: a harness is a
+    registry entry). Runs at import; the app imports this module through
+    ``routers/agent_chat``."""
+    from app.services import chat_switch
+
+    driver = OmpChatDriver()
+    chat_switch.register_driver("omp", driver)
+    return driver
+
+
+SWITCH_DRIVER = register_switch_driver()
