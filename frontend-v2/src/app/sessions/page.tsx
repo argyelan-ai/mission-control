@@ -12,6 +12,7 @@ import { BrowserLiveView } from "@/components/shared/BrowserLiveView";
 import { SessionSidebar } from "@/components/chat/SessionSidebar";
 import { ChatView, type CenterView, type DetailLevel, CENTER_VIEWS, DETAIL_LEVELS } from "@/components/chat/ChatView";
 import { DiffPanel } from "@/components/chat/DiffPanel";
+import { furtherChatHref } from "@/components/chat/useRecordChat";
 import type { PanelKind } from "@/components/chat/PanelButtons";
 import { agentIsRunning, type AgentWithState } from "@/components/chat/TerminalPanel";
 import { GroupChatView } from "@/components/groupchat/GroupChatView";
@@ -454,7 +455,10 @@ function SessionsPageContent() {
     const agentParam = searchParams.get("agent");
     const groupParam = searchParams.get("group");
     const headParam = searchParams.get("head");
-    const key = agentParam ? `agent:${agentParam}` : groupParam ? `group:${groupParam}` : headParam ? `head:${headParam}` : null;
+    // A further chat of the agent (chats slice S2): part of the key and of
+    // every URL below — ChatView reads it from there.
+    const chatParam = agentParam ? searchParams.get("chat") : null;
+    const key = agentParam ? `agent:${agentParam}${chatParam ? `#${chatParam}` : ""}` : groupParam ? `group:${groupParam}` : headParam ? `head:${headParam}` : null;
     const viaLink = searchParams.get(CHAT_ENTRY_PARAM) === "1";
     if (arrival.current === "pending") {
       const direct = takeDirectLoad();
@@ -488,7 +492,7 @@ function SessionsPageContent() {
       setSelectedHeadId(null);
       setMobileView("chat");
       rememberChat({ kind: "agent", id: agent.id });
-      url = chatUrl("agent", agent.id);
+      url = chatParam ? furtherChatHref(agent.id, chatParam) : chatUrl("agent", agent.id);
     } else if (groupParam) {
       if (!groups.some((g) => g.id === groupParam)) return;
       handledParam.current = key;
@@ -562,6 +566,20 @@ function SessionsPageContent() {
     if (replace) router.replace(chatUrl(kind, id), { scroll: false });
     else router.push(chatUrl(kind, id), { scroll: false });
   }
+
+  // `/new` became a further chat (201 `newChat`): open it on top of the
+  // chat it was typed in, so back returns there.
+  const openChatParam = searchParams.get("agent") === selectedLive?.id ? searchParams.get("chat") : null;
+  const openFurtherChat = useCallback(
+    (chatId: string) => {
+      if (!selectedLive) return;
+      // The list asks the record again now, not on its next poll — the new
+      // chat's row has to stand there (and be marked) the moment it opens.
+      void qc.invalidateQueries({ queryKey: ["chat-record", "chats"] });
+      router.push(furtherChatHref(selectedLive.id, chatId), { scroll: false });
+    },
+    [router, selectedLive, qc],
+  );
 
   // Phase 15 T3.7: re-mount the terminal when the backend switches the
   // selected agent's runtime (incl. cross-image recreate). Without this
@@ -842,7 +860,9 @@ function SessionsPageContent() {
               // refetch would remount the chat (and drop its SSE subscription
               // and scroll position) ten times a minute.
               <ChatView
-                key={selectedLive?.id ?? "none"}
+                // A further chat is its own mount: its own events, echoes
+                // and scroll — never the agent chat's state carried over.
+                key={`${selectedLive?.id ?? "none"}${openChatParam ? `#${openChatParam}` : ""}`}
                 agent={selectedLive}
                 hasTranscript={agentHasTranscript(selectedLive)}
                 voiceOnScreen={chatOnScreen}
@@ -857,6 +877,7 @@ function SessionsPageContent() {
                 onOpenPanel={setActivePanel}
                 activePanel={activePanel}
                 onTogglePanel={setActivePanel}
+                onOpenChat={openFurtherChat}
               />
             )}
           </div>

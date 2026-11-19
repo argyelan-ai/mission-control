@@ -7,7 +7,7 @@ import { SquarePen } from "lucide-react";
 import { C } from "@/lib/colors";
 import { chatRowTime, type ChatListEntry, type ChatListState } from "@/lib/chatList";
 import { useRecentChats } from "./MobileTabBar";
-import { useChatList } from "./useChatList";
+import { activeChatKey, useChatList, useOpenChat } from "./useChatList";
 
 /** Where "New chat" leads: the sessions page's picker — who to talk to, or a
  *  new group. Until chats stop being bound to agents (ADR-102 stage 1) a new
@@ -100,9 +100,11 @@ export function ChatList({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname() ?? "/";
   const { waiting, today, earlier, loaded } = useChatList();
   const recent = useRecentChats();
+  const openChat = useOpenChat();
   // The open chat is the one the sessions page remembered last (it writes
-  // lib/recentChats on every pick and deep link).
-  const activeKey = pathname.startsWith("/sessions") && recent[0] ? `${recent[0].kind}:${recent[0].id}` : null;
+  // lib/recentChats on every pick and deep link) — or, while one is open,
+  // the agent's further chat (its own row, not the agent's).
+  const activeKey = activeChatKey(pathname, recent[0], openChat);
   const empty = loaded && waiting.length + today.length + earlier.length === 0;
 
   return (
