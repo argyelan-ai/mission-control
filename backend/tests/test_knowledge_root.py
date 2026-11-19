@@ -397,8 +397,12 @@ async def test_two_sweeps_at_once_do_not_crash(homes, flag_on):
 
 
 async def test_api_sync_answers_409_while_a_sweep_runs(homes, flag_on, auth_client):
+    import asyncio
+
     async with knowledge_import._local_lock:
-        r = await auth_client.post("/api/v1/knowledge-root/_admin/sync")
+        # wait_for: a sweep that queues behind the lock instead of answering
+        # 409 would hang here — it must fail fast instead.
+        r = await asyncio.wait_for(auth_client.post("/api/v1/knowledge-root/_admin/sync"), 5)
     assert r.status_code == 409
     assert r.json()["detail"]["reason"] == "sync_running"
 
