@@ -17,6 +17,8 @@ import { useLocale, useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 import { api } from "@/lib/api";
+import { chooseUiLocale } from "@/lib/locale";
+import { isLocale } from "@/i18n/locales";
 import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import type { Agent } from "@/lib/types";
@@ -82,7 +84,8 @@ function Group({ id, label, hint, children }: { id: string; label: string; hint?
 }
 
 // ── You: app language ───────────────────────────────────────────────────────
-// Cookie-based (i18n pattern): writes NEXT_LOCALE and refreshes the server
+// Cookie-based (i18n pattern): writes NEXT_LOCALE (+ the per-user setting
+// `ui_language`) and refreshes the server
 // tree — no URL change, applies immediately. Options in their own language,
 // so someone who cannot read the current one still finds theirs.
 function AppLanguageRow() {
@@ -96,7 +99,10 @@ function AppLanguageRow() {
       value={locale}
       options={AGENT_LANGUAGES.map((code) => ({ value: code, label: t(`endonym.${code}`) }))}
       onChange={(next) => {
-        document.cookie = `NEXT_LOCALE=${next}; path=/; max-age=31536000; samesite=lax`;
+        if (!isLocale(next)) return;
+        // Cookie for the server render now; also saved per user so a browser
+        // without the cookie gets it back (lib/locale.ts).
+        void chooseUiLocale(next);
         router.refresh();
       }}
     />

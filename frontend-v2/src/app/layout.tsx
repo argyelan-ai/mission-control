@@ -4,6 +4,8 @@ import { getLocale, getMessages } from "next-intl/server";
 import "@/styles/globals.css";
 import { Providers } from "./providers";
 import { THEME_COLOR, THEME_INIT_SCRIPT } from "@/lib/themeScript";
+import { LOCALE_INIT_SCRIPT } from "@/lib/localeScript";
+import { LocaleSync } from "@/i18n/LocaleSync";
 
 export const metadata: Metadata = {
   title: process.env.NEXT_PUBLIC_BRAND?.replace(".", "") || "Mission Control",
@@ -44,6 +46,9 @@ export default async function RootLayout({
             <head> — it sets data-theme from the stored choice so a light user
             never sees a dark flash. Dark is the default without it. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        {/* No NEXT_LOCALE cookie: restore the user's language before first
+            paint (lib/localeScript.ts) — no English flash for a German user. */}
+        <script dangerouslySetInnerHTML={{ __html: LOCALE_INIT_SCRIPT }} />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <link rel="icon" href="/favicon.ico" sizes="any" />
         {/* Preload the two critical self-hosted fonts (first paint: UI sans + display) */}
@@ -52,6 +57,7 @@ export default async function RootLayout({
       </head>
       <body className="font-sans antialiased bg-[var(--color-bg-deep)] text-[var(--color-text-primary)] min-h-[100dvh] overflow-x-hidden">
         <NextIntlClientProvider locale={locale} messages={messages}>
+          <LocaleSync />
           <Providers>{children}</Providers>
         </NextIntlClientProvider>
       </body>
