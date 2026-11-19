@@ -580,6 +580,12 @@ function SessionsPageContent() {
     },
     [router, selectedLive, qc],
   );
+  // `?chat=` named a chat the record does not have: ChatView already shows
+  // the agent's own chat — the URL follows (replace, so back skips it).
+  const dropMissingChat = useCallback(() => {
+    if (!selectedLive) return;
+    router.replace(chatUrl("agent", selectedLive.id), { scroll: false });
+  }, [router, selectedLive]);
 
   // Phase 15 T3.7: re-mount the terminal when the backend switches the
   // selected agent's runtime (incl. cross-image recreate). Without this
@@ -878,6 +884,7 @@ function SessionsPageContent() {
                 activePanel={activePanel}
                 onTogglePanel={setActivePanel}
                 onOpenChat={openFurtherChat}
+                onChatMissing={dropMissingChat}
               />
             )}
           </div>

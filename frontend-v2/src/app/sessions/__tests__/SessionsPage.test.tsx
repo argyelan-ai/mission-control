@@ -95,8 +95,10 @@ vi.mock("@/components/chat/ChatView", () => ({
     activePanel,
     onTogglePanel,
     onOpenChat,
+    onChatMissing,
   }: {
     onOpenChat?: (chatId: string) => void;
+    onChatMissing?: () => void;
     voiceOnScreen?: boolean;
     activePanel?: string | null;
     onTogglePanel?: (panel: string | null) => void;
@@ -140,6 +142,13 @@ vi.mock("@/components/chat/ChatView", () => ({
       {onOpenChat && (
         <button type="button" onClick={() => onOpenChat("chat-9")}>
           Stub Open Chat
+        </button>
+      )}
+      {/* `?chat=` names a chat the record does not have — ChatView calls
+          this; covered by ChatView.further.test.tsx. */}
+      {onChatMissing && (
+        <button type="button" onClick={onChatMissing}>
+          Stub Chat Missing
         </button>
       )}
       {/* The header's panel buttons (ADR-099) are ChatView's — covered by
@@ -1351,6 +1360,19 @@ describe("SessionsPage — phone history puts the list behind every chat", () =>
     expect(nav.pushed).toEqual(["/sessions?agent=agent-2&chat=chat-9"]);
     // The list's row for the new chat comes at once, not on the next poll.
     expect(spy).toHaveBeenCalledWith({ queryKey: ["chat-record", "chats"] });
+  });
+
+  it("a ?chat= the record does not have is dropped from the URL (replace, not push)", async () => {
+    const user = userEvent.setup();
+    nav.searchParamsString = "agent=agent-2&chat=chat-gone";
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument());
+    nav.replaced = [];
+    nav.pushed = [];
+    const view = screen.getByTestId("chat-view-stub");
+    await user.click(within(view).getByRole("button", { name: "Stub Chat Missing" }));
+    expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]);
+    expect(nav.pushed).toEqual([]);
   });
 
   it("opening a chat from the list pushes it on top of the list", async () => {

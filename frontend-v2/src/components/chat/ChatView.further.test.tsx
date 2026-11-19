@@ -136,6 +136,7 @@ function mkRecord(overrides: Partial<RecordChatResult> = {}): RecordChatResult {
     ...mkStream({ session: null }),
     events: [msg("r1", "user", "only in chat two"), msg("r2", "assistant", "answer in chat two")],
     disabled: false,
+    missing: false,
     recordChats: CHATS,
     ...overrides,
   };
@@ -215,6 +216,24 @@ describe("ChatView — further chat (?chat=)", () => {
     expect(screen.getByText("main chat answer")).toBeInTheDocument();
     expect(screen.getByTestId("chat-header-title")).not.toHaveTextContent("chat 2");
     expect(screen.getByTestId("voice-dock")).toBeInTheDocument();
+  });
+
+  it("chat not there (404 'Chat not found'): own chat shows and the page is asked to drop &chat=", () => {
+    navMock.params = new URLSearchParams("agent=agent-1&chat=chat-gone");
+    mockRecord.mockReturnValue(mkRecord({ missing: true, events: [] }));
+    const onChatMissing = vi.fn();
+    renderView({ onChatMissing });
+    expect(onChatMissing).toHaveBeenCalledTimes(1);
+    expect(mockChatStream).toHaveBeenLastCalledWith("agent-1", true);
+    expect(screen.getByText("main chat answer")).toBeInTheDocument();
+    expect(screen.getByTestId("chat-header-title")).not.toHaveTextContent("chat 2");
+  });
+
+  it("a further chat that is there never asks to drop &chat=", () => {
+    navMock.params = new URLSearchParams("agent=agent-1&chat=chat-2");
+    const onChatMissing = vi.fn();
+    renderView({ onChatMissing });
+    expect(onChatMissing).not.toHaveBeenCalled();
   });
 
   it("sends into the further chat with its chatId — never into the agent's own", async () => {

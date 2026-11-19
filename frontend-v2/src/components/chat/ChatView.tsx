@@ -377,6 +377,10 @@ interface ChatViewProps {
    *  `/new` came back as a new chat (201 `{"newChat": …}`, chats slice S2).
    *  The sessions page passes it; without it the new chat waits in the list. */
   onOpenChat?: (chatId: string) => void;
+  /** `?chat=` names a chat the record does not have (archived, deleted, not
+   *  visible): the agent's own chat shows, and the page drops `&chat=` so
+   *  the URL never names a chat the screen does not show. */
+  onChatMissing?: () => void;
 }
 
 export function ChatView({
@@ -398,6 +402,7 @@ export function ChatView({
   newerHeadRunId = null,
   onSelectHeadRun,
   onOpenChat,
+  onChatMissing,
 }: ChatViewProps) {
   const t = useTranslations("sessions");
   const tCockpit = useTranslations("cockpit");
@@ -453,7 +458,11 @@ export function ChatView({
   const chatParam =
     !head && agent && searchParams?.get("agent") === agent.id ? searchParams.get("chat") || null : null;
   const recordStream = useRecordChat(chatParam);
-  const furtherChat = chatParam != null && !recordStream.disabled;
+  const furtherChat = chatParam != null && !recordStream.disabled && !recordStream.missing;
+  const chatMissing = chatParam != null && recordStream.missing;
+  useEffect(() => {
+    if (chatMissing) onChatMissing?.();
+  }, [chatMissing, onChatMissing]);
   const streamEnabled = hasTranscript && !!agent && !head && !furtherChat;
   // The chat list marks this chat's own row while it is open.
   useEffect(() => {
