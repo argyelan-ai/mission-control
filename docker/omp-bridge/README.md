@@ -132,6 +132,7 @@ and is rendered again at boot.
 | `$OMP_HOME/profiles/mc-agent/agent/sessions/` | `~/.mc/agents/<slug>/omp-sessions/` | yes | omp's session files; per session folder MC's copies in `.mc/`, the state mirror `acp-chat-state.json` and the chat pointer `acp-chat.json` (S1-R4) |
 | `$OMP_HOME/profiles/mc-agent/agent/blobs/` | `~/.mc/agents/<slug>/omp-blobs/` (rw, S1-R8) | yes, with S1-R8 | omp's pictures of a conversation (`blob:sha256:<hash>`); before S1-R8 a recreate kept the conversation but lost its pictures |
 | the rest of `$OMP_HOME`: `omp.env`, `profiles/mc-agent/agent/models.yml`, `acp-chat.sock` | — | no | rendered again at boot (`render-omp-config.sh`) or created by the daemon |
+| `profiles/mc-agent/agent/config.yml` (omp's profile settings) | — | no | written again at boot and on every reload by `render-omp-config.sh` through `omp config set` — a hand edit is lost on the next recreate. Compaction order: `compaction.methodOrder` = soft, shake, handoff, snapcompact (text summary before bitmap frames, measured 13.11.2026); override per container with `OMP_COMPACTION_METHOD_ORDER` (comma list, or `omp-default`). |
 
 ---
 
