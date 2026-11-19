@@ -576,13 +576,16 @@ async def _request_locked(session: AsyncSession, chat: Chat, *, harness: str, ru
 
     await _settle_before_request(session, chat)
 
-    agent = await _agent(session, chat)
-    driver = driver_for(chat.harness if model_only else harness)
-    stopped = await _guard_turn(driver_for(chat.harness), agent, chat, mode)
+    # Every refusal that stops nothing comes before _guard_turn: a running
+    # turn is never stopped for a request that is refused anyway.
     if not same_runtime:
         lock = await box_lock_for(runtime)
         if lock:
             raise SwitchError(423, "box_locked", message=lock)
+
+    agent = await _agent(session, chat)
+    driver = driver_for(chat.harness if model_only else harness)
+    stopped = await _guard_turn(driver_for(chat.harness), agent, chat, mode)
 
     current = await _current_session(session, chat)
     to = {"harness": harness, "runtimeId": str(runtime_id) if runtime_id else None, "model": model or (chat.model if model_only else None)}
@@ -707,12 +710,14 @@ async def _back_locked(session: AsyncSession, chat: Chat, *, mode: str | None) -
     runtime_id = uuid.UUID(back["runtimeId"]) if back.get("runtimeId") else None
     await _check_pair(session, harness, runtime_id)
 
-    agent = await _agent(session, chat)
-    stopped = await _guard_turn(driver_for(chat.harness), agent, chat, mode)
+    # Box lock before _guard_turn, as in _request_locked.
     if runtime_id != chat.runtime_id:
         lock = await box_lock_for(await _runtime(session, runtime_id))
         if lock:
             raise SwitchError(423, "box_locked", message=lock)
+
+    agent = await _agent(session, chat)
+    stopped = await _guard_turn(driver_for(chat.harness), agent, chat, mode)
 
     current = await _current_session(session, chat) or target
     last_seq = (

@@ -358,6 +358,41 @@ async def test_box_lock_refuses(flag_on, make_agent, driver, monkeypatch):
     assert await _switch_rows(chat.id) == [] and driver.calls == []
 
 
+async def test_a_locked_box_refuses_before_a_running_turn_is_stopped(flag_on, make_agent, driver, monkeypatch):
+    """Nothing is stopped for a request that is refused anyway."""
+    _agent, chat, rts = await _world(make_agent)
+
+    async def _locked(runtime):
+        return "Cloud X is still answering 1 request(s)."
+
+    monkeypatch.setattr(chat_switch, "box_lock_for", _locked)
+    driver.busy = True
+    with pytest.raises(SwitchError) as err:
+        await _switch(chat.id, harness="omp", runtime_id=rts["cloud"].id, model="gpt-x", mode="stop_and_switch")
+    assert (err.value.status, err.value.code) == (423, "box_locked")
+    assert driver.calls == [] and driver.busy is True
+    assert await _switch_rows(chat.id) == []
+
+
+async def test_a_locked_box_refuses_switch_back_before_a_running_turn_is_stopped(flag_on, make_agent, driver,
+                                                                                 monkeypatch):
+    _agent, chat, rts = await _world(make_agent)
+    out = await _switch(chat.id, harness="omp", runtime_id=rts["cloud"].id, model="gpt-x")
+    await _report(chat.id, out["eventId"], status="done")
+    calls_before = list(driver.calls)
+
+    async def _locked(runtime):
+        return "Local Box is still answering 1 request(s)."
+
+    monkeypatch.setattr(chat_switch, "box_lock_for", _locked)
+    driver.busy = True
+    with pytest.raises(SwitchError) as err:
+        await _back(chat.id, mode="stop_and_switch")
+    assert (err.value.status, err.value.code) == (423, "box_locked")
+    assert driver.calls == calls_before and driver.busy is True
+    assert len(await _switch_rows(chat.id)) == 1
+
+
 async def test_box_lock_reads_the_engine_state_and_the_switch_lock(monkeypatch):
     """The default probe: a runtime whose engine does not serve its model
     needs a recipe switch, which the box's switch lock may refuse."""
