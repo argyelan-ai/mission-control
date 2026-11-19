@@ -830,8 +830,13 @@ async def test_clear_in_a_further_chat_is_refused_not_typed(monkeypatch, word):
     with pytest.raises(agent_chat_input.InputNotSupportedError):
         await agent_chat_input.send_text(_Agent(), word, chat_id=str(uuid.uuid4()))
     assert calls == [] and opened == []
-    # An ordinary message that starts with the word is just text.
-    await agent_chat_input.send_text(_Agent(), "/clear den Cache", chat_id=str(uuid.uuid4()))
+    # ``/clear`` takes an argument in Claude Code (``argumentHint: "[name]"``,
+    # 2.1.328): "/clear den Cache" still clears — refused too (item A2).
+    with pytest.raises(agent_chat_input.SessionCommandBlockedError):
+        await agent_chat_input.send_text(_Agent(), "/clear den Cache", chat_id=str(uuid.uuid4()))
+    assert opened == []
+    # A message that only mentions the word is just text.
+    await agent_chat_input.send_text(_Agent(), "please /clear it", chat_id=str(uuid.uuid4()))
     assert len(opened) == 1
 
 

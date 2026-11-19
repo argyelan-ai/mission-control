@@ -41,6 +41,7 @@ from app.services.agent_chat_input import (
     InputNotSupportedError,
     InstallCommandBlockedError,
     QuestionOpenError,
+    SessionCommandBlockedError,
     answer_elicitation,
     can_receive_input,
     clear_queue,
@@ -74,6 +75,8 @@ from app.services.runtime_window import agent_runtime_window
 from app.services.transcript_adapters import adapter_for, bind_runtime_window
 from app.services.checklist_todo_sync import chat_todo_sync
 from app.services import fresh_session
+from app.services import claude_chat_runner
+from app.services.claude_chat_runner import ClaudeChatRunnerError
 from app.services.transcript_chat import (
     read_history,
     resolve_aliveness,
@@ -117,6 +120,19 @@ def _boss_delivery_failed(e: BossDeliveryError) -> JSONResponse:
 # wie eine inhaltliche Absage: "der Agent lehnt ab" und "da ist gerade
 # niemand" sind fuer den Operator zwei verschiedene Lagen.
 _ACP_UNREACHABLE = "acp_unreachable"
+
+
+def _claude_chat_failed(agent, e: ClaudeChatRunnerError) -> JSONResponse:
+    """A further Claude chat could not be put in front of its process
+    (chats slice S3, ``claude_chat_runner``): 404 ``chat_not_found``, 409
+    ``chat_process_refused`` (by content), 503 ``chats_busy`` with
+    ``Retry-After`` (every chat slot taken right now) or 502
+    ``chat_process_unreachable`` (container / tmux / disk), each with the
+    runner's code as ``error``.
+    The runner's detail goes to the log only (paths, tmux text)."""
+    status, content, headers = claude_chat_runner.http_answer(e)
+    logger.warning("claude chat for %s refused: %s (%s)", agent.slug, e.code, e.detail[:300])
+    return JSONResponse(status_code=status, content=content, headers=headers)
 
 
 def _acp_unreachable(e: AcpChatUnreachableError) -> JSONResponse:
@@ -1368,6 +1384,13 @@ async def post_chat_input(
             status_code=409,
             content={"reason": "install_blocked", "command": e.command},
         )
+    except SessionCommandBlockedError as e:
+        # A further Claude chat: the command would move its claude off the
+        # chat's pinned session (``claude_chat_runner.session_switch_command``).
+        return JSONResponse(
+            status_code=409,
+            content={"reason": "session_command_blocked", "command": e.command},
+        )
     except InputNotSupportedError:
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
     except AgentStartingError:
@@ -1388,6 +1411,8 @@ async def post_chat_input(
         return _acp_unreachable(e)
     except BossDeliveryError as e:
         return _boss_delivery_failed(e)
+    except ClaudeChatRunnerError as e:
+        return _claude_chat_failed(agent, e)
     if reset is not None:
         title, detail = chat_input_event(reset, _actor(current_user, request))
         await _audit(session, agent, CHAT_SESSION_RESET_EVENT, title, detail)

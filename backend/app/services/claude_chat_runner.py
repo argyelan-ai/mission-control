@@ -37,6 +37,13 @@ Claude Code 2.1.323 in ``-p`` mode and in a real terminal window):
   file ``runner.json`` in the chat dir).
 * never ``--session-id`` together with ``--resume`` (the CLI refuses it).
 
+Hardening (item A2): a chat window without a turn for
+:data:`IDLE_CLOSE_SECONDS` is closed by a sweep and resumed on the next
+prompt; at most :data:`MAX_WARM_CHATS` chat processes warm and
+:data:`MAX_WORKING_CHATS` mid-turn over all agents; :func:`http_answer` maps
+every error code to 404 / 409 / 502; :func:`session_switch_command` names
+the commands a further chat must not receive.
+
 Everything here is behind ``settings.chat_record_enabled`` — the caller
 (``agent_chat_input.send_text``) only comes here for a ``chat_id``, and only
 with the flag on.
@@ -46,13 +53,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import subprocess
+import time
 import uuid
 import weakref
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.config import settings
 from app.services.token_harvester import _host_home, encode_cwd
 
 logger = logging.getLogger(__name__)
@@ -92,6 +102,108 @@ class ClaudeChatRunnerError(Exception):
         super().__init__(f"{code}: {detail}" if detail else code)
         self.code = code
         self.detail = detail
+
+
+# ── hardening (S3 item A2): limits, refused commands, HTTP answers ─────────
+
+#: A further chat's window closes after this long without a turn; the next
+#: prompt opens it again with ``--resume`` (the session file is on disk).
+IDLE_CLOSE_SECONDS = 15 * 60
+#: Upper bounds over ALL agents' further-chat processes (window 0 of each
+#: agent is not counted — it is the agent itself). From the process
+#: measurement of 19.11.2026: a quiet claude about 0.13–0.37 GB, a working
+#: one up to about 1 GB; about 6.2 GiB free in the Docker VM, 2 GiB of it
+#: kept back for backend peaks and builds → "provisionally 4 warm, at most 2
+#: working at the same time". Constants, not settings: changing them is a
+#: measured decision, not a knob.
+MAX_WARM_CHATS = 4
+MAX_WORKING_CHATS = 2
+#: A chat touched this recently is never closed to make room: a send that
+#: just got its window's target must still find the window when it types.
+EVICT_GRACE_SECONDS = 60
+#: How often the idle sweep looks.
+SWEEP_INTERVAL_SECONDS = 60
+#: A turn MC just sent counts as working this long before claude's own
+#: ``submit`` hook has written anything (window start + resume).
+TURN_START_GRACE_SECONDS = 30
+#: The chat's own turn signal (start-claude.sh --chat rewrites the agent's
+#: hooks to ``<chat dir>/.turn-signal``): ``<epoch> submit`` / ``<epoch> stop``.
+TURN_SIGNAL_FILENAME = ".turn-signal"
+
+#: Slash commands that would move a further chat's claude OFF its pinned
+#: session, with every alias the CLI accepts (live: the command table in the
+#: Claude Code 2.1.328 binary — guarded by a test against the installed
+#: binary): ``/clear`` (``/reset``, ``/new``) starts a new one under a random
+#: id; ``/resume`` (``/continue``) switches to some other one; ``/branch``
+#: creates a branch of the conversation; ``/teleport`` (``/tp``) sends it to
+#: or resumes one from claude.ai; ``/background`` (``/bg``) hands it to a
+#: background session and frees the window; ``/login`` / ``/logout`` swap
+#: the shared login for every chat and the agent. The chat's pin would keep
+#: naming the old file: the next restart would resume it, and everything
+#: after the switch would be silently gone. Matched on the first word —
+#: ``/resume <id>`` takes arguments, and a refused harmless message is
+#: cheaper than a lost one. ``/exit`` is fine: the next prompt resumes.
+SESSION_SWITCH_ALIASES: dict[str, tuple[str, ...]] = {
+    "clear": ("reset", "new"),
+    "resume": ("continue",),
+    "branch": (),
+    "teleport": ("tp",),
+    "background": ("bg",),
+    "login": (),
+    "logout": (),
+}
+SESSION_SWITCH_COMMANDS = frozenset(
+    {name for name in SESSION_SWITCH_ALIASES}
+    | {alias for aliases in SESSION_SWITCH_ALIASES.values() for alias in aliases}
+)
+
+
+def session_switch_command(text: str | None) -> str | None:
+    """``"/resume"`` etc. when ``text`` starts with a session-switching
+    command (case and surrounding space aside), else None."""
+    stripped = (text or "").strip()
+    if not stripped.startswith("/"):
+        return None
+    word = stripped.split(None, 1)[0][1:].lower()
+    return f"/{word}" if word in SESSION_SWITCH_COMMANDS else None
+
+
+#: Codes the caller answers with 404: the chat is not one this agent has.
+NOT_FOUND_CODES = frozenset({"chat_not_found"})
+#: Codes that are a refusal by content (409): asking again unchanged does not help.
+REFUSED_CODES = frozenset({
+    "not_a_container_agent", "not_a_claude_chat", "default_chat",
+    "bad_session_id", "bad_action", "snapshot_off_without_prompt",
+    "prompt_too_large",
+})
+#: A temporary state (503 + ``Retry-After``): the same message a little
+#: later goes through — every chat slot is taken right now.
+TEMPORARY_CODES = frozenset({"chats_busy"})
+#: What ``Retry-After`` says for ``chats_busy``: half the sweep interval —
+#: a turn ending or the sweep closing a chat frees a slot.
+CHATS_BUSY_RETRY_SECONDS = 30
+#: Codes where nobody answered (502): container down, docker/tmux failed,
+#: the prompt file could not be written. Same split as the ACP path
+#: ("the agent refuses" vs "nobody is there").
+UNREACHABLE_CODES = frozenset({
+    "agent_unreachable", "docker_timeout", "process_start_failed",
+    "process_stop_failed", "prompt_write_failed",
+})
+
+
+def http_answer(err: ClaudeChatRunnerError) -> tuple[int, dict[str, Any], dict[str, str]]:
+    """``(status, body, headers)`` for a router. ``detail`` never goes out
+    (it can hold paths and tmux text) — the router logs it. An unknown code
+    is a 502: never a 204 for something that did not arrive."""
+    if err.code in NOT_FOUND_CODES:
+        return 404, {"reason": "chat_not_found"}, {}
+    if err.code in REFUSED_CODES:
+        return 409, {"reason": "chat_process_refused", "error": err.code}, {}
+    if err.code in TEMPORARY_CODES:
+        return 503, {"reason": err.code, "error": err.code,
+                     "retryAfter": CHATS_BUSY_RETRY_SECONDS}, \
+            {"Retry-After": str(CHATS_BUSY_RETRY_SECONDS)}
+    return 502, {"reason": "chat_process_unreachable", "error": err.code}, {}
 
 
 # ── pure parts ─────────────────────────────────────────────────────────────
@@ -348,6 +460,20 @@ def _open_lock(slug: str) -> asyncio.Lock:
     return lock
 
 
+#: One lock over ALL agents around the working bound's check-and-note.
+_WORKING_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _working_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _WORKING_LOCKS.get(loop)
+    if lock is None:
+        lock = _WORKING_LOCKS[loop] = asyncio.Lock()
+    return lock
+
+
 async def _chat_windows(slug: str) -> tuple[bool, set[str]]:
     """``(chats session exists, its window names)`` — one ``list-windows -a``
     (a missing chats session is no error; a dead tmux server is)."""
@@ -437,6 +563,14 @@ async def ensure_window(
                                             (result.stderr or "").strip()[:200])
             # The last window closed ends the chats session.
             session_up = len(names) > 1
+        else:
+            # A process more: keep within MAX_WARM_CHATS (closes the least
+            # recently used quiet chat, or refuses ``chats_busy``).
+            names = await _make_room(slug, chat_id, names)
+            session_up = bool(names)
+        # A new process: whatever turn the folder still names (a ``submit``
+        # from before a container restart or a handoff kill) is over.
+        mark_closed(slug, chat_id)
         await _open_window(slug, chat_id, launch, session_up)
     logger.info("claude chat runner: opened %s (%s, snapshot_off=%s)",
                 target, launch.action, launch.snapshot_off)
@@ -472,9 +606,319 @@ async def load_chat_plan(agent: Any, chat_id: str) -> dict[str, Any]:
 
 
 async def open_chat(agent: Any, chat_id: str, *, handoff: str | None = None) -> str:
-    """Plan + window in one: what ``send_text`` calls for a ``chat_id``."""
+    """Plan + window in one: what ``send_text`` calls for a ``chat_id``.
+    Every call is a turn: it counts against :data:`MAX_WORKING_CHATS`
+    (refused ``chats_busy`` when that many OTHER chats are mid-turn) and
+    resets the chat's idle clock."""
     plan = await load_chat_plan(agent, chat_id)
-    return await ensure_window(
+    slug = getattr(agent, "slug", None)
+    if slug:
+        # Check and note under ONE lock over all agents: two sends that
+        # arrive together must not both see "one slot free".
+        async with _working_lock():
+            own = (slug, _valid_uuid(chat_id))
+            busy = await working_chats()
+            if own not in busy:
+                others = [c for c in busy if c != own]
+                if len(others) >= MAX_WORKING_CHATS:
+                    raise ClaudeChatRunnerError("chats_busy", f"{len(others)} chats working")
+            note_turn(slug, chat_id)
+    target = await ensure_window(
         agent, chat_id, plan["nativeSessionId"],
         planned_action=plan.get("action"), handoff=handoff,
     )
+    ensure_idle_sweeper()
+    return target
+
+
+# ── idle close and the warm / working bounds ──────────────────────────────
+
+#: Last turn MC sent per ``(slug, chat id)`` (wall clock). Only a floor for
+#: the activity below: the files on disk are the truth, and they survive a
+#: backend restart; this covers the seconds between a send and claude's
+#: first write.
+_LAST_TURN: dict[tuple[str, str], float] = {}
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def note_turn(slug: str, chat_id: str, now: float | None = None) -> None:
+    _LAST_TURN[(slug, _valid_uuid(chat_id))] = time.time() if now is None else now
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def last_activity(slug: str, chat_id: str) -> float:
+    """Wall-clock time of the chat's last sign of life: the turn MC sent,
+    the chat's own turn signal, or any transcript under its ``projects``
+    growing — the session file AND the nested ones (a subagent's turn
+    writes ``<session>/subagents/agent-*.jsonl``, not the main file). A
+    single long tool call writes nothing; that is what the pane check in
+    :func:`_pane_mid_turn` is for."""
+    chat_dir = host_chat_dir(slug, chat_id)
+    times = [_LAST_TURN.get((slug, _valid_uuid(chat_id)), 0.0),
+             _mtime(chat_dir / TURN_SIGNAL_FILENAME)]
+    times += [_mtime(p) for p in chat_dir.glob("projects/**/*.jsonl")]
+    return max(times)
+
+
+def _last_signal(slug: str, chat_id: str) -> str | None:
+    path = host_chat_dir(slug, chat_id) / TURN_SIGNAL_FILENAME
+    try:
+        with path.open("rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 256))
+            tail = f.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    lines = [x.split() for x in tail.splitlines() if x.strip()]
+    return lines[-1][-1] if lines and lines[-1] else None
+
+
+def chat_is_working(slug: str, chat_id: str, now: float | None = None) -> bool:
+    """Mid-turn: the chat's last turn signal is ``submit`` (no ``stop`` yet)
+    — and it showed life within :data:`IDLE_CLOSE_SECONDS`. An interrupted
+    turn (Esc) writes no ``stop``; without the second condition it would
+    count as working for ever."""
+    if _last_signal(slug, chat_id) != "submit":
+        return False
+    now = time.time() if now is None else now
+    return now - last_activity(slug, chat_id) < IDLE_CLOSE_SECONDS
+
+
+def _chat_dirs() -> list[tuple[str, str]]:
+    """Every further chat that has a folder on the host, as ``(slug, chat id)``."""
+    found: list[tuple[str, str]] = []
+    for chats in (_host_home() / ".mc" / "agents").glob(f"*/claude-config/{CHATS_DIRNAME}"):
+        slug = chats.parent.parent.name
+        if not _SLUG_RE.match(slug):
+            continue
+        for entry in chats.iterdir() if chats.is_dir() else ():
+            try:
+                found.append((slug, _valid_uuid(entry.name)))
+            except ClaudeChatRunnerError:
+                continue
+    return found
+
+
+def known_slugs() -> set[str]:
+    """Agents that may have chat windows: what this process opened, plus
+    every agent with a chats folder on disk (covers a backend restart)."""
+    return {s for s, _ in _LAST_TURN} | {s for s, _ in _chat_dirs()}
+
+
+async def _running_slugs(slugs: set[str]) -> set[str]:
+    """The ones among ``slugs`` whose container runs — one ``docker ps``
+    instead of one ``docker exec`` per agent that ever had a chat (archived
+    chats keep their folder; a stopped container makes an exec wait). When
+    docker cannot be asked, all of them (the old way: each exec then
+    answers for itself)."""
+    if not slugs:
+        return set()
+    try:
+        result = await _docker(["docker", "ps", "--format", "{{.Names}}"])
+    except ClaudeChatRunnerError:
+        return set(slugs)
+    if result.returncode != 0:
+        return set(slugs)
+    running = {line.strip() for line in (result.stdout or "").splitlines()}
+    return {s for s in slugs if f"mc-agent-{s}" in running}
+
+
+async def _open_chat_windows(slugs: set[str]) -> set[tuple[str, str]]:
+    """``(slug, chat id)`` of every chat window open on these agents."""
+    found: set[tuple[str, str]] = set()
+    for slug in sorted(await _running_slugs(slugs)):
+        try:
+            _up, names = await _chat_windows(slug)
+        except ClaudeChatRunnerError:
+            continue  # container down: its windows are gone with it
+        found |= {(slug, c) for c in _chat_ids(names)}
+    return found
+
+
+def _just_sent(key: tuple[str, str], now: float) -> bool:
+    """MC sent this chat a turn within :data:`TURN_START_GRACE_SECONDS` and
+    claude has not finished it: it counts as working before its own
+    ``submit`` hook has fired (a chat that was just opened has written
+    nothing yet)."""
+    sent = _LAST_TURN.get(key)
+    if sent is None or now - sent >= TURN_START_GRACE_SECONDS:
+        return False
+    sig = host_chat_dir(*key) / TURN_SIGNAL_FILENAME
+    return not (_last_signal(*key) == "stop" and _mtime(sig) >= sent)
+
+
+async def working_chats(now: float | None = None) -> list[tuple[str, str]]:
+    """Chats mid-turn over all agents: a turn MC just sent, or a ``submit``
+    without ``stop`` in a chat whose window is OPEN. A folder whose process
+    is gone (container restart, handoff kill, ``/exit``, an Esc interrupt —
+    the Stop hook does not fire for it) is no turn."""
+    now = time.time() if now is None else now
+    fresh = {k for k in _LAST_TURN if _just_sent(k, now)}
+    signalled = {k for k in set(_chat_dirs()) | set(_LAST_TURN)
+                 if k not in fresh and chat_is_working(k[0], k[1], now)}
+    if signalled:
+        signalled &= await _open_chat_windows({s for s, _ in signalled})
+    return sorted(fresh | signalled)
+
+
+def mark_closed(slug: str, chat_id: str) -> None:
+    """Appends ``<epoch> closed`` to the chat's turn signal: its process is
+    gone (or about to be replaced), so a ``submit`` in there is over. A
+    folder that is not there yet needs nothing; a write that fails is only
+    logged — the window check in :func:`working_chats` still holds."""
+    sig = host_chat_dir(slug, chat_id) / TURN_SIGNAL_FILENAME
+    if not sig.parent.is_dir():
+        return
+    try:
+        with sig.open("a", encoding="utf-8") as f:
+            f.write(f"{int(time.time())} closed\n")
+    except OSError as e:
+        logger.warning("claude chat runner: could not mark %s closed: %s",
+                       chat_target(slug, chat_id), e)
+
+
+async def _pane_mid_turn(slug: str, chat_id: str) -> bool | None:
+    """What the chat's pane says: True mid-turn (spinner, or a question /
+    permission prompt waiting for the operator), False at the idle prompt,
+    None when it cannot be read or recognised (then the time rule
+    decides)."""
+    from app.services.pane_state import parse_pane_state
+
+    pane = await capture_chat_pane(slug, chat_id)
+    if pane is None:
+        return None
+    status = parse_pane_state(pane, False)["status"]
+    if status in ("working", "permission_prompt"):
+        return True
+    if status == "idle":
+        return False
+    return None
+
+
+def _chat_ids(names: set[str]) -> list[str]:
+    out = []
+    for name in names:
+        if name.startswith(WINDOW_PREFIX):
+            try:
+                out.append(_valid_uuid(name[len(WINDOW_PREFIX):]))
+            except ClaudeChatRunnerError:
+                continue
+    return out
+
+
+async def _kill_chat_window(slug: str, chat_id: str) -> bool:
+    result = await _docker([
+        "docker", "exec", "-u", "agent", f"mc-agent-{slug}",
+        "tmux", "kill-window", "-t", chat_target(slug, chat_id),
+    ])
+    _LAST_TURN.pop((slug, _valid_uuid(chat_id)), None)
+    if result.returncode != 0:
+        return False
+    mark_closed(slug, chat_id)
+    return True
+
+
+async def _make_room(slug: str, chat_id: str, names: set[str]) -> set[str]:
+    """Before a new chat process: at most :data:`MAX_WARM_CHATS` open over
+    all agents. Closes the least recently active chat that is neither
+    working nor touched within :data:`EVICT_GRACE_SECONDS` (its session file
+    stays; the next prompt resumes it). Refuses ``chats_busy`` when none
+    qualifies. Returns this agent's window names after closing. Runs under
+    THIS agent's open lock; another agent's window is closed without its
+    lock — the grace time keeps a send in flight there safe."""
+    own = (slug, _valid_uuid(chat_id))
+    open_chats: list[tuple[str, str]] = [(slug, c) for c in _chat_ids(names)]
+    open_chats += sorted(await _open_chat_windows(known_slugs() - {slug}))
+    open_chats = [c for c in open_chats if c != own]
+    names = set(names)
+    now = time.time()
+    spared: set[tuple[str, str]] = set()
+    while len(open_chats) >= MAX_WARM_CHATS:
+        quiet = sorted((c for c in open_chats
+                        if c not in spared
+                        and not chat_is_working(*c, now=now)
+                        and now - last_activity(*c) >= EVICT_GRACE_SECONDS),
+                       key=lambda c: last_activity(*c))
+        victim = None
+        for candidate in quiet:
+            # Quiet on disk is not enough: one long tool call writes nothing
+            # for minutes. Mid-turn by its pane → never the one closed.
+            if _last_signal(*candidate) == "submit" and await _pane_mid_turn(*candidate):
+                spared.add(candidate)
+                continue
+            victim = candidate
+            break
+        if victim is None:
+            raise ClaudeChatRunnerError("chats_busy", f"{len(open_chats)} chats warm")
+        if not await _kill_chat_window(*victim):
+            raise ClaudeChatRunnerError("process_stop_failed", f"{victim[0]}:{victim[1]}")
+        logger.info("claude chat runner: closed %s to stay within %d warm chats",
+                    chat_target(*victim), MAX_WARM_CHATS)
+        open_chats.remove(victim)
+        if victim[0] == slug:
+            names.discard(window_name(victim[1]))
+    return names
+
+
+async def close_idle_chats(now: float | None = None) -> list[str]:
+    """Closes every further-chat window without a turn for
+    :data:`IDLE_CLOSE_SECONDS`; returns the closed targets. Nothing while
+    ``chat_record_enabled`` is off. Each close re-checks under the agent's
+    open lock, so a send that came in meanwhile keeps its window."""
+    if not getattr(settings, "chat_record_enabled", False):
+        return []
+    closed: list[str] = []
+    by_slug: dict[str, list[str]] = {}
+    for slug, cid in sorted(await _open_chat_windows(known_slugs())):
+        by_slug.setdefault(slug, []).append(cid)
+    for slug, cids in by_slug.items():
+        for cid in cids:
+            when = time.time() if now is None else now
+            if when - last_activity(slug, cid) < IDLE_CLOSE_SECONDS:
+                continue
+            if _last_signal(slug, cid) == "submit" and await _pane_mid_turn(slug, cid):
+                # ``submit`` without ``stop`` and a pane that still works
+                # (one long tool call, a question waiting): never killed —
+                # the turn and its answer would be lost without a word.
+                continue
+            async with _open_lock(slug):
+                when = time.time() if now is None else now
+                if when - last_activity(slug, cid) < IDLE_CLOSE_SECONDS:
+                    continue
+                if await _kill_chat_window(slug, cid):
+                    closed.append(chat_target(slug, cid))
+                    logger.info("claude chat runner: closed idle %s", chat_target(slug, cid))
+    return closed
+
+
+_SWEEPERS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Task]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+async def _sweep_forever() -> None:
+    while True:
+        await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+        try:
+            await close_idle_chats()
+        except Exception:  # noqa: BLE001 — the sweep must keep running
+            logger.warning("claude chat runner: idle sweep failed", exc_info=True)
+
+
+def ensure_idle_sweeper() -> asyncio.Task | None:
+    """Starts the idle sweep on this event loop once (flag on only). Called
+    from the backend's lifespan (``app.main``) and again on every chat send
+    (restarts it if it died)."""
+    if not getattr(settings, "chat_record_enabled", False):
+        return None
+    loop = asyncio.get_running_loop()
+    task = _SWEEPERS.get(loop)
+    if task is None or task.done():
+        task = _SWEEPERS[loop] = loop.create_task(_sweep_forever())
+    return task
