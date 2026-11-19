@@ -295,7 +295,28 @@ export interface VoiceUsageSummary {
   per_minute_usd: number | null;
 }
 
+/** A chat of MC's chat record (ADR-103; S2: several per agent). */
+export type RecordChat = {
+  id: string;
+  title: string;
+  harness: string | null;
+  model: string | null;
+  legacyAgentId: string | null;
+  /** The agent's own chat — the one the agent row already stands for. */
+  agentDefault: boolean;
+  nativeSessionId: string | null;
+  pinned: boolean;
+  archived: boolean;
+  lastActivityAt: string | null;
+};
+
 export const api = {
+  // ── Chat record (ADR-103) ─────────────────────────────────────────────────
+  // 404 `chat_record_disabled` while CHAT_RECORD_ENABLED is off — callers
+  // treat any failure as "no record chats".
+  chatRecord: {
+    listChats: () => request<{ chats: RecordChat[] }>("/api/v1/chat-record/chats"),
+  },
   // ── Auth ──────────────────────────────────────────────────────────────────
   auth: {
     setupRequired: () => publicRequest<{ setup_required: boolean }>("/api/v1/auth/setup-required"),

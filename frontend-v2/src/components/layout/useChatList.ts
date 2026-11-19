@@ -41,6 +41,14 @@ export function useChatList(): ChatListSections & { waitingCount: number; loaded
     queryFn: () => api.groups.list({ includeArchived: true }),
     refetchInterval: poll,
   });
+  // Further chats of an agent (chats slice S2). The record answers 404
+  // while its flag is off: then the list is exactly the one before.
+  const { data: record } = useQuery({
+    queryKey: ["chat-record", "chats"],
+    queryFn: () => api.chatRecord.listChats(),
+    refetchInterval: poll,
+    retry: false,
+  });
   const inbox = useInbox();
 
   const sections = useMemo(
@@ -51,9 +59,10 @@ export function useChatList(): ChatListSections & { waitingCount: number; loaded
           groups: (Array.isArray(groups) ? groups : []).filter((g) => !g.archived_at),
           headRuns: inbox.headQuestions,
           approvals: inbox.approvals,
+          recordChats: Array.isArray(record?.chats) ? record.chats : [],
         }),
       ),
-    [dockerAgents, hostAgents, groups, inbox.headQuestions, inbox.approvals],
+    [dockerAgents, hostAgents, groups, record, inbox.headQuestions, inbox.approvals],
   );
 
   return { ...sections, waitingCount: inbox.count, loaded: dockerLoaded || hostLoaded };

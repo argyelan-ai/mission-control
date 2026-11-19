@@ -5421,6 +5421,7 @@
     "closeChats": "Chats schliessen",
     "chatList": "Chats",
     "newChat": "Neuer Chat",
+    "furtherChat": "{name} · Chat {n}",
     "sectionWaiting": "Wartet auf dich",
     "sectionToday": "Heute",
     "sectionEarlier": "Früher",
