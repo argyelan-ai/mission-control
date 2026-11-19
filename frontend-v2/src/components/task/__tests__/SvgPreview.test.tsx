@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+// Node's own stream class, imported rather than taken from the global scope:
+// in the vmForks pool the test's global object is jsdom's window, which has
+// no ReadableStream (Node's fetch Response is still there). This is the class
+// that Response reads its body from, in either pool.
+import { ReadableStream } from "node:stream/web";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { FilePreview } from "../FilePreview";
 import { SVG_SOURCE_MAX_BYTES, SVG_SOURCE_MAX_LINES, SVG_HIGHLIGHT_MAX_BYTES } from "../SvgPreview";
