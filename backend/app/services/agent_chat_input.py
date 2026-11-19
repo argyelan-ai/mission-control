@@ -879,8 +879,14 @@ async def _wait_for_send_readiness(agent) -> None:
 
 
 async def send_text(agent, text: str, *, origin: str | None = None,
-                    context: str | None = None) -> ChatReset | None:
+                    context: str | None = None, chat_id: str | None = None) -> ChatReset | None:
     """Types ``text`` into the agent's live session.
+
+    ``chat_id`` (headless omp agents, record flag on — chats slice S2,
+    ``acp_chat_chats.resolve_chat``): a further chat of the agent; the
+    daemon runs the text in that chat's own session. None = the agent's
+    own chat, as before. Any other kind of agent refuses it
+    (``InputNotSupportedError``).
 
     ``context`` (headless/ACP agents only, ``chat_run_context``): a block the
     chat daemon puts in front of ``text`` for the model only — what the
@@ -928,6 +934,8 @@ async def send_text(agent, text: str, *, origin: str | None = None,
 
     kind = _target_kind(agent)
     slug = agent.slug
+    if chat_id and kind not in _ACP_KINDS:
+        raise InputNotSupportedError()
 
     if kind in _ACP_KINDS:
         # Kopflos: kein Fenster, kein Bereitschafts-Tor, kein Recycler-Marker
@@ -942,7 +950,9 @@ async def send_text(agent, text: str, *, origin: str | None = None,
         # eingereiht angezeigte Nachricht war weg (Operator-Befund 09.10.2026).
         # Lenken MITTEN im Zug gibt es ueber ACP nicht: ein zweites
         # ``session/prompt`` bricht bei omp den laufenden Zug ab.
-        transport = transport_for(agent)
+        # The one-argument call when no further chat is named: the wire and
+        # every caller stay as before the chats slice.
+        transport = transport_for(agent, chat_id=chat_id) if chat_id else transport_for(agent)
         reset_command = await _acp_session_reset_command(agent, text)
         if reset_command and not reset_command[2]:
             word, state, _own = reset_command
@@ -1106,6 +1116,8 @@ async def send_keys(agent, keys: list[str]) -> None:
 
     kind = _target_kind(agent)
     slug = agent.slug
+    if chat_id and kind not in _ACP_KINDS:
+        raise InputNotSupportedError()
 
     if kind in _ACP_KINDS:
         # Der Stop-Knopf des Composers schickt genau ``["Escape"]`` — das ist

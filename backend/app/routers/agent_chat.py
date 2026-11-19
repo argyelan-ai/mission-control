@@ -62,7 +62,7 @@ from app.services.reference_ingest import (
     store_reference,
 )
 from app.models.activity import ActivityEvent
-from app.services import chat_actions, chat_media, chat_run_context, chat_task_steps, commit_llm
+from app.services import acp_chat_chats, chat_actions, chat_media, chat_run_context, chat_task_steps, commit_llm
 from app.services.activity import emit_event
 from app.services.chat_changes import aggregate_changes
 from app.services.chat_diff import capture_texts
@@ -135,6 +135,9 @@ _DISALLOWED_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f]")
 
 class ChatInputBody(BaseModel):
     text: str
+    #: A further chat of this agent (chats slice S2, record flag on); None =
+    #: the agent's own chat, as before.
+    chatId: uuid.UUID | None = None
 
 
 class ChatKeysBody(BaseModel):
@@ -1304,7 +1307,14 @@ async def post_chat_input(
     (decided 12.10.2026), so chat refuses it outright rather than letting
     the agent's own CLI act on it unsupervised. A ``/new`` or ``/clear`` that
     became a new chat session is recorded as the activity event
-    ``chat.session_reset`` with who sent it (incident 21.10.2026)."""
+    ``chat.session_reset`` with who sent it (incident 21.10.2026).
+
+    Chats slice S2, only while ``CHAT_RECORD_ENABLED`` is on, headless omp
+    agents only (``acp_chat_chats``): ``chatId`` names a further chat of
+    this agent (404 ``chat_not_found`` for anything else, 404
+    ``chat_record_disabled`` with the flag off); ``/new`` / ``/clear``
+    answers 201 ``{"newChat": <chat>}`` — a further chat in the record,
+    opened by the daemon on its first message — instead of a reset."""
     agent = await _load_agent_or_404(agent_id, session)
 
     if not body.text or not body.text.strip():
@@ -1319,12 +1329,27 @@ async def post_chat_input(
             status_code=422, detail="text contains disallowed control characters"
         )
 
+    # Chats slice S2 (``acp_chat_chats``): which chat the text goes to, and
+    # ``/new`` as a further chat instead of a reset — both only while the
+    # chat record is on; without it nothing below changes.
+    try:
+        chat_id = await acp_chat_chats.resolve_chat(session, current_user, agent, body.chatId)
+    except acp_chat_chats.ChatRecordDisabledError:
+        return JSONResponse(status_code=404, content={"reason": "chat_record_disabled"})
+    except acp_chat_chats.ChatNotFoundError:
+        return JSONResponse(status_code=404, content={"reason": "chat_not_found"})
+    new_chat = await acp_chat_chats.new_chat_for_reset(session, current_user, agent, body.text)
+    if new_chat is not None:
+        # The conversation it was typed in stays as it is — its own chat.
+        return JSONResponse(status_code=201, content={"newChat": new_chat})
+
     try:
         # The composer: the operator's own text — the only one a chat card
         # may offer to send again (headless agents; ignored elsewhere).
+        extra = {"chat_id": chat_id} if chat_id else {}
         reset = await send_text(
             agent, body.text, origin=ORIGIN_OPERATOR,
-            context=await _run_context_for(agent, session),
+            context=await _run_context_for(agent, session), **extra,
         )
     except InstallCommandBlockedError as e:
         return JSONResponse(
