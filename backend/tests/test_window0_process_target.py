@@ -61,8 +61,13 @@ def test_recycler_targets_window0_not_the_first_claude():
 def test_window_cli_pid_picks_window0_even_with_a_lower_pid_chat(tmp_path: Path):
     """The live shape: the chat's claude is started FIRST (lower pid), window
     0 runs claude as a grandchild under a restart loop (entrypoint.sh)."""
+    # A script, not a copy of `sleep`: on uutils coreutils (Ubuntu 26.04, the
+    # CI runner) `sleep` is a multicall binary that dispatches on argv[0] —
+    # a copy named fakecli exits at once ("unknown program"), nothing runs.
+    # The script's shell keeps comm=fakecli while `sleep` runs as its child.
     cli = tmp_path / "fakecli"
-    shutil.copy(shutil.which("sleep"), cli)
+    cli.write_text('#!/bin/sh\nsleep "$1"\nexit 0\n')
+    cli.chmod(0o755)
     sock = tmp_path / "tmux"
     sock.mkdir()
     env = {**os.environ, "TMUX_TMPDIR": str(sock), "TMPDIR": str(tmp_path)}
@@ -81,6 +86,10 @@ def test_window_cli_pid_picks_window0_even_with_a_lower_pid_chat(tmp_path: Path)
         ).returncode == 0
         time.sleep(0.5)
         chat_pid = tmux("display-message", "-p", "-t", "chats-rex:chat-1", "#{pane_pid}").stdout.strip()
+        # Both sessions must still run — an empty pid on both sides used to
+        # pass the precondition below and fail only as ('', '').
+        assert chat_pid.isdigit(), "precondition: the chat's pane is alive"
+        assert Path(f"/proc/{chat_pid}/comm").read_text().strip() == "fakecli"
 
         res = subprocess.run(
             ["bash", "-c", f'. "{LIB}"\npgrep -x fakecli | head -1\necho ---\nwindow_cli_pid "rex:0" fakecli\n'],
