@@ -315,6 +315,15 @@ class ChatRecordSync:
 
         async with database.async_session_maker() as db:
             stats = await import_all(db)
+        try:
+            # After the import: a model-only switch is settled by the usage
+            # line the import just wrote (F12); orphans by the clock (F14).
+            from app.services import chat_switch
+
+            async with database.async_session_maker() as db:
+                await chat_switch.sweep_orphans(db)
+        except Exception:  # noqa: BLE001 — the switch upkeep never stops the import
+            logger.warning("chat record sweep: switch upkeep failed", exc_info=True)
         if stats.errors:
             logger.warning("chat record sweep: %d file(s) failed: %s", len(stats.errors), stats.errors[:5])
         self.last = stats
