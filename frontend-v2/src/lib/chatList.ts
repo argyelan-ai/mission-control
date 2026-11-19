@@ -16,6 +16,7 @@
  * Pure: no React, no fetching — `components/layout/useChatList.ts` loads.
  */
 import type { Agent, Approval } from "@/lib/types";
+import type { RecordChat } from "@/lib/api";
 import type { GroupSummary } from "@/lib/groupTypes";
 import type { HeadRun } from "@/lib/heads";
 import { openHeadQuestions } from "@/lib/inbox";
@@ -34,6 +35,14 @@ export type ChatListEntry = {
   at: string | null;
   state: ChatListState;
   href: string;
+  /**
+   * A further chat of an agent (chats slice S2, the record flag on): its
+   * record id, and its number among the agent's chats (the agent row is
+   * chat 1). The row names it "<agent> · chat <n>" while it carries no
+   * title of its own.
+   */
+  chatId?: string;
+  ordinal?: number;
 };
 
 export type ChatListSections = {
@@ -47,7 +56,16 @@ export type ChatListInput = {
   groups: Pick<GroupSummary, "id" | "name" | "status" | "created_at" | "last_message">[];
   headRuns: HeadRun[];
   approvals: Pick<Approval, "agent_id" | "status">[];
+  /** Chats of MC's chat record; empty while the record is off. */
+  recordChats?: Pick<
+    RecordChat,
+    "id" | "title" | "harness" | "legacyAgentId" | "agentDefault" | "archived" | "lastActivityAt" | "createdAt"
+  >[];
 };
+
+/** The one harness whose chat daemon holds further chats (S2: omp over ACP
+ *  in its container — the backend refuses a chat id for any other). */
+const FURTHER_CHAT_HARNESS = "omp";
 
 /** The later of two ISO times; null only when both are missing. */
 function later(a: string | null | undefined, b: string | null | undefined): string | null {
@@ -73,6 +91,52 @@ export function buildChatList(input: ChatListInput): ChatListEntry[] {
       at: agent.last_task_activity_at ?? null,
       state: pending.has(agent.id) ? "waiting" : isAgentWorking(agent.status) ? "working" : "idle",
       href: chatEntryHref("agent", agent.id),
+    });
+  }
+
+  // Further chats of an agent (S2): one row each, next to the agent's own
+  // row, numbered 2, 3, … by when they were created — never by the list's
+  // order (the record sorts by activity, so writing in one chat would
+  // renumber the others). The agent's default chat IS the agent row; an
+  // archived chat, one of an agent not listed, or one of a harness whose
+  // daemon holds no further chats (only omp does) shows nothing.
+  const listed = new Map(
+    input.agents.filter((a) => a.status !== "archived").map((a) => [a.id, a] as const),
+  );
+  const further = (input.recordChats ?? []).filter(
+    (c) =>
+      !c.agentDefault &&
+      !c.archived &&
+      c.harness === FURTHER_CHAT_HARNESS &&
+      c.legacyAgentId &&
+      listed.has(c.legacyAgentId),
+  );
+  const created = [...further].sort(
+    (a, b) =>
+      (a.createdAt ?? "\uffff").localeCompare(b.createdAt ?? "\uffff") || a.id.localeCompare(b.id),
+  );
+  const ordinalOf = new Map<string, number>();
+  const counts = new Map<string, number>();
+  for (const chat of created) {
+    const n = (counts.get(chat.legacyAgentId as string) ?? 1) + 1;
+    counts.set(chat.legacyAgentId as string, n);
+    ordinalOf.set(chat.id, n);
+  }
+  for (const chat of further) {
+    const agent = listed.get(chat.legacyAgentId as string)!;
+    const n = ordinalOf.get(chat.id)!;
+    const ownTitle = chat.title && chat.title !== agent.name ? chat.title : null;
+    entries.push({
+      key: `chat:${chat.id}`,
+      kind: "agent",
+      id: agent.id,
+      title: ownTitle ?? agent.name,
+      at: chat.lastActivityAt ?? null,
+      // The agent's state is its own chat's; a further chat claims none.
+      state: "idle",
+      href: `${chatEntryHref("agent", agent.id)}&chat=${encodeURIComponent(chat.id)}`,
+      chatId: chat.id,
+      ordinal: ownTitle ? undefined : n,
     });
   }
 

@@ -179,7 +179,7 @@
    {"id": "chat-resume", "label": "Session resume after restart", "cells": {
     "claude": {"status": "open", "note": "no resume-id logic found for the tmux path"},
     "openclaude": {"status": "open", "note": "same as claude"},
-    "omp": {"status": "yes", "note": "`session/load` of the stored id; on failure a new session and a reset card", "evidence": ["docs/specs/chat-over-acp.md:228-231", "docker/omp-bridge/acp_chat.py:538"]},
+    "omp": {"status": "yes", "note": "`session/load` of the stored id; on failure a new session and a reset card. With the chat record on, each further chat of the agent resumes its own pinned session (chats slice S2)", "evidence": ["docs/specs/chat-over-acp.md:228-231", "docker/omp-bridge/acp_chat.py:538", "docker/omp-bridge/acp_chat_pool.py:186"]},
     "hermes": {"status": "open", "note": "the spec names one contract for omp and hermes; hermes resume not read", "evidence": ["docs/specs/chat-over-acp.md:16"]},
     "kimi": {"status": "no", "note": "input reaches the container TUI, but there is no transcript adapter — the chat shows nothing", "since": "2026-11-02", "recheck": "kimi entry in transcript_adapters._BUILDERS", "evidence": ["backend/app/services/transcript_adapters.py:366-376"]},
     "grok": {"status": "no", "note": "no transcript adapter and no chat input channel", "since": "2026-11-02", "recheck": "grok in transcript_adapters._BUILDERS or acp_chat_transport.headless_chat_kind", "evidence": ["backend/app/services/transcript_adapters.py:343-353", "backend/app/services/agent_chat_input.py:651-656"]},

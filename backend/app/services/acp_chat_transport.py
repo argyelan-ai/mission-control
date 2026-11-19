@@ -200,10 +200,17 @@ class DockerCtlTransport:
     auf die gewartet wird — die gehoert auf die Event-Loop, nicht in den
     geteilten Thread-Pool des Tailers."""
 
-    def __init__(self, slug: str):
+    def __init__(self, slug: str, chat_id: str | None = None):
+        """``chat_id``: a further chat of this agent (chats slice S2,
+        ``acp_chat_chats``) — every op then names it (``chatId``) and the
+        daemon runs it in that chat's own session. None = the agent's own
+        chat; the request stays byte-identical to before."""
         self._slug = slug
+        self._chat_id = chat_id
 
     def _argv(self, op: str, payload: dict[str, Any] | None) -> list[str]:
+        if self._chat_id:
+            payload = {**(payload or {}), "chatId": self._chat_id}
         # ``-u agent`` und ``LANG=C.UTF-8`` wie in ``agent_chat_input._docker_argv``:
         # ohne die richtige Locale verstuemmelt der Container mehrbytige Zeichen
         # im Prompt-Text.
@@ -352,10 +359,15 @@ class HttpCtlTransport:
         return await self._call("answer", _answer_payload(id, action, content))
 
 
-def transport_for(agent) -> ChatTransport:
+def transport_for(agent, chat_id: str | None = None) -> ChatTransport:
     """Der Steuerkanal dieses Agenten. ``InputNotSupportedError`` fuer jeden,
     der gar nicht kopflos chattet — dieselbe Ausnahme und derselbe Klassierer
     (``_target_kind``), mit dem die Tastendruck-Pfade ihre Kanaele waehlen.
+
+    ``chat_id``: a further chat of the agent (chats slice S2) — only the
+    omp container daemon holds those; any other channel refuses it
+    (``InputNotSupportedError``) instead of sending it to the agent's own
+    chat.
 
     Import funktionslokal: ``agent_chat_input`` importiert dieses Modul auf
     Modulebene, andersherum waere es ein Zirkel."""
@@ -363,7 +375,9 @@ def transport_for(agent) -> ChatTransport:
 
     kind = _target_kind(agent)
     if kind == "acp-docker":
-        return DockerCtlTransport(agent.slug)
+        return DockerCtlTransport(agent.slug, chat_id=chat_id) if chat_id else DockerCtlTransport(agent.slug)
+    if chat_id:
+        raise InputNotSupportedError()
     if kind == "acp-http":
         return HttpCtlTransport()
     raise InputNotSupportedError()

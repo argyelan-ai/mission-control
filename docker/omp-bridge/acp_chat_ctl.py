@@ -19,6 +19,8 @@ Examples:
     acp_chat_ctl.py new_session --json '{"mode": "queue", "requestId": "…"}'
     acp_chat_ctl.py config --json '{"id": "thinking", "value": "high"}'
     acp_chat_ctl.py cancel
+    acp_chat_ctl.py prompt --json '{"text": "hi", "chatId": "<record chat uuid>"}'
+    acp_chat_ctl.py chats
     acp_chat_ctl.py answer --json '{"id": "el-…", "action": "accept", "content": {"value": "Yes"}}'
 
 `requestId` is how MC's backend names its own `new_session` request; a
@@ -36,7 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import acp_chat  # noqa: E402
 
-OPS = ("prompt", "cancel", "config", "state", "new_session", "queue_clear", "answer")
+OPS = ("prompt", "cancel", "config", "state", "new_session", "queue_clear", "answer", "chats")
 
 EXIT_OK = 0
 EXIT_NOT_OK = 2
