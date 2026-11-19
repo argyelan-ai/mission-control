@@ -813,3 +813,53 @@ async def test_after_stop_and_switch_the_interrupted_turns_usage_does_not_decide
     await _add_event(chat.id, "s-old", "u2:usage:0", {
         "kind": "usage", "uuid": "u2", "ts": "2099-01-01T00:01:00Z", "model": "qwen-b", "inputTokens": 1})
     assert (await _get(chat.id, out["eventId"]))["status"] == "done"
+
+
+# ── A refused request leaves a pending model-only switch alone ─────────────
+
+
+async def _assert_model_switch_survives(chat_id, event_id):
+    """The model-only row is still pending, and the answer that later
+    arrives settles it: the header follows the model the harness runs."""
+    assert (await _get(chat_id, event_id))["status"] == "pending"
+    await _add_event(chat_id, "s-old", "u7:usage:0", {
+        "kind": "usage", "uuid": "u7", "ts": "2099-01-01T00:00:00Z", "model": "qwen-b", "inputTokens": 1})
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        await chat_switch.sweep_orphans(s)
+    assert (await _get(chat_id, event_id))["status"] == "done"
+    assert (await _chat(chat_id)).model == "qwen-b"
+
+
+async def test_a_switch_refused_for_a_running_turn_keeps_the_model_switch(flag_on, make_agent, driver):
+    """The operator switches the model, sends a message, then taps switch
+    again while the turn runs: the 409 must not cancel the model switch."""
+    _agent, chat, rts = await _world(make_agent)
+    first = await _switch(chat.id, harness="omp", runtime_id=rts["local"].id, model="qwen-b")
+    driver.busy = True
+    with pytest.raises(SwitchError) as err:
+        await _switch(chat.id, harness="omp", runtime_id=rts["cloud"].id, model="gpt-x")
+    assert (err.value.status, err.value.code) == (409, "turn_running")
+    await _assert_model_switch_survives(chat.id, first["eventId"])
+
+
+async def test_a_switch_refused_for_a_locked_box_keeps_the_model_switch(flag_on, make_agent, driver, monkeypatch):
+    _agent, chat, rts = await _world(make_agent)
+    first = await _switch(chat.id, harness="omp", runtime_id=rts["local"].id, model="qwen-b")
+
+    async def _locked(runtime):
+        return "Cloud is busy."
+
+    monkeypatch.setattr(chat_switch, "box_lock_for", _locked)
+    with pytest.raises(SwitchError) as err:
+        await _switch(chat.id, harness="omp", runtime_id=rts["cloud"].id, model="gpt-x")
+    assert (err.value.status, err.value.code) == (423, "box_locked")
+    await _assert_model_switch_survives(chat.id, first["eventId"])
+
+
+async def test_a_refused_switch_back_keeps_the_model_switch(flag_on, make_agent, driver):
+    _agent, chat, rts = await _world(make_agent)
+    first = await _switch(chat.id, harness="omp", runtime_id=rts["local"].id, model="qwen-b")
+    with pytest.raises(SwitchError) as err:
+        await _back(chat.id)
+    assert (err.value.status, err.value.code) == (409, "nothing_to_switch_back_to")
+    await _assert_model_switch_survives(chat.id, first["eventId"])
