@@ -222,8 +222,9 @@ def test_aliases_match_the_installed_claude_binary():
 
 
 # The ONE gate is ``agent_chat_input.send_text`` (the router path for a
-# Claude chat cannot be reached yet: ``acp_chat_chats.resolve_chat`` admits
-# only omp). It refuses before the chat's process is even opened.
+# Claude chat is reachable: ``acp_chat_chats.resolve_chat`` admits omp and
+# Claude chats, the latter only with ``chat_record_enabled``). It refuses
+# before the chat's process is even opened.
 
 
 @pytest.fixture
