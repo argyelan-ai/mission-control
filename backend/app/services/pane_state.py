@@ -347,6 +347,41 @@ async def capture_pane(agent) -> str | None:
     return "\n".join(lines[-_PANE_TAIL_LINES:])
 
 
+#: The probe inside the container. ``$1`` = the agent's chats session, ``$2``
+#: = the process name. Exit codes are pgrep's: 0 found, 1 provably none,
+#: >1 pgrep's own failure. A further chat (``claude_chat_runner``, chats S3)
+#: runs its own claude in the ``chats-<slug>`` tmux session — those process
+#: trees are not the agent's window-0 CLI, so they are left out; without that
+#: a dead window-0 claude read "alive" while any chat ran (review blocker on
+#: #1044). No chats session (every agent before S3, every omp agent) leaves
+#: plain ``pgrep -x``. ``=`` pins the exact session name (no prefix match).
+_PROCESS_ALIVE_SCRIPT = r"""
+pids=$(pgrep -x "$2"); rc=$?
+[ "$rc" -eq 0 ] || exit "$rc"
+skip=""
+front=$(tmux list-panes -s -t "=$1" -F '#{pane_pid}' 2>/dev/null)
+while [ -n "$front" ]; do
+    skip="$skip $front"
+    next=""
+    for p in $front; do next="$next $(pgrep -P "$p")"; done
+    front=$(echo $next)
+done
+for p in $pids; do
+    case " $skip " in *" $p "*) ;; *) exit 0 ;; esac
+done
+exit 1
+"""
+
+
+def _process_alive_argv(slug: str, process_name: str) -> list[str]:
+    from app.services.claude_chat_runner import chats_session
+
+    return [
+        "docker", "exec", "-u", "agent", f"mc-agent-{slug}",
+        "sh", "-c", _PROCESS_ALIVE_SCRIPT, "sh", chats_session(slug), process_name,
+    ]
+
+
 _PROCESS_ALIVE_CACHE_TTL_SECONDS = 30
 _process_alive_cache: dict[tuple[str, str], tuple[float, bool]] = {}
 
@@ -402,7 +437,7 @@ async def process_alive(agent, process_name: str) -> bool | None:
     if cached is not None and (now - cached[0]) < _PROCESS_ALIVE_CACHE_TTL_SECONDS:
         return cached[1]
 
-    argv = ["docker", "exec", "-u", "agent", f"mc-agent-{slug}", "pgrep", "-x", process_name]
+    argv = _process_alive_argv(slug, process_name)
 
     try:
         result = await asyncio.to_thread(

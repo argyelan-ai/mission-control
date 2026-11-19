@@ -141,3 +141,26 @@ subtree_busy() {
     esac
     [ $(( now - prev )) -ge "$RECYCLER_BUSY_MIN_JIFFIES" ]
 }
+
+# ── chats S3: window 0's CLI, not "the first one in the container" ─────────
+# window_cli_pid <tmux-target> <name> — pid of the process named exactly
+# <name> (comm, as `pgrep -x`) in the process tree of the tmux pane
+# <tmux-target>, pane pid included, shallowest first. Empty if the pane or
+# such a process is missing. A further chat runs its own claude in the
+# chats-<slug> session; `pgrep -x claude | head -1` (lowest pid) picked that
+# one as soon as window 0's claude had been respawned with a higher pid —
+# the chat's RSS then decided window 0's recycle (review blocker on #1044).
+window_cli_pid() {
+    local target="$1" name="$2" root p comm
+    [ -n "$target" ] && [ -n "$name" ] || return 0
+    root=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null || true)
+    case "$root" in ''|*[!0-9]*) return 0 ;; esac
+    for p in $(subtree_pids "$root" 2>/dev/null); do
+        comm=$(cat "/proc/$p/comm" 2>/dev/null || true)
+        if [ "$comm" = "$name" ]; then
+            echo "$p"
+            return 0
+        fi
+    done
+    return 0
+}

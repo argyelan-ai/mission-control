@@ -404,9 +404,13 @@ async def test_process_alive_argv_construction_and_true_when_found(monkeypatch):
     agent = _StubAgent(agent_runtime="cli-bridge", slug="rex")
     result = await process_alive(agent, "claude")
 
+    # The probe runs ``pgrep -x claude`` minus the chats-<slug> session's
+    # process trees (chats S3, see test_window0_process_target.py).
     assert captured_argv == [
-        "docker", "exec", "-u", "agent", "mc-agent-rex", "pgrep", "-x", "claude",
+        "docker", "exec", "-u", "agent", "mc-agent-rex",
+        "sh", "-c", pane_state._PROCESS_ALIVE_SCRIPT, "sh", "chats-rex", "claude",
     ]
+    assert 'pgrep -x "$2"' in pane_state._PROCESS_ALIVE_SCRIPT
     assert result is True
 
 
