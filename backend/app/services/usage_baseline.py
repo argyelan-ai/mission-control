@@ -24,7 +24,9 @@ overstated.
 
 Cost is the stored ``cost_usd`` — the list-price equivalent from
 ``model_prices`` at harvest time (subscriptions are not invoices). Rows
-without a price are counted in ``unpriced_events``.
+without a price are counted in ``unpriced_events``. ``local_cost_usd`` is the
+part of it from local rows, so cloud cost = ``cost_usd`` − ``local_cost_usd``
+(the Insights switch All · Cloud · Local).
 
 Days and weeks are counted in a zone (``tz``, IANA name). The query groups by
 UTC hour and each hour is moved into the zone here, so one code path serves
@@ -120,13 +122,14 @@ async def _lead_ids(session: AsyncSession) -> set:
 
 def _empty() -> dict:
     return {"events": 0, **{f: 0 for f in _TOKEN_FIELDS}, "total_tokens": 0,
-            "generated_tokens": 0, "cost_usd": 0.0, "unpriced_events": 0,
+            "generated_tokens": 0, "cost_usd": 0.0, "local_cost_usd": 0.0, "unpriced_events": 0,
             "local_tokens": 0, "local_output_tokens": 0, "local_generated_tokens": 0}
 
 
 def _finish(bucket: dict) -> dict:
     total, out = bucket["total_tokens"], bucket["output_tokens"]
     bucket["cost_usd"] = round(bucket["cost_usd"], 4)
+    bucket["local_cost_usd"] = round(bucket["local_cost_usd"], 4)
     bucket["local_share"] = bucket["local_tokens"] / total if total else None
     bucket["local_output_share"] = bucket["local_output_tokens"] / out if out else None
     return bucket
@@ -294,6 +297,7 @@ def _add(bucket: dict, local: bool, tokens: dict, r) -> None:
     bucket["cost_usd"] += float(r.cost or 0.0)
     bucket["unpriced_events"] += int(r.unpriced or 0)
     if local:
+        bucket["local_cost_usd"] += float(r.cost or 0.0)
         bucket["local_tokens"] += total
         bucket["local_output_tokens"] += tokens["output_tokens"]
         bucket["local_generated_tokens"] += generated
@@ -360,6 +364,10 @@ async def compute_weekly_baseline(
             "weeks": result_weeks}
 
 
+def _top(sources: dict[str, int] | None) -> str | None:
+    return max(sources.items(), key=lambda kv: kv[1])[0] if sources else None
+
+
 async def compute_daily_usage(
     session: AsyncSession,
     *,
@@ -370,7 +378,9 @@ async def compute_daily_usage(
     """Tokens and list-price cost per calendar day in ``tz`` for the Insights
     heatmap: every day of the window, oldest first, today last (partial).
     ``generated_tokens`` = input + output (no cache); ``top_source`` is the
-    source bucket with the most generated tokens that day."""
+    source bucket with the most generated tokens that day, and
+    ``top_source_local`` / ``top_source_cloud`` the same over only the local
+    or only the cloud rows (the Insights switch All · Cloud · Local)."""
     tzinfo = zone(tz)
     now = ensure_aware(now) if now is not None else utcnow()
     days = max(1, min(int(days), MAX_DAYS))
@@ -378,7 +388,7 @@ async def compute_daily_usage(
     first = today - timedelta(days=days - 1)
 
     buckets = {first + timedelta(days=i): _empty() for i in range(days)}
-    per_source: dict[date, dict[str, int]] = {}
+    per_source: dict[date, dict[str, dict[str, int]]] = {}
     since = await _box_since(session)
     since_hour = _floor_hour(since)
     mc_local = {d: _box_zero() for d in buckets}
@@ -388,8 +398,10 @@ async def compute_daily_usage(
         if bucket is None:
             continue
         _add(bucket, local, tokens, r)
-        by_source = per_source.setdefault(day, {})
-        by_source[source] = by_source.get(source, 0) + tokens["input_tokens"] + tokens["output_tokens"]
+        generated = tokens["input_tokens"] + tokens["output_tokens"]
+        for scope in ("all", "local" if local else "cloud"):
+            by_source = per_source.setdefault(day, {}).setdefault(scope, {})
+            by_source[source] = by_source.get(source, 0) + generated
         if _counts_against_box(r, local, since_hour):
             _mc_local_add(mc_local[day], tokens)
 
@@ -397,12 +409,13 @@ async def compute_daily_usage(
     since_day = since.astimezone(tzinfo).date() if since is not None else None
     out = []
     for day, bucket in buckets.items():
-        sources = per_source.get(day)
-        top = max(sources.items(), key=lambda kv: kv[1])[0] if sources else None
+        scopes = per_source.get(day, {})
+        top = {scope: _top(scopes.get(scope)) for scope in ("all", "local", "cloud")}
         box = None
         if since_day is not None and day >= since_day:
             box = box_days.get(day, _box_zero())
-        out.append({"date": day.isoformat(), **_finish(bucket), "top_source": top,
+        out.append({"date": day.isoformat(), **_finish(bucket), "top_source": top["all"],
+                    "top_source_local": top["local"], "top_source_cloud": top["cloud"],
                     **box_view(box, mc_local[day])})
     return {"generated_at": now.isoformat(), "start": first.isoformat(), "tz": tz or "UTC",
             "box_tracking_since": since.isoformat() if since is not None else None,

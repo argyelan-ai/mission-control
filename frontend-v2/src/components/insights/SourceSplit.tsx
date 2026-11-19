@@ -3,7 +3,8 @@
 /**
  * Insights → "Where usage comes from": this week's list-price equivalent by
  * source (backend buckets from usage_baseline.py) as one stacked bar plus a
- * list. Achromatic: the biggest source is the brightest step.
+ * list, for the page's switch (All · Cloud · Local). Achromatic: the biggest
+ * source is the brightest step.
  *
  *   ████████████████▓▓▓▓▓▓▒▒▒░░
  *   ■ You, interactive      $777   58 %
@@ -14,15 +15,15 @@
 import { useLocale, useTranslations } from "next-intl";
 import { C, alpha } from "@/lib/colors";
 import { formatShare, formatUsd, sourceLabel, type UsageWeek } from "@/lib/usage";
-import { sourceSplit } from "@/lib/insights";
+import { sourceSplit, type HeatMetric } from "@/lib/insights";
 
 const STEPS = [C.accent, alpha(C.accent, 0.66), alpha(C.accent, 0.42), alpha(C.accent, 0.22), C.borderActive];
 
-export function SourceSplit({ week }: { week: UsageWeek | undefined }) {
+export function SourceSplit({ week, metric = "all" }: { week: UsageWeek | undefined; metric?: HeatMetric }) {
   const t = useTranslations("insights.sources");
   const ts = useTranslations("insights.source");
   const locale = useLocale();
-  const { rows, rest } = sourceSplit(week, 4);
+  const { rows, rest } = sourceSplit(week, 4, metric);
   const all = [
     ...rows.map((r) => {
       const l = sourceLabel(r.source);
