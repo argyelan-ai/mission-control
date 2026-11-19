@@ -175,7 +175,8 @@ class SwitchBody(BaseModel):
 
     harness: str = Field(max_length=40)
     runtime_id: uuid.UUID | None = Field(default=None, alias="runtimeId")
-    model: str | None = Field(default=None, max_length=200)
+    #: The service's rule (no whitespace or control characters); empty = keep.
+    model: str | None = Field(default=None, max_length=200, pattern="^$|" + chat_switch.MODEL_PATTERN)
     #: Only needed while a turn runs (409 ``turn_running`` lists the options).
     mode: str | None = Field(default=None, max_length=40)
 

@@ -30,6 +30,7 @@ Everything runs behind ``CHAT_RECORD_ENABLED`` (the router checks it).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import uuid
@@ -37,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -63,10 +65,15 @@ FAILURE_CODES = frozenset(
         "model_not_applied",
         "model_not_offered",
         "orphaned",
+        "superseded",
     }
 )
 #: Codes the harness side may report (the rest are MC's own).
 REPORTABLE_CODES = frozenset({"process_start_failed", "new_session_failed", "model_unreachable", "provider_error"})
+#: A model name as the harnesses take it: ``sonnet``, ``claude-opus-4-1[1m]``,
+#: ``provider/model``, ``model:tag``. No whitespace or control characters —
+#: Claude Code gets it typed into its pane as ``/model <name>``.
+MODEL_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/@+\[\]-]{0,199}$"
 #: Event kinds the package reads; everything else (thinking, usage, media,
 #: tool output) stays out of the query.
 _PACKAGE_KINDS = ("message", "tool", "todo", "elicitation", "elicitation_result")
@@ -323,12 +330,19 @@ async def _reconcile_model_switch(session: AsyncSession, chat: Chat, row: ChatEv
             .order_by(ChatEvent.seq)
         )
     ).all()
+    # After ``stop_and_switch`` the stopped turn may still write its usage
+    # line, stamped after the switch and carrying the old model: one
+    # mismatch is let through before it counts as ``model_not_applied``.
+    grace = 1 if payload.get("stoppedTurn") else 0
     for usage in usages:
         ts = _aware(usage.ts)
         if switched_at is not None and ts is not None and ts < switched_at:
             continue  # a late import of an older turn, not the answer to the switch
         requested = (payload.get("to") or {}).get("model") or ""
         seen = (usage.payload or {}).get("model")
+        if not model_matches(requested, seen) and grace:
+            grace -= 1
+            continue
         if model_matches(requested, seen):
             chat.model = requested
             session.add(chat)
@@ -386,6 +400,46 @@ async def sweep_orphans(session: AsyncSession, *, now: datetime | None = None) -
     return touched
 
 
+async def _settle_before_request(session: AsyncSession, chat: Chat) -> None:
+    """Upkeep, then let the new request replace a pending MODEL-ONLY switch
+    (``superseded``): that one waits for an answer that a dead or stuck
+    process never gives, and must not block the chat for good. A pending
+    restart still blocks (409 ``switch_pending``) until it reports back or
+    the orphan cutoff passes. Commits what it changed."""
+    changed = await _upkeep(session, chat)
+    for row in await _switch_rows(session, chat.id):
+        payload = row.payload or {}
+        if payload.get("status") == "pending" and payload.get("path") == "model_only":
+            await _set_payload(
+                session, row, status="failed", finishedAt=_iso(utcnow()),
+                error={"code": "superseded", "detail": "a newer switch replaced it before an answer came"},
+            )
+            changed = True
+    if changed:
+        await session.commit()
+    if any((r.payload or {}).get("status") == "pending" for r in await _switch_rows(session, chat.id)):
+        raise SwitchError(409, "switch_pending")
+
+
+#: One switch request per chat at a time inside this process (the backend
+#: runs one worker); the row lock below covers a second process on Postgres.
+_CHAT_LOCKS: dict[uuid.UUID, asyncio.Lock] = {}
+
+
+def _chat_lock(chat_id: uuid.UUID) -> asyncio.Lock:
+    lock = _CHAT_LOCKS.get(chat_id)
+    if lock is None:
+        lock = _CHAT_LOCKS[chat_id] = asyncio.Lock()
+    return lock
+
+
+async def _lock_chat_row(session: AsyncSession, chat: Chat) -> None:
+    """``SELECT … FOR UPDATE`` on the chat (Postgres; SQLite ignores it):
+    held until :func:`_open_row` commits the pending row, so a parallel
+    request sees that row and gets 409 instead of a second switch."""
+    await session.exec(select(Chat.id).where(Chat.id == chat.id).with_for_update())
+
+
 # ── Requests ────────────────────────────────────────────────────────────
 
 
@@ -420,18 +474,18 @@ async def _check_pair(session: AsyncSession, harness: str, runtime_id: uuid.UUID
     return runtime
 
 
-async def _guard_turn(driver: SwitchDriver, agent: Any, chat: Chat, mode: str | None) -> None:
+async def _guard_turn(driver: SwitchDriver, agent: Any, chat: Chat, mode: str | None) -> bool:
     """F1 — never switch under a running turn. ``stop_and_switch`` stops it
-    first; there is no force path."""
+    first; there is no force path. Returns whether a turn was stopped."""
     busy = await driver.is_busy(agent, chat) if agent is not None else False
     if busy is False:
-        return
+        return False
     if mode == "stop_and_switch" and busy is True:
         try:
             await driver.stop_turn(agent, chat)
         except DriverUnavailable as exc:
             raise SwitchError(409, "cannot_stop_turn") from exc
-        return
+        return True
     raise SwitchError(
         409, "turn_running", options=list(SUPPORTED_BUSY_MODES), state="running" if busy else "unknown"
     )
@@ -439,7 +493,12 @@ async def _guard_turn(driver: SwitchDriver, agent: Any, chat: Chat, mode: str | 
 
 async def _open_row(session: AsyncSession, chat: Chat, current: ChatSession, payload: dict[str, Any]) -> ChatEvent:
     key = f"switch:{uuid.uuid4()}"
-    await _write(session, chat.id, current.id, key, payload)
+    try:
+        await _write(session, chat.id, current.id, key, payload)
+    except IntegrityError as exc:
+        # A parallel writer won the race: a clean 409, never a 500.
+        await session.rollback()
+        raise SwitchError(409, "switch_pending") from exc
     row = (
         await session.exec(select(ChatEvent).where(ChatEvent.chat_id == chat.id, ChatEvent.source_key == key))
     ).one()
@@ -472,6 +531,20 @@ async def request_switch(
     if mode is not None and mode not in SUPPORTED_BUSY_MODES:
         raise SwitchError(422, "mode_unsupported", options=list(SUPPORTED_BUSY_MODES))
     model = (model or "").strip() or None
+    if model is not None and not re.match(MODEL_PATTERN, model):
+        raise SwitchError(422, "bad_model")
+    async with _chat_lock(chat.id):
+        step = await _request_locked(session, chat, harness=harness, runtime_id=runtime_id, model=model, mode=mode)
+    if "handover" not in step:
+        return step
+    return await _hand_over(session, **step["handover"])
+
+
+async def _request_locked(session: AsyncSession, chat: Chat, *, harness: str, runtime_id: uuid.UUID | None,
+                          model: str | None, mode: str | None) -> dict[str, Any]:
+    """Everything up to the committed pending row, under the chat's lock.
+    Returns the final answer, or ``{"handover": …}`` for the start that
+    runs after the lock is released."""
     runtime = await _check_pair(session, harness, runtime_id)
     same_harness = harness == chat.harness
     same_runtime = runtime_id == chat.runtime_id
@@ -483,14 +556,12 @@ async def request_switch(
         # runtime switch (agent_runtime_switch), not a chat switch.
         raise SwitchError(409, "default_chat_follows_agent")
 
-    if await _upkeep(session, chat):
-        await session.commit()
-    if any((r.payload or {}).get("status") == "pending" for r in await _switch_rows(session, chat.id)):
-        raise SwitchError(409, "switch_pending")
+    await _settle_before_request(session, chat)
+    await _lock_chat_row(session, chat)
 
     agent = await _agent(session, chat)
     driver = driver_for(chat.harness if model_only else harness)
-    await _guard_turn(driver_for(chat.harness), agent, chat, mode)
+    stopped = await _guard_turn(driver_for(chat.harness), agent, chat, mode)
     if not same_runtime:
         lock = await box_lock_for(runtime)
         if lock:
@@ -517,6 +588,7 @@ async def request_switch(
         "ts": _iso(now),
         "status": "pending",
         "mode": mode,
+        "stoppedTurn": stopped,
         "from": old.as_dict(),
         "to": to,
         "package": None,
@@ -563,11 +635,11 @@ async def request_switch(
         **base, **package.as_dict(), "path": "restart", "action": action,
         "nativeSessionId": native, "tryNativeLoad": try_load,
     })
-    return await _hand_over(session, driver, agent, chat, row, action=action, native=native,
-                            try_load=try_load, package=package.text, to=to)
+    return {"handover": dict(driver=driver, agent=agent, chat=chat, row=row, action=action, native=native,
+                             try_load=try_load, package=package.text, to=to)}
 
 
-async def _hand_over(session, driver, agent, chat, row, *, action, native, try_load, package, to) -> dict[str, Any]:
+async def _hand_over(session, *, driver, agent, chat, row, action, native, try_load, package, to) -> dict[str, Any]:
     try:
         await driver.start(agent, chat, _start_request(
             row, chat, action=action, native=native, try_native_load=try_load, package=package, to=to,
@@ -587,11 +659,15 @@ async def switch_back(session: AsyncSession, user: Any, chat: Chat, *, mode: str
     after a failed switch there is none. Commits."""
     if mode is not None and mode not in SUPPORTED_BUSY_MODES:
         raise SwitchError(422, "mode_unsupported", options=list(SUPPORTED_BUSY_MODES))
-    if await _upkeep(session, chat):
-        await session.commit()
+    async with _chat_lock(chat.id):
+        step = await _back_locked(session, chat, mode=mode)
+    return await _hand_over(session, **step["handover"])
+
+
+async def _back_locked(session: AsyncSession, chat: Chat, *, mode: str | None) -> dict[str, Any]:
+    await _settle_before_request(session, chat)
+    await _lock_chat_row(session, chat)
     rows = await _switch_rows(session, chat.id)
-    if any((r.payload or {}).get("status") == "pending" for r in rows):
-        raise SwitchError(409, "switch_pending")
     last = next(
         (r for r in reversed(rows)
          if (r.payload or {}).get("path") in ("restart", "switch_back") and (r.payload or {}).get("status") in ("done", "failed")),
@@ -615,7 +691,7 @@ async def switch_back(session: AsyncSession, user: Any, chat: Chat, *, mode: str
     await _check_pair(session, harness, runtime_id)
 
     agent = await _agent(session, chat)
-    await _guard_turn(driver_for(chat.harness), agent, chat, mode)
+    stopped = await _guard_turn(driver_for(chat.harness), agent, chat, mode)
     if runtime_id != chat.runtime_id:
         lock = await box_lock_for(await _runtime(session, runtime_id))
         if lock:
@@ -647,6 +723,7 @@ async def switch_back(session: AsyncSession, user: Any, chat: Chat, *, mode: str
         "status": "pending",
         "path": "switch_back",
         "mode": mode,
+        "stoppedTurn": stopped,
         "action": "resume",
         "nativeSessionId": target_native,
         "tryNativeLoad": False,
@@ -657,8 +734,8 @@ async def switch_back(session: AsyncSession, user: Any, chat: Chat, *, mode: str
         "realTokens": None,
         "error": None,
     })
-    return await _hand_over(session, driver_for(harness), agent, chat, row, action="resume", native=target_native,
-                            try_load=False, package=package.text if package else None, to=to)
+    return {"handover": dict(driver=driver_for(harness), agent=agent, chat=chat, row=row, action="resume",
+                             native=target_native, try_load=False, package=package.text if package else None, to=to)}
 
 
 # ── The harness reports back ────────────────────────────────────────────
@@ -694,12 +771,21 @@ async def report_result(
     payload = row.payload or {}
     if payload.get("path") not in ("restart", "switch_back"):
         raise SwitchError(409, "switch_not_reportable")
-    if payload.get("status") != "pending":
-        if payload.get("status") == status:
-            return switch_out(row)  # a retried report
-        raise SwitchError(409, "switch_not_pending", current=payload.get("status"))
     if status not in ("done", "failed"):
         raise SwitchError(422, "bad_status")
+    late = False
+    if payload.get("status") != "pending":
+        if payload.get("status") == status:
+            return switch_out(row)  # a retried report (or a late failure of an orphan)
+        orphaned = payload.get("status") == "failed" and (payload.get("error") or {}).get("code") == "orphaned"
+        if not (status == "done" and orphaned):
+            raise SwitchError(409, "switch_not_pending", current=payload.get("status"))
+        # A start that outlasted the cutoff (cold model load): the new
+        # process runs, so MC's record follows — unless the chat moved on
+        # since (a newer switch row), then the report is too late to apply.
+        if any(r.seq > row.seq for r in await _switch_rows(session, chat.id)):
+            raise SwitchError(409, "switch_superseded")
+        late = True
 
     if status == "failed":
         code = (error or {}).get("code")
@@ -713,17 +799,11 @@ async def report_result(
         raise SwitchError(422, "native_session_required")
     if payload.get("path") == "switch_back" and native != payload.get("nativeSessionId"):
         raise SwitchError(409, "native_session_mismatch")
-    other = (
-        await session.exec(
-            select(Chat.id).where(
-                Chat.legacy_agent_id == chat.legacy_agent_id,
-                Chat.native_session_id == native,
-                Chat.id != chat.id,
-            )
-        )
-    ).first()
-    if other is not None:
-        raise SwitchError(409, "pinned_by_other_chat")
+    if chat.legacy_agent_id is not None:
+        # Pinned by, or recorded in, another chat of the agent (ADR-105).
+        owner = await chat_record.pinned_chat_id(session, chat.legacy_agent_id, native)
+        if owner is not None and owner != chat.id:
+            raise SwitchError(409, "pinned_by_other_chat")
 
     to = payload.get("to") or {}
     old = (await session.get(ChatSession, row.session_id))
@@ -751,6 +831,7 @@ async def report_result(
         session, row, status="done", finishedAt=_iso(now), nativeSessionId=native,
         nativeResume=bool(native_resume), used=bool(payload.get("package")) and not native_resume,
         toSessionRowId=str(new.id), realTokens=real_tokens,
+        **({"lateReport": True, "error": None} if late else {}),
     )
     await session.commit()
     return {"eventId": str(row.id), "seq": row.seq, **done}

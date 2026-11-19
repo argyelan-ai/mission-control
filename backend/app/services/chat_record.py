@@ -217,17 +217,13 @@ async def ensure_agent_chat(session: AsyncSession, agent: Any) -> Chat:
 
 async def chat_for_native(session: AsyncSession, agent: Any, native_session_id: str) -> Chat:
     """The chat a native session of ``agent`` belongs to: the chat that
-    pinned it (S2), otherwise the agent's default chat."""
-    pinned = (
-        await session.exec(
-            select(Chat).where(
-                Chat.legacy_agent_id == agent.id,
-                Chat.native_session_id == native_session_id[:200],
-            )
-        )
-    ).first()
-    if pinned is not None:
-        return pinned
+    pinned it (S2) or recorded it before a switch moved it on (ADR-105),
+    otherwise the agent's default chat."""
+    owner = await pinned_chat_id(session, agent.id, native_session_id)
+    if owner is not None:
+        chat = await session.get(Chat, owner)
+        if chat is not None:
+            return chat
     return await ensure_agent_chat(session, agent)
 
 
@@ -846,17 +842,19 @@ async def pin_native_session(session: AsyncSession, chat: Chat, native_session_i
     if chat.native_session_id == native:
         return 0
     if chat.native_session_id is not None:
-        raise ChatRecordConflict("already_pinned")
-    other = (
-        await session.exec(
-            select(Chat).where(
-                Chat.legacy_agent_id == chat.legacy_agent_id,
-                Chat.native_session_id == native,
-                Chat.id != chat.id,
+        # A switch (ADR-105) re-pins through its result route, only once
+        # the new session answered; a pin before that would move the chat
+        # off its old session early (F2). Say so instead of already_pinned.
+        pending = (
+            await session.exec(
+                select(ChatEvent.payload).where(ChatEvent.chat_id == chat.id, ChatEvent.kind == "switch")
             )
-        )
-    ).first()
-    if other is not None:
+        ).all()
+        if _has_pending_switch(pending):
+            raise ChatRecordConflict("switch_pending")
+        raise ChatRecordConflict("already_pinned")
+    owner = await pinned_chat_id(session, chat.legacy_agent_id, native)
+    if owner is not None and owner != chat.id:
         raise ChatRecordConflict("pinned_by_other_chat")
     chat.native_session_id = native
     session.add(chat)
@@ -872,16 +870,39 @@ async def pin_native_session(session: AsyncSession, chat: Chat, native_session_i
 
 
 async def pinned_chat_id(session: AsyncSession, agent_id: uuid.UUID, native_session_id: str) -> uuid.UUID | None:
-    """The chat that pinned this native session of the agent, or ``None``
-    (= the default chat). One lookup on ``uq_chats_agent_native``."""
-    return (
+    """The chat that owns this native session of the agent, or ``None``
+    (= the default chat). Owner = the chat that pins it now (one lookup on
+    ``uq_chats_agent_native``), else a non-default chat that recorded it
+    and switched away from it (ADR-105): a switch re-pins the chat to the
+    new session, and without this the old one would fall back to the
+    default chat and be imported a second time there."""
+    native = native_session_id[:200]
+    chats = Chat.__table__
+    pinned = (
         await session.execute(
-            sa_select(Chat.__table__.c.id).where(
-                Chat.__table__.c.legacy_agent_id == agent_id,
-                Chat.__table__.c.native_session_id == native_session_id[:200],
-            )
+            sa_select(chats.c.id).where(chats.c.legacy_agent_id == agent_id, chats.c.native_session_id == native)
         )
     ).scalar_one_or_none()
+    if pinned is not None:
+        return pinned
+    sessions = ChatSession.__table__
+    return (
+        await session.execute(
+            sa_select(sessions.c.chat_id)
+            .join(chats, chats.c.id == sessions.c.chat_id)
+            .where(
+                chats.c.legacy_agent_id == agent_id,
+                chats.c.agent_default.is_(False),
+                sessions.c.native_session_id == native,
+            )
+            .order_by(sessions.c.created_at.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+def _has_pending_switch(payloads: Iterable[Any]) -> bool:
+    return any(isinstance(p, dict) and p.get("status") == "pending" for p in payloads)
 
 
 async def update_chat(
