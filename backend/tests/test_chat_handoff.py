@@ -81,10 +81,41 @@ def test_one_message_is_clipped_to_max_msg_chars():
 
 @pytest.mark.parametrize(
     ("window", "budget"),
-    [(8_000, 4_000), (1_000_000, 32_000), (64_000, 16_000), (None, 8_000), (0, 8_000)],
+    [(8_000, 8_000), (1_000_000, 32_000), (64_000, 16_000), (None, 8_000), (0, 8_000)],
 )
 def test_budget_floor_and_cap(window, budget):
     assert budget_for_window(window) == budget
+
+
+def test_floor_is_8000_from_m1():
+    """M1: a 4k package lost ~25 points against 8k. A 16k window (25 % =
+    4 000) and a 32k window both get the 8 000 floor; above it the share
+    counts again."""
+    assert chat_handoff.BUDGET_FLOOR_TOKENS == 8_000
+    assert budget_for_window(16_000) == 8_000
+    assert budget_for_window(32_000) == 8_000
+    assert budget_for_window(40_000) == 10_000
+    assert budget_for_window(200_000) == 32_000  # cap: unmeasured, kept
+
+
+def test_token_estimate_is_3_3_chars_per_token():
+    """M1: 4 chars/token made packages ~20 % larger than estimated. A full
+    8 000-token package now holds at most 26 400 characters, not 32 000."""
+    assert chat_handoff.est_tokens("x" * 33) == 10
+    assert chat_handoff.est_tokens("x" * 26_400) == 8_000
+    assert chat_handoff.est_tokens("x" * 26_401) == 8_001
+    events = [_msg(i, "user" if i % 2 else "assistant", "x" * 1_500) for i in range(100)]
+    pkg = _build(events, budget=8_000)
+    assert len(pkg.text) <= 26_400
+    assert pkg.est_tokens <= 8_000
+    assert len(pkg.text) > 26_400 - chat_handoff.MAX_MSG_CHARS - 100  # the room is used
+
+
+def test_max_msg_chars_stays_2000():
+    """M1: keep 2 000 while the floor is at least 8 000 (600 only for a 4k
+    floor)."""
+    assert chat_handoff.MAX_MSG_CHARS == 2_000
+    assert chat_handoff.BUDGET_FLOOR_TOKENS >= 8_000
 
 
 def test_window_prefers_the_runtime_row_then_the_model_name():
@@ -135,6 +166,27 @@ def test_recap_open_todos_and_open_question():
     assert "old" not in pkg.text and "plan" not in pkg.text
     assert pkg.open_question == "Which branch?"
     assert "- Open question: Which branch?" in pkg.text
+
+
+def test_recap_keeps_the_chat_goal_when_the_tail_drops_it():
+    """M1's cheap step instead of layer 3: the first operator message is in
+    the recap even after it fell out of the tail; clipped to MAX_MSG_CHARS,
+    masked before the clip, one line."""
+    token = "sk-ant-" + "a" * 40
+    goal = f"GOAL-START key {token}\nsecond line " + "g" * 5_000
+    events = [_msg(0, "assistant", "hello first"), _msg(1, "user", goal)]
+    events += [_msg(i, "user" if i % 2 else "assistant", f"<{i:03d}>" + "x" * 1_495) for i in range(2, 200)]
+    pkg = _build(events)
+    assert pkg.truncated is True
+    tail = pkg.text.split("### Last messages", 1)[1]
+    assert "GOAL-START" not in tail
+    line = next(ln for ln in pkg.text.splitlines() if ln.startswith("- Chat goal (first operator message): "))
+    assert "GOAL-START key" in line and "second line" in line
+    assert token[:20] not in pkg.text
+    assert line.endswith("…")
+    assert len(line) - len("- Chat goal (first operator message): ") == chat_handoff.MAX_MSG_CHARS
+    # No operator message, no goal line.
+    assert "Chat goal" not in _build([_msg(1, "assistant", "only me")]).text
 
 
 def test_no_open_question_when_answered():
