@@ -54,7 +54,8 @@
       "back": "Back",
       "reply": "Reply",
       "more": "More"
-    }
+    },
+    "knowledge": "Knowledge"
   },
   "settingsProfile": {
     "email": "Email",
@@ -1077,6 +1078,7 @@
     "sessionEnded": "ended",
     "detailLevel": "Detail level",
     "detailLevelCurrent": "Detail level: {level}",
+    "detailAnswer": "Answer only",
     "detailCompact": "Compact",
     "detailNormal": "Normal",
     "detailVerbose": "Verbose",
@@ -1248,6 +1250,8 @@
       "chatEmpty": "No file changes in this chat yet",
       "chatEmptyHint": "Files the agent edits in this chat show up here — in any folder, with or without git.",
       "chatFiles": "{count, plural, one {# file} other {# files}}",
+      "inlineFiles": "{count, plural, one {# file changed in this chat} other {# files changed in this chat}}",
+      "inlineOpen": "Open diff",
       "chatEdits": "{count, plural, one {# edit} other {# edits}}",
       "chatBack": "All files",
       "chatLoadFailed": "Couldn't load this chat's changes.",
@@ -2097,7 +2101,8 @@
       "nightShift": "Night shift",
       "appearance": "Appearance",
       "claude": "Claude",
-      "language": "Language"
+      "language": "Language",
+      "more": "More"
     },
     "security": {
       "title": "Security",
@@ -2534,7 +2539,8 @@
       "fleet": "Fleet",
       "connections": "Connections",
       "secrets": "Secrets",
-      "system": "System"
+      "system": "System",
+      "pages": "Pages"
     },
     "aiProviders": {
       "title": "AI providers",
@@ -3859,7 +3865,7 @@
       "emptyConnectByAddress": "Connect by address",
       "emptyPickProviderModel": "Pick a provider model",
       "tabFleet": "Fleet",
-      "tabModels": "Models",
+      "tabModels": "Library",
       "tabInfra": "Infrastructure",
       "tabCloud": "Cloud",
       "registerTitle": "Runtime register",
@@ -5404,5 +5410,54 @@
     "agentButton": "{lang} to you",
     "agentButtonTitle": "Language: {summary}",
     "languageSettings": "Language settings"
+  },
+  "cockpit": {
+    "tabChat": "Chat",
+    "tabModels": "Models",
+    "tabKnowledge": "Knowledge",
+    "chatWaiting": "{count} waiting for you",
+    "mainNav": "Main navigation",
+    "openChats": "Open chats",
+    "closeChats": "Close chats",
+    "chatList": "Chats",
+    "newChat": "New chat",
+    "sectionWaiting": "Waiting for you",
+    "sectionToday": "Today",
+    "sectionEarlier": "Earlier",
+    "emptyChats": "No chats yet",
+    "stateWaiting": "waits for you",
+    "stateWorking": "working",
+    "more": "More",
+    "settings": "Settings",
+    "pickTitle": "Who do you want to chat with?",
+    "knowledge": {
+      "title": "Knowledge",
+      "lead": "What MC knows and what it can do.",
+      "memoryTitle": "Memory",
+      "memoryHint": "What the agents wrote down: notes, lessons, references",
+      "skillsTitle": "Skills",
+      "skillsHint": "What the agents can do: skills and plugins",
+      "notesCount": "{count, plural, one {# note} other {# notes}}",
+      "skillsCount": "{count, plural, one {# skill} other {# skills}}"
+    },
+    "more_page": {
+      "title": "More",
+      "lead": "Every page outside the main navigation. All still work as before."
+    },
+    "header": {
+      "working": "Working",
+      "workingFor": "Working for {span}",
+      "ready": "Ready",
+      "waitingInput": "Waits for you"
+    },
+    "speed": {
+      "label": "Model and box",
+      "tps": "{tps} tok/s",
+      "boxTps": "Speed of the whole box, measured live",
+      "tpsNone": "– tok/s",
+      "lastTps": "Last speed this box measured",
+      "noTps": "This box has not measured a speed yet"
+    },
+    "openLastChat": "Open your last chat"
   }
 }

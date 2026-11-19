@@ -28,8 +28,12 @@ function isActivity(ev: TimelineChatEvent): ev is ActivityEvent {
 export type TimelineItem =
   /** A message or command, or a run too short to be worth collapsing. */
   | { kind: "single"; event: TimelineChatEvent }
-  /** A run of consecutive tool/thinking events → one ToolGroup chip. */
-  | { kind: "activity"; events: ActivityEvent[] }
+  /** A run of consecutive tool/thinking events → one ToolGroup chip.
+   *  `endTs` = when the agent's own next step (its reply, a delegated job, a
+   *  message to another session) began — the end of this work. `null` while
+   *  the run is still the newest thing, or when the operator / another
+   *  session spoke next (a pause before that would count as work). */
+  | { kind: "activity"; events: ActivityEvent[]; endTs: string | null }
   /** A run of consecutive sidechain (subagent) events → one SubagentGroup. */
   | { kind: "sidechain"; events: TimelineChatEvent[] }
   /** Every helper (subagent) started in one working stretch → ONE quiet
@@ -38,6 +42,13 @@ export type TimelineItem =
   | { kind: "helpers"; events: ToolEvent[] }
   /** A message to another session (`mc send` / `mc_send`, ADR-100 2d) → a send card. */
   | { kind: "send"; event: ToolEvent; call: SendCall };
+
+/** The agent's own next step — the only event whose time ends a work run. */
+function closesWork(ev: TimelineChatEvent | null): ev is TimelineChatEvent {
+  if (!ev) return false;
+  if (ev.kind === "message") return ev.role === "assistant";
+  return ev.kind === "tool";
+}
 
 /** Runs shorter than this render as plain rows: collapsing a single tool call
  *  behind "1 Befehl ausgeführt" would hide its title (the useful part) and
@@ -66,10 +77,10 @@ export function buildTimelineItems(events: TimelineChatEvent[]): TimelineItem[] 
     }
   }
 
-  function flushActivity() {
+  function flushActivity(closer: TimelineChatEvent | null = null) {
     if (activityRun.length === 0) return;
     if (activityRun.length >= ACTIVITY_GROUP_MIN_SIZE) {
-      out.push({ kind: "activity", events: activityRun });
+      out.push({ kind: "activity", events: activityRun, endTs: closesWork(closer) ? closer.ts : null });
     } else {
       for (const ev of activityRun) out.push({ kind: "single", event: ev });
     }
@@ -109,7 +120,7 @@ export function buildTimelineItems(events: TimelineChatEvent[]): TimelineItem[] 
     if (send && ev.kind === "tool") {
       /* Like a delegated job: talking to another session is something the
          operator wants to see, not "+1 tool" inside a collapsed group. */
-      flushActivity();
+      flushActivity(ev);
       openHelpers = null;
       out.push({ kind: "send", event: ev, call: send });
       continue;
@@ -118,7 +129,7 @@ export function buildTimelineItems(events: TimelineChatEvent[]): TimelineItem[] 
       /* Muss VOR der Aktivitaets-Sammlung stehen: sonst verschwindet der
          Auftrag als anonymes "+1 Tool" in einer Werkzeug-Gruppe, weil er in
          der Praxis fast immer neben Bash/Read steht. */
-      flushActivity();
+      flushActivity(ev);
       if (openHelpers) {
         openHelpers.push(ev);
       } else {
@@ -131,7 +142,7 @@ export function buildTimelineItems(events: TimelineChatEvent[]): TimelineItem[] 
       activityRun.push(ev);
       continue;
     }
-    flushActivity();
+    flushActivity(ev);
     if (ev.kind === "command" || (ev.kind === "message" && ev.role !== "teammate")) openHelpers = null;
     out.push({ kind: "single", event: ev });
   }

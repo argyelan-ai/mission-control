@@ -460,3 +460,14 @@ describe("mergeTimeline — a finished task does not come back after a new quest
     expect(tail.kind === "segment" && tail.head).toBe("title");
   });
 });
+
+describe("mergeTimeline — an activity run's end time survives object reuse", () => {
+  it("a reply arriving after the run gives the reused group its end time", () => {
+    const tools = [chatTool(at(1), "a"), chatTool(at(2), "b")];
+    const first = merge(tools, []);
+    const reply = chatMsg(at(4), "Done.", "assistant");
+    const second = merge([...tools, reply], [], { prev: first });
+    const group = second.entries[0];
+    expect(group.kind === "chat" && group.item.kind === "activity" && group.item.endTs).toBe(reply.ts);
+  });
+});

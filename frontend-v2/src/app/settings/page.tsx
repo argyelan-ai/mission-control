@@ -45,6 +45,7 @@ import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
 import { ClaudeAccountTab } from "@/components/settings/ClaudeAccountTab";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { LanguageSection } from "@/components/settings/LanguageSection";
+import { MorePagesSection } from "@/components/settings/MorePagesSection";
 import { NightShiftTab } from "@/components/settings/NightShiftTab";
 import { PhoneAccountPanel } from "@/components/settings/PhoneAccountPanel";
 import { BoardsCard } from "@/components/settings/BoardsCard";
@@ -72,7 +73,6 @@ import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 const SHORTCUTS = [
   { keys: ["Cmd", "K"], descKey: "shortcuts.items.commandPalette" },
-  { keys: ["Cmd", "B"], descKey: "shortcuts.items.sidebar" },
   { keys: ["Esc"], descKey: "shortcuts.items.closeDialog" },
   { keys: ["?"], descKey: "shortcuts.items.help" },
   { keys: ["g", "h"], descKey: "shortcuts.items.goHome" },
@@ -2460,6 +2460,11 @@ function SettingsContent() {
               )}
               {activeSection === "shortcuts" && <ShortcutsSection />}
               {activeSection === "about" && <AboutSection />}
+              {activeSection === "more" && (
+                <SectionMotion sectionKey="more">
+                  <MorePagesSection />
+                </SectionMotion>
+              )}
             </AnimatePresence>
           </div>
         </div>

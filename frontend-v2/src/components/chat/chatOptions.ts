@@ -12,10 +12,13 @@
  * gerendert wird — `t(labelKey)` im Namensraum `sessions`.
  */
 
-/** How much of the transcript's machinery to show. */
-export type DetailLevel = "compact" | "normal" | "verbose";
+/** How much of the transcript's machinery to show. `answer` = only the
+ *  operator's messages and the agent's last reply per turn (questions and
+ *  errors stay visible in every level, `detailLevelFilter.ts`). */
+export type DetailLevel = "answer" | "compact" | "normal" | "verbose";
 
 export const DETAIL_LEVELS: { key: DetailLevel; labelKey: string }[] = [
+  { key: "answer", labelKey: "detailAnswer" },
   { key: "compact", labelKey: "detailCompact" },
   { key: "normal", labelKey: "detailNormal" },
   { key: "verbose", labelKey: "detailVerbose" },

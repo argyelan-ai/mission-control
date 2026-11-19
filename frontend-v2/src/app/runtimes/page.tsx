@@ -763,6 +763,7 @@ export default function RuntimesPage() {
   const t = useTranslations("runtimes");
   const tSlot = useTranslations("runtimes.slotPage");
   const tHosts = useTranslations("runtimes.hosts");
+  const tCockpit = useTranslations("cockpit");
   const [addOpen, setAddOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pageTab, setPageTab] = useState<"fleet" | "cloud" | "models" | "infra">("fleet");
@@ -864,38 +865,44 @@ export default function RuntimesPage() {
     unassignedRuntimes.length === 0;
   const cloudEmpty = groups.cloud.length === 0;
 
-  return (
-    <AppShell>
-      <div className="py-6 max-w-4xl">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <div className="label-sys mb-2">System · Runtimes</div>
-            <h1
-              className="display text-xl font-semibold"
-              style={{ color: C.textPrimary }}
-            >
-              {t("title")}
-            </h1>
-            {/* Kein Seiten-Untertitel (Spec §2) — die Bühne selbst erklärt
-                den Zustand der Flotte, eine zusätzliche Zeile hier würde das
-                nur doppeln. */}
-          </div>
+  const addButton = (
+    <button
+      onClick={() => setAddOpen(true)}
+      aria-label={t("addRuntime")}
+      title={t("addRuntime")}
+      data-testid="add-runtime-icon"
+      className="flex items-center justify-center w-9 h-9 rounded-md transition-all cursor-pointer shrink-0"
+      style={{
+        color: C.accent,
+        border: `1px solid ${C.borderAccent}`,
+        background: C.accentSubtle,
+      }}
+    >
+      <Plus size={14} />
+    </button>
+  );
 
-          <button
-            onClick={() => setAddOpen(true)}
-            aria-label={t("addRuntime")}
-            title={t("addRuntime")}
-            data-testid="add-runtime-icon"
-            className="flex items-center justify-center w-9 h-9 rounded-md transition-all cursor-pointer shrink-0"
-            style={{
-              color: C.accent,
-              border: `1px solid ${C.borderAccent}`,
-              background: C.accentSubtle,
-            }}
+  return (
+    <AppShell
+      // Phone: the bar reads like the chat header — drawer · "Models" · +
+      // (operator pictures 18.11.2026: "Runtimes" under a "Models" tab).
+      mobileTitle={tCockpit("tabModels")}
+      mobileAction={addButton}
+    >
+      <div className="pb-6 md:pt-6 max-w-4xl">
+        {/* Header (desktop; the phone's app bar carries title and +). The
+            page is the Models tab, so it says Models — no caps mark above
+            the title (K7). */}
+        <div className="hidden md:flex items-center justify-between mb-6">
+          <h1
+            className="display text-xl font-semibold"
+            style={{ color: C.textPrimary }}
           >
-            <Plus size={14} />
-          </button>
+            {tCockpit("tabModels")}
+          </h1>
+          {/* Kein Seiten-Untertitel (Spec §2) — die Bühne selbst erklärt
+              den Zustand der Flotte. */}
+          {addButton}
         </div>
 
         {isLoading && (

@@ -1,12 +1,12 @@
 /**
- * Phone navigation V2 „Schnell-Knopf": Home · Tasks · ⊕ New · Chats · Inbox.
+ * Phone navigation „Drei Daumen" (operator decision 2026-11-18, ADR-102):
+ * Chat · Models · Knowledge.
  *
- * Pins the behaviour the operator chose: five labelled places, the Inbox
- * badge is the real count from lib/inbox.ts (reviews + approvals + open head
- * questions), Chats opens the last chat directly and leads back to the list
- * on the chats page, ⊕ opens the menu sheet (variant B „Zwei Ebenen": new
- * job, voice, last chat, Pages ›, Settings ›), and the bar steps aside for
- * the keyboard.
+ * Pins: exactly three labelled places, Chat carries the real count of what
+ * waits on the operator (lib/inbox.ts) and no badge when nothing waits, each
+ * tab leads to its page and lights up on it, the bar steps aside for the
+ * keyboard. The old ⊕ sheet (QuickSheet) is no longer mounted by the shell;
+ * its own behaviour stays pinned below through a test opener.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -88,9 +88,19 @@ vi.mock("@/components/shared/CreateTaskModal", () => ({
     openRequest ? <div data-testid="create-task-modal" data-request={openRequest} /> : null,
 }));
 
-import MobileNav, { MobileNavProvider } from "../MobileNav";
+import MobileNav, { MobileNavProvider, useMobileNav } from "../MobileNav";
 import { MobileTabBar } from "../MobileTabBar";
 import { QuickSheet } from "../QuickSheet";
+
+/** The shell no longer has a ⊕ button; this stands in for it. */
+function OpenSheet() {
+  const { setQuickOpen } = useMobileNav();
+  return (
+    <button type="button" data-testid="open-sheet" onClick={() => setQuickOpen(true)}>
+      open sheet
+    </button>
+  );
+}
 
 function renderNav() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -100,6 +110,7 @@ function renderNav() {
         <MobileNav />
         <MobileTabBar />
         <QuickSheet />
+        <OpenSheet />
       </MobileNavProvider>
     </QueryClientProvider>,
   );
@@ -123,24 +134,33 @@ afterEach(() => {
 });
 
 describe("phone tab bar", () => {
-  it("shows five labelled places in the chosen order", () => {
+  it("shows exactly three labelled places: Chat · Models · Knowledge", () => {
     renderNav();
-    const labels = within(bar())
-      .getAllByRole("link")
-      .map((a) => a.textContent)
-      .concat(within(bar()).getAllByRole("button").map((b) => b.textContent));
-    expect(labels).toEqual(["Home", "Tasks", "Chats", "Inbox", "New"]);
-    // DOM order — New sits in the middle
+    const links = within(bar()).getAllByRole("link");
+    expect(links.map((a) => a.textContent)).toEqual(["Chat", "Models", "Knowledge"]);
+    expect(within(bar()).queryAllByRole("button")).toEqual([]);
     expect([...bar().querySelectorAll("[data-tab]")].map((e) => e.getAttribute("data-tab"))).toEqual([
-      "home",
-      "tasks",
-      "new",
-      "chats",
-      "inbox",
+      "chat",
+      "models",
+      "knowledge",
     ]);
   });
 
-  it("Inbox badge = reviews + approvals + open head questions", async () => {
+  it("each tab leads to its page", () => {
+    renderNav();
+    expect(within(bar()).getByRole("link", { name: "Chat" })).toHaveAttribute("href", "/sessions");
+    expect(within(bar()).getByRole("link", { name: "Models" })).toHaveAttribute("href", "/runtimes");
+    expect(within(bar()).getByRole("link", { name: "Knowledge" })).toHaveAttribute("href", "/knowledge");
+  });
+
+  // Shell review A2: plain /sessions sent an open chat back to the old list.
+  it("Chat leads straight into the last chat, without the list-entry marker", () => {
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-7" }]));
+    renderNav();
+    expect(within(bar()).getByRole("link", { name: "Chat" })).toHaveAttribute("href", "/sessions?agent=agent-7");
+  });
+
+  it("Chat badge = reviews + approvals + open head questions", async () => {
     data.approvals = [{ id: "a1", status: "pending" }, { id: "a2", status: "pending" }];
     data.reviews = [{ id: "t1", status: "review", assigned_agent_id: null, human_review_required: false }];
     data.runs = [
@@ -148,37 +168,37 @@ describe("phone tab bar", () => {
       { run_id: "r2", task_id: "h2", state: "passed", created_at: "2026-10-01T10:00:00Z", task_deleted: false },
     ];
     renderNav();
-    await waitFor(() => expect(screen.getByTestId("inbox-badge")).toHaveTextContent("4"));
-    expect(within(bar()).getByRole("link", { name: "Inbox, 4 waiting" })).toHaveAttribute("href", "/inbox");
+    await waitFor(() => expect(screen.getByTestId("chat-badge")).toHaveTextContent("4"));
+    expect(within(bar()).getByRole("link", { name: "Chat, 4 waiting for you" })).toHaveAttribute("href", "/sessions");
   });
 
   it("shows no badge when nothing waits", async () => {
     renderNav();
-    // give the queries a tick to resolve
-    await waitFor(() => expect(within(bar()).getByRole("link", { name: "Inbox" })).toBeInTheDocument());
-    expect(screen.queryByTestId("inbox-badge")).toBeNull();
+    await waitFor(() => expect(within(bar()).getByRole("link", { name: "Chat" })).toBeInTheDocument());
+    expect(screen.queryByTestId("chat-badge")).toBeNull();
   });
 
-  it("Chats opens the last chat directly from anywhere else", () => {
-    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-7" }]));
-    renderNav();
-    expect(within(bar()).getByRole("link", { name: "Chats" })).toHaveAttribute("href", "/sessions?agent=agent-7&enter=1");
-  });
-
-  it("Chats on the chats page leads back to the list", () => {
+  it("lights Chat on the chat page and on the start route", () => {
     nav.pathname = "/sessions";
-    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-7" }]));
     renderNav();
-    const chats = within(bar()).getByRole("link", { name: "Chats" });
-    expect(chats).toHaveAttribute("href", "/sessions");
-    expect(chats).toHaveAttribute("aria-current", "page");
+    expect(within(bar()).getByRole("link", { name: "Chat" })).toHaveAttribute("aria-current", "page");
+    expect(within(bar()).getByRole("link", { name: "Models" })).not.toHaveAttribute("aria-current");
   });
 
-  it("marks the active place", () => {
+  it("lights Models on runtimes and bench, Knowledge on memory and skills", () => {
+    nav.pathname = "/bench";
+    const { unmount } = renderNav();
+    expect(within(bar()).getByRole("link", { name: "Models" })).toHaveAttribute("aria-current", "page");
+    unmount();
+    nav.pathname = "/memory";
+    renderNav();
+    expect(within(bar()).getByRole("link", { name: "Knowledge" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("lights nothing on a page that left the bar (Tasks)", () => {
     nav.pathname = "/tasks";
     renderNav();
-    expect(within(bar()).getByRole("link", { name: "Tasks" })).toHaveAttribute("aria-current", "page");
-    expect(within(bar()).getByRole("link", { name: "Home" })).not.toHaveAttribute("aria-current");
+    expect(within(bar()).queryAllByRole("link").filter((a) => a.getAttribute("aria-current"))).toEqual([]);
   });
 
   it("steps aside while the on-screen keyboard is up", () => {
@@ -206,7 +226,7 @@ describe("⊕ sheet — variant B, level 1", () => {
       { id: "a2", name: "Helper" },
     ];
     renderNav();
-    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("open-sheet"));
     const sheet = screen.getByRole("dialog", { name: "Menu" });
 
     // last chat: one row, the newest chat whose agent still exists
@@ -230,7 +250,7 @@ describe("⊕ sheet — variant B, level 1", () => {
 
   it("Test a model opens the bench test sheet for the running model (bench W1 P2)", async () => {
     renderNav();
-    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("open-sheet"));
     const row = screen.getByTestId("quick-bench-test");
     expect(row).toHaveTextContent("Test a model");
     expect(row).toHaveTextContent("The running model, everything pre-filled");
@@ -242,7 +262,7 @@ describe("⊕ sheet — variant B, level 1", () => {
 
   it("New job closes the sheet and opens the New-task modal", async () => {
     renderNav();
-    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("open-sheet"));
     await userEvent.click(screen.getByTestId("quick-new-job"));
     await waitFor(() => expect(screen.queryByTestId("quick-sheet")).toBeNull());
     expect(screen.getByTestId("create-task-modal")).toHaveAttribute("data-request", "1");
@@ -250,7 +270,7 @@ describe("⊕ sheet — variant B, level 1", () => {
 
   it("Voice command starts the voice assistant", async () => {
     renderNav();
-    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("open-sheet"));
     await userEvent.click(screen.getByTestId("quick-voice"));
     expect(voice.toggleButton).toHaveBeenCalledTimes(1);
   });
@@ -259,7 +279,7 @@ describe("⊕ sheet — variant B, level 1", () => {
     live.lead = { agentId: "lead-1", agentName: "Chief" };
     try {
       renderNav();
-      await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+      await userEvent.click(screen.getByTestId("open-sheet"));
       const row = screen.getByTestId("quick-voice");
       expect(row).toHaveTextContent("Jarvis (classic voice)");
       expect(row).not.toHaveTextContent("Voice command");
@@ -273,13 +293,13 @@ describe("⊕ sheet — variant B, level 1", () => {
 
   it("with the live voice off, the voice row stays as it was", async () => {
     renderNav();
-    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("open-sheet"));
     expect(screen.getByTestId("quick-voice")).not.toHaveTextContent("Jarvis");
   });
 
   it("hides the last-chat row when this device has no recent chat", async () => {
     renderNav();
-    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("open-sheet"));
     expect(screen.queryByTestId("quick-last-chat")).toBeNull();
     expect(mem["mc-recent-chats"]).toBeUndefined();
   });
@@ -288,21 +308,24 @@ describe("⊕ sheet — variant B, level 1", () => {
 describe("⊕ sheet — variant B, level 2 Pages", () => {
   it("Pages › opens every page outside the tab bar, Used most first", async () => {
     renderNav();
-    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("open-sheet"));
     await userEvent.click(screen.getByTestId("quick-pages"));
     const level = screen.getByTestId("quick-pages-level");
     expect(within(level).getByRole("heading", { name: "Pages" })).toBeInTheDocument();
     const hrefs = [...level.querySelectorAll("a[data-page]")].map((a) => a.getAttribute("href"));
-    expect(hrefs.slice(0, 4)).toEqual(["/runtimes", "/agents", "/insights", "/memory"]);
-    // the rest alphabetical by label: Benchmark, Files, Loops, Office, Repos, Schedule, Skills
-    expect(hrefs.slice(4)).toEqual(["/bench", "/files", "/loops", "/office", "/repos", "/schedule", "/skills"]);
+    // Runtimes is a tab now (Models), so "Used most" starts at Agents
+    expect(hrefs.slice(0, 3)).toEqual(["/agents", "/insights", "/memory"]);
+    // the rest alphabetical by label — Home, Inbox and Tasks left the bar
+    expect(hrefs.slice(3)).toEqual([
+      "/bench", "/files", "/home", "/inbox", "/loops", "/office", "/repos", "/schedule", "/skills", "/tasks",
+    ]);
     // tab-bar places and Settings are not repeated
-    for (const h of ["/", "/tasks", "/sessions", "/inbox", "/settings"]) expect(hrefs).not.toContain(h);
+    for (const h of ["/sessions", "/runtimes", "/knowledge", "/settings"]) expect(hrefs).not.toContain(h);
   });
 
   it("‹ Back returns to level 1", async () => {
     renderNav();
-    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("open-sheet"));
     await userEvent.click(screen.getByTestId("quick-pages"));
     await userEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(screen.getByTestId("quick-root")).toBeInTheDocument();
@@ -311,7 +334,7 @@ describe("⊕ sheet — variant B, level 2 Pages", () => {
 
   it("Esc on level 2 goes back one level, Esc on level 1 closes", async () => {
     renderNav();
-    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("open-sheet"));
     await userEvent.click(screen.getByTestId("quick-pages"));
     await userEvent.keyboard("{Escape}");
     expect(screen.getByTestId("quick-root")).toBeInTheDocument();
@@ -321,11 +344,11 @@ describe("⊕ sheet — variant B, level 2 Pages", () => {
 
   it("reopening always starts on level 1", async () => {
     renderNav();
-    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("open-sheet"));
     await userEvent.click(screen.getByTestId("quick-pages"));
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByTestId("quick-sheet")).toBeNull());
-    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("open-sheet"));
     expect(screen.getByTestId("quick-root")).toBeInTheDocument();
   });
 });

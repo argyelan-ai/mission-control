@@ -25,7 +25,7 @@
  */
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranslations } from "next-intl";
-import { Check, GitCompare, Globe, MonitorPlay, MessagesSquare, X } from "lucide-react";
+import { Check, GitCompare, Globe, MonitorPlay, MessagesSquare, Users, X } from "lucide-react";
 import { C, alpha } from "@/lib/colors";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
 import type { PanelKind } from "./PanelButtons";
@@ -57,6 +57,10 @@ interface ChatOptionsSheetProps {
   onDetailLevelChange: (level: DetailLevel) => void;
   /** Omitted when the caller has no side panels to offer. */
   onOpenPanel?: (panel: PanelKind) => void;
+  /** Who can be talked to across harnesses (ADR-100 §4) — moved here from the
+   *  header line (variant C, 2026-11-18). Omitted = no directory loaded. */
+  reachable?: number | null;
+  onOpenDirectory?: () => void;
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -77,8 +81,11 @@ export function ChatOptionsSheet({
   detailLevel,
   onDetailLevelChange,
   onOpenPanel,
+  reachable = null,
+  onOpenDirectory,
 }: ChatOptionsSheetProps) {
   const t = useTranslations("sessions");
+  const tComms = useTranslations("comms");
   return (
     <AnimatePresence>
       {open && (
@@ -188,6 +195,22 @@ export function ChatOptionsSheet({
                   ))}
                 </div>
               </>
+            )}
+
+            {reachable != null && onOpenDirectory && (
+              <button
+                type="button"
+                data-testid="sheet-reachable"
+                onClick={() => {
+                  onClose();
+                  onOpenDirectory();
+                }}
+                className="flex items-center gap-3 min-h-touch px-2 mt-2 rounded-lg text-left cursor-pointer w-full"
+                style={{ color: C.textSecondary }}
+              >
+                <Users size={16} style={{ color: C.textMuted }} aria-hidden="true" />
+                <span className="flex-1 text-sm tabular-nums">{tComms("reachable", { count: reachable })}</span>
+              </button>
             )}
 
             {centerView === "chat" && (

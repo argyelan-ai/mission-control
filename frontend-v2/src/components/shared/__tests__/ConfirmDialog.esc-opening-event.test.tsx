@@ -67,16 +67,25 @@ describe("ConfirmDialog — Esc that opens it", () => {
   });
 
   it("a later Esc (not the opening one) still cancels", async () => {
+    const onCancel = vi.fn();
     function Plain() {
       const [open, setOpen] = useState(true);
       return (
         <ConfirmDialog open={open} title="Discard draft?" body="b"
-          onConfirm={() => setOpen(false)} onCancel={() => setOpen(false)} />
+          onConfirm={() => setOpen(false)}
+          onCancel={() => { onCancel(); setOpen(false); }} />
       );
     }
     render(<Plain />);
     expect(dialog()).not.toBeNull();
     fireEvent.keyDown(window, { key: "Escape" });
-    await waitFor(() => expect(dialog()).toBeNull());
+    // The behaviour under test: the Esc cancels, at once and exactly once.
+    // No timer involved, so CPU load on a busy CI runner cannot flake it.
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    // The dialog then leaves through framer-motion's exit spring (~560 ms
+    // unloaded). The default 1000 ms waitFor flaked at ~1650 ms under load
+    // (one vitest worker per vCPU); 5000 ms keeps the unmount check without
+    // racing the animation.
+    await waitFor(() => expect(dialog()).toBeNull(), { timeout: 5000 });
   });
 });

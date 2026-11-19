@@ -90,9 +90,14 @@ export function rowMs(ts: string | null | undefined): number | null {
   return d ? d.getTime() : null;
 }
 
+/** Compact and "answer only" show a task band the same quiet way. */
+function isQuiet(level: DetailLevel): boolean {
+  return level === "compact" || level === "answer";
+}
+
 /** Which rows a detail level shows at all (D13, §2.3). */
 export function isRowVisible(row: TaskStepRow, level: DetailLevel): boolean {
-  if (level !== "compact") return true;
+  if (!isQuiet(level)) return true;
   return row.k === "text" || row.k === "comment" || row.k === "attempt";
 }
 
@@ -129,7 +134,7 @@ export function buildTaskUnits(
   opts: UnitOpts,
 ): { units: TaskUnit[]; ctx: UnitCtx } {
   const { detailLevel, autoIds, prev } = opts;
-  const compact = detailLevel === "compact";
+  const compact = isQuiet(detailLevel);
   const units: TaskUnit[] = [];
   let lastMarkMs = ctx.lastMarkMs;
   // (cast: TS would narrow a `let … = null` to `null` across the closures below)

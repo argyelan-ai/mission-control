@@ -1,65 +1,71 @@
 /**
- * Phone navigation V2 „Schnell-Knopf" (operator decision 2026-10-01).
+ * Phone navigation „Drei Daumen" (operator decision 2026-11-18, ADR-102
+ * principle 1: "few menus: chat, models, knowledge"):
  *
- *   Home · Tasks · ⊕ New · Chats · Inbox
+ *   Chat · Models · Knowledge
  *
- * Five places, always icon + word (Apple HIG / Material: 3–5 destinations,
- * never drop the labels). ⊕ is the one action in the bar. It opens the menu
- * sheet, variant B „Zwei Ebenen" (operator decision 2026-10-02):
+ * Three places, always icon + word. Chat lands in the last chat (the sessions
+ * page restores it); every chat is one tap away in the drawer behind the
+ * sidebar icon of the chat header (components/layout/ChatDrawer.tsx). Every
+ * other page left the main navigation and sits in Settings › More, generated
+ * by `sheetPages` below — nothing was deleted, every route still works.
  *
- *   level 1 — New job · Voice · last chat · Pages › · Settings ›
- *   level 2 — Pages: every destination not in the bar, from lib/nav.ts
- *
- * Pure data, no React; labels are `nav.*` keys.
+ * Pure data, no React; labels are `cockpit.*` keys.
  */
-import {
-  FolderKanban,
-  Home,
-  Inbox,
-  MessagesSquare,
-  type LucideIcon,
-} from "lucide-react";
+import { BookOpen, Gauge, MessageSquare, type LucideIcon } from "lucide-react";
 import { CHROME_ITEMS, NAV_ITEMS, type NavItem } from "./nav";
 
-export type MobileTabKey = "home" | "tasks" | "chats" | "inbox";
+import { chatUrl } from "./chatHistory";
+import type { ChatRef } from "./recentChats";
 
-/** Which tab is lit for a route; `null` for every place the ⊕ sheet leads to. */
+export type MobileTabKey = "chat" | "models" | "knowledge";
+
+export const TAB_ORDER: MobileTabKey[] = ["chat", "models", "knowledge"];
+
+/** Which tab is lit for a route; `null` for every page reached via Settings › More. */
 export function activeTabFor(pathname: string): MobileTabKey | null {
-  if (pathname === "/") return "home";
-  if (pathname.startsWith("/tasks")) return "tasks";
-  if (pathname.startsWith("/sessions")) return "chats";
-  if (pathname.startsWith("/inbox")) return "inbox";
+  if (pathname === "/" || pathname.startsWith("/sessions")) return "chat";
+  if (pathname.startsWith("/runtimes") || pathname.startsWith("/bench")) return "models";
+  if (pathname.startsWith("/knowledge") || pathname.startsWith("/memory") || pathname.startsWith("/skills")) {
+    return "knowledge";
+  }
   return null;
 }
 
 export const TAB_ICONS: Record<MobileTabKey, LucideIcon> = {
-  home: Home,
-  tasks: FolderKanban,
-  chats: MessagesSquare,
-  inbox: Inbox,
+  chat: MessageSquare,
+  models: Gauge,
+  knowledge: BookOpen,
 };
 
-/** Label keys in the `nav` namespace. "Chats" is the sessions page (route unchanged). */
+/** Label keys in the `cockpit` namespace. */
 export const TAB_LABEL_KEYS: Record<MobileTabKey, string> = {
-  home: "home",
-  tasks: "tasks",
-  chats: "sessions",
-  inbox: "inbox",
+  chat: "tabChat",
+  models: "tabModels",
+  knowledge: "tabKnowledge",
 };
 
-/** The route each tab stands for (Chats = the sessions page). */
+/** The route each tab stands for: the chat page, the runtimes page, the knowledge landing. */
 export const TAB_HREFS: Record<MobileTabKey, string> = {
-  home: "/",
-  tasks: "/tasks",
-  chats: "/sessions",
-  inbox: "/inbox",
+  chat: "/sessions",
+  models: "/runtimes",
+  knowledge: "/knowledge",
 };
+
+/**
+ * Where the Chat tab leads: straight into the last chat (its plain URL, no
+ * entry marker — no list goes in behind it). Plain `/sessions` sent an open
+ * chat back to the old full-screen list (shell review A2).
+ */
+export function chatTabHref(recent: ChatRef[]): string {
+  return recent[0] ? chatUrl(recent[0].kind, recent[0].id) : TAB_HREFS.chat;
+}
 
 export type SheetPages = { usedMost: NavItem[]; others: NavItem[] };
 
 /**
- * Level 2 of the ⊕ sheet: every destination in NAV_ITEMS that is neither a
- * tab nor chrome (Settings has its own row on level 1). Generated, never a
+ * Settings › More: every destination in NAV_ITEMS that is neither a tab nor
+ * chrome (Settings itself). Generated, never a
  * second list — a page added to nav.ts shows up here, and a vertical that is
  * switched off (Benchmark) disappears here exactly like in the sidebar.
  *

@@ -6,6 +6,7 @@ import { Brain } from "lucide-react";
 import { C } from "@/lib/colors";
 import type { ThinkingEvent } from "@/lib/chatTypes";
 import { formatElapsed } from "./thinkingFormat";
+import type { DetailLevel } from "./chatOptions";
 
 /**
  * Collapsed-by-default row for extended-thinking blocks — quieter than a
@@ -20,7 +21,7 @@ export const ThinkingRow = memo(function ThinkingRow({
   detailLevel = "normal",
 }: {
   ev: ThinkingEvent;
-  detailLevel?: "compact" | "normal" | "verbose";
+  detailLevel?: DetailLevel;
 }) {
   const t = useTranslations("sessions");
   const [expanded, setExpanded] = useState(detailLevel === "verbose");

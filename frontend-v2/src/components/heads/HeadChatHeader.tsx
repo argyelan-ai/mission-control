@@ -16,6 +16,8 @@ import { useLocale, useTranslations } from "next-intl";
 import { ChevronLeft } from "lucide-react";
 import { C } from "@/lib/colors";
 import { headContextLine, headListTitle, type HeadRun } from "@/lib/heads";
+import { DrawerButton } from "@/components/layout/ChatDrawer";
+import { useMobileNavOptional } from "@/components/layout/MobileNav";
 
 /** Same visual weight as `ChatView`'s own back chevron (36px circle, 44px
  *  touch target via `-m-1`) — not re-exported from there (that module is
@@ -26,6 +28,10 @@ const TOUCH_TARGET = "min-w-touch min-h-touch -m-1";
 
 export function HeadChatHeader({ head, onBack }: { head: HeadRun; onBack?: () => void }) {
   const t = useTranslations("heads");
+  // Inside the shell the drawer icon replaces the back chevron on the phone,
+  // the same as in an agent chat (shell review A3). On its own (tests, no
+  // shell) the chevron stays.
+  const inShell = !!useMobileNavOptional();
   const locale = useLocale();
 
   // Same "pair + exactly one state/time fact" rule as `HeadChatRow`'s own
@@ -42,7 +48,7 @@ export function HeadChatHeader({ head, onBack }: { head: HeadRun; onBack?: () =>
       className="relative flex items-center gap-2 pl-1 pr-2 md:px-4 py-2 md:py-3 pt-safe-top md:pt-3 border-b shrink-0 bg-[var(--color-bg-surface)]"
       style={{ borderColor: C.border }}
     >
-      {onBack && (
+      {inShell ? <DrawerButton className="md:hidden -m-1" /> : onBack && (
         <button
           type="button"
           onClick={onBack}
