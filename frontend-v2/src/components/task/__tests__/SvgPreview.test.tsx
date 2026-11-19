@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // Node's own stream class, imported rather than taken from the global scope:
 // in the vmForks pool the test's global object is jsdom's window, which has
 // no ReadableStream (Node's fetch Response is still there). This is the class
-// that Response reads its body from, in either pool.
-import { ReadableStream } from "node:stream/web";
+// that Response reads its body from, in either pool. Its type is Node's, not
+// the DOM's, hence the cast where it becomes a Response body.
+import { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { FilePreview } from "../FilePreview";
 import { SVG_SOURCE_MAX_BYTES, SVG_SOURCE_MAX_LINES, SVG_HIGHLIGHT_MAX_BYTES } from "../SvgPreview";
@@ -269,7 +270,7 @@ describe("SvgPreview — a long SVG is shown only from its start, as plain text"
     const MAX_CHUNKS = 2 * Math.ceil(SVG_SOURCE_MAX_BYTES / CHUNK) + 4; // stands in for "endless"
     let pulls = 0;
     const enc = new TextEncoder();
-    const stream = new ReadableStream<Uint8Array>({
+    const stream = new NodeReadableStream<Uint8Array>({
       pull(controller) {
         if (pulls >= MAX_CHUNKS) { controller.close(); return; }
         pulls += 1;
@@ -278,7 +279,7 @@ describe("SvgPreview — a long SVG is shown only from its start, as plain text"
         controller.enqueue(enc.encode(pulls === 1 ? "<svg>".padEnd(CHUNK, " ") : " ".repeat(CHUNK)));
       },
     });
-    fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(stream, { status: 200 }));
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(stream as unknown as BodyInit, { status: 200 }));
     render(<FilePreview fileUrl={URL_SVG} path="endless.svg" />);
 
     expect(await screen.findByText(SHORTENED)).toBeInTheDocument();
