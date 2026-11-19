@@ -7,6 +7,7 @@ is ``docker/omp-bridge/tests/test_acp_chat_switch.py``.
 """
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -187,3 +188,68 @@ async def test_the_default_chat_keeps_the_agent_driver(daemon, make_agent, monke
     default_chat = Chat(id=uuid.uuid4(), agent_default=True, harness="omp")
     await chat_switch._DRIVERS["omp"].set_model(agent, default_chat, "qwen-b")
     assert seen == [("default", "qwen-b")] and daemon.calls == []
+
+
+# ── the ctl transport of a switch: the package goes over stdin ─────────────
+
+#: Linux caps ONE exec argument at MAX_ARG_STRLEN = 32 pages = 131 072 bytes.
+MAX_ARG_STRLEN = 131_072
+
+
+class _StdinProc:
+    def __init__(self, seen: dict):
+        self.returncode = 0
+        self._seen = seen
+
+    async def communicate(self, input=None):
+        self._seen["input"] = input
+        return b'{"ok": true, "switching": true, "handedOver": []}', b""
+
+    def kill(self):  # pragma: no cover — timeout path only
+        pass
+
+
+async def test_a_full_budget_package_never_rides_in_one_exec_argument(monkeypatch):
+    """Blocker (critic, #1047): 32k tokens x 4 chars of German chat text is
+    ~160 KB as escaped JSON — over MAX_ARG_STRLEN, docker exec would fail
+    with E2BIG and the switch would read ``chat_daemon_unreachable``. The
+    switch payload goes over stdin (``docker exec -i … --json -``)."""
+    seen: dict = {}
+
+    async def _exec(*argv, **kwargs):
+        seen["argv"] = list(argv)
+        seen["kwargs"] = kwargs
+        return _StdinProc(seen)
+
+    monkeypatch.setattr(acp_chat_transport.asyncio, "create_subprocess_exec", _exec)
+    package = ("Grüße — Änderung in loader.py; " * 4200)[:128_000]
+    payload = {"switchEventId": str(uuid.uuid4()), "action": "start", "package": package}
+    transport = acp_chat_transport.DockerCtlTransport("agent-x", chat_id=str(uuid.uuid4()))
+
+    answer = await transport.switch(payload)
+
+    assert answer["ok"] is True
+    assert max(len(a.encode()) for a in seen["argv"]) < MAX_ARG_STRLEN
+    assert seen["argv"][:3] == ["docker", "exec", "-i"]
+    assert seen["argv"][-2:] == ["--json", "-"]
+    assert seen["kwargs"].get("stdin") is not None
+    sent = json.loads(seen["input"].decode("utf-8"))
+    assert sent["package"] == package and len(seen["input"]) > MAX_ARG_STRLEN
+
+
+async def test_any_payload_too_big_for_one_argument_goes_over_stdin(monkeypatch):
+    """Not only ``switch``: whatever op carries more than fits in one exec
+    argument goes over stdin; small ones keep their argv shape."""
+    seen: dict = {}
+
+    async def _exec(*argv, **kwargs):
+        seen["argv"] = list(argv)
+        return _StdinProc(seen)
+
+    monkeypatch.setattr(acp_chat_transport.asyncio, "create_subprocess_exec", _exec)
+    transport = acp_chat_transport.DockerCtlTransport("agent-x")
+    await transport.prompt("x" * 200_000)
+    assert seen["argv"][-2:] == ["--json", "-"] and json.loads(seen["input"])["text"] == "x" * 200_000
+    seen.clear()
+    await transport.prompt("small")
+    assert seen["argv"][-3:-1] == ["prompt", "--json"] and seen.get("input") is None

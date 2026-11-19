@@ -444,8 +444,10 @@ def test_switch_is_refused_while_a_turn_runs(tmp_path):
         p.close()
 
 
-def test_stop_for_switch_hands_the_held_queue_back(tmp_path):
-    """F8: the queue goes to MC in order — not dropped, no `queue_lost`."""
+def test_stop_for_switch_keeps_the_queue_in_the_daemon(tmp_path):
+    """F8: the queue stays in the daemon (nothing in MC's memory, nothing
+    lost to a ctl timeout or a backend restart) and runs after the handoff
+    turn, in order, on the new session — no `queue_lost`."""
     mc = FakeMc()
     old = _client(turns=[{"block": True}])
     new = _client(sid="sid-new", new_ids=["sid-new"])
@@ -458,17 +460,14 @@ def test_stop_for_switch_hands_the_held_queue_back(tmp_path):
                            "origin": "operator"})["queued"] is True
         stop = p.send({"op": "stop_for_switch", "chatId": A})
         assert stop["ok"] is True and stop["stopped"] is True and stop["idle"] is True
-        assert [(j["text"], j["origin"]) for j in stop["handedOver"]] == \
-            [("one", "operator"), ("two", "operator"), ("three", "operator")]
-        assert chat.state()["queue"] == []
+        assert stop["handedOver"] == [] and stop["held"] == 3
+        assert [j["text"] for j in chat.state()["queue"]] == ["one", "two", "three"]
         # nothing of the queue ran on the old pair
         assert [c[2] for c in old.calls if c[0] == "prompt"] == ["first"]
 
-        assert p.send({"op": "switch", "chatId": A, "switchEventId": EV1, "action": "start",
-                       "package": "PKG"})["ok"] is True
-        for job in stop["handedOver"]:          # MC sends them again
-            p.send({"op": "prompt", "chatId": A, "text": job["text"], "mode": "queue",
-                    "origin": job["origin"]})
+        answer = p.send({"op": "switch", "chatId": A, "switchEventId": EV1, "action": "start",
+                         "package": "PKG"})
+        assert answer["ok"] is True and answer["handedOver"] == []
         _wait_for(lambda: len([c for c in new.calls if c[0] == "prompt"]) == 4)
         assert chat.wait_idle(5)
         assert [c[2] for c in new.calls if c[0] == "prompt"] == \
@@ -477,6 +476,75 @@ def test_stop_for_switch_hands_the_held_queue_back(tmp_path):
             read_lines(chat.transcript_path), "custom_message",
             acp_chat_events.CHAT_ERROR_CUSTOM_TYPE)] if chat.transcript_path else []
         assert "queue_lost" not in codes
+    finally:
+        p.close()
+
+
+def test_stop_for_switch_answers_well_inside_the_ctl_timeout(tmp_path):
+    """A turn that does not end on cancel: the answer still comes in
+    STOP_WAIT_SECONDS (far below the backend's 10 s ctl timeout, docker
+    exec start included) with idle=false — and the queue is still held."""
+    assert acp_chat_pool.STOP_WAIT_SECONDS <= 3.0
+    mc = FakeMc()
+    gate = threading.Event()
+    old = _client(turns=[{"gate": gate}, {"chunks": ["one done"]}])
+    p = Pool(tmp_path, mc, [old])
+    try:
+        chat = _open(p, "first")
+        _wait_for(lambda: chat.state()["busy"])
+        p.send({"op": "prompt", "chatId": A, "text": "one", "mode": "queue", "origin": "operator"})
+        began = time.time()
+        stop = p.send({"op": "stop_for_switch", "chatId": A})
+        assert time.time() - began < acp_chat_pool.STOP_WAIT_SECONDS + 1.0
+        assert stop["ok"] is True and stop["idle"] is False and stop["handedOver"] == []
+        assert [j["text"] for j in chat.state()["queue"]] == ["one"]
+        gate.set()
+    finally:
+        p.close()
+
+
+def test_held_queue_runs_on_the_old_session_when_no_switch_follows(tmp_path, monkeypatch):
+    """MC stopped the turn but refused the switch (box lock, lost race):
+    after SWITCH_HOLD_SECONDS the queue runs where it is — never dropped."""
+    monkeypatch.setattr(acp_chat_pool, "SWITCH_HOLD_SECONDS", 1.5)
+    mc = FakeMc()
+    old = _client(turns=[{"block": True}, {"chunks": ["a"]}, {"chunks": ["b"]}])
+    p = Pool(tmp_path, mc, [old])
+    try:
+        chat = _open(p, "first")
+        _wait_for(lambda: chat.state()["busy"])
+        for text in ("one", "two"):
+            p.send({"op": "prompt", "chatId": A, "text": text, "mode": "queue",
+                    "origin": "operator"})
+        assert p.send({"op": "stop_for_switch", "chatId": A})["idle"] is True
+        assert [c[2] for c in old.calls if c[0] == "prompt"] == ["first"]
+        _wait_for(lambda: len([c for c in old.calls if c[0] == "prompt"]) == 3)
+        assert chat.wait_idle(5)
+        assert [c[2] for c in old.calls if c[0] == "prompt"] == ["first", "one", "two"]
+    finally:
+        p.close()
+
+
+def test_a_message_between_stop_and_switch_waits_for_the_switch(tmp_path):
+    """Race: after stop_for_switch the chat is idle; a message typed before
+    MC sends `switch` must not start a turn (it would make the switch
+    `busy`). It is held and runs after the handoff turn."""
+    mc = FakeMc()
+    old = _client(turns=[{"block": True}])
+    new = _client(sid="sid-new", new_ids=["sid-new"])
+    p = Pool(tmp_path, mc, [old, new])
+    try:
+        chat = _open(p, "first")
+        _wait_for(lambda: chat.state()["busy"])
+        assert p.send({"op": "stop_for_switch", "chatId": A})["idle"] is True
+        typed = p.send({"op": "prompt", "chatId": A, "text": "typed", "origin": "operator"})
+        assert typed["ok"] is True and typed.get("queued") is True
+        assert [c[2] for c in old.calls if c[0] == "prompt"] == ["first"]
+        assert p.send({"op": "switch", "chatId": A, "switchEventId": EV1, "action": "start",
+                       "package": "PKG"})["ok"] is True
+        _wait_for(lambda: len([c for c in new.calls if c[0] == "prompt"]) == 2)
+        assert chat.wait_idle(5)
+        assert [c[2] for c in new.calls if c[0] == "prompt"] == ["PKG\n\nContinue.", "typed"]
     finally:
         p.close()
 
@@ -617,3 +685,208 @@ def test_handoff_helpers():
     assert acp_chat.handoff_text_of("Go on.", {"OMP_ACP_HANDOFF_TEXT": ""}) == "Go on."
     assert acp_chat._model_text("", "PKG") == "PKG"
     assert acp_chat._model_text("hi", None) == "hi"
+
+
+class RefusingMc(FakeMc):
+    """MC answers the switch report with a 409 (switch_not_pending /
+    switch_superseded / pinned_by_other_chat): e.g. the backend's ctl call
+    timed out and it wrote `failed` while the daemon went on."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.refuse = True
+
+    def report(self, chat_id, event_id, body):
+        if self.down:
+            raise acp_chat_pool.McUnreachable("down")
+        self.reports.append((chat_id, event_id, body))
+        if self.refuse:
+            raise acp_chat_pool.PinConflict("switch_not_pending")
+        if body.get("status") == "done":
+            self.pins[chat_id] = body["nativeSessionId"]
+        return {}
+
+
+def _prompts(client):
+    return [(c[1], c[2]) for c in client.calls if c[0] == "prompt"]
+
+
+def test_refused_done_report_puts_the_chat_back_on_the_session_mc_pins(tmp_path):
+    """MC refused `done`: the daemon must not keep running a session MC
+    does not route to this chat — back to the pinned one, pointer too."""
+    mc = RefusingMc()
+    old = _client()
+    new = _client(sid="sid-new", new_ids=["sid-new"])
+    back = _client()
+    p = Pool(tmp_path, mc, [old, new, back])
+    try:
+        chat = _open(p)
+        assert chat.wait_idle(5)
+        mc.pins[A] = "sid-old"
+        assert p.send({"op": "switch", "chatId": A, "switchEventId": EV1, "action": "start",
+                       "package": "PKG"})["ok"] is True
+        _wait_for(lambda: mc.reports)
+        assert chat.wait_idle(5)
+        assert mc.reports[0][2]["status"] == "done"
+        assert chat.state()["sessionId"] == "sid-old" == mc.pins[A]
+        assert json.loads(chat.persist_file.read_text())["sessionId"] == "sid-old"
+        assert new.closed is True
+        assert ("load_session", "sid-old", chat._cwd) in back.calls
+        p.send({"op": "prompt", "chatId": A, "text": "after", "origin": "operator"})
+        assert chat.wait_idle(5)
+        assert _prompts(back) == [("sid-old", "after")]
+        codes = [e["data"]["code"] for e in entries_of_type(
+            read_lines(chat.transcript_path), "custom_message",
+            acp_chat_events.CHAT_ERROR_CUSTOM_TYPE)]
+        assert "switch_refused" in codes
+    finally:
+        p.close()
+
+
+def test_pointer_waits_for_mc_and_a_late_refusal_goes_back(tmp_path, monkeypatch):
+    """The report did not arrive: the pointer still names the session MC
+    pins (a restart resumes that one). MC later refuses it: before the next
+    message runs, the chat goes back to the pinned session."""
+    monkeypatch.setattr(acp_chat_pool, "REPORT_RETRY_DELAYS", (0.0,))
+    mc = RefusingMc(down=True)
+    old = _client()
+    new = _client(sid="sid-new", new_ids=["sid-new"])
+    back = _client()
+    p = Pool(tmp_path, mc, [old, new, back])
+    try:
+        mc.down = False
+        mc.refuse = False
+        chat = _open(p)
+        assert chat.wait_idle(5)
+        mc.down, mc.refuse = True, True
+        p.send({"op": "switch", "chatId": A, "switchEventId": EV1, "action": "start",
+                "package": "PKG"})
+        _wait_for(lambda: chat._pending_report is not None)
+        assert chat.wait_idle(5)
+        assert json.loads(chat.persist_file.read_text())["sessionId"] == "sid-old"
+        mc.down = False
+        p.send({"op": "prompt", "chatId": A, "text": "next", "origin": "operator"})
+        assert chat.wait_idle(5)
+        assert chat._pending_report is None
+        assert chat.state()["sessionId"] == "sid-old"
+        assert _prompts(back) == [("sid-old", "next")]
+        assert [c for c in _prompts(new) if c[1] == "next"] == []
+    finally:
+        p.close()
+
+
+def test_pointer_is_written_once_mc_takes_a_late_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(acp_chat_pool, "REPORT_RETRY_DELAYS", (0.0,))
+    mc = FakeMc()
+    old = _client()
+    new = _client(sid="sid-new", new_ids=["sid-new"])
+    p = Pool(tmp_path, mc, [old, new])
+    try:
+        chat = _open(p)
+        assert chat.wait_idle(5)
+        mc.down = True
+        p.send({"op": "switch", "chatId": A, "switchEventId": EV1, "action": "start",
+                "package": "PKG"})
+        _wait_for(lambda: chat._pending_report is not None)
+        assert chat.wait_idle(5)
+        assert json.loads(chat.persist_file.read_text())["sessionId"] == "sid-old"
+        mc.down = False
+        p.send({"op": "prompt", "chatId": A, "text": "next", "origin": "operator"})
+        assert chat.wait_idle(5)
+        assert json.loads(chat.persist_file.read_text())["sessionId"] == "sid-new"
+        assert _prompts(new)[-1] == ("sid-new", "next")
+    finally:
+        p.close()
+
+
+def test_a_model_the_session_refuses_fails_the_switch(tmp_path):
+    """Rule F12 on the omp side: the model was not applied → `failed`
+    (MC keeps chats.model), never `done` with the requested model."""
+    mc = FakeMc()
+    old = _client()
+    new = _client()                     # loads sid-old, refuses `boom*`
+    back = _client()
+    p = Pool(tmp_path, mc, [old, new, back])
+    try:
+        chat = _open(p)
+        assert chat.wait_idle(5)
+        p.send({"op": "switch", "chatId": A, "switchEventId": EV1, "action": "resume",
+                "nativeSessionId": "sid-old", "tryNativeLoad": True,
+                "model": "boom/not-offered"})
+        _wait_for(lambda: mc.reports)
+        assert chat.wait_idle(5)
+        report = mc.reports[0][2]
+        assert report["status"] == "failed"
+        assert report["error"]["code"] == "model_unreachable"
+        assert chat.state()["sessionId"] == "sid-old"
+        assert chat._model != "boom/not-offered"
+    finally:
+        p.close()
+
+
+def test_a_substituted_sibling_model_fails_the_switch(tmp_path):
+    """`choose_model` would run a sibling of the same provider: the chat
+    would run another model than MC records — `failed`, not `done`."""
+    offered = dict(SESSION_RESULT, configOptions=[
+        {"id": "model", "category": "model", "currentValue": "mc-openai/x",
+         "options": [{"value": "mc-openai/x", "name": "X"}]}])
+    mc = FakeMc()
+    old = _client()
+    new = FakeClient(session_result=dict(offered, sessionId="sid-new"), new_ids=["sid-new"],
+                     turns=[{"chunks": ["ok"]}])
+    back = _client()
+    p = Pool(tmp_path, mc, [old, new, back])
+    try:
+        chat = _open(p)
+        assert chat.wait_idle(5)
+        p.send({"op": "switch", "chatId": A, "switchEventId": EV1, "action": "start",
+                "package": "PKG", "model": "mc-openai/z"})
+        _wait_for(lambda: mc.reports)
+        assert chat.wait_idle(5)
+        report = mc.reports[0][2]
+        assert report["status"] == "failed" and report["error"]["code"] == "model_unreachable"
+        assert "mc-openai/x" in report["error"]["detail"]
+        assert _prompts(new) == []           # no handoff turn on the wrong model
+    finally:
+        p.close()
+
+
+def test_a_handoff_turn_without_text_still_counts_as_done(tmp_path):
+    """The model took the package but answered with tools only (no final
+    text = `empty_turn` in the chat rules): the switch is done, not rolled
+    back."""
+    mc = FakeMc()
+    old = _client()
+    new = _client(sid="sid-new", new_ids=["sid-new"], turns=[{"chunks": []}])
+    p = Pool(tmp_path, mc, [old, new])
+    try:
+        chat = _open(p)
+        assert chat.wait_idle(5)
+        p.send({"op": "switch", "chatId": A, "switchEventId": EV1, "action": "start",
+                "package": "PKG"})
+        _wait_for(lambda: mc.reports)
+        assert chat.wait_idle(5)
+        assert mc.reports[0][2]["status"] == "done"
+        assert chat.state()["sessionId"] == "sid-new"
+    finally:
+        p.close()
+
+
+def test_a_full_budget_package_crosses_the_shim_via_stdin(e2e):
+    """Blocker: Linux caps ONE exec argument at 128 KiB (MAX_ARG_STRLEN).
+    A full-budget package (32k tokens ~ 128k chars, umlauts escaped) is
+    bigger as JSON — the shim reads it from stdin (`--json -`)."""
+    d, mc = e2e
+    d.say("hello")
+    package = ("Grüße — Änderung in loader.py; " * 4200)[:128_000]
+    payload = {"chatId": A, "switchEventId": EV1, "action": "start", "package": package}
+    assert len(json.dumps(payload).encode()) > 131_072
+    args = [sys.executable, str(ROOT / "acp_chat_ctl.py"), "switch", "--json", "-",
+            "--socket", str(d.sock)]
+    proc = subprocess.run(args, input=json.dumps(payload), capture_output=True, text=True,
+                          timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    _, _, report = mc.wait_report()
+    assert report["status"] == "done"
+    _wait_idle(d.chat())
+    assert d.told(report["nativeSessionId"]) == [package.strip() + "\n\nContinue."]

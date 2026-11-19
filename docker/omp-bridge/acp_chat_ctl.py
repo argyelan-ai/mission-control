@@ -23,6 +23,7 @@ Examples:
     acp_chat_ctl.py chats
     acp_chat_ctl.py answer --json '{"id": "el-…", "action": "accept", "content": {"value": "Yes"}}'
     acp_chat_ctl.py stop_for_switch --json '{"chatId": "<chat uuid>"}'
+    acp_chat_ctl.py switch --json - < payload.json   # the package is too big for argv
     acp_chat_ctl.py switch --json '{"chatId": "<chat uuid>", "switchEventId": "<switch row uuid>",
         "action": "resume", "nativeSessionId": "<id>", "tryNativeLoad": true,
         "package": "<handoff package>", "model": "<provider/model>"}'
@@ -57,13 +58,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="control the ACP chat daemon")
     parser.add_argument("op", choices=OPS)
     parser.add_argument("--json", dest="payload", default=None,
-                        help='request fields as JSON, e.g. \'{"text": "hi"}\'')
+                        help='request fields as JSON, e.g. \'{"text": "hi"}\', '
+                             'or "-" to read them from stdin')
     parser.add_argument("--socket", default=None,
                         help="socket path (default: $OMP_HOME/acp-chat.sock)")
     parser.add_argument("--timeout", type=float, default=30.0)
     args = parser.parse_args(argv)
 
     request = {"op": args.op}
+    if args.payload == "-":
+        # `--json -`: the payload comes on stdin — a switch's handoff package
+        # does not fit in one exec argument (Linux MAX_ARG_STRLEN, 128 KiB).
+        args.payload = sys.stdin.read()
     if args.payload:
         try:
             extra = json.loads(args.payload)

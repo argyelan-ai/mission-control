@@ -835,7 +835,7 @@ class ChatSession:
             text=f"The chat restarted — {len(lost)} queued message(s) were not sent:\n{listed}",
         )
 
-    def _pin_model(self) -> None:
+    def _pin_model(self) -> Optional[dict]:
         """Pin the session to the MC model (twin of bridge.py's #483 fix).
 
         `omp acp` inherits the bridge environment; OPENAI_API_KEY activates
@@ -846,7 +846,10 @@ class ChatSession:
         passes --model, bridge.py sets it per task session; the chat daemon
         has to do the same on every session/new and session/load. A refused
         pin is a chat-visible error, not a crash: the daemon still serves
-        state/cancel, and the operator sees WHY in the chat."""
+        state/cancel, and the operator sees WHY in the chat.
+
+        Returns the `config` answer (None when there was nothing to pin) —
+        a chat switch has to know whether the model it asked for runs."""
         previous = self._model
         fresh = None
         if self._model_resolver is not None:
@@ -856,7 +859,7 @@ class ChatSession:
                 logger.warning("model resolver failed; keeping %s", previous, exc_info=True)
         wanted = fresh or previous
         if not wanted:
-            return
+            return None
         with self._lock:
             options = json.loads(json.dumps(self._config_options))
         offered = acp_model.offered_models(options)
@@ -876,6 +879,7 @@ class ChatSession:
                 {"previous": acp_model.display_name(replaced),
                  "current": acp_model.display_name(value)},
             )
+        return answer
 
     def close(self) -> None:
         with self._lock:
@@ -915,8 +919,12 @@ class ChatSession:
         if mode not in _MODES:
             return {"ok": False, "error": "bad_mode", "detail": str(mode)}
         with self._lock:
-            if self._busy:
-                if mode == MODE_QUEUE and not self._closed:
+            held = self._hold_queue_locked()
+            if self._busy or held:
+                if (mode == MODE_QUEUE or held) and not self._closed:
+                    # A switch MC is about to send holds the chat
+                    # (`_hold_queue_locked`): nothing starts on the old pair,
+                    # every message waits for the new one.
                     return self._enqueue_locked("prompt", text, origin, context=context)
                 if origin in _QUIET_BUSY_ORIGINS:
                     # Mission Control's wake-up: its caller (the omp
@@ -986,6 +994,14 @@ class ChatSession:
 
     def _run_switch(self, job: dict) -> None:
         raise NotImplementedError("only a further chat switches")
+
+    def _hold_queue_locked(self) -> bool:
+        """True while queued jobs must wait (a further chat between
+        `stop_for_switch` and `switch`). Caller holds `_lock`."""
+        return False
+
+    def _between_jobs(self) -> None:
+        """Runs in the worker after each job, before the next queued one."""
 
     def queue_clear(self) -> dict:
         """Take every held job back, oldest first. The composer's withdraw
@@ -1276,11 +1292,15 @@ class ChatSession:
                                    job.get("context"))
             except Exception:  # noqa: BLE001 — one broken job must not strand the queue busy
                 logger.exception("chat job %s failed", job.get("kind"))
+            try:
+                self._between_jobs()
+            except Exception:  # noqa: BLE001 — same rule as a job
+                logger.exception("chat: between jobs failed")
             with self._lock:
                 closed = self._closed
                 # The job is over; the next queued one (if any) is current.
                 self._current = None
-                if closed or not self._queue:
+                if closed or not self._queue or self._hold_queue_locked():
                     self._busy = False
                     job = None
                 else:
