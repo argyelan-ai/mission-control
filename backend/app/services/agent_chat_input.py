@@ -168,6 +168,7 @@ from app.services.harness_catalog import (
     resolve_cli_version,
 )
 from app.services.pane_state import capture_pane, parse_pane_state
+from app.services import claude_chat_runner
 from app.services.plugin_manager import list_skills_in_dir
 from app.services.token_harvester import _host_home
 from app.services.transcript_chat import resolve_context_window
@@ -521,11 +522,13 @@ _EFFORT_REJECTED_RE = re.compile(r"Kept effort level as \S+")
 _EFFORT_CONFIRM_DIALOG_MARKER = "Change effort level?"
 
 
-def _docker_argv(slug: str, *tail: str) -> list[str]:
+def _docker_argv(slug: str, *tail: str, target: str | None = None) -> list[str]:
+    """``target``: a further chat's window (``claude_chat_runner.chat_target``);
+    None = the agent's own window 0, as always."""
     return [
         "docker", "exec", "-e", "LANG=C.UTF-8", "-u", "agent",
         f"mc-agent-{slug}",
-        "tmux", "send-keys", "-t", f"{slug}:0",
+        "tmux", "send-keys", "-t", target or f"{slug}:0",
         *tail,
     ]
 
@@ -832,7 +835,7 @@ def can_receive_input(agent) -> bool:
         return False
 
 
-async def _wait_for_send_readiness(agent) -> None:
+async def _wait_for_send_readiness(agent, chat_id: str | None = None) -> None:
     """Readiness gate before typing into a docker agent's pane. Live
     measurement (wave-review) found a real send landing in a session file
     created 27s AFTER a recycler respawn's previous write — the message was
@@ -869,7 +872,11 @@ async def _wait_for_send_readiness(agent) -> None:
     read_state = adapter_for(agent).parse_pane_state
 
     for _ in range(_SEND_READINESS_POLL_ATTEMPTS):
-        pane = await capture_pane(agent)
+        if chat_id:
+            # A further Claude chat: its own window (claude_chat_runner).
+            pane = await claude_chat_runner.capture_chat_pane(agent.slug, chat_id)
+        else:
+            pane = await capture_pane(agent)
         if pane is not None:
             status = read_state(pane, False)["status"]
             if status != "unknown":
@@ -884,8 +891,12 @@ async def send_text(agent, text: str, *, origin: str | None = None,
 
     ``chat_id`` (headless omp agents, record flag on — chats slice S2,
     ``acp_chat_chats.resolve_chat``): a further chat of the agent; the
-    daemon runs the text in that chat's own session. None = the agent's
-    own chat, as before. Any other kind of agent refuses it
+    daemon runs the text in that chat's own session. Claude container
+    agents (chats slice S3 item A, ``CHAT_RECORD_ENABLED`` on): the text
+    goes into that chat's own window and claude process
+    (``claude_chat_runner``), which is opened or resumed first when it is
+    not running. None = the agent's own chat, as before. Any other kind of
+    agent, and a Claude agent while the record flag is off, refuses it
     (``InputNotSupportedError``).
 
     ``context`` (headless/ACP agents only, ``chat_run_context``): a block the
@@ -934,8 +945,17 @@ async def send_text(agent, text: str, *, origin: str | None = None,
 
     kind = _target_kind(agent)
     slug = agent.slug
+    chat_target: str | None = None
     if chat_id and kind not in _ACP_KINDS:
-        raise InputNotSupportedError()
+        if (
+            not getattr(settings, "chat_record_enabled", False)
+            or kind != "docker"
+            or (getattr(agent, "harness", None) or "claude") != "claude"
+        ):
+            raise InputNotSupportedError()
+        # Opens (or resumes) the chat's own claude before anything is typed;
+        # its errors (chat not found, start failed) reach the caller.
+        chat_target = await claude_chat_runner.open_chat(agent, chat_id)
 
     if kind in _ACP_KINDS:
         # Kopflos: kein Fenster, kein Bereitschafts-Tor, kein Recycler-Marker
@@ -1022,13 +1042,17 @@ async def send_text(agent, text: str, *, origin: str | None = None,
             #
             # Harnesses OHNE Adapter (kimi) bleiben aussen vor: keine Aussage
             # ueber Bereitschaft ist besser als eine falsche Ablehnung.
-            await _wait_for_send_readiness(agent)
+            if chat_target:
+                await _wait_for_send_readiness(agent, chat_id)
+            else:
+                # The agent's own window: the call as before the chats slice.
+                await _wait_for_send_readiness(agent)
         if "\n" in text:
             pasted = f"{_BRACKETED_PASTE_START}{text}{_BRACKETED_PASTE_END}"
-            await _run_docker_exec(_docker_argv(slug, "-l", "--", pasted))
+            await _run_docker_exec(_docker_argv(slug, "-l", "--", pasted, target=chat_target))
         else:
-            await _run_docker_exec(_docker_argv(slug, "-l", "--", text))
-        await _run_docker_exec(_docker_argv(slug, "Enter"))
+            await _run_docker_exec(_docker_argv(slug, "-l", "--", text, target=chat_target))
+        await _run_docker_exec(_docker_argv(slug, "Enter", target=chat_target))
         note_sent(str(getattr(agent, "id", "") or slug), text)
         return _terminal_reset(text)
 
