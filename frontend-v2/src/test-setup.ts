@@ -1,6 +1,32 @@
 import "@testing-library/jest-dom";
+import * as nodeStreamWeb from "node:stream/web";
 import { vi } from "vitest";
 import en from "../messages/en.json";
+
+// In the vmForks pool the test's global object is jsdom's window, and jsdom
+// ships none of the web-stream classes every real browser has (ReadableStream,
+// WritableStream, TransformStream, TextDecoderStream, TextEncoderStream).
+// Node's fetch `Response` is still there and reads its body from Node's own
+// stream classes, so a test that builds a stream by hand (a mocked SSE or chat
+// body) passed in the forks pool and threw "ReadableStream is not defined"
+// only in the vm pool. Copying Node's classes onto the global object closes
+// the whole class once; it also makes `res.body instanceof ReadableStream`
+// true, as in a browser. Only missing names are filled in.
+for (const name of [
+  "ReadableStream",
+  "WritableStream",
+  "TransformStream",
+  "TextDecoderStream",
+  "TextEncoderStream",
+] as const) {
+  if (typeof (globalThis as Record<string, unknown>)[name] === "undefined") {
+    Object.defineProperty(globalThis, name, {
+      value: nodeStreamWeb[name],
+      configurable: true,
+      writable: true,
+    });
+  }
+}
 
 // jsdom implements no scroll methods at all (not even as a no-op) — several
 // components call `el?.scrollIntoView(...)` on an element that DOES exist in
