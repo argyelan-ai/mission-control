@@ -60,7 +60,9 @@ from app.services.decision_docs import (
 #   talking across harnesses) — Accepted, operator decision of 2026-11-01.
 # +1 on 2026-11-19: ADR-104 (knowledge in one place, slice 1), confirmed on
 #   purpose. ADR-103 (chat record) had already landed without a comment line.
-EXPECTED_DECISION_DOCS = 103
+# +1 on 2026-11-19: ADR-105 (chat switch with handoff, S3 core) — status
+#   Proposed, confirmed on purpose.
+EXPECTED_DECISION_DOCS = 104
 
 
 def _repo_root() -> Path:
