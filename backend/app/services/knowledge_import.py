@@ -228,9 +228,11 @@ async def sync_project_folders(session: AsyncSession, root: Path, stats: SyncSta
                         stats.briefs_rendered += 1
                 elif current != new_hash:
                     stats.briefs_kept += 1
+            before = _read_meta(folder)
             meta.update({"id": pid, "slug": slug, "name": p.name, "status": p.status})
             meta.setdefault("created", utcnow().isoformat())
-            _write_atomic(folder / ".mc" / "project.json", json.dumps(meta, indent=2, sort_keys=True) + "\n")
+            if meta != before:  # no rewrite (and no new mtime) on every sweep
+                _write_atomic(folder / ".mc" / "project.json", json.dumps(meta, indent=2, sort_keys=True) + "\n")
             if created:
                 stats.projects_created += 1
         except OSError as exc:

@@ -857,6 +857,12 @@ internal:
   - "table:chats"
   - "table:chat_sessions"
   - "table:chat_events"
+  # ADR-104: knowledge in one place, slice 1 — project folders and an index
+  # over ~/.mc/knowledge, the vault and the skills folder. Behind
+  # KNOWLEDGE_ROOT_ENABLED (default off); admin read API only, no screen
+  # reads it yet — the Knowledge page column is the frontend slice.
+  - "endpoint:* /api/v1/knowledge-root/*"
+  - "table:knowledge_entries"
   # Skill packs: seeded for the playbook layer, which was removed in E5
   # (migration 0207); the rows stay, nothing reads them any more.
   - "table:skill_packs"

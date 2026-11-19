@@ -80,8 +80,7 @@ async def _rows() -> list[KnowledgeEntry]:
 
 async def test_sync_does_nothing_while_flag_is_off(homes):
     mc, _vault = homes
-    async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        assert await knowledge_import.knowledge_sync.sweep_once() is None
+    assert await knowledge_import.knowledge_sync.sweep_once() is None
     assert not (mc / "knowledge").exists()
     assert await _rows() == []
 
@@ -111,6 +110,10 @@ async def test_layout_and_one_folder_per_project(homes, flag_on, make_board):
     meta = json.loads((folder / ".mc" / "project.json").read_text())
     assert meta["id"] == str(p.id) and meta["slug"] == "online-shop"
     assert stats.projects_created == 1
+    meta_mtime = (folder / ".mc" / "project.json").stat().st_mtime_ns
+    again = await _sync()
+    assert again.projects_created == 0 and again.briefs_rendered == 0
+    assert (folder / ".mc" / "project.json").stat().st_mtime_ns == meta_mtime
 
     rows = await _rows()
     brief_rows = [r for r in rows if r.kind == "project"]

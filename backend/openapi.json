@@ -3584,6 +3584,60 @@
         ]
       }
     },
+    "/api/v1/knowledge-root/_admin/sync": {
+      "post": {
+        "operationId": "knowledge_sync_now_api_v1_knowledge_root__admin_sync_post",
+        "summary": "Knowledge Sync Now",
+        "tags": [
+          "knowledge-root"
+        ]
+      }
+    },
+    "/api/v1/knowledge-root/entries": {
+      "get": {
+        "operationId": "knowledge_entries_api_v1_knowledge_root_entries_get",
+        "summary": "Knowledge Entries",
+        "tags": [
+          "knowledge-root"
+        ]
+      }
+    },
+    "/api/v1/knowledge-root/entries/{entry_id}": {
+      "get": {
+        "operationId": "knowledge_entry_api_v1_knowledge_root_entries__entry_id__get",
+        "summary": "Knowledge Entry",
+        "tags": [
+          "knowledge-root"
+        ]
+      }
+    },
+    "/api/v1/knowledge-root/projects": {
+      "get": {
+        "operationId": "knowledge_projects_api_v1_knowledge_root_projects_get",
+        "summary": "Knowledge Projects",
+        "tags": [
+          "knowledge-root"
+        ]
+      }
+    },
+    "/api/v1/knowledge-root/search": {
+      "get": {
+        "operationId": "knowledge_search_api_v1_knowledge_root_search_get",
+        "summary": "Knowledge Search",
+        "tags": [
+          "knowledge-root"
+        ]
+      }
+    },
+    "/api/v1/knowledge-root/status": {
+      "get": {
+        "operationId": "knowledge_status_api_v1_knowledge_root_status_get",
+        "summary": "Knowledge Status",
+        "tags": [
+          "knowledge-root"
+        ]
+      }
+    },
     "/api/v1/knowledge/stats": {
       "get": {
         "operationId": "knowledge_stats_api_v1_knowledge_stats_get",

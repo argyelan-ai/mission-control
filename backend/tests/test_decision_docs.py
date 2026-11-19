@@ -58,7 +58,9 @@ from app.services.decision_docs import (
 #   side panel) — Accepted, operator decision of 2026-11-01.
 # +1 on 2026-11-01: ADR-100 (MC is the foundation under every harness;
 #   talking across harnesses) — Accepted, operator decision of 2026-11-01.
-EXPECTED_DECISION_DOCS = 102
+# +1 on 2026-11-19: ADR-104 (knowledge in one place, slice 1), confirmed on
+#   purpose. ADR-103 (chat record) had already landed without a comment line.
+EXPECTED_DECISION_DOCS = 103
 
 
 def _repo_root() -> Path:
