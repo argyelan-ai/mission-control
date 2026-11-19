@@ -4,8 +4,9 @@ import { useContext, useState } from "react";
 import { QueryClientContext, useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { ChevronsUpDown } from "lucide-react";
-import { api, type SwitchRow } from "@/lib/api";
-import { useChatSwitch } from "@/hooks/useChatSwitch";
+import { api, type RecordChat } from "@/lib/api";
+import { canPickPair, useChatSwitch } from "@/hooks/useChatSwitch";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { TaskStepsAgentContext } from "@/hooks/useTaskStepDetail";
 import { PairPicker } from "./PairPicker";
 import { C } from "@/lib/colors";
@@ -114,19 +115,16 @@ export function SpeedLineView({ box, model, tps, live = false, onPick }: SpeedLi
   );
 }
 
-/** The pair the line names: the newest finished switch of the chat wins
- *  over the agent's binding (the chat may have moved), else the caller's. */
+/** The pair the line names. The record chat row is the truth (chat_out
+ *  carries its runtimeId/model; the picker refreshes it after a switch),
+ *  never the switch rows: an agent runtime switch writes no switch row.
+ *  The main chat follows the agent, so it names the agent binding. */
 export function pairForLine(
-  switches: Pick<SwitchRow, "status" | "to">[],
+  chat: Pick<RecordChat, "agentDefault" | "runtimeId" | "model"> | null,
   fallback: { runtimeId: string | null; model: string | null },
 ): { runtimeId: string | null; model: string | null } {
-  // A failed or open switch left the chat where the last finished one put it.
-  const last = [...switches].reverse().find((r) => r.status === "done") ?? null;
-  if (!last || !last.to) return fallback;
-  return {
-    runtimeId: last.to.runtimeId ?? fallback.runtimeId,
-    model: last.to.model ?? fallback.model,
-  };
+  if (!chat || chat.agentDefault) return fallback;
+  return { runtimeId: chat.runtimeId ?? null, model: chat.model ?? null };
 }
 
 /**
@@ -149,10 +147,10 @@ function SpeedLineLoaded({ runtimeId: boundRuntime, model: liveModel, streaming 
   // line is exactly the one before.
   const agentId = useContext(TaskStepsAgentContext);
   const sw = useChatSwitch(agentId);
+  const isAdmin = useIsAdmin();
   const [picking, setPicking] = useState(false);
-  const { runtimeId, model } = sw.enabled
-    ? pairForLine(sw.switches, { runtimeId: boundRuntime, model: liveModel })
-    : { runtimeId: boundRuntime, model: liveModel };
+  const door = canPickPair(sw.chat, isAdmin);
+  const { runtimeId, model } = pairForLine(sw.chat, { runtimeId: boundRuntime, model: liveModel });
   const { data: rows } = useRuntimeRows(!!runtimeId);
   const runtime = runtimeId ? rows?.runtimes.find((r) => r.id === runtimeId) ?? null : null;
   const hostId = runtime?.host?.id ?? null;
@@ -171,9 +169,9 @@ function SpeedLineLoaded({ runtimeId: boundRuntime, model: liveModel, streaming 
         model={model ?? runtime?.model_identifier ?? null}
         tps={live ?? lastTps(pulse)}
         live={live != null}
-        onPick={sw.chat ? () => setPicking(true) : undefined}
+        onPick={door ? () => setPicking(true) : undefined}
       />
-      {sw.chat && (
+      {door && sw.chat && (
         <PairPicker
           open={picking}
           onClose={() => setPicking(false)}

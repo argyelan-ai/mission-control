@@ -4,7 +4,7 @@
  * the header line are exactly the ones before (S3 item D acceptance).
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const apiMock = vi.hoisted(() => ({
@@ -25,6 +25,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
     },
   };
 });
+
+const isAdmin = vi.hoisted(() => ({ value: false }));
+vi.mock("@/hooks/useIsAdmin", () => ({ useIsAdmin: () => isAdmin.value }));
 
 import { SpeedLine } from "./SpeedLine";
 import { ChatHeaderSubline } from "./ChatHeaderSubline";
@@ -78,14 +81,28 @@ describe("record on", () => {
     });
   });
 
-  it("the speed line is the door to the pair picker", async () => {
+  it("the main chat follows the agent: the speed line stays a plain line, even for an admin", async () => {
+    isAdmin.value = true;
     mount(<SpeedLine runtimeId="rt-1" model="qwen38" streaming={false} />);
-    await waitFor(() => expect(screen.getByTestId("speed-line").tagName).toBe("BUTTON"));
-    fireEvent.click(screen.getByTestId("speed-line"));
-    expect(await screen.findByTestId("pair-picker")).toBeTruthy();
+    await waitFor(() => expect(apiMock.history).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByTestId("speed-line").tagName).toBe("DIV");
+    expect(screen.queryByTestId("pair-picker")).toBeNull();
+    isAdmin.value = false;
   });
 
-  it("an open switch replaces the state word in the header line", async () => {
+  it("an open model-only switch does not mask the state word", async () => {
+    mount(<ChatHeaderSubline state={IDLE} aliveness="active" turnStartedAt={null} />);
+    await waitFor(() => expect(apiMock.history).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByTestId("chat-header-subline").textContent).toBe("Ready");
+  });
+
+  it("an open restart replaces the state word in the header line", async () => {
+    apiMock.history.mockReset().mockResolvedValue({
+      events: [{ id: "e2", seq: 2, sessionId: "s", event: { kind: "switch", status: "pending", path: "restart", ts: "2026-11-19T10:00:00Z" } }],
+      hasMore: false,
+    });
     mount(<ChatHeaderSubline state={IDLE} aliveness="active" turnStartedAt={null} />);
     await waitFor(() => expect(screen.getByTestId("chat-header-subline").dataset.kind).toBe("switching"));
     expect(screen.getByTestId("chat-header-subline").textContent).toBe("Switching …");

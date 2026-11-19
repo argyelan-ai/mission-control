@@ -3,7 +3,7 @@
 import { useContext } from "react";
 import { QueryClientContext } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
-import { useChatSwitch } from "@/hooks/useChatSwitch";
+import { isSwitching, useChatSwitch } from "@/hooks/useChatSwitch";
 import { TaskStepsAgentContext } from "@/hooks/useTaskStepDetail";
 import { C } from "@/lib/colors";
 import { useNow } from "@/hooks/useNow";
@@ -55,8 +55,9 @@ type SublineProps = {
   aliveness: ChatAliveness;
   turnStartedAt: string | null;
   sending?: boolean;
-  /** A chat switch (ADR-105) is open: the line says so instead of the
-   *  state word — the card in the timeline names the pair (K3). */
+  /** A restart or switch back (ADR-105) is open: the line says so instead
+   *  of the state word — the card in the timeline names the pair (K3). A
+   *  model-only switch does not: the session keeps answering meanwhile. */
   switching?: boolean;
 };
 
@@ -69,7 +70,7 @@ export function ChatHeaderSubline(props: SublineProps) {
 
 function SublineWithSwitch(props: SublineProps) {
   const sw = useChatSwitch(useContext(TaskStepsAgentContext));
-  return <SublineView {...props} switching={sw.enabled && !!sw.pending} />;
+  return <SublineView {...props} switching={sw.enabled && isSwitching(sw.switches)} />;
 }
 
 export function SublineView({

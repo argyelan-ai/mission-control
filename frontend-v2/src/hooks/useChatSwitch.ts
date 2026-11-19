@@ -20,10 +20,45 @@ export function recordSwitchesQueryKey(chatId: string | null) {
   return ["chat-record", "switches", chatId] as const;
 }
 
-/** How often the switch rows are read: fast while one is open (the harness
- *  reports back within seconds), calm otherwise. */
+/** How often the switch rows are read. Fast only while a restart or a
+ *  switch back is young (the harness reports back within seconds), calm
+ *  while anything else is open, not at all when nothing is open: the rows
+ *  only change through a switch, and the picker refreshes them itself. A
+ *  model-only switch waits for the next answer with no cutoff
+ *  (chat_switch._upkeep), so it never keeps the fast poll running. */
 export const SWITCH_POLL_PENDING_MS = 3_000;
 export const SWITCH_POLL_IDLE_MS = 60_000;
+export const SWITCH_FAST_POLL_FOR_MS = 2 * 60_000;
+
+/** An open switch that moves the chat to another session — the only kind
+ *  the header names instead of the state word. A model-only switch is a
+ *  quiet line in its card: the session keeps answering meanwhile. */
+function isOpenRestart(r: Pick<SwitchRow, "status" | "path">): boolean {
+  return r.status === "pending" && r.path !== "model_only";
+}
+
+export function isSwitching(rows: Pick<SwitchRow, "status" | "path">[]): boolean {
+  return rows.some(isOpenRestart);
+}
+
+export function switchPollInterval(rows: Pick<SwitchRow, "status" | "path" | "ts">[], now: number): number | false {
+  if (!rows.some((r) => r.status === "pending")) return false;
+  const young = rows.some((r) => {
+    if (!isOpenRestart(r)) return false;
+    const t = Date.parse(r.ts);
+    return !Number.isNaN(t) && now - t < SWITCH_FAST_POLL_FOR_MS;
+  });
+  return young ? SWITCH_POLL_PENDING_MS : SWITCH_POLL_IDLE_MS;
+}
+
+/** The speed line is a door only where a switch can really happen: a
+ *  further chat (the main chat follows the agent — the server refuses any
+ *  other move there, `default_chat_follows_agent`) and an admin (both
+ *  switch routes require ADMIN). Today the chat view only shows main
+ *  chats, so the door stays shut until a further-chat view exists. */
+export function canPickPair(chat: Pick<RecordChat, "agentDefault"> | null, isAdmin: boolean): boolean {
+  return !!chat && !chat.agentDefault && isAdmin;
+}
 
 export interface ChatSwitchState {
   /** The record is on AND this agent's chat is in it. Off = no switch UI. */
@@ -77,8 +112,7 @@ export function useChatSwitch(agentId: string | null): ChatSwitchState {
     enabled: !!chatId,
     retry: false,
     refetchOnWindowFocus: false,
-    refetchInterval: (query) =>
-      (query.state.data ?? []).some((r) => r.status === "pending") ? SWITCH_POLL_PENDING_MS : SWITCH_POLL_IDLE_MS,
+    refetchInterval: (query) => switchPollInterval(query.state.data ?? [], Date.now()),
   });
   const switches = rowsQuery.data ?? NO_SWITCHES;
   const pending = useMemo(() => [...switches].reverse().find((r) => r.status === "pending") ?? null, [switches]);
