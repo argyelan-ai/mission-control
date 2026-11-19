@@ -465,3 +465,17 @@ async def test_file_reads_run_off_the_event_loop(homes, flag_on, monkeypatch):
     monkeypatch.setattr(knowledge_import, "_walk", spy)
     await _sync()
     assert seen and not any(seen), seen
+
+
+@pytest.mark.postgres
+async def test_sweep_in_another_process_blocks_this_one(homes, flag_on):
+    """The API and the worker are two processes: the Postgres advisory lock,
+    held here by a second connection, must turn this sweep into SyncBusy."""
+    from sqlalchemy import text
+
+    async with test_engine.connect() as other:
+        await other.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": knowledge_import._PG_LOCK_KEY})
+        with pytest.raises(knowledge_import.SyncBusy):
+            await _sync()
+        await other.rollback()
+    assert isinstance(await _sync(), knowledge_import.SyncStats)
