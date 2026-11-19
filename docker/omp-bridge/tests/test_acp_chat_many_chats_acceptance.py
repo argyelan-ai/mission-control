@@ -139,7 +139,7 @@ class Daemon:
     def say(self, chat_id, text):
         code, body = self.ctl("prompt", {"text": text, "chatId": chat_id, "mode": "queue"})
         assert code == 0 and body["ok"] is True, body
-        chat, _ = self.pool.get(chat_id, start=False)
+        chat = self.pool.wait_open(chat_id, 30)
         assert chat.wait_idle(20)
         return assistant_texts(read_lines(chat.transcript_path))[-1]
 
@@ -164,7 +164,7 @@ def test_two_chats_keep_their_own_context_and_resume_after_a_restart(tmp_path):
             default_state = json.loads((d.sessions_dir / "acp-chat-state.json").read_text())
             assert default_state["sessionId"] not in pins.values()
             assert assistant_texts(read_lines(d.default.transcript_path)) == []
-            files = {c: d.pool.get(c, start=False)[0].transcript_path for c in (A, B)}
+            files = {c: d.pool.get(c).transcript_path for c in (A, B)}
         finally:
             d.close()
 
@@ -174,7 +174,7 @@ def test_two_chats_keep_their_own_context_and_resume_after_a_restart(tmp_path):
             assert d2.say(A, "and now?") == "I know: my cat is Tom, what is my pet?, and now?"
             assert mc.pins == pins       # same native sessions, nothing re-pinned elsewhere
             for c in (A, B):
-                assert d2.pool.get(c, start=False)[0].transcript_path == files[c]
+                assert d2.pool.get(c).transcript_path == files[c]
             # the backend's view of the further chats through the ctl shim
             code, body = d2.ctl("chats")
             assert code == 0 and {c["chatId"] for c in body["chats"]} == {A, B}
