@@ -2,7 +2,11 @@
 
 Reads: signed-in users (role viewer or higher). Writes (S2 — a further chat
 on an agent's harness, rename/archive, pin the native session, the resume
-plan): admins, the same role the agent chat's input routes need. The privacy gate of the
+plan): admins, the same role the agent chat's input routes need. The
+harness side (omp bridge after ACP ``session/new``, the Claude start
+script) holds an agent token, not a user JWT: ``/agent/me/chats/…`` are the
+pin and resume twins for it, scope ``chat:write`` for the pin, and only the
+calling agent's own chats exist there. The privacy gate of the
 transcript adapters (``transcript_allowed``) runs when an event is WRITTEN
 (importer, live sink); what is in the record stays readable here. While ``CHAT_RECORD_ENABLED`` is off every route
 answers 404 ``{"reason": "chat_record_disabled"}`` — the record does not exist
@@ -16,8 +20,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.auth import Role, require_role
+from app.auth import Role, require_agent, require_role
 from app.database import get_session
+from app.scopes import Scope, require_scope
 from app.services import chat_record
 
 router = APIRouter(prefix="/api/v1/chat-record", tags=["chat-record"])
@@ -176,4 +181,50 @@ async def get_record_chat_resume(
     (Claude ``--resume``, ACP ``session/load``). Data only; starts nothing."""
     _require_enabled()
     chat = await _visible_chat(session, current_user, chat_id)
+    return await chat_record.resume_plan(session, chat)
+
+
+# ── Harness side (agent token) ───────────────────────────────────────────
+
+
+async def _own_chat(session: AsyncSession, agent, chat_id: uuid.UUID):
+    """A chat on the calling agent's harness — any other chat is 404, so an
+    agent cannot probe or move another agent's record."""
+    from app.models.chat_record import Chat
+
+    chat = await session.get(Chat, chat_id)
+    if chat is None or chat.legacy_agent_id != agent.id:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return chat
+
+
+@router.put("/agent/me/chats/{chat_id}/native-session")
+async def agent_pin_chat_session(
+    chat_id: uuid.UUID,
+    body: PinBody,
+    agent=Depends(require_scope(Scope.CHAT_WRITE)),
+    session: AsyncSession = Depends(get_session),
+):
+    """The harness reports the native session it opened for this chat (omp:
+    the id ACP ``session/new`` returned). Same rules as the admin route."""
+    _require_enabled()
+    chat = await _own_chat(session, agent, chat_id)
+    try:
+        moved = await chat_record.pin_native_session(session, chat, body.native_session_id)
+    except chat_record.ChatRecordError as exc:
+        _raise(exc)
+    await session.commit()
+    return {**chat_record.chat_out(chat), "movedEvents": moved}
+
+
+@router.get("/agent/me/chats/{chat_id}/resume")
+async def agent_chat_resume(
+    chat_id: uuid.UUID,
+    agent=Depends(require_agent),
+    session: AsyncSession = Depends(get_session),
+):
+    """How the harness puts this chat's own session in front of the model
+    (same plan as the admin route). Data only; starts nothing."""
+    _require_enabled()
+    chat = await _own_chat(session, agent, chat_id)
     return await chat_record.resume_plan(session, chat)

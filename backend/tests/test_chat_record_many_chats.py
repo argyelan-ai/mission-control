@@ -259,6 +259,137 @@ async def test_stray_rows_of_a_moved_session_are_healed_by_the_next_import(host_
     assert await _chat_texts(second.id) == ["hello acp"]
 
 
+async def _session_rows(agent, native):
+    async with AsyncSession(test_engine) as s:
+        return (await s.exec(
+            select(ChatSession).join(Chat, Chat.id == ChatSession.chat_id)
+            .where(Chat.legacy_agent_id == agent.id, ChatSession.native_session_id == native)
+        )).all()
+
+
+async def _stray_row_in_default_chat(agent, text="hello acp", key="n1:message:0"):
+    """The writer that resolved the default chat BEFORE the pin committed and
+    called ``ensure_session`` AFTER it: (default, native) no longer matches
+    the moved row, so a NEW session row is born in the default chat."""
+    default = await _default_chat(agent)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        stray = await chat_record.ensure_session(
+            s, default, native_session_id="s-acp", harness="omp", runtime_id=None,
+            model=None, place="container", transcript_path=None,
+        )
+        await chat_record.upsert_events(s, default.id, stray.id, [
+            (key, {"kind": "message", "uuid": key.split(":")[0], "role": "user", "text": text,
+                   "ts": "2026-11-01T10:00:01.000Z"}),
+        ])
+        await s.commit()
+    return default, stray
+
+
+async def test_a_stray_session_row_born_in_the_default_chat_after_the_pin_is_merged(
+    host_home, flag_on, make_agent
+):
+    """Critic repro (S2 review): pin race that creates a SECOND row. The next
+    import routes by native id and merges every row of that native session
+    into the pinned chat — the default chat ends empty, nothing doubles."""
+    agent = await make_agent(name="Omp", slug="omp-a", harness="omp")
+    _omp_files(host_home, "omp-a")
+    await _import_all()
+    second = await _new_chat(agent)
+    await _pin(second.id, "s-acp")
+    default, _stray = await _stray_row_in_default_chat(agent)
+    assert await _chat_texts(default.id) == ["hello acp"]
+    await _import_all()
+    await _import_all()
+    assert await _chat_texts(default.id) == []
+    assert await _chat_texts(second.id) == ["hello acp"]
+    rows = await _session_rows(agent, "s-acp")
+    assert [r.chat_id for r in rows] == [second.id]
+
+
+async def test_pinning_merges_rows_of_the_session_from_every_other_chat(host_home, flag_on, make_agent):
+    """The pin itself collects every row of that native session, not only the
+    ones the default chat held at pin time (here: two rows, one stray)."""
+    agent = await make_agent(name="Omp", slug="omp-a", harness="omp")
+    _omp_files(host_home, "omp-a")
+    second = await _new_chat(agent)
+    # The pinned chat already has its own row (e.g. the bridge wrote first).
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        mine = await chat_record.ensure_session(
+            s, second, native_session_id="s-acp", harness="omp", runtime_id=None,
+            model=None, place="container", transcript_path=None,
+        )
+        await chat_record.upsert_events(s, second.id, mine.id, [
+            ("n2:message:0", {"kind": "message", "uuid": "n2", "role": "assistant", "text": "answer",
+                              "ts": "2026-11-01T10:00:02.000Z"}),
+        ])
+        await s.commit()
+    await _stray_row_in_default_chat(agent)
+    moved = await _pin(second.id, "s-acp")
+    assert moved == 1
+    assert await _chat_texts((await _default_chat(agent)).id) == []
+    assert await _chat_texts(second.id) == ["hello acp", "answer"]
+    rows = await _session_rows(agent, "s-acp")
+    assert [r.id for r in rows] == [mine.id]
+
+
+async def test_live_recorder_that_cached_a_stray_row_switches_to_the_pinned_chat(
+    host_home, flag_on, make_agent
+):
+    """The tailer cached (default chat, stray row). The row never moves, so
+    comparing the row's own chat is not enough: the next live event must go
+    to the chat that pinned the native session, and the stray copy is merged."""
+    from app.services.transcript_adapters import adapter_for
+
+    agent = await make_agent(name="Omp", slug="omp-a", harness="omp")
+    native, _bridge, _head, _msg = _omp_files(host_home, "omp-a")
+    rec = chat_record.LiveRecorder(agent, adapter_for(agent), native, session_factory=_test_factory)
+    await rec.backfilled.wait()
+    second = await _new_chat(agent)
+    await _pin(second.id, "s-acp")
+    default, stray = await _stray_row_in_default_chat(agent, text="stray copy", key="n9:message:0")
+    rec._session_rows[str(native)] = (default.id, stray.id, True)
+    rec.record(native, {"kind": "message", "uuid": "n3", "ts": "2026-11-01T10:00:03.000Z",
+                        "role": "user", "text": "after the pin"})
+    await rec.wait_idle()
+    rec.close()
+    assert rec.errors == 0
+    assert await _chat_texts(default.id) == []
+    assert await _chat_texts(second.id) == ["hello acp", "stray copy", "after the pin"]
+    assert [r.chat_id for r in await _session_rows(agent, "s-acp")] == [second.id]
+
+
+async def test_import_of_a_default_chat_session_runs_no_stray_repair(host_home, flag_on, make_agent, monkeypatch):
+    """Cost: the stray repair runs only for sessions a further chat pinned,
+    not once per session file and sweep for every agent."""
+    calls = []
+    real = chat_record.merge_strays
+
+    async def _spy(*a, **kw):
+        calls.append(a)
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(chat_record, "merge_strays", _spy)
+    agent = await make_agent(name="Omp", slug="omp-a", harness="omp")
+    _omp_files(host_home, "omp-a")
+    await _import_all()
+    await _import_all()
+    assert calls == []
+    second = await _new_chat(agent)
+    await _pin(second.id, "s-acp")
+    calls.clear()
+    await _import_all()
+    assert len(calls) == 1
+
+
+async def test_a_caller_without_a_users_row_creates_an_unowned_chat(host_home, flag_on, make_agent):
+    """LOCAL_AUTH_TOKEN acts as a synthetic admin while no user exists
+    (auth._legacy_admin_user, fixed id, no users row). Its id must not reach
+    ``owner_user_id`` — Postgres' users FK would turn the create into a 500."""
+    agent = await make_agent(name="Alpha", slug="alpha", harness="claude")
+    chat = await _new_chat(agent, user=_User(uid=uuid.UUID("00000000-0000-0000-0000-000000000001")))
+    assert chat.owner_user_id is None
+
+
 async def test_resume_plan_starts_then_continues_the_pinned_session(host_home, flag_on, make_agent):
     claude = await make_agent(name="Alpha", slug="alpha", harness="claude")
     chat = await _new_chat(claude)
@@ -375,6 +506,64 @@ async def test_api_write_routes_need_admin(host_home, flag_on, make_agent, clien
     assert r.status_code == 403
 
 
+async def test_harness_side_pins_and_reads_the_resume_plan_with_its_agent_token(
+    host_home, flag_on, make_agent, client
+):
+    """The callers of pin + resume are the harness side (omp bridge after
+    ACP ``session/new``, the Claude start script) and they hold an AGENT
+    token, not a user JWT. Their twins answer only for the agent's own chats."""
+    from app.auth import generate_agent_token
+
+    raw, token_hash = generate_agent_token()
+    agent = await make_agent(name="Omp", slug="omp-a", harness="omp", agent_token_hash=token_hash)
+    other = await make_agent(name="Other", slug="other", harness="omp")
+    _omp_files(host_home, "omp-a")
+    await _import_all()
+    mine = await _new_chat(agent)
+    theirs = await _new_chat(other)
+    h = {"Authorization": f"Bearer {raw}"}
+    base = f"{_BASE}/agent/me/chats"
+
+    r = await client.get(f"{base}/{mine.id}/resume", headers=h)
+    assert r.status_code == 200 and r.json()["acp"] == {"method": "session/new"}
+    r = await client.put(f"{base}/{mine.id}/native-session", json={"nativeSessionId": "s-acp"}, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["nativeSessionId"] == "s-acp" and r.json()["movedEvents"] == 1
+    assert await _chat_texts(mine.id) == ["hello acp"]
+    r = await client.get(f"{base}/{mine.id}/resume", headers=h)
+    assert r.json()["acp"] == {"method": "session/load", "sessionId": "s-acp"}
+
+    # Another agent's chat does not exist for this token.
+    for method, url, kw in (
+        ("put", f"{base}/{theirs.id}/native-session", {"json": {"nativeSessionId": "s-x"}}),
+        ("get", f"{base}/{theirs.id}/resume", {}),
+    ):
+        r = await getattr(client, method)(url, headers=h, **kw)
+        assert r.status_code == 404, url
+    # Conflicts come through as on the admin route.
+    r = await client.put(f"{base}/{mine.id}/native-session", json={"nativeSessionId": "s-other"}, headers=h)
+    assert r.status_code == 409 and r.json()["detail"] == {"reason": "already_pinned"}
+    # No token, no route.
+    r = await client.get(f"{base}/{mine.id}/resume")
+    assert r.status_code == 401
+
+
+async def test_agent_twins_are_404_while_flag_is_off(make_agent, client):
+    from app.auth import generate_agent_token
+
+    raw, token_hash = generate_agent_token()
+    await make_agent(name="Omp", slug="omp-a", harness="omp", agent_token_hash=token_hash)
+    h = {"Authorization": f"Bearer {raw}"}
+    cid = uuid.uuid4()
+    for method, url, kw in (
+        ("put", f"{_BASE}/agent/me/chats/{cid}/native-session", {"json": {"nativeSessionId": "s-1"}}),
+        ("get", f"{_BASE}/agent/me/chats/{cid}/resume", {}),
+    ):
+        r = await getattr(client, method)(url, headers=h, **kw)
+        assert r.status_code == 404, url
+        assert r.json()["detail"] == {"reason": "chat_record_disabled"}
+
+
 # ── Postgres lane: real partial unique indexes, real transactions ──────────
 
 
@@ -414,3 +603,17 @@ async def test_pg_pin_moves_the_session_and_a_second_pin_is_refused(host_home, f
     await _import_all()
     assert await _chat_texts(a.id) == ["hello acp"]
     assert await _chat_texts((await _default_chat(agent)).id) == []
+
+
+@pytest.mark.postgres
+async def test_pg_a_stray_row_from_the_pin_race_is_merged_into_the_pinned_chat(host_home, flag_on, make_agent):
+    agent = await make_agent(name="Omp", slug="omp-a", harness="omp")
+    _omp_files(host_home, "omp-a")
+    await _import_all()
+    second = await _new_chat(agent)
+    await _pin(second.id, "s-acp")
+    default, _stray = await _stray_row_in_default_chat(agent, text="stray copy", key="n9:message:0")
+    await _import_all()
+    assert await _chat_texts(default.id) == []
+    assert await _chat_texts(second.id) == ["hello acp", "stray copy"]
+    assert [r.chat_id for r in await _session_rows(agent, "s-acp")] == [second.id]

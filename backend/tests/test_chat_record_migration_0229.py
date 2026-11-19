@@ -125,10 +125,19 @@ def test_upgrade_marks_existing_chats_default_and_downgrade_keeps_rows():
         ), {"c": uuid.uuid4().hex, "agent": other})
 
         _run(conn, rev29, "downgrade")
-        rows = {t: a for t, a in conn.execute(sa.text("SELECT title, legacy_agent_id FROM chats")).all()}
-        # Nothing deleted; the further chats are detached from their agent.
+        rows = {
+            t: (a, arch is not None)
+            for t, a, arch in conn.execute(sa.text("SELECT title, legacy_agent_id, archived_at FROM chats")).all()
+        }
+        # Nothing deleted; the further chats are detached from their agent …
         assert set(rows) == {"Alpha", "Loose", "Second", "Other"}
-        assert rows["Alpha"] == agent and rows["Second"] is None and rows["Other"] is None
+        assert rows["Alpha"][0] == agent and rows["Second"][0] is None and rows["Other"][0] is None
+        # … and archived: after the way back the importer reads their native
+        # sessions into the agent's chat again, and a detached copy in the
+        # list and search would show that history twice. A chat that never
+        # had an agent is left alone.
+        assert rows["Second"][1] and rows["Other"][1]
+        assert not rows["Alpha"][1] and not rows["Loose"][1]
         assert "uq_chats_legacy_agent" in _indexes(conn)
         cols = {c["name"] for c in sa.inspect(conn).get_columns("chats")}
         assert "agent_default" not in cols and "native_session_id" not in cols

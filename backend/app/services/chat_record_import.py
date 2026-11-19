@@ -161,16 +161,19 @@ async def import_session_file(
     except OSError:
         return 0
     chat, row = await _session_row_for(db, agent, adapter, path)
+    if not chat.agent_default:
+        # A pinned chat (S2): collect every row / event of its native
+        # session a writer racing the pin left in another chat. Before the
+        # bridge check, so a merged copy of omp's own file is replaced too.
+        moved, touched = await chat_record.merge_strays(db, chat)
+        if touched:
+            force = True
     if await asyncio.to_thread(_omp_moves_to_bridge, adapter, row.transcript_path, path):
         from app.models.chat_record import ChatEvent
 
         await db.execute(delete(ChatEvent.__table__).where(ChatEvent.__table__.c.session_id == row.id))
         row.transcript_path = str(path)
         row.imported_bytes = 0
-        force = True
-    if await chat_record.heal_strays(db, chat.id, row.id):
-        # Rows of this session sat in another chat (a pin moved the session
-        # while a writer was busy): read the whole file into the right chat.
         force = True
     if not force and row.imported_bytes == size:
         return SKIPPED_UNCHANGED

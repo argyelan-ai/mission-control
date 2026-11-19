@@ -15,6 +15,9 @@ Everything that writes here is behind ``CHAT_RECORD_ENABLED`` (default off).
 Way back: flag off, then ``downgrade`` — further chats are DETACHED from
 their agent (``legacy_agent_id`` set to NULL, their rows and events stay),
 so the old one-chat-per-agent index can be built again; nothing is deleted.
+They are also ARCHIVED: with the pin gone, the next sweep imports their
+native sessions into the agent's chat again (full copy). The detached
+chats keep the old copy, hidden from the list and from search.
 
 Revision ID: 0229_chat_record_many_chats
 Revises: 0228_knowledge_root
@@ -60,8 +63,14 @@ def downgrade() -> None:
     op.drop_index("ix_chats_legacy_agent_id", table_name="chats")
     op.drop_index("uq_chats_agent_native", table_name="chats")
     op.drop_index("uq_chats_agent_default", table_name="chats")
-    # Keep the further chats and their record, only detach them.
-    op.execute("UPDATE chats SET legacy_agent_id = NULL WHERE agent_default = FALSE")
+    # Keep the further chats and their record, only detach them — and
+    # archive them: without the pin the importer reads their native sessions
+    # into the agent's chat again, so a visible detached copy would show
+    # that history twice (archived chats leave the list and search).
+    op.execute(
+        "UPDATE chats SET archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP), legacy_agent_id = NULL "
+        "WHERE agent_default = FALSE AND legacy_agent_id IS NOT NULL"
+    )
     op.create_index(
         "uq_chats_legacy_agent",
         "chats",
