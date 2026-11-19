@@ -864,7 +864,8 @@ internal:
   # yet — the chat list and history switch over in a later ROADMAP stage-1
   # package. Slice S2 (migration 0229) adds the admin write side: further
   # chats per agent with their own pinned native session (create, rename/
-  # archive, pin, resume plan) — no harness drives them yet.
+  # archive, pin, resume plan), plus agent-token twins of pin + resume
+  # (/agent/me/chats/…) for the harness side — no harness drives them yet.
   - "endpoint:* /api/v1/chat-record/*"
   - "table:chats"
   - "table:chat_sessions"

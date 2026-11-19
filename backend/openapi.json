@@ -2596,6 +2596,24 @@
         ]
       }
     },
+    "/api/v1/chat-record/agent/me/chats/{chat_id}/native-session": {
+      "put": {
+        "operationId": "agent_pin_chat_session_api_v1_chat_record_agent_me_chats__chat_id__native_session_put",
+        "summary": "Agent Pin Chat Session",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
+    "/api/v1/chat-record/agent/me/chats/{chat_id}/resume": {
+      "get": {
+        "operationId": "agent_chat_resume_api_v1_chat_record_agent_me_chats__chat_id__resume_get",
+        "summary": "Agent Chat Resume",
+        "tags": [
+          "chat-record"
+        ]
+      }
+    },
     "/api/v1/chat-record/chats": {
       "get": {
         "operationId": "list_record_chats_api_v1_chat_record_chats_get",
