@@ -9,6 +9,7 @@ import {
   shiftDay,
   boxSplit,
   dayTotals,
+  type UsageDay,
 } from "../insights";
 import { mkUsageByDay, mkDay, mkUsageByWeek, mkSource, mkUsageWeek, mkBox } from "./usageFixtures";
 
@@ -59,6 +60,13 @@ describe("heatmapGrid", () => {
     expect(local[1]?.level).toBe(4);
   });
 
+  it("colours by the cloud tokens: all minus the local ones", () => {
+    const days = [mkDay("2026-09-28", 1000, 0), mkDay("2026-09-29", 10, 10), mkDay("2026-09-30", 0, 0)];
+    const cloud = heatmapGrid(days, 1, "cloud").columns[0];
+    expect(cloud.slice(0, 3).map((c) => c?.value)).toEqual([1000, 0, 0]);
+    expect(cloud[1]?.level).toBe(0);
+  });
+
   it("adds the boxes' direct API tokens to a day in both modes", () => {
     // 1000 via MC (100 of them local) + 500 sent straight to a box's API.
     const withBox = { ...mkDay("2026-09-29", 1000, 100), ...mkBox(600, 100) };
@@ -67,6 +75,8 @@ describe("heatmapGrid", () => {
     const local = heatmapGrid(days, 1, "local").columns[0];
     expect(all.slice(0, 3).map((c) => c?.value)).toEqual([1000, 1500, 0]);
     expect(local.slice(0, 3).map((c) => c?.value)).toEqual([0, 600, 0]);
+    // Direct API tokens ran on a local box, so they never count as cloud.
+    expect(heatmapGrid(days, 1, "cloud").columns[0].slice(0, 3).map((c) => c?.value)).toEqual([1000, 900, 0]);
   });
 
   it("labels the column that holds the first of a month", () => {
@@ -86,6 +96,25 @@ describe("weekSoFar", () => {
     expect(w.cost).toBe(150);
     expect(w.previousCost).toBe(300); // Mon–Wed of last week, not the whole week
     expect(w.change).toBeCloseTo(-0.5);
+  });
+
+  it("follows the switch: cloud is the cost minus the local part", () => {
+    const days = [
+      mkDay("2026-09-21", 0, 0, 100, 10), mkDay("2026-09-22", 0, 0, 100, 10), mkDay("2026-09-23", 0, 0, 100, 0),
+      mkDay("2026-09-28", 0, 0, 50, 5), mkDay("2026-09-29", 0, 0, 100, 0), mkDay("2026-09-30", 0, 0, 0, 0),
+    ];
+    expect(weekSoFar(days, "all").cost).toBe(150);
+    const cloud = weekSoFar(days, "cloud");
+    expect([cloud.cost, cloud.previousCost]).toEqual([145, 280]);
+    const local = weekSoFar(days, "local");
+    expect([local.cost, local.previousCost]).toEqual([5, 20]);
+    expect(local.change).toBeCloseTo(-0.75);
+  });
+
+  it("reads a missing local cost (older backend) as 0, so cloud is the whole cost", () => {
+    const { local_cost_usd: _drop, ...old } = mkDay("2026-09-30", 0, 0, 40, 0);
+    expect(weekSoFar([old as UsageDay], "cloud").cost).toBe(40);
+    expect(weekSoFar([old as UsageDay], "local").cost).toBe(0);
   });
 
   it("has no change when last week had nothing", () => {
@@ -157,18 +186,18 @@ describe("boxSplit", () => {
 describe("dayTotals", () => {
   it("counts direct API tokens as local and keeps the local share consistent", () => {
     const t = dayTotals({ ...mkDay("2026-09-29", 1000, 100), ...mkBox(600, 100) });
-    expect(t).toEqual({ all: 1500, local: 600, external: 500, localShare: 0.4 });
+    expect(t).toEqual({ all: 1500, cloud: 900, local: 600, external: 500, localShare: 0.4 });
   });
 
   it("is MC's own numbers on days without box data (no made-up numbers)", () => {
-    expect(dayTotals(mkDay("2026-09-29", 1000, 100))).toEqual({ all: 1000, local: 100, external: 0, localShare: 0.1 });
+    expect(dayTotals(mkDay("2026-09-29", 1000, 100))).toEqual({ all: 1000, cloud: 900, local: 100, external: 0, localShare: 0.1 });
     const before = { ...mkDay("2026-09-29", 1000, 100), box: null, via_mc_local: null, external: null };
-    expect(dayTotals(before)).toEqual({ all: 1000, local: 100, external: 0, localShare: 0.1 });
+    expect(dayTotals(before)).toEqual({ all: 1000, cloud: 900, local: 100, external: 0, localShare: 0.1 });
   });
 
   it("has a day used only through the direct API", () => {
     expect(dayTotals({ ...mkDay("2026-09-29", 0, 0), ...mkBox(800, 0) })).toEqual({
-      all: 800, local: 800, external: 800, localShare: 1,
+      all: 800, cloud: 0, local: 800, external: 800, localShare: 1,
     });
     expect(dayTotals(mkDay("2026-09-29", 0, 0)).localShare).toBeNull();
   });

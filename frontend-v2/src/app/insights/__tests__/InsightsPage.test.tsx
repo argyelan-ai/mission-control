@@ -1,6 +1,6 @@
 /** Insights page: one story in a fixed order, days in the browser's zone. */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { mkUsageByDay, mkUsageByWeek } from "@/lib/__tests__/usageFixtures";
@@ -49,6 +49,29 @@ describe("InsightsPage", () => {
     await screen.findByTestId("hero-cost");
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Insights");
+  });
+
+  it("has one switch All · Cloud · Local at the top that moves the cost", async () => {
+    const days = mkUsageByDay();
+    days.days = days.days.map((d) => ({ ...d, local_cost_usd: d.cost_usd / 4 }));
+    vi.spyOn(api.intelligence, "byDay").mockResolvedValue(days);
+    renderPage();
+    const cost = await screen.findByTestId("hero-cost");
+    const group = screen.getByRole("radiogroup", { name: "Which usage the page shows" });
+    expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["All", "Cloud", "Local"]);
+    expect(within(group).getByRole("radio", { name: "All" })).toHaveAttribute("aria-checked", "true");
+    const all = cost.textContent;
+
+    fireEvent.click(within(group).getByRole("radio", { name: "Cloud" }));
+    expect(within(group).getByRole("radio", { name: "Cloud" })).toHaveAttribute("aria-checked", "true");
+    const cloud = screen.getByTestId("hero-cost").textContent;
+    expect(cloud).not.toBe(all);
+
+    fireEvent.click(within(group).getByRole("radio", { name: "Local" }));
+    const local = screen.getByTestId("hero-cost").textContent;
+    expect(local).not.toBe(all);
+    expect(local).not.toBe(cloud);
+    expect(screen.getByText(/local runs at the API list price/)).toBeInTheDocument();
   });
 
   it("asks for days and weeks in the browser's time zone", async () => {
