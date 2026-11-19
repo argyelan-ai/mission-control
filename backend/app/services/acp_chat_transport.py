@@ -20,6 +20,11 @@ haelt:
 ``answer``       ``{"id":"el-…","action":"accept",``     ``{"ok":true,"status":"answered"}`` ·
                  ``"content"?:{...}}`` (P3)              ``{"ok":false,"error":"not_pending"}`` ·
                                                          ``{"ok":false,"error":"bad_content",...}``
+``stop_for_``    — (further chat only, S3 item C)       ``{"ok":true,"handedOver":[],"held":n,``
+``switch``                                               ``"stopped":bool}``
+``switch``       ``{"switchEventId","action",``          ``{"ok":true,"switching":true,``
+                 ``"nativeSessionId"?,"tryNativeLoad",`` ``"handedOver":[]}`` (stdin) ·
+                 ``"package"?,"model"?}``                ``{"ok":false,"error":"busy"}``
 ===============  ======================================  ==========================
 
 ``config`` traegt die id, die der Agent selbst meldet: die Denk-Stufe heisst
@@ -80,6 +85,12 @@ _CTL_EXIT_NOT_OK = 2
 #: ``agent_chat_input._run_docker_exec``'s ``timeout=5``).
 _CTL_TIMEOUT_SECONDS = 10.0
 _HTTP_TIMEOUT_SECONDS = 10.0
+#: Ops whose payload always goes over stdin (``--json -``): a switch carries
+#: the handoff package, which does not fit in one exec argument.
+_STDIN_OPS = frozenset({"switch"})
+#: Any other payload above this goes over stdin too — well below Linux's
+#: MAX_ARG_STRLEN (131 072 bytes for ONE argument).
+_ARGV_PAYLOAD_MAX_BYTES = 100_000
 
 #: Die hermes-bridge auf dem Host. Aus dem Backend-Container zeigt
 #: ``host.docker.internal`` auf den Mac; der Port ist derselbe wie in
@@ -155,6 +166,10 @@ class ChatTransport(Protocol):
 
     async def answer(self, id: str, action: str, content: dict | None = None) -> dict: ...
 
+    async def stop_for_switch(self) -> dict: ...
+
+    async def switch(self, payload: dict[str, Any]) -> dict: ...
+
 
 def _answer_payload(id: str, action: str, content: dict | None) -> dict[str, Any]:
     """``answer``-Op (P3): ``content`` nur bei ``accept`` — der Daemon prueft
@@ -208,31 +223,48 @@ class DockerCtlTransport:
         self._slug = slug
         self._chat_id = chat_id
 
-    def _argv(self, op: str, payload: dict[str, Any] | None) -> list[str]:
+    def _request(self, op: str, payload: dict[str, Any] | None) -> tuple[list[str], bytes | None]:
+        """argv of the ctl call, plus the JSON for its stdin — or None when
+        the payload rides in argv as before.
+
+        Linux caps ONE exec argument at ``MAX_ARG_STRLEN`` (128 KiB); a
+        switch's handoff package (32k tokens ~ 128k chars, escaped as JSON)
+        is bigger. ``switch`` and any payload near the cap therefore go over
+        stdin (``docker exec -i … --json -``); every other call keeps its
+        argv shape byte for byte (an older shim does not know ``-``)."""
         if self._chat_id:
             payload = {**(payload or {}), "chatId": self._chat_id}
         # ``-u agent`` und ``LANG=C.UTF-8`` wie in ``agent_chat_input._docker_argv``:
         # ohne die richtige Locale verstuemmelt der Container mehrbytige Zeichen
         # im Prompt-Text.
+        encoded = json.dumps(payload) if payload else ""
+        stdin = op in _STDIN_OPS or len(encoded.encode("utf-8")) > _ARGV_PAYLOAD_MAX_BYTES
         argv = [
-            "docker", "exec", "-e", "LANG=C.UTF-8", "-u", "agent",
+            "docker", "exec", *(["-i"] if stdin else []), "-e", "LANG=C.UTF-8", "-u", "agent",
             f"mc-agent-{self._slug}",
             "python3", CTL_PATH, op,
         ]
+        if stdin:
+            return argv + ["--json", "-"], (encoded or "{}").encode("utf-8")
         if payload:
-            argv += ["--json", json.dumps(payload)]
-        return argv
+            argv += ["--json", encoded]
+        return argv, None
+
+    def _argv(self, op: str, payload: dict[str, Any] | None) -> list[str]:
+        return self._request(op, payload)[0]
 
     async def _call(self, op: str, payload: dict[str, Any] | None = None) -> dict:
-        argv = self._argv(op, payload)
+        argv, stdin = self._request(op, payload)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
+                stdin=asyncio.subprocess.PIPE if stdin is not None else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), _CTL_TIMEOUT_SECONDS
+                proc.communicate(stdin) if stdin is not None else proc.communicate(),
+                _CTL_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError as e:
             raise AcpChatUnreachableError(f"acp_chat_ctl {op}: timeout") from e
@@ -298,6 +330,19 @@ class DockerCtlTransport:
     async def answer(self, id: str, action: str, content: dict | None = None) -> dict:
         return await self._call("answer", _answer_payload(id, action, content))
 
+    async def stop_for_switch(self) -> dict:
+        """A chat switch with a running turn (S3 item C, ADR-105): the
+        daemon stops it, closes its question cards (``expired_by_switch``)
+        and holds the queue for the switch (it runs after the handoff turn;
+        ``handedOver`` is only filled by an older daemon)."""
+        return await self._call("stop_for_switch")
+
+    async def switch(self, payload: dict[str, Any]) -> dict:
+        """Moves a further chat to the session ``payload`` names
+        (``acp_chat_chats.OmpChatDriver``); the outcome arrives on MC's
+        switch result route."""
+        return await self._call("switch", payload)
+
 
 class HttpCtlTransport:
     """Steuerkanal zur hermes-bridge auf dem Host (``POST /chat/<op>``).
@@ -357,6 +402,13 @@ class HttpCtlTransport:
         # Die Host-Bruecke routet ``answer`` (noch) nicht — ihr Chat-Daemon
         # fragt auch nie (Elicitation ist dort aus).
         return await self._call("answer", _answer_payload(id, action, content))
+
+    async def stop_for_switch(self) -> dict:
+        # The host bridge holds no further chats — nothing to switch.
+        return {"ok": False, "error": "switch_unsupported"}
+
+    async def switch(self, payload: dict[str, Any]) -> dict:
+        return {"ok": False, "error": "switch_unsupported"}
 
 
 def transport_for(agent, chat_id: str | None = None) -> ChatTransport:

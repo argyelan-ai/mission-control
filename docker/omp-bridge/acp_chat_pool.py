@@ -38,6 +38,21 @@ Contract:
 * `/new` (`new_session`) on a further chat is refused (`chat_pinned`): its
   native session is pinned for good. A new conversation is a new chat — the
   backend creates it in the record and sends its `chatId`.
+* `switch` (S3 item C, ADR-105) is the one legitimate replacement of a
+  pinned session: MC asked for it and names the switch row
+  (`switchEventId`). The chat's child ends, a new one starts; for a
+  `resume` MC asked to try (`tryNativeLoad`) `session/load` comes first and
+  needs no package. Otherwise `session/new`, and the first prompt carries
+  MC's handoff package as its `context` (cap `CONTEXT_MAX_CHARS_HANDOFF`).
+  The outcome goes to MC's switch result route — never the pin route, which
+  refuses a re-pin while a switch is pending. A failed switch puts the chat
+  back on its old session (MC still pins that one). Open question cards end
+  as `expired` with reason `expired_by_switch`. `stop_for_switch` stops a
+  running turn for a switch and HOLDS the queue here (new messages too)
+  until the switch; it runs after the handoff turn — never dropped, never
+  in MC's memory. The pointer names the new session only once MC took the
+  `done` report; a refused one puts the chat back on MC's session. A model
+  the session does not run as asked fails the switch (`model_unreachable`).
 """
 from __future__ import annotations
 
@@ -91,6 +106,43 @@ CHAT_OPEN_FAILED = "chat_open_failed"
 _CHAT_OPEN_FAILED_TEXT = (
     "This chat could not be opened — the message was not sent."
 )
+
+
+#: Ids MC sends for a switch: the `chat_events` row id (a UUID).
+_SWITCH_ID_RE = _CHAT_ID_RE
+#: A model selector as omp takes it (`provider/model`, `model:tag`) — the
+#: backend's `chat_switch.MODEL_PATTERN`.
+_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\[\]-]{0,199}$")
+#: How long `stop_for_switch` waits for the stopped turn to end — well below
+#: the backend's 10 s ctl timeout (`acp_chat_transport._CTL_TIMEOUT_SECONDS`),
+#: which also covers the `docker exec` start. Not idle by then: the answer
+#: says `idle: false`, and MC's `switch` gets `busy` (nothing is lost — the
+#: queue stays here).
+STOP_WAIT_SECONDS = 3.0
+#: After `stop_for_switch` the chat holds its queue (and every new message)
+#: for the `switch` MC is about to send. No switch within this time (MC
+#: refused it after the stop: box lock, a lost race): the hold ends and the
+#: queue runs on the current session — never dropped.
+SWITCH_HOLD_SECONDS = 30.0
+#: Pauses between tries of a switch report MC did not answer; after the last
+#: one the report waits for the chat's next message (`prompt`).
+REPORT_RETRY_DELAYS = (0.5, 2.0)
+#: Codes MC's switch result route takes (`chat_switch.REPORTABLE_CODES`).
+_REPORT_CODES = ("process_start_failed", "new_session_failed", "model_unreachable",
+                 "provider_error")
+
+
+def _report_code(code: str) -> str:
+    """A turn's error code as MC's switch result route takes it."""
+    if code in _REPORT_CODES:
+        return code
+    if code in ("process_exit", "closed"):
+        return "process_start_failed"
+    return "provider_error"  # rpc_error, empty_turn, … — the model's side refused
+
+
+#: The chat card when MC refused a switch's `done` report.
+SWITCH_REFUSED = "switch_refused"
 
 
 class McUnreachable(Exception):
@@ -160,6 +212,12 @@ class McChats:
         return self._call("PUT", f"{chat_id}/native-session",
                           {"nativeSessionId": native_session_id})
 
+    def report(self, chat_id: str, switch_event_id: str, body: dict) -> dict:
+        """How a switch ended (S3 item C): `PUT …/switch/{event}/result` —
+        `{status: done|failed, nativeSessionId?, nativeResume?, realTokens?,
+        error?: {code, detail}}`. The one route that re-pins a chat."""
+        return self._call("PUT", f"{chat_id}/switch/{switch_event_id}/result", body)
+
 
 def _plan_native(plan: dict) -> Optional[str]:
     """The native session the plan says to load, or None (`session/new`)."""
@@ -192,6 +250,15 @@ class PinnedChatSession(acp_chat.ChatSession):
         self.last_used = time.monotonic()
         # Ops running on this chat right now (the pool's eviction skips it).
         self.inflight = 0
+        # A switch report MC did not take yet: `(switchEventId, body,
+        # restore)`, tried again before the chat's next message. `restore`
+        # names the session MC still pins, for a `done` MC then refuses.
+        self._pending_report: Optional[tuple[str, dict, Optional[dict]]] = None
+        # `stop_for_switch` holds the queue until this monotonic time.
+        self._hold_until: Optional[float] = None
+        self._hold_timer: Optional[threading.Timer] = None
+        # A `done` MC refused while a turn ran: back to MC's session after it.
+        self._restore_after_turn: Optional[dict] = None
 
     # -- files: the chat's own pointer AND state mirror ------------------
 
@@ -322,13 +389,395 @@ class PinnedChatSession(acp_chat.ChatSession):
     def prompt(self, *args: Any, **kwargs: Any) -> dict:
         if self.load_refused:
             return {"ok": False, "error": CHAT_LOAD_FAILED}
+        self._retry_report()
         self._ensure_pinned()
         return super().prompt(*args, **kwargs)
+
+    # -- switch (S3 item C, ADR-105) -------------------------------------
+
+    def stop_for_switch(self) -> dict:
+        """Before MC switches this chat while a turn runs
+        (`stop_and_switch`): the turn is stopped, open question cards end
+        `expired_by_switch` (F9), and the queue is HELD here (F8) — it and
+        every message that arrives meanwhile run after the handoff turn of
+        the `switch` that follows, on the new session. Nothing goes to MC's
+        memory, so neither a ctl timeout nor a backend restart can lose it;
+        without a switch the hold ends after SWITCH_HOLD_SECONDS."""
+        with self._lock:
+            if self._closed:
+                return {"ok": False, "error": "not_started"}
+            busy = self._busy
+            held = len(self._queue)
+            self._hold_until = time.monotonic() + SWITCH_HOLD_SECONDS
+        self._arm_hold_timer()
+        self._expire_elicitations(reason=acp_chat.EXPIRED_BY_SWITCH)
+        idle = True
+        if busy:
+            self.cancel()
+            idle = self.wait_idle(STOP_WAIT_SECONDS)
+        self._write_state()
+        # `handedOver` stays in the answer (empty) for the backend driver,
+        # which still sends back whatever an older daemon handed over.
+        return {"ok": True, "handedOver": [], "held": held, "stopped": busy, "idle": idle}
+
+    def _hold_queue_locked(self) -> bool:
+        return self._hold_until is not None and time.monotonic() < self._hold_until
+
+    def _arm_hold_timer(self) -> None:
+        timer = threading.Timer(SWITCH_HOLD_SECONDS, self._release_hold)
+        timer.daemon = True
+        with self._lock:
+            old, self._hold_timer = self._hold_timer, timer
+        if old is not None:
+            old.cancel()
+        timer.start()
+
+    def _release_hold(self) -> None:
+        """No switch came: the held queue runs where the chat is now."""
+        with self._lock:
+            self._hold_until = None
+            self._hold_timer = None
+            if self._closed or self._busy or not self._queue or self._client is None:
+                return
+            job = self._claim_locked(self._queue.pop(0))
+        self._write_state()
+        self._spawn(job)
+
+    def _end_hold_locked(self) -> None:
+        self._hold_until = None
+        timer, self._hold_timer = self._hold_timer, None
+        if timer is not None:
+            timer.cancel()
+
+    def close(self) -> None:
+        with self._lock:
+            self._end_hold_locked()
+        super().close()
+
+    def switch(self, request: dict) -> dict:
+        """MC moves this chat to another pair. Refused while a turn runs
+        (F1: `busy`, nothing changes) — MC stops it first
+        (`stop_for_switch`). Runs in the worker like a turn; the answer
+        comes at once, the outcome through MC's switch result route. A held
+        queue stays in place and runs after the handoff turn (F8)."""
+        cleaned = _clean_switch(request)
+        if "error" in cleaned:
+            return {"ok": False, **cleaned}
+        with self._lock:
+            if self._closed:
+                return {"ok": False, "error": "not_started"}
+            if self._busy:
+                return {"ok": False, "error": "busy"}
+            self._end_hold_locked()
+            job = self._claim_locked({"kind": "switch", "text": "", "switch": cleaned})
+        self._write_state()
+        self._spawn(job)
+        return {"ok": True, "switching": True, "switchEventId": cleaned["switchEventId"],
+                "handedOver": []}
+
+    def _run_switch(self, job: dict) -> None:
+        req = job["switch"]
+        event_id = req["switchEventId"]
+        with self._lock:
+            previous = self._session_id
+            previous_transcript = self.transcript_path
+            previous_model, previous_resolver = self._model, self._model_resolver
+        # F9: a question of the old session can never be answered in the new one.
+        self._expire_elicitations(reason=acp_chat.EXPIRED_BY_SWITCH)
+        with self._lock:
+            old_client, self._client = self._client, None
+        if old_client is not None:
+            try:
+                old_client.close()
+            except Exception:  # noqa: BLE001 — the old child goes either way
+                pass
+        self._state_dir.mkdir(parents=True, exist_ok=True)
+        self._sessions_dir.mkdir(parents=True, exist_ok=True)
+        if self._pump is None:
+            self._pump = acp_chat_events.ToolOutputPump(self._mapper, self._emit_preview).start()
+        if req.get("model"):
+            # The pair MC asked for, not the agent's omp.env selector.
+            self._model, self._model_resolver = req["model"], None
+        restore = dict(previous=previous, transcript=previous_transcript,
+                       model=previous_model, resolver=previous_resolver)
+
+        try:
+            client = self._new_client()
+        except Exception as exc:  # noqa: BLE001
+            self._switch_failed(event_id, "process_start_failed", exc, None, **restore)
+            return
+        native = req.get("nativeSessionId")
+        loaded = False
+        if req["action"] == "resume" and native:
+            try:
+                with self._muted_replay():
+                    client.load_session(native, self._cwd)
+                loaded = True
+            except Exception as exc:  # noqa: BLE001
+                if not req["tryNativeLoad"]:
+                    # Switch back: the old session itself, or nothing.
+                    self._switch_failed(event_id, "new_session_failed",
+                                        f"session/load {native}: {exc}", client, **restore)
+                    return
+                logger.info("chat %s: session/load %s for the switch failed (%s) — "
+                            "a new session gets the handoff", self.chat_id, native, exc)
+        if loaded:
+            session_id = native
+            sink = acp_chat_events.ChatEventSink.appending(self._copy_of(native), native)
+        else:
+            try:
+                session_id = client.new_session(self._cwd)
+            except Exception as exc:  # noqa: BLE001
+                self._switch_failed(event_id, "new_session_failed", exc, client, **restore)
+                return
+            sink = acp_chat_events.ChatEventSink(self._sessions_dir, session_id)
+        with self._lock:
+            self._client = client
+            self._session_id = session_id
+            if not loaded:
+                self._context = None
+            self._mapper.set_session_id(session_id)
+            self._sink = sink
+            self._preview = acp_chat_events.PreviewEventSink.beside(sink.path, session_id)
+            # MC learns this id from the switch report, never from the pin
+            # route (it refuses a re-pin while the switch is pending).
+            self._pinned = session_id
+        self._absorb_session_result(getattr(client, "last_session_result", None))
+        pinned = self._pin_model()
+        wanted = req.get("model")
+        if wanted and (not isinstance(pinned, dict) or not pinned.get("ok")
+                       or self._model != wanted):
+            # F12 on the omp side: the session does not run the model MC
+            # asked for (refused, or `choose_model` took a sibling) — MC
+            # must not record it. No handoff turn on the wrong model.
+            why = (f"the session runs {self._model}, not {wanted}"
+                   if isinstance(pinned, dict) and pinned.get("ok")
+                   else f"model {wanted} refused: "
+                        f"{(pinned or {}).get('detail') or (pinned or {}).get('error')}")
+            self._switch_failed(event_id, "model_unreachable", why, None, **restore)
+            return
+
+        package = req.get("package")
+        handoff = bool(package) and not (loaded and req["tryNativeLoad"])
+        usage = None
+        if handoff:
+            text = acp_chat.handoff_text_of(req.get("handoffText"))
+            with self._lock:
+                self._turn += 1
+                turn = self._turn
+                self._omp_mark = self._omp_file_mark()
+                self._current = acp_chat._current_entry(
+                    {"kind": "prompt", "text": text, "turn": turn,
+                     "origin": acp_chat.ORIGIN_HANDOFF})
+            self._write_state()
+            outcome = self._run_turn(text, turn, acp_chat.ORIGIN_HANDOFF,
+                                     acp_chat.handoff_context_of(package))
+            # A turn that answered with tools only (no final text) took the
+            # package: that is no refusal. A Stop (`cancelled`) is no error
+            # either — the prompt with the package is in the session.
+            if outcome.get("code") and outcome["code"] != "empty_turn":
+                # F6: the new model refused the handoff turn.
+                self._switch_failed(event_id, _report_code(outcome["code"]),
+                                    outcome.get("detail") or outcome["code"], None, **restore)
+                return
+            usage = outcome.get("usage")
+        body: dict = {"status": "done", "nativeSessionId": session_id,
+                      "nativeResume": bool(loaded and not handoff)}
+        tokens = usage.get("inputTokens") if isinstance(usage, dict) else None
+        if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0:
+            body["realTokens"] = tokens
+        self._settle_done(self._report(event_id, body, restore), restore)
+
+    def _settle_done(self, outcome: str, restore: dict) -> None:
+        """After a `done` report: the pointer is written only once MC took
+        it (until then a restart resumes the session MC still pins); a
+        refusal puts the chat back on MC's session — the daemon never runs
+        a session MC does not route to this chat."""
+        if outcome == "accepted":
+            self._write_persisted()
+        elif outcome == "refused":
+            self._drop_new_child(restore)
+            self._reconnect_old(restore)
+            # In the copy of the session the chat is on again (the record
+            # routes it to this chat by that native id).
+            self._emit_error(
+                SWITCH_REFUSED, "Mission Control refused the switch report",
+                text="Mission Control did not take the switch — this chat stays on "
+                     "its previous model.",
+            )
+
+    def _new_client(self) -> Any:
+        """A fresh child, handshaken — the first half of `_connect`."""
+        client = self._client_factory()
+        client.on_event(self._on_event)
+        client.on_permission(self._on_permission)
+        if self._elicitation_enabled and hasattr(client, "on_elicitation"):
+            client.on_elicitation(self._on_elicitation)
+        client._ensure_process()
+        client.initialize()
+        return client
+
+    def _switch_failed(self, event_id: str, code: str, detail: Any, client: Any, *,
+                       previous: Optional[str], transcript: Optional[Path],
+                       model: Optional[str], resolver: Any) -> None:
+        """F2/F6: MC keeps the old pair and the old session current — so
+        does the daemon. The new child goes, the old session is loaded
+        again (pinned: never replaced, `chat_load_failed` if it cannot load),
+        and MC hears why."""
+        detail = f"{type(detail).__name__}: {detail}" if isinstance(detail, BaseException) \
+            else str(detail)
+        logger.warning("chat %s: switch %s failed (%s): %s", self.chat_id, event_id, code, detail)
+        restore = dict(previous=previous, transcript=transcript, model=model, resolver=resolver)
+        self._drop_new_child(restore, client)
+        self._report(event_id, {"status": "failed",
+                                "error": {"code": code, "detail": detail[:2000]}})
+        self._reconnect_old(restore)
+
+    def _drop_new_child(self, restore: dict, client: Any = None) -> None:
+        with self._lock:
+            current, self._client = self._client, None
+            self._model, self._model_resolver = restore["model"], restore["resolver"]
+        for dead in {id(c): c for c in (client, current) if c is not None}.values():
+            try:
+                dead.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _reconnect_old(self, restore: dict) -> None:
+        previous, transcript = restore["previous"], restore["transcript"]
+        try:
+            if previous:
+                self._pinned = previous
+                self._session_id = None
+                self._connect({"sessionId": previous,
+                               "transcript": str(transcript) if transcript else "",
+                               "source": "switch"})
+            else:
+                # Never open here before: MC's plan says where it stands.
+                self._session_id = None
+                self._connect(self._plan_persisted())
+        except acp_chat.SessionLoadRefused:
+            pass  # its card is out; the pool reopens it on the next message
+        except Exception as exc:  # noqa: BLE001 — the pool reopens it from MC's plan
+            logger.error("chat %s: back to its old session failed: %s", self.chat_id, exc)
+            self.load_refused = True
+
+    def _report(self, event_id: str, body: dict, restore: Optional[dict] = None) -> str:
+        """MC's switch result route, a few tries. Returns `accepted`,
+        `refused` (404/409 — MC will not apply it) or `pending` (MC did not
+        answer: tried again before the chat's next message)."""
+        for delay in (0.0, *REPORT_RETRY_DELAYS):
+            if delay:
+                time.sleep(delay)
+            try:
+                self._mc.report(self.chat_id, event_id, body)
+            except McUnreachable as exc:
+                logger.warning("chat %s: switch report %s not delivered (%s)",
+                               self.chat_id, event_id, exc)
+                continue
+            except (PinConflict, ChatUnknown) as exc:
+                logger.error("chat %s: MC refused the switch report %s: %s",
+                             self.chat_id, event_id, exc)
+                with self._lock:
+                    self._pending_report = None
+                return "refused"
+            with self._lock:
+                self._pending_report = None
+            return "accepted"
+        with self._lock:
+            self._pending_report = (event_id, body, restore)
+        return "pending"
+
+    def _retry_report(self) -> None:
+        """Before the chat's next message: the report MC did not take yet.
+        A `done` MC refuses now puts the chat back on MC's session first —
+        at once when idle, else right after the running turn."""
+        with self._lock:
+            pending = self._pending_report
+        if pending is None:
+            return
+        event_id, body, restore = pending
+        try:
+            self._mc.report(self.chat_id, event_id, body)
+        except McUnreachable:
+            return
+        except (PinConflict, ChatUnknown) as exc:
+            logger.error("chat %s: MC refused the switch report %s: %s",
+                         self.chat_id, event_id, exc)
+            outcome = "refused"
+        else:
+            outcome = "accepted"
+        with self._lock:
+            if self._pending_report is not pending:
+                return
+            self._pending_report = None
+            if body.get("status") != "done" or restore is None:
+                return
+            if outcome == "refused" and self._busy:
+                self._restore_after_turn = restore
+                return
+            if outcome == "refused":
+                # Nothing runs: hold the worker off while the child changes.
+                self._busy = True
+                self._idle.clear()
+        if outcome == "accepted":
+            self._write_persisted()
+            return
+        try:
+            self._settle_done("refused", restore)
+        finally:
+            with self._lock:
+                self._busy = False
+            self._idle.set()
+
+    def _between_jobs(self) -> None:
+        with self._lock:
+            restore, self._restore_after_turn = self._restore_after_turn, None
+        if restore is not None:
+            self._settle_done("refused", restore)
 
     def new_session(self, mode: str = acp_chat.MODE_NOW, request_id: Any = None) -> dict:
         # Its native session is pinned for good: a new conversation is a
         # new chat (the backend creates it and sends its chatId).
         return {"ok": False, "error": "chat_pinned"}
+
+
+def _clean_switch(request: dict) -> dict:
+    """The `switch` request as the worker uses it, or `{"error", "detail"}`."""
+    event_id = request.get("switchEventId")
+    if not isinstance(event_id, str) or not _SWITCH_ID_RE.match(event_id):
+        return {"error": "bad_switch", "detail": "switchEventId"}
+    action = request.get("action")
+    if action not in ("resume", "start"):
+        return {"error": "bad_switch", "detail": "action"}
+    native = request.get("nativeSessionId")
+    if native is not None and (not isinstance(native, str)
+                               or not acp_chat._SESSION_ID_RE.fullmatch(native)):
+        return {"error": "bad_switch", "detail": "nativeSessionId"}
+    if action == "resume" and not native:
+        return {"error": "bad_switch", "detail": "resume needs nativeSessionId"}
+    package = request.get("package")
+    if package is not None and not isinstance(package, str):
+        return {"error": "bad_switch", "detail": "package"}
+    model = request.get("model")
+    if model is not None and (not isinstance(model, str) or not _MODEL_RE.match(model)):
+        return {"error": "bad_switch", "detail": "model"}
+    text = request.get("handoffText")
+    if text is not None and not isinstance(text, str):
+        return {"error": "bad_switch", "detail": "handoffText"}
+    if request.get("runtimeEnv"):
+        # One models.yml + omp.env per agent: a child of this daemon cannot
+        # reach another runtime's endpoint (open point of S3 item C).
+        return {"error": "runtime_env_unsupported"}
+    return {
+        "switchEventId": event_id.lower(),
+        "action": action,
+        "nativeSessionId": native,
+        "tryNativeLoad": request.get("tryNativeLoad") is True,
+        "package": package or None,
+        "model": model or None,
+        "handoffText": text,
+    }
 
 
 class _Opening:
@@ -403,6 +852,8 @@ class ChatPool:
         chat_id = chat_id.lower()
         op = request.get("op")
         inner = {k: v for k, v in request.items() if k != "chatId"}
+        if op == "switch":
+            return self._switch(chat_id, inner)
         for _attempt in range(2):
             with self._lock:
                 chat = self._chats.get(chat_id)
@@ -460,6 +911,51 @@ class ChatPool:
                 return _accepted(chat_id)
             return _not_open(op, chat_id, opening=True)
         return {"ok": False, "error": "chat_opening"}
+
+    def _switch(self, chat_id: str, inner: dict) -> dict:
+        """`switch` on an open chat runs in its session; on a chat without a
+        child it starts one for the switch — MC's request names the
+        session, no resume plan is asked."""
+        with self._lock:
+            if self._closed:
+                return {"ok": False, "error": "not_started"}
+            if chat_id in self._opening:
+                return {"ok": False, "error": "busy", "detail": "chat_opening"}
+            chat = self._chats.get(chat_id)
+            if chat is not None and chat.load_refused:
+                del self._chats[chat_id]
+                stale, chat = chat, None
+            else:
+                stale = None
+            fresh = chat is None
+            if fresh:
+                if len(self._chats) >= self._max_open and not self._evict_locked():
+                    answer: Optional[dict] = {"ok": False, "error": "chats_busy"}
+                else:
+                    answer = None
+                    chat = self._factory(chat_id)
+                    self._chats[chat_id] = chat
+            else:
+                answer = None
+            if chat is not None and answer is None:
+                chat.inflight += 1
+                chat.last_used = time.monotonic()
+        if stale is not None:
+            stale.close()
+        if answer is not None:
+            return answer
+        try:
+            answer = acp_chat.dispatch(chat, inner)
+        finally:
+            with self._lock:
+                chat.inflight -= 1
+        if fresh and not answer.get("ok"):
+            with self._lock:
+                if self._chats.get(chat_id) is chat:
+                    del self._chats[chat_id]
+            chat.close()
+        answer.setdefault("chatId", chat_id)
+        return answer
 
     def _begin(self, chat_id: str, opening: _Opening) -> dict:
         """MC's plan now (fast), the child in a thread."""
@@ -585,6 +1081,10 @@ def _not_open(op: Any, chat_id: str, *, opening: bool = False) -> dict:
         return {"ok": True}
     if op == "new_session":
         return {"ok": False, "error": "chat_pinned"}
+    if op == "stop_for_switch":
+        # Nothing runs, nothing is held: nothing to stop or hand back.
+        return {"ok": True, "chatId": chat_id, "handedOver": [], "stopped": False,
+                "idle": not opening}
     return {"ok": False, "error": "chat_opening" if opening else "chat_not_open"}
 
 
