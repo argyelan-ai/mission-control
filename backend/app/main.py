@@ -133,6 +133,7 @@ from app.background import (
 )
 from app.routers import vault as vault_router_module
 from app.routers import chat_record as chat_record_router_module
+from app.routers import knowledge_root as knowledge_root_router_module
 # Architektur E Teil 2 (Rex-Review PR #500, B1): die Seed-Helfer leben
 # in app.seeds (geteilt mit app.background.prepare_process) — app.main
 # importiert sie von dort, damit der Worker app.main nicht mehr anziehen muss.
@@ -494,6 +495,7 @@ app.include_router(voice.router)
 app.include_router(voice_live.router)
 app.include_router(usage.router)  # /api/v1/usage/page|pages — E0 page-usage beacon
 app.include_router(chat_record_router_module.router)  # /api/v1/chat-record — MC's own chat record (ADR-103), flag CHAT_RECORD_ENABLED
+app.include_router(knowledge_root_router_module.router)  # /api/v1/knowledge-root — knowledge in one place (ADR-104), flag KNOWLEDGE_ROOT_ENABLED
 
 # ── Verticals (optional, strippable feature bundles — ADR-044) ──────────────
 # Discovery loads every subpackage of app/verticals/ with register(app).

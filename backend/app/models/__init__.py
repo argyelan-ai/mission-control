@@ -8,6 +8,7 @@ from app.models.chat import ChatMessage
 from app.models.chat_record import Chat, ChatEvent, ChatSession  # noqa: F401
 from app.models.comms import CommsConversation, CommsCursor, CommsGuestCard, CommsSession  # noqa: F401
 from app.models.content import ContentPipeline
+from app.models.knowledge_entry import KnowledgeEntry  # noqa: F401
 from app.models.credential import Credential
 from app.models.deploy_history import DeployHistory
 from app.models.group import AgentGroup, GroupMember, GroupRound
