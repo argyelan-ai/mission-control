@@ -86,14 +86,6 @@ class Chat(SQLModel, table=True):
     archived_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
-    #: ``busy`` / ``idle`` (migration 0230), written by the live recorder from
-    #: turn start and the harness's turn-end judgement; ``None`` = no
-    #: recorder saw a turn of this chat yet (unknown, not "ready").
-    turn_state: str | None = Field(default=None, max_length=10)
-    #: When the turn started (``busy``) or ended (``idle``).
-    turn_state_at: datetime | None = Field(
-        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
-    )
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP")),

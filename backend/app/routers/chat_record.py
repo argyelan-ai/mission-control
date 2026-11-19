@@ -24,7 +24,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import Role, require_agent, require_role
 from app.database import get_session
 from app.scopes import Scope, require_scope
-from app.services import chat_record, chat_switch
+from app.services import chat_record, chat_switch, chat_turn_state
 
 router = APIRouter(prefix="/api/v1/chat-record", tags=["chat-record"])
 
@@ -134,9 +134,9 @@ async def get_record_history(
         "title": chat.title,
         "harness": chat.harness,
         "model": chat.model,
-        "turnState": chat.turn_state,
-        "turnStateAt": chat.turn_state_at.isoformat() if chat.turn_state_at else None,
     }
+    states = await chat_turn_state.turn_states(session, [chat])
+    chat_turn_state.with_state(history["chat"], states.get(chat.id))
     return history
 
 

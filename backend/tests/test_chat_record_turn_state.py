@@ -1,11 +1,20 @@
 """Turn state per chat in MC's chat record (follow-up of #1051).
 
-The live recorder writes ``busy`` when a turn starts (the operator's
-message) and ``idle`` when the harness's own turn-end judgement
-(``adapter.transcript_suggests_turn_ended``) says the turn is over — for
-Claude Code (``stop_reason: end_turn`` with a text block) and omp
-(``stopReason`` stop/error/aborted). The chat list and the history answer
-carry it, so a further chat can show "working" / "ready" honestly.
+The state is derived ON READ from the chat's current session file — never
+from a writer that only runs while somebody watches the chat (critic
+finding on #1052: the live recorder lives inside the SSE tailer, which is
+cancelled with the last viewer, and follows only the agent's newest file).
+
+* ``busy``  — the last content line of the file is part of a running turn;
+* ``idle``  — it ends the turn: the harness's turn end (Claude Code
+  ``end_turn`` with text, omp ``stopReason`` stop/error/aborted), an
+  interrupt (``[Request interrupted by user…]``), an API error line, a
+  ``max_tokens`` / ``stop_sequence`` / ``refusal`` stop — or there is no
+  content line at all (fresh session, slash-command echoes only);
+* ``stale`` — not ended, but the file has been quiet longer than
+  ``TURN_STALE_SECONDS`` (process gone, or one very long tool call): the
+  UI says "no sign of life since …" instead of a "working" for ever;
+* ``None``  — no session file found for the chat (unknown, never guessed).
 
 Fixture lines are synthetic copies of the Claude Code / omp JSONL schema
 (structure kept, content neutral).
@@ -13,18 +22,16 @@ Fixture lines are synthetic copies of the Claude Code / omp JSONL schema
 from __future__ import annotations
 
 import json
-import uuid
-from datetime import datetime, timezone
+import os
+import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
-import sqlalchemy as sa
-from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
-from app.models.chat_record import Chat
-from app.services import chat_record
+from app.services import chat_record, chat_turn_state
 from tests.conftest import test_engine
 
 # ── fixtures ────────────────────────────────────────────────────────────────
@@ -36,6 +43,7 @@ def host_home(tmp_path, monkeypatch):
 
     monkeypatch.setattr(transcript_chat, "_host_home", lambda: tmp_path)
     monkeypatch.setattr(omp_chat, "_host_home", lambda: tmp_path)
+    chat_turn_state._memo.clear()
     return tmp_path
 
 
@@ -44,157 +52,183 @@ def flag_on(monkeypatch):
     monkeypatch.setattr(settings, "chat_record_enabled", True, raising=False)
 
 
-def _factory():
-    return AsyncSession(test_engine, expire_on_commit=False)
-
-
 def _claude_dir(home: Path, slug: str) -> Path:
     return home / ".mc" / "agents" / slug / "claude-config" / "projects" / "-home-agent"
 
 
-def _c_user(uid, ts, text, sidechain=False):
-    return {"type": "user", "uuid": uid, "timestamp": ts, "isSidechain": sidechain,
+def _c_user(uid, ts, text, sidechain=False, **extra):
+    return {"type": "user", "uuid": uid, "timestamp": ts, "isSidechain": sidechain, **extra,
             "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
 
 
-def _c_tool(uid, ts, tool_id):
+def _c_tool(uid, ts, tool_id, name="Bash"):
     return {"type": "assistant", "uuid": uid, "timestamp": ts, "isSidechain": False,
             "message": {"role": "assistant", "model": "claude-sonnet-4-6", "id": f"msg_{uid}",
                         "stop_reason": "tool_use",
-                        "content": [{"type": "tool_use", "id": tool_id, "name": "Bash",
+                        "content": [{"type": "tool_use", "id": tool_id, "name": name,
                                      "input": {"command": "ls"}}]}}
 
 
-def _c_result(uid, ts, tool_id):
+def _c_result(uid, ts, tool_id, content="a.py"):
     return {"type": "user", "uuid": uid, "timestamp": ts, "isSidechain": False,
             "message": {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": tool_id, "content": "a.py", "is_error": False}]}}
+                {"type": "tool_result", "tool_use_id": tool_id, "content": content, "is_error": False}]}}
 
 
-def _c_answer(uid, ts, text, sidechain=False):
-    return {"type": "assistant", "uuid": uid, "timestamp": ts, "isSidechain": sidechain,
+def _c_answer(uid, ts, text, sidechain=False, stop="end_turn", **extra):
+    return {"type": "assistant", "uuid": uid, "timestamp": ts, "isSidechain": sidechain, **extra,
             "message": {"role": "assistant", "model": "claude-sonnet-4-6", "id": f"msg_{uid}",
-                        "stop_reason": "end_turn", "content": [{"type": "text", "text": text}]}}
+                        "stop_reason": stop, "content": [{"type": "text", "text": text}]}}
 
 
-def _append(path: Path, lines: list[dict]) -> None:
+def _c_thinking(uid, ts, stop="end_turn"):
+    return {"type": "assistant", "uuid": uid, "timestamp": ts, "isSidechain": False,
+            "message": {"role": "assistant", "model": "claude-sonnet-4-6", "id": f"msg_{uid}",
+                        "stop_reason": stop, "content": [{"type": "thinking", "thinking": "hm"}]}}
+
+
+def _c_system(uid, ts):
+    return {"type": "system", "uuid": uid, "timestamp": ts, "subtype": "turn_duration", "durationMs": 9}
+
+
+def _write(path: Path, lines: list[dict], *, age: float = 0.0) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as fh:
         for line in lines:
             fh.write(json.dumps(line) + "\n")
+    if age:
+        t = time.time() - age
+        os.utime(path, (t, t))
+    return path
 
 
-async def _feed(rec, adapter, parse, path: Path, lines: list[dict]) -> None:
-    """What the tailer does: the lines land in the file, the parser turns
-    them into events, every event goes to the recorder."""
-    _append(path, lines)
-    for line in lines:
-        for ev in parse(json.dumps(line), None):
-            rec.record(path, ev)
-    await rec.wait_idle()
+T = "2026-11-19T10:00:0{}.000Z"
+TURN = [_c_user("u1", T.format(0), "rename the loader")]
 
 
-async def _chat(agent_id) -> Chat:
-    async with AsyncSession(test_engine) as s:
-        return (await s.exec(select(Chat).where(Chat.legacy_agent_id == agent_id))).one()
+def _state(path: Path, harness: str = "claude") -> str | None:
+    return chat_turn_state.file_turn_state(path, harness)["state"]
 
 
-def _at(value) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+# ── Claude Code: classification of one file ────────────────────────────────
 
 
-# ── Claude Code ─────────────────────────────────────────────────────────────
+def test_claude_normal_turn(tmp_path):
+    p = tmp_path / "s.jsonl"
+    _write(p, TURN)
+    assert _state(p) == "busy"
+    _write(p, [_c_tool("a1", T.format(1), "t-1")])
+    assert _state(p) == "busy"
+    _write(p, [_c_result("r1", T.format(2), "t-1")])
+    assert _state(p) == "busy"
+    # A text line whose turn goes on is not the end (the 182-of-245 trap).
+    _write(p, [_c_answer("a2", T.format(3), "Looking.", stop="tool_use")])
+    assert _state(p) == "busy"
+    # end_turn on the THINKING line: the text follows, still busy.
+    _write(p, [_c_thinking("a3", T.format(4))])
+    assert _state(p) == "busy"
+    _write(p, [_c_answer("a4", T.format(5), "Done."), _c_system("s1", T.format(6))])
+    assert _state(p) == "idle"
+    _write(p, [_c_user("u2", T.format(7), "and the tests?")])
+    assert _state(p) == "busy"
 
 
-async def test_claude_turn_goes_busy_then_idle_with_timestamps(host_home, flag_on, make_agent):
-    from app.services.transcript_adapters import adapter_for
+def test_claude_interrupt_ends_the_turn(tmp_path):
+    p = _write(tmp_path / "s.jsonl", [*TURN, _c_tool("a1", T.format(1), "t-1")])
+    _write(p, [_c_user("u2", T.format(2), "[Request interrupted by user for tool use]")])
+    assert _state(p) == "idle"
 
-    agent = await make_agent(name="Alpha", slug="alpha")
-    adapter = adapter_for(agent)
-    parse = adapter.new_parser()
-    path = _claude_dir(host_home, "alpha") / "live.jsonl"
-    rec = chat_record.LiveRecorder(agent, adapter, None, session_factory=_factory)
-    await rec.backfilled.wait()
 
-    await _feed(rec, adapter, parse, path, [_c_user("u1", "2026-11-19T10:00:00.000Z", "rename the loader")])
-    chat = await _chat(agent.id)
-    assert chat.turn_state == "busy"
-    assert _at(chat.turn_state_at) == datetime(2026, 11, 19, 10, 0, 0, tzinfo=timezone.utc)
+def test_claude_interrupt_inside_the_tool_result_ends_the_turn(tmp_path):
+    p = _write(tmp_path / "s.jsonl", [*TURN, _c_tool("a1", T.format(1), "t-1")])
+    _write(p, [_c_result("r1", T.format(2), "t-1", content="[Request interrupted by user for tool use]")])
+    assert _state(p) == "idle"
 
-    # A tool call and its result: still the same turn.
-    await _feed(rec, adapter, parse, path, [
-        _c_tool("a1", "2026-11-19T10:00:03.000Z", "t-1"),
-        _c_result("r1", "2026-11-19T10:00:04.000Z", "t-1"),
+
+def test_claude_interrupt_while_thinking_ends_the_turn(tmp_path):
+    p = _write(tmp_path / "s.jsonl", TURN)
+    _write(p, [_c_user("u2", T.format(2), "[Request interrupted by user]")])
+    assert _state(p) == "idle"
+
+
+def test_claude_api_error_ends_the_turn(tmp_path):
+    p = _write(tmp_path / "s.jsonl", TURN)
+    _write(p, [_c_answer("e1", T.format(2), "API Error: 529 overloaded", stop=None,
+                         isApiErrorMessage=True)])
+    assert _state(p) == "idle"
+
+
+@pytest.mark.parametrize("stop", ["max_tokens", "stop_sequence", "refusal"])
+def test_claude_other_final_stop_reasons_end_the_turn(tmp_path, stop):
+    p = _write(tmp_path / "s.jsonl", [*TURN, _c_answer("a1", T.format(2), "cut", stop=stop)])
+    assert _state(p) == "idle"
+
+
+def test_claude_compact_summary_after_an_idle_turn_stays_idle(tmp_path):
+    p = _write(tmp_path / "s.jsonl", [*TURN, _c_answer("a1", T.format(1), "Done.")])
+    _write(p, [
+        {"type": "system", "uuid": "b1", "timestamp": T.format(2), "subtype": "compact_boundary"},
+        _c_user("c1", T.format(3), "This session is being continued ...", isCompactSummary=True),
+        _c_user("c2", T.format(4), "<local-command-stdout>Compacted</local-command-stdout>"),
     ])
-    chat = await _chat(agent.id)
-    assert chat.turn_state == "busy"
-    # The turn started at the operator's message, not at the last tool.
-    assert _at(chat.turn_state_at) == datetime(2026, 11, 19, 10, 0, 0, tzinfo=timezone.utc)
-
-    await _feed(rec, adapter, parse, path, [_c_answer("a2", "2026-11-19T10:00:09.000Z", "Done.")])
-    chat = await _chat(agent.id)
-    assert chat.turn_state == "idle"
-    assert _at(chat.turn_state_at) == datetime(2026, 11, 19, 10, 0, 9, tzinfo=timezone.utc)
-
-    # The next message starts the next turn.
-    await _feed(rec, adapter, parse, path, [_c_user("u2", "2026-11-19T10:05:00.000Z", "and the tests?")])
-    chat = await _chat(agent.id)
-    assert chat.turn_state == "busy"
-    assert _at(chat.turn_state_at) == datetime(2026, 11, 19, 10, 5, 0, tzinfo=timezone.utc)
-    rec.close()
-    assert rec.errors == 0
+    assert _state(p) == "idle"
 
 
-async def test_claude_text_between_tools_is_not_a_turn_end(host_home, flag_on, make_agent):
-    """A text line whose turn goes on (``stop_reason: tool_use``) must not
-    flip the chat to idle — the measured 182-of-245 trap of the old rule."""
-    from app.services.transcript_adapters import adapter_for
-
-    agent = await make_agent(name="Alpha", slug="alpha")
-    adapter = adapter_for(agent)
-    parse = adapter.new_parser()
-    path = _claude_dir(host_home, "alpha") / "live.jsonl"
-    rec = chat_record.LiveRecorder(agent, adapter, None, session_factory=_factory)
-    await rec.backfilled.wait()
-    between = _c_answer("a1", "2026-11-19T10:00:02.000Z", "Looking at it.")
-    between["message"]["stop_reason"] = "tool_use"
-    await _feed(rec, adapter, parse, path, [_c_user("u1", "2026-11-19T10:00:00.000Z", "go"), between])
-    assert (await _chat(agent.id)).turn_state == "busy"
-    rec.close()
+def test_claude_auto_compact_inside_a_turn_stays_busy(tmp_path):
+    p = _write(tmp_path / "s.jsonl", [*TURN, _c_tool("a1", T.format(1), "t-1"), _c_result("r1", T.format(2), "t-1")])
+    _write(p, [_c_user("c1", T.format(3), "This session is being continued ...", isCompactSummary=True)])
+    assert _state(p) == "busy"
 
 
-async def test_subagent_lines_never_change_the_turn_state(host_home, flag_on, make_agent):
-    from app.services.transcript_adapters import adapter_for
-
-    agent = await make_agent(name="Alpha", slug="alpha")
-    adapter = adapter_for(agent)
-    parse = adapter.new_parser()
-    path = _claude_dir(host_home, "alpha") / "live.jsonl"
-    rec = chat_record.LiveRecorder(agent, adapter, None, session_factory=_factory)
-    await rec.backfilled.wait()
-    await _feed(rec, adapter, parse, path, [
-        _c_user("u1", "2026-11-19T10:00:00.000Z", "go"),
-        _c_answer("a1", "2026-11-19T10:00:05.000Z", "Done."),
+def test_claude_meta_and_sidechain_lines_do_not_count(tmp_path):
+    p = _write(tmp_path / "s.jsonl", [*TURN, _c_answer("a1", T.format(1), "Done.")])
+    _write(p, [
+        _c_user("m1", T.format(2), "caveat", isMeta=True),
+        _c_user("s1", T.format(3), "helper prompt", sidechain=True),
+        _c_answer("s2", T.format(4), "helper", sidechain=True, stop="tool_use"),
     ])
-    assert (await _chat(agent.id)).turn_state == "idle"
-    # A helper's prompt is a "user" line with isSidechain — not a new turn.
-    await _feed(rec, adapter, parse, path, [_c_user("s1", "2026-11-19T10:01:00.000Z", "sub", sidechain=True)])
-    chat = await _chat(agent.id)
-    assert chat.turn_state == "idle"
-    assert _at(chat.turn_state_at) == datetime(2026, 11, 19, 10, 0, 5, tzinfo=timezone.utc)
-    rec.close()
+    assert _state(p) == "idle"
+
+
+def test_claude_session_without_a_conversation_is_idle(tmp_path):
+    p = _write(tmp_path / "s.jsonl", [
+        {"type": "mode", "mode": "default"},
+        _c_user("c1", T.format(1), "<command-name>/model</command-name>"),
+    ])
+    assert _state(p) == "idle"
+
+
+def test_unreadable_last_line_is_never_called_idle(tmp_path):
+    p = _write(tmp_path / "s.jsonl", TURN)
+    with p.open("a") as fh:
+        fh.write('{"type": "user", "message": {"content": "cut in the mid\n')
+    assert _state(p) == "busy"
+
+
+def test_a_quiet_running_turn_turns_stale_not_busy_for_ever(tmp_path):
+    p = _write(tmp_path / "s.jsonl", [*TURN, _c_tool("a1", T.format(1), "t-1")],
+               age=chat_turn_state.TURN_STALE_SECONDS + 60)
+    out = chat_turn_state.file_turn_state(p, "claude")
+    assert out["state"] == "stale"
+    assert out["at"] is not None
+    # An ended turn never turns stale.
+    q = _write(tmp_path / "t.jsonl", [*TURN, _c_answer("a1", T.format(1), "Done.")],
+               age=chat_turn_state.TURN_STALE_SECONDS + 60)
+    assert _state(q) == "idle"
+
+
+def test_at_is_the_last_write_time(tmp_path):
+    p = _write(tmp_path / "s.jsonl", TURN, age=120)
+    at = datetime.fromisoformat(chat_turn_state.file_turn_state(p, "claude")["at"])
+    assert abs(at.timestamp() - (time.time() - 120)) < 5
+    assert at.tzinfo is not None
+
+
+def test_missing_file_is_unknown(tmp_path):
+    assert chat_turn_state.file_turn_state(tmp_path / "nope.jsonl", "claude") == {"state": None, "at": None}
 
 
 # ── omp ─────────────────────────────────────────────────────────────────────
-
-
-def _omp_path(home: Path, slug: str) -> Path:
-    return home / ".mc" / "agents" / slug / "omp-sessions" / "--workspace--" / "2026-11-19T10-00-00_s-1.jsonl"
-
-
-def _o_head():
-    return {"type": "session", "version": 3, "id": "s-1", "timestamp": "2026-11-19T10:00:00.000Z",
-            "cwd": "/workspace"}
 
 
 def _o_user(mid, ts, text):
@@ -205,119 +239,110 @@ def _o_user(mid, ts, text):
 def _o_answer(mid, ts, text, stop):
     return {"type": "message", "id": mid, "parentId": None, "timestamp": ts,
             "message": {"role": "assistant", "content": [{"type": "text", "text": text}],
-                        "model": "m-1", "stopReason": stop,
-                        "usage": {"input": 10, "output": 5, "cacheRead": 0, "cacheWrite": 0}}}
+                        "model": "m-1", "stopReason": stop}}
 
 
-@pytest.mark.parametrize("stop", ["stop", "aborted"])
-async def test_omp_turn_goes_busy_then_idle(host_home, flag_on, make_agent, stop):
-    from app.services.transcript_adapters import adapter_for
-
-    agent = await make_agent(name="Omp", slug="omp-a", harness="omp")
-    adapter = adapter_for(agent)
-    path = _omp_path(host_home, "omp-a")
-    _append(path, [_o_head()])
-    parse = adapter.new_parser(path)
-    rec = chat_record.LiveRecorder(agent, adapter, path, session_factory=_factory)
-    await rec.backfilled.wait()
-
-    await _feed(rec, adapter, parse, path, [_o_user("m1", "2026-11-19T10:00:01.000Z", "hello")])
-    chat = await _chat(agent.id)
-    assert chat.turn_state == "busy"
-
-    await _feed(rec, adapter, parse, path, [_o_answer("m2", "2026-11-19T10:00:04.000Z", "hi", "toolUse")])
-    assert (await _chat(agent.id)).turn_state == "busy"
-
-    await _feed(rec, adapter, parse, path, [_o_answer("m3", "2026-11-19T10:00:07.000Z", "done", stop)])
-    chat = await _chat(agent.id)
-    assert chat.turn_state == "idle"
-    assert _at(chat.turn_state_at) == datetime(2026, 11, 19, 10, 0, 7, tzinfo=timezone.utc)
-    rec.close()
-    assert rec.errors == 0
+def _o_head():
+    return {"type": "session", "version": 3, "id": "s-1", "timestamp": T.format(0), "cwd": "/workspace"}
 
 
-# ── write rule ──────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("stop", ["stop", "aborted", "error"])
+def test_omp_turn(tmp_path, stop):
+    p = _write(tmp_path / "s.jsonl", [_o_head()])
+    assert _state(p, "omp") == "idle"
+    _write(p, [_o_user("m1", T.format(1), "hello")])
+    assert _state(p, "omp") == "busy"
+    _write(p, [_o_answer("m2", T.format(2), "hi", "toolUse")])
+    assert _state(p, "omp") == "busy"
+    _write(p, [_o_answer("m3", T.format(3), "done", stop)])
+    assert _state(p, "omp") == "idle"
 
 
-async def test_older_turn_state_never_overwrites_a_newer_one(flag_on, make_agent):
+# ── read side: every chat, nobody watching ──────────────────────────────────
+
+
+async def _chats(make_agent, host_home, *, further: bool = False):
     agent = await make_agent(name="Alpha", slug="alpha")
-    async with _factory() as s:
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
         chat = await chat_record.ensure_agent_chat(s, agent)
-        newer = datetime(2026, 11, 19, 10, 5, tzinfo=timezone.utc)
-        older = datetime(2026, 11, 19, 10, 0, tzinfo=timezone.utc)
-        assert await chat_record.set_turn_state(s, chat.id, "idle", newer) is True
-        assert await chat_record.set_turn_state(s, chat.id, "busy", older) is False
+        other = await chat_record.create_chat(s, None, agent, title="Second") if further else None
         await s.commit()
-    chat = await _chat(agent.id)
-    assert chat.turn_state == "idle" and _at(chat.turn_state_at) == newer
+    return agent, chat, other
 
 
-def test_turn_signal_by_event():
-    sig = chat_record.turn_signal
-    assert sig({"kind": "message", "role": "user", "uuid": "u", "sidechain": False}) == "start"
-    assert sig({"kind": "message", "role": "assistant", "uuid": "a"}) == "check_end"
-    assert sig({"kind": "usage", "uuid": "a"}) == "check_end"
-    assert sig({"kind": "tool", "uuid": "a", "toolUseId": "t"}) == "working"
-    assert sig({"kind": "thinking", "uuid": "a"}) == "working"
-    # Not part of the operator's turn: helpers, team mail, slash commands.
-    assert sig({"kind": "message", "role": "user", "uuid": "u", "sidechain": True}) is None
-    assert sig({"kind": "message", "role": "teammate", "uuid": "u"}) is None
-    assert sig({"kind": "command", "uuid": "c", "command": "/clear"}) is None
-    assert sig({"kind": "notification", "uuid": "n"}) is None
+async def test_list_derives_the_state_without_any_recorder_or_import(
+    host_home, flag_on, make_agent, auth_client
+):
+    """No tailer, no recorder, no import sweep: the file alone decides —
+    the chat nobody has open shows its state, and it follows the file."""
+    _agent, chat, _ = await _chats(make_agent, host_home)
+    path = _write(_claude_dir(host_home, "alpha") / "n-1.jsonl", TURN)
 
-
-# ── read side ───────────────────────────────────────────────────────────────
-
-
-async def test_api_list_and_history_carry_the_turn_state(host_home, flag_on, make_agent, auth_client):
-    agent = await make_agent(name="Alpha", slug="alpha")
-    at = datetime(2026, 11, 19, 10, 0, tzinfo=timezone.utc)
-    async with _factory() as s:
-        chat = await chat_record.ensure_agent_chat(s, agent)
-        other = await chat_record.create_chat(s, None, agent, title="Second")
-        await chat_record.set_turn_state(s, chat.id, "busy", at)
-        await s.commit()
-        chat_id, other_id = chat.id, other.id
     r = await auth_client.get("/api/v1/chat-record/chats")
     assert r.status_code == 200
-    rows = {c["id"]: c for c in r.json()["chats"]}
-    assert rows[str(chat_id)]["turnState"] == "busy"
-    assert datetime.fromisoformat(rows[str(chat_id)]["turnStateAt"]).replace(tzinfo=timezone.utc) == at
-    # A chat no recorder saw yet says so — no guessed "ready".
-    assert rows[str(other_id)]["turnState"] is None and rows[str(other_id)]["turnStateAt"] is None
+    row = {c["id"]: c for c in r.json()["chats"]}[str(chat.id)]
+    assert row["turnState"] == "busy"
+    assert row["turnStateAt"] is not None
 
-    r = await auth_client.get(f"/api/v1/chat-record/chats/{chat_id}/history")
+    _write(path, [_c_answer("a1", T.format(5), "Done.")])
+    r = await auth_client.get("/api/v1/chat-record/chats")
+    assert {c["id"]: c for c in r.json()["chats"]}[str(chat.id)]["turnState"] == "idle"
+
+    r = await auth_client.get(f"/api/v1/chat-record/chats/{chat.id}/history")
     assert r.status_code == 200
-    assert r.json()["chat"]["turnState"] == "busy"
+    assert r.json()["chat"]["turnState"] == "idle"
     assert r.json()["chat"]["turnStateAt"] is not None
 
 
-# ── migration ───────────────────────────────────────────────────────────────
+async def test_each_chat_of_one_agent_reads_its_own_session(host_home, flag_on, make_agent, auth_client):
+    """A further chat (own native session) and the default chat: each gets
+    the state of ITS file — the default chat never takes the pinned file of
+    a further chat, even when that one is the newest on disk."""
+    _agent, chat, other = await _chats(make_agent, host_home, further=True)
+    tdir = _claude_dir(host_home, "alpha")
+    _write(tdir / "default-1.jsonl", [*TURN, _c_answer("a1", T.format(1), "Done.")], age=60)
+    # Newest on disk, with an answer line, so the agent's own pick
+    # (find_active_session) is this pinned file.
+    _write(tdir / f"{other.native_session_id}.jsonl", [*TURN, _c_tool("a1", T.format(1), "t-1")])
+
+    r = await auth_client.get("/api/v1/chat-record/chats")
+    rows = {c["id"]: c for c in r.json()["chats"]}
+    assert rows[str(other.id)]["turnState"] == "busy"
+    assert rows[str(chat.id)]["turnState"] == "idle"
 
 
-def test_migration_adds_and_drops_the_two_columns():
-    from tests.test_chat_record_migration_0229 import _load, _run
+async def test_recorded_session_path_is_used(host_home, flag_on, make_agent, auth_client):
+    """A chat whose session the record already knows (e.g. after a switch
+    to another harness) reads that file."""
+    _agent, chat, other = await _chats(make_agent, host_home, further=True)
+    elsewhere = _write(host_home / "elsewhere" / "x.jsonl", TURN)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        await chat_record.ensure_session(
+            s, other, native_session_id="x", harness="claude", runtime_id=None, model=None,
+            place="container", transcript_path=str(elsewhere),
+        )
+        await s.commit()
+    r = await auth_client.get("/api/v1/chat-record/chats")
+    assert {c["id"]: c for c in r.json()["chats"]}[str(other.id)]["turnState"] == "busy"
 
-    rev27 = _load("0227_chat_record")
-    rev29 = _load("0229_chat_record_many_chats")
-    rev30 = _load("0230_chat_turn_state")
-    assert rev30.down_revision == "0229_chat_record_many_chats"
-    engine = sa.create_engine("sqlite://")
-    with engine.begin() as conn:
-        conn.connection.driver_connection.create_function("NOW", 0, lambda: "2026-11-19 00:00:00")
-        for t in ("users", "projects", "runtimes", "agents"):
-            conn.execute(sa.text(f"CREATE TABLE {t} (id CHAR(32) PRIMARY KEY)"))
-        _run(conn, rev27, "upgrade")
-        _run(conn, rev29, "upgrade")
-        conn.execute(sa.text("INSERT INTO chats (id, title, next_seq, pinned) VALUES (:a, 'Alpha', 1, 0)"),
-                     {"a": uuid.uuid4().hex})
-        _run(conn, rev30, "upgrade")
-        cols = {c["name"] for c in sa.inspect(conn).get_columns("chats")}
-        assert {"turn_state", "turn_state_at"} <= cols
-        # Existing chats start without a state (unknown, not "ready").
-        assert conn.execute(sa.text("SELECT turn_state, turn_state_at FROM chats")).all() == [(None, None)]
-        _run(conn, rev30, "downgrade")
-        cols = {c["name"] for c in sa.inspect(conn).get_columns("chats")}
-        assert "turn_state" not in cols and "turn_state_at" not in cols
-        assert conn.execute(sa.text("SELECT title FROM chats")).all() == [("Alpha",)]
 
+async def test_chat_without_a_session_file_is_unknown(host_home, flag_on, make_agent, auth_client):
+    _agent, chat, other = await _chats(make_agent, host_home, further=True)
+    r = await auth_client.get("/api/v1/chat-record/chats")
+    rows = {c["id"]: c for c in r.json()["chats"]}
+    for cid in (chat.id, other.id):
+        assert rows[str(cid)]["turnState"] is None and rows[str(cid)]["turnStateAt"] is None
+
+
+async def test_turn_state_reads_are_cached_per_file_version(tmp_path, monkeypatch):
+    p = _write(tmp_path / "s.jsonl", TURN)
+    chat_turn_state._memo.clear()
+    calls = []
+    real = chat_turn_state._claude_turn_ended
+    monkeypatch.setattr(chat_turn_state, "_claude_turn_ended", lambda path: calls.append(1) or real(path))
+    chat_turn_state.file_turn_state(p, "claude")
+    chat_turn_state.file_turn_state(p, "claude")
+    assert len(calls) == 1
+    _write(p, [_c_answer("a1", T.format(5), "Done.")])
+    assert chat_turn_state.file_turn_state(p, "claude")["state"] == "idle"
+    assert len(calls) == 2

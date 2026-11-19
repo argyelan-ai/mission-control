@@ -445,59 +445,6 @@ async def upsert_events(
     return written
 
 
-# ── Turn state (busy / idle per chat) ────────────────────────────────────
-
-TURN_BUSY = "busy"
-TURN_IDLE = "idle"
-
-
-def turn_signal(ev: dict[str, Any]) -> str | None:
-    """What one recorded event says about the operator's turn in its chat.
-
-    * ``start`` — the operator's own message: a turn begins;
-    * ``working`` — the harness is in a turn (tool call, thinking);
-    * ``check_end`` — an answer line (assistant text, usage): the turn may
-      be over; the harness's own judgement on the transcript decides
-      (``adapter.transcript_suggests_turn_ended``);
-    * ``None`` — not part of the turn: helper (sidechain) lines, team mail,
-      slash commands (no answer follows ``/clear``), background reports.
-    """
-    if ev.get("sidechain"):
-        return None
-    kind = ev.get("kind")
-    if kind == "message":
-        role = ev.get("role")
-        if role == "user":
-            return "start"
-        if role == "assistant":
-            return "check_end"
-        return None
-    if kind == "usage":
-        return "check_end"
-    if kind in ("tool", "thinking", "todo"):
-        return "working"
-    return None
-
-
-async def set_turn_state(session: AsyncSession, chat_id: uuid.UUID, state: str, at: datetime) -> bool:
-    """Writes ``state`` (``busy`` / ``idle``) with the time the turn started
-    or ended. A state equal to the stored one is left alone (``busy`` keeps
-    the time its turn STARTED), and a write older than the stored time never
-    replaces it (a recorder that restarts and replays). Returns whether the
-    row changed. Does not commit."""
-    if state not in (TURN_BUSY, TURN_IDLE):
-        raise ValueError(f"unknown turn state {state!r}")
-    table = Chat.__table__
-    result = await session.execute(
-        update(table)
-        .where(table.c.id == chat_id)
-        .where(table.c.turn_state.is_distinct_from(state))
-        .where(or_(table.c.turn_state_at.is_(None), table.c.turn_state_at <= at))
-        .values(turn_state=state, turn_state_at=at)
-    )
-    return bool(getattr(result, "rowcount", 0))
-
-
 # ── Live sink ────────────────────────────────────────────────────────────
 
 
@@ -545,9 +492,6 @@ class LiveRecorder:
         self._settled: dict[str, bool] = {}
         #: Set once the start-up backfill is done (tests wait on it).
         self.backfilled = asyncio.Event()
-        #: Last turn state this recorder wrote per chat — saves the UPDATE
-        #: on every event of a running turn.
-        self._turn: dict[uuid.UUID, str] = {}
         self._task = asyncio.create_task(self._worker())
         self.written = 0
         self.errors = 0
@@ -646,24 +590,6 @@ class LiveRecorder:
         if self._initial_path is not None:
             await self._backfill_file(self._initial_path)
 
-    async def _track_turn(self, db: AsyncSession, chat_id: uuid.UUID, path: Path, ev: dict[str, Any]) -> None:
-        """Turn state of ``chat_id`` after ``ev`` (:func:`turn_signal`). The
-        turn end is the harness's own judgement on the file as it is NOW —
-        the same check the status line uses — so a recorder that lags behind
-        the tailer still lands on the right state with the last event."""
-        signal = turn_signal(ev)
-        if signal is None:
-            return
-        state = TURN_BUSY
-        if signal == "check_end":
-            ended = getattr(self._adapter, "transcript_suggests_turn_ended", None)
-            if ended is not None and await asyncio.to_thread(ended, path):
-                state = TURN_IDLE
-        if self._turn.get(chat_id) == state:
-            return
-        await set_turn_state(db, chat_id, state, parse_ts(ev.get("ts")) or utcnow())
-        self._turn[chat_id] = state
-
     async def _worker(self) -> None:
         try:
             await self._backfill_all()
@@ -685,7 +611,6 @@ class LiveRecorder:
                 async with self._new_session() as db:
                     chat_id, session_row_id = await self._session_row(db, path)
                     self.written += await upsert_events(db, chat_id, session_row_id, [(key, ev)])
-                    await self._track_turn(db, chat_id, path, ev)
                     await db.commit()
             except asyncio.CancelledError:
                 raise
@@ -1055,9 +980,6 @@ def chat_out(chat: Chat) -> dict[str, Any]:
         "pinned": chat.pinned,
         "archived": chat.archived_at is not None,
         "lastActivityAt": chat.last_activity_at.isoformat() if chat.last_activity_at else None,
-        # busy / idle from the live recorder; None = not seen yet (unknown).
-        "turnState": chat.turn_state,
-        "turnStateAt": chat.turn_state_at.isoformat() if chat.turn_state_at else None,
         # Stable order of an agent's chats (the chat list numbers them by it;
         # the list itself is sorted by activity).
         "createdAt": chat.created_at.isoformat() if chat.created_at else None,
@@ -1109,11 +1031,17 @@ async def list_chats(
     visible = _visible(user)
     if visible is not True:
         q = q.where(visible)
+    rows = (await session.exec(q)).all()
+    from app.services import chat_turn_state
+
+    # busy / idle / stale from each chat's current session file — read, not
+    # stored, so a chat nobody has open shows its state too.
+    states = await chat_turn_state.turn_states(session, [r[0] for r in rows])
     out = []
-    for chat, events, n_sessions, failed in (await session.exec(q)).all():
+    for chat, events, n_sessions, failed in rows:
         out.append(
             {
-                **chat_out(chat),
+                **chat_turn_state.with_state(chat_out(chat), states.get(chat.id)),
                 "events": int(events or 0),
                 "sessions": int(n_sessions or 0),
                 # Sessions whose last import failed — "record incomplete".
