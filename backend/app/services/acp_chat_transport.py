@@ -20,10 +20,10 @@ haelt:
 ``answer``       ``{"id":"el-…","action":"accept",``     ``{"ok":true,"status":"answered"}`` ·
                  ``"content"?:{...}}`` (P3)              ``{"ok":false,"error":"not_pending"}`` ·
                                                          ``{"ok":false,"error":"bad_content",...}``
-``stop_for_``    — (further chat only, S3 item C)       ``{"ok":true,"handedOver":[...],``
+``stop_for_``    — (further chat only, S3 item C)       ``{"ok":true,"handedOver":[],"held":n,``
 ``switch``                                               ``"stopped":bool}``
 ``switch``       ``{"switchEventId","action",``          ``{"ok":true,"switching":true,``
-                 ``"nativeSessionId"?,"tryNativeLoad",`` ``"handedOver":[...]}`` ·
+                 ``"nativeSessionId"?,"tryNativeLoad",`` ``"handedOver":[]}`` (stdin) ·
                  ``"package"?,"model"?}``                ``{"ok":false,"error":"busy"}``
 ===============  ======================================  ==========================
 
@@ -333,8 +333,8 @@ class DockerCtlTransport:
     async def stop_for_switch(self) -> dict:
         """A chat switch with a running turn (S3 item C, ADR-105): the
         daemon stops it, closes its question cards (``expired_by_switch``)
-        and hands the held queue back (``handedOver``) — MC sends it again
-        after the switch."""
+        and holds the queue for the switch (it runs after the handoff turn;
+        ``handedOver`` is only filled by an older daemon)."""
         return await self._call("stop_for_switch")
 
     async def switch(self, payload: dict[str, Any]) -> dict:

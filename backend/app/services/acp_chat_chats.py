@@ -19,13 +19,14 @@ and what ``/new`` means once the record is on.
   per-chat ``--session-id`` / ``--resume``); they keep today's behaviour.
 * Switching a further chat's pair (S3 item C, ADR-105): :class:`OmpChatDriver`
   is ``chat_switch``'s driver for harness ``omp``. It stops a running turn
-  through the daemon (``stop_for_switch``: the held queue comes back to MC,
-  open question cards end ``expired_by_switch``), changes the model of the
+  through the daemon (``stop_for_switch``: the daemon holds the queue for the
+  switch, open question cards end ``expired_by_switch``), changes the model of the
   chat's own session (``config model``), and starts the switch
   (``switch``: ``session/load`` first when MC says to try it, else
   ``session/new`` with the handoff package as the first prompt's
-  ``context``). What the daemon handed back is sent again with
-  ``mode=queue`` right after — it runs after the handoff turn (rule F8).
+  ``context``). The held queue runs after the handoff turn in the daemon
+  (rule F8); whatever an older daemon still hands back is sent again with
+  ``mode=queue`` right after.
   The daemon reports the outcome on the switch result route. The agent's
   default chat keeps ``chat_switch.AgentDefaultDriver``.
 """

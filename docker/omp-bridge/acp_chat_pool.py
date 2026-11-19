@@ -48,8 +48,11 @@ Contract:
   refuses a re-pin while a switch is pending. A failed switch puts the chat
   back on its old session (MC still pins that one). Open question cards end
   as `expired` with reason `expired_by_switch`. `stop_for_switch` stops a
-  running turn for a switch and hands the held queue back to MC, which
-  sends it again after the switch — the daemon never drops it.
+  running turn for a switch and HOLDS the queue here (new messages too)
+  until the switch; it runs after the handoff turn — never dropped, never
+  in MC's memory. The pointer names the new session only once MC took the
+  `done` report; a refused one puts the chat back on MC's session. A model
+  the session does not run as asked fails the switch (`model_unreachable`).
 """
 from __future__ import annotations
 
