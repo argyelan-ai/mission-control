@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING
 
 import frontmatter
 
+from app.services.git_harden import run_git
+
 if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -290,13 +292,13 @@ async def finalize_cleanup(
     git_committed = False
     if not skip_git and vault_root.exists() and (vault_root / ".git").exists():
         try:
-            subprocess.run(
-                ["git", "-C", str(vault_root), "add", "-A"],
+            run_git(
+                "-C", str(vault_root), "add", "-A",
                 check=True, capture_output=True,
             )
-            subprocess.run(
-                ["git", "-C", str(vault_root), "commit",
-                 "-m", f"cleanup: soft-archive run {state.run_id}"],
+            run_git(
+                "-C", str(vault_root), "commit",
+                "-m", f"cleanup: soft-archive run {state.run_id}",
                 check=True, capture_output=True,
             )
             git_committed = True

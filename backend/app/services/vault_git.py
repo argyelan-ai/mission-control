@@ -14,6 +14,8 @@ import time
 import threading
 from pathlib import Path
 
+from app.services.git_harden import run_git
+
 logger = logging.getLogger("mc.vault_git")
 
 # git's index.lock is repo-global; VaultGit's threading.Lock only serializes
@@ -30,7 +32,7 @@ def _run_git_retry(args: list[str]) -> subprocess.CompletedProcess:
     """git run with index.lock backoff. Raises CalledProcessError on final fail."""
     last: subprocess.CompletedProcess | None = None
     for attempt in range(_GIT_LOCK_RETRIES):
-        result = subprocess.run(args, capture_output=True, text=True)
+        result = run_git(*args[1:], capture_output=True, text=True)
         if result.returncode == 0 or not _is_index_lock_error(result.stderr):
             return result
         last = result
@@ -67,18 +69,18 @@ class VaultGit:
             return
 
         logger.info("Initializing git repo in %s", self.vault_path)
-        subprocess.run(
-            ["git", "init", str(self.vault_path)],
+        run_git(
+            "init", str(self.vault_path),
             check=True,
             capture_output=True,
         )
-        subprocess.run(
-            ["git", "-C", str(self.vault_path), "config", "user.email", "vault@mc.local"],
+        run_git(
+            "-C", str(self.vault_path), "config", "user.email", "vault@mc.local",
             check=True,
             capture_output=True,
         )
-        subprocess.run(
-            ["git", "-C", str(self.vault_path), "config", "user.name", "MC Vault"],
+        run_git(
+            "-C", str(self.vault_path), "config", "user.name", "MC Vault",
             check=True,
             capture_output=True,
         )
@@ -87,13 +89,13 @@ class VaultGit:
         gitignore = self.vault_path / ".gitignore"
         if not gitignore.exists():
             gitignore.write_text(_VAULT_GITIGNORE)
-            subprocess.run(
-                ["git", "-C", str(self.vault_path), "add", ".gitignore"],
+            run_git(
+                "-C", str(self.vault_path), "add", ".gitignore",
                 check=True,
                 capture_output=True,
             )
-            subprocess.run(
-                ["git", "-C", str(self.vault_path), "commit", "-m", "vault: init"],
+            run_git(
+                "-C", str(self.vault_path), "commit", "-m", "vault: init",
                 check=True,
                 capture_output=True,
             )
