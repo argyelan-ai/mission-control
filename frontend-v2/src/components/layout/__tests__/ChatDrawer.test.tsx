@@ -46,6 +46,8 @@ const data = vi.hoisted(() => ({
   approvals: [] as unknown[],
   hostAgents: [] as unknown[],
   groups: [] as unknown[],
+  // null = the record is off (404), like the live default
+  recordChats: null as unknown[] | null,
 }));
 vi.mock("@/lib/api", () => ({
   clearToken: vi.fn(),
@@ -61,6 +63,12 @@ vi.mock("@/lib/api", () => ({
     },
     groups: { list: vi.fn(async () => data.groups) },
     heads: { list: vi.fn(async () => ({ runs: [] })) },
+    chatRecord: {
+      listChats: vi.fn(async () => {
+        if (data.recordChats === null) throw new Error('API 404: {"detail":{"reason":"chat_record_disabled"}}');
+        return { chats: data.recordChats };
+      }),
+    },
   },
 }));
 
@@ -112,6 +120,7 @@ beforeEach(() => {
   localStorage.clear();
   data.approvals = [];
   data.groups = [];
+  data.recordChats = null;
   data.hostAgents = [
     { id: "a1", name: "Recipe rework", status: "idle", last_task_activity_at: iso(0, 9), updated_at: iso(-30, 9) },
     { id: "a2", name: "Bench video", status: "working", last_task_activity_at: iso(0, 8), updated_at: iso(-30, 9) },
@@ -129,6 +138,29 @@ describe("chat drawer (phone)", () => {
     );
     expect(screen.queryByTestId("chat-drawer")).toBeNull();
     expect(screen.getByTestId("drawer-button")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows two chats of the same agent once the record has a further chat (chats slice S2)", async () => {
+    data.recordChats = [
+      { id: "d-1", title: "Recipe rework", legacyAgentId: "a1", agentDefault: true, archived: false, lastActivityAt: iso(0, 9) },
+      { id: "c-2", title: "Recipe rework", harness: "omp", legacyAgentId: "a1", agentDefault: false, archived: false, lastActivityAt: iso(0, 10), createdAt: iso(0, 9) },
+    ];
+    const drawer = await openDrawer();
+    const today = () => within(drawer).getByTestId("chat-section-today");
+    await waitFor(() => expect(within(today()).getAllByTestId("chat-list-row")).toHaveLength(3));
+    const rows = within(today()).getAllByTestId("chat-list-row");
+    expect(rows.map((r) => r.querySelector(".truncate")?.textContent)).toEqual([
+      "Recipe rework · chat 2", "Recipe rework", "Bench video",
+    ]);
+    expect(rows[0]).toHaveAttribute("href", "/sessions?agent=a1&enter=1&chat=c-2");
+    expect(rows[1]).toHaveAttribute("href", "/sessions?agent=a1&enter=1");
+  });
+
+  it("with the record off the list is the agents' list", async () => {
+    const drawer = await openDrawer();
+    await waitFor(() => expect(within(drawer).getByTestId("chat-section-today")).toBeInTheDocument());
+    expect(within(drawer).getAllByTestId("chat-list-row").map((r) => r.getAttribute("data-chat")))
+      .toEqual(["agent:a1", "agent:a2", "agent:a3"]);
   });
 
   it("puts New chat on top, leading to the picker", async () => {

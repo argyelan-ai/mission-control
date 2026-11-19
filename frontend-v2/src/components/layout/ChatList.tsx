@@ -48,7 +48,7 @@ function Row({ entry, active, onNavigate }: { entry: ChatListEntry; active: bool
           className="flex-1 min-w-0 truncate text-sm"
           style={{ color: active ? C.textPrimary : C.textSecondary, fontWeight: active ? 500 : 400 }}
         >
-          {entry.title}
+          {entry.ordinal ? t("furtherChat", { name: entry.title, n: entry.ordinal }) : entry.title}
         </span>
         {time && (
           <span className="shrink-0 text-xs tabular-nums" style={{ color: C.textMuted }}>

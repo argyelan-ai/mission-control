@@ -63,41 +63,41 @@ Places: `C` = container (cli-bridge image), `H` = host (launchd adapter). Number
 | Tool calls shown | **yes** — tool events with edit stats [82][83] | **open** — same parser as claude; never measured for openclaude | **yes** — live tool output, per-edit diffs, file chips (P1) [84][85] | **no** — input reaches the container TUI, but there is no transcript adapter — the chat shows nothing (since 2026-11-02) [71] | **open** — shares the omp parser; not measured on a hermes transcript | **no** — no transcript adapter and no chat input channel (since 2026-11-02) [65][68] | **no** — not in the sessions chat; voice has its own channel (ADR-091) (since 2026-09-16) [68] | **no** — MC chat features for coding-CLI sessions are parked; the vendor's remote control covers the phone (since 2026-11-01) [11] |
 | Tool arguments stream while generated | **open** — the tail reads finished transcript lines; no streaming path found | **open** — same as claude | **no** — arguments are taken once, when the tool call starts (since 2026-11-02) [85] | **no** — input reaches the container TUI, but there is no transcript adapter — the chat shows nothing (since 2026-11-02) [71] | **open** — shares the omp mapper; not measured | **no** — no transcript adapter and no chat input channel (since 2026-11-02) [65][68] | **no** — not in the sessions chat; voice has its own channel (ADR-091) (since 2026-09-16) [68] | **no** — MC chat features for coding-CLI sessions are parked; the vendor's remote control covers the phone (since 2026-11-01) [11] |
 | Images / attachments into the chat | **open** — attachments arrive as a `[Anhang: <path>]` text line; whether the model sees the image is unmeasured | **open** — same as claude | **open** — same text line; ADR-090 lists 'send an image' (P5) as a package, not found built [86] | **no** — input reaches the container TUI, but there is no transcript adapter — the chat shows nothing (since 2026-11-02) [71] | **open** — same as omp | **no** — no transcript adapter and no chat input channel (since 2026-11-02) [65][68] | **no** — not in the sessions chat; voice has its own channel (ADR-091) (since 2026-09-16) [68] | **no** — MC chat features for coding-CLI sessions are parked; the vendor's remote control covers the phone (since 2026-11-01) [11] |
-| Session resume after restart | **open** — no resume-id logic found for the tmux path | **open** — same as claude | **yes** — `session/load` of the stored id; on failure a new session and a reset card [87][88] | **no** — input reaches the container TUI, but there is no transcript adapter — the chat shows nothing (since 2026-11-02) [71] | **open** — the spec names one contract for omp and hermes; hermes resume not read [70] | **no** — no transcript adapter and no chat input channel (since 2026-11-02) [65][68] | **no** — not in the sessions chat; voice has its own channel (ADR-091) (since 2026-09-16) [68] | **no** — MC chat features for coding-CLI sessions are parked; the vendor's remote control covers the phone (since 2026-11-01) [11] |
-| Own phone app / remote control outside MC | **yes** — the vendor ships a remote control from the phone [89] | **open** — no mention in the repo | **no** — no app of its own — the MC chat is its remote control (since 2026-11-01) [89][11] | **open** — no mention in the repo | **partial** — beta app; MC chat stays until it is stable [11][90] | **open** — no mention in the repo | **no** — the voice concierge is reached through MC (since 2026-09-16) [25] | **yes** — a Claude Code terminal session: the vendor's remote control [89] |
+| Session resume after restart | **open** — no resume-id logic found for the tmux path | **open** — same as claude | **yes** — `session/load` of the stored id; on failure a new session and a reset card. With the chat record on, each further chat of the agent resumes its own pinned session (chats slice S2) [87][88][89] | **no** — input reaches the container TUI, but there is no transcript adapter — the chat shows nothing (since 2026-11-02) [71] | **open** — the spec names one contract for omp and hermes; hermes resume not read [70] | **no** — no transcript adapter and no chat input channel (since 2026-11-02) [65][68] | **no** — not in the sessions chat; voice has its own channel (ADR-091) (since 2026-09-16) [68] | **no** — MC chat features for coding-CLI sessions are parked; the vendor's remote control covers the phone (since 2026-11-01) [11] |
+| Own phone app / remote control outside MC | **yes** — the vendor ships a remote control from the phone [90] | **open** — no mention in the repo | **no** — no app of its own — the MC chat is its remote control (since 2026-11-01) [90][11] | **open** — no mention in the repo | **partial** — beta app; MC chat stays until it is stable [11][91] | **open** — no mention in the repo | **no** — the voice concierge is reached through MC (since 2026-09-16) [25] | **yes** — a Claude Code terminal session: the vendor's remote control [90] |
 
 ## Cross-harness comms (ADR-100)
 
 | Capability | Claude Code | OpenClaude | omp | Kimi Code | Hermes | Grok Build | Voice (realtime) | Terminal session (guest card) |
 |---|---|---|---|---|---|---|---|---|
-| `comms:talk` usable | **yes** — explicit per-agent grant, harness-agnostic (an empty scope list does not grant it) [91][92] | **yes** — explicit per-agent grant, harness-agnostic (an empty scope list does not grant it) [91][92] | **yes** — explicit per-agent grant, harness-agnostic (an empty scope list does not grant it) [91][92] | **yes** — explicit per-agent grant, harness-agnostic (an empty scope list does not grant it) [91][92] | **yes** — explicit per-agent grant, harness-agnostic (an empty scope list does not grant it) [91][92] | **yes** — explicit per-agent grant, harness-agnostic (an empty scope list does not grant it) [91][92] | **open** — the grant is per agent and would work in principle; never exercised for the voice agent [91] | **yes** — the session token carries only `comms:talk` [93] |
-| `mc who` / `mc send` in the docs it reads | **no** — CARD.md does not list who/send (CARD_VERBS); only `mc docs tasks` / `mc help` show them (since 2026-11-02) [94] | **no** — CARD.md does not list who/send (CARD_VERBS); only `mc docs tasks` / `mc help` show them (since 2026-11-02) [94] | **no** — CARD.md does not list who/send (CARD_VERBS); only `mc docs tasks` / `mc help` show them (since 2026-11-02) [94] | **no** — CARD.md does not list who/send (CARD_VERBS); only `mc docs tasks` / `mc help` show them (since 2026-11-02) [94] | **yes** — the `mc_who` / `mc_send` MCP tools carry their own docstrings [95][96] | **no** — CARD.md does not list who/send (CARD_VERBS); only `mc docs tasks` / `mc help` show them (since 2026-11-02) [94] | **no** — voice worker, no task loop — not wired (since 2026-09-16) [25] | **yes** — setup and verbs in the hook README [97] |
-| Inbox delivery (nudge + pull) | **yes** — poll.sh pastes one wake-up line; the agent pulls with `mc inbox` [98] | **yes** — shared poll.sh [98] | **yes** — bridge nudge + pull (ADR-071 port) [99] | **yes** — shared poll.sh, nudge mode [98][39] | **yes** — bridge nudge pointing at the `mc_inbox` MCP tool [100] | **yes** — grok-bridge nudge + pull [101] | **open** — no inbox path for the voice agent found | **partial** — a one-line notice only; reading is opt-in (`MC_COMMS_AUTO_READ=1`) [102] |
-| Listed in `mc who` | **yes** — from its agent row once `comms:talk` is granted [91][103] | **yes** — from its agent row once `comms:talk` is granted [91][103] | **yes** — from its agent row once `comms:talk` is granted [91][103] | **yes** — from its agent row once `comms:talk` is granted [91][103] | **yes** — from its agent row once `comms:talk` is granted [91][103] | **yes** — from its agent row once `comms:talk` is granted [91][103] | **open** — would follow from a grant; never exercised | **yes** — enrolled by `mc hello` from the session-start hook [104] |
-| Auto-enrol hook | **no** — agents need no hook: the agent row is the directory entry (since 2026-11-01) [91] | **no** — agents need no hook: the agent row is the directory entry (since 2026-11-01) [91] | **no** — agents need no hook: the agent row is the directory entry (since 2026-11-01) [91] | **no** — agents need no hook: the agent row is the directory entry (since 2026-11-01) [91] | **no** — agents need no hook: the agent row is the directory entry (since 2026-11-01) [91] | **no** — agents need no hook: the agent row is the directory entry (since 2026-11-01) [91] | **no** — voice worker, no task loop — no directory hook (since 2026-09-16) [25] | **yes** — SessionStart / UserPromptSubmit / Stop / SessionEnd hooks [105] |
-| Busy / idle presence | **yes** — derived from agent liveness and run state — one presence source [103] | **yes** — derived from agent liveness and run state — one presence source [103] | **yes** — derived from agent liveness and run state — one presence source [103] | **yes** — derived from agent liveness and run state — one presence source [103] | **yes** — derived from agent liveness and run state — one presence source [103] | **yes** — derived from agent liveness and run state — one presence source [103] | **open** — would follow from agent liveness; not exercised | **yes** — the hook reports busy on prompt and idle on stop [106][107] |
-| Box status (`mc box status`) | **yes** — `mc box` verb (scope tasks:read) [108] | **yes** — `mc box` verb in the image [108][48] | **yes** — `mc box` verb, live in the container [108][50] | **yes** — `mc box` verb in the image [108][51] | **yes** — `mc_box_status` MCP tool [109] | **open** — depends on the `mc` CLI on the grok host, which is unproven | **no** — voice worker, no task loop — not wired (since 2026-09-16) [25] | **open** — box status needs tasks:read; a session token carries only comms:talk — not measured |
+| `comms:talk` usable | **yes** — explicit per-agent grant, harness-agnostic (an empty scope list does not grant it) [92][93] | **yes** — explicit per-agent grant, harness-agnostic (an empty scope list does not grant it) [92][93] | **yes** — explicit per-agent grant, harness-agnostic (an empty scope list does not grant it) [92][93] | **yes** — explicit per-agent grant, harness-agnostic (an empty scope list does not grant it) [92][93] | **yes** — explicit per-agent grant, harness-agnostic (an empty scope list does not grant it) [92][93] | **yes** — explicit per-agent grant, harness-agnostic (an empty scope list does not grant it) [92][93] | **open** — the grant is per agent and would work in principle; never exercised for the voice agent [92] | **yes** — the session token carries only `comms:talk` [94] |
+| `mc who` / `mc send` in the docs it reads | **no** — CARD.md does not list who/send (CARD_VERBS); only `mc docs tasks` / `mc help` show them (since 2026-11-02) [95] | **no** — CARD.md does not list who/send (CARD_VERBS); only `mc docs tasks` / `mc help` show them (since 2026-11-02) [95] | **no** — CARD.md does not list who/send (CARD_VERBS); only `mc docs tasks` / `mc help` show them (since 2026-11-02) [95] | **no** — CARD.md does not list who/send (CARD_VERBS); only `mc docs tasks` / `mc help` show them (since 2026-11-02) [95] | **yes** — the `mc_who` / `mc_send` MCP tools carry their own docstrings [96][97] | **no** — CARD.md does not list who/send (CARD_VERBS); only `mc docs tasks` / `mc help` show them (since 2026-11-02) [95] | **no** — voice worker, no task loop — not wired (since 2026-09-16) [25] | **yes** — setup and verbs in the hook README [98] |
+| Inbox delivery (nudge + pull) | **yes** — poll.sh pastes one wake-up line; the agent pulls with `mc inbox` [99] | **yes** — shared poll.sh [99] | **yes** — bridge nudge + pull (ADR-071 port) [100] | **yes** — shared poll.sh, nudge mode [99][39] | **yes** — bridge nudge pointing at the `mc_inbox` MCP tool [101] | **yes** — grok-bridge nudge + pull [102] | **open** — no inbox path for the voice agent found | **partial** — a one-line notice only; reading is opt-in (`MC_COMMS_AUTO_READ=1`) [103] |
+| Listed in `mc who` | **yes** — from its agent row once `comms:talk` is granted [92][104] | **yes** — from its agent row once `comms:talk` is granted [92][104] | **yes** — from its agent row once `comms:talk` is granted [92][104] | **yes** — from its agent row once `comms:talk` is granted [92][104] | **yes** — from its agent row once `comms:talk` is granted [92][104] | **yes** — from its agent row once `comms:talk` is granted [92][104] | **open** — would follow from a grant; never exercised | **yes** — enrolled by `mc hello` from the session-start hook [105] |
+| Auto-enrol hook | **no** — agents need no hook: the agent row is the directory entry (since 2026-11-01) [92] | **no** — agents need no hook: the agent row is the directory entry (since 2026-11-01) [92] | **no** — agents need no hook: the agent row is the directory entry (since 2026-11-01) [92] | **no** — agents need no hook: the agent row is the directory entry (since 2026-11-01) [92] | **no** — agents need no hook: the agent row is the directory entry (since 2026-11-01) [92] | **no** — agents need no hook: the agent row is the directory entry (since 2026-11-01) [92] | **no** — voice worker, no task loop — no directory hook (since 2026-09-16) [25] | **yes** — SessionStart / UserPromptSubmit / Stop / SessionEnd hooks [106] |
+| Busy / idle presence | **yes** — derived from agent liveness and run state — one presence source [104] | **yes** — derived from agent liveness and run state — one presence source [104] | **yes** — derived from agent liveness and run state — one presence source [104] | **yes** — derived from agent liveness and run state — one presence source [104] | **yes** — derived from agent liveness and run state — one presence source [104] | **yes** — derived from agent liveness and run state — one presence source [104] | **open** — would follow from agent liveness; not exercised | **yes** — the hook reports busy on prompt and idle on stop [107][108] |
+| Box status (`mc box status`) | **yes** — `mc box` verb (scope tasks:read) [109] | **yes** — `mc box` verb in the image [109][48] | **yes** — `mc box` verb, live in the container [109][50] | **yes** — `mc box` verb in the image [109][51] | **yes** — `mc_box_status` MCP tool [110] | **open** — depends on the `mc` CLI on the grok host, which is unproven | **no** — voice worker, no task loop — not wired (since 2026-09-16) [25] | **open** — box status needs tasks:read; a session token carries only comms:talk — not measured |
 
 ## Extensions
 
 | Capability | Claude Code | OpenClaude | omp | Kimi Code | Hermes | Grok Build | Voice (realtime) | Terminal session (guest card) |
 |---|---|---|---|---|---|---|---|---|
-| Claude-Code skills / plugins managed by MC | **yes** [110] | **yes** [111] | **no** — own config surfaces; MC plugin/skill files are ignored (since 2026-09-16) [112] | **no** — own config surfaces (since 2026-09-16) [113] | **no** — host-only, all capabilities off (since 2026-09-16) [114] | **no** — host-only, all capabilities off (since 2026-09-16) [114] | **no** — not in HARNESS_CAPABILITIES; falls to the all-off row (since 2026-09-16) [115] | **no** — a terminal session is not an MC agent — the operator's own CLI setup (since 2026-11-01) [11] |
-| Subagents on the agent's own model | **open** — native in the CLI; MC neither configures nor measures them | **open** — native in the CLI; not measured | **yes** — the config renderer pins subagent roles (task, scout, reviewer) to the bound model [116] | **open** — not measured | **open** — not measured | **open** — not measured | **no** — voice worker, no task loop — no subagents (since 2026-09-16) [25] | **open** — the operator's own CLI; not MC's concern |
-| Turn hooks wired by MC | **yes** — UserPromptSubmit / Stop turn-signal hooks + statusLine in settings.json [117] | **partial** — only when the bound runtime speaks the anthropic protocol [118] | **yes** — guard hook (bash lesson guards) and turn-end hook [119][120] | **yes** — `[[hooks]]` UserPromptSubmit / Stop in config.toml [121] | **open** — none found | **open** — none found | **no** — voice worker, no task loop — no hooks (since 2026-09-16) [25] | **yes** — the comms hook in the operator's own settings [105] |
+| Claude-Code skills / plugins managed by MC | **yes** [111] | **yes** [112] | **no** — own config surfaces; MC plugin/skill files are ignored (since 2026-09-16) [113] | **no** — own config surfaces (since 2026-09-16) [114] | **no** — host-only, all capabilities off (since 2026-09-16) [115] | **no** — host-only, all capabilities off (since 2026-09-16) [115] | **no** — not in HARNESS_CAPABILITIES; falls to the all-off row (since 2026-09-16) [116] | **no** — a terminal session is not an MC agent — the operator's own CLI setup (since 2026-11-01) [11] |
+| Subagents on the agent's own model | **open** — native in the CLI; MC neither configures nor measures them | **open** — native in the CLI; not measured | **yes** — the config renderer pins subagent roles (task, scout, reviewer) to the bound model [117] | **open** — not measured | **open** — not measured | **open** — not measured | **no** — voice worker, no task loop — no subagents (since 2026-09-16) [25] | **open** — the operator's own CLI; not MC's concern |
+| Turn hooks wired by MC | **yes** — UserPromptSubmit / Stop turn-signal hooks + statusLine in settings.json [118] | **partial** — only when the bound runtime speaks the anthropic protocol [119] | **yes** — guard hook (bash lesson guards) and turn-end hook [120][121] | **yes** — `[[hooks]]` UserPromptSubmit / Stop in config.toml [122] | **open** — none found | **open** — none found | **no** — voice worker, no task loop — no hooks (since 2026-09-16) [25] | **yes** — the comms hook in the operator's own settings [106] |
 
 ## Operations
 
 | Capability | Claude Code | OpenClaude | omp | Kimi Code | Hermes | Grok Build | Voice (realtime) | Terminal session (guest card) |
 |---|---|---|---|---|---|---|---|---|
-| Provisioning path | **yes** — C: cli-bridge provision; H: generic staged host path (plist + run.sh + agent.env + poll.sh) [122][123] | **yes** — same as claude [122][123] | **yes** — same as claude; host omp also gets its own models.yml profile [123][124] | **yes** — C: cli-bridge provision; H: adapter bootstrap [125][126] | **yes** — adapter bootstrap (singleton) [127][128] | **yes** — adapter bootstrap (singleton) [129][130] | **no** — owned by the voice-worker compose service; bootstrap refuses (since 2026-09-16) [25] | **yes** — an admin issues a guest card; the hook enrols the session [131] |
-| Config sync (`sync-config`) | **yes** — C: files + optional container restart; H: files only, no restart [132] | **yes** — C: files + optional container restart; H: files only, no restart [132] | **yes** — C: files + optional container restart; H: files only, no restart [132] | **yes** — C: files + optional container restart; H: files only, no restart [132] | **yes** — host files only, no restart [132] | **yes** — host files only, no restart [132] | **no** — nothing to sync; the binding is read per call (since 2026-09-16) [25] | **no** — a terminal session is not an MC agent — nothing to sync (since 2026-11-01) [11] |
-| Token / auth model | **yes** — Claude account OAuth token from the vault (`CLAUDE_CODE_OAUTH_TOKEN`) [133] | **yes** — `OPENAI_API_KEY`: agent secret first, then runtime secret; keyless local runtimes get none [134] | **yes** — same as openclaude [134] | **yes** — own OAuth credential files in the per-agent config mount; no env token [135] | **yes** — same as openclaude [134] | **yes** — its own OAuth session; MC renders only control-plane vars [7] | **yes** — voice-worker env, or the vault via `/agent/voice/credentials` [136] | **yes** — guest card (≤ 7 days, mode 0600) → per-session token [137] |
-| Pinned CLI version | **yes** 2.1.308 [138] | **yes** 0.30.0 [139] | **yes** 18.10.1 — with sha256 [140] | **yes** 0.29.1 — with sha256 [141] | **no** — not in cli-versions.json (since 2026-11-02) [142] | **yes** 0.2.93 [143] | **no** — voice worker, no task loop — no CLI (since 2026-09-16) [25] | **no** — a terminal session is not an MC agent — the operator's own CLI (since 2026-11-01) [11] |
-| Binary on the host PATH (live) | **yes** 2.1.316 [144] | **partial** 0.1.8 — far behind the pin (0.30.0) [145] | **partial** 16.2.13 — host binary behind the pin; the container runs 18.10.1 [146] | **partial** 0.27.0 — behind the pin (0.29.1) [147] | **yes** v0.18.0 [148] | **yes** 0.2.93 — matches the pin [149] | **no** — voice worker, no task loop — no CLI (since 2026-09-16) [25] | **no** — a terminal session is not an MC agent — the operator's own CLI (since 2026-11-01) [11] |
-| Pane fixtures in the adapter TCK | **yes** [150] | **yes** [151] | **no** — container omp runs headless over ACP — no pane to scrape (since 2026-11-02) [152] | **yes** [153] | **open** — no fixtures; the hermes TUI path greps its own paste | **open** — no fixtures; the grok bridge scrapes its pane without a TCK | **no** — voice worker, no task loop — no pane (since 2026-09-16) [25] | **no** — a terminal session is not an MC agent — not MC-driven (since 2026-11-01) [11] |
-| Known limits | **partial** — fleet matrix refuses local runtimes (heads only, experimental); host chat bound to the lead agent's slug [154][68] | **partial** — turn-signal hooks and statusLine only on anthropic-protocol runtimes [118] | **partial** — stream idle timeout raised to 1 h (engines that hold tool arguments send nothing for minutes); cannot boot without a runtime binding [155][15] | **partial** — OAuth refresh rotation kills copied credential files; unattended only with `--yolo` [4][156] | **partial** — the only harness reading the thinking switch; ACP chat only behind `HERMES_DRIVER=acp` [157][158] | **partial** — `-p` banned fleet-wide; one persistent TUI per host [53] | **partial** — realtime voice only; one provider per call [21] | **partial** — one card enrols at most 5 live sessions sharing one rate limit; a second terminal in the same folder stays out [159][160] |
-| Live agents on this harness | **yes** — 1 active host agent (the lead) [161] | **no** — no agent (since 2026-11-02) [161] | **yes** — 1 active container agent [161] | **no** — no agent (since 2026-11-02) [161] | **no** — 1 agent, paused (since 2026-09-22) [161] | **no** — 1 agent, paused (since 2026-09-22) [161] | **yes** — 1 active voice agent [161] | **open** — guest sessions are not agent rows; not counted |
+| Provisioning path | **yes** — C: cli-bridge provision; H: generic staged host path (plist + run.sh + agent.env + poll.sh) [123][124] | **yes** — same as claude [123][124] | **yes** — same as claude; host omp also gets its own models.yml profile [124][125] | **yes** — C: cli-bridge provision; H: adapter bootstrap [126][127] | **yes** — adapter bootstrap (singleton) [128][129] | **yes** — adapter bootstrap (singleton) [130][131] | **no** — owned by the voice-worker compose service; bootstrap refuses (since 2026-09-16) [25] | **yes** — an admin issues a guest card; the hook enrols the session [132] |
+| Config sync (`sync-config`) | **yes** — C: files + optional container restart; H: files only, no restart [133] | **yes** — C: files + optional container restart; H: files only, no restart [133] | **yes** — C: files + optional container restart; H: files only, no restart [133] | **yes** — C: files + optional container restart; H: files only, no restart [133] | **yes** — host files only, no restart [133] | **yes** — host files only, no restart [133] | **no** — nothing to sync; the binding is read per call (since 2026-09-16) [25] | **no** — a terminal session is not an MC agent — nothing to sync (since 2026-11-01) [11] |
+| Token / auth model | **yes** — Claude account OAuth token from the vault (`CLAUDE_CODE_OAUTH_TOKEN`) [134] | **yes** — `OPENAI_API_KEY`: agent secret first, then runtime secret; keyless local runtimes get none [135] | **yes** — same as openclaude [135] | **yes** — own OAuth credential files in the per-agent config mount; no env token [136] | **yes** — same as openclaude [135] | **yes** — its own OAuth session; MC renders only control-plane vars [7] | **yes** — voice-worker env, or the vault via `/agent/voice/credentials` [137] | **yes** — guest card (≤ 7 days, mode 0600) → per-session token [138] |
+| Pinned CLI version | **yes** 2.1.308 [139] | **yes** 0.30.0 [140] | **yes** 18.10.1 — with sha256 [141] | **yes** 0.29.1 — with sha256 [142] | **no** — not in cli-versions.json (since 2026-11-02) [143] | **yes** 0.2.93 [144] | **no** — voice worker, no task loop — no CLI (since 2026-09-16) [25] | **no** — a terminal session is not an MC agent — the operator's own CLI (since 2026-11-01) [11] |
+| Binary on the host PATH (live) | **yes** 2.1.316 [145] | **partial** 0.1.8 — far behind the pin (0.30.0) [146] | **partial** 16.2.13 — host binary behind the pin; the container runs 18.10.1 [147] | **partial** 0.27.0 — behind the pin (0.29.1) [148] | **yes** v0.18.0 [149] | **yes** 0.2.93 — matches the pin [150] | **no** — voice worker, no task loop — no CLI (since 2026-09-16) [25] | **no** — a terminal session is not an MC agent — the operator's own CLI (since 2026-11-01) [11] |
+| Pane fixtures in the adapter TCK | **yes** [151] | **yes** [152] | **no** — container omp runs headless over ACP — no pane to scrape (since 2026-11-02) [153] | **yes** [154] | **open** — no fixtures; the hermes TUI path greps its own paste | **open** — no fixtures; the grok bridge scrapes its pane without a TCK | **no** — voice worker, no task loop — no pane (since 2026-09-16) [25] | **no** — a terminal session is not an MC agent — not MC-driven (since 2026-11-01) [11] |
+| Known limits | **partial** — fleet matrix refuses local runtimes (heads only, experimental); host chat bound to the lead agent's slug [155][68] | **partial** — turn-signal hooks and statusLine only on anthropic-protocol runtimes [119] | **partial** — stream idle timeout raised to 1 h (engines that hold tool arguments send nothing for minutes); cannot boot without a runtime binding [156][15] | **partial** — OAuth refresh rotation kills copied credential files; unattended only with `--yolo` [4][157] | **partial** — the only harness reading the thinking switch; ACP chat only behind `HERMES_DRIVER=acp` [158][159] | **partial** — `-p` banned fleet-wide; one persistent TUI per host [53] | **partial** — realtime voice only; one provider per call [21] | **partial** — one card enrols at most 5 live sessions sharing one rate limit; a second terminal in the same folder stays out [160][161] |
+| Live agents on this harness | **yes** — 1 active host agent (the lead) [162] | **no** — no agent (since 2026-11-02) [162] | **yes** — 1 active container agent [162] | **no** — no agent (since 2026-11-02) [162] | **no** — 1 agent, paused (since 2026-09-22) [162] | **no** — 1 agent, paused (since 2026-09-22) [162] | **yes** — 1 active voice agent [162] | **open** — guest sessions are not agent rows; not counted |
 
 ## Maturity levels
 
@@ -202,76 +202,77 @@ Places: `C` = container (cli-bridge image), `H` = host (launchd adapter). Number
 86. [`docs/decisions/090-chat-as-remote-control.md:88`](../docs/decisions/090-chat-as-remote-control.md#L88)
 87. [`docs/specs/chat-over-acp.md:228-231`](../docs/specs/chat-over-acp.md#L228-L231)
 88. [`docker/omp-bridge/acp_chat.py:538`](../docker/omp-bridge/acp_chat.py#L538)
-89. [`docs/decisions/100-foundation-and-cross-harness-comms.md:44-48`](../docs/decisions/100-foundation-and-cross-harness-comms.md#L44-L48)
-90. [`docs/decisions/100-foundation-and-cross-harness-comms.md:164`](../docs/decisions/100-foundation-and-cross-harness-comms.md#L164)
-91. [`backend/app/services/comms_directory.py:79-84`](../backend/app/services/comms_directory.py#L79-L84)
-92. [`backend/app/comms_auth.py:54-60`](../backend/app/comms_auth.py#L54-L60)
-93. [`backend/app/routers/agent_comms.py:97-111`](../backend/app/routers/agent_comms.py#L97-L111)
-94. [`backend/app/agent_doc_constants.py:210-214`](../backend/app/agent_doc_constants.py#L210-L214)
-95. [`scripts/mc-mcp.py:1054-1055`](../scripts/mc-mcp.py#L1054-L1055)
-96. [`scripts/mc-mcp.py:1080-1081`](../scripts/mc-mcp.py#L1080-L1081)
-97. [`scripts/comms/claude-code/README.md:1-30`](../scripts/comms/claude-code/README.md#L1-L30)
-98. [`docker/shared/poll.sh:146-148`](../docker/shared/poll.sh#L146-L148)
-99. [`docker/omp-bridge/bridge.py:2344-2353`](../docker/omp-bridge/bridge.py#L2344-L2353)
-100. [`scripts/hermes-bridge.py:958-967`](../scripts/hermes-bridge.py#L958-L967)
-101. [`scripts/grok-bridge.py:141`](../scripts/grok-bridge.py#L141)
-102. [`scripts/comms/claude-code/README.md:24-25`](../scripts/comms/claude-code/README.md#L24-L25)
-103. [`backend/app/services/comms_directory.py:194-235`](../backend/app/services/comms_directory.py#L194-L235)
-104. [`scripts/comms/claude-code/mc-comms-hook.py:122`](../scripts/comms/claude-code/mc-comms-hook.py#L122)
-105. [`scripts/comms/claude-code/hooks.example.json:1-8`](../scripts/comms/claude-code/hooks.example.json#L1-L8)
-106. [`scripts/comms/claude-code/mc-comms-hook.py:138`](../scripts/comms/claude-code/mc-comms-hook.py#L138)
-107. [`scripts/comms/claude-code/mc-comms-hook.py:152`](../scripts/comms/claude-code/mc-comms-hook.py#L152)
-108. [`scripts/mc-cli/mc_cli/commands.py:3870-3871`](../scripts/mc-cli/mc_cli/commands.py#L3870-L3871)
-109. [`scripts/mc-mcp.py:991-992`](../scripts/mc-mcp.py#L991-L992)
-110. [`backend/app/services/harness_compat.py:337-343`](../backend/app/services/harness_compat.py#L337-L343)
-111. [`backend/app/services/harness_compat.py:344-350`](../backend/app/services/harness_compat.py#L344-L350)
-112. [`backend/app/services/harness_compat.py:351-357`](../backend/app/services/harness_compat.py#L351-L357)
-113. [`backend/app/services/harness_compat.py:358-364`](../backend/app/services/harness_compat.py#L358-L364)
-114. [`backend/app/services/harness_compat.py:367-376`](../backend/app/services/harness_compat.py#L367-L376)
-115. [`backend/app/services/harness_compat.py:379-390`](../backend/app/services/harness_compat.py#L379-L390)
-116. [`docker/omp-bridge/render-omp-config.sh:311-316`](../docker/omp-bridge/render-omp-config.sh#L311-L316)
-117. [`backend/templates/cli_agent_settings.json.j2:6-38`](../backend/templates/cli_agent_settings.json.j2#L6-L38)
-118. [`backend/app/services/harness_compat.py:393-399`](../backend/app/services/harness_compat.py#L393-L399)
-119. [`docker/omp-bridge/guard-hook.mjs:1-20`](../docker/omp-bridge/guard-hook.mjs#L1-L20)
-120. [`docker/omp-bridge/turn-end-hook.mjs:1-12`](../docker/omp-bridge/turn-end-hook.mjs#L1-L12)
-121. [`docker/mc-kimi-agent/entrypoint.sh:149-162`](../docker/mc-kimi-agent/entrypoint.sh#L149-L162)
-122. [`backend/app/routers/agents.py:2000-2015`](../backend/app/routers/agents.py#L2000-L2015)
-123. [`backend/app/routers/agents.py:2068-2076`](../backend/app/routers/agents.py#L2068-L2076)
-124. [`backend/app/services/host_provisioning.py:87-90`](../backend/app/services/host_provisioning.py#L87-L90)
-125. [`backend/app/services/agent_bootstrap.py:489`](../backend/app/services/agent_bootstrap.py#L489)
-126. [`backend/app/services/host_harness_adapter.py:164-170`](../backend/app/services/host_harness_adapter.py#L164-L170)
-127. [`backend/app/services/agent_bootstrap.py:321`](../backend/app/services/agent_bootstrap.py#L321)
-128. [`backend/app/services/host_harness_adapter.py:79-85`](../backend/app/services/host_harness_adapter.py#L79-L85)
-129. [`backend/app/services/agent_bootstrap.py:580`](../backend/app/services/agent_bootstrap.py#L580)
-130. [`backend/app/services/host_harness_adapter.py:123-129`](../backend/app/services/host_harness_adapter.py#L123-L129)
-131. [`scripts/comms/claude-code/README.md:9-17`](../scripts/comms/claude-code/README.md#L9-L17)
-132. [`backend/app/routers/agents.py:2165-2176`](../backend/app/routers/agents.py#L2165-L2176)
-133. [`backend/app/services/harness_compat.py:195-198`](../backend/app/services/harness_compat.py#L195-L198)
-134. [`backend/app/services/harness_compat.py:200-214`](../backend/app/services/harness_compat.py#L200-L214)
-135. [`backend/app/routers/internal.py:336-342`](../backend/app/routers/internal.py#L336-L342)
-136. [`backend/app/services/harness_compat.py:81-87`](../backend/app/services/harness_compat.py#L81-L87)
-137. [`scripts/comms/claude-code/README.md:9-13`](../scripts/comms/claude-code/README.md#L9-L13)
-138. [`docker/cli-versions.json:5-7`](../docker/cli-versions.json#L5-L7)
-139. [`docker/cli-versions.json:2-4`](../docker/cli-versions.json#L2-L4)
-140. [`docker/cli-versions.json:8-11`](../docker/cli-versions.json#L8-L11)
-141. [`docker/cli-versions.json:12-15`](../docker/cli-versions.json#L12-L15)
-142. [`docker/cli-versions.json:1-19`](../docker/cli-versions.json#L1-L19)
-143. [`docker/cli-versions.json:16-18`](../docker/cli-versions.json#L16-L18)
-144. live measurement — 2026-11-02 `claude --version` on the host → 2.1.316
-145. live measurement — 2026-11-02 `openclaude --version` on the host → 0.1.8
-146. live measurement — 2026-11-02 `omp --version` on the host → 16.2.13; in the omp container → 18.10.1
-147. live measurement — 2026-11-02 `kimi --version` on the host → 0.27.0
-148. live measurement — 2026-11-02 `hermes --version` on the host → v0.18.0
-149. live measurement — 2026-11-02 `grok --version` on the host → 0.2.93
-150. [`backend/tests/fixtures/panes/claude`](../backend/tests/fixtures/panes/claude)
-151. [`backend/tests/fixtures/panes/openclaude`](../backend/tests/fixtures/panes/openclaude)
-152. [`backend/app/services/acp_chat_transport.py:186-188`](../backend/app/services/acp_chat_transport.py#L186-L188)
-153. [`backend/tests/fixtures/panes/kimi`](../backend/tests/fixtures/panes/kimi)
-154. [`backend/app/services/harness_compat.py:144-155`](../backend/app/services/harness_compat.py#L144-L155)
-155. [`backend/app/services/harness_compat.py:281-288`](../backend/app/services/harness_compat.py#L281-L288)
-156. [`docs/specs/head-launcher.md:125`](../docs/specs/head-launcher.md#L125)
-157. [`backend/app/services/harness_compat.py:236-244`](../backend/app/services/harness_compat.py#L236-L244)
-158. [`backend/app/services/acp_chat_transport.py:190-191`](../backend/app/services/acp_chat_transport.py#L190-L191)
-159. [`scripts/comms/claude-code/README.md:11-13`](../scripts/comms/claude-code/README.md#L11-L13)
-160. [`scripts/comms/claude-code/README.md:28-30`](../scripts/comms/claude-code/README.md#L28-L30)
-161. live measurement — 2026-11-02 agents table (read-only query): active = 1 claude host agent, 1 omp container agent, 1 jarvis; paused = 1 grok, 1 hermes; no kimi or openclaude agent
+89. [`docker/omp-bridge/acp_chat_pool.py:186`](../docker/omp-bridge/acp_chat_pool.py#L186)
+90. [`docs/decisions/100-foundation-and-cross-harness-comms.md:44-48`](../docs/decisions/100-foundation-and-cross-harness-comms.md#L44-L48)
+91. [`docs/decisions/100-foundation-and-cross-harness-comms.md:164`](../docs/decisions/100-foundation-and-cross-harness-comms.md#L164)
+92. [`backend/app/services/comms_directory.py:79-84`](../backend/app/services/comms_directory.py#L79-L84)
+93. [`backend/app/comms_auth.py:54-60`](../backend/app/comms_auth.py#L54-L60)
+94. [`backend/app/routers/agent_comms.py:97-111`](../backend/app/routers/agent_comms.py#L97-L111)
+95. [`backend/app/agent_doc_constants.py:210-214`](../backend/app/agent_doc_constants.py#L210-L214)
+96. [`scripts/mc-mcp.py:1054-1055`](../scripts/mc-mcp.py#L1054-L1055)
+97. [`scripts/mc-mcp.py:1080-1081`](../scripts/mc-mcp.py#L1080-L1081)
+98. [`scripts/comms/claude-code/README.md:1-30`](../scripts/comms/claude-code/README.md#L1-L30)
+99. [`docker/shared/poll.sh:146-148`](../docker/shared/poll.sh#L146-L148)
+100. [`docker/omp-bridge/bridge.py:2344-2353`](../docker/omp-bridge/bridge.py#L2344-L2353)
+101. [`scripts/hermes-bridge.py:958-967`](../scripts/hermes-bridge.py#L958-L967)
+102. [`scripts/grok-bridge.py:141`](../scripts/grok-bridge.py#L141)
+103. [`scripts/comms/claude-code/README.md:24-25`](../scripts/comms/claude-code/README.md#L24-L25)
+104. [`backend/app/services/comms_directory.py:194-235`](../backend/app/services/comms_directory.py#L194-L235)
+105. [`scripts/comms/claude-code/mc-comms-hook.py:122`](../scripts/comms/claude-code/mc-comms-hook.py#L122)
+106. [`scripts/comms/claude-code/hooks.example.json:1-8`](../scripts/comms/claude-code/hooks.example.json#L1-L8)
+107. [`scripts/comms/claude-code/mc-comms-hook.py:138`](../scripts/comms/claude-code/mc-comms-hook.py#L138)
+108. [`scripts/comms/claude-code/mc-comms-hook.py:152`](../scripts/comms/claude-code/mc-comms-hook.py#L152)
+109. [`scripts/mc-cli/mc_cli/commands.py:3870-3871`](../scripts/mc-cli/mc_cli/commands.py#L3870-L3871)
+110. [`scripts/mc-mcp.py:991-992`](../scripts/mc-mcp.py#L991-L992)
+111. [`backend/app/services/harness_compat.py:337-343`](../backend/app/services/harness_compat.py#L337-L343)
+112. [`backend/app/services/harness_compat.py:344-350`](../backend/app/services/harness_compat.py#L344-L350)
+113. [`backend/app/services/harness_compat.py:351-357`](../backend/app/services/harness_compat.py#L351-L357)
+114. [`backend/app/services/harness_compat.py:358-364`](../backend/app/services/harness_compat.py#L358-L364)
+115. [`backend/app/services/harness_compat.py:367-376`](../backend/app/services/harness_compat.py#L367-L376)
+116. [`backend/app/services/harness_compat.py:379-390`](../backend/app/services/harness_compat.py#L379-L390)
+117. [`docker/omp-bridge/render-omp-config.sh:311-316`](../docker/omp-bridge/render-omp-config.sh#L311-L316)
+118. [`backend/templates/cli_agent_settings.json.j2:6-38`](../backend/templates/cli_agent_settings.json.j2#L6-L38)
+119. [`backend/app/services/harness_compat.py:393-399`](../backend/app/services/harness_compat.py#L393-L399)
+120. [`docker/omp-bridge/guard-hook.mjs:1-20`](../docker/omp-bridge/guard-hook.mjs#L1-L20)
+121. [`docker/omp-bridge/turn-end-hook.mjs:1-12`](../docker/omp-bridge/turn-end-hook.mjs#L1-L12)
+122. [`docker/mc-kimi-agent/entrypoint.sh:149-162`](../docker/mc-kimi-agent/entrypoint.sh#L149-L162)
+123. [`backend/app/routers/agents.py:2000-2015`](../backend/app/routers/agents.py#L2000-L2015)
+124. [`backend/app/routers/agents.py:2068-2076`](../backend/app/routers/agents.py#L2068-L2076)
+125. [`backend/app/services/host_provisioning.py:87-90`](../backend/app/services/host_provisioning.py#L87-L90)
+126. [`backend/app/services/agent_bootstrap.py:489`](../backend/app/services/agent_bootstrap.py#L489)
+127. [`backend/app/services/host_harness_adapter.py:164-170`](../backend/app/services/host_harness_adapter.py#L164-L170)
+128. [`backend/app/services/agent_bootstrap.py:321`](../backend/app/services/agent_bootstrap.py#L321)
+129. [`backend/app/services/host_harness_adapter.py:79-85`](../backend/app/services/host_harness_adapter.py#L79-L85)
+130. [`backend/app/services/agent_bootstrap.py:580`](../backend/app/services/agent_bootstrap.py#L580)
+131. [`backend/app/services/host_harness_adapter.py:123-129`](../backend/app/services/host_harness_adapter.py#L123-L129)
+132. [`scripts/comms/claude-code/README.md:9-17`](../scripts/comms/claude-code/README.md#L9-L17)
+133. [`backend/app/routers/agents.py:2165-2176`](../backend/app/routers/agents.py#L2165-L2176)
+134. [`backend/app/services/harness_compat.py:195-198`](../backend/app/services/harness_compat.py#L195-L198)
+135. [`backend/app/services/harness_compat.py:200-214`](../backend/app/services/harness_compat.py#L200-L214)
+136. [`backend/app/routers/internal.py:336-342`](../backend/app/routers/internal.py#L336-L342)
+137. [`backend/app/services/harness_compat.py:81-87`](../backend/app/services/harness_compat.py#L81-L87)
+138. [`scripts/comms/claude-code/README.md:9-13`](../scripts/comms/claude-code/README.md#L9-L13)
+139. [`docker/cli-versions.json:5-7`](../docker/cli-versions.json#L5-L7)
+140. [`docker/cli-versions.json:2-4`](../docker/cli-versions.json#L2-L4)
+141. [`docker/cli-versions.json:8-11`](../docker/cli-versions.json#L8-L11)
+142. [`docker/cli-versions.json:12-15`](../docker/cli-versions.json#L12-L15)
+143. [`docker/cli-versions.json:1-19`](../docker/cli-versions.json#L1-L19)
+144. [`docker/cli-versions.json:16-18`](../docker/cli-versions.json#L16-L18)
+145. live measurement — 2026-11-02 `claude --version` on the host → 2.1.316
+146. live measurement — 2026-11-02 `openclaude --version` on the host → 0.1.8
+147. live measurement — 2026-11-02 `omp --version` on the host → 16.2.13; in the omp container → 18.10.1
+148. live measurement — 2026-11-02 `kimi --version` on the host → 0.27.0
+149. live measurement — 2026-11-02 `hermes --version` on the host → v0.18.0
+150. live measurement — 2026-11-02 `grok --version` on the host → 0.2.93
+151. [`backend/tests/fixtures/panes/claude`](../backend/tests/fixtures/panes/claude)
+152. [`backend/tests/fixtures/panes/openclaude`](../backend/tests/fixtures/panes/openclaude)
+153. [`backend/app/services/acp_chat_transport.py:186-188`](../backend/app/services/acp_chat_transport.py#L186-L188)
+154. [`backend/tests/fixtures/panes/kimi`](../backend/tests/fixtures/panes/kimi)
+155. [`backend/app/services/harness_compat.py:144-155`](../backend/app/services/harness_compat.py#L144-L155)
+156. [`backend/app/services/harness_compat.py:281-288`](../backend/app/services/harness_compat.py#L281-L288)
+157. [`docs/specs/head-launcher.md:125`](../docs/specs/head-launcher.md#L125)
+158. [`backend/app/services/harness_compat.py:236-244`](../backend/app/services/harness_compat.py#L236-L244)
+159. [`backend/app/services/acp_chat_transport.py:190-191`](../backend/app/services/acp_chat_transport.py#L190-L191)
+160. [`scripts/comms/claude-code/README.md:11-13`](../scripts/comms/claude-code/README.md#L11-L13)
+161. [`scripts/comms/claude-code/README.md:28-30`](../scripts/comms/claude-code/README.md#L28-L30)
+162. live measurement — 2026-11-02 agents table (read-only query): active = 1 claude host agent, 1 omp container agent, 1 jarvis; paused = 1 grok, 1 hermes; no kimi or openclaude agent

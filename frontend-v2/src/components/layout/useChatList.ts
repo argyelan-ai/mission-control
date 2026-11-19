@@ -24,6 +24,15 @@ export function chatListPollMs(pathname: string): number {
   return pathname.startsWith("/sessions") ? 10_000 : 60_000;
 }
 
+/**
+ * The record answers 404 while CHAT_RECORD_ENABLED is off: then it is not
+ * asked again (one request per page load, not one per poll). Any other
+ * failure keeps the poll — the record may be back on the next one.
+ */
+export function recordPollMs(error: unknown, poll: number): number | false {
+  return error instanceof Error && error.message.startsWith("API 404") ? false : poll;
+}
+
 export function useChatList(): ChatListSections & { waitingCount: number; loaded: boolean } {
   const poll = chatListPollMs(usePathname() ?? "/");
   const { data: dockerAgents, isSuccess: dockerLoaded } = useQuery({
@@ -41,6 +50,14 @@ export function useChatList(): ChatListSections & { waitingCount: number; loaded
     queryFn: () => api.groups.list({ includeArchived: true }),
     refetchInterval: poll,
   });
+  // Further chats of an agent (chats slice S2). The record answers 404
+  // while its flag is off: then the list is exactly the one before.
+  const { data: record } = useQuery({
+    queryKey: ["chat-record", "chats"],
+    queryFn: () => api.chatRecord.listChats(),
+    refetchInterval: (query) => recordPollMs(query.state.error, poll),
+    retry: false,
+  });
   const inbox = useInbox();
 
   const sections = useMemo(
@@ -51,9 +68,10 @@ export function useChatList(): ChatListSections & { waitingCount: number; loaded
           groups: (Array.isArray(groups) ? groups : []).filter((g) => !g.archived_at),
           headRuns: inbox.headQuestions,
           approvals: inbox.approvals,
+          recordChats: Array.isArray(record?.chats) ? record.chats : [],
         }),
       ),
-    [dockerAgents, hostAgents, groups, inbox.headQuestions, inbox.approvals],
+    [dockerAgents, hostAgents, groups, record, inbox.headQuestions, inbox.approvals],
   );
 
   return { ...sections, waitingCount: inbox.count, loaded: dockerLoaded || hostLoaded };

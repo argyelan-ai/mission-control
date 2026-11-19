@@ -445,6 +445,12 @@ class Settings(BaseSettings):
     # from chats / chat_sessions / chat_events; the chat runs exactly as
     # before. Env CHAT_RECORD_ENABLED. Way back: false + truncate the tables.
     chat_record_enabled: bool = False
+    # Chats slice S2: with the record on, ``/new`` / ``/clear`` on a headless
+    # omp agent opens a FURTHER chat (201 ``newChat``) instead of a fresh
+    # session in the agent's own chat. Off until the chat view follows
+    # ``newChat`` (opens ``?chat=`` and sends its ``chatId``) — before that
+    # the operator could not reach the new chat. Env CHAT_RECORD_NEW_AS_CHAT.
+    chat_record_new_as_chat: bool = False
     # How often the background services sweep every agent's session files
     # into the record (services/chat_record_import.ChatRecordSync). The live
     # sink only writes while somebody has the chat open; this covers the
