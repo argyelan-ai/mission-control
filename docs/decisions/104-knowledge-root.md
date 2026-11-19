@@ -45,21 +45,37 @@ search index can be rebuilt from the files (ADR-034).
    read. A vault note whose frontmatter `project` names a project folder is
    listed with that project. Nothing is moved or copied; the move of the vault
    is a later slice.
-5. **Ownership rule for projects.** Under `projects/<slug>/` a frontmatter
-   `project` that names another project flags the file
-   (`problem = project_mismatch`): it is not listed in that project and is
-   counted in the status. The file is not moved. Symlinks that leave their
-   folder are not indexed.
+5. **Ownership rule for projects.** A note names its project with the
+   frontmatter `project`. Valid values: the folder slug (`online-shop`), the
+   project id, the brief's own `project-<id>`, or the project name
+   (`Online Shop`, compared slugified). Any other value — the vault uses
+   board slugs there (`project: mc-dev`) — names no project and is ignored.
+   Under `projects/<slug>/` only a value that names a **different** project
+   flags the file (`problem = project_mismatch`): it is not listed in that
+   project and is counted in the status. The file is not moved. Symlinks that
+   leave their folder are not indexed. A folder whose `.mc/project.json` went
+   missing is adopted again by the `id: project-<id>` in its `PROJECT.md`
+   (no second folder).
 6. **When the index is written.** `services/knowledge_import.sync_all`:
    background sweep every `KNOWLEDGE_ROOT_SYNC_INTERVAL` seconds (default
    300), `POST /api/v1/knowledge-root/_admin/sync`, or
    `python -m app.services.knowledge_import` (`--dry-run` only counts). An
-   unchanged file (same size and mtime) costs one `stat`.
+   unchanged file (same size and mtime) costs one `stat`. One sweep at a
+   time: a process lock plus a Postgres advisory lock for the sweep's
+   transaction (API and worker are separate processes); a second sweep gets
+   409 `sync_running` (the worker just skips its turn). All file work (walk,
+   read, hash, parse, folder writes) runs in a worker thread, only the DB
+   part on the event loop. A source folder that is missing (mount flap,
+   moved `vault_path`) keeps its rows and reports an error instead of
+   emptying the index.
 7. **Read API** (admin only, like the vault reads; 404
    `knowledge_root_disabled` while the flag is off): `GET
    /api/v1/knowledge-root/status`, `/projects`, `/entries` (filter by drawer,
    project, source, `problems`), `/entries/{id}` (body read from the file now,
-   `stale` when it changed since the sweep, 410 when it is gone), `/search`.
+   `stale` when it changed since the sweep, cut at 2 MB with
+   `truncated: true`, 410 when it is gone), `/search`. `/projects` counts
+   what `/entries?project=<slug>` returns (folder files plus vault notes that
+   name the project).
    The prefix is not `/knowledge` because that is the legacy `board_memory`
    API, which stays.
 8. **Nothing else changes in this slice.** No screen reads the new API yet,
@@ -88,7 +104,14 @@ search index can be rebuilt from the files (ADR-034).
 - The index holds up to 64 KB of text per note, so note content is now also
   in the MC database and its backups — the same notes the vault already holds
   on disk. Readable by admins only.
-- The vault and the index can disagree for one sweep interval.
+- **Two indexes for one transition, then one.** The vault keeps its own
+  SQLite FTS index and `GET /api/v1/vault/search` for its current callers
+  (the Memory page, the agents' `TOOLS.md`). Every new screen — the Knowledge
+  page of the frontend slice first — reads **only** `/api/v1/knowledge-root/*`.
+  The vault move slice (vault becomes `notes/` under the knowledge root)
+  points those two callers at `/knowledge-root/search` and retires the
+  vault's SQLite index and `/vault/search`. Until then the two can disagree
+  for up to one sweep interval.
 - Later slices: Knowledge page column "Projects / Notes / Skills" and a
   `knowledge` root on the Files page (frontend), chats grouped by project,
   `PROJECT.md` into the harness's instruction file, chat export, task history

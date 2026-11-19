@@ -45,6 +45,10 @@ SEARCH_TEXT_CAP = 64_000
 #: log is not knowledge; the file stays readable through the API).
 MAX_INDEX_BYTES = 2_000_000
 
+#: At most this much of a file goes into one ``GET /entries/{id}`` answer;
+#: the rest is cut and the answer says ``truncated``.
+MAX_BODY_BYTES = 2_000_000
+
 #: Vault folders that are machine state, trash or binary storage — not
 #: knowledge. ``jobs/`` and ``runs/`` are task-era history (slice 4).
 VAULT_SKIP_TOP = frozenset({"attachments", "jobs", "runs"})
@@ -186,17 +190,25 @@ async def get_entry(session: AsyncSession, entry_id: uuid.UUID) -> KnowledgeEntr
     return await session.get(KnowledgeEntry, entry_id)
 
 
-def read_body(e: KnowledgeEntry) -> tuple[str, bool] | None:
-    """Body of an entry read from disk now, plus "changed since indexed".
-    ``None`` when the file is gone or outside its folder."""
+def read_body(e: KnowledgeEntry) -> tuple[str, bool, bool] | None:
+    """Body of an entry read from disk now (at most ``MAX_BODY_BYTES``),
+    "changed since indexed" and "cut". ``None`` when the file is gone or
+    outside its folder. The hash still covers the whole file."""
     import hashlib
 
     path = resolve_inside(e.source, e.rel_path)
     if path is None or not path.is_file():
         return None
-    raw = path.read_bytes()
-    stale = hashlib.sha256(raw).hexdigest() != e.content_hash
-    return raw.decode("utf-8", errors="replace"), stale
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        head = fh.read(MAX_BODY_BYTES)
+        h.update(head)
+        truncated = False
+        while chunk := fh.read(1 << 20):
+            truncated = True
+            h.update(chunk)
+    stale = h.hexdigest() != e.content_hash
+    return head.decode("utf-8", errors="replace"), stale, truncated
 
 
 async def search(
@@ -235,11 +247,13 @@ async def search(
 
 async def list_projects(session: AsyncSession) -> list[dict[str, Any]]:
     """Every project folder the index knows, with its name from PROJECT.md
-    and how many entries it holds (flagged ones not counted)."""
+    and how many entries it holds — every entry ``/entries?project=<slug>``
+    returns, so folder files plus vault notes that name the project (flagged
+    ones not counted)."""
     rows = (
         await session.exec(
             select(KnowledgeEntry)
-            .where(KnowledgeEntry.drawer == "projects")
+            .where(col(KnowledgeEntry.project_slug).is_not(None))
             .where(col(KnowledgeEntry.problem).is_(None))
         )
     ).all()
@@ -248,7 +262,7 @@ async def list_projects(session: AsyncSession) -> list[dict[str, Any]]:
         slug = e.project_slug or ""
         p = by_slug.setdefault(slug, {"slug": slug, "projectId": None, "name": slug, "entries": 0})
         p["entries"] += 1
-        if e.kind == "project":
+        if e.kind == "project" and e.drawer == "projects":
             p["name"] = e.title or slug
             p["projectId"] = str(e.project_id) if e.project_id else None
     return sorted(by_slug.values(), key=lambda p: p["slug"])

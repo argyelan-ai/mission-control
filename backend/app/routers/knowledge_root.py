@@ -84,7 +84,8 @@ async def knowledge_entries(
 @router.get("/entries/{entry_id}")
 async def knowledge_entry(entry_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
     """One entry with its body, read from the file now. ``stale`` = the file
-    changed since the last sweep. 410 when the file is gone."""
+    changed since the last sweep, ``truncated`` = the body was cut at
+    ``MAX_BODY_BYTES``. 410 when the file is gone."""
     _require_enabled()
     entry = await knowledge.get_entry(session, entry_id)
     if entry is None:
@@ -93,13 +94,17 @@ async def knowledge_entry(entry_id: uuid.UUID, session: AsyncSession = Depends(g
     if body is None:
         raise HTTPException(status_code=410, detail={"reason": "file_gone"})
     out = knowledge.entry_dict(entry)
-    out["body"], out["stale"] = body
+    out["body"], out["stale"], out["truncated"] = body
     return out
 
 
 @router.post("/_admin/sync")
 async def knowledge_sync_now(session: AsyncSession = Depends(get_session)):
     """Run one sweep now: layout, project folders, index. Writes only into the
-    knowledge root and the index; the vault and the skills folder are read."""
+    knowledge root and the index; the vault and the skills folder are read.
+    409 ``sync_running`` while another sweep (here or in the worker) runs."""
     _require_enabled()
-    return (await knowledge_import.sync_all(session)).to_api()
+    try:
+        return (await knowledge_import.sync_all(session)).to_api()
+    except knowledge_import.SyncBusy:
+        raise HTTPException(status_code=409, detail={"reason": "sync_running"}) from None

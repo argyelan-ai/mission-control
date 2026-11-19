@@ -347,3 +347,117 @@ async def test_api_is_admin_only(homes, flag_on, client):
         await s.commit()
     client.headers["Authorization"] = f"Bearer {create_access_token(str(uid), 'operator')}"
     assert (await client.get("/api/v1/knowledge-root/status")).status_code == 403
+
+
+# ── critic round: ownership aliases, concurrency, safety nets ───────────────
+
+
+async def test_project_hint_may_be_name_id_or_brief_id(homes, flag_on, make_board):
+    mc, _vault = homes
+    shop = await _project(make_board, "Online Shop")
+    await _project(make_board, "Beta")
+    await _sync()
+    k = mc / "knowledge" / "projects" / "online-shop" / "knowledge"
+    _write(k / "by-name.md", "---\nproject: Online Shop\n---\n# By name\n")
+    _write(k / "by-id.md", f"---\nproject: {shop.id}\n---\n# By id\n")
+    _write(k / "by-brief-id.md", f"---\nproject: project-{shop.id}\n---\n# By brief id\n")
+    _write(k / "board-slug.md", "---\nproject: mc-dev\n---\n# Board slug\n")
+    _write(k / "other.md", "---\nproject: Beta\n---\n# Other project\n")
+    await _sync()
+    rows = {r.rel_path.rsplit("/", 1)[-1]: r for r in await _rows() if r.drawer == "projects"}
+    for name in ("by-name.md", "by-id.md", "by-brief-id.md", "board-slug.md"):
+        assert rows[name].problem is None, name
+        assert rows[name].project_id == shop.id, name
+    assert rows["other.md"].problem == "project_mismatch"
+
+
+async def test_vault_note_finds_its_project_by_name_or_id(homes, flag_on, make_board):
+    _mc, vault = homes
+    shop = await _project(make_board, "Online Shop")
+    _write(vault / "agents" / "rex" / "a.md", "---\nproject: Online Shop\n---\n# A\n")
+    _write(vault / "agents" / "rex" / "b.md", f"---\nproject: {shop.id}\n---\n# B\n")
+    _write(vault / "agents" / "rex" / "c.md", "---\nproject: mc-dev\n---\n# C\n")
+    await _sync()
+    rows = {r.rel_path: r for r in await _rows() if r.source == "vault"}
+    assert rows["agents/rex/a.md"].project_slug == "online-shop"
+    assert rows["agents/rex/b.md"].project_slug == "online-shop"
+    assert rows["agents/rex/c.md"].project_slug is None
+
+
+async def test_two_sweeps_at_once_do_not_crash(homes, flag_on):
+    import asyncio
+
+    mc, _vault = homes
+    for i in range(30):
+        _write(mc / "knowledge" / "notes" / f"n{i}.md", f"# Note {i}\n")
+    results = await asyncio.gather(_sync(), _sync(), return_exceptions=True)
+    kinds = sorted(type(r).__name__ for r in results)
+    assert kinds == ["SyncBusy", "SyncStats"], kinds
+    assert len([r for r in await _rows() if r.source == "knowledge"]) == 30
+
+
+async def test_api_sync_answers_409_while_a_sweep_runs(homes, flag_on, auth_client):
+    async with knowledge_import._local_lock:
+        r = await auth_client.post("/api/v1/knowledge-root/_admin/sync")
+    assert r.status_code == 409
+    assert r.json()["detail"]["reason"] == "sync_running"
+
+
+async def test_folder_without_project_json_is_adopted(homes, flag_on, make_board):
+    mc, _vault = homes
+    await _project(make_board, "Shop")
+    await _sync()
+    (mc / "knowledge" / "projects" / "shop" / ".mc" / "project.json").unlink()
+    stats = await _sync()
+    assert sorted(x.name for x in (mc / "knowledge" / "projects").iterdir()) == ["shop"]
+    assert stats.projects_created == 0
+    assert (mc / "knowledge" / "projects" / "shop" / ".mc" / "project.json").is_file()
+
+
+async def test_missing_source_folder_keeps_its_rows(homes, flag_on, tmp_path, monkeypatch):
+    _mc, vault = homes
+    for i in range(5):
+        _write(vault / "global" / f"v{i}.md", f"# V{i}\n")
+    await _sync()
+    monkeypatch.setattr(settings, "vault_path", tmp_path / "not-there")
+    stats = await _sync()
+    assert stats.removed == 0
+    assert any("vault" in e for e in stats.errors)
+    assert len([r for r in await _rows() if r.source == "vault"]) == 5
+
+
+async def test_project_count_matches_the_entries_filter(homes, flag_on, make_board, auth_client):
+    _mc, vault = homes
+    await _project(make_board, "Shop")
+    _write(vault / "agents" / "x" / "a.md", "---\nproject: shop\n---\n# For shop\n")
+    await auth_client.post("/api/v1/knowledge-root/_admin/sync")
+    projects = (await auth_client.get("/api/v1/knowledge-root/projects")).json()["projects"]
+    listed = (await auth_client.get("/api/v1/knowledge-root/entries?project=shop")).json()
+    assert projects[0]["entries"] == listed["total"] == 2
+
+
+async def test_entry_body_is_capped(homes, flag_on, auth_client):
+    mc, _vault = homes
+    _write(mc / "knowledge" / "notes" / "big.md", "x" * (knowledge.MAX_BODY_BYTES + 10))
+    await auth_client.post("/api/v1/knowledge-root/_admin/sync")
+    entry = (await auth_client.get("/api/v1/knowledge-root/entries")).json()["entries"][0]
+    one = (await auth_client.get(f"/api/v1/knowledge-root/entries/{entry['id']}")).json()
+    assert len(one["body"]) == knowledge.MAX_BODY_BYTES
+    assert one["truncated"] is True and one["stale"] is False
+
+
+async def test_file_reads_run_off_the_event_loop(homes, flag_on, monkeypatch):
+    import threading
+
+    mc, _vault = homes
+    _write(mc / "knowledge" / "notes" / "n.md", "# N\n")
+    seen: list[bool] = []
+    real = knowledge_import._walk
+
+    def spy(source, root):
+        seen.append(threading.current_thread() is threading.main_thread())
+        return real(source, root)
+
+    monkeypatch.setattr(knowledge_import, "_walk", spy)
+    await _sync()
+    assert seen and not any(seen), seen
