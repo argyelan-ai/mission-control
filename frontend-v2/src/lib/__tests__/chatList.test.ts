@@ -124,6 +124,15 @@ describe("chatRowTime", () => {
   });
 });
 
+describe("recordPollMs (critic 19.11.)", () => {
+  it("stops asking the record after its 404 (flag off), keeps polling on other failures", async () => {
+    const { recordPollMs } = await import("@/components/layout/useChatList");
+    expect(recordPollMs(new Error('API 404: {"detail":"chat_record_disabled"}'), 60_000)).toBe(false);
+    expect(recordPollMs(new Error("API 502: bad gateway"), 60_000)).toBe(60_000);
+    expect(recordPollMs(null, 10_000)).toBe(10_000);
+  });
+});
+
 describe("chatListPollMs (shell review E1)", () => {
   it("polls as before on the chat page, calmly everywhere else", async () => {
     const { chatListPollMs } = await import("@/components/layout/useChatList");
@@ -135,8 +144,8 @@ describe("chatListPollMs (shell review E1)", () => {
 
 describe("buildChatList — further chats of an agent (chats slice S2)", () => {
   const rec = (over: Record<string, unknown>) => ({
-    id: "c-x", title: "Lead", legacyAgentId: "a1", agentDefault: false, archived: false,
-    lastActivityAt: today(11), ...over,
+    id: "c-x", title: "Lead", harness: "omp", legacyAgentId: "a1", agentDefault: false, archived: false,
+    lastActivityAt: today(11), createdAt: null, ...over,
   });
 
   it("without record chats the list is exactly the one before", () => {
@@ -147,8 +156,8 @@ describe("buildChatList — further chats of an agent (chats slice S2)", () => {
     const list = buildChatList(input({
       recordChats: [
         rec({ id: "d-1", agentDefault: true }),
-        rec({ id: "c-2", lastActivityAt: today(12) }),
-        rec({ id: "c-3", lastActivityAt: today(8) }),
+        rec({ id: "c-2", lastActivityAt: today(12), createdAt: today(1) }),
+        rec({ id: "c-3", lastActivityAt: today(8), createdAt: today(2) }),
       ],
     }));
     const rows = list.filter((e) => e.id === "a1");
@@ -161,6 +170,24 @@ describe("buildChatList — further chats of an agent (chats slice S2)", () => {
     expect(rows[2].ordinal).toBe(3);
     // the default chat IS the agent row — never a second one
     expect(list.some((e) => e.key === "chat:d-1")).toBe(false);
+  });
+
+  it("the numbers follow creation, so writing in one chat renames none (critic 19.11.)", () => {
+    const b = rec({ id: "c-b", createdAt: today(1) });
+    const a = rec({ id: "c-a", createdAt: today(2) });
+    // the record lists by activity: B was active last, then A is
+    const before = buildChatList(input({ recordChats: [{ ...b, lastActivityAt: today(10) }, { ...a, lastActivityAt: today(9) }] }));
+    const after = buildChatList(input({ recordChats: [{ ...a, lastActivityAt: today(11) }, { ...b, lastActivityAt: today(10) }] }));
+    const n = (list: ReturnType<typeof buildChatList>, id: string) => list.find((e) => e.chatId === id)?.ordinal;
+    expect([n(before, "c-b"), n(before, "c-a")]).toEqual([2, 3]);
+    expect([n(after, "c-b"), n(after, "c-a")]).toEqual([2, 3]);
+  });
+
+  it("only harnesses whose daemon holds further chats get rows (omp)", () => {
+    const list = buildChatList(input({
+      recordChats: [rec({ id: "c-h", harness: "hermes" }), rec({ id: "c-c", harness: "claude-code" }), rec({ id: "c-o" })],
+    }));
+    expect(list.filter((e) => e.key.startsWith("chat:")).map((e) => e.chatId)).toEqual(["c-o"]);
   });
 
   it("a chat with its own title keeps it and gets no number", () => {

@@ -959,6 +959,9 @@ def chat_out(chat: Chat) -> dict[str, Any]:
         "pinned": chat.pinned,
         "archived": chat.archived_at is not None,
         "lastActivityAt": chat.last_activity_at.isoformat() if chat.last_activity_at else None,
+        # Stable order of an agent's chats (the chat list numbers them by it;
+        # the list itself is sorted by activity).
+        "createdAt": chat.created_at.isoformat() if chat.created_at else None,
     }
 
 

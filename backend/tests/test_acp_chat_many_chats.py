@@ -171,6 +171,7 @@ async def test_new_creates_a_further_chat_and_leaves_the_session(auth_client, ma
     chat = resp.json()["newChat"]
     assert chat["legacyAgentId"] == str(agent.id) and chat["agentDefault"] is False
     assert chat["harness"] == "omp" and chat["nativeSessionId"] is None
+    assert chat["createdAt"]  # the chat list numbers an agent's chats by it
     assert _calls(wire) == []  # the open conversation is not reset
     chats = await _chats(agent.id)
     assert sorted(c.agent_default for c in chats) == [False, True]

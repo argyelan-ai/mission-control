@@ -308,6 +308,8 @@ export type RecordChat = {
   pinned: boolean;
   archived: boolean;
   lastActivityAt: string | null;
+  /** When the chat was made — the stable order of an agent's chats. */
+  createdAt: string | null;
 };
 
 export const api = {

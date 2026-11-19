@@ -57,8 +57,15 @@ export type ChatListInput = {
   headRuns: HeadRun[];
   approvals: Pick<Approval, "agent_id" | "status">[];
   /** Chats of MC's chat record; empty while the record is off. */
-  recordChats?: Pick<RecordChat, "id" | "title" | "legacyAgentId" | "agentDefault" | "archived" | "lastActivityAt">[];
+  recordChats?: Pick<
+    RecordChat,
+    "id" | "title" | "harness" | "legacyAgentId" | "agentDefault" | "archived" | "lastActivityAt" | "createdAt"
+  >[];
 };
+
+/** The one harness whose chat daemon holds further chats (S2: omp over ACP
+ *  in its container — the backend refuses a chat id for any other). */
+const FURTHER_CHAT_HARNESS = "omp";
 
 /** The later of two ISO times; null only when both are missing. */
 function later(a: string | null | undefined, b: string | null | undefined): string | null {
@@ -88,19 +95,36 @@ export function buildChatList(input: ChatListInput): ChatListEntry[] {
   }
 
   // Further chats of an agent (S2): one row each, next to the agent's own
-  // row, oldest first numbered 2, 3, … The agent's default chat IS the
-  // agent row; an archived chat or one of an agent not listed shows nothing.
+  // row, numbered 2, 3, … by when they were created — never by the list's
+  // order (the record sorts by activity, so writing in one chat would
+  // renumber the others). The agent's default chat IS the agent row; an
+  // archived chat, one of an agent not listed, or one of a harness whose
+  // daemon holds no further chats (only omp does) shows nothing.
   const listed = new Map(
     input.agents.filter((a) => a.status !== "archived").map((a) => [a.id, a] as const),
   );
   const further = (input.recordChats ?? []).filter(
-    (c) => !c.agentDefault && !c.archived && c.legacyAgentId && listed.has(c.legacyAgentId),
+    (c) =>
+      !c.agentDefault &&
+      !c.archived &&
+      c.harness === FURTHER_CHAT_HARNESS &&
+      c.legacyAgentId &&
+      listed.has(c.legacyAgentId),
   );
-  const ordinals = new Map<string, number>();
+  const created = [...further].sort(
+    (a, b) =>
+      (a.createdAt ?? "\uffff").localeCompare(b.createdAt ?? "\uffff") || a.id.localeCompare(b.id),
+  );
+  const ordinalOf = new Map<string, number>();
+  const counts = new Map<string, number>();
+  for (const chat of created) {
+    const n = (counts.get(chat.legacyAgentId as string) ?? 1) + 1;
+    counts.set(chat.legacyAgentId as string, n);
+    ordinalOf.set(chat.id, n);
+  }
   for (const chat of further) {
     const agent = listed.get(chat.legacyAgentId as string)!;
-    const n = (ordinals.get(agent.id) ?? 1) + 1;
-    ordinals.set(agent.id, n);
+    const n = ordinalOf.get(chat.id)!;
     const ownTitle = chat.title && chat.title !== agent.name ? chat.title : null;
     entries.push({
       key: `chat:${chat.id}`,

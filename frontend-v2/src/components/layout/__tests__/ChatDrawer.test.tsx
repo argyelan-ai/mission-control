@@ -143,7 +143,7 @@ describe("chat drawer (phone)", () => {
   it("shows two chats of the same agent once the record has a further chat (chats slice S2)", async () => {
     data.recordChats = [
       { id: "d-1", title: "Recipe rework", legacyAgentId: "a1", agentDefault: true, archived: false, lastActivityAt: iso(0, 9) },
-      { id: "c-2", title: "Recipe rework", legacyAgentId: "a1", agentDefault: false, archived: false, lastActivityAt: iso(0, 10) },
+      { id: "c-2", title: "Recipe rework", harness: "omp", legacyAgentId: "a1", agentDefault: false, archived: false, lastActivityAt: iso(0, 10), createdAt: iso(0, 9) },
     ];
     const drawer = await openDrawer();
     const today = () => within(drawer).getByTestId("chat-section-today");

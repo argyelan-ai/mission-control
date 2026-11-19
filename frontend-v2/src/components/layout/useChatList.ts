@@ -24,6 +24,15 @@ export function chatListPollMs(pathname: string): number {
   return pathname.startsWith("/sessions") ? 10_000 : 60_000;
 }
 
+/**
+ * The record answers 404 while CHAT_RECORD_ENABLED is off: then it is not
+ * asked again (one request per page load, not one per poll). Any other
+ * failure keeps the poll — the record may be back on the next one.
+ */
+export function recordPollMs(error: unknown, poll: number): number | false {
+  return error instanceof Error && error.message.startsWith("API 404") ? false : poll;
+}
+
 export function useChatList(): ChatListSections & { waitingCount: number; loaded: boolean } {
   const poll = chatListPollMs(usePathname() ?? "/");
   const { data: dockerAgents, isSuccess: dockerLoaded } = useQuery({
@@ -46,7 +55,7 @@ export function useChatList(): ChatListSections & { waitingCount: number; loaded
   const { data: record } = useQuery({
     queryKey: ["chat-record", "chats"],
     queryFn: () => api.chatRecord.listChats(),
-    refetchInterval: poll,
+    refetchInterval: (query) => recordPollMs(query.state.error, poll),
     retry: false,
   });
   const inbox = useInbox();
