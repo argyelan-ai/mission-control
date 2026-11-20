@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { mergeSwitchEvents, useChatSwitch } from "./useChatSwitch";
 import { useSSE } from "@/lib/sse";
 import type {
   SubagentRun,
@@ -962,8 +963,15 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     onReconnect: onSSEReconnect,
   });
 
+  const chatSwitch = useChatSwitch(queryEnabled ? agentId : null);
+  const switchChatId = chatSwitch.chat?.id ?? null;
+  const events = useMemo(
+    () => mergeSwitchEvents(chatState.events, chatSwitch.switches, switchChatId),
+    [chatState.events, chatSwitch.switches, switchChatId],
+  );
+
   return {
-    events: chatState.events,
+    events,
     subagentRuns: historyQuery.data?.subagentRuns ?? EMPTY_RUNS,
     state: chatState.state,
     usage: chatState.usage,

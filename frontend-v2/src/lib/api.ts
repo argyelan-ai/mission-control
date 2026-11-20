@@ -310,7 +310,80 @@ export type RecordChat = {
   lastActivityAt: string | null;
   /** When the chat was made — the stable order of an agent's chats. */
   createdAt: string | null;
+  /** The runtime the chat runs on (its pair: harness × runtime × model). */
+  runtimeId?: string | null;
 };
+
+/** One side of a chat switch (ADR-105): what the chat ran on before, or
+ *  runs on after. `sessionId` is the native session (never shown). */
+export type SwitchPair = {
+  harness: string | null;
+  runtimeId: string | null;
+  model: string | null;
+  sessionId?: string | null;
+};
+
+/** A `kind=switch` row of the record (`chat_switch.switch_out`). The
+ *  record writes it BEFORE any process is touched (F14) and the harness
+ *  reports how it ended — so `pending` is a real, visible state. */
+export type SwitchRow = {
+  eventId: string;
+  seq?: number;
+  ts: string;
+  status: "pending" | "done" | "failed";
+  /** model_only = same harness and runtime; restart = new session with the
+   *  handoff package; switch_back = back to the session before. */
+  path: "model_only" | "restart" | "switch_back" | "not_started";
+  mode?: string | null;
+  from?: SwitchPair | null;
+  to?: SwitchPair | null;
+  package?: string | null;
+  estTokens?: number;
+  realTokens?: number | null;
+  truncated?: boolean;
+  messagesIncluded?: number;
+  messagesTotal?: number;
+  /** omp found the old session again (`session/load`): no package used. */
+  nativeResume?: boolean;
+  error?: { code: string; detail?: string | null } | null;
+  finishedAt?: string | null;
+};
+
+/** One page of a chat's record (oldest first). `event` is the raw payload. */
+export type RecordHistory = {
+  events: { id: string; seq: number; sessionId: string; event: Record<string, unknown> | null }[];
+  hasMore: boolean;
+};
+
+export type SwitchRequest = {
+  harness: string;
+  runtimeId: string | null;
+  model?: string | null;
+  /** Only after a 409 `turn_running`, and only a value its `options` named. */
+  mode?: string;
+};
+
+/** A refused switch, read from the `API <status>: <body>` error `request`
+ *  throws. `options` = what the server can do while a turn runs (409
+ *  `turn_running`); the UI offers exactly these and nothing else. */
+export type SwitchRefusal = { status: number; code: string; options: string[]; message: string | null };
+
+export function switchRefusal(err: unknown): SwitchRefusal | null {
+  if (!(err instanceof Error)) return null;
+  const m = /^API (\d{3}): ([\s\S]*)$/.exec(err.message);
+  if (!m) return null;
+  let detail: Record<string, unknown> = {};
+  try {
+    const body = JSON.parse(m[2]) as { detail?: unknown };
+    if (body.detail && typeof body.detail === "object") detail = body.detail as Record<string, unknown>;
+  } catch {
+    /* not JSON — a proxy page; the status alone still says something */
+  }
+  const code = typeof detail.code === "string" ? detail.code : typeof detail.reason === "string" ? detail.reason : "unknown";
+  const options = Array.isArray(detail.options) ? detail.options.filter((o): o is string => typeof o === "string") : [];
+  const message = typeof detail.message === "string" ? detail.message : null;
+  return { status: Number(m[1]), code, options, message };
+}
 
 export const api = {
   // ── Chat record (ADR-103) ─────────────────────────────────────────────────
@@ -318,6 +391,21 @@ export const api = {
   // treat any failure as "no record chats".
   chatRecord: {
     listChats: () => request<{ chats: RecordChat[] }>("/api/v1/chat-record/chats"),
+    history: (chatId: string, limit = 200) =>
+      request<RecordHistory>(`/api/v1/chat-record/chats/${encodeURIComponent(chatId)}/history?limit=${limit}`),
+    /** Move a chat to another pair (ADR-105). Refusals come as errors —
+     *  read them with `switchRefusal`. */
+    switchChat: (chatId: string, body: SwitchRequest) =>
+      request<SwitchRow | { eventId: null; status: "done"; path: "not_started" }>(
+        `/api/v1/chat-record/chats/${encodeURIComponent(chatId)}/switch`,
+        { method: "POST", body: JSON.stringify(body) },
+      ),
+    /** Back to the pair before the last switch (F6/F7). */
+    switchBack: (chatId: string, mode?: string) =>
+      request<SwitchRow>(`/api/v1/chat-record/chats/${encodeURIComponent(chatId)}/switch-back`, {
+        method: "POST",
+        body: JSON.stringify(mode ? { mode } : {}),
+      }),
   },
   // ── Auth ──────────────────────────────────────────────────────────────────
   auth: {
