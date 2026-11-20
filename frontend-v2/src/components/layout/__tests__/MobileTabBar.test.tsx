@@ -315,9 +315,10 @@ describe("⊕ sheet — variant B, level 2 Pages", () => {
     const hrefs = [...level.querySelectorAll("a[data-page]")].map((a) => a.getAttribute("href"));
     // Runtimes is a tab now (Models), so "Used most" starts at Agents
     expect(hrefs.slice(0, 3)).toEqual(["/agents", "/insights", "/memory"]);
-    // the rest alphabetical by label — Home, Inbox and Tasks left the bar
+    // the rest alphabetical by label — Home, Inbox and Tasks left the bar;
+    // Office and Loops are frozen (Etappe 2) and offered nowhere
     expect(hrefs.slice(3)).toEqual([
-      "/bench", "/files", "/home", "/inbox", "/loops", "/office", "/repos", "/schedule", "/skills", "/tasks",
+      "/bench", "/files", "/home", "/inbox", "/repos", "/schedule", "/skills", "/tasks",
     ]);
     // tab-bar places and Settings are not repeated
     for (const h of ["/sessions", "/runtimes", "/knowledge", "/settings"]) expect(hrefs).not.toContain(h);

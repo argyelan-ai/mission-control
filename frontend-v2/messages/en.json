@@ -3084,6 +3084,8 @@
     "loading": "Loading loops...",
     "emptyTitle": "No loops yet",
     "emptyHint": "Create a loop to have a runner grind through a backlog until it's done or needs you.",
+    "frozenTitle": "Loops are frozen",
+    "frozenBody": "Loops are no longer used, so this page is read-only. Existing loops stay here; loops can no longer be created, started or deleted.",
     "deleteTitle": "Delete loop",
     "deleteBody": "Delete \"{name}\"? This cannot be undone.",
     "delete": "Delete",

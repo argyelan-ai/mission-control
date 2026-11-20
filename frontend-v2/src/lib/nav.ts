@@ -67,7 +67,6 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/home", icon: Home, label: "Home", labelKey: "home" },
   { href: "/tasks", icon: FolderKanban, label: "Tasks", labelKey: "tasks" },
   { href: "/agents", icon: Bot, label: "Agents", labelKey: "agents", phoneRank: 2 },
-  { href: "/office", icon: Building2, label: "Office", labelKey: "office" },
   { href: "/inbox", icon: Inbox, label: "Inbox", labelKey: "inbox" },
   { href: "/insights", icon: TrendingUp, label: "Insights", labelKey: "insights", phoneRank: 3 },
   { href: "/memory", icon: Brain, label: "Memory", labelKey: "memory", phoneRank: 4 },
@@ -81,10 +80,27 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/knowledge", icon: BookOpen, label: "Knowledge", labelKey: "knowledge" },
   { href: "/runtimes", icon: Server, label: "Runtimes", labelKey: "runtimes", phoneRank: 1 },
   { href: "/sessions", icon: MessageSquareCode, label: "Sessions", labelKey: "sessions" },
-  { href: "/loops", icon: Repeat, label: "Loops", labelKey: "loops" },
   { href: "/schedule", icon: Calendar, label: "Schedule", labelKey: "schedule" },
   { href: "/settings", icon: Settings, label: "Settings", labelKey: "settings" },
 ];
+
+/**
+ * Frozen pages — Etappe 2 "clean up" (ADR-102 §3; page counter 28.09.–19.11.:
+ * Office 5 views / 0 in the last 14 days, Loops 4 / 0, last loop round 07.07.).
+ * They left every menu (sidebar, command palette, Settings › More), but nothing
+ * was deleted: the route still opens the page, read-only, and creating a loop
+ * is refused by the API (410 "frozen"). Way back: move the entry into
+ * NAV_ITEMS and its group in NAV_TREE again.
+ */
+export const FROZEN_ITEMS: NavItem[] = [
+  { href: "/office", icon: Building2, label: "Office", labelKey: "office" },
+  { href: "/loops", icon: Repeat, label: "Loops", labelKey: "loops" },
+];
+
+/** True for a frozen page and its sub-routes (not for "/loopsy"). */
+export function isFrozenRoute(pathname: string): boolean {
+  return FROZEN_ITEMS.some((i) => pathname === i.href || pathname.startsWith(`${i.href}/`));
+}
 
 const byHref = new Map(NAV_ITEMS.map((i) => [i.href, i]));
 
@@ -109,7 +125,7 @@ export const NAV_TREE: NavGroup[] = [
     label: "OVERVIEW",
     labelKey: "groupOverview",
     rowLabelKey: "navGroupOverview",
-    children: pick(["/home", "/insights", "/office"]),
+    children: pick(["/home", "/insights"]),
   },
   {
     key: "work",
@@ -141,7 +157,7 @@ export const NAV_TREE: NavGroup[] = [
     label: "SYSTEM",
     labelKey: "groupSystem",
     rowLabelKey: "navGroupSystem",
-    children: pick(["/runtimes", "/loops", "/schedule"]),
+    children: pick(["/runtimes", "/schedule"]),
   },
 ];
 

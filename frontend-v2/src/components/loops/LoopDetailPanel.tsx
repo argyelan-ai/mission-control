@@ -15,10 +15,12 @@ interface LoopDetailPanelProps {
   loopId: string | null;
   open: boolean;
   onClose: () => void;
-  onStart: (id: string) => void;
+  /** Omitted while loops are frozen (Etappe 2): no Start button. */
+  onStart?: (id: string) => void;
   onPause: (id: string) => void;
   onStop: (id: string) => void;
-  onDelete: (id: string) => void;
+  /** Omitted while loops are frozen (Etappe 2): no Delete button. */
+  onDelete?: (id: string) => void;
   actionPending?: boolean;
 }
 
@@ -71,7 +73,7 @@ export function LoopDetailPanel({
               {t(`status.${LOOP_STATUS_META[loop.status].labelKey}`)}
             </span>
             <div className="flex items-center gap-1.5">
-              {canStartLoop(loop.status) && (
+              {onStart && canStartLoop(loop.status) && (
                 <PanelActionButton icon={<Play size={12} />} label={t("detail.start")} tone={C.accent} onClick={() => onStart(loop.id)} disabled={actionPending} />
               )}
               {canPauseLoop(loop.status) && (
@@ -80,7 +82,7 @@ export function LoopDetailPanel({
               {canStopLoop(loop.status) && (
                 <PanelActionButton icon={<Square size={12} />} label={t("detail.stop")} tone={C.error} onClick={() => onStop(loop.id)} disabled={actionPending} />
               )}
-              {isLoopInactive(loop.status) && (
+              {onDelete && isLoopInactive(loop.status) && (
                 <PanelActionButton icon={<Trash2 size={12} />} label={t("detail.delete")} tone={C.textMuted} onClick={() => onDelete(loop.id)} disabled={actionPending} />
               )}
             </div>

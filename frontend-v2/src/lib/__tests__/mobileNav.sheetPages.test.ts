@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { Server } from "lucide-react";
-import { NAV_ITEMS, type NavItem } from "../nav";
+import { FROZEN_ITEMS, NAV_ITEMS, type NavItem } from "../nav";
 import { sheetPages, TAB_HREFS } from "../mobileNav";
 
 const hrefs = (items: NavItem[]) => items.map((i) => i.href);
@@ -39,5 +39,12 @@ describe("sheetPages", () => {
   it("a new page in nav.ts shows up without touching the sheet", () => {
     const extra: NavItem = { href: "/new-page", icon: Server, label: "Aardvark", labelKey: "x" };
     expect(hrefs(sheetPages(undefined, [...NAV_ITEMS, extra]).others)[0]).toBe("/new-page");
+  });
+
+  it("never offers a frozen page (Office, Loops), even when it is handed in", () => {
+    const { usedMost, others } = sheetPages(undefined, [...NAV_ITEMS, ...FROZEN_ITEMS]);
+    const offered = [...hrefs(usedMost), ...hrefs(others)];
+    expect(offered).not.toContain("/office");
+    expect(offered).not.toContain("/loops");
   });
 });

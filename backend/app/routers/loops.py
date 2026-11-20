@@ -28,6 +28,25 @@ router = APIRouter(prefix="/api/v1", tags=["loops"])
 
 ACTIVE_STATUSES = ACTIVE_LOOP_STATUSES
 
+# Etappe 2 "clean up" (ADR-102 §3): loops are frozen — page counter
+# 28.09.–19.11.: 4 views, 0 in the last 14 days; last loop round 07.07.
+# Existing loops stay readable, and a running one can still be paused or
+# stopped (the safe way out). Create, start, edit and delete are refused with
+# 410 "frozen" — nothing is written, nothing is deleted.
+# Way back: set this to False (and take /loops out of FROZEN_ITEMS in
+# frontend-v2/src/lib/nav.ts).
+FROZEN = True
+FROZEN_DETAIL = {
+    "code": "frozen",
+    "message": "Loops are frozen: existing loops stay readable, "
+    "but loops can no longer be created, started, edited or deleted.",
+}
+
+
+def _refuse_if_frozen() -> None:
+    if FROZEN:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=FROZEN_DETAIL)
+
 
 class LoopCreate(BaseModel):
     board_id: uuid.UUID
@@ -82,6 +101,7 @@ async def create_loop(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
+    _refuse_if_frozen()
     if payload.backlog_source not in BACKLOG_SOURCES:
         raise HTTPException(status_code=400, detail=f"backlog_source must be one of {BACKLOG_SOURCES}")
     if payload.backlog_source == "markdown" and not (payload.backlog_md or "").strip():
@@ -141,6 +161,7 @@ async def update_loop(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
+    _refuse_if_frozen()
     loop = await session.get(Loop, loop_id)
     if not loop:
         raise HTTPException(status_code=404, detail="Loop not found")
@@ -168,6 +189,7 @@ async def start_loop(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
+    _refuse_if_frozen()
     loop = await session.get(Loop, loop_id)
     if not loop:
         raise HTTPException(status_code=404, detail="Loop not found")
@@ -254,6 +276,7 @@ async def delete_loop(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
+    _refuse_if_frozen()
     loop = await session.get(Loop, loop_id)
     if not loop:
         raise HTTPException(status_code=404, detail="Loop not found")
