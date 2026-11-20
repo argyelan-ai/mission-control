@@ -166,10 +166,10 @@ async def test_runner_off_tick_starts_nothing(heads_root, make_board, make_task,
     (task,) = await _world(make_board, make_task)
     now = datetime.now(UTC)
     await _cfg(**_window_around_now(now))
-    _mark(task, order=1)
+    await _held_mark(task, order=1)  # the same setup starts a head with the runner on
     monkeypatch.setattr(settings, "night_shift_runner_enabled", False)
     assert (await _tick(now)).started is None
-    assert (await _task(task.id)).status == "inbox"
+    assert night_store.load_mark(str(task.id)).run_id is None
 
 
 async def test_runner_off_job_does_not_start(monkeypatch):
