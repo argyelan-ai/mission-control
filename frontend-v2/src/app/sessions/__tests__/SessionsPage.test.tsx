@@ -94,7 +94,11 @@ vi.mock("@/components/chat/ChatView", () => ({
     voiceOnScreen,
     activePanel,
     onTogglePanel,
+    onOpenChat,
+    onChatMissing,
   }: {
+    onOpenChat?: (chatId: string) => void;
+    onChatMissing?: () => void;
     voiceOnScreen?: boolean;
     activePanel?: string | null;
     onTogglePanel?: (panel: string | null) => void;
@@ -131,6 +135,20 @@ vi.mock("@/components/chat/ChatView", () => ({
       {onBack && (
         <button type="button" onClick={onBack}>
           Stub Back
+        </button>
+      )}
+      {/* A `/new` that came back as a new chat (201 newChat) — ChatView
+          calls this; covered by ChatView.further.test.tsx. */}
+      {onOpenChat && (
+        <button type="button" onClick={() => onOpenChat("chat-9")}>
+          Stub Open Chat
+        </button>
+      )}
+      {/* `?chat=` names a chat the record does not have — ChatView calls
+          this; covered by ChatView.further.test.tsx. */}
+      {onChatMissing && (
+        <button type="button" onClick={onChatMissing}>
+          Stub Chat Missing
         </button>
       )}
       {/* The header's panel buttons (ADR-099) are ChatView's — covered by
@@ -1297,6 +1315,62 @@ describe("SessionsPage — phone history puts the list behind every chat", () =>
     nav.searchParamsString = "agent=agent-2&enter=1";
     rerenderWith(view);
     await waitFor(() => expect(isHidden(chat())).toBe(false));
+    expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]);
+    expect(nav.pushed).toEqual([]);
+  });
+
+  // Chats slice S2: a further chat of an agent is `?agent=…&chat=…`. Every
+  // URL the page writes on the way keeps the chat — ChatView reads it there.
+  it("a link to a further chat (enter=1) keeps ?chat= through list + chat", async () => {
+    nav.searchParamsString = "agent=agent-2&enter=1&chat=c-2";
+    const view = renderPage();
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions"]));
+    rerenderWith(view);
+    await waitFor(() => expect(nav.pushed).toEqual(["/sessions?agent=agent-2&chat=c-2"]));
+    rerenderWith(view);
+    expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument();
+  });
+
+  it("on the desktop a further-chat link only drops the marker, never the chat", async () => {
+    phone = false;
+    nav.searchParamsString = "agent=agent-2&enter=1&chat=c-2";
+    renderPage();
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=c-2"]));
+    expect(nav.pushed).toEqual([]);
+  });
+
+  it("from the agent's own chat to its further chat: the link is handled, not skipped", async () => {
+    phone = false;
+    nav.searchParamsString = "agent=agent-2";
+    const view = renderPage();
+    await waitFor(() => expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument());
+    nav.searchParamsString = "agent=agent-2&enter=1&chat=c-2";
+    rerenderWith(view);
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=c-2"]));
+  });
+
+  it("a /new that became a new chat opens it on top of the chat it was typed in", async () => {
+    const user = userEvent.setup();
+    nav.searchParamsString = "agent=agent-2";
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument());
+    const view = screen.getByTestId("chat-view-stub");
+    const spy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    await user.click(within(view).getByRole("button", { name: "Stub Open Chat" }));
+    expect(nav.pushed).toEqual(["/sessions?agent=agent-2&chat=chat-9"]);
+    // The list's row for the new chat comes at once, not on the next poll.
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["chat-record", "chats"] });
+  });
+
+  it("a ?chat= the record does not have is dropped from the URL (replace, not push)", async () => {
+    const user = userEvent.setup();
+    nav.searchParamsString = "agent=agent-2&chat=chat-gone";
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument());
+    nav.replaced = [];
+    nav.pushed = [];
+    const view = screen.getByTestId("chat-view-stub");
+    await user.click(within(view).getByRole("button", { name: "Stub Chat Missing" }));
     expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]);
     expect(nav.pushed).toEqual([]);
   });

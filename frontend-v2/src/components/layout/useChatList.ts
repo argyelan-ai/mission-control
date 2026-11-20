@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { usePathname } from "next/navigation";
 import { api } from "@/lib/api";
@@ -31,6 +31,43 @@ export function chatListPollMs(pathname: string): number {
  */
 export function recordPollMs(error: unknown, poll: number): number | false {
   return error instanceof Error && error.message.startsWith("API 404") ? false : poll;
+}
+
+/**
+ * The further chat open on the chat page right now (chats slice S2), so the
+ * list marks ITS row and not the agent's: the agent row and its further
+ * chats share one agent id, and the shell has no `?chat=` of its own (it
+ * sits on every page, outside the sessions page's Suspense boundary).
+ * `ChatView` sets it while a further chat is open and clears it on leave.
+ */
+let openChatId: string | null = null;
+const openChatListeners = new Set<() => void>();
+
+export function setOpenChat(id: string | null): void {
+  if (openChatId === id) return;
+  openChatId = id;
+  for (const l of openChatListeners) l();
+}
+
+function subscribeOpenChat(l: () => void): () => void {
+  openChatListeners.add(l);
+  return () => openChatListeners.delete(l);
+}
+
+export function useOpenChat(): string | null {
+  return useSyncExternalStore(subscribeOpenChat, () => openChatId, () => null);
+}
+
+/** The key of the row to mark: the open further chat, else the chat the
+ *  sessions page opened last; nothing off the chat page. */
+export function activeChatKey(
+  pathname: string,
+  recent: { kind: string; id: string } | undefined,
+  openChat: string | null,
+): string | null {
+  if (!pathname.startsWith("/sessions")) return null;
+  if (openChat) return `chat:${openChat}`;
+  return recent ? `${recent.kind}:${recent.id}` : null;
 }
 
 export function useChatList(): ChatListSections & { waitingCount: number; loaded: boolean } {

@@ -94,6 +94,7 @@ vi.mock("@/components/shared/ThemeSwitch", () => ({ ThemeCycleButton: () => null
 import MobileNav, { MobileNavProvider } from "../MobileNav";
 import { ChatDrawer } from "../ChatDrawer";
 import { ChatSidebar } from "../ChatSidebar";
+import { activeChatKey, setOpenChat } from "../useChatList";
 
 function wrap(ui: React.ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -154,6 +155,36 @@ describe("chat drawer (phone)", () => {
     ]);
     expect(rows[0]).toHaveAttribute("href", "/sessions?agent=a1&enter=1&chat=c-2");
     expect(rows[1]).toHaveAttribute("href", "/sessions?agent=a1&enter=1");
+  });
+
+  it("marks the open further chat — not the agent row it shares an agent with", async () => {
+    data.recordChats = [
+      { id: "d-1", title: "Recipe rework", legacyAgentId: "a1", agentDefault: true, archived: false, lastActivityAt: iso(0, 9) },
+      { id: "c-2", title: "Recipe rework", harness: "omp", legacyAgentId: "a1", agentDefault: false, archived: false, lastActivityAt: iso(0, 10), createdAt: iso(0, 9) },
+    ];
+    // The sessions page remembers the agent; ChatView names the open chat.
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "a1" }]));
+    act(() => setOpenChat("c-2"));
+    try {
+      const drawer = await openDrawer();
+      await waitFor(() => expect(within(drawer).getAllByTestId("chat-list-row")).toHaveLength(4));
+      const row = (key: string) => within(drawer).getAllByTestId("chat-list-row").find((r) => r.getAttribute("data-chat") === key)!;
+      expect(row("chat:c-2")).toHaveAttribute("aria-current", "page");
+      expect(row("agent:a1")).not.toHaveAttribute("aria-current");
+      // Back in the agent's own chat: the agent row again.
+      act(() => setOpenChat(null));
+      expect(row("agent:a1")).toHaveAttribute("aria-current", "page");
+      expect(row("chat:c-2")).not.toHaveAttribute("aria-current");
+    } finally {
+      act(() => setOpenChat(null));
+    }
+  });
+
+  it("off the chat page nothing is marked, not even an open further chat", () => {
+    expect(activeChatKey("/models", { kind: "agent", id: "a1" }, "c-2")).toBeNull();
+    expect(activeChatKey("/sessions", { kind: "agent", id: "a1" }, "c-2")).toBe("chat:c-2");
+    expect(activeChatKey("/sessions", { kind: "agent", id: "a1" }, null)).toBe("agent:a1");
+    expect(activeChatKey("/sessions", undefined, null)).toBeNull();
   });
 
   it("with the record off the list is the agents' list", async () => {

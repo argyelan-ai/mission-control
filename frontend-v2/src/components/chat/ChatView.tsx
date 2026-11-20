@@ -76,6 +76,8 @@ import { reachableCount } from "@/lib/comms";
 import { ChatHeaderSubline, isTurnRunning } from "./ChatHeaderSubline";
 import { SpeedLine } from "./SpeedLine";
 import { DrawerButton } from "@/components/layout/ChatDrawer";
+import { setOpenChat } from "@/components/layout/useChatList";
+import { furtherChatLabel, newChatIdOf, sendToChat, useRecordChat } from "./useRecordChat";
 import { useCommsDirectory } from "@/hooks/useCommsDirectory";
 import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
 import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
@@ -371,6 +373,14 @@ interface ChatViewProps {
    *  above. Omitted alongside `newerHeadRunId` on any caller that never
    *  supplies either. */
   onSelectHeadRun?: (runId: string) => void;
+  /** Opens a further chat of this agent by its record id — called when a
+   *  `/new` came back as a new chat (201 `{"newChat": …}`, chats slice S2).
+   *  The sessions page passes it; without it the new chat waits in the list. */
+  onOpenChat?: (chatId: string) => void;
+  /** `?chat=` names a chat the record does not have (archived, deleted, not
+   *  visible): the agent's own chat shows, and the page drops `&chat=` so
+   *  the URL never names a chat the screen does not show. */
+  onChatMissing?: () => void;
 }
 
 export function ChatView({
@@ -391,8 +401,11 @@ export function ChatView({
   onTogglePanel,
   newerHeadRunId = null,
   onSelectHeadRun,
+  onOpenChat,
+  onChatMissing,
 }: ChatViewProps) {
   const t = useTranslations("sessions");
+  const tCockpit = useTranslations("cockpit");
   const tComms = useTranslations("comms");
   /** Typing into a live session (text, keys, approvals, effort) is admin-only
    *  on the backend — non-admins read the transcript without a composer. */
@@ -437,7 +450,34 @@ export function ChatView({
   // and this costs one boolean.
   const [renderAll, setRenderAll] = useState(false);
 
-  const streamEnabled = hasTranscript && !!agent && !head;
+  // A further chat of this agent (chats slice S2): `?chat=<record id>`. It
+  // reads the chat record and sends with `chatId`. While the record is off
+  // (404) — or without `?chat=` — this is the agent's own chat, unchanged.
+  // Only for the agent the URL names: a pick in the list on the desktop
+  // changes the agent without touching the URL.
+  const chatParam =
+    !head && agent && searchParams?.get("agent") === agent.id ? searchParams.get("chat") || null : null;
+  const recordStream = useRecordChat(chatParam);
+  const furtherChat = chatParam != null && !recordStream.disabled && !recordStream.missing;
+  const chatMissing = chatParam != null && recordStream.missing;
+  useEffect(() => {
+    if (chatMissing) onChatMissing?.();
+  }, [chatMissing, onChatMissing]);
+  const streamEnabled = hasTranscript && !!agent && !head && !furtherChat;
+  // The chat list marks this chat's own row while it is open.
+  useEffect(() => {
+    if (!furtherChat || !chatParam) return;
+    setOpenChat(chatParam);
+    return () => setOpenChat(null);
+  }, [furtherChat, chatParam]);
+  // Its name in the header: the same words as its row ("Cody · chat 2").
+  const furtherTitle = useMemo(
+    () =>
+      furtherChat && agent && chatParam
+        ? furtherChatLabel(recordStream.recordChats, agent, chatParam, (name, n) => tCockpit("furtherChat", { name, n }))
+        : null,
+    [furtherChat, agent, chatParam, recordStream.recordChats, tCockpit],
+  );
   // Klick daneben oder Escape schliesst das ⋯-Menue. Ohne das bliebe es
   // offen stehen, waehrend man laengst woanders arbeitet — dasselbe Muster
   // wie beim Modell-Waehler im Composer.
@@ -465,7 +505,7 @@ export function ChatView({
   // stale subscription open.
   const agentStream = useChatStream(head ? null : agent?.id ?? null, streamEnabled);
   const headStream = useHeadTranscript(head?.run_id ?? null, head?.state ?? null);
-  const stream = head ? headStream : agentStream;
+  const stream = head ? headStream : furtherChat ? recordStream : agentStream;
   const voiceCallActive = useVoiceLiveActive(head ? null : agent?.id);
   const headMeta = useHeadTranscriptMeta(head?.run_id ?? null);
 
@@ -489,7 +529,7 @@ export function ChatView({
   // transcript, a runtime 404 from the history fetch forces terminal mode
   // the same way a known-no-transcript agent (Hermes/Jarvis) does — no
   // separate dead-end empty-state screen, the toggle just can't reach "chat".
-  const canChat = hasTranscript && !isNoTranscriptError(stream.error);
+  const canChat = furtherChat || (hasTranscript && !isNoTranscriptError(stream.error));
   // Ein ACP-Agent (`headless_chat`) hat keinen zweiten Kopf: die TUI in
   // tmux-Fenster 0 faehrt nichts, was der Operator hier tippt. Der Umschalter
   // entfaellt darum — und mit ihm der gespeicherte `centerView`, der sonst
@@ -533,6 +573,7 @@ export function ChatView({
   // backend's adapter rule — never a harness name here, PRINCIPLES §3.4);
   // every other agent renders at once, exactly as before.
   const agentId = agent?.id ?? null;
+  // A further chat holds no tasks — they run beside the agent's own chat.
   const taskGateOn = !head && !!agent && agent.tasks_in_own_session === true && streamEnabled;
   const chatOnScreen = effectiveView === "chat" && voiceOnScreen;
   // A chat-state flip asks for the stubs at once (inside the hook): a task
@@ -934,6 +975,51 @@ export function ChatView({
     if (viewMoved && !heightChanged) setStick(false);
   }
 
+  /** The composer under the chat — inside the live-voice dock for the
+   *  agent's own chat, on its own for a further chat. */
+  function renderComposer(voiceSlot: React.ReactNode) {
+    if (!agent) return null;
+    return (
+      <Composer
+        voiceSlot={voiceSlot}
+        agentId={agent.id}
+        usage={stream.usage}
+        state={stream.state}
+        onSend={handleSend}
+        onStop={handleStop}
+        prefill={composerPrefill}
+        quote={composerQuote}
+        placeholder={liveTask ? t("messagePlaceholderTaskRunning") : undefined}
+        sessionLive={aliveness !== "ended"}
+        /* Nur die Docker-tmux-Bruecke liefert echten Pane-Text; Host-Agenten
+         * (Boss/Hermes/Jarvis) haben diesen Kanal nicht — dort ist "arbeitet"
+         * nie widerlegbar, also bleibt Stop erreichbar.
+         * Ausnahme ACP (`headless_chat`): dort meldet das Protokoll
+         * selbst, ob ein Zug laeuft — "Bereit" ist dann belegt, und
+         * ein Stopp-Quadrat neben "Bereit" war falsch (Operator-
+         * Bilder 18.11.2026, auch auf main). */
+        paneObservable={agent.agent_runtime === "cli-bridge" || headlessChat}
+        capabilities={stream.capabilities}
+        modeSlot={
+          headlessChat && !furtherChat ? (
+            <ModeChip
+              agentId={agent.id}
+              capabilities={stream.capabilities}
+              liveMode={stream.mode}
+              busy={
+                stream.state?.status === "working" ||
+                stream.state?.status === "waiting_input"
+              }
+            />
+          ) : null
+        }
+        // The tab bar sits under the chat on the phone now
+        // (variant C) and owns the home-indicator strip.
+        barBelow
+      />
+    );
+  }
+
   function handleSend(text: string) {
     if (!agent) return;
     // Echo BEFORE the request: the bubble and the scroll happen in this frame,
@@ -952,7 +1038,18 @@ export function ChatView({
    *  subtly different one. */
   function deliver(text: string) {
     if (!agent) return;
-    api.chat.sendText(agent.id, text).catch((err) => {
+    const sent: Promise<unknown> = furtherChat && chatParam
+      ? sendToChat(agent.id, chatParam, text)
+      : api.chat.sendText(agent.id, text);
+    sent.then((res) => {
+      // `/new` with the record on became a further chat: open it. The
+      // conversation it was typed in stays as it is.
+      const opened = newChatIdOf(res);
+      if (opened) {
+        stream.echoFailed(text);
+        onOpenChat?.(opened);
+      }
+    }, (err) => {
       if (isAgentStartingError(err)) {
         // Not a failure: the agent is booting. The echo says so and the send is
         // retried once. No toast — nothing has gone wrong yet.
@@ -1410,7 +1507,7 @@ export function ChatView({
               className="text-base leading-tight md:text-sm font-semibold md:font-medium truncate min-w-0"
               style={{ color: C.textPrimary }}
             >
-              {agent.name}
+              {furtherTitle ?? agent.name}
             </span>
           </span>
           <ChatHeaderSubline
@@ -1599,7 +1696,7 @@ export function ChatView({
 
       {/* Only where the chat shows no task sections: there the section head
           names the task (K3). */}
-      {!head && agent && workingOn && !tasksApply && (!taskGateOn || chatTasks.settled) && (
+      {!head && agent && !furtherChat && workingOn && !tasksApply && (!taskGateOn || chatTasks.settled) && (
         <WorkingOnRow taskId={workingOn.taskId} title={workingOn.title} />
       )}
 
@@ -1839,6 +1936,10 @@ export function ChatView({
               />
               {!isAdmin ? (
                 <AdminOnlyNotice compact message={t("inputAdminOnly")} />
+              ) : agent && furtherChat ? (
+                // A further chat: the composer alone. Live voice and the
+                // mode chip act on the agent's own chat, not this one.
+                renderComposer(null)
               ) : agent ? (
                 <VoiceLiveDock
                   agentId={agent.id}
@@ -1854,45 +1955,7 @@ export function ChatView({
                   progress={voiceProgress}
                   onScreen={voiceOnScreen}
                 >
-                {(voiceSlot) => (
-                <Composer
-                  voiceSlot={voiceSlot}
-                  agentId={agent.id}
-                  usage={stream.usage}
-                  state={stream.state}
-                  onSend={handleSend}
-                  onStop={handleStop}
-                  prefill={composerPrefill}
-                  quote={composerQuote}
-                  placeholder={liveTask ? t("messagePlaceholderTaskRunning") : undefined}
-                  sessionLive={aliveness !== "ended"}
-                  /* Nur die Docker-tmux-Bruecke liefert echten Pane-Text; Host-Agenten
-                   * (Boss/Hermes/Jarvis) haben diesen Kanal nicht — dort ist "arbeitet"
-                   * nie widerlegbar, also bleibt Stop erreichbar.
-                   * Ausnahme ACP (`headless_chat`): dort meldet das Protokoll
-                   * selbst, ob ein Zug laeuft — "Bereit" ist dann belegt, und
-                   * ein Stopp-Quadrat neben "Bereit" war falsch (Operator-
-                   * Bilder 18.11.2026, auch auf main). */
-                  paneObservable={agent.agent_runtime === "cli-bridge" || headlessChat}
-                  capabilities={stream.capabilities}
-                  modeSlot={
-                    headlessChat ? (
-                      <ModeChip
-                        agentId={agent.id}
-                        capabilities={stream.capabilities}
-                        liveMode={stream.mode}
-                        busy={
-                          stream.state?.status === "working" ||
-                          stream.state?.status === "waiting_input"
-                        }
-                      />
-                    ) : null
-                  }
-                  // The tab bar sits under the chat on the phone now
-                  // (variant C) and owns the home-indicator strip.
-                  barBelow
-                />
-                )}
+                {(voiceSlot) => renderComposer(voiceSlot)}
                 </VoiceLiveDock>
               ) : null}
               {/* The speed line under the input (variant C, operator
