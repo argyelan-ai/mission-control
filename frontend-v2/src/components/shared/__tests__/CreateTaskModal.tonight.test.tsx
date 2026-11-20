@@ -65,6 +65,20 @@ describe("CreateTaskModal — Run tonight", () => {
     vi.spyOn(api.projects, "list").mockResolvedValue([]);
     vi.spyOn(api.credentials, "list").mockResolvedValue([]);
     vi.spyOn(api.repos, "list").mockResolvedValue([repo]);
+    vi.spyOn(api.nightShift, "config").mockResolvedValue({} as never);
+  });
+
+  it("night shift off (config 404) → no 'Run tonight' switch; 'Run as head' stays", async () => {
+    vi.spyOn(api.nightShift, "config").mockRejectedValue(
+      new Error('API 404: {"detail":{"code":"night_shift_off"}}'),
+    );
+    vi.spyOn(api.heads, "pairs").mockResolvedValue({ pairs: [ompLocal], default_pair: ompLocal });
+    renderModal();
+    await openAndFill();
+    expect(await screen.findByTestId("run-as-head")).toBeInTheDocument();
+    await waitFor(() => expect(api.nightShift.config).toHaveBeenCalled());
+    expect(screen.queryByTestId("create-run-tonight-row")).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Run tonight" })).toBeNull();
   });
 
   it("switch on → 'Queue for tonight' creates the card and marks it; no head starts now", async () => {
