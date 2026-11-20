@@ -156,6 +156,28 @@ describe("ApiKeysSection GitHub dedup (Settings)", () => {
     expect(screen.getByText("GitHub credentials are managed in the GitHub section.")).toBeInTheDocument();
   });
 
+  it("no longer points to the parked Slack and Telegram sections (Etappe 2)", async () => {
+    vi.spyOn(api.secrets, "providers").mockResolvedValue([
+      ...PROVIDERS,
+      { provider: "slack", key: "slack_bot_token", label: "Slack Bot Token", description: "", placeholder: "xoxb-..." },
+      { provider: "telegram", key: "telegram_bot_token", label: "Telegram Bot Token", description: "", placeholder: "123:abc" },
+    ]);
+    vi.spyOn(api.secrets, "list").mockResolvedValue([
+      { ...GITHUB_SECRET, id: "s7", key: "slack_bot_token", provider: "slack", label: "Slack Bot Token" },
+      { ...GITHUB_SECRET, id: "s8", key: "telegram_bot_token", provider: "telegram", label: "Telegram Bot Token" },
+    ]);
+
+    renderPage();
+
+    expect(await screen.findByText("Anthropic API Key")).toBeInTheDocument();
+    // A link to a section the page no longer opens would be a dead end.
+    expect(screen.queryByRole("button", { name: /Go to Slack/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Go to Telegram/i })).not.toBeInTheDocument();
+    // The tokens stay stored and stay out of the generic list.
+    expect(screen.queryByText("Slack Bot Token")).not.toBeInTheDocument();
+    expect(screen.queryByText("Telegram Bot Token")).not.toBeInTheDocument();
+  });
+
   it("does not offer GitHub in the Add-key flow", async () => {
     vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS);
     vi.spyOn(api.secrets, "list").mockResolvedValue([]);

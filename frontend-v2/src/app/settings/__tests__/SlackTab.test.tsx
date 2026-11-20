@@ -5,7 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { SecretEntry, SlackConnectionResult } from "@/lib/types";
 
-// Deep-link straight into ?section=slack so only SlackTab mounts.
+// The Slack section is parked in Settings (Etappe 2, ADR-102 §3): the page no
+// longer opens it, so SlackTab is mounted on its own — its code stays.
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
   usePathname: () => "/settings",
@@ -41,7 +42,7 @@ vi.mock("@/lib/store", () => ({
   ),
 }));
 
-import SettingsPage from "../page";
+import { SlackTab } from "@/components/settings/SlackTab";
 
 function renderPage() {
   const qc = new QueryClient({
@@ -49,7 +50,7 @@ function renderPage() {
   });
   return render(
     <QueryClientProvider client={qc}>
-      <SettingsPage />
+      <SlackTab />
     </QueryClientProvider>
   );
 }

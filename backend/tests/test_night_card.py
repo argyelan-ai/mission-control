@@ -30,6 +30,11 @@ URL = "/api/v1/night-shift/last-night"
 
 
 @pytest.fixture(autouse=True)
+def _runner_on(monkeypatch):
+    monkeypatch.setattr(settings, "night_shift_runner_enabled", True)
+
+
+@pytest.fixture(autouse=True)
 def _channels_off(monkeypatch):
     """The shipped default: MC only."""
     monkeypatch.setattr(settings, "night_shift_send_to_channels", False)

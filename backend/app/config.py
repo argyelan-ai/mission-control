@@ -848,6 +848,13 @@ class Settings(BaseSettings):
     # copy only when this is on AND a channel is configured. Off by default.
     night_shift_send_to_channels: bool = False
     night_shift_interval: int = 60
+    # Etappe 2 (ADR-102 §3, "clean up"): the night shift is frozen, not
+    # deleted. Off → the worker job does not start, a tick does nothing and
+    # /api/v1/night-shift answers 404 (night_shift_off), so the task toggle and
+    # the Home cards hide instead of queueing work that never runs. The marks,
+    # reports and the operator's settings stay on disk / in app_settings.
+    # Way back: NIGHT_SHIFT_RUNNER_ENABLED=true (still needs heads_enabled).
+    night_shift_runner_enabled: bool = False
 
     # Vault Index Rebuild on Boot
     # False (default): only rebuild on first boot when .mc_index.db is missing.

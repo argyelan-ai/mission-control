@@ -49,6 +49,13 @@ def _probes(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _runner_on(monkeypatch):
+    """These tests cover the runner itself. It is off by default (Etappe 2,
+    NIGHT_SHIFT_RUNNER_ENABLED) — the off path is covered below."""
+    monkeypatch.setattr(settings, "night_shift_runner_enabled", True)
+
+
+@pytest.fixture(autouse=True)
 def _channels_on(monkeypatch):
     """These tests cover the channel path (Slack / Telegram). It is off by
     default — MC-only is covered in test_night_card.py."""
@@ -135,6 +142,51 @@ async def test_disabled_is_404(auth_client, monkeypatch):
     for path in ("/api/v1/night-shift/config", "/api/v1/night-shift/tonight"):
         resp = await auth_client.get(path)
         assert resp.status_code == 404 and resp.json()["detail"]["code"] == "heads_disabled"
+
+
+# ── Runner switch (Etappe 2): off by default, env switch turns it back on ──
+
+
+def test_runner_is_off_by_default():
+    from app.config import Settings
+
+    assert Settings().night_shift_runner_enabled is False
+
+
+async def test_runner_off_api_is_404(auth_client, heads_root, monkeypatch):
+    """Off → the night-shift API answers 404, so the task toggle and the Home
+    cards hide themselves instead of queueing work that never starts."""
+    monkeypatch.setattr(settings, "night_shift_runner_enabled", False)
+    for path in ("/api/v1/night-shift/config", "/api/v1/night-shift/tonight"):
+        resp = await auth_client.get(path)
+        assert resp.status_code == 404 and resp.json()["detail"]["code"] == "night_shift_off"
+
+
+async def test_runner_off_tick_starts_nothing(heads_root, make_board, make_task, monkeypatch):
+    (task,) = await _world(make_board, make_task)
+    now = datetime.now(UTC)
+    await _cfg(**_window_around_now(now))
+    _mark(task, order=1)
+    monkeypatch.setattr(settings, "night_shift_runner_enabled", False)
+    assert (await _tick(now)).started is None
+    assert (await _task(task.id)).status == "inbox"
+
+
+async def test_runner_off_job_does_not_start(monkeypatch):
+    from app.services.heads.night_shift import NightShift
+
+    monkeypatch.setattr(settings, "night_shift_interval", 60)
+    monkeypatch.setattr(settings, "night_shift_runner_enabled", False)
+    job = NightShift()
+    await job.start()
+    assert job._task is None
+
+    monkeypatch.setattr(settings, "night_shift_runner_enabled", True)
+    await job.start()
+    try:
+        assert job._task is not None
+    finally:
+        await job.stop()
 
 
 async def test_mark_holds_the_inbox_card_and_unmark_releases_it(auth_client, heads_root, make_board, make_task):

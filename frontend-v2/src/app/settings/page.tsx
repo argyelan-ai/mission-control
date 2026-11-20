@@ -69,6 +69,13 @@ import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 // SECTIONS / GROUP_ORDER live in components/settings/sections.ts — the desktop
 // side nav and the phone section list read the same list.
 
+// Etappe 2 "clean up" (ADR-102 §3): sections taken out of Settings. Their code
+// and their stored values (tokens, channel switches, night-shift settings) stay;
+// the page just neither lists nor opens them, and a link to one shows the list.
+// Slack / Telegram: 0 notifications in 14 days. Night shift: frozen, its runner
+// is off unless NIGHT_SHIFT_RUNNER_ENABLED is set. Way back: drop the id here.
+const PARKED_SECTIONS: ReadonlySet<string> = new Set(["slack", "telegram", "night-shift"]);
+
 // ── Keyboard shortcuts reference ──────────────────────────────────────────────
 
 const SHORTCUTS = [
@@ -1177,10 +1184,10 @@ function ApiKeysSection({
           {hasGithubSecret && (
             <ManagedElsewhere icon={Github} name="GitHub" hint={t("githubManagedHint")} action={t("goToGithub")} onGo={onNavigateToGithub} />
           )}
-          {hasSlackSecret && (
+          {hasSlackSecret && !PARKED_SECTIONS.has("slack") && (
             <ManagedElsewhere icon={MessageSquare} name="Slack" hint={t("slackManagedHint")} action={t("goToSlack")} onGo={onNavigateToSlack} />
           )}
-          {hasTelegramSecret && (
+          {hasTelegramSecret && !PARKED_SECTIONS.has("telegram") && (
             <ManagedElsewhere icon={Send} name="Telegram" hint={t("telegramManagedHint")} action={t("goToTelegram")} onGo={onNavigateToTelegram} />
           )}
           {nonGithubProviders.map((tmpl) => {
@@ -2232,7 +2239,9 @@ function SettingsContent() {
   const t = useTranslations("settings");
   const currentUser = useAppStore((s) => s.currentUser);
   const isAdmin = currentUser?.role === "admin";
-  const visibleSections = SECTIONS.filter((s) => !s.adminOnly || isAdmin);
+  const visibleSections = SECTIONS.filter(
+    (s) => !PARKED_SECTIONS.has(s.id) && (!s.adminOnly || isAdmin),
+  );
 
   // The section lives in the URL — /settings?section=github — so a reload, a
   // shared link and the browser's back button all land on it (other pages
@@ -2241,7 +2250,7 @@ function SettingsContent() {
   // must show the list again.
   const searchParams = useSearchParams();
   const sectionParam = searchParams.get("section");
-  const named = SECTIONS.find((s) => s.id === sectionParam);
+  const named = SECTIONS.find((s) => s.id === sectionParam && !PARKED_SECTIONS.has(s.id));
   // A member who follows a link to an admin section gets the list, not an
   // empty screen. While the user is still loading, keep the section (no flash).
   const openSection =

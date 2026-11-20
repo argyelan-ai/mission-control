@@ -53,6 +53,10 @@ FINISHED = night.FINISHED_TASK_STATUSES
 def _enabled() -> None:
     if not settings.heads_enabled:
         raise HTTPException(status_code=404, detail={"code": "heads_disabled"})
+    # Etappe 2: the night shift is frozen unless NIGHT_SHIFT_RUNNER_ENABLED is
+    # on — marking a task that never starts would be a silent failure.
+    if not settings.night_shift_runner_enabled:
+        raise HTTPException(status_code=404, detail={"code": "night_shift_off"})
 
 
 def _err(status: int, code: str, **extra) -> HTTPException:

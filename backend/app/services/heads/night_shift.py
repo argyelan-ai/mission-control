@@ -141,7 +141,7 @@ async def tick(session: AsyncSession, now: datetime | None = None, *, send=None)
     now = now or datetime.now(UTC)
     now_ts = now.timestamp()
     out = TickResult()
-    if not settings.heads_enabled:
+    if not settings.heads_enabled or not settings.night_shift_runner_enabled:
         return out
     cfg = await night_store.load_config(session)
     marks = night_store.list_marks()
@@ -398,6 +398,9 @@ class NightShift:
 
     async def start(self) -> None:
         interval = settings.night_shift_interval
+        if not settings.night_shift_runner_enabled:
+            logger.info("night shift job off (NIGHT_SHIFT_RUNNER_ENABLED=false)")
+            return
         if self._running or not interval or interval <= 0 or interval >= 99999:
             return
         self._running = True

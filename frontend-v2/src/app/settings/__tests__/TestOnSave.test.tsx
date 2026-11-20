@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
 import { api } from "@/lib/api";
 import type { ProviderTemplate, SecretEntry } from "@/lib/types";
 
@@ -70,6 +71,8 @@ vi.mock("@/lib/store", () => ({
 }));
 
 import SettingsPage from "../page";
+import { SlackTab } from "@/components/settings/SlackTab";
+import { TelegramTab } from "@/components/settings/TelegramTab";
 
 // The whole Settings page renders and userEvent types into it: on CI these
 // tests take 2.5–5.3 s each, right at vitest's 5 s default — "saving a new
@@ -86,6 +89,13 @@ function renderPage() {
       <SettingsPage />
     </QueryClientProvider>
   );
+}
+
+function renderTab(tab: ReactElement) {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(<QueryClientProvider client={qc}>{tab}</QueryClientProvider>);
 }
 
 // ── fixtures ──────────────────────────────────────────────────────────────
@@ -345,14 +355,16 @@ const SLACK_OK: SlackConnectionResult = {
 
 describe("Slack + Telegram: the age of the stored result", () => {
   it("Slack: the status card says when it was tested, and re-reads it after a test", async () => {
-    setup("slack");
+    setup("apikeys");
     vi.spyOn(api.secrets, "list").mockResolvedValue([
       { ...OPENAI_SECRET, key: "slack_bot_token", provider: "slack" },
     ]);
     vi.spyOn(api.slack, "testConnection").mockResolvedValue(SLACK_OK);
     const list = listChecks([check({ kind: "slack", subject_id: "workspace", secret_key: "slack_bot_token", state: "ok", ...ago(0) })]);
 
-    renderPage();
+    // The Slack section is parked in Settings (Etappe 2) — its code stays and
+    // is tested on its own.
+    renderTab(<SlackTab />);
 
     expect(await screen.findByText("tested just now", undefined, { timeout: 5000 })).toBeInTheDocument();
     // The Slack button stores through the registry — after a test the age is re-read.
@@ -363,7 +375,7 @@ describe("Slack + Telegram: the age of the stored result", () => {
   });
 
   it("Telegram: each bot line carries its own age", async () => {
-    setup("telegram");
+    setup("apikeys");
     vi.spyOn(api.secrets, "list").mockResolvedValue([]);
     vi.spyOn(api.channels, "getSettings").mockResolvedValue({ values: {}, overridden: [] } as never);
     const tg: TelegramConnectionResult = {
@@ -376,7 +388,7 @@ describe("Slack + Telegram: the age of the stored result", () => {
       check({ kind: "telegram", subject_id: "reports_bot", secret_key: "telegram_reports_bot_token", configured: false }),
     ]);
 
-    renderPage();
+    renderTab(<TelegramTab />);
 
     expect(await screen.findByText("tested 2 min ago", undefined, { timeout: 5000 })).toBeInTheDocument();
   });
