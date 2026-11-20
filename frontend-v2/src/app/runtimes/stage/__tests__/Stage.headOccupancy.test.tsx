@@ -222,7 +222,8 @@ describe("Switch / stop under a working head", () => {
     const notice = await screen.findByTestId("head-in-use-notice");
     expect(notice).toHaveTextContent("A head is working on this box (“Fix flaky retry test”).");
     expect(notice).toHaveTextContent("Switching now would cut it off. Stop the head first.");
-    expect(within(notice).getByRole("link", { name: "Open task" })).toHaveAttribute("href", "/tasks?task=task-7");
+    // Etappe 2: the task page goes; the link opens the head's own chat.
+    expect(within(notice).getByRole("link", { name: "Open chat" })).toHaveAttribute("href", "/sessions?head=run-1&enter=1");
     expect(screen.queryByTestId("recipe-option-qwen")).not.toBeInTheDocument();
     expect(start).not.toHaveBeenCalled();
     // OK closes it and the bar is back

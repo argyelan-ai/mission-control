@@ -4399,6 +4399,7 @@
     "x_access_token_secret": "OAuth 1.0a access token secret of the posting account — for the X post publisher (ADR-065)"
   },
   "common": {
+    "openChat": "Open chat",
     "section": {
       "collapse": "Collapse {name}",
       "expand": "Expand {name}",

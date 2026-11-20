@@ -36,6 +36,12 @@ function agentsResponse(slug: string, agents: RuntimeAgentsResponse["agents"]): 
 describe("CloudUsage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    // The chat list (docker + host sessions): an agent outside it — archived,
+    // or on no session runtime — has no chat to open, so no link (Etappe 2 A).
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue(
+      ["a1", "a2", "a3", "a4", "a5", "a6"].map((id) => ({ id })) as never,
+    );
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([] as never);
   });
 
   it("renders a bound runtime as agent chips left + mono model right", async () => {
@@ -57,7 +63,22 @@ describe("CloudUsage", () => {
     expect(within(row).getByText("Boss")).toBeInTheDocument();
     expect(within(row).getByText("Rex")).toBeInTheDocument();
     expect(within(row).getByText("claude-opus-5")).toBeInTheDocument();
-    expect(within(row).getByRole("link", { name: "Boss" })).toHaveAttribute("href", "/agents/a1");
+    expect(await within(row).findByRole("link", { name: "Boss" })).toHaveAttribute("href", "/sessions?agent=a1&enter=1");
+  });
+
+  it("an agent without a chat (archived) is a plain chip, not a link to another chat", async () => {
+    const rt = makeRuntime({ slug: "sonnet", display_name: "Claude Sonnet", model_identifier: "claude-sonnet-5" });
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue(
+      agentsResponse("sonnet", [
+        { id: "a1", name: "Boss", agent_runtime: "host" },
+        { id: "gone", name: "Downloader", agent_runtime: "cli-bridge" },
+      ])
+    );
+    renderWithQuery(<CloudUsage runtimes={[rt]} onOpen={() => {}} />);
+    const row = await screen.findByTestId("cloud-usage-row-sonnet");
+    await waitFor(() => expect(within(row).getByRole("link", { name: "Boss" })).toBeInTheDocument());
+    expect(within(row).getByText("Downloader").closest("a")).toBeNull();
+    expect(within(row).getAllByRole("link")).toHaveLength(1);
   });
 
   it("caps chips at 3 and shows a +N overflow chip", async () => {
@@ -76,7 +97,7 @@ describe("CloudUsage", () => {
     renderWithQuery(<CloudUsage runtimes={[rt]} onOpen={() => {}} />);
 
     const row = await screen.findByTestId("cloud-usage-row-sonnet");
-    expect(within(row).getAllByRole("link")).toHaveLength(3);
+    await waitFor(() => expect(within(row).getAllByRole("link")).toHaveLength(3));
     expect(within(row).getByText("+3")).toBeInTheDocument();
   });
 
