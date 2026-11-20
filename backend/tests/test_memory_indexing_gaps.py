@@ -16,6 +16,20 @@ from app.models.memory import BoardMemory
 from tests.conftest import test_engine
 
 
+@pytest.fixture(autouse=True)
+def _board_memory_writes_on():
+    """These tests cover legacy board_memory writers, which sit behind
+    BOARD_MEMORY_WRITE_ENABLED (default off, services/board_memory_gate.py).
+    Switch it on for this module. Plain setattr instead of monkeypatch: an
+    autouse fixture that requests monkeypatch reorders the DB setup (conftest)."""
+    import app.config
+
+    old = app.config.settings.board_memory_write_enabled
+    app.config.settings.board_memory_write_enabled = True
+    yield
+    app.config.settings.board_memory_write_enabled = old
+
+
 async def _make_researcher(name: str = "TestResearcher") -> tuple[Agent, str]:
     """Researcher agent with knowledge:write scope + token."""
     from app.auth import generate_agent_token
