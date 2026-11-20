@@ -18,6 +18,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
+import { chatEntryHref } from "@/lib/chatHistory";
 import { api } from "@/lib/api";
 import { isRuntimeUnprobed } from "@/lib/runtimeRows";
 import { C, STATUS, STATUS_TEXT, alpha } from "@/lib/colors";
@@ -275,7 +276,7 @@ export function BoundAgents({ runtime }: { runtime: Runtime }) {
         {bound.map((a) => (
           <span key={a.id} className="inline-flex items-center gap-1">
             <Link
-              href={`/agents/${a.id}`}
+              href={chatEntryHref("agent", a.id)}
               className="inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none min-h-11 sm:min-h-6 hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
               style={{
                 backgroundColor: C.accentSubtle,

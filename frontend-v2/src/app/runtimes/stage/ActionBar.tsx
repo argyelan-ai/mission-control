@@ -15,6 +15,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { chatEntryHref } from "@/lib/chatHistory";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Settings } from "lucide-react";
@@ -89,6 +90,7 @@ export function ActionBar({
 }) {
   const t = useTranslations("runtimes.stage");
   const tHeads = useTranslations("heads.runtimes");
+  const tVoice = useTranslations("voiceLive");
   const headConflictText = useHeadConflictText();
   const [refusedBy, setRefusedBy] = useState<{ task_id: string | null; title: string | null } | null>(null);
   const locked = !!headOnBox && variant === "normal";
@@ -188,13 +190,14 @@ export function ActionBar({
       >
         <span className="basis-full sm:basis-auto sm:flex-1 min-w-0">{title} {body}</span>
         <div className="flex items-center gap-2 ml-auto">
-          {headOnBox.task_id && (
+          {/* Etappe 2: the task page goes — open the head's own chat instead. */}
+          {headOnBox.run_id && (
             <Link
-              href={`/tasks?task=${encodeURIComponent(headOnBox.task_id)}`}
+              href={chatEntryHref("head", headOnBox.run_id)}
               className="inline-flex items-center px-3 min-h-[44px] rounded-md hover:bg-[var(--color-bg-hover)]"
               style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
             >
-              {tHeads("openTask")}
+              {tVoice("openChat")}
             </Link>
           )}
           <button

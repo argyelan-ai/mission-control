@@ -290,6 +290,10 @@ describe("BoxCockpit", () => {
     const links = await screen.findAllByTestId("connection-agent-link");
     expect(links).toHaveLength(3);
     expect(links.map((l) => l.textContent)).toEqual(["Alpha", "Beta", "Gamma"]);
+    // Etappe 2: /agents/<id> goes; each name opens that agent's chat.
+    expect(links.map((l) => l.getAttribute("href"))).toEqual([
+      "/sessions?agent=a1&enter=1", "/sessions?agent=a2&enter=1", "/sessions?agent=a3&enter=1",
+    ]);
     expect(agentsSpy).toHaveBeenCalledWith("dgx-spark-slot");
     expect(agentsSpy).not.toHaveBeenCalledWith("qwen38-flash-next");
   });

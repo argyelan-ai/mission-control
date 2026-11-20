@@ -16,7 +16,6 @@
  */
 
 import { useState, type ReactNode } from "react";
-import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown } from "lucide-react";
@@ -144,9 +143,11 @@ export function InsightsDetails() {
                 <Line
                   key={task.task_id}
                   main={
-                    <Link href={`/tasks?task=${encodeURIComponent(task.task_id)}`} className="text-sm hover:underline" style={{ color: C.textPrimary }}>
+                    // Etappe 2: no link — the task page goes and a cost row
+                    // carries no chat to open instead.
+                    <span className="text-sm" style={{ color: C.textPrimary }}>
                       {task.task_title}
-                    </Link>
+                    </span>
                   }
                   meta={t("taskMeta", { events: task.event_count, tokens: formatTokens(task.input_tokens, locale) })}
                   value={formatUsd(task.cost_usd, locale)}

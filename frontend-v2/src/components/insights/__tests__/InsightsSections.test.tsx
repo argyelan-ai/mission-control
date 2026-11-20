@@ -352,6 +352,15 @@ describe("InsightsDetails", () => {
     expect(await screen.findByText("task:00000000")).toBeInTheDocument();
   });
 
+  it("shows task titles as text, not as links to the task page that goes (Etappe 2)", async () => {
+    wrap(<InsightsDetails />);
+    fireEvent.click(within(screen.getByTestId("details-tasks")).getByRole("button"));
+    const title = await screen.findByText("Rework the settings page");
+    expect(title.closest("a")).toBeNull();
+    const hrefs = within(screen.getByTestId("details-tasks")).queryAllByRole("link").map((l) => l.getAttribute("href") ?? "");
+    expect(hrefs.filter((h) => h.startsWith("/tasks"))).toEqual([]);
+  });
+
   it("renders AI reports as Markdown, not raw asterisks", async () => {
     wrap(<InsightsDetails />);
     fireEvent.click(within(screen.getByTestId("details-reports")).getByRole("button"));

@@ -214,6 +214,8 @@ describe("RuntimeDetailPanel", () => {
       });
       renderWithQuery(<RuntimeDetailPanel open runtime={slot} onClose={() => {}} />);
       expect(await screen.findByText("agent-one")).toBeInTheDocument();
+      // Etappe 2: /agents/<id> goes; the chip opens the agent's chat.
+      expect(screen.getByRole("link", { name: /agent-one/ })).toHaveAttribute("href", "/sessions?agent=a1&enter=1");
     });
   });
 });

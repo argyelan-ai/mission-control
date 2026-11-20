@@ -57,7 +57,7 @@ describe("CloudUsage", () => {
     expect(within(row).getByText("Boss")).toBeInTheDocument();
     expect(within(row).getByText("Rex")).toBeInTheDocument();
     expect(within(row).getByText("claude-opus-5")).toBeInTheDocument();
-    expect(within(row).getByRole("link", { name: "Boss" })).toHaveAttribute("href", "/agents/a1");
+    expect(within(row).getByRole("link", { name: "Boss" })).toHaveAttribute("href", "/sessions?agent=a1&enter=1");
   });
 
   it("caps chips at 3 and shows a +N overflow chip", async () => {

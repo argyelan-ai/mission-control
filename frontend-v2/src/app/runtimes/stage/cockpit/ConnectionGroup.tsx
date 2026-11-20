@@ -16,6 +16,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
+import { chatEntryHref } from "@/lib/chatHistory";
 import { Check, Copy } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
@@ -88,7 +89,7 @@ export function ConnectionGroup({ runtimeSlug, endpoint }: { runtimeSlug: string
           return (
             <Link
               key={a.id}
-              href={`/agents/${a.id}`}
+              href={chatEntryHref("agent", a.id)}
               className="inline-flex items-center gap-1.5"
               style={{ color: C.textSecondary, borderBottom: `1px solid ${C.borderActive}` }}
               data-testid="connection-agent-link"

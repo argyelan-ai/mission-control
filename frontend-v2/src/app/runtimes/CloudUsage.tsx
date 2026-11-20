@@ -17,6 +17,7 @@ import { useQueries } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
 import Link from "next/link";
+import { chatEntryHref } from "@/lib/chatHistory";
 import { api } from "@/lib/api";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import type { Runtime, RuntimeAgentRef } from "@/lib/types";
@@ -67,7 +68,7 @@ function UsageRow({
         {shown.map((a) => (
           <Link
             key={a.id}
-            href={`/agents/${a.id}`}
+            href={chatEntryHref("agent", a.id)}
             onClick={(e) => e.stopPropagation()}
             className="font-mono text-[11px] leading-none rounded-sm px-2 py-1 hover:bg-[var(--color-bg-hover)] transition-colors"
             style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.textSecondary }}
