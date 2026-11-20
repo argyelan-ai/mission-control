@@ -89,6 +89,7 @@ describe("codes and counts", () => {
     expect(nightErrorKey(apiError(422, { code: "pair_blocked", reason_code: "unproven" }))).toBe("errors.pair_blocked");
     expect(nightErrorKey(apiError(409, { code: "task_busy" }))).toBe("errors.task_busy");
     expect(nightErrorKey(apiError(409, { code: "night_busy" }))).toBe("errors.night_busy");
+    expect(nightErrorKey(apiError(404, { code: "night_shift_off" }))).toBe("errors.night_shift_off");
     expect(nightErrorKey(apiError(500, { code: "weird" }))).toBe("errors.unknown");
     expect(nightErrorKey(new Error("network"))).toBe("errors.unknown");
   });

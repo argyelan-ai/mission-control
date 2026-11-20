@@ -5149,6 +5149,7 @@
     },
     "errors": {
       "heads_disabled": "Heads sind ausgeschaltet.",
+      "night_shift_off": "Die Nachtschicht ist ausgeschaltet.",
       "task_not_found": "Die Aufgabe gibt es nicht mehr.",
       "task_finished": "Die Aufgabe ist schon abgeschlossen.",
       "repo_required": "Ein Nachtlauf braucht ein Repo an der Aufgabe.",

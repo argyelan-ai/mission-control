@@ -218,6 +218,7 @@ export function nightReasonKey(code: string | null | undefined): string {
 
 const ERROR_CODES = new Set([
   "heads_disabled",
+  "night_shift_off",
   "task_not_found",
   "task_finished",
   "repo_required",

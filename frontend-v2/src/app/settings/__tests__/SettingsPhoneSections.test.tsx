@@ -91,6 +91,10 @@ const ALL = [
   "apikeys", "credentials",
   "users", "about",
 ];
+// Etappe 2 (ADR-102 §3): taken out of Settings — the registry and the
+// section code stay, the page no longer shows or opens them.
+const PARKED = ["slack", "telegram", "night-shift"];
+const SHOWN = ALL.filter((id) => !PARKED.includes(id));
 const MEMBER = ["more", "profile", "security", "appearance", "language", "shortcuts", "about"];
 
 const ADMIN = { id: "u1", email: "a@b.com", name: "Admin", role: "admin" };
@@ -129,7 +133,7 @@ describe("Settings on the phone — section list", () => {
     expect(list).not.toBeNull();
     expect(classes(list)).toContain("md:hidden");
     const links = within(list).getAllByRole("link");
-    expect(links.map((a) => a.getAttribute("data-section"))).toEqual(ALL);
+    expect(links.map((a) => a.getAttribute("data-section"))).toEqual(SHOWN);
     for (const a of links) {
       expect(a.getAttribute("href")).toBe(`/settings?section=${a.getAttribute("data-section")}`);
     }
@@ -145,7 +149,7 @@ describe("Settings on the phone — section list", () => {
   it("rows are labelled, sit in labelled groups and are at least 44 px tall", () => {
     renderPage();
     const list = phoneList()!;
-    expect(within(list).getByRole("link", { name: "Night shift" })).toBeInTheDocument();
+    expect(within(list).getByRole("link", { name: "Costs" })).toBeInTheDocument();
     expect(within(list).getByRole("list", { name: "Connections" })).toBeInTheDocument();
     for (const a of within(list).getAllByRole("link")) {
       expect(classes(a)).toContain("min-h-12"); // 48 px
@@ -169,7 +173,7 @@ describe("Settings on the phone — section list", () => {
 });
 
 describe("Settings on the phone — an opened section", () => {
-  it.each(ALL)("opens %s as its own screen with a back button", (id) => {
+  it.each(SHOWN)("opens %s as its own screen with a back button", (id) => {
     nav.search = `section=${id}`;
     renderPage();
     expect(phoneList()).toBeNull();
@@ -217,6 +221,14 @@ describe("Settings on the phone — an opened section", () => {
     renderPage();
     expect(phoneList()).not.toBeNull();
     expect(screen.queryByTestId("settings-phone-back")).toBeNull();
+  });
+
+  it.each(PARKED)("shows the list, not the section, for a link to the parked %s section", (id) => {
+    nav.search = `section=${id}`;
+    renderPage();
+    expect(phoneList()).not.toBeNull();
+    expect(screen.queryByTestId("settings-phone-back")).toBeNull();
+    expect(within(phoneList()!).queryByRole("link", { name: /Slack|Telegram|Night shift/ })).toBeNull();
   });
 
   it("shows the list for an unknown section", () => {

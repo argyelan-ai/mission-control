@@ -147,6 +147,16 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
   // The picker then also offers pairs that are only held back for today
   // (model not running, box busy) — by tonight they can run.
   const [runTonight, setRunTonight] = useState(false);
+  // Night shift off (Etappe 2: 404 night_shift_off) → no "Run tonight"
+  // switch, the same rule as the task toggle and the Home cards.
+  const nightConfigQuery = useQuery({
+    queryKey: ["nightShift", "config"],
+    queryFn: () => api.nightShift.config(),
+    enabled: open && headsAvailable,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const nightAvailable = nightConfigQuery.isSuccess;
   const pickerPairs = pairsResp ? (runTonight ? pairsForTonight(pairsResp.pairs) : pairsResp.pairs) : [];
   const selectedPair = pairsResp
     ? ((pickedPairKey ? pickerPairs.find((p) => pairKey(p) === pickedPairKey) : undefined) ??
@@ -593,7 +603,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                       onSelect={(p) => setPickedPairKey(pairKey(p))}
                       disabled={loading}
                     />
-                    {headRepoId && (
+                    {headRepoId && nightAvailable && (
                       <div className="mt-1 sm:ml-[100px] flex items-center gap-2" data-testid="create-run-tonight-row">
                         <NightSwitch
                           checked={runTonight}

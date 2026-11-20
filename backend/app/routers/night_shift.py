@@ -50,9 +50,17 @@ MARKABLE_BLOCKS = frozenset({"engine_not_ready", "box_busy"})
 FINISHED = night.FINISHED_TASK_STATUSES
 
 
-def _enabled() -> None:
+def _heads_on() -> None:
     if not settings.heads_enabled:
         raise HTTPException(status_code=404, detail={"code": "heads_disabled"})
+
+
+def _enabled() -> None:
+    _heads_on()
+    # Etappe 2: the night shift is frozen unless NIGHT_SHIFT_RUNNER_ENABLED is
+    # on — marking a task that never starts would be a silent failure.
+    if not settings.night_shift_runner_enabled:
+        raise HTTPException(status_code=404, detail={"code": "night_shift_off"})
 
 
 def _err(status: int, code: str, **extra) -> HTTPException:
@@ -276,8 +284,10 @@ async def put_task_mark(
     session: AsyncSession = Depends(get_session),
     user=Depends(require_role(Role.OPERATOR)),
 ):
-    _enabled()
     try:
+        # Inside the try: "Queue for tonight" while the runner is off must
+        # still hold the card it created only for a night head.
+        _enabled()
         async with _locked(task_id):
             return await _mark(session, task_id, body, user)
     except HTTPException:
@@ -346,7 +356,9 @@ async def _mark(session: AsyncSession, task_id: uuid.UUID, body: MarkBody, user)
 
 @router.delete("/tasks/{task_id}", dependencies=[Depends(require_role(Role.OPERATOR))])
 async def delete_task_mark(task_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
-    _enabled()
+    # Only the heads switch: an existing mark can always be removed, also
+    # while the night shift is off (Etappe 2), so no card stays held by it.
+    _heads_on()
     async with _locked(task_id):
         mark = night_store.load_mark(str(task_id))
         if mark is None:

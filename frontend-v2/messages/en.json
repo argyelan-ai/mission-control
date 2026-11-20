@@ -5149,6 +5149,7 @@
     },
     "errors": {
       "heads_disabled": "Heads are switched off.",
+      "night_shift_off": "The night shift is switched off.",
       "task_not_found": "The task no longer exists.",
       "task_finished": "The task is already finished.",
       "repo_required": "A night run needs a repo on the task.",
