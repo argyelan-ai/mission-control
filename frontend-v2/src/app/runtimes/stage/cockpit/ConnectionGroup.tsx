@@ -48,6 +48,7 @@ export function ConnectionGroup({ runtimeSlug, endpoint }: { runtimeSlug: string
   });
   const busyIds = new Set((allAgents ?? []).filter((a) => a.current_task_id != null).map((a) => a.id));
   const chatIds = useChatAgentIds();
+  const agentCls = "inline-flex items-center gap-1.5";
 
   const onCopy = () => {
     navigator.clipboard?.writeText(endpoint).then(() => {
@@ -104,7 +105,7 @@ export function ConnectionGroup({ runtimeSlug, endpoint }: { runtimeSlug: string
             <Link
               key={a.id}
               href={chatEntryHref("agent", a.id)}
-              className="inline-flex items-center gap-1.5"
+              className={agentCls}
               style={{ color: C.textSecondary, borderBottom: `1px solid ${C.borderActive}` }}
               data-testid="connection-agent-link"
               data-busy={busy ? "true" : "false"}
@@ -115,7 +116,7 @@ export function ConnectionGroup({ runtimeSlug, endpoint }: { runtimeSlug: string
           ) : (
             <span
               key={a.id}
-              className="inline-flex items-center gap-1.5"
+              className={agentCls}
               style={{ color: C.textSecondary }}
               data-testid="connection-agent"
               data-busy={busy ? "true" : "false"}

@@ -255,6 +255,7 @@ export function BoundAgents({ runtime }: { runtime: Runtime }) {
   const anyPending = bound.some((a) => a.pending_runtime_sync);
   // Only an agent the chat list shows has a chat to open (archived → plain chip).
   const chatIds = useChatAgentIds();
+  const chipCls = "inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none min-h-11 sm:min-h-6";
 
   const syncNowMutation = useMutation({
     mutationFn: () => api.runtimes.db.syncAgents(slug),
@@ -281,7 +282,7 @@ export function BoundAgents({ runtime }: { runtime: Runtime }) {
             {chatIds?.has(a.id) ? (
               <Link
                 href={chatEntryHref("agent", a.id)}
-                className="inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none min-h-11 sm:min-h-6 hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
+                className={`${chipCls} hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer`}
                 style={{
                   backgroundColor: C.accentSubtle,
                   color: C.textSecondary,
@@ -293,7 +294,7 @@ export function BoundAgents({ runtime }: { runtime: Runtime }) {
               </Link>
             ) : (
               <span
-                className="inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none min-h-11 sm:min-h-6"
+                className={chipCls}
                 style={{
                   backgroundColor: C.accentSubtle,
                   color: C.textSecondary,
