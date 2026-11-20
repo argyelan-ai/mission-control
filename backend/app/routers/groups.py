@@ -27,6 +27,7 @@ from app.database import get_session, release_session
 from app.models.agent import Agent
 from app.models.group import AgentGroup, GroupMember
 from app.models.memory import BoardMemory
+from app.services.board_memory_gate import require_board_memory_writes
 from app.models.thread import Message
 from app.redis_client import RedisKeys
 from app.routers.agent_chat import _resolve_transcript_path
@@ -652,7 +653,11 @@ async def unarchive_group(
     return await _serialize_group(session, group)
 
 
-@router.post("/groups/{group_id}/memorize", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/groups/{group_id}/memorize",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_board_memory_writes)],
+)
 async def memorize_group_result(
     group_id: uuid.UUID,
     payload: MemorizeGroupPayload,

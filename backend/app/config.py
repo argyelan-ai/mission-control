@@ -462,6 +462,13 @@ class Settings(BaseSettings):
     # answers 404. Env KNOWLEDGE_ROOT_ENABLED. Way back: false + truncate
     # knowledge_entries (the files stay; delete ~/.mc/knowledge by hand).
     knowledge_root_enabled: bool = False
+
+    # Legacy board_memory table (clean-up stage 2, PR B). False = nothing new
+    # is written to board_memory and nothing in it is changed or deleted; the
+    # API answers 410 on writes, background writers skip. Reading stays, the
+    # rows stay. Env BOARD_MEMORY_WRITE_ENABLED. Way back: true + restart
+    # backend and worker (services/board_memory_gate.py).
+    board_memory_write_enabled: bool = False
     # How often the background services sweep the knowledge root, the vault
     # and the skills folder into the index (services/knowledge_import.py).
     # Unchanged files cost one stat each. Idles while the flag is off.

@@ -153,6 +153,9 @@ services:
       BUILD_MIN_FREE_GB: ${BUILD_MIN_FREE_GB:-15}
       BUILD_CACHE_KEEP_GB: ${BUILD_CACHE_KEEP_GB:-20}
       DISK_WATCHDOG_PERCENT: ${DISK_WATCHDOG_PERCENT:-95}
+      # Legacy board_memory write switch (backend/app/services/board_memory_gate.py).
+      # Off = read-only; true is the way back. API and worker both write.
+      BOARD_MEMORY_WRITE_ENABLED: ${BOARD_MEMORY_WRITE_ENABLED:-false}
       DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       AUTH_MODE: local
@@ -533,6 +536,9 @@ services:
       BUILD_MIN_FREE_GB: ${BUILD_MIN_FREE_GB:-15}
       BUILD_CACHE_KEEP_GB: ${BUILD_CACHE_KEEP_GB:-20}
       DISK_WATCHDOG_PERCENT: ${DISK_WATCHDOG_PERCENT:-95}
+      # Legacy board_memory write switch (backend/app/services/board_memory_gate.py).
+      # Off = read-only; true is the way back. API and worker both write.
+      BOARD_MEMORY_WRITE_ENABLED: ${BOARD_MEMORY_WRITE_ENABLED:-false}
       DISCORD_WEBHOOK_OPS: ${DISCORD_WEBHOOK_OPS:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}

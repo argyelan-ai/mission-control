@@ -85,6 +85,7 @@ from app.models.approval import Approval
 from app.models.board import Board, Project
 from app.models.chat import ChatMessage
 from app.models.memory import BoardMemory
+from app.services.board_memory_gate import board_memory_write_skipped, require_board_memory_writes
 from app.models.task import Task, TaskComment
 from app.services.harness_compat import is_voice_harness
 from app.services.activity import emit_event
@@ -2993,22 +2994,25 @@ async def agent_create_deliverable(
     memory_tags = list(payload.tags or [])
     memory_tags.extend([f"task:{task_id}", f"deliverable:{deliverable.id}"])
 
-    try:
-        memory_entry = BoardMemory(
-            board_id=task.board_id,
-            agent_id=agent.id,
-            memory_type=memory_type,
-            title=payload.title,
-            content=memory_body[:20000],
-            tags=memory_tags,
-            source=agent.name,
-            auto_generated=True,
-        )
-        session.add(memory_entry)
-        await session.commit()
-    except Exception as e:
-        # A memory-write failure must not block the deliverable flow — just log it.
-        logger.warning("Auto-memory-write fuer deliverable %s fehlgeschlagen: %s", deliverable.id, e)
+    # Legacy board_memory mirror of the deliverable — only with the write
+    # switch on (board_memory_gate); the vault copy below always happens.
+    if not board_memory_write_skipped("deliverable"):
+        try:
+            memory_entry = BoardMemory(
+                board_id=task.board_id,
+                agent_id=agent.id,
+                memory_type=memory_type,
+                title=payload.title,
+                content=memory_body[:20000],
+                tags=memory_tags,
+                source=agent.name,
+                auto_generated=True,
+            )
+            session.add(memory_entry)
+            await session.commit()
+        except Exception as e:
+            # A memory-write failure must not block the deliverable flow — just log it.
+            logger.warning("Auto-memory-write fuer deliverable %s fehlgeschlagen: %s", deliverable.id, e)
 
     logger.info(
         "Deliverable created: task=%s agent=%s type=%s title='%s' scope=%s pinned=%s memory_type=%s",
@@ -3646,7 +3650,11 @@ async def agent_memory_query(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/boards/{board_id}/memory", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/boards/{board_id}/memory",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_board_memory_writes)],
+)
 async def agent_create_memory(
     board_id: uuid.UUID,
     payload: MemoryCreate,
@@ -3784,7 +3792,7 @@ class KnowledgeCreate(BaseModel):
     scope: str = "agent"  # "agent" | "board" | "global"
 
 
-@router.post("/knowledge", status_code=status.HTTP_201_CREATED)
+@router.post("/knowledge", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_board_memory_writes)])
 async def agent_create_knowledge(
     payload: KnowledgeCreate,
     session: AsyncSession = Depends(get_session),
