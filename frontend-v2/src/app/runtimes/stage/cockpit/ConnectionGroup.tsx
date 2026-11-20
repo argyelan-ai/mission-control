@@ -17,6 +17,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { chatEntryHref } from "@/lib/chatHistory";
+import { useChatAgentIds } from "@/hooks/useChatAgentIds";
 import { Check, Copy } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
@@ -46,6 +47,7 @@ export function ConnectionGroup({ runtimeSlug, endpoint }: { runtimeSlug: string
     retry: false,
   });
   const busyIds = new Set((allAgents ?? []).filter((a) => a.current_task_id != null).map((a) => a.id));
+  const chatIds = useChatAgentIds();
 
   const onCopy = () => {
     navigator.clipboard?.writeText(endpoint).then(() => {
@@ -86,7 +88,19 @@ export function ConnectionGroup({ runtimeSlug, endpoint }: { runtimeSlug: string
         )}
         {bound.map((a) => {
           const busy = busyIds.has(a.id);
-          return (
+          const inner = (
+            <>
+              <span
+                aria-hidden
+                className="inline-block rounded-full"
+                style={{ width: 6, height: 6, background: busy ? STATUS.busy : STATUS.idle }}
+              />
+              {a.name}
+            </>
+          );
+          // Only an agent the chat list shows has a chat to open; an archived
+          // one is plain text (no underline), not a link to another chat.
+          return chatIds?.has(a.id) ? (
             <Link
               key={a.id}
               href={chatEntryHref("agent", a.id)}
@@ -96,13 +110,19 @@ export function ConnectionGroup({ runtimeSlug, endpoint }: { runtimeSlug: string
               data-busy={busy ? "true" : "false"}
               title={busy ? t("agentWorking") : t("agentIdle")}
             >
-              <span
-                aria-hidden
-                className="inline-block rounded-full"
-                style={{ width: 6, height: 6, background: busy ? STATUS.busy : STATUS.idle }}
-              />
-              {a.name}
+              {inner}
             </Link>
+          ) : (
+            <span
+              key={a.id}
+              className="inline-flex items-center gap-1.5"
+              style={{ color: C.textSecondary }}
+              data-testid="connection-agent"
+              data-busy={busy ? "true" : "false"}
+              title={busy ? t("agentWorking") : t("agentIdle")}
+            >
+              {inner}
+            </span>
           );
         })}
       </div>

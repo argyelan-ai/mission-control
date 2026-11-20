@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -61,7 +61,10 @@ const TASKS = [
   { id: "t2", title: "Digest nobody ran", status: "done", assigned_agent_id: null, completed_at: null, started_at: null },
 ];
 
-function setup(job: ScheduledJob) {
+function setup(job: ScheduledJob, chatAgents: string[] = ["a-task", "a-job"]) {
+  // The chat list: only these agents have a chat the link can open.
+  vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue(chatAgents.map((id) => ({ id })) as never);
+  vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([] as never);
   vi.spyOn(api.schedule, "listJobs").mockResolvedValue([job]);
   vi.spyOn(api.schedule, "getStats").mockResolvedValue({} as never);
   vi.spyOn(api.schedule, "getRuns").mockResolvedValue(RUNS as never);
@@ -80,7 +83,9 @@ describe("Job detail — links go to chats, never to /tasks/<id>", () => {
   it("a created task opens the chat of its agent; without an agent it is plain text", async () => {
     setup(JOB);
     renderPage();
-    const row = (await screen.findByText("Digest for Monday")).closest("a");
+    await screen.findByText("Digest for Monday");
+    await waitFor(() => expect(screen.getByText("Digest for Monday").closest("a")).not.toBeNull());
+    const row = screen.getByText("Digest for Monday").closest("a");
     expect(row).toHaveAttribute("href", "/sessions?agent=a-task&enter=1");
     expect(screen.getByText("Digest nobody ran").closest("a")).toBeNull();
     expect(allHrefs().filter((h) => h.startsWith("/tasks"))).toEqual([]);
@@ -90,6 +95,7 @@ describe("Job detail — links go to chats, never to /tasks/<id>", () => {
     setup({ ...JOB, agent_id: "a-job" } as ScheduledJob);
     renderPage();
     await screen.findByText("Digest for Monday");
+    await waitFor(() => expect(screen.getAllByRole("link", { name: "Open chat" })).toHaveLength(2));
     const runLinks = screen.getAllByRole("link", { name: "Open chat" }).map((l) => l.getAttribute("href"));
     expect(runLinks).toEqual(["/sessions?agent=a-task&enter=1", "/sessions?agent=a-job&enter=1"]);
     expect(allHrefs().filter((h) => h.startsWith("/tasks"))).toEqual([]);
@@ -100,6 +106,26 @@ describe("Job detail — links go to chats, never to /tasks/<id>", () => {
     renderPage();
     await screen.findByText("Digest for Monday");
     // r1 still reaches its task's agent; r2 (task not listed, job has no agent) has none.
-    expect(screen.getAllByRole("link", { name: "Open chat" })).toHaveLength(1);
+    await waitFor(() => expect(screen.getAllByRole("link", { name: "Open chat" })).toHaveLength(1));
+  });
+
+  it("an agent without a chat (archived) gets no link — the chat page would open another chat", async () => {
+    setup({ ...JOB, agent_id: "a-job" } as ScheduledJob, ["a-job"]);
+    renderPage();
+    await screen.findByText("Digest for Monday");
+    // a-task is archived: its task row is plain; the run falls back to the job's agent.
+    await waitFor(() => expect(screen.getAllByRole("link", { name: "Open chat" })).toHaveLength(2));
+    expect(screen.getByText("Digest for Monday").closest("a")).toBeNull();
+    const runLinks = screen.getAllByRole("link", { name: "Open chat" }).map((l) => l.getAttribute("href"));
+    expect(runLinks).toEqual(["/sessions?agent=a-job&enter=1", "/sessions?agent=a-job&enter=1"]);
+    expect(allHrefs().filter((h) => h.includes("a-task"))).toEqual([]);
+  });
+
+  it("nothing links while the chat list has not loaded or no agent has a chat", async () => {
+    setup({ ...JOB, agent_id: "a-job" } as ScheduledJob, []);
+    renderPage();
+    await screen.findByText("Digest for Monday");
+    await waitFor(() => expect(api.agents.listDockerSessions).toHaveBeenCalled());
+    expect(allHrefs().filter((h) => h.startsWith("/sessions"))).toEqual([]);
   });
 });

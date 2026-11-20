@@ -83,6 +83,8 @@ beforeEach(() => {
   });
   vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({ runtime_slug: "qwen38-flash-next", count: 0, agents: [] });
   vi.spyOn(api.localRegistry, "list").mockResolvedValue({ recipes: [], total: 0, sources: [] });
+  vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([{ id: "a1" }, { id: "a2" }, { id: "a3" }] as never);
+  vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([] as never);
 });
 
 describe("BoxCockpit", () => {
@@ -296,6 +298,27 @@ describe("BoxCockpit", () => {
     ]);
     expect(agentsSpy).toHaveBeenCalledWith("dgx-spark-slot");
     expect(agentsSpy).not.toHaveBeenCalledWith("qwen38-flash-next");
+  });
+
+  it("Connection group: an archived bound agent is plain text, not a link to some other chat (Etappe 2 A)", async () => {
+    const serving = makeRuntime({ slug: "qwen38-flash-next" });
+    const slot = makeRuntime({ id: "slot-1", slug: "dgx-spark-slot", is_slot: true, endpoint: "http://192.0.2.10:8000/v1" });
+    vi.spyOn(api.runtimes.db, "agents").mockImplementation((slug: string) =>
+      Promise.resolve(
+        slug === "dgx-spark-slot"
+          ? { runtime_slug: slug, count: 2, agents: [
+              { id: "a1", name: "Alpha", agent_runtime: "cli-bridge" },
+              { id: "gone", name: "Rex", agent_runtime: "cli-bridge" },
+            ] }
+          : { runtime_slug: slug, count: 0, agents: [] }
+      )
+    );
+    renderWithQuery(
+      <BoxCockpit open onClose={() => {}} members={[{ ...headMember, slot }]} activeHostId="spark" onSwitchActive={() => {}} runtime={serving} />
+    );
+    const links = await screen.findAllByTestId("connection-agent-link");
+    expect(links.map((l) => l.textContent)).toEqual(["Alpha"]);
+    expect(screen.getByText("Rex").closest("a")).toBeNull();
   });
 
   it("touch targets: close button and footer actions are >= 44px (Review #440 Fund 3)", async () => {

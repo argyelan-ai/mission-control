@@ -18,6 +18,7 @@ import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
 import Link from "next/link";
 import { chatEntryHref } from "@/lib/chatHistory";
+import { useChatAgentIds } from "@/hooks/useChatAgentIds";
 import { api } from "@/lib/api";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import type { Runtime, RuntimeAgentRef } from "@/lib/types";
@@ -46,6 +47,11 @@ function UsageRow({
   const shown = agents.slice(0, 3);
   const overflow = agents.length - shown.length;
   const anyPending = agents.some((a) => a.pending_runtime_sync);
+  // Only an agent the chat list shows has a chat to open; an archived one is
+  // a plain chip (the chat page would otherwise land on another chat).
+  const chatIds = useChatAgentIds();
+  const chipCls = "font-mono text-[11px] leading-none rounded-sm px-2 py-1";
+  const chipStyle = { background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.textSecondary };
 
   return (
     <div
@@ -65,17 +71,23 @@ function UsageRow({
       style={{ background: C.bgSurface, border: `1px solid ${C.borderSubtle}` }}
     >
       <span className="flex items-center gap-1.5 flex-wrap min-w-0">
-        {shown.map((a) => (
-          <Link
-            key={a.id}
-            href={chatEntryHref("agent", a.id)}
-            onClick={(e) => e.stopPropagation()}
-            className="font-mono text-[11px] leading-none rounded-sm px-2 py-1 hover:bg-[var(--color-bg-hover)] transition-colors"
-            style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.textSecondary }}
-          >
-            {a.name}
-          </Link>
-        ))}
+        {shown.map((a) =>
+          chatIds?.has(a.id) ? (
+            <Link
+              key={a.id}
+              href={chatEntryHref("agent", a.id)}
+              onClick={(e) => e.stopPropagation()}
+              className={`${chipCls} hover:bg-[var(--color-bg-hover)] transition-colors`}
+              style={chipStyle}
+            >
+              {a.name}
+            </Link>
+          ) : (
+            <span key={a.id} className={chipCls} style={chipStyle}>
+              {a.name}
+            </span>
+          ),
+        )}
         {overflow > 0 && (
           <span
             className="font-mono text-[11px] leading-none rounded-sm px-2 py-1"

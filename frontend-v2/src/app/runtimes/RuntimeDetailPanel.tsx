@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { chatEntryHref } from "@/lib/chatHistory";
+import { useChatAgentIds } from "@/hooks/useChatAgentIds";
 import { api } from "@/lib/api";
 import { isRuntimeUnprobed } from "@/lib/runtimeRows";
 import { C, STATUS, STATUS_TEXT, alpha } from "@/lib/colors";
@@ -252,6 +253,8 @@ export function BoundAgents({ runtime }: { runtime: Runtime }) {
 
   const bound = data?.agents ?? [];
   const anyPending = bound.some((a) => a.pending_runtime_sync);
+  // Only an agent the chat list shows has a chat to open (archived → plain chip).
+  const chatIds = useChatAgentIds();
 
   const syncNowMutation = useMutation({
     mutationFn: () => api.runtimes.db.syncAgents(slug),
@@ -275,18 +278,32 @@ export function BoundAgents({ runtime }: { runtime: Runtime }) {
         )}
         {bound.map((a) => (
           <span key={a.id} className="inline-flex items-center gap-1">
-            <Link
-              href={chatEntryHref("agent", a.id)}
-              className="inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none min-h-11 sm:min-h-6 hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
-              style={{
-                backgroundColor: C.accentSubtle,
-                color: C.textSecondary,
-                border: `1px solid ${C.borderAccent}`,
-              }}
-              title={`${a.name} · ${a.agent_runtime}`}
-            >
-              <EntityIcon value="🤖" size={13} className="inline-block align-[-2px] mr-1" />{a.name}
-            </Link>
+            {chatIds?.has(a.id) ? (
+              <Link
+                href={chatEntryHref("agent", a.id)}
+                className="inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none min-h-11 sm:min-h-6 hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
+                style={{
+                  backgroundColor: C.accentSubtle,
+                  color: C.textSecondary,
+                  border: `1px solid ${C.borderAccent}`,
+                }}
+                title={`${a.name} · ${a.agent_runtime}`}
+              >
+                <EntityIcon value="🤖" size={13} className="inline-block align-[-2px] mr-1" />{a.name}
+              </Link>
+            ) : (
+              <span
+                className="inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none min-h-11 sm:min-h-6"
+                style={{
+                  backgroundColor: C.accentSubtle,
+                  color: C.textSecondary,
+                  border: `1px solid ${C.borderAccent}`,
+                }}
+                title={`${a.name} · ${a.agent_runtime}`}
+              >
+                <EntityIcon value="🤖" size={13} className="inline-block align-[-2px] mr-1" />{a.name}
+              </span>
+            )}
             {a.pending_runtime_sync && (
               <MetaChip tone="warn" title={t("pendingSyncTitle")}>
                 {t("pendingSync")}

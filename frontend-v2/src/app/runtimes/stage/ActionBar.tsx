@@ -90,7 +90,7 @@ export function ActionBar({
 }) {
   const t = useTranslations("runtimes.stage");
   const tHeads = useTranslations("heads.runtimes");
-  const tVoice = useTranslations("voiceLive");
+  const tCommon = useTranslations("common");
   const headConflictText = useHeadConflictText();
   const [refusedBy, setRefusedBy] = useState<{ task_id: string | null; title: string | null } | null>(null);
   const locked = !!headOnBox && variant === "normal";
@@ -197,7 +197,7 @@ export function ActionBar({
               className="inline-flex items-center px-3 min-h-[44px] rounded-md hover:bg-[var(--color-bg-hover)]"
               style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
             >
-              {tVoice("openChat")}
+              {tCommon("openChat")}
             </Link>
           )}
           <button

@@ -29,6 +29,12 @@ function makeRuntime(over: Partial<Runtime>): Runtime {
 describe("RuntimeDetailPanel", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    // The chat list (docker + host sessions): an agent outside it — archived,
+    // or on no session runtime — has no chat to open, so no link (Etappe 2 A).
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue(
+      ["a1", "a2", "a3", "a4", "a5", "a6"].map((id) => ({ id })) as never,
+    );
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([] as never);
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
       runtime_slug: "rt", count: 0, agents: [],
     });
@@ -215,7 +221,22 @@ describe("RuntimeDetailPanel", () => {
       renderWithQuery(<RuntimeDetailPanel open runtime={slot} onClose={() => {}} />);
       expect(await screen.findByText("agent-one")).toBeInTheDocument();
       // Etappe 2: /agents/<id> goes; the chip opens the agent's chat.
-      expect(screen.getByRole("link", { name: /agent-one/ })).toHaveAttribute("href", "/sessions?agent=a1&enter=1");
+      expect(await screen.findByRole("link", { name: /agent-one/ })).toHaveAttribute("href", "/sessions?agent=a1&enter=1");
+    });
+
+    it("an archived bound agent is a plain chip — its chat does not exist (Etappe 2 A)", async () => {
+      vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
+      vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
+        runtime_slug: "box-a-slot",
+        count: 2,
+        agents: [
+          { id: "a1", name: "agent-one", agent_runtime: "cli-bridge" },
+          { id: "gone", name: "agent-archived", agent_runtime: "cli-bridge" },
+        ],
+      });
+      renderWithQuery(<RuntimeDetailPanel open runtime={slot} onClose={() => {}} />);
+      expect(await screen.findByRole("link", { name: /agent-one/ })).toBeInTheDocument();
+      expect(screen.getByText("agent-archived").closest("a")).toBeNull();
     });
   });
 });

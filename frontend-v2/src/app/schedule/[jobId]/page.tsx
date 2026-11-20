@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { chatEntryHref } from "@/lib/chatHistory";
+import { useChatAgentIds } from "@/hooks/useChatAgentIds";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AreaChart,
@@ -185,7 +186,11 @@ export default function ScheduleJobDetailPage() {
     return m;
   }, [agents]);
   // Etappe 2: a run's link opens the chat of the agent that did the work —
-  // its task's agent, else the job's agent (the task page goes).
+  // its task's agent, else the job's agent (the task page goes). Only an
+  // agent the chat list shows has a chat; an archived one gets no link, or
+  // the chat page would land on another chat.
+  const chatIds = useChatAgentIds();
+  const chatAgent = (id: string | null | undefined): string | null => (id && chatIds?.has(id) ? id : null);
   const taskAgent = useMemo(() => {
     const m = new Map<string, string>();
     for (const t of createdTasks as Task[]) if (t.assigned_agent_id) m.set(t.id, t.assigned_agent_id);
@@ -477,7 +482,7 @@ export default function ScheduleJobDetailPage() {
                     <RunRow
                       key={run.id}
                       run={run}
-                      agentId={run.task_id ? taskAgent.get(run.task_id) ?? job?.agent_id ?? null : null}
+                      agentId={run.task_id ? chatAgent(taskAgent.get(run.task_id)) ?? chatAgent(job?.agent_id) : null}
                     />
                   ))}
                 </div>
@@ -504,6 +509,7 @@ export default function ScheduleJobDetailPage() {
                     <TaskRow
                       key={t.id}
                       task={t}
+                      chatAgentId={chatAgent(t.assigned_agent_id)}
                       agentName={
                         t.assigned_agent_id
                           ? agentLookup.get(t.assigned_agent_id)?.name ?? null
@@ -599,7 +605,7 @@ function ConfigRow({
 function RunRow({ run, agentId }: { run: ScheduledJobRun; agentId: string | null }) {
   const locale = useLocale();
   const t = useTranslations("schedule");
-  const tVoice = useTranslations("voiceLive");
+  const tCommon = useTranslations("common");
   const duration =
     run.finished_at != null
       ? new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()
@@ -643,8 +649,8 @@ function RunRow({ run, agentId }: { run: ScheduledJobRun; agentId: string | null
       {agentId && (
         <Link
           href={chatEntryHref("agent", agentId)}
-          title={tVoice("openChat")}
-          aria-label={tVoice("openChat")}
+          title={tCommon("openChat")}
+          aria-label={tCommon("openChat")}
           className="flex-shrink-0 p-1 rounded-sm transition-colors"
           style={{ color: C.textMuted }}
         >
@@ -655,7 +661,7 @@ function RunRow({ run, agentId }: { run: ScheduledJobRun; agentId: string | null
   );
 }
 
-function TaskRow({ task, agentName }: { task: Task; agentName: string | null }) {
+function TaskRow({ task, agentName, chatAgentId }: { task: Task; agentName: string | null; chatAgentId: string | null }) {
   const locale = useLocale();
   const status = task.status as TaskStatus;
   const ts = task.completed_at ?? task.started_at ?? null;
@@ -696,9 +702,9 @@ function TaskRow({ task, agentName }: { task: Task; agentName: string | null }) 
     </>
   );
   // Etappe 2: the task page goes — the row opens the chat of the agent that
-  // ran the task; without an agent there is nothing to open.
-  return task.assigned_agent_id ? (
-    <Link href={chatEntryHref("agent", task.assigned_agent_id)} className={rowCls} style={{ borderColor: C.border }}>
+  // ran the task; without an agent that has a chat there is nothing to open.
+  return chatAgentId ? (
+    <Link href={chatEntryHref("agent", chatAgentId)} className={rowCls} style={{ borderColor: C.border }}>
       {body}
     </Link>
   ) : (
