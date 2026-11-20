@@ -211,6 +211,8 @@ describe("LoopsPage", () => {
 
     expect(await screen.findByText("Old grind")).toBeInTheDocument();
     expect(screen.getByTestId("loops-frozen")).toHaveTextContent("Loops are frozen");
+    // Start is refused while frozen, so Pause cannot be undone — the notice says so.
+    expect(screen.getByTestId("loops-frozen")).toHaveTextContent(/paused loop cannot be started again/i);
     expect(screen.queryByRole("button", { name: "New loop" })).toBeNull();
   });
 

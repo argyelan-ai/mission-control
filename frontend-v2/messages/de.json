@@ -3085,7 +3085,7 @@
     "emptyTitle": "Noch keine Loops",
     "emptyHint": "Erstelle einen Loop — ein Runner arbeitet den Backlog ab, bis er fertig ist oder dich braucht.",
     "frozenTitle": "Loops sind eingefroren",
-    "frozenBody": "Loops werden nicht mehr genutzt, darum ist diese Seite nur noch zum Lesen da. Bestehende Loops bleiben sichtbar; anlegen, starten oder löschen geht nicht mehr.",
+    "frozenBody": "Loops werden nicht mehr genutzt, darum ist diese Seite nur noch zum Lesen da. Bestehende Loops bleiben sichtbar; anlegen, starten oder löschen geht nicht mehr. Ein laufender Loop lässt sich noch pausieren oder stoppen, aber ein pausierter Loop kann nicht wieder gestartet werden.",
     "deleteTitle": "Loop löschen",
     "deleteBody": "\"{name}\" löschen? Das kann nicht rückgängig gemacht werden.",
     "delete": "Löschen",

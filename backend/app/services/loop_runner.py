@@ -80,6 +80,30 @@ async def supersede_pending_gates(session: AsyncSession, loop_id) -> None:
             session.add(a)
 
 
+# Etappe 2 "clean up" (ADR-102 §3): loops are frozen — page counter
+# 28.09.–19.11.: 4 views, 0 in the last 14 days; last loop round 07.07.
+# The switch lives HERE, in the shared service, so every caller obeys it:
+# the HTTP router (create/start/edit/delete → 410), the scheduler's
+# `start_loop` job (→ job error) and a loop_gate approval (→ loop stays
+# paused). Existing loops stay readable; a running one keeps running until
+# it is paused or stopped. While frozen, pause is final (start is refused).
+# Way back: set this to False (and take /loops out of FROZEN_ITEMS in
+# frontend-v2/src/lib/nav.ts).
+FROZEN = True
+FROZEN_DETAIL = {
+    "code": "frozen",
+    "message": "Loops are frozen: existing loops stay readable, "
+    "but loops can no longer be created, started, edited or deleted.",
+}
+
+
+class LoopsFrozenError(ValueError):
+    """A loop start was refused because loops are frozen (see FROZEN)."""
+
+    def __init__(self) -> None:
+        super().__init__(FROZEN_DETAIL["message"])
+
+
 async def start_loop(session: AsyncSession, loop: Loop) -> Loop:
     """Startet einen Loop (draft/paused/waiting_gate → running).
 
@@ -90,6 +114,8 @@ async def start_loop(session: AsyncSession, loop: Loop) -> Loop:
     Board-Konflikt — der Aufrufer übersetzt das in HTTPException bzw.
     einen Job-Fehler.
     """
+    if FROZEN:
+        raise LoopsFrozenError()
     if loop.status not in ("draft", "paused", "waiting_gate"):
         raise ValueError(f"Loop kann aus Status '{loop.status}' nicht gestartet werden")
 
@@ -677,10 +703,12 @@ async def apply_loop_gate_decision(
     if loop is None or loop.status not in ("paused", "waiting_gate"):
         return  # Loop weg oder inzwischen anders weitergeschaltet — no-op.
 
-    if decision == "approved":
+    resumed = decision == "approved" and not FROZEN
+    if resumed:
         loop.status = "running"
         loop.consecutive_failed_rounds = 0
     else:
+        # rejected, or approved while loops are frozen: the loop stays paused.
         loop.status = "paused"
     loop.updated_at = utcnow()
     session.add(loop)
@@ -688,7 +716,10 @@ async def apply_loop_gate_decision(
     await emit_event(
         session, "loop.gate_resolved",
         f"Loop '{loop.name}': Gate {decision} — "
-        + ("läuft weiter" if decision == "approved" else "bleibt pausiert"),
+        + ("läuft weiter" if resumed else (
+            "bleibt pausiert (Loops eingefroren)" if decision == "approved"
+            else "bleibt pausiert"
+        )),
         board_id=loop.board_id,
         detail={"loop_id": str(loop.id), "decision": decision},
     )

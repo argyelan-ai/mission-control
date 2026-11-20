@@ -15,6 +15,7 @@ from app.auth import require_user
 from app.database import get_session
 from app.models.board import Board
 from app.models.loop import ACTIVE_LOOP_STATUSES, BACKLOG_SOURCES, Loop, LoopRound, TERMINAL_LOOP_STATUSES
+from app.services import loop_runner as _loop_runner
 from app.services.activity import emit_event
 from app.services.loop_runner import (
     LoopAlreadyActiveError,
@@ -28,24 +29,15 @@ router = APIRouter(prefix="/api/v1", tags=["loops"])
 
 ACTIVE_STATUSES = ACTIVE_LOOP_STATUSES
 
-# Etappe 2 "clean up" (ADR-102 §3): loops are frozen — page counter
-# 28.09.–19.11.: 4 views, 0 in the last 14 days; last loop round 07.07.
-# Existing loops stay readable, and a running one can still be paused or
-# stopped (the safe way out). Create, start, edit and delete are refused with
-# 410 "frozen" — nothing is written, nothing is deleted.
-# Way back: set this to False (and take /loops out of FROZEN_ITEMS in
-# frontend-v2/src/lib/nav.ts).
-FROZEN = True
-FROZEN_DETAIL = {
-    "code": "frozen",
-    "message": "Loops are frozen: existing loops stay readable, "
-    "but loops can no longer be created, started, edited or deleted.",
-}
+# Etappe 2 "clean up" (ADR-102 §3): loops are frozen. The switch is
+# `FROZEN` in app/services/loop_runner.py (one switch for router, scheduler
+# and loop_gate approvals). Here, create/start/edit/delete answer 410
+# "frozen"; list, detail, pause and stop keep working.
 
 
 def _refuse_if_frozen() -> None:
-    if FROZEN:
-        raise HTTPException(status_code=status.HTTP_410_GONE, detail=FROZEN_DETAIL)
+    if _loop_runner.FROZEN:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=_loop_runner.FROZEN_DETAIL)
 
 
 class LoopCreate(BaseModel):

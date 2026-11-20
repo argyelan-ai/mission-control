@@ -21,6 +21,17 @@ from app.services.sse import make_sse_response
 router = APIRouter(prefix="/api/v1/schedule", tags=["schedule"])
 
 
+def _refuse_start_loop_if_frozen(action_type: str | None) -> None:
+    """Etappe 2: loops are frozen — no new `start_loop` jobs (410 "frozen").
+
+    Existing start_loop jobs are refused when they run (loop_runner.start_loop).
+    """
+    from app.services import loop_runner
+
+    if action_type == "start_loop" and loop_runner.FROZEN:
+        raise HTTPException(status_code=410, detail=loop_runner.FROZEN_DETAIL)
+
+
 # ── Pydantic Schemas ──────────────────────────────────────────────────────────
 
 class JobCreate(BaseModel):
@@ -198,6 +209,7 @@ async def create_job(
     payload: JobCreate,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
+    _refuse_start_loop_if_frozen(payload.action_type)
     job = ScheduledJob(**payload.model_dump())
     session.add(job)
     await session.commit()
@@ -413,6 +425,7 @@ async def update_job(
     job = await session.get(ScheduledJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    _refuse_start_loop_if_frozen(payload.action_type)
 
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(job, key, value)

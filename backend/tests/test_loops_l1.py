@@ -284,7 +284,10 @@ async def test_deleted_task_direct_db_still_counts_as_failed(fake_redis):
 # ── loop_gate-Resolve ─────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_gate_approve_resumes_loop(auth_client: AsyncClient, fake_redis):
+async def test_gate_approve_resumes_loop(auth_client: AsyncClient, fake_redis, monkeypatch):
+    # Loops are frozen (Etappe 2); the behaviour stays for the way back.
+    from app.services import loop_runner as _loop_runner_mod
+    monkeypatch.setattr(_loop_runner_mod, "FROZEN", False)
     board = await _mk_board()
     loop = await _mk_loop(board, status="paused", consecutive_failed_rounds=2)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -326,9 +329,12 @@ async def test_gate_reject_keeps_paused(auth_client: AsyncClient, fake_redis):
 
 
 @pytest.mark.asyncio
-async def test_gate_approve_via_telegram_quick_resolve(auth_client: AsyncClient, fake_redis):
+async def test_gate_approve_via_telegram_quick_resolve(auth_client: AsyncClient, fake_redis, monkeypatch):
     """Telegram-Quick-Resolve hat einen EIGENEN Resolve-Pfad — der muss den
     Loop genauso weiterschalten wie resolve_approval (Review-Fund)."""
+    # Loops are frozen (Etappe 2); the behaviour stays for the way back.
+    from app.services import loop_runner as _loop_runner_mod
+    monkeypatch.setattr(_loop_runner_mod, "FROZEN", False)
     board = await _mk_board()
     loop = await _mk_loop(board, status="paused", consecutive_failed_rounds=2)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -362,8 +368,8 @@ async def test_gate_approve_via_telegram_quick_resolve(auth_client: AsyncClient,
 @pytest.mark.asyncio
 async def test_create_requires_backlog_for_markdown(auth_client: AsyncClient, monkeypatch):
     # Loops are frozen (Etappe 2); the validation stays for the way back.
-    from app.routers import loops as _loops_router
-    monkeypatch.setattr(_loops_router, "FROZEN", False)
+    from app.services import loop_runner as _loop_runner_mod
+    monkeypatch.setattr(_loop_runner_mod, "FROZEN", False)
     board = await _mk_board()
     r = await auth_client.post("/api/v1/loops", json={
         "board_id": str(board.id), "name": "x", "goal": "g",
@@ -375,8 +381,8 @@ async def test_create_requires_backlog_for_markdown(auth_client: AsyncClient, mo
 @pytest.mark.asyncio
 async def test_one_active_loop_per_board(auth_client: AsyncClient, monkeypatch):
     # Loops are frozen (Etappe 2); the behaviour stays for the way back.
-    from app.routers import loops as _loops_router
-    monkeypatch.setattr(_loops_router, "FROZEN", False)
+    from app.services import loop_runner as _loop_runner_mod
+    monkeypatch.setattr(_loop_runner_mod, "FROZEN", False)
     board = await _mk_board()
     active = await _mk_loop(board, status="running")
     other = await _mk_loop(board, status="draft", name="Second loop")
@@ -396,8 +402,8 @@ async def test_one_active_loop_per_board(auth_client: AsyncClient, monkeypatch):
 @pytest.mark.asyncio
 async def test_start_supersedes_pending_gate(auth_client: AsyncClient, monkeypatch):
     # Loops are frozen (Etappe 2); the behaviour stays for the way back.
-    from app.routers import loops as _loops_router
-    monkeypatch.setattr(_loops_router, "FROZEN", False)
+    from app.services import loop_runner as _loop_runner_mod
+    monkeypatch.setattr(_loop_runner_mod, "FROZEN", False)
     board = await _mk_board()
     loop = await _mk_loop(board, status="paused")
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -415,8 +421,8 @@ async def test_start_supersedes_pending_gate(auth_client: AsyncClient, monkeypat
 @pytest.mark.asyncio
 async def test_stop_and_delete_flow(auth_client: AsyncClient, monkeypatch):
     # Loops are frozen (Etappe 2); the behaviour stays for the way back.
-    from app.routers import loops as _loops_router
-    monkeypatch.setattr(_loops_router, "FROZEN", False)
+    from app.services import loop_runner as _loop_runner_mod
+    monkeypatch.setattr(_loop_runner_mod, "FROZEN", False)
     board = await _mk_board()
     loop = await _mk_loop(board, status="running", rounds_completed=3)
 
