@@ -10,6 +10,7 @@ import { ChatAttachmentTile } from "./ChatAttachmentTile";
 import { ClampedContent, USER_CLAMP_MAX_PX } from "./ClampedContent";
 import { ChatErrorCard } from "./ChatErrorCard";
 import { ChatNoticeCard } from "./ChatNoticeCard";
+import { SwitchCard } from "./SwitchCard";
 import { EventCard } from "./EventCard";
 import { QuoteReplyButton } from "./QuoteReplyButton";
 import type { MessageEvent } from "@/lib/chatTypes";
@@ -112,6 +113,11 @@ export function ChatMessage({
   // einem Runtime-Wechsel) — sichtbar, aber kein Fehler.
   if (ev.role === "teammate" && ev.source?.kind === "notice") {
     return <ChatNoticeCard ev={ev} />;
+  }
+  // Ein Wechsel des Chats auf ein anderes Paar (ADR-105) — aus MCs
+  // Aufzeichnung, nicht aus dem Transkript.
+  if (ev.role === "teammate" && ev.source?.kind === "switch" && ev.switchInfo) {
+    return <SwitchCard info={ev.switchInfo} />;
   }
   if (ev.role === "teammate" && ev.source) {
     return <EventCard ev={ev} source={ev.source} live={live} />;

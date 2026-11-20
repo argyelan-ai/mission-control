@@ -1,9 +1,14 @@
 "use client";
 
-import { useContext } from "react";
+import { useContext, useState } from "react";
 import { QueryClientContext, useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
-import { api } from "@/lib/api";
+import { ChevronsUpDown } from "lucide-react";
+import { api, type RecordChat } from "@/lib/api";
+import { canPickPair, useChatSwitch } from "@/hooks/useChatSwitch";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
+import { TaskStepsAgentContext } from "@/hooks/useTaskStepDetail";
+import { PairPicker } from "./PairPicker";
 import { C } from "@/lib/colors";
 import { useRuntimeRows } from "@/lib/runtimeRows";
 import type { HostPulse, Runtime } from "@/lib/types";
@@ -17,6 +22,8 @@ export type SpeedLineFacts = {
   /** true = measured right now while this chat streams; false = the last
    *  value the box measured (the operator wants a number at rest too). */
   live?: boolean;
+  /** Set = the line is the door to the pair picker (chat record on). */
+  onPick?: () => void;
 };
 
 /** The box part of the line: the runtime's head box plus its duo members. */
@@ -53,17 +60,13 @@ export function lastTps(pulse: HostPulse | undefined): number | null {
 }
 
 /** Pure render — tested without queries. Nothing known → nothing shown (K3). */
-export function SpeedLineView({ box, model, tps, live = false }: SpeedLineFacts) {
+export function SpeedLineView({ box, model, tps, live = false, onPick }: SpeedLineFacts) {
   const t = useTranslations("cockpit.speed");
+  const ts = useTranslations("cockpit.switch");
   if (!box && !model) return null;
   const parts = [box, model].filter(Boolean).join(" · ");
-  return (
-    <div
-      data-testid="speed-line"
-      aria-label={t("label")}
-      className="flex items-center gap-2 px-4 pb-2 md:pb-3 text-xs min-w-0"
-      style={{ color: C.textMuted }}
-    >
+  const body = (
+    <>
       <span
         aria-hidden
         className="w-1.5 h-1.5 rounded-full shrink-0"
@@ -84,8 +87,44 @@ export function SpeedLineView({ box, model, tps, live = false }: SpeedLineFacts)
           {tps != null ? t("tps", { tps }) : t("tpsNone")}
         </span>
       )}
+      {onPick && <ChevronsUpDown size={12} aria-hidden="true" className="shrink-0" style={{ color: C.textMuted }} />}
+    </>
+  );
+  const className = "flex items-center gap-2 px-4 pb-2 md:pb-3 text-xs min-w-0";
+  if (onPick) {
+    // The same line, tappable: the hit area grows to 44 px above and below
+    // (before:) without moving the composer (K11).
+    return (
+      <button
+        type="button"
+        data-testid="speed-line"
+        aria-label={ts("open")}
+        aria-haspopup="dialog"
+        onClick={onPick}
+        className={`${className} relative w-full text-left cursor-pointer before:absolute before:inset-x-0 before:-inset-y-2 before:content-['']`}
+        style={{ color: C.textMuted }}
+      >
+        {body}
+      </button>
+    );
+  }
+  return (
+    <div data-testid="speed-line" aria-label={t("label")} className={className} style={{ color: C.textMuted }}>
+      {body}
     </div>
   );
+}
+
+/** The pair the line names. The record chat row is the truth (chat_out
+ *  carries its runtimeId/model; the picker refreshes it after a switch),
+ *  never the switch rows: an agent runtime switch writes no switch row.
+ *  The main chat follows the agent, so it names the agent binding. */
+export function pairForLine(
+  chat: Pick<RecordChat, "agentDefault" | "runtimeId" | "model"> | null,
+  fallback: { runtimeId: string | null; model: string | null },
+): { runtimeId: string | null; model: string | null } {
+  if (!chat || chat.agentDefault) return fallback;
+  return { runtimeId: chat.runtimeId ?? null, model: chat.model ?? null };
 }
 
 /**
@@ -103,7 +142,15 @@ export function SpeedLine(props: SpeedLineProps) {
   return <SpeedLineLoaded {...props} />;
 }
 
-function SpeedLineLoaded({ runtimeId, model, streaming }: SpeedLineProps) {
+function SpeedLineLoaded({ runtimeId: boundRuntime, model: liveModel, streaming }: SpeedLineProps) {
+  // The chat switch (ADR-105) — only while the chat record is on; off, the
+  // line is exactly the one before.
+  const agentId = useContext(TaskStepsAgentContext);
+  const sw = useChatSwitch(agentId);
+  const isAdmin = useIsAdmin();
+  const [picking, setPicking] = useState(false);
+  const door = canPickPair(sw.chat, isAdmin);
+  const { runtimeId, model } = pairForLine(sw.chat, { runtimeId: boundRuntime, model: liveModel });
   const { data: rows } = useRuntimeRows(!!runtimeId);
   const runtime = runtimeId ? rows?.runtimes.find((r) => r.id === runtimeId) ?? null : null;
   const hostId = runtime?.host?.id ?? null;
@@ -116,11 +163,23 @@ function SpeedLineLoaded({ runtimeId, model, streaming }: SpeedLineProps) {
   });
   const live = liveTps(pulse, streaming);
   return (
-    <SpeedLineView
-      box={boxLabel(runtime)}
-      model={model ?? runtime?.model_identifier ?? null}
-      tps={live ?? lastTps(pulse)}
-      live={live != null}
-    />
+    <>
+      <SpeedLineView
+        box={boxLabel(runtime)}
+        model={model ?? runtime?.model_identifier ?? null}
+        tps={live ?? lastTps(pulse)}
+        live={live != null}
+        onPick={door ? () => setPicking(true) : undefined}
+      />
+      {door && sw.chat && (
+        <PairPicker
+          open={picking}
+          onClose={() => setPicking(false)}
+          chat={sw.chat}
+          chats={sw.allChats}
+          agentId={agentId}
+        />
+      )}
+    </>
   );
 }

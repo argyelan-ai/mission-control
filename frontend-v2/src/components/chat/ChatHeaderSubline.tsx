@@ -1,6 +1,10 @@
 "use client";
 
+import { useContext } from "react";
+import { QueryClientContext } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
+import { isSwitching, useChatSwitch } from "@/hooks/useChatSwitch";
+import { TaskStepsAgentContext } from "@/hooks/useTaskStepDetail";
 import { C } from "@/lib/colors";
 import { useNow } from "@/hooks/useNow";
 import { formatSpan } from "@/lib/taskDetail/stateLine";
@@ -46,21 +50,48 @@ export function isTurnRunning(state: StateEvent | null, sending = false): boolea
  * message in the transcript — the start of the running turn — and only
  * shows from one minute on (K17). Nothing known → no line (K3).
  */
-export function ChatHeaderSubline({
-  state,
-  aliveness,
-  turnStartedAt,
-  sending = false,
-}: {
+type SublineProps = {
   state: StateEvent | null;
   aliveness: ChatAliveness;
   turnStartedAt: string | null;
   sending?: boolean;
-}) {
+  /** A restart or switch back (ADR-105) is open: the line says so instead
+   *  of the state word — the card in the timeline names the pair (K3). A
+   *  model-only switch does not: the session keeps answering meanwhile. */
+  switching?: boolean;
+};
+
+export function ChatHeaderSubline(props: SublineProps) {
+  // Outside a query client (a header rendered on its own) there is no
+  // record to ask; inside, an open switch is read from it.
+  if (!useContext(QueryClientContext)) return <SublineView {...props} />;
+  return <SublineWithSwitch {...props} />;
+}
+
+function SublineWithSwitch(props: SublineProps) {
+  const sw = useChatSwitch(useContext(TaskStepsAgentContext));
+  return <SublineView {...props} switching={sw.enabled && isSwitching(sw.switches)} />;
+}
+
+export function SublineView({
+  state,
+  aliveness,
+  turnStartedAt,
+  sending = false,
+  switching = false,
+}: SublineProps) {
   const t = useTranslations("cockpit.header");
+  const ts = useTranslations("cockpit.switch");
   const locale = useLocale();
   const now = useNow(30_000);
   const kind = sublineKind(state, aliveness, sending);
+  if (switching && aliveness !== "ended") {
+    return (
+      <span data-testid="chat-header-subline" data-kind="switching" className="text-xs leading-tight truncate" style={{ color: C.textMuted }}>
+        {ts("switching")}
+      </span>
+    );
+  }
   if (!kind) return null;
 
   let text: string | null;

@@ -36,8 +36,9 @@ export function motifForSource(kind: MessageSourceKind): MotifKind {
     // Eine Fehlerzeile traegt ihre eigene Karte (ChatErrorCard) und kommt hier
     // nie an; der Zweig haelt den Schalter nur vollstaendig.
     case "error":
-    // Ebenso der Hinweis (ChatNoticeCard).
+    // Ebenso der Hinweis (ChatNoticeCard) und der Wechsel (SwitchCard).
     case "notice":
+    case "switch":
       return "kern";
   }
 }
