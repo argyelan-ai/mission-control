@@ -65,26 +65,95 @@ def test_switch_defaults_to_off():
     assert app.config.Settings.model_fields["board_memory_write_enabled"].default is False
 
 
+# The one write site that is allowed to stay open with the switch off, and why:
+# the operator's own "keep the result" in the group chat Finish dialog. It is
+# an explicit operator action (not a background second truth), the dialog
+# treats any refusal as a failure, and with "delete everything" a skipped
+# write would lose the result. The group tab goes in clean-up PR H; that PR
+# removes this exemption.
+EXEMPT_FUNCTIONS = {("app/routers/groups.py", "memorize_group_result")}
+
+#: Calls that write rows without constructing ``BoardMemory(...)`` directly.
+_SQL_WRITERS = {"insert", "update", "delete"}
+
+
+def _mentions_boardmemory(node: ast.AST, aliases: set[str]) -> bool:
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Name) and sub.id in aliases:
+            return True
+        if isinstance(sub, ast.Attribute) and sub.attr in aliases:
+            return True
+    return False
+
+
+def _write_sites(source: str):
+    """Yield (line, enclosing function node) for every place in ``source``
+    that creates or bulk-changes ``board_memory`` rows:
+
+    - ``BoardMemory(...)``, also under an import alias or as ``models.BoardMemory(...)``
+    - ``BoardMemory.model_validate(...)`` / ``.model_construct(...)``
+    - ``insert(...)`` / ``update(...)`` / ``delete(...)`` whose argument names BoardMemory
+    """
+    tree = ast.parse(source)
+    aliases = {"BoardMemory"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for a in node.names:
+                if a.name == "BoardMemory" and a.asname:
+                    aliases.add(a.asname)
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        hit = False
+        if isinstance(f, ast.Name) and f.id in aliases:
+            hit = True
+        elif isinstance(f, ast.Attribute) and f.attr in aliases:
+            hit = True
+        elif (
+            isinstance(f, ast.Attribute)
+            and f.attr in {"model_validate", "model_construct"}
+            and _mentions_boardmemory(f.value, aliases)
+        ):
+            hit = True
+        elif (
+            isinstance(f, (ast.Name, ast.Attribute))
+            and (f.id if isinstance(f, ast.Name) else f.attr) in _SQL_WRITERS
+            and any(_mentions_boardmemory(a, aliases) for a in node.args)
+        ):
+            hit = True
+        if not hit:
+            continue
+        fn = node
+        while fn is not None and not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            fn = parents.get(fn)
+        yield node.lineno, fn
+
+
+def _gate_line(fn: ast.AST | None) -> int | None:
+    """First line in ``fn`` that asks the gate: a call to one of the gate
+    helpers, or the gate dependency in the route decorator."""
+    if fn is None:
+        return None
+    lines = []
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.Name) and sub.id in GATE_NAMES:
+            lines.append(sub.lineno)
+    return min(lines) if lines else None
+
+
 def _boardmemory_constructions():
-    """Yield (file, line, enclosing function node) for every BoardMemory(...)."""
+    """Yield (file, line, enclosing function node) for every write site in app/."""
     for path in sorted(APP_DIR.rglob("*.py")):
         if path.name == "board_memory_gate.py":
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        parents: dict[ast.AST, ast.AST] = {}
-        for node in ast.walk(tree):
-            for child in ast.iter_child_nodes(node):
-                parents[child] = node
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "BoardMemory"
-            ):
-                fn = node
-                while fn is not None and not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    fn = parents.get(fn)
-                yield path.relative_to(APP_DIR.parent), node.lineno, fn
+        source = path.read_text(encoding="utf-8")
+        for line, fn in _write_sites(source):
+            yield path.relative_to(APP_DIR.parent), line, fn
 
 
 def test_every_boardmemory_construction_asks_the_gate():
@@ -93,10 +162,58 @@ def test_every_boardmemory_construction_asks_the_gate():
     assert len(found) >= 11, found
     ungated = []
     for rel, line, fn in found:
-        src = ast.unparse(fn) if fn is not None else ""
-        if not any(name in src for name in GATE_NAMES):
+        if fn is not None and (str(rel), fn.name) in EXEMPT_FUNCTIONS:
+            continue
+        gate = _gate_line(fn)
+        # The gate must be asked BEFORE the write, not just somewhere in the
+        # function (decorator dependencies sit above the def, so they count).
+        if gate is None or gate > line:
             ungated.append(f"{rel}:{line}")
     assert not ungated, f"BoardMemory written without the write switch: {ungated}"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from app.models.memory import BoardMemory as BM\ndef f():\n    BM(content='x')\n",
+        "import app.models.memory as m\ndef f():\n    m.BoardMemory(content='x')\n",
+        "def f():\n    BoardMemory.model_validate({'content': 'x'})\n",
+        "def f(s):\n    s.execute(insert(BoardMemory).values(content='x'))\n",
+        "def f(s):\n    s.execute(update(BoardMemory).values(title='x'))\n",
+        "def f(s):\n    s.execute(delete(BoardMemory.__table__))\n",
+    ],
+)
+def test_guard_detects_indirect_writes(source):
+    """The completeness guard is not fooled by an alias, an attribute call,
+    model_validate or a raw insert/update/delete."""
+    sites = list(_write_sites(source))
+    assert sites, source
+    assert all(_gate_line(fn) is None for _, fn in sites)
+
+
+def test_guard_rejects_a_gate_asked_after_the_write():
+    source = (
+        "def f():\n"
+        "    BoardMemory(content='x')\n"
+        "    if board_memory_write_skipped('late'):\n"
+        "        return\n"
+    )
+    [(line, fn)] = list(_write_sites(source))
+    assert _gate_line(fn) > line
+
+
+def test_operator_group_memorize_is_the_only_exemption():
+    """Exactly one write site stays open, and it is the operator's explicit
+    'keep the result' (see EXEMPT_FUNCTIONS). A second exemption needs a
+    reason here, not a silent add."""
+    assert EXEMPT_FUNCTIONS == {("app/routers/groups.py", "memorize_group_result")}
+    from app.main import app as fastapi_app
+
+    route = next(
+        r for r in fastapi_app.routes
+        if isinstance(r, APIRoute) and r.endpoint.__name__ == "memorize_group_result"
+    )
+    assert not _gated(route), "group memorize must not answer 410 while the group tab exists"
 
 
 def _gated(route: APIRoute) -> bool:
@@ -126,12 +243,11 @@ def test_every_mutating_memory_route_carries_the_gate():
         elif (mod, name) in {
             ("app.routers.agent_scoped", "agent_create_memory"),
             ("app.routers.agent_scoped", "agent_create_knowledge"),
-            ("app.routers.groups", "memorize_group_result"),
         }:
             must.append(route)
     # create/update/delete memory, create/update/delete knowledge, attachment
-    # upload/delete, merge_into, keep_both, unrelated + 3 outside memory.py.
-    assert len(must) >= 14, [r.path for r in must]
+    # upload/delete, merge_into, keep_both, unrelated + 2 outside memory.py.
+    assert len(must) >= 13, [r.path for r in must]
     ungated = [f"{sorted(r.methods)} {r.path}" for r in must if not _gated(r)]
     assert not ungated, f"mutating board_memory routes without the gate: {ungated}"
 
@@ -233,3 +349,54 @@ async def test_switch_on_writes_again(auth_client, writes_on, make_board, make_t
         await auto_memory.record_task_failure(task.id, None)
 
     assert await _count() == before + 2
+
+
+# ── 4. What agents are told (TOOLS.md) ───────────────────────────────────
+
+
+def _tools_md() -> str:
+    from app.services.tools_md_builder import generate_tools_md
+
+    # scopes=[] = every section (backward compat), so every write block shows.
+    return generate_tools_md(
+        name="T", emoji="x", raw_token="tkn", board_id="board-1", scopes=[]
+    )
+
+
+def test_tools_md_does_not_advertise_refused_writes_when_off():
+    md = _tools_md()
+    assert "POST $MC_API_URL/api/v1/agent/knowledge" not in md
+    assert "/api/v1/agent/knowledge\\\" \\\\" not in md  # Flow 6 curl
+    assert "-X POST \"$MC_API_URL/api/v1/agent/knowledge\"" not in md
+    assert "POST $MC_API_URL/api/v1/agent/boards/board-1/memory" not in md
+    # Reading the old entries is still documented, and writing points to the vault.
+    assert "GET $MC_API_URL/api/v1/agent/knowledge" in md
+    flow6 = md.split("### Flow 6")[1].split("### Flow")[0]
+    assert "mc remember" in flow6
+
+
+def test_tools_md_advertises_writes_again_when_on(writes_on):
+    md = _tools_md()
+    assert "POST $MC_API_URL/api/v1/agent/knowledge" in md
+    assert "POST $MC_API_URL/api/v1/agent/boards/board-1/memory" in md
+    assert "-X POST \"$MC_API_URL/api/v1/agent/knowledge\"" in md
+
+
+# ── 5. Log noise ──────────────────────────────────────────────────────────
+
+
+def test_skip_logs_once_per_place_at_info(caplog):
+    import logging
+
+    from app.services import board_memory_gate as gate
+
+    gate._logged_skips.clear()
+    with caplog.at_level(logging.DEBUG, logger="mc.board_memory_gate"):
+        for _ in range(3):
+            assert gate.board_memory_write_skipped("intelligence_daily_report")
+        assert gate.board_memory_write_skipped("weekly_digest")
+    infos = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert [r.getMessage().split("(")[1].split(")")[0] for r in infos] == [
+        "intelligence_daily_report",
+        "weekly_digest",
+    ]

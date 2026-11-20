@@ -33,6 +33,12 @@ def generate_tools_md(
     (default False keeps non-pilot output byte-identical).
     """
     from app.scopes import Scope
+    from app.services.board_memory_gate import board_memory_writes_enabled
+
+    # Legacy board_memory writes are behind BOARD_MEMORY_WRITE_ENABLED (default
+    # off, clean-up stage 2): while off those routes answer 410, so TOOLS.md
+    # does not advertise them — new notes go to the vault (`mc remember`).
+    legacy_memory_writes = board_memory_writes_enabled()
 
     def _has(scope: str) -> bool:
         """True if no scopes are set (backward compat) or the scope is present."""
@@ -424,7 +430,7 @@ Content-Type: application/json
 Using this consistently lets you find your own lessons again, learn from
 team experience, and avoid duplicate work.""")
 
-        if _has(Scope.MEMORY_WRITE):
+        if _has(Scope.MEMORY_WRITE) and legacy_memory_writes:
             parts.append(f"""## Write board memory (board-scoped, visible to all agents on the board)
 POST $MC_API_URL/api/v1/agent/boards/{board_id}/memory
 Authorization: Bearer $MC_AGENT_TOKEN
@@ -1077,7 +1083,22 @@ Optional parameters:
 
 Returns all relevant entries: own knowledge, board memory, global knowledge.""")
 
-    if _has(Scope.KNOWLEDGE_WRITE):
+    if _has(Scope.KNOWLEDGE_WRITE) and not legacy_memory_writes:
+        knowledge_parts.append(
+            "## Writing knowledge\n"
+            "The knowledge base above is read-only now (POST /api/v1/agent/knowledge\n"
+            "answers 410)."
+            + (
+                " Write new lessons, decisions and findings to the vault:\n\n"
+                "```bash\n"
+                'mc remember "Title" --content "Body" --type knowledge\n'
+                'mc remember "Lesson learned" --type lesson\n'
+                "```"
+                if _has("vault:write")
+                else ""
+            )
+        )
+    if _has(Scope.KNOWLEDGE_WRITE) and legacy_memory_writes:
         knowledge_parts.append(f"""## Write your own knowledge entry
 POST $MC_API_URL/api/v1/agent/knowledge
 Authorization: Bearer $MC_AGENT_TOKEN
@@ -1666,17 +1687,26 @@ Rules:
             "mc memory \"client brand guidelines primary color\"\n"
             "# → top-K similar entries with content + score + memory_type\n"
             "\n"
-            "# If you learned something important: write it back\n"
-            "curl -sf -X POST \"$MC_API_URL/api/v1/agent/knowledge\" \\\n"
-            "  -H \"Authorization: Bearer $MC_AGENT_TOKEN\" \\\n"
-            "  -H \"Content-Type: application/json\" \\\n"
-            "  -d '{{\n"
-            "    \"content\": \"Dispatch messages >8000 chars are counterproductive (lost-in-middle)\",\n"
-            "    \"memory_type\": \"lesson\",\n"
-            "    \"scope\": \"board\"\n"
-            "  }}'\n"
-            "# scope: \"agent\" = only me | \"board\" = everyone on the board | \"global\" = all agents\n"
-            "```"
+            + (
+                "# If you learned something important: write it back\n"
+                "curl -sf -X POST \"$MC_API_URL/api/v1/agent/knowledge\" \\\n"
+                "  -H \"Authorization: Bearer $MC_AGENT_TOKEN\" \\\n"
+                "  -H \"Content-Type: application/json\" \\\n"
+                "  -d '{{\n"
+                "    \"content\": \"Dispatch messages >8000 chars are counterproductive (lost-in-middle)\",\n"
+                "    \"memory_type\": \"lesson\",\n"
+                "    \"scope\": \"board\"\n"
+                "  }}'\n"
+                "# scope: \"agent\" = only me | \"board\" = everyone on the board | \"global\" = all agents\n"
+                if legacy_memory_writes
+                else (
+                    "# If you learned something important: write it to the vault\n"
+                    "mc remember \"Dispatch messages >8000 chars are counterproductive (lost-in-middle)\" --type lesson\n"
+                    if _has("vault:write")
+                    else ""
+                )
+            )
+            + "```"
         )
 
     quick_ref = "\n\n".join(flow_blocks)

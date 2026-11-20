@@ -15,20 +15,6 @@ from app.models.agent import Agent
 
 
 @pytest.fixture(autouse=True)
-def _board_memory_writes_on():
-    """These tests cover legacy board_memory writers, which sit behind
-    BOARD_MEMORY_WRITE_ENABLED (default off, services/board_memory_gate.py).
-    Switch it on for this module. Plain setattr instead of monkeypatch: an
-    autouse fixture that requests monkeypatch reorders the DB setup (conftest)."""
-    import app.config
-
-    old = app.config.settings.board_memory_write_enabled
-    app.config.settings.board_memory_write_enabled = True
-    yield
-    app.config.settings.board_memory_write_enabled = old
-
-
-@pytest.fixture(autouse=True)
 def _references_in_tmp(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         "app.services.reference_ingest.references_root", lambda: str(tmp_path)
