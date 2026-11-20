@@ -29,6 +29,7 @@ from app.scopes import Scope, get_agent_effective_scopes, require_scope
 from app.database import get_session
 from app.models.agent import Agent
 from app.models.memory import BoardMemory
+from app.services.board_memory_gate import board_memory_write_skipped
 from app.models.task import Task, TaskComment
 from app.services.activity import emit_event
 from app.services.blocker_triage import is_lead_agent
@@ -809,6 +810,9 @@ async def _handle_reflection_verdict(
             "Reflexions-Kommentar — kein BoardMemory-Eintrag.",
             task.title[:60],
         )
+        return
+
+    if board_memory_write_skipped("reflection_verdict"):
         return
 
     lesson_text = _extract_reflection_lesson(reflection.content)

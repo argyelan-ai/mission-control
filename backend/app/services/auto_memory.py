@@ -20,6 +20,7 @@ from app.database import engine
 from app.models.agent import Agent
 from app.models.board import Project
 from app.models.memory import BoardMemory
+from app.services.board_memory_gate import board_memory_write_skipped
 from app.models.tag import Tag, TagAssignment
 from app.models.task import Task, TaskComment
 from app.redis_client import RedisKeys, get_redis
@@ -189,6 +190,9 @@ async def record_task_completion(task_id: uuid.UUID, agent_id: uuid.UUID | None)
 
 async def record_task_failure(task_id: uuid.UUID, agent_id: uuid.UUID | None) -> None:
     """Records a lesson when a task is set to 'failed'."""
+    # Legacy board_memory writer: skip before the dedup key is used up.
+    if board_memory_write_skipped("task_failed"):
+        return
     dedup_key = RedisKeys.auto_memory_task_failed(str(task_id))
     if not await _dedup_check(dedup_key):
         return
@@ -252,6 +256,9 @@ async def record_phase_completion(
     parent_task_id: uuid.UUID, subtask_ids: list[uuid.UUID]
 ) -> None:
     """Records knowledge when all subtasks of a phase are complete."""
+    # Legacy board_memory writer: skip before the dedup key is used up.
+    if board_memory_write_skipped("phase_done"):
+        return
     dedup_key = RedisKeys.auto_memory_phase_done(str(parent_task_id))
     if not await _dedup_check(dedup_key):
         return
@@ -330,6 +337,9 @@ async def record_phase_completion(
 
 async def generate_weekly_digest() -> None:
     """Generates a weekly review — max once per week (Redis dedup, 6-day TTL)."""
+    # Legacy board_memory writer: skip before the dedup key is used up.
+    if board_memory_write_skipped("weekly_digest"):
+        return
     dedup_key = RedisKeys.auto_memory_weekly_digest()
     if not await _dedup_check(dedup_key, ttl=518400):  # 6 days
         return
@@ -541,6 +551,9 @@ async def record_feedback_lesson(
 
     feedback_type: "approved" or "rejected"
     """
+    # Legacy board_memory writer: skip before the dedup key is used up.
+    if board_memory_write_skipped("feedback_lesson"):
+        return
     dedup_key = RedisKeys.auto_memory_feedback(str(task_id), feedback_type)
     if not await _dedup_check(dedup_key):
         return

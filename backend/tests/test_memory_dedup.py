@@ -30,6 +30,20 @@ from app.models.memory import BoardMemory
 from tests.conftest import test_engine
 
 
+@pytest.fixture(autouse=True)
+def _board_memory_writes_on():
+    """These tests cover legacy board_memory writers, which sit behind
+    BOARD_MEMORY_WRITE_ENABLED (default off, services/board_memory_gate.py).
+    Switch it on for this module. Plain setattr instead of monkeypatch: an
+    autouse fixture that requests monkeypatch reorders the DB setup (conftest)."""
+    import app.config
+
+    old = app.config.settings.board_memory_write_enabled
+    app.config.settings.board_memory_write_enabled = True
+    yield
+    app.config.settings.board_memory_write_enabled = old
+
+
 @pytest.mark.asyncio
 async def test_identical_hash_skipped(auth_client):
     """MSY-02 D-05: POST /knowledge with identical title+content twice
