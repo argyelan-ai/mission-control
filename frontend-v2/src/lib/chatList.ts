@@ -95,12 +95,11 @@ export type ChatListSections = {
 };
 
 export type ChatListInput = {
-  agents: (Pick<Agent, "id" | "name" | "status" | "last_task_activity_at" | "updated_at"> &
-    SessionFacts & {
-      /** When the agent's chat last saw anything (backend: newest entry of
-       *  the chat session, else the last task activity). */
-      last_chat_activity_at?: string | null;
-    })[];
+  agents: (Pick<
+    Agent,
+    "id" | "name" | "status" | "last_task_activity_at" | "last_chat_activity_at" | "updated_at"
+  > &
+    SessionFacts)[];
   groups: Pick<GroupSummary, "id" | "name" | "status" | "created_at" | "last_message">[];
   headRuns: HeadRun[];
   approvals: Pick<Approval, "agent_id" | "status">[];

@@ -742,6 +742,10 @@ export interface Agent {
   memory_md: string | null;
   last_seen_at: string | null;
   last_task_activity_at: string | null;
+  /** When the agent's chat last saw anything: the newest entry of its chat
+   *  session, else the last task activity. Sent by the agent and chat list
+   *  endpoints only (not the single-agent GET). */
+  last_chat_activity_at?: string | null;
   current_task_id: string | null;
   /** The task the agent's live run works on, from the bridge's run record
    *  (ACP agents only); null without a live run or a record. Unlike
@@ -840,6 +844,7 @@ export const SESSION_AGENT_KEYS = [
   "current_task_id",
   "last_seen_at",
   "last_task_activity_at",
+  "last_chat_activity_at",
   "updated_at",
   "headless_chat",
   "tasks_in_own_session",

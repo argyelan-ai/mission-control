@@ -707,9 +707,7 @@ class SessionAgentRow(BaseModel):
     current_task_id: Optional[uuid.UUID] = None
     last_seen_at: Optional[datetime] = None
     last_task_activity_at: Optional[datetime] = None
-    # The chat's own last message time (transcript), else the last task
-    # activity — the chat list dates and sorts rows by it.
-    last_chat_activity_at: Optional[datetime] = None
+    last_chat_activity_at: Optional[datetime] = None  # chat's own time, else last task
     updated_at: datetime
     headless_chat: bool = False
     tasks_in_own_session: bool = False
