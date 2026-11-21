@@ -226,26 +226,26 @@ describe("buildChatList — dated by the chat, off when not started (user test 2
     const list = buildChatList(
       input({
         agents: [
-          { id: "spark", name: "Sparky", status: "idle", last_task_activity_at: daysAgo(10), last_chat_activity_at: today(14), updated_at: daysAgo(30) },
+          { id: "alpha", name: "Alpha", status: "idle", last_task_activity_at: daysAgo(10), last_chat_activity_at: today(14), updated_at: daysAgo(30) },
           { id: "z", name: "ZCode", status: "idle", last_task_activity_at: daysAgo(2), updated_at: daysAgo(30) },
         ],
         groups: [],
       }),
       NOW,
     );
-    expect(list.map((e) => e.id)).toEqual(["spark", "z"]);
-    expect(sectionChats(list, NOW).today.map((e) => e.id)).toEqual(["spark"]);
+    expect(list.map((e) => e.id)).toEqual(["alpha", "z"]);
+    expect(sectionChats(list, NOW).today.map((e) => e.id)).toEqual(["alpha"]);
   });
 
   it("a stopped host session, a stopped container or a heartbeat older than 90 s is 'off'", () => {
     const list = buildChatList(
       input({
         agents: [
-          { id: "host-off", name: "Jarvis", status: "idle", last_task_activity_at: null, updated_at: daysAgo(1), session_running: false, last_seen_at: secAgo(10) },
+          { id: "host-off", name: "Voice", status: "idle", last_task_activity_at: null, updated_at: daysAgo(1), session_running: false, last_seen_at: secAgo(10) },
           { id: "box-off", name: "Box", status: "idle", last_task_activity_at: null, updated_at: daysAgo(1), container_state: "exited", last_seen_at: secAgo(10) },
           { id: "stale", name: "Stale", status: "working", last_task_activity_at: null, updated_at: daysAgo(1), last_seen_at: secAgo(91) },
           { id: "never", name: "Never", status: "idle", last_task_activity_at: null, updated_at: daysAgo(1), last_seen_at: null },
-          { id: "on", name: "Boss", status: "idle", last_task_activity_at: null, updated_at: daysAgo(1), session_running: true, last_seen_at: secAgo(20) },
+          { id: "on", name: "Lead", status: "idle", last_task_activity_at: null, updated_at: daysAgo(1), session_running: true, last_seen_at: secAgo(20) },
           { id: "legacy", name: "Legacy", status: "idle", last_task_activity_at: null, updated_at: daysAgo(1) },
         ],
         groups: [],

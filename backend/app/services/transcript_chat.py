@@ -1388,8 +1388,8 @@ def last_chat_activity(agent) -> datetime | None:
 
     The chat list sorted and dated each agent by ``last_task_activity_at``:
     an agent the operator chatted with today but whose last TASK was two
-    weeks ago sat under "Earlier" with the old date (user test 21.11.2026,
-    Sparky 8.11. while the chat had 20.11.). This is the chat's own time.
+    weeks ago sat under "Earlier" with the old date (user test 21.11.2026:
+    dated 8.11. while the chat had 20.11.). This is the chat's own time.
 
     Same session, same privacy gate as ``GET /agents/{id}/chat/history``
     (``adapter_for`` → ``resolve_transcript_dir`` → ``find_active_session``

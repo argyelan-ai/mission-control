@@ -184,13 +184,13 @@ describe("SessionSidebar", () => {
   });
 
   it("an agent whose session is not running sits below the running ones, hollow dot and 'not started' (user test 21.11.)", () => {
-    const jarvis = { ...mkAgent({ id: "j", name: "Jarvis", agent_runtime: "host" }), session_running: false } as Agent;
-    const boss = { ...mkAgent({ id: "b", name: "Boss", agent_runtime: "host" }), session_running: true } as Agent;
+    const voice = { ...mkAgent({ id: "j", name: "Voice", agent_runtime: "host" }), session_running: false } as Agent;
+    const lead = { ...mkAgent({ id: "b", name: "Lead", agent_runtime: "host" }), session_running: true } as Agent;
     render(
-      <SessionSidebar agents={[jarvis, boss]} tasks={[]} projects={[]} selectedId={null} onSelect={() => {}} variant="list" />
+      <SessionSidebar agents={[voice, lead]} tasks={[]} projects={[]} selectedId={null} onSelect={() => {}} variant="list" />
     );
     const rows = screen.getAllByRole("option");
-    expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining("Boss"), expect.stringContaining("Jarvis")]);
+    expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining("Lead"), expect.stringContaining("Voice")]);
     expect(within(rows[1]).getByTestId("session-off-dot")).toBeInTheDocument();
     expect(rows[1].textContent).toMatch(/stateOff|not started/);
     expect(within(rows[0]).queryByTestId("session-off-dot")).toBeNull();
