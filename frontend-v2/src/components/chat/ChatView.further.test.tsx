@@ -296,3 +296,40 @@ describe("ChatView — further chat (?chat=)", () => {
     expect(screen.getByTestId("open-chat")).toHaveTextContent("none");
   });
 });
+
+describe("ChatView — a new, empty further chat (New chat → pick)", () => {
+  beforeEach(() => {
+    navMock.params = new URLSearchParams("agent=agent-1&chat=chat-2");
+    mockRecord.mockReturnValue(mkRecord({ events: [] }));
+  });
+
+  it("says it is a new chat with the agent — not the terminal hint of the agent's own chat", () => {
+    renderView();
+    const empty = screen.getByTestId("chat-empty-new");
+    expect(empty).toHaveTextContent("New chat with Cody");
+    expect(empty).toHaveTextContent("Write your first message below.");
+    expect(empty).not.toHaveTextContent("terminal");
+    expect(screen.queryByTestId("chat-empty")).not.toBeInTheDocument();
+  });
+
+  it("opens with the composer focused", async () => {
+    renderView();
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveFocus());
+  });
+
+  it("the agent's own empty chat keeps its old empty state and does not grab focus", () => {
+    navMock.params = new URLSearchParams();
+    mockChatStream.mockReturnValue(mkStream({ events: [] }));
+    renderView();
+    expect(screen.getByTestId("chat-empty")).toHaveTextContent("No messages yet");
+    expect(screen.getByRole("textbox")).not.toHaveFocus();
+  });
+
+  it("the first message goes into the new chat (chatId), the agent's own chat gets nothing", async () => {
+    renderView();
+    await send("hi");
+    await waitFor(() => expect(mockSendToChat).toHaveBeenCalledWith("agent-1", "chat-2", "hi"));
+    expect(api.chat.sendText).not.toHaveBeenCalled();
+  });
+});
+
