@@ -70,9 +70,15 @@ describe("Settings › More", () => {
   it("reaches every page that left the main navigation", () => {
     render(<MorePagesSection />);
     const links = hrefs(screen.getByTestId("settings-more-links"));
-    for (const h of ["/home", "/tasks", "/inbox", "/office", "/loops", "/repos", "/schedule", "/agents", "/files"]) {
+    for (const h of ["/home", "/tasks", "/inbox", "/repos", "/schedule", "/agents", "/files"]) {
       expect(links).toContain(h);
     }
+  });
+
+  it("no longer offers the frozen pages Office and Loops (Etappe 2; the URL still works)", () => {
+    render(<MorePagesSection />);
+    const links = hrefs(screen.getByTestId("settings-more-links"));
+    for (const h of ["/office", "/loops"]) expect(links).not.toContain(h);
   });
 
   it("does not repeat the three tabs or Settings itself", () => {

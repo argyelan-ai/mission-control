@@ -43,6 +43,8 @@ vi.mock("@/lib/store", () => ({
 }));
 
 import LoopsPage from "../page";
+import { CreateLoopDialog } from "@/components/loops/CreateLoopDialog";
+import { LoopCard } from "@/components/loops/LoopCard";
 
 function renderPage() {
   const qc = new QueryClient({
@@ -148,52 +150,97 @@ describe("LoopsPage", () => {
     expect(screen.getByText(/2 failed rounds in a row/)).toBeInTheDocument();
   });
 
-  it("starts a draft loop via the Start action", async () => {
+  it("frozen: a draft loop offers neither Start nor Delete (no new runs, data stays)", async () => {
     vi.spyOn(api.loops, "list").mockResolvedValue([makeLoop({ status: "draft" })]);
-    const startSpy = vi.spyOn(api.loops, "start").mockResolvedValue(makeLoop({ status: "running" }));
+    const startSpy = vi.spyOn(api.loops, "start");
 
     renderPage();
 
-    const startBtn = await screen.findByRole("button", { name: "Start" });
-    await userEvent.click(startBtn);
-
-    await waitFor(() => expect(startSpy).toHaveBeenCalledWith("loop-1"));
+    expect(await screen.findByText("Nightly polish loop")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete Nightly polish loop" })).toBeNull();
+    expect(startSpy).not.toHaveBeenCalled();
   });
 
-  it("shows the backend's 409 error text when start is blocked by an active loop on the board", async () => {
-    vi.spyOn(api.loops, "list").mockResolvedValue([makeLoop({ status: "draft" })]);
-    vi.spyOn(api.loops, "start").mockRejectedValue(
-      new Error('API 409: {"detail":"Board already has an active loop — pause or stop it first"}')
+  it("frozen: a running loop can still be paused and stopped (the safe way out)", async () => {
+    vi.spyOn(api.loops, "list").mockResolvedValue([makeLoop({ status: "running", current_round_no: 1 })]);
+    const stopSpy = vi.spyOn(api.loops, "stop").mockResolvedValue(makeLoop({ status: "done" }));
+
+    renderPage();
+
+    expect(await screen.findByRole("button", { name: "Pause" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await waitFor(() => expect(stopSpy).toHaveBeenCalledWith("loop-1"));
+  });
+
+  it("shows the backend's frozen message when an action is refused with 410", async () => {
+    vi.spyOn(api.loops, "list").mockResolvedValue([makeLoop({ status: "running", current_round_no: 1 })]);
+    vi.spyOn(api.loops, "stop").mockRejectedValue(
+      new Error('API 410: {"detail":{"code":"frozen","message":"Loops are frozen: existing loops stay readable."}}')
     );
 
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Start" }));
-
-    expect(
-      await screen.findByText("Board already has an active loop — pause or stop it first")
-    ).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Stop" }));
+    expect(await screen.findByText("Loops are frozen: existing loops stay readable.")).toBeInTheDocument();
   });
 
-  it("requires a markdown backlog when the backlog source is Markdown list", async () => {
+  it("the card still wires Start when a handler is given (way back)", async () => {
+    const onStart = vi.fn();
+    render(
+      <LoopCard
+        loop={makeLoop({ status: "draft" })}
+        onOpen={() => {}}
+        onStart={onStart}
+        onPause={() => {}}
+        onStop={() => {}}
+        actionPending={false}
+      />
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Start" }));
+    expect(onStart).toHaveBeenCalledTimes(1);
+  });
+
+  // Etappe 2 (ADR-102 §3): loops are frozen — 0 page views in 14 days, last
+  // round 07.07. The page stays reachable by URL and read-only; the backend
+  // answers POST /loops with 410 "frozen".
+  it("is frozen: no New loop button, a notice says why, existing loops stay visible", async () => {
+    vi.spyOn(api.loops, "list").mockResolvedValue([makeLoop({ status: "done", name: "Old grind" })]);
+
+    renderPage();
+
+    expect(await screen.findByText("Old grind")).toBeInTheDocument();
+    expect(screen.getByTestId("loops-frozen")).toHaveTextContent("Loops are frozen");
+    // Start is refused while frozen, so Pause cannot be undone — the notice says so.
+    expect(screen.getByTestId("loops-frozen")).toHaveTextContent(/paused loop cannot be started again/i);
+    expect(screen.queryByRole("button", { name: "New loop" })).toBeNull();
+  });
+
+  it("is frozen in the empty state too: no create button there", async () => {
     vi.spyOn(api.loops, "list").mockResolvedValue([]);
+
+    renderPage();
+
+    expect(await screen.findByText("No loops yet")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New loop" })).toBeNull();
+  });
+
+  it("the create dialog still requires a markdown backlog (dialog code kept for the way back)", async () => {
     vi.spyOn(api.boards, "list").mockResolvedValue([
       { id: "board-1", name: "MC Development" } as never,
     ]);
     const createSpy = vi.spyOn(api.loops, "create");
-
-    renderPage();
-
-    await userEvent.click(await screen.findByRole("button", { name: "New loop" }));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <CreateLoopDialog open onClose={() => {}} onCreated={() => {}} />
+      </QueryClientProvider>
+    );
 
     const nameInput = await screen.findByPlaceholderText("Nightly polish loop");
     await userEvent.type(nameInput, "Backlog grind");
-
-    const boardSelect = await screen.findByDisplayValue("MC Development");
-    expect(boardSelect).toBeInTheDocument();
-
-    const goalInput = screen.getByPlaceholderText(/Drive down open bugs/);
-    await userEvent.type(goalInput, "Clear the bug backlog");
+    expect(await screen.findByDisplayValue("MC Development")).toBeInTheDocument();
+    await userEvent.type(screen.getByPlaceholderText(/Drive down open bugs/), "Clear the bug backlog");
 
     // Backlog source defaults to "Markdown list" — leave backlog_md empty and submit.
     await userEvent.click(screen.getByRole("button", { name: "Create loop" }));

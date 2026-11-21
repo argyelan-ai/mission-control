@@ -15,6 +15,7 @@ from app.auth import require_user
 from app.database import get_session
 from app.models.board import Board
 from app.models.loop import ACTIVE_LOOP_STATUSES, BACKLOG_SOURCES, Loop, LoopRound, TERMINAL_LOOP_STATUSES
+from app.services import loop_runner as _loop_runner
 from app.services.activity import emit_event
 from app.services.loop_runner import (
     LoopAlreadyActiveError,
@@ -27,6 +28,16 @@ from app.utils import utcnow
 router = APIRouter(prefix="/api/v1", tags=["loops"])
 
 ACTIVE_STATUSES = ACTIVE_LOOP_STATUSES
+
+# Etappe 2 "clean up" (ADR-102 §3): loops are frozen. The switch is
+# `FROZEN` in app/services/loop_runner.py (one switch for router, scheduler
+# and loop_gate approvals). Here, create/start/edit/delete answer 410
+# "frozen"; list, detail, pause and stop keep working.
+
+
+def _refuse_if_frozen() -> None:
+    if _loop_runner.FROZEN:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=_loop_runner.FROZEN_DETAIL)
 
 
 class LoopCreate(BaseModel):
@@ -82,6 +93,7 @@ async def create_loop(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
+    _refuse_if_frozen()
     if payload.backlog_source not in BACKLOG_SOURCES:
         raise HTTPException(status_code=400, detail=f"backlog_source must be one of {BACKLOG_SOURCES}")
     if payload.backlog_source == "markdown" and not (payload.backlog_md or "").strip():
@@ -141,6 +153,7 @@ async def update_loop(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
+    _refuse_if_frozen()
     loop = await session.get(Loop, loop_id)
     if not loop:
         raise HTTPException(status_code=404, detail="Loop not found")
@@ -168,6 +181,7 @@ async def start_loop(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
+    _refuse_if_frozen()
     loop = await session.get(Loop, loop_id)
     if not loop:
         raise HTTPException(status_code=404, detail="Loop not found")
@@ -254,6 +268,7 @@ async def delete_loop(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
+    _refuse_if_frozen()
     loop = await session.get(Loop, loop_id)
     if not loop:
         raise HTTPException(status_code=404, detail="Loop not found")

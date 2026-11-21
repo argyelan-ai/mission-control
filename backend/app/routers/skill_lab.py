@@ -11,6 +11,16 @@ from app.services import skill_candidates
 
 router = APIRouter(prefix="/api/v1/skill-lab", tags=["skill-lab"])
 
+# Etappe 2 "clean up" (ADR-102 §3): Skill-Lab is dead — no UI, 0 candidates,
+# 0 runs. Its tables are frozen: reading stays, the only write path (PATCH a
+# candidate) answers 410 "frozen". Nothing is deleted.
+# Way back: set this to False.
+FROZEN = True
+FROZEN_DETAIL = {
+    "code": "frozen",
+    "message": "Skill-Lab is frozen: candidates stay readable, but can no longer be changed.",
+}
+
 
 class SkillCandidateUpdate(BaseModel):
     title: str | None = None
@@ -38,6 +48,8 @@ async def update_skill_candidate(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ) -> dict[str, Any]:
+    if FROZEN:
+        raise HTTPException(status_code=410, detail=FROZEN_DETAIL)
     candidate = await skill_candidates.get_skill_candidate(session, candidate_id)
     if not candidate:
         raise HTTPException(status_code=404, detail="Skill candidate not found")

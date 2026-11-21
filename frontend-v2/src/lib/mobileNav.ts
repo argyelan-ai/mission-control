@@ -9,11 +9,12 @@
  * sidebar icon of the chat header (components/layout/ChatDrawer.tsx). Every
  * other page left the main navigation and sits in Settings › More, generated
  * by `sheetPages` below — nothing was deleted, every route still works.
+ * Frozen pages (nav.ts `FROZEN_ITEMS`, Etappe 2) are not offered there at all.
  *
  * Pure data, no React; labels are `cockpit.*` keys.
  */
 import { BookOpen, Gauge, MessageSquare, type LucideIcon } from "lucide-react";
-import { CHROME_ITEMS, NAV_ITEMS, type NavItem } from "./nav";
+import { CHROME_ITEMS, FROZEN_ITEMS, NAV_ITEMS, type NavItem } from "./nav";
 
 import { chatUrl } from "./chatHistory";
 import type { ChatRef } from "./recentChats";
@@ -65,7 +66,7 @@ export type SheetPages = { usedMost: NavItem[]; others: NavItem[] };
 
 /**
  * Settings › More: every destination in NAV_ITEMS that is neither a tab nor
- * chrome (Settings itself). Generated, never a
+ * chrome (Settings itself) nor frozen (Etappe 2). Generated, never a
  * second list — a page added to nav.ts shows up here, and a vertical that is
  * switched off (Benchmark) disappears here exactly like in the sidebar.
  *
@@ -76,7 +77,11 @@ export function sheetPages(
   labelOf: (item: NavItem) => string = (i) => i.label,
   items: NavItem[] = NAV_ITEMS,
 ): SheetPages {
-  const skip = new Set<string>([...Object.values(TAB_HREFS), ...CHROME_ITEMS]);
+  const skip = new Set<string>([
+    ...Object.values(TAB_HREFS),
+    ...CHROME_ITEMS,
+    ...FROZEN_ITEMS.map((i) => i.href),
+  ]);
   const pages = items.filter((i) => !skip.has(i.href));
   const usedMost = pages
     .filter((i) => i.phoneRank !== undefined)

@@ -10,10 +10,12 @@ import { canPauseLoop, canStartLoop, canStopLoop, isLoopInactive, LOOP_STATUS_ME
 interface LoopCardProps {
   loop: Loop;
   onOpen: () => void;
-  onStart: () => void;
+  /** Omitted while loops are frozen (Etappe 2): no Start button. */
+  onStart?: () => void;
   onPause: () => void;
   onStop: () => void;
-  onDelete: () => void;
+  /** Omitted while loops are frozen (Etappe 2): no Delete button. */
+  onDelete?: () => void;
   actionPending?: boolean;
 }
 
@@ -91,7 +93,7 @@ export function LoopCard({ loop, onOpen, onStart, onPause, onStop, onDelete, act
 
       <div className="flex items-center gap-1.5 pt-1" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
         <div className="flex items-center gap-1.5 pt-2 flex-1">
-          {canStartLoop(loop.status) && (
+          {onStart && canStartLoop(loop.status) && (
             <ActionButton
               label={t("card.start")}
               icon={<Play size={12} />}
@@ -120,7 +122,7 @@ export function LoopCard({ loop, onOpen, onStart, onPause, onStop, onDelete, act
           )}
           {actionPending && <Loader2 size={12} className="animate-spin" style={{ color: C.textMuted }} />}
         </div>
-        {isLoopInactive(loop.status) && (
+        {onDelete && isLoopInactive(loop.status) && (
           <button
             type="button"
             aria-label={t("card.deleteAria", { name: loop.name })}

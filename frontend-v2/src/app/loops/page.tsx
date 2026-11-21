@@ -4,14 +4,20 @@
  * Loops page (ADR-051) — outcome-driven task loops. A runner spins up one
  * normal parent task per round; once the round ends it decides to continue,
  * pause, escalate, or finish. This page lists loops on the active board,
- * lets the operator create/start/pause/stop/delete them, and shows the
+ * lets the operator start/pause/stop/delete them, and shows the
  * round-by-round history in a detail drawer.
+ *
+ * Frozen since Etappe 2 (ADR-102 §3, lib/nav.ts FROZEN_ITEMS): the page left
+ * every menu and is reachable by URL only. Create, Start and Delete are hidden
+ * here and refused by the API (410 "frozen"); Pause and Stop stay as the safe
+ * way out of a running loop. The code stays for the way back — take /loops out
+ * of FROZEN_ITEMS (and set FROZEN = False in backend/app/routers/loops.py).
  */
 
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, Plus, Repeat, X } from "lucide-react";
+import { AlertTriangle, Info, Loader2, Plus, Repeat, X } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
 import { LoopCard } from "@/components/loops/LoopCard";
 import { LoopDetailPanel } from "@/components/loops/LoopDetailPanel";
@@ -19,10 +25,14 @@ import { CreateLoopDialog } from "@/components/loops/CreateLoopDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
+import { isFrozenRoute } from "@/lib/nav";
 import { C, alpha } from "@/lib/colors";
 import type { Loop } from "@/lib/types";
 
-/** Pull the human-readable detail out of `API 409: {"detail":"..."}` errors. */
+/**
+ * Pull the human-readable detail out of `API 409: {"detail":"..."}` errors,
+ * and out of `API 410: {"detail":{"code":"frozen","message":"..."}}`.
+ */
 function extractApiError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   const jsonStart = msg.indexOf("{");
@@ -30,6 +40,7 @@ function extractApiError(err: unknown): string {
     try {
       const parsed = JSON.parse(msg.slice(jsonStart));
       if (typeof parsed.detail === "string") return parsed.detail;
+      if (typeof parsed.detail?.message === "string") return parsed.detail.message;
     } catch {
       /* fall through to raw message */
     }
@@ -39,6 +50,7 @@ function extractApiError(err: unknown): string {
 
 export default function LoopsPage() {
   const t = useTranslations("loops");
+  const frozen = isFrozenRoute("/loops");
   const qc = useQueryClient();
   const activeBoardId = useAppStore((s) => s.activeBoardId);
   const [createOpen, setCreateOpen] = useState(false);
@@ -113,6 +125,7 @@ export default function LoopsPage() {
               {t("subtitle")}
             </p>
           </div>
+          {!frozen && (
           <button
             onClick={() => setCreateOpen(true)}
             disabled={!activeBoardId}
@@ -122,7 +135,24 @@ export default function LoopsPage() {
             <Plus size={11} />
             {t("newLoop")}
           </button>
+          )}
         </div>
+
+        {frozen && (
+          <div
+            role="status"
+            data-testid="loops-frozen"
+            className="flex items-start gap-2 rounded-md px-3 py-2 text-xs mb-4"
+            style={{ background: C.bgSurface, border: `1px solid ${C.border}`, color: C.textSecondary }}
+          >
+            <Info size={14} className="shrink-0" style={{ color: C.textMuted }} />
+            <span className="flex-1">
+              <span className="font-medium" style={{ color: C.textPrimary }}>{t("frozenTitle")}</span>
+              {" · "}
+              {t("frozenBody")}
+            </span>
+          </div>
+        )}
 
         {actionError && (
           <div
@@ -165,10 +195,13 @@ export default function LoopsPage() {
               <p className="text-sm font-medium" style={{ color: C.textSecondary }}>
                 {t("emptyTitle")}
               </p>
-              <p className="text-xs mt-1" style={{ color: C.textMuted }}>
-                {t("emptyHint")}
-              </p>
+              {!frozen && (
+                <p className="text-xs mt-1" style={{ color: C.textMuted }}>
+                  {t("emptyHint")}
+                </p>
+              )}
             </div>
+            {!frozen && (
             <button
               onClick={() => setCreateOpen(true)}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer mt-1"
@@ -177,6 +210,7 @@ export default function LoopsPage() {
               <Plus size={11} />
               {t("newLoop")}
             </button>
+            )}
           </div>
         )}
 
@@ -187,10 +221,10 @@ export default function LoopsPage() {
                 key={loop.id}
                 loop={loop}
                 onOpen={() => setSelectedLoopId(loop.id)}
-                onStart={() => startMutation.mutate(loop.id)}
+                onStart={frozen ? undefined : () => startMutation.mutate(loop.id)}
                 onPause={() => pauseMutation.mutate(loop.id)}
                 onStop={() => stopMutation.mutate(loop.id)}
-                onDelete={() => handleDelete(loop)}
+                onDelete={frozen ? undefined : () => handleDelete(loop)}
                 actionPending={pendingId === loop.id}
               />
             ))}
@@ -198,20 +232,22 @@ export default function LoopsPage() {
         )}
       </div>
 
-      <CreateLoopDialog
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onCreated={(loop) => setSelectedLoopId(loop.id)}
-      />
+      {!frozen && (
+        <CreateLoopDialog
+          open={createOpen}
+          onClose={() => setCreateOpen(false)}
+          onCreated={(loop) => setSelectedLoopId(loop.id)}
+        />
+      )}
 
       <LoopDetailPanel
         loopId={selectedLoopId}
         open={!!selectedLoopId}
         onClose={() => setSelectedLoopId(null)}
-        onStart={(id) => startMutation.mutate(id)}
+        onStart={frozen ? undefined : (id) => startMutation.mutate(id)}
         onPause={(id) => pauseMutation.mutate(id)}
         onStop={(id) => stopMutation.mutate(id)}
-        onDelete={(id) => {
+        onDelete={frozen ? undefined : (id) => {
           const loop = loops.find((l) => l.id === id);
           if (loop) handleDelete(loop);
         }}

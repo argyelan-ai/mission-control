@@ -10,6 +10,8 @@ import {
   isActiveRoute,
   groupKeyFor,
   navItem,
+  FROZEN_ITEMS,
+  isFrozenRoute,
 } from "../nav";
 
 describe("nav model", () => {
@@ -150,5 +152,38 @@ describe("i18n", () => {
       expect(g.labelKey).toBeTruthy();
       expect(g.rowLabelKey).toBeTruthy();
     }
+  });
+});
+
+// Etappe 2 "clean up" (ADR-102 §3): pages with 0 views in 14 days left every
+// menu. Nothing is deleted — the route stays, the page is read-only.
+describe("frozen pages", () => {
+  const frozen = ["/office", "/loops"];
+
+  it("lists Office and Loops as frozen", () => {
+    expect(FROZEN_ITEMS.map((i) => i.href).sort()).toEqual([...frozen].sort());
+  });
+
+  it("takes them out of the flat list and every group (sidebar, palette, Settings › More)", () => {
+    const flat = NAV_ITEMS.map((i) => i.href);
+    const tree = NAV_TREE.flatMap((g) => g.children.map((c) => c.href));
+    for (const h of frozen) {
+      expect(flat, `${h} still in NAV_ITEMS`).not.toContain(h);
+      expect(tree, `${h} still in NAV_TREE`).not.toContain(h);
+    }
+  });
+
+  it("keeps their pages, so the URL still opens them", () => {
+    const appDir = path.resolve(__dirname, "../../app");
+    for (const item of FROZEN_ITEMS) {
+      expect(existsSync(path.join(appDir, item.href, "page.tsx")), `${item.href} has no page`).toBe(true);
+    }
+  });
+
+  it("answers isFrozenRoute for the route and its sub-routes only", () => {
+    expect(isFrozenRoute("/loops")).toBe(true);
+    expect(isFrozenRoute("/office")).toBe(true);
+    expect(isFrozenRoute("/sessions")).toBe(false);
+    expect(isFrozenRoute("/loopsy")).toBe(false);
   });
 });

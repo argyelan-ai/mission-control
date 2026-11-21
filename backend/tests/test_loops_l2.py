@@ -195,7 +195,10 @@ def _job(**kw) -> ScheduledJob:
 
 
 @pytest.mark.asyncio
-async def test_schedule_starts_draft_loop():
+async def test_schedule_starts_draft_loop(monkeypatch):
+    # Loops are frozen (Etappe 2); the behaviour stays for the way back.
+    from app.services import loop_runner as _loop_runner_mod
+    monkeypatch.setattr(_loop_runner_mod, "FROZEN", False)
     from app.services.scheduler import SchedulerService
 
     board = await _mk_board()
@@ -243,7 +246,10 @@ async def test_schedule_start_loop_missing_loop_id_fails():
 
 
 @pytest.mark.asyncio
-async def test_schedule_start_loop_conflict_when_other_loop_active():
+async def test_schedule_start_loop_conflict_when_other_loop_active(monkeypatch):
+    # Loops are frozen (Etappe 2); the behaviour stays for the way back.
+    from app.services import loop_runner as _loop_runner_mod
+    monkeypatch.setattr(_loop_runner_mod, "FROZEN", False)
     from app.services.scheduler import SchedulerService
 
     board = await _mk_board()
@@ -337,7 +343,10 @@ async def test_tag_backlog_excludes_dispatched_tasks(fake_redis):
 
 
 @pytest.mark.asyncio
-async def test_router_requires_backlog_tag_for_tag_source(auth_client: AsyncClient):
+async def test_router_requires_backlog_tag_for_tag_source(auth_client: AsyncClient, monkeypatch):
+    # Loops are frozen (Etappe 2); the validation stays for the way back.
+    from app.services import loop_runner as _loop_runner_mod
+    monkeypatch.setattr(_loop_runner_mod, "FROZEN", False)
     board = await _mk_board()
     r = await auth_client.post("/api/v1/loops", json={
         "board_id": str(board.id), "name": "x", "goal": "g",
@@ -348,7 +357,10 @@ async def test_router_requires_backlog_tag_for_tag_source(auth_client: AsyncClie
 
 
 @pytest.mark.asyncio
-async def test_router_accepts_tag_source_with_backlog_tag(auth_client: AsyncClient):
+async def test_router_accepts_tag_source_with_backlog_tag(auth_client: AsyncClient, monkeypatch):
+    # Loops are frozen (Etappe 2); the validation stays for the way back.
+    from app.services import loop_runner as _loop_runner_mod
+    monkeypatch.setattr(_loop_runner_mod, "FROZEN", False)
     board = await _mk_board()
     from app.models.tag import Tag
     async with AsyncSession(test_engine, expire_on_commit=False) as _s:
@@ -364,8 +376,11 @@ async def test_router_accepts_tag_source_with_backlog_tag(auth_client: AsyncClie
 
 
 @pytest.mark.asyncio
-async def test_create_tag_loop_rejects_unknown_tag(auth_client, make_board):
+async def test_create_tag_loop_rejects_unknown_tag(auth_client, make_board, monkeypatch):
     """Review-Fund: unbekannter Tag-Slug → 400 statt still-leerem Backlog."""
+    # Loops are frozen (Etappe 2); the validation stays for the way back.
+    from app.services import loop_runner as _loop_runner_mod
+    monkeypatch.setattr(_loop_runner_mod, "FROZEN", False)
     board = await make_board()
     r = await auth_client.post("/api/v1/loops", json={
         "board_id": str(board.id), "name": "L", "goal": "g",
