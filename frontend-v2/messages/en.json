@@ -1276,7 +1276,7 @@
     "contextPanelSource": "Source",
     "contextPanelCacheRate": "Cache hit rate",
     "contextPanelCost": "Session cost",
-    "contextPanelNote": "The agent page shows the last reported figure of its work session — so the number there can differ. From about 80 % the agent summarises the chat automatically.",
+    "contextPanelNote": "The agent page shows the last reported figure of its work session — so the number there can differ. Shortly before the context is full, the agent summarises the chat automatically.",
     "contextPanelClose": "Close",
     "slashCommands": {
       "model": "Switch model",
