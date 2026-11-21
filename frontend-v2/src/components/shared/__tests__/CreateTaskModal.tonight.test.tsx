@@ -48,7 +48,7 @@ const ompQwenDown = mkPair({ runtime_slug: "qwen", runtime_label: "Qwen local", 
 
 async function openAndFill({ withRepo = true } = {}) {
   await userEvent.click(screen.getByRole("button", { name: "New task" }));
-  await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Fix flaky retry test");
+  await userEvent.type(screen.getByPlaceholderText("Short, clear task title"), "Fix flaky retry test");
   if (withRepo) {
     const select = await screen.findByRole("combobox", { name: "Repository" });
     await userEvent.selectOptions(select, repo.id);

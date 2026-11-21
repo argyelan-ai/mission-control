@@ -13,17 +13,20 @@ import { timeAgo } from "@/lib/utils";
 import { C, latencyColor } from "./colors";
 import { SectionHeading, ServiceDot, SparklineChart } from "./primitives";
 import { watchdogView } from "./watchdogStatus";
+import { isOperatorEvent } from "@/lib/operatorEvents";
 
 function SystemActivityFeed() {
   const t = useTranslations("home");
   const locale = useLocale();
   const { activeBoardId } = useAppStore();
-  const { data: events = [] } = useQuery({
+  // Fetch a few more than shown: plumbing events are left out (isOperatorEvent).
+  const { data: allEvents = [] } = useQuery({
     queryKey: ["activity", activeBoardId, "compact"],
-    queryFn: () => api.activity.list({ board_id: activeBoardId!, limit: 15 }),
+    queryFn: () => api.activity.list({ board_id: activeBoardId!, limit: 30 }),
     enabled: !!activeBoardId,
     refetchInterval: 15_000,
   });
+  const events = allEvents.filter(isOperatorEvent);
 
   if (events.length === 0) {
     return (

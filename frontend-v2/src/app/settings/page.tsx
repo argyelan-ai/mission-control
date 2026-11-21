@@ -2309,8 +2309,6 @@ function SettingsContent() {
         transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
         className={cn("shrink-0 px-4 py-4 md:px-6", openSection && "hidden md:block")}
       >
-        {/* label-sys stays untranslated: P2 mono instrument code (round-6 decision) */}
-        <div className="label-sys mb-2">System · Settings</div>
         <h1 className="display text-2xl font-semibold" style={{ color: "var(--color-text-primary)" }}>{t("title")}</h1>
         <p className="text-[13px] mt-1" style={{ color: "var(--color-text-secondary)" }}>
           {t("subtitle")}

@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
+import { Fragment, type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { useEffortWord } from "@/lib/effortWord";
 import { Brain, Square, ArrowUp, ChevronDown, Paperclip, X, FileText} from "lucide-react";
@@ -153,6 +153,27 @@ export function resolveSlashCommands(
     })
     .filter((cmd) => cmd.command.length > 1);
   return normalized;
+}
+
+/** MC's own chat commands, in this order, at the top of the "/" palette —
+ *  with MC's translated description instead of the harness's English text.
+ *  Only those the list actually holds are lifted: a command the harness does
+ *  not offer is never added here (no false promise). */
+export const MC_SLASH_ORDER = ["/new", "/clear", "/model", "/compact"] as const;
+
+export interface OrderedSlashCommands {
+  mc: SlashCommand[];
+  other: SlashCommand[];
+}
+
+export function orderSlashCommands(commands: SlashCommand[]): OrderedSlashCommands {
+  const byName = new Map(commands.map((c) => [c.command.toLowerCase(), c]));
+  const mc = MC_SLASH_ORDER.filter((name) => byName.has(name)).map((name) => ({
+    command: name,
+    descriptionKey: name.slice(1),
+  }));
+  const lifted = new Set<string>(mc.map((c) => c.command));
+  return { mc, other: commands.filter((c) => !lifted.has(c.command.toLowerCase())) };
 }
 
 /** One row of the model switcher, after normalization. */
@@ -515,7 +536,9 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     setDraftIndex(null);
     if (level) selectEffort(level);
   };
-  const slashCommands = resolveSlashCommands(capabilities?.slashCommands);
+  const orderedSlash = orderSlashCommands(resolveSlashCommands(capabilities?.slashCommands));
+  // One flat list in display order, so keyboard index and rows always agree.
+  const slashCommands = [...orderedSlash.mc, ...orderedSlash.other];
   const modelOptions = resolveModelOptions(capabilities?.modelOptions);
 
   // Palette is only ever "/<query>" with no space yet — once a space lands,
@@ -527,6 +550,11 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
     ? slashCommands.filter((cmd) => cmd.command.slice(1).toLowerCase().startsWith(paletteQuery))
     : [];
   const paletteVisible = paletteOpen && filteredCommands.length > 0;
+  // First row of the "more" group (harness commands) inside the filtered list:
+  // it gets a small group heading when MC's own commands sit above it.
+  const mcNames = new Set(orderedSlash.mc.map((c) => c.command));
+  const firstOtherIndex = filteredCommands.findIndex((c) => !mcNames.has(c.command));
+  const otherHasRawText = filteredCommands.some((c) => !mcNames.has(c.command) && !c.descriptionKey && c.description);
   const highlightedIndex = Math.min(paletteIndex, Math.max(filteredCommands.length - 1, 0));
 
   // "@" file mention: the files of the chat's working folder, searched with
@@ -920,25 +948,37 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             boxShadow: "var(--shadow-elevated)",
           }}
         >
-          <div className="max-h-56 overflow-y-auto p-1.5">
+          <div className="max-h-72 overflow-y-auto p-1.5">
             {filteredCommands.map((cmd, i) => (
-              <button
-                key={cmd.command}
-                type="button"
-                data-testid={`slash-item-${cmd.command}`}
-                data-highlighted={i === highlightedIndex}
-                onMouseEnter={() => setPaletteIndex(i)}
-                onClick={() => selectCommand(cmd.command)}
-                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-xs cursor-pointer font-mono text-left"
-                style={{
-                  backgroundColor: i === highlightedIndex ? C.accentSubtle : "transparent",
-                }}
-              >
-                <span style={{ color: C.accent }}>{cmd.command}</span>
-                <span className="text-[10px] font-medium" style={{ color: C.textMuted }}>
-                  {cmd.descriptionKey ? t(`slashCommands.${cmd.descriptionKey}`) : cmd.description}
-                </span>
-              </button>
+              <Fragment key={cmd.command}>
+                {i === firstOtherIndex && i > 0 && (
+                  <div
+                    data-testid="slash-group-more"
+                    className="px-2 pt-2 pb-1 text-xs font-medium"
+                    style={{ color: C.textMuted }}
+                  >
+                    {otherHasRawText ? t("slashGroupMoreRaw") : t("slashGroupMore")}
+                  </div>
+                )}
+                {/* Rows are a full finger target (44 px); the command stays
+                    mono (a machine value), the description is normal type. */}
+                <button
+                  type="button"
+                  data-testid={`slash-item-${cmd.command}`}
+                  data-highlighted={i === highlightedIndex}
+                  onMouseEnter={() => setPaletteIndex(i)}
+                  onClick={() => selectCommand(cmd.command)}
+                  className="w-full flex items-center gap-2 px-2 min-h-touch rounded-sm text-sm cursor-pointer text-left"
+                  style={{
+                    backgroundColor: i === highlightedIndex ? C.accentSubtle : "transparent",
+                  }}
+                >
+                  <span className="font-mono shrink-0" style={{ color: C.accent }}>{cmd.command}</span>
+                  <span className="text-xs min-w-0 truncate" style={{ color: C.textMuted }}>
+                    {cmd.descriptionKey ? t(`slashCommands.${cmd.descriptionKey}`) : cmd.description}
+                  </span>
+                </button>
+              </Fragment>
             ))}
           </div>
         </div>
@@ -1340,6 +1380,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   aria-haspopup="listbox"
                   aria-expanded={effortOpen}
                   aria-label={t("effortLevelCurrent", { level: effortWord(currentEffort ?? "auto") })}
+                  title={t("effortLevelHint")}
                   data-testid="effort-chip"
                   data-level={currentEffort ?? "auto"}
                   data-pending={pendingEffort != null}
@@ -1404,6 +1445,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                       list="effort-ticks"
                       data-testid="effort-slider"
                       aria-label={t("effortLevel")}
+                      title={t("effortLevelHint")}
                       aria-valuetext={effortWord(sliderLabel)}
                       disabled={pendingEffort != null}
                       autoFocus

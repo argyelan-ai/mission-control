@@ -195,7 +195,6 @@ export default function ReposPage() {
         {/* Header */}
         <div className="flex items-center justify-between gap-3 mb-6">
           <div>
-            <div className="label-sys mb-2">Code · Repos</div>
             <h1 className="display text-xl font-semibold" style={{ color: C.textPrimary }}>
               {t("title")}
             </h1>

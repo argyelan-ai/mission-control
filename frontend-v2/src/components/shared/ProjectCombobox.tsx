@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { Search, Plus, ChevronDown, X } from "lucide-react";
 import type { Project } from "@/lib/types";
 import { C, LANE, alpha } from "@/lib/colors";
@@ -19,6 +20,7 @@ interface ProjectComboboxProps {
   deep?: string;
 }
 
+// Labels: taskForm.project.status.<key> / taskForm.project.type.<value>.
 const STATUS_DOT: Record<string, { color: string; label: string }> = {
   active: { color: LANE.in_progress, label: "active" }, // C.info — active work
   draft:  { color: C.textDim,        label: "draft" },  // neutral, dim
@@ -61,6 +63,7 @@ export function ProjectCombobox({
   const ref = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const t = useTranslations("taskForm.project");
   const selected = projects.find((p) => p.id === value);
 
   useEffect(() => {
@@ -128,7 +131,7 @@ export function ProjectCombobox({
         }}
       >
         <span className="flex-1 truncate">
-          {selected ? selected.name : "Project (optional)"}
+          {selected ? selected.name : t("placeholder")}
         </span>
         {value ? (
           <X
@@ -164,7 +167,7 @@ export function ProjectCombobox({
                 ref={inputRef}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search projects..."
+                placeholder={t("search")}
                 className="flex-1 bg-transparent text-[11px] outline-none"
                 style={{ color: textPrimary }}
               />
@@ -188,7 +191,7 @@ export function ProjectCombobox({
                       {p.name}
                     </span>
                     <span className="flex items-center gap-1.5 text-[9px]" style={{ color: textSecondary }}>
-                      {dot.label}
+                      {t(`status.${STATUS_DOT[p.status] ? p.status : "draft"}`)}
                       <span
                         className="w-1.5 h-1.5 rounded-full"
                         style={{ backgroundColor: dot.color }}
@@ -199,7 +202,7 @@ export function ProjectCombobox({
               })}
               {filtered.length === 0 && (
                 <div className="px-3 py-3 text-[11px] text-center" style={{ color: textMuted }}>
-                  No project found
+                  {t("notFound")}
                 </div>
               )}
             </div>
@@ -213,7 +216,7 @@ export function ProjectCombobox({
                   style={{ color: accent }}
                 >
                   <Plus size={12} />
-                  Create new project
+                  {t("createNew")}
                 </button>
               ) : (
                 <div className="p-3 flex flex-col gap-2">
@@ -225,18 +228,19 @@ export function ProjectCombobox({
                       if (e.key === "Enter") handleCreate();
                       if (e.key === "Escape") setShowCreate(false);
                     }}
-                    placeholder="Project name"
+                    placeholder={t("namePlaceholder")}
                     className="w-full text-[11px] px-2.5 py-1.5 rounded-lg bg-transparent outline-none"
                     style={{ border: `1px solid ${border}`, color: textPrimary }}
                   />
                   <select
+                    aria-label={t("typeAria")}
                     value={newType}
                     onChange={(e) => setNewType(e.target.value)}
                     className="w-full text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
                     style={{ backgroundColor: deep, border: `1px solid ${border}`, color: textSecondary }}
                   >
-                    {PROJECT_TYPES.map((t) => (
-                      <option key={t.value} value={t.value}>{t.label}</option>
+                    {PROJECT_TYPES.map((pt) => (
+                      <option key={pt.value} value={pt.value}>{t(`type.${pt.value}`)}</option>
                     ))}
                   </select>
                   <div className="flex gap-2">
@@ -246,7 +250,7 @@ export function ProjectCombobox({
                       className="flex-1 text-[10px] py-1 rounded-lg cursor-pointer"
                       style={{ color: textMuted, border: `1px solid ${border}` }}
                     >
-                      Cancel
+                      {t("cancel")}
                     </button>
                     <button
                       type="button"
@@ -255,7 +259,7 @@ export function ProjectCombobox({
                       className="flex-1 text-[10px] py-1 rounded-lg font-medium cursor-pointer disabled:opacity-30"
                       style={{ backgroundColor: alpha(accent, 0.13), color: accent, border: `1px solid ${alpha(accent, 0.4)}` }}
                     >
-                      {creating ? "..." : "Create"}
+                      {creating ? "..." : t("create")}
                     </button>
                   </div>
                 </div>

@@ -23,7 +23,7 @@ function renderForm(onChange = vi.fn()) {
 describe("TaskFormFields — Blocker-to-operator toggle", () => {
   it("patches blockerToOperator when the pill is clicked", () => {
     const onChange = renderForm();
-    const pill = screen.getByRole("button", { name: /blocker to me/i });
+    const pill = screen.getByRole("button", { name: /blockers to me/i });
     fireEvent.click(pill);
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ blockerToOperator: true }),

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -14,6 +15,7 @@ export function ReviewStep({
   update,
   onCreated,
 }: WizardStepProps & { onCreated: () => void }) {
+  const t = useTranslations("agents.wizard.review");
   const qc = useQueryClient();
   const [creating, setCreating] = useState(false);
   // Mirror the create result locally — `update` lifts it into wizard state
@@ -48,7 +50,7 @@ export function ReviewStep({
       const token = createdWithToken.token ?? null;
       setLocalResult({ id: created.id, token });
       update({ createdAgentId: created.id, createdToken: token });
-      notify.success(`Agent "${state.name}" created`);
+      notify.success(t("created", { name: state.name }));
 
       // Host agents don't auto-provision on create — stage their files now.
       // Provisioning rotates the token, so the freshly returned one (if any)
@@ -62,12 +64,12 @@ export function ReviewStep({
             update({ createdAgentId: created.id, createdToken: provisioned.token });
           }
         } catch {
-          notify.error("Host files could not be rendered — retry later via the provision button.");
+          notify.error(t("hostFilesFailed"));
         }
       }
       await qc.refetchQueries({ queryKey: ["agents"] });
     } catch (e: unknown) {
-      notify.error(`Creation failed: ${e instanceof Error ? e.message : "error"}`);
+      notify.error(t("createFailed", { message: e instanceof Error ? e.message : t("errorFallback") }));
     } finally {
       setCreating(false);
     }
@@ -82,14 +84,14 @@ export function ReviewStep({
   });
 
   const rows: { label: string; value: string }[] = [
-    { label: "Name", value: `${state.emoji || "🤖"} ${state.name}` },
-    { label: "Role", value: state.role || "—" },
-    { label: "Runtime", value: state.agentRuntime },
-    { label: "Harness", value: state.harness ?? "(derived)" },
-    { label: "LLM Runtime", value: state.runtimeId || "Fallback" },
-    { label: "Model", value: state.model || "(runtime default)" },
-    { label: "Scopes", value: `${state.scopes.length} selected` },
-    { label: "Board Lead", value: state.isBoardLead ? "yes" : "no" },
+    { label: t("name"), value: `${state.emoji || "🤖"} ${state.name}` },
+    { label: t("role"), value: state.role || "—" },
+    { label: t("runtime"), value: t(`runtimeValue.${state.agentRuntime}`) },
+    { label: t("harness"), value: state.harness ?? t("harnessDerived") },
+    { label: t("llmRuntime"), value: state.runtimeId || t("fallback") },
+    { label: t("model"), value: state.model || t("modelDefault") },
+    { label: t("scopes"), value: t("scopesCount", { count: state.scopes.length }) },
+    { label: t("boardLead"), value: state.isBoardLead ? t("yes") : t("no") },
   ];
 
   if (!createdAgentId) {
@@ -113,11 +115,9 @@ export function ReviewStep({
             }}
           >
             <span className="font-medium" style={{ color: C.warning }}>
-              Grok Build CLI must be logged in on the host.
+              {t("grokTitle")}
             </span>{" "}
-            Without a valid xAI OAuth session (<code className="font-mono">~/.grok/auth.json</code>)
-            dispatches will stall. One-time on the Mac:{" "}
-            <code className="font-mono">grok login --device-auth</code>.
+            {t("grokBody", { file: "~/.grok/auth.json", cmd: "grok login --device-auth" })}
           </div>
         )}
         <div className="flex justify-end">
@@ -128,9 +128,9 @@ export function ReviewStep({
             style={wizardBtnPrimaryStyle}
           >
             {creating ? (
-              <span className="flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Creating…</span>
+              <span className="flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> {t("creating")}</span>
             ) : (
-              "Create agent"
+              t("create")
             )}
           </button>
         </div>
@@ -142,15 +142,15 @@ export function ReviewStep({
     <div className="space-y-4">
       {createdToken && (
         <div>
-          <label className={wizardLabelClass}>Agent token (shown only once — save it now!)</label>
+          <label className={wizardLabelClass}>{t("token")}</label>
           <TokenDisplay token={createdToken} />
         </div>
       )}
 
       <div>
-        <label className={wizardLabelClass}>Readiness check</label>
+        <label className={wizardLabelClass}>{t("readiness")}</label>
         <div className="space-y-1.5">
-          {(readiness?.checks ?? [{ label: "waiting for provisioning…", ok: false, detail: "" }]).map((c) => (
+          {(readiness?.checks ?? [{ label: t("waiting"), ok: false, detail: "" }]).map((c) => (
             <div key={c.label} className="flex items-center gap-2 text-sm">
               {c.ok ? (
                 <CheckCircle2 size={15} className="text-[var(--color-online)]" />
@@ -164,8 +164,7 @@ export function ReviewStep({
         </div>
         {state.agentRuntime === "host" && (
           <p className="mt-2 text-[10px] text-[var(--color-text-muted)]">
-            Host agent: files were rendered to ~/.mc/agents/&lt;slug&gt;/.
-            Load onto the Mac via launchctl (see activity event) — the heartbeat will turn green.
+            {t("hostNote")}
           </p>
         )}
       </div>
@@ -176,7 +175,7 @@ export function ReviewStep({
           className="px-5 py-2.5 text-sm rounded-xl font-medium text-[var(--color-on-accent)] cursor-pointer"
           style={wizardBtnPrimaryStyle}
         >
-          Done
+          {t("done")}
         </button>
       </div>
     </div>

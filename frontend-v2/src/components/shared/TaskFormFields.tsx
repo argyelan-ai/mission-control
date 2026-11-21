@@ -22,6 +22,7 @@ import {
   FolderKanban, Users, ChevronDown, ChevronRight, ClipboardList,
   CircleAlert, Wand2, Paperclip, X, MousePointerClick, UserCheck, BellRing, FastForward } from "lucide-react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
@@ -51,48 +52,53 @@ const C = {
 };
 
 // ── Static option lists ──────────────────────────────────────────────
+// Words are resolved at render time from the `taskForm` catalog (docs/i18n.md
+// "Shared constants"): a constant only holds the value, never a translated label.
+// Glyph per language (taskForm.priorityGlyph): L/M/H in English, N/M/H in German.
 const PRIORITY_OPTIONS = [
-  { value: "low", label: "L", color: C.textMuted },
-  { value: "medium", label: "M", color: C.accent },
-  { value: "high", label: "H", color: C.warning },
-  { value: "critical", label: "!", color: C.error },
+  { value: "low", color: C.textMuted },
+  { value: "medium", color: C.accent },
+  { value: "high", color: C.warning },
+  { value: "critical", color: C.error },
 ];
 
 const TASK_TYPE_OPTIONS = [
-  { value: "story", label: "Feature" },
-  { value: "bug", label: "Bugfix" },
-  { value: "revision", label: "Überarbeitung" },
-  { value: "chore", label: "Wartung" },
+  { value: "story", labelKey: "taskType.story" },
+  { value: "bug", labelKey: "taskType.bug" },
+  { value: "revision", labelKey: "taskType.revision" },
+  { value: "chore", labelKey: "taskType.chore" },
 ];
 
 const APPROVAL_OPTIONS = [
-  { value: "", label: "Auto" },
-  { value: "never", label: "Nie" },
-  { value: "on_plan", label: "Bei Plan" },
-  { value: "on_execution", label: "Bei Ausführung" },
-  { value: "on_publish", label: "Bei Publish" },
-  { value: "on_sensitive_action", label: "Bei Risiko" },
-  { value: "always", label: "Immer" },
+  { value: "", labelKey: "approvalOption.auto" },
+  { value: "never", labelKey: "approvalOption.never" },
+  { value: "on_plan", labelKey: "approvalOption.on_plan" },
+  { value: "on_execution", labelKey: "approvalOption.on_execution" },
+  { value: "on_publish", labelKey: "approvalOption.on_publish" },
+  { value: "on_sensitive_action", labelKey: "approvalOption.on_sensitive_action" },
+  { value: "always", labelKey: "approvalOption.always" },
 ];
 
 const REQUEST_KIND_OPTIONS = [
-  { value: "", label: "Automatisch" },
-  { value: "code_change", label: "Code-Änderung" },
-  { value: "content_create", label: "Content erstellen" },
-  { value: "research", label: "Recherche" },
-  { value: "browser_task", label: "Browser-Automation" },
-  { value: "credential_task", label: "Mit Logins / Keys" },
-  { value: "mixed", label: "Gemischt" },
+  { value: "", labelKey: "requestKindOption.auto" },
+  { value: "code_change", labelKey: "requestKindOption.code_change" },
+  { value: "content_create", labelKey: "requestKindOption.content_create" },
+  { value: "research", labelKey: "requestKindOption.research" },
+  { value: "browser_task", labelKey: "requestKindOption.browser_task" },
+  { value: "credential_task", labelKey: "requestKindOption.credential_task" },
+  { value: "mixed", labelKey: "requestKindOption.mixed" },
 ];
 
 const AUTONOMY_OPTIONS = [
-  { value: "", label: "Unbestimmt" },
-  { value: "advise_only", label: "Nur beraten" },
-  { value: "draft_only", label: "Nur Entwurf" },
-  { value: "execute_low_risk", label: "Low-Risk selbst ausführen" },
-  { value: "execute_with_approval_on_risk", label: "Risiko → Freigabe" },
-  { value: "manual_dispatch_required", label: "Manual dispatch" },
+  { value: "", labelKey: "autonomyOption.unset" },
+  { value: "advise_only", labelKey: "autonomyOption.advise_only" },
+  { value: "draft_only", labelKey: "autonomyOption.draft_only" },
+  { value: "execute_low_risk", labelKey: "autonomyOption.execute_low_risk" },
+  { value: "execute_with_approval_on_risk", labelKey: "autonomyOption.execute_with_approval_on_risk" },
+  { value: "manual_dispatch_required", labelKey: "autonomyOption.manual_dispatch_required" },
 ];
+
+const REPORT_FORMATS = ["summary", "screenshot", "before_after"] as const;
 
 // ── Templates (Quick-Start Chips) ────────────────────────────────────
 type TemplatePrefill = {
@@ -100,42 +106,33 @@ type TemplatePrefill = {
   plannerMode?: "auto" | "with_planner" | "direct";
   requestKind?: string;
   autonomyLevel?: string;
-  descriptionPlaceholder?: string;
-  acceptancePlaceholder?: string;
 };
 
+// label / placeholders: taskForm.templates.<key>.label|description|acceptance
 const TEMPLATES: Record<string, {
-  label: string;
   icon: typeof Bug;
   color: string;
   prefill: TemplatePrefill;
 }> = {
   bug: {
-    label: "Bug Fix",
     icon: Bug,
     color: C.error,
     prefill: {
       taskType: "bug",
       plannerMode: "direct",
       requestKind: "code_change",
-      descriptionPlaceholder: "Was geht nicht? Wie reproduziert man's? Was sollte stattdessen passieren?",
-      acceptancePlaceholder: "Bug ist weg, Reproduktions-Schritte geben keinen Fehler mehr, Test deckt den Case ab.",
     },
   },
   feature: {
-    label: "Feature",
     icon: Sparkles,
     color: C.accent,
     prefill: {
       taskType: "story",
       plannerMode: "auto",
       requestKind: "code_change",
-      descriptionPlaceholder: "Was soll neu moeglich sein? Wer benutzt es? Warum?",
-      acceptancePlaceholder: "Das neue Feature ist live, ein typischer User-Flow funktioniert.",
     },
   },
   research: {
-    label: "Research",
     icon: SearchIcon,
     color: C.info,
     prefill: {
@@ -143,8 +140,6 @@ const TEMPLATES: Record<string, {
       plannerMode: "direct",
       requestKind: "research",
       autonomyLevel: "draft_only",
-      descriptionPlaceholder: "Was willst du herausfinden? Welche Quellen hast du im Kopf?",
-      acceptancePlaceholder: "Zusammenfassung mit 3+ Primaerquellen und klarer Empfehlung.",
     },
   },
 };
@@ -320,11 +315,11 @@ function AgentCard({
     agent.status === "online" || agent.status === "idle" ? C.online :
     C.textMuted;
 
-  const role = agent.role ?? "Agent";
-  const stateLabel = agent.run_state === "idle" ? "bereit" :
-                     agent.run_state === "running" ? "arbeitet" :
-                     agent.run_state === "blocked" ? "blockiert" :
-                     agent.run_state;
+  const t = useTranslations("taskForm");
+  const role = agent.role ?? t("agent");
+  const stateLabel = agent.run_state === "idle" || agent.run_state === "running" || agent.run_state === "blocked"
+    ? t(`agentState.${agent.run_state}`)
+    : agent.run_state;
 
   return (
     <button
@@ -424,6 +419,7 @@ export function TaskFormFields({
 }: TaskFormFieldsProps) {
   const qc = useQueryClient();
   const fieldId = useId();
+  const t = useTranslations("taskForm");
 
   // ── Reference files (ADR-053) — local-only, reported upward via callback ──
   const [stagedReferenceFiles, setStagedReferenceFiles] = useState<StagedReferenceFile[]>([]);
@@ -566,14 +562,14 @@ export function TaskFormFields({
     const base = containerWorkspacePath(selectedAgent.workspace_path, selectedAgent.agent_runtime);
     if (selectedProject && selectedProject.name) {
       const projectSlug = slugify(selectedProject.name);
-      const taskSlug = autoSlug || "neue-aufgabe";
+      const taskSlug = autoSlug || t("newTaskSlug");
       return `${base}/projects/${projectSlug}/.worktrees/${taskSlug}/`;
     }
     if (autoSlug) {
-      return `${base}/${autoSlug}/ (ad-hoc)`;
+      return `${base}/${autoSlug}/ ${t("adHoc")}`;
     }
     return `${base}/`;
-  }, [selectedAgent, selectedProject, autoSlug]);
+  }, [selectedAgent, selectedProject, autoSlug, t]);
 
   // ── Template apply ──
   const applyTemplate = useCallback((key: keyof typeof TEMPLATES) => {
@@ -617,11 +613,11 @@ export function TaskFormFields({
       qc.invalidateQueries({ queryKey: ["repos"] });
       return repo;
     } catch (err) {
-      const msg = err instanceof Error && err.message ? err.message : "Repo-Erstellung fehlgeschlagen";
+      const msg = err instanceof Error && err.message ? err.message : t("repoCreateFailed");
       notify.error(msg);
       throw err;
     }
-  }, [qc]);
+  }, [qc, t]);
 
   // Link an existing registry repo to the currently selected project.
   const handleLinkRepo = useCallback(async (repoId: string) => {
@@ -630,13 +626,13 @@ export function TaskFormFields({
       await api.repos.linkProject(repoId, value.projectId);
       qc.invalidateQueries({ queryKey: ["repos"] });
       refetchGitInfo();
-      notify.success("Repo verknüpft");
+      notify.success(t("repoLinked"));
     } catch (err) {
-      const msg = err instanceof Error && err.message ? err.message : "Repo-Verknüpfung fehlgeschlagen";
+      const msg = err instanceof Error && err.message ? err.message : t("repoLinkFailed");
       notify.error(msg);
       throw err;
     }
-  }, [qc, value.projectId, refetchGitInfo]);
+  }, [qc, value.projectId, refetchGitInfo, t]);
 
   const toggleReportFormat = (fmt: string) => {
     patch({
@@ -646,8 +642,12 @@ export function TaskFormFields({
     });
   };
 
-  const currentTemplate = value.activeTemplate ? TEMPLATES[value.activeTemplate] : null;
-  const descriptionPlaceholder = currentTemplate?.prefill.descriptionPlaceholder ?? "Was soll gemacht werden?";
+  const descriptionPlaceholder = value.activeTemplate
+    ? t(`templates.${value.activeTemplate}.description`)
+    : t("descriptionPlaceholder");
+  const acceptancePlaceholder = value.activeTemplate
+    ? t(`templates.${value.activeTemplate}.acceptance`)
+    : null;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") onEscape?.();
@@ -682,21 +682,21 @@ export function TaskFormFields({
         {/* Templates (full width) */}
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] shrink-0" style={{ color: C.textMuted }}>
-            <Wand2 size={10} className="inline mr-1 mb-0.5" />Vorlage:
+            <Wand2 size={10} className="inline mr-1 mb-0.5" />{t("template")}
           </span>
           {(Object.keys(TEMPLATES) as Array<keyof typeof TEMPLATES>).map((key) => {
-            const t = TEMPLATES[key]; const active = value.activeTemplate === key; const Icon = t.icon;
+            const tpl = TEMPLATES[key]; const active = value.activeTemplate === key; const Icon = tpl.icon;
             return (
               <button key={key} type="button"
                 onClick={() => (active ? patch({ activeTemplate: null }) : applyTemplate(key))}
                 className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono font-medium rounded-md transition-all cursor-pointer"
-                style={{ color: active ? t.color : C.textMuted, background: active ? alpha(t.color, 0.08) : "transparent", border: `1px solid ${active ? alpha(t.color, 0.33) : C.border}` }}>
-                <Icon size={10} />{t.label}
+                style={{ color: active ? tpl.color : C.textMuted, background: active ? alpha(tpl.color, 0.08) : "transparent", border: `1px solid ${active ? alpha(tpl.color, 0.33) : C.border}` }}>
+                <Icon size={10} />{t(`templates.${key}.label`)}
               </button>
             );
           })}
           {value.activeTemplate && (
-            <button type="button" onClick={() => patch({ activeTemplate: null })} className="text-[10px] ml-1 cursor-pointer hover:underline" style={{ color: C.textMuted }}>zuruecksetzen</button>
+            <button type="button" onClick={() => patch({ activeTemplate: null })} className="text-[10px] ml-1 cursor-pointer hover:underline" style={{ color: C.textMuted }}>{t("reset")}</button>
           )}
         </div>
 
@@ -704,10 +704,10 @@ export function TaskFormFields({
           {/* ── MAIN: hero ── */}
           <div className="flex flex-col gap-5 min-w-0">
             <div className="flex flex-col gap-1.5">
-              <label htmlFor={`${fieldId}-title`} className="text-[11px] font-medium" style={{ color: C.textMuted }}>Titel <span style={{ color: C.error }}>*</span></label>
+              <label htmlFor={`${fieldId}-title`} className="text-[11px] font-medium" style={{ color: C.textMuted }}>{t("title")} <span style={{ color: C.error }}>*</span></label>
               <input id={`${fieldId}-title`} ref={titleRef} type="text" required value={value.title}
                 onChange={(e) => patch({ title: e.target.value })} onKeyDown={handleKeyDown}
-                placeholder="Kurzer, klarer Aufgabentitel"
+                placeholder={t("titlePlaceholder")}
                 className="w-full text-[15px] outline-none px-3.5 py-3 rounded-xl transition-all"
                 style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }}
                 onFocus={(e) => { e.target.style.borderColor = alpha(C.accent, 0.4); e.target.style.boxShadow = `0 0 0 3px ${alpha(C.accent, 0.1)}`; }}
@@ -715,7 +715,7 @@ export function TaskFormFields({
                 disabled={disabled} />
             </div>
             <div className="flex flex-col gap-1.5 flex-1">
-              <label htmlFor={`${fieldId}-description`} className="text-[11px] font-medium" style={{ color: C.textMuted }}>Beschreibung <span style={{ color: C.textMuted }}>(optional)</span></label>
+              <label htmlFor={`${fieldId}-description`} className="text-[11px] font-medium" style={{ color: C.textMuted }}>{t("description")} <span style={{ color: C.textMuted }}>{t("optional")}</span></label>
               <textarea id={`${fieldId}-description`} ref={descriptionRef} value={value.description}
                 onChange={(e) => patch({ description: e.target.value })}
                 onKeyDown={handleKeyDown} placeholder={descriptionPlaceholder}
@@ -729,15 +729,15 @@ export function TaskFormFields({
               {value.plannerMode === "with_planner" && (
                 <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }} className="flex flex-col gap-3 overflow-hidden">
                   <div className="flex flex-col gap-1.5">
-                    <label htmlFor={`${fieldId}-acceptance`} className="text-[11px] font-medium" style={{ color: C.textMuted }}>Acceptance Criteria</label>
-                    <textarea id={`${fieldId}-acceptance`} aria-label="Acceptance Criteria" value={value.acceptanceCriteria} onChange={(e) => patch({ acceptanceCriteria: e.target.value })}
-                      placeholder={currentTemplate?.prefill.acceptancePlaceholder ?? "Was muss erfuellt sein?"} rows={2}
+                    <label htmlFor={`${fieldId}-acceptance`} className="text-[11px] font-medium" style={{ color: C.textMuted }}>{t("acceptance")}</label>
+                    <textarea id={`${fieldId}-acceptance`} aria-label={t("acceptance")} value={value.acceptanceCriteria} onChange={(e) => patch({ acceptanceCriteria: e.target.value })}
+                      placeholder={acceptancePlaceholder ?? t("acceptancePlaceholder")} rows={2}
                       className="w-full text-[12px] outline-none px-3 py-2 rounded-xl resize-none" style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label htmlFor={`${fieldId}-scope`} className="text-[11px] font-medium" style={{ color: C.textMuted }}>Scope-Out</label>
-                    <textarea id={`${fieldId}-scope`} aria-label="Scope-Out" value={value.scopeOut} onChange={(e) => patch({ scopeOut: e.target.value })}
-                      placeholder="Was gehoert NICHT dazu?" rows={2}
+                    <label htmlFor={`${fieldId}-scope`} className="text-[11px] font-medium" style={{ color: C.textMuted }}>{t("scopeOut")}</label>
+                    <textarea id={`${fieldId}-scope`} aria-label={t("scopeOut")} value={value.scopeOut} onChange={(e) => patch({ scopeOut: e.target.value })}
+                      placeholder={t("scopeOutPlaceholder")} rows={2}
                       className="w-full text-[12px] outline-none px-3 py-2 rounded-xl resize-none" style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }} />
                   </div>
                 </motion.div>
@@ -751,24 +751,24 @@ export function TaskFormFields({
                 Zuweisungs-/Ausführungs-Optionen (Mark, 04.07.: Repo-Wahl ist wichtig
                 genug, um nicht unter Agent/Priorität zu verschwinden). */}
             <div className="flex flex-col gap-3">
-              {sectionHead("Projekt")}
+              {sectionHead(t("sectionProject"))}
               <ProjectCombobox projects={projects ?? []} value={value.projectId}
                 onChange={(id) => patch({ projectId: id, phaseId: null, deliverableId: null, branchName: "", repoId: null })}
                 onCreateProject={handleCreateProject} accent={C.accent} textPrimary={C.textPrimary} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} deep={C.deep} />
               {value.projectId && phases && phases.length > 0 && (
                 <div className="flex flex-col gap-1.5">
-                  <label htmlFor={`${fieldId}-phase`} className="text-[10px]" style={{ color: C.textMuted }}>Phase</label>
-                  <select id={`${fieldId}-phase`} aria-label="Phase" value={value.phaseId ?? ""} onChange={(e) => patch({ phaseId: e.target.value || null })} className={selCls} style={selStyle(!!value.phaseId)}>
-                    <option value="">No phase (optional)</option>
+                  <label htmlFor={`${fieldId}-phase`} className="text-[10px]" style={{ color: C.textMuted }}>{t("phase")}</label>
+                  <select id={`${fieldId}-phase`} aria-label={t("phase")} value={value.phaseId ?? ""} onChange={(e) => patch({ phaseId: e.target.value || null })} className={selCls} style={selStyle(!!value.phaseId)}>
+                    <option value="">{t("noPhase")}</option>
                     {phases.filter((p) => p.status === "active" || p.status === "pending").map((p) => (<option key={p.id} value={p.id}>{p.status === "active" ? "● " : "○ "}{p.title}</option>))}
                   </select>
                 </div>
               )}
               {value.projectId && deliverables && deliverables.length > 0 && (
                 <div className="flex flex-col gap-1.5">
-                  <label htmlFor={`${fieldId}-deliverable`} className="text-[10px]" style={{ color: C.textMuted }}>Basiert auf</label>
-                  <select id={`${fieldId}-deliverable`} aria-label="Basiert auf Deliverable" value={value.deliverableId ?? ""} onChange={(e) => patch({ deliverableId: e.target.value || null })} className={selCls} style={selStyle(!!value.deliverableId)}>
-                    <option value="">No deliverable</option>
+                  <label htmlFor={`${fieldId}-deliverable`} className="text-[10px]" style={{ color: C.textMuted }}>{t("basedOn")}</label>
+                  <select id={`${fieldId}-deliverable`} aria-label={t("basedOnAria")} value={value.deliverableId ?? ""} onChange={(e) => patch({ deliverableId: e.target.value || null })} className={selCls} style={selStyle(!!value.deliverableId)}>
+                    <option value="">{t("noDeliverable")}</option>
                     {deliverables.map((d) => (<option key={d.id} value={d.id}>{d.title} ({d.deliverable_type})</option>))}
                   </select>
                 </div>
@@ -783,13 +783,13 @@ export function TaskFormFields({
             {/* Reference files (ADR-053) */}
             {enableReferenceFiles && (
               <div className="flex flex-col gap-3">
-                {sectionHead("Reference files")}
+                {sectionHead(t("sectionFiles"))}
                 <label
                   className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[11px] cursor-pointer transition-colors self-start"
                   style={{ border: `1px dashed ${C.border}`, color: C.textMuted }}
                 >
                   <Paperclip size={11} />
-                  Add files
+                  {t("addFiles")}
                   <input
                     type="file"
                     multiple
@@ -813,7 +813,7 @@ export function TaskFormFields({
                           type="button"
                           onClick={() => removeStagedReferenceFile(f.id)}
                           disabled={disabled}
-                          aria-label={`Remove ${f.file.name}`}
+                          aria-label={t("removeFile", { name: f.file.name })}
                           className="shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           style={{ color: C.textMuted }}
                         >
@@ -822,10 +822,10 @@ export function TaskFormFields({
                       </div>
                     ))}
                     <textarea
-                      aria-label="Note for reference files"
+                      aria-label={t("fileNoteAria")}
                       value={referenceNote}
                       onChange={(e) => updateReferenceNote(e.target.value)}
-                      placeholder="Note for the agent (optional)"
+                      placeholder={t("fileNotePlaceholder")}
                       rows={2}
                       disabled={disabled}
                       className="w-full text-[11px] px-2.5 py-2 rounded-lg outline-none resize-none"
@@ -838,24 +838,24 @@ export function TaskFormFields({
 
             {/* Zuweisung */}
             <div className="flex flex-col gap-3">
-              {sectionHead("Zuweisung")}
+              {sectionHead(t("sectionAssign"))}
               <div className="flex flex-col gap-1.5">
-                <label htmlFor={`${fieldId}-agent`} className="text-[10px]" style={{ color: C.textMuted }}><Users size={10} className="inline mr-1" />Agent</label>
+                <label htmlFor={`${fieldId}-agent`} className="text-[10px]" style={{ color: C.textMuted }}><Users size={10} className="inline mr-1" />{t("agent")}</label>
                 <div className="flex items-center gap-2">
                   {selectedAgent && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: C.online }} />}
-                  <select id={`${fieldId}-agent`} aria-label="Agent" value={value.selectedAgentId ?? ""} onChange={(e) => patch({ selectedAgentId: e.target.value || null })} className={selCls} style={selStyle(!!selectedAgent)}>
-                    <option value="">Auto — bester verfügbarer</option>
-                    {availableAgents.map((a) => (<option key={a.id} value={a.id}>{a.name} — {a.role ?? "Agent"}</option>))}
+                  <select id={`${fieldId}-agent`} aria-label={t("agent")} value={value.selectedAgentId ?? ""} onChange={(e) => patch({ selectedAgentId: e.target.value || null })} className={selCls} style={selStyle(!!selectedAgent)}>
+                    <option value="">{t("agentAuto")}</option>
+                    {availableAgents.map((a) => (<option key={a.id} value={a.id}>{a.name} — {a.role ?? t("agent")}</option>))}
                   </select>
                 </div>
               </div>
               <div className="flex flex-col gap-1.5">
-                <span className="text-[10px]" style={{ color: C.textMuted }}>Priorität</span>
+                <span className="text-[10px]" style={{ color: C.textMuted }}>{t("priority")}</span>
                 <div className="flex items-center gap-1">
                   {PRIORITY_OPTIONS.map((opt) => (
-                    <button key={opt.value} type="button" onClick={() => patch({ priority: opt.value })} aria-label={`Priorität ${opt.label}`} aria-pressed={value.priority === opt.value}
+                    <button key={opt.value} type="button" onClick={() => patch({ priority: opt.value })} aria-label={t("priorityAria", { level: t(`priorityLevel.${opt.value}`) })} aria-pressed={value.priority === opt.value}
                       className="w-7 h-7 flex items-center justify-center rounded-lg text-[10px] font-bold transition-all cursor-pointer" style={pill(value.priority === opt.value, opt.color)}>
-                      {opt.label}
+                      {t(`priorityGlyph.${opt.value}`)}
                     </button>
                   ))}
                 </div>
@@ -864,21 +864,21 @@ export function TaskFormFields({
 
             {/* Ausführung */}
             <div className="flex flex-col gap-3">
-              {sectionHead("Ausführung")}
+              {sectionHead(t("sectionRun"))}
               <div className="flex flex-col gap-1.5">
-                <span className="text-[10px]" style={{ color: C.textMuted }}>Typ</span>
+                <span className="text-[10px]" style={{ color: C.textMuted }}>{t("type")}</span>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {TASK_TYPE_OPTIONS.map((opt) => (
                     <button key={opt.value} type="button" onClick={() => patch({ taskType: opt.value })} aria-pressed={value.taskType === opt.value}
                       className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.taskType === opt.value, C.accent)}>
-                      {opt.label}
+                      {t(opt.labelKey)}
                     </button>
                   ))}
                 </div>
               </div>
               <div className="flex flex-col gap-1.5">
-                <label htmlFor={`${fieldId}-deadline`} className="text-[10px]" style={{ color: C.textMuted }}><Calendar size={10} className="inline mr-1" />Deadline</label>
-                <input id={`${fieldId}-deadline`} type="date" aria-label="Deadline" value={value.dueAt} onChange={(e) => patch({ dueAt: e.target.value })}
+                <label htmlFor={`${fieldId}-deadline`} className="text-[10px]" style={{ color: C.textMuted }}><Calendar size={10} className="inline mr-1" />{t("deadline")}</label>
+                <input id={`${fieldId}-deadline`} type="date" aria-label={t("deadline")} value={value.dueAt} onChange={(e) => patch({ dueAt: e.target.value })}
                   className="w-full text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer" style={{ background: C.deep, border: `1px solid ${value.dueAt ? alpha(C.accent, 0.33) : C.border}`, color: value.dueAt ? C.textPrimary : C.textMuted }} />
               </div>
               <PlannerSlider value={value.plannerMode} onChange={(m) => patch({ plannerMode: m })} accent={C.accent} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} />
@@ -888,7 +888,7 @@ export function TaskFormFields({
               <div className="flex items-start gap-2 px-3 py-2 rounded-lg font-mono text-[10px]" style={{ background: alpha(C.accent, 0.03), border: `1px solid ${alpha(C.accent, 0.13)}` }}>
                 <FolderKanban size={11} style={{ color: C.accent, flexShrink: 0, marginTop: 1 }} />
                 <div className="min-w-0">
-                  <span style={{ color: C.textMuted }}>Arbeitsplatz: </span>
+                  <span style={{ color: C.textMuted }}>{t("workspace")} </span>
                   <span style={{ color: C.textPrimary, wordBreak: "break-all" }}>{workspacePreview}</span>
                 </div>
               </div>
@@ -899,42 +899,42 @@ export function TaskFormFields({
               <button type="button" onClick={() => setAdvancedExpanded((v) => !v)} aria-expanded={advancedExpanded} aria-controls={`${fieldId}-advanced`}
                 className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors cursor-pointer self-start" style={{ color: advancedExpanded ? C.accent : C.textMuted }}>
                 {advancedExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                <Settings2 size={11} />Erweitert
-                {!advancedExpanded && (<span className="normal-case tracking-normal font-normal" style={{ color: C.textMuted }}>· Approval · Auth · URLs · Intake</span>)}
+                <Settings2 size={11} />{t("advanced")}
+                {!advancedExpanded && (<span className="normal-case tracking-normal font-normal" style={{ color: C.textMuted }}>{t("advancedSummary")}</span>)}
               </button>
               <AnimatePresence>
                 {advancedExpanded && (
                   <motion.div id={`${fieldId}-advanced`} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }} className="flex flex-col gap-4 overflow-hidden">
                     <div className="flex flex-col gap-1.5">
-                      <label htmlFor={`${fieldId}-approval`} className="text-[10px]" style={{ color: C.textMuted }}>Approval</label>
-                      <select id={`${fieldId}-approval`} aria-label="Approval-Policy" value={value.approvalPolicy} onChange={(e) => patch({ approvalPolicy: e.target.value })} className={selCls} style={selStyle(!!value.approvalPolicy)}>
-                        {APPROVAL_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
+                      <label htmlFor={`${fieldId}-approval`} className="text-[10px]" style={{ color: C.textMuted }}>{t("approval")}</label>
+                      <select id={`${fieldId}-approval`} aria-label={t("approvalAria")} value={value.approvalPolicy} onChange={(e) => patch({ approvalPolicy: e.target.value })} className={selCls} style={selStyle(!!value.approvalPolicy)}>
+                        {APPROVAL_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>))}
                       </select>
                     </div>
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <button type="button" onClick={() => patch({ needsBrowser: !value.needsBrowser })} aria-pressed={value.needsBrowser} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.needsBrowser, C.info)}><Globe size={11} />Browser</button>
-                      <button type="button" onClick={() => patch({ requiresAuth: !value.requiresAuth })} aria-pressed={value.requiresAuth} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.requiresAuth, C.warning)}><KeyRound size={11} />Auth</button>
-                      <button type="button" onClick={() => patch({ reportBack: !value.reportBack })} aria-pressed={value.reportBack} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.reportBack, C.online)}><MessageSquare size={11} />Report-Back</button>
-                      <button type="button" onClick={() => patch({ e2eTestRequired: !value.e2eTestRequired })} aria-pressed={value.e2eTestRequired} title="After review, a tester agent drives the real user flows in a browser before the task can complete" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.e2eTestRequired, C.accent)}><MousePointerClick size={11} />E2E test</button>
-                      <button type="button" onClick={() => patch({ humanReviewRequired: !value.humanReviewRequired, ...(value.humanReviewRequired ? {} : { skipReview: false }) })} aria-pressed={value.humanReviewRequired} title="You review this task yourself instead of a review agent" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.humanReviewRequired, C.accent)}><UserCheck size={11} />Human review</button>
-                      <button type="button" onClick={() => patch({ skipReview: !value.skipReview, ...(value.skipReview ? {} : { humanReviewRequired: false }) })} aria-pressed={value.skipReview} title="Task goes straight to done — no review stage (typical for scheduled/report jobs)" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.skipReview, C.accent)}><FastForward size={11} />Skip review</button>
-                      <button type="button" onClick={() => patch({ blockerToOperator: !value.blockerToOperator })} aria-pressed={value.blockerToOperator} title="Blockers on this task come straight to you instead of going to Boss first" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.blockerToOperator, C.warning)}><BellRing size={11} />Blocker to me</button>
+                      <button type="button" onClick={() => patch({ needsBrowser: !value.needsBrowser })} aria-pressed={value.needsBrowser} title={t("browserTitle")} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.needsBrowser, C.info)}><Globe size={11} />{t("browser")}</button>
+                      <button type="button" onClick={() => patch({ requiresAuth: !value.requiresAuth })} aria-pressed={value.requiresAuth} title={t("authTitle")} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.requiresAuth, C.warning)}><KeyRound size={11} />{t("auth")}</button>
+                      <button type="button" onClick={() => patch({ reportBack: !value.reportBack })} aria-pressed={value.reportBack} title={t("reportBackTitle")} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.reportBack, C.online)}><MessageSquare size={11} />{t("reportBack")}</button>
+                      <button type="button" onClick={() => patch({ e2eTestRequired: !value.e2eTestRequired })} aria-pressed={value.e2eTestRequired} title={t("e2eTitle")} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.e2eTestRequired, C.accent)}><MousePointerClick size={11} />{t("e2e")}</button>
+                      <button type="button" onClick={() => patch({ humanReviewRequired: !value.humanReviewRequired, ...(value.humanReviewRequired ? {} : { skipReview: false }) })} aria-pressed={value.humanReviewRequired} title={t("humanReviewTitle")} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.humanReviewRequired, C.accent)}><UserCheck size={11} />{t("humanReview")}</button>
+                      <button type="button" onClick={() => patch({ skipReview: !value.skipReview, ...(value.skipReview ? {} : { humanReviewRequired: false }) })} aria-pressed={value.skipReview} title={t("skipReviewTitle")} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.skipReview, C.accent)}><FastForward size={11} />{t("skipReview")}</button>
+                      <button type="button" onClick={() => patch({ blockerToOperator: !value.blockerToOperator })} aria-pressed={value.blockerToOperator} title={t("blockerToMeTitle")} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.blockerToOperator, C.warning)}><BellRing size={11} />{t("blockerToMe")}</button>
                     </div>
                     <AnimatePresence>
                       {value.requiresAuth && (
                         <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.15 }} className="flex flex-col gap-2 overflow-hidden pl-2" style={{ borderLeft: `2px solid ${alpha(C.warning, 0.2)}` }}>
                           <div className="flex items-center gap-2">
-                            <button type="button" onClick={() => patch({ credentialMode: "vault" })} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.credentialMode === "vault", C.warning)}>Aus Vault</button>
-                            <button type="button" onClick={() => patch({ credentialMode: "inline" })} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.credentialMode === "inline", C.warning)}>Einmalig eingeben</button>
+                            <button type="button" onClick={() => patch({ credentialMode: "vault" })} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.credentialMode === "vault", C.warning)}>{t("credFromVault")}</button>
+                            <button type="button" onClick={() => patch({ credentialMode: "inline" })} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.credentialMode === "inline", C.warning)}>{t("credInline")}</button>
                           </div>
                           {value.credentialMode === "vault" && (
-                            <select aria-label="Credential auswählen" value={value.credentialId ?? ""} onChange={(e) => patch({ credentialId: e.target.value || null })} className={selCls} style={selStyle(!!value.credentialId)}>
-                              <option value="">Credential wählen...</option>
+                            <select aria-label={t("credSelectAria")} value={value.credentialId ?? ""} onChange={(e) => patch({ credentialId: e.target.value || null })} className={selCls} style={selStyle(!!value.credentialId)}>
+                              <option value="">{t("credSelect")}</option>
                               {(vaultCredentials ?? []).map((c) => (<option key={c.id} value={c.id}>{c.name} ({c.credential_type})</option>))}
                             </select>
                           )}
                           {value.credentialMode === "inline" && (
-                            <textarea aria-label="Inline-Credentials" value={value.inlineCredentials} onChange={(e) => patch({ inlineCredentials: e.target.value })} placeholder="Username: admin&#10;Password: ..." rows={2} className="w-full text-[11px] px-3 py-2 rounded-xl outline-none resize-none font-mono" style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }} />
+                            <textarea aria-label={t("credInlineAria")} value={value.inlineCredentials} onChange={(e) => patch({ inlineCredentials: e.target.value })} placeholder={t("credInlinePlaceholder")} rows={2} className="w-full text-[11px] px-3 py-2 rounded-xl outline-none resize-none font-mono" style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }} />
                           )}
                         </motion.div>
                       )}
@@ -943,41 +943,41 @@ export function TaskFormFields({
                       {value.reportBack && (
                         <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.15 }} className="flex flex-col gap-2 overflow-hidden pl-2" style={{ borderLeft: `2px solid ${alpha(C.online, 0.2)}` }}>
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-[10px]" style={{ color: C.textMuted }}>Kanal:</span>
+                            <span className="text-[10px]" style={{ color: C.textMuted }}>{t("channel")}</span>
                             {["discord", "telegram"].map((ch) => (<button key={ch} type="button" onClick={() => patch({ reportChannel: ch })} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.reportChannel === ch, C.online)}>{ch.charAt(0).toUpperCase() + ch.slice(1)}</button>))}
                           </div>
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-[10px]" style={{ color: C.textMuted }}>Format:</span>
-                            {[{ value: "summary", label: "Summary" }, { value: "screenshot", label: "Screenshot" }, { value: "before_after", label: "Before/After" }].map((fmt) => (<button key={fmt.value} type="button" onClick={() => toggleReportFormat(fmt.value)} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.reportFormats.includes(fmt.value), C.online)}>{fmt.label}</button>))}
+                            <span className="text-[10px]" style={{ color: C.textMuted }}>{t("format")}</span>
+                            {REPORT_FORMATS.map((fmt) => (<button key={fmt} type="button" onClick={() => toggleReportFormat(fmt)} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.reportFormats.includes(fmt), C.online)}>{t(`reportFormat.${fmt}`)}</button>))}
                           </div>
                         </motion.div>
                       )}
                     </AnimatePresence>
                     <div className="flex flex-col gap-1.5">
-                      <span className="text-[10px]" style={{ color: C.textMuted }}>Referenz-URLs</span>
+                      <span className="text-[10px]" style={{ color: C.textMuted }}>{t("referenceUrls")}</span>
                       <UrlListInput value={value.referenceUrls} onChange={(urls) => patch({ referenceUrls: urls })} textPrimary={C.textPrimary} textMuted={C.textMuted} border={C.border} deep={C.deep} accent={C.accent} />
                     </div>
                     <div className="flex flex-col gap-3" style={{ borderTop: `1px solid ${C.borderSubtle}`, paddingTop: "10px" }}>
-                      <span className="text-[10px] font-medium flex items-center gap-1.5" style={{ color: C.textMuted }}><ClipboardList size={11} />Operator-Intake</span>
+                      <span className="text-[10px] font-medium flex items-center gap-1.5" style={{ color: C.textMuted }}><ClipboardList size={11} />{t("intake")}</span>
                       <div className="flex flex-col gap-1.5">
-                        <label htmlFor={`${fieldId}-requestkind`} className="text-[10px]" style={{ color: C.textMuted }}>Auftragstyp</label>
-                        <select id={`${fieldId}-requestkind`} aria-label="Auftragstyp" value={value.requestKind} onChange={(e) => patch({ requestKind: e.target.value })} className={selCls} style={selStyle(!!value.requestKind)}>
-                          {REQUEST_KIND_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
+                        <label htmlFor={`${fieldId}-requestkind`} className="text-[10px]" style={{ color: C.textMuted }}>{t("requestKind")}</label>
+                        <select id={`${fieldId}-requestkind`} aria-label={t("requestKind")} value={value.requestKind} onChange={(e) => patch({ requestKind: e.target.value })} className={selCls} style={selStyle(!!value.requestKind)}>
+                          {REQUEST_KIND_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>))}
                         </select>
                       </div>
                       <div className="flex flex-col gap-1.5">
-                        <label htmlFor={`${fieldId}-autonomy`} className="text-[10px]" style={{ color: C.textMuted }}>Autonomie</label>
-                        <select id={`${fieldId}-autonomy`} aria-label="Autonomie-Level" value={value.autonomyLevel} onChange={(e) => patch({ autonomyLevel: e.target.value })} className={selCls} style={selStyle(!!value.autonomyLevel)}>
-                          {AUTONOMY_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
+                        <label htmlFor={`${fieldId}-autonomy`} className="text-[10px]" style={{ color: C.textMuted }}>{t("autonomy")}</label>
+                        <select id={`${fieldId}-autonomy`} aria-label={t("autonomy")} value={value.autonomyLevel} onChange={(e) => patch({ autonomyLevel: e.target.value })} className={selCls} style={selStyle(!!value.autonomyLevel)}>
+                          {AUTONOMY_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>))}
                         </select>
                       </div>
-                      <textarea aria-label="Gewünschtes Ergebnis" value={value.desiredOutput} onChange={(e) => patch({ desiredOutput: e.target.value })} placeholder="Was soll am Ende rauskommen? (PR, Screenshot, Deployment-URL ...)" rows={2} className="w-full text-[12px] outline-none px-3 py-2 rounded-xl resize-none" style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }} />
-                      <textarea aria-label="Referenz-Notizen" value={value.referenceNotes} onChange={(e) => patch({ referenceNotes: e.target.value })} placeholder="Referenz-Notizen — Vorlagen, Inspirationen ..." rows={2} className="w-full text-[12px] outline-none px-3 py-2 rounded-xl resize-none" style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }} />
+                      <textarea aria-label={t("desiredOutput")} value={value.desiredOutput} onChange={(e) => patch({ desiredOutput: e.target.value })} placeholder={t("desiredOutputPlaceholder")} rows={2} className="w-full text-[12px] outline-none px-3 py-2 rounded-xl resize-none" style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }} />
+                      <textarea aria-label={t("referenceNotes")} value={value.referenceNotes} onChange={(e) => patch({ referenceNotes: e.target.value })} placeholder={t("referenceNotesPlaceholder")} rows={2} className="w-full text-[12px] outline-none px-3 py-2 rounded-xl resize-none" style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }} />
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-[10px]" style={{ color: C.textMuted }}>Veröffentlichung:</span>
-                        <button type="button" onClick={() => patch({ publishAllowed: value.publishAllowed === true ? null : true })} className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.publishAllowed === true, C.online)}>Erlaubt</button>
-                        <button type="button" onClick={() => patch({ publishAllowed: value.publishAllowed === false ? null : false })} className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.publishAllowed === false, C.warning)}>Nur Draft</button>
-                        {value.publishAllowed === null && (<span className="text-[10px]" style={{ color: C.textMuted }}>(Agent entscheidet)</span>)}
+                        <span className="text-[10px]" style={{ color: C.textMuted }}>{t("publish")}</span>
+                        <button type="button" onClick={() => patch({ publishAllowed: value.publishAllowed === true ? null : true })} className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.publishAllowed === true, C.online)}>{t("publishAllowed")}</button>
+                        <button type="button" onClick={() => patch({ publishAllowed: value.publishAllowed === false ? null : false })} className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.publishAllowed === false, C.warning)}>{t("publishDraft")}</button>
+                        {value.publishAllowed === null && (<span className="text-[10px]" style={{ color: C.textMuted }}>{t("publishAgentDecides")}</span>)}
                       </div>
                     </div>
                   </motion.div>
@@ -996,12 +996,12 @@ export function TaskFormFields({
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-[10px] shrink-0" style={{ color: C.textMuted }}>
           <Wand2 size={10} className="inline mr-1 mb-0.5" />
-          Vorlage:
+          {t("template")}
         </span>
         {(Object.keys(TEMPLATES) as Array<keyof typeof TEMPLATES>).map((key) => {
-          const t = TEMPLATES[key];
+          const tpl = TEMPLATES[key];
           const active = value.activeTemplate === key;
-          const Icon = t.icon;
+          const Icon = tpl.icon;
           return (
             <button
               key={key}
@@ -1009,13 +1009,13 @@ export function TaskFormFields({
               onClick={() => (active ? patch({ activeTemplate: null }) : applyTemplate(key))}
               className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
-                color: active ? t.color : C.textMuted,
-                background: active ? alpha(t.color, 0.08) : "transparent",
-                border: `1px solid ${active ? alpha(t.color, 0.33) : C.border}`,
+                color: active ? tpl.color : C.textMuted,
+                background: active ? alpha(tpl.color, 0.08) : "transparent",
+                border: `1px solid ${active ? alpha(tpl.color, 0.33) : C.border}`,
               }}
             >
               <Icon size={10} />
-              {t.label}
+              {t(`templates.${key}.label`)}
             </button>
           );
         })}
@@ -1026,7 +1026,7 @@ export function TaskFormFields({
             className="text-[10px] ml-1 cursor-pointer hover:underline"
             style={{ color: C.textMuted }}
           >
-            zuruecksetzen
+            {t("reset")}
           </button>
         )}
       </div>
@@ -1034,7 +1034,7 @@ export function TaskFormFields({
       {/* ── Title ── */}
       <div className="flex flex-col gap-1">
         <label htmlFor={`${fieldId}-title`} className="text-[10px] font-medium" style={{ color: C.textMuted }}>
-          Titel <span style={{ color: C.error }}>*</span>
+          {t("title")} <span style={{ color: C.error }}>*</span>
         </label>
         <input
           id={`${fieldId}-title`}
@@ -1044,7 +1044,7 @@ export function TaskFormFields({
           value={value.title}
           onChange={(e) => patch({ title: e.target.value })}
           onKeyDown={handleKeyDown}
-          placeholder="Kurzer, klarer Aufgabentitel"
+          placeholder={t("titlePlaceholder")}
           className="w-full text-sm outline-none px-3 py-2.5 rounded-xl transition-all"
           style={{
             border: `1px solid ${C.border}`,
@@ -1060,7 +1060,7 @@ export function TaskFormFields({
       {/* ── Description ── */}
       <div className="flex flex-col gap-1">
         <label htmlFor={`${fieldId}-description`} className="text-[10px] font-medium" style={{ color: C.textMuted }}>
-          Beschreibung <span style={{ color: C.textMuted }}>(optional)</span>
+          {t("description")} <span style={{ color: C.textMuted }}>{t("optional")}</span>
         </label>
         <textarea
           id={`${fieldId}-description`}
@@ -1093,13 +1093,14 @@ export function TaskFormFields({
       {/* ── Priority + Mode-Toggle (Row) ── */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <span className="text-[10px]" style={{ color: C.textMuted }}>Prioritaet:</span>
+          <span className="text-[10px]" style={{ color: C.textMuted }}>{t("priority")}:</span>
           <div className="flex items-center gap-1">
             {PRIORITY_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
                 type="button"
                 onClick={() => patch({ priority: opt.value })}
+                aria-label={t("priorityAria", { level: t(`priorityLevel.${opt.value}`) })}
                 className="w-6 h-6 flex items-center justify-center rounded-lg text-[10px] font-bold transition-all cursor-pointer"
                 style={{
                   backgroundColor: value.priority === opt.value ? alpha(opt.color, 0.13) : "transparent",
@@ -1107,7 +1108,7 @@ export function TaskFormFields({
                   border: value.priority === opt.value ? `1px solid ${alpha(opt.color, 0.4)}` : "1px solid transparent",
                 }}
               >
-                {opt.label}
+                {t(`priorityGlyph.${opt.value}`)}
               </button>
             ))}
           </div>
@@ -1133,7 +1134,7 @@ export function TaskFormFields({
                 }}
               >
                 <Icon size={10} />
-                {m === "schnell" ? "Schnell" : "Strukturiert"}
+                {m === "schnell" ? t("modeQuick") : t("modeStructured")}
               </button>
             );
           })}
@@ -1146,7 +1147,7 @@ export function TaskFormFields({
           <div className="flex items-center justify-between">
             <span className="text-[10px]" style={{ color: C.textMuted }}>
               <Users size={10} className="inline mr-1" />
-              Agent {selectedAgent ? `: ${selectedAgent.name}` : "(auto wenn leer)"}
+              {selectedAgent ? t("agentSelected", { name: selectedAgent.name }) : t("agentAutoIfEmpty")}
             </span>
             {value.selectedAgentId && (
               <button
@@ -1155,7 +1156,7 @@ export function TaskFormFields({
                 className="text-[9px] cursor-pointer hover:underline"
                 style={{ color: C.textMuted }}
               >
-                zuruecksetzen
+                {t("reset")}
               </button>
             )}
           </div>
@@ -1209,7 +1210,7 @@ export function TaskFormFields({
           }}
         >
           <FolderKanban size={11} style={{ color: C.accent, flexShrink: 0 }} />
-          <span style={{ color: C.textMuted }}>Arbeitsplatz:</span>
+          <span style={{ color: C.textMuted }}>{t("workspace")}</span>
           <code style={{ color: C.textPrimary }}>{workspacePreview}</code>
         </motion.div>
       )}
@@ -1220,7 +1221,7 @@ export function TaskFormFields({
           type="button"
           onClick={() => patch({ skipReview: !value.skipReview, ...(value.skipReview ? {} : { humanReviewRequired: false }) })}
           aria-pressed={value.skipReview}
-          title="Task goes straight to done — no review stage (typical for scheduled/report jobs)"
+          title={t("skipReviewTitle")}
           className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer self-start"
           style={{
             backgroundColor: value.skipReview ? alpha(C.accent, 0.13) : "transparent",
@@ -1229,7 +1230,7 @@ export function TaskFormFields({
           }}
         >
           <FastForward size={11} />
-          Skip review
+          {t("skipReview")}
         </button>
       )}
 
@@ -1247,7 +1248,7 @@ export function TaskFormFields({
             }}
           >
             <KeyRound size={11} />
-            Auth
+            {t("auth")}
             {value.requiresAuth && value.credentialId && (() => {
               const cred = (vaultCredentials ?? []).find((c) => c.id === value.credentialId);
               return cred ? <span style={{ opacity: 0.75 }}>· {cred.name}</span> : null;
@@ -1264,6 +1265,7 @@ export function TaskFormFields({
                 style={{ borderLeft: `2px solid ${alpha(C.warning, 0.2)}` }}
               >
                 <select
+                  aria-label={t("credSelectAria")}
                   value={value.credentialId ?? ""}
                   onChange={(e) => patch({ credentialId: e.target.value || null, credentialMode: "vault" })}
                   className="text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
@@ -1273,7 +1275,7 @@ export function TaskFormFields({
                     color: value.credentialId ? C.warning : C.textMuted,
                   }}
                 >
-                  <option value="">Credential waehlen...</option>
+                  <option value="">{t("credSelect")}</option>
                   {(vaultCredentials ?? []).map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name} ({c.credential_type})
@@ -1292,9 +1294,9 @@ export function TaskFormFields({
           {/* Phase + Deliverable-Ref */}
           {value.projectId && phases && phases.length > 0 && (
             <div className="flex items-center gap-2">
-              <span className="text-[10px] shrink-0 w-20" style={{ color: C.textMuted }}>Phase:</span>
+              <span className="text-[10px] shrink-0 w-20" style={{ color: C.textMuted }}>{t("phase")}:</span>
               <select
-                aria-label="Phase"
+                aria-label={t("phase")}
                 value={value.phaseId ?? ""}
                 onChange={(e) => patch({ phaseId: e.target.value || null })}
                 className="flex-1 text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
@@ -1304,7 +1306,7 @@ export function TaskFormFields({
                   color: value.phaseId ? C.accent : C.textMuted,
                 }}
               >
-                <option value="">No phase (optional)</option>
+                <option value="">{t("noPhase")}</option>
                 {phases
                   .filter((p) => p.status === "active" || p.status === "pending")
                   .map((p) => (
@@ -1318,9 +1320,9 @@ export function TaskFormFields({
 
           {value.projectId && deliverables && deliverables.length > 0 && (
             <div className="flex items-center gap-2">
-              <span className="text-[10px] shrink-0 w-20" style={{ color: C.textMuted }}>Basiert auf:</span>
+              <span className="text-[10px] shrink-0 w-20" style={{ color: C.textMuted }}>{t("basedOn")}:</span>
               <select
-                aria-label="Basiert auf Deliverable"
+                aria-label={t("basedOnAria")}
                 value={value.deliverableId ?? ""}
                 onChange={(e) => patch({ deliverableId: e.target.value || null })}
                 className="flex-1 text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
@@ -1330,7 +1332,7 @@ export function TaskFormFields({
                   color: value.deliverableId ? C.accent : C.textMuted,
                 }}
               >
-                <option value="">No deliverable</option>
+                <option value="">{t("noDeliverable")}</option>
                 {deliverables.map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.title} ({d.deliverable_type})
@@ -1387,7 +1389,7 @@ export function TaskFormFields({
 
           {/* Task-Type */}
           <div className="flex items-center gap-2">
-            <span className="text-[10px] shrink-0 w-20" style={{ color: C.textMuted }}>Typ:</span>
+            <span className="text-[10px] shrink-0 w-20" style={{ color: C.textMuted }}>{t("type")}:</span>
             <div className="flex items-center gap-1.5">
               {TASK_TYPE_OPTIONS.map((opt) => (
                 <button
@@ -1401,7 +1403,7 @@ export function TaskFormFields({
                     border: `1px solid ${value.taskType === opt.value ? alpha(C.accent, 0.4) : C.border}`,
                   }}
                 >
-                  {opt.label}
+                  {t(opt.labelKey)}
                 </button>
               ))}
             </div>
@@ -1428,19 +1430,19 @@ export function TaskFormFields({
                 className="flex flex-col gap-3 overflow-hidden"
               >
                 <textarea
-                  aria-label="Acceptance Criteria"
+                  aria-label={t("acceptance")}
                   value={value.acceptanceCriteria}
                   onChange={(e) => patch({ acceptanceCriteria: e.target.value })}
-                  placeholder={currentTemplate?.prefill.acceptancePlaceholder ?? "Acceptance Criteria — was muss erfuellt sein?"}
+                  placeholder={acceptancePlaceholder ?? t("acceptancePlaceholderLong")}
                   rows={2}
                   className="w-full text-[12px] outline-none px-3 py-2 rounded-xl resize-none"
                   style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }}
                 />
                 <textarea
-                  aria-label="Scope-Out"
+                  aria-label={t("scopeOut")}
                   value={value.scopeOut}
                   onChange={(e) => patch({ scopeOut: e.target.value })}
-                  placeholder="Scope-Out — was gehoert NICHT dazu?"
+                  placeholder={t("scopeOutPlaceholderLong")}
                   rows={2}
                   className="w-full text-[12px] outline-none px-3 py-2 rounded-xl resize-none"
                   style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }}
@@ -1453,11 +1455,11 @@ export function TaskFormFields({
           <div className="flex items-center gap-2">
             <span className="text-[10px] shrink-0 w-20" style={{ color: C.textMuted }}>
               <Calendar size={10} className="inline mr-1" />
-              Deadline:
+              {t("deadline")}:
             </span>
             <input
               type="date"
-              aria-label="Deadline"
+              aria-label={t("deadline")}
               value={value.dueAt}
               onChange={(e) => patch({ dueAt: e.target.value })}
               className="text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
@@ -1470,17 +1472,17 @@ export function TaskFormFields({
           </div>
 
           <textarea
-            aria-label="Risiken"
+            aria-label={t("risks")}
             value={value.riskNotes}
             onChange={(e) => patch({ riskNotes: e.target.value })}
-            placeholder="Risiken — was darf nicht kaputtgehen?"
+            placeholder={t("risksPlaceholder")}
             rows={2}
             className="w-full text-[12px] outline-none px-3 py-2 rounded-xl resize-none"
             style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }}
           />
 
           <div className="flex flex-col gap-1">
-            <span className="text-[10px]" style={{ color: C.textMuted }}>Referenz-URLs:</span>
+            <span className="text-[10px]" style={{ color: C.textMuted }}>{t("referenceUrls")}:</span>
             <UrlListInput
               value={value.referenceUrls}
               onChange={(urls) => patch({ referenceUrls: urls })}
@@ -1494,9 +1496,9 @@ export function TaskFormFields({
 
           {/* Approval */}
           <div className="flex items-center gap-2">
-            <span className="text-[10px] shrink-0 w-20" style={{ color: C.textMuted }}>Approval:</span>
+            <span className="text-[10px] shrink-0 w-20" style={{ color: C.textMuted }}>{t("approval")}:</span>
             <select
-              aria-label="Approval-Policy"
+              aria-label={t("approvalAria")}
               value={value.approvalPolicy}
               onChange={(e) => patch({ approvalPolicy: e.target.value })}
               className="text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
@@ -1507,7 +1509,7 @@ export function TaskFormFields({
               }}
             >
               {APPROVAL_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                <option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>
               ))}
             </select>
           </div>
@@ -1525,12 +1527,12 @@ export function TaskFormFields({
               }}
             >
               <Globe size={11} />
-              Browser
+              {t("browser")}
             </button>
             <button
               type="button"
               onClick={() => patch({ e2eTestRequired: !value.e2eTestRequired })}
-              title="After review, a tester agent drives the real user flows in a browser before the task can complete"
+              title={t("e2eTitle")}
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
                 backgroundColor: value.e2eTestRequired ? alpha(C.accent, 0.13) : "transparent",
@@ -1539,12 +1541,12 @@ export function TaskFormFields({
               }}
             >
               <MousePointerClick size={11} />
-              E2E test
+              {t("e2e")}
             </button>
             <button
               type="button"
               onClick={() => patch({ humanReviewRequired: !value.humanReviewRequired, ...(value.humanReviewRequired ? {} : { skipReview: false }) })}
-              title="You review this task yourself instead of a review agent"
+              title={t("humanReviewTitle")}
               aria-pressed={value.humanReviewRequired}
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
@@ -1554,13 +1556,13 @@ export function TaskFormFields({
               }}
             >
               <UserCheck size={11} />
-              Human review
+              {t("humanReview")}
             </button>
             <button
               type="button"
               onClick={() => patch({ skipReview: !value.skipReview, ...(value.skipReview ? {} : { humanReviewRequired: false }) })}
               aria-pressed={value.skipReview}
-              title="Task goes straight to done — no review stage (typical for scheduled/report jobs)"
+              title={t("skipReviewTitle")}
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
                 backgroundColor: value.skipReview ? alpha(C.accent, 0.13) : "transparent",
@@ -1569,12 +1571,12 @@ export function TaskFormFields({
               }}
             >
               <FastForward size={11} />
-              Skip review
+              {t("skipReview")}
             </button>
             <button
               type="button"
               onClick={() => patch({ blockerToOperator: !value.blockerToOperator })}
-              title="Blockers on this task come straight to you instead of going to Boss first"
+              title={t("blockerToMeTitle")}
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
                 backgroundColor: value.blockerToOperator ? alpha(C.warning, 0.13) : "transparent",
@@ -1583,7 +1585,7 @@ export function TaskFormFields({
               }}
             >
               <BellRing size={11} />
-              Blocker to me
+              {t("blockerToMe")}
             </button>
             <button
               type="button"
@@ -1596,7 +1598,7 @@ export function TaskFormFields({
               }}
             >
               <KeyRound size={11} />
-              Auth
+              {t("auth")}
             </button>
             <button
               type="button"
@@ -1609,7 +1611,7 @@ export function TaskFormFields({
               }}
             >
               <MessageSquare size={11} />
-              Report-Back
+              {t("reportBack")}
             </button>
           </div>
 
@@ -1635,7 +1637,7 @@ export function TaskFormFields({
                       border: `1px solid ${value.credentialMode === "vault" ? alpha(C.warning, 0.4) : C.border}`,
                     }}
                   >
-                    Aus Vault
+                    {t("credFromVault")}
                   </button>
                   <button
                     type="button"
@@ -1647,13 +1649,13 @@ export function TaskFormFields({
                       border: `1px solid ${value.credentialMode === "inline" ? alpha(C.warning, 0.4) : C.border}`,
                     }}
                   >
-                    Einmalig eingeben
+                    {t("credInline")}
                   </button>
                 </div>
 
                 {value.credentialMode === "vault" && (
                   <select
-                    aria-label="Credential auswählen"
+                    aria-label={t("credSelectAria")}
                     value={value.credentialId ?? ""}
                     onChange={(e) => patch({ credentialId: e.target.value || null })}
                     className="text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
@@ -1663,7 +1665,7 @@ export function TaskFormFields({
                       color: value.credentialId ? C.warning : C.textMuted,
                     }}
                   >
-                    <option value="">Credential waehlen...</option>
+                    <option value="">{t("credSelect")}</option>
                     {(vaultCredentials ?? []).map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name} ({c.credential_type})
@@ -1674,10 +1676,10 @@ export function TaskFormFields({
 
                 {value.credentialMode === "inline" && (
                   <textarea
-                    aria-label="Inline-Credentials"
+                    aria-label={t("credInlineAria")}
                     value={value.inlineCredentials}
                     onChange={(e) => patch({ inlineCredentials: e.target.value })}
-                    placeholder="Username: admin&#10;Password: ..."
+                    placeholder={t("credInlinePlaceholder")}
                     rows={2}
                     className="w-full text-[11px] px-3 py-2 rounded-xl outline-none resize-none font-mono"
                     style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }}
@@ -1699,7 +1701,7 @@ export function TaskFormFields({
                 style={{ borderLeft: `2px solid ${alpha(C.online, 0.2)}` }}
               >
                 <div className="flex items-center gap-3">
-                  <span className="text-[10px]" style={{ color: C.textMuted }}>Kanal:</span>
+                  <span className="text-[10px]" style={{ color: C.textMuted }}>{t("channel")}</span>
                   {["discord", "telegram"].map((ch) => (
                     <button
                       key={ch}
@@ -1717,24 +1719,20 @@ export function TaskFormFields({
                   ))}
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[10px]" style={{ color: C.textMuted }}>Format:</span>
-                  {[
-                    { value: "summary", label: "Summary" },
-                    { value: "screenshot", label: "Screenshot" },
-                    { value: "before_after", label: "Before/After" },
-                  ].map((fmt) => (
+                  <span className="text-[10px]" style={{ color: C.textMuted }}>{t("format")}</span>
+                  {REPORT_FORMATS.map((fmt) => (
                     <button
-                      key={fmt.value}
+                      key={fmt}
                       type="button"
-                      onClick={() => toggleReportFormat(fmt.value)}
+                      onClick={() => toggleReportFormat(fmt)}
                       className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer"
                       style={{
-                        backgroundColor: value.reportFormats.includes(fmt.value) ? alpha(C.online, 0.13) : "transparent",
-                        color: value.reportFormats.includes(fmt.value) ? C.online : C.textMuted,
-                        border: `1px solid ${value.reportFormats.includes(fmt.value) ? alpha(C.online, 0.4) : C.border}`,
+                        backgroundColor: value.reportFormats.includes(fmt) ? alpha(C.online, 0.13) : "transparent",
+                        color: value.reportFormats.includes(fmt) ? C.online : C.textMuted,
+                        border: `1px solid ${value.reportFormats.includes(fmt) ? alpha(C.online, 0.4) : C.border}`,
                       }}
                     >
-                      {fmt.label}
+                      {t(`reportFormat.${fmt}`)}
                     </button>
                   ))}
                 </div>
@@ -1754,10 +1752,10 @@ export function TaskFormFields({
             >
               {intakeExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
               <ClipboardList size={11} />
-              Operator-Intake
+              {t("intake")}
               {!intakeExpanded && (
                 <span style={{ color: C.textMuted, fontWeight: 400 }}>
-                  (Auftragstyp, Autonomie, Ergebnis-Format)
+                  {t("intakeSummary")}
                 </span>
               )}
             </button>
@@ -1767,7 +1765,7 @@ export function TaskFormFields({
                 <motion.div
                   id="operator-intake-panel"
                   role="region"
-                  aria-label="Operator-Intake Details"
+                  aria-label={t("intakeAria")}
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: "auto" }}
                   exit={{ opacity: 0, height: 0 }}
@@ -1775,9 +1773,9 @@ export function TaskFormFields({
                   className="flex flex-col gap-3 overflow-hidden pt-3"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] shrink-0 w-20" style={{ color: C.textMuted }}>Auftragstyp:</span>
+                    <span className="text-[10px] shrink-0 w-20" style={{ color: C.textMuted }}>{t("requestKind")}:</span>
                     <select
-                      aria-label="Auftragstyp"
+                      aria-label={t("requestKind")}
                       value={value.requestKind}
                       onChange={(e) => patch({ requestKind: e.target.value })}
                       className="flex-1 text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
@@ -1788,14 +1786,14 @@ export function TaskFormFields({
                       }}
                     >
                       {REQUEST_KIND_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        <option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>
                       ))}
                     </select>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] shrink-0 w-20" style={{ color: C.textMuted }}>Autonomie:</span>
+                    <span className="text-[10px] shrink-0 w-20" style={{ color: C.textMuted }}>{t("autonomy")}:</span>
                     <select
-                      aria-label="Autonomie-Level"
+                      aria-label={t("autonomy")}
                       value={value.autonomyLevel}
                       onChange={(e) => patch({ autonomyLevel: e.target.value })}
                       className="flex-1 text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer"
@@ -1806,30 +1804,30 @@ export function TaskFormFields({
                       }}
                     >
                       {AUTONOMY_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        <option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>
                       ))}
                     </select>
                   </div>
                   <textarea
-                    aria-label="Gewünschtes Ergebnis"
+                    aria-label={t("desiredOutput")}
                   value={value.desiredOutput}
                     onChange={(e) => patch({ desiredOutput: e.target.value })}
-                    placeholder="Was soll am Ende rauskommen? (PR, Screenshot, Deployment-URL ...)"
+                    placeholder={t("desiredOutputPlaceholder")}
                     rows={2}
                     className="w-full text-[12px] outline-none px-3 py-2 rounded-xl resize-none"
                     style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }}
                   />
                   <textarea
-                    aria-label="Referenz-Notizen"
+                    aria-label={t("referenceNotes")}
                   value={value.referenceNotes}
                     onChange={(e) => patch({ referenceNotes: e.target.value })}
-                    placeholder="Referenz-Notizen — Vorlagen, Inspirationen ..."
+                    placeholder={t("referenceNotesPlaceholder")}
                     rows={2}
                     className="w-full text-[12px] outline-none px-3 py-2 rounded-xl resize-none"
                     style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }}
                   />
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-[10px] shrink-0" style={{ color: C.textMuted }}>Veroeffentlichung:</span>
+                    <span className="text-[10px] shrink-0" style={{ color: C.textMuted }}>{t("publish")}</span>
                     <button
                       type="button"
                       onClick={() => patch({ publishAllowed: value.publishAllowed === true ? null : true })}
@@ -1840,7 +1838,7 @@ export function TaskFormFields({
                         border: `1px solid ${value.publishAllowed === true ? alpha(C.online, 0.4) : C.border}`,
                       }}
                     >
-                      Erlaubt
+                      {t("publishAllowed")}
                     </button>
                     <button
                       type="button"
@@ -1852,10 +1850,10 @@ export function TaskFormFields({
                         border: `1px solid ${value.publishAllowed === false ? alpha(C.warning, 0.4) : C.border}`,
                       }}
                     >
-                      Nur Draft
+                      {t("publishDraft")}
                     </button>
                     {value.publishAllowed === null && (
-                      <span className="text-[10px]" style={{ color: C.textMuted }}>(Agent entscheidet)</span>
+                      <span className="text-[10px]" style={{ color: C.textMuted }}>{t("publishAgentDecides")}</span>
                     )}
                   </div>
                 </motion.div>
@@ -1874,7 +1872,7 @@ export function TaskFormFields({
           style={{ color: C.warning }}
         >
           <CircleAlert size={11} />
-          Du hast strukturierte Felder angefasst — wechsle in den Strukturiert-Modus um sie zu bearbeiten.
+          {t("structuredHint")}
         </motion.div>
       )}
     </div>

@@ -41,13 +41,13 @@ function mkEvent(overrides: Partial<MessageEvent> = {}): MessageEvent {
 describe("ChatMessage", () => {
   it("renders a user row with the 'Du' label", () => {
     render(<ChatMessage ev={mkEvent({ role: "user", text: "Mach mal X" })} />);
-    expect(screen.getByText("Du")).toBeInTheDocument();
+    expect(screen.getByText("You")).toBeInTheDocument();
     expect(screen.getByText("Mach mal X")).toBeInTheDocument();
   });
 
   it("renders an assistant row without the 'Du' label", () => {
     render(<ChatMessage ev={mkEvent({ role: "assistant", text: "Erledigt." })} />);
-    expect(screen.queryByText("Du")).not.toBeInTheDocument();
+    expect(screen.queryByText("You")).not.toBeInTheDocument();
     expect(screen.getByText("Erledigt.")).toBeInTheDocument();
   });
 
@@ -55,7 +55,7 @@ describe("ChatMessage", () => {
     // The right-aligned bubble carries the speaker visually; a visible label
     // would repeat it. Screen readers can't hear alignment, so the text stays.
     render(<ChatMessage ev={mkEvent({ role: "user", text: "Mach mal X" })} />);
-    expect(screen.getByText("Du")).toHaveClass("sr-only");
+    expect(screen.getByText("You")).toHaveClass("sr-only");
   });
 
   it("hides the model name by default", () => {
@@ -209,7 +209,7 @@ describe("ChatMessage — Teamkollegen-Nachricht", () => {
   it("sieht nicht aus wie eine Nachricht des Operators", () => {
     render(<ChatMessage ev={mkTeammate("fertig")} />);
     // Die rechtsbuendige Blase ist dem Operator vorbehalten.
-    expect(screen.queryByText("Du")).toBeNull();
+    expect(screen.queryByText("You")).toBeNull();
     expect(screen.getByTestId("teammate-row")).toBeTruthy();
   });
 

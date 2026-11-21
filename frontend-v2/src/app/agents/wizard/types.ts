@@ -38,12 +38,13 @@ export interface WizardStepProps {
   goBack: () => void;
 }
 
-export const WIZARD_STEPS: { key: string; label: string }[] = [
-  { key: "start", label: "Start" },
-  { key: "identity", label: "Identity" },
-  { key: "runtime", label: "Runtime & Model" },
-  { key: "rights", label: "Scopes & Skills" },
-  { key: "review", label: "Review & Provision" },
+// Step words: agents.wizard.steps.<key>.
+export const WIZARD_STEPS: { key: string }[] = [
+  { key: "start" },
+  { key: "identity" },
+  { key: "runtime" },
+  { key: "rights" },
+  { key: "review" },
 ];
 
 export function initialWizardState(defaultBoardId: string | null): WizardState {
@@ -89,7 +90,8 @@ export function canProceed(state: WizardState): boolean {
   }
 }
 
-// WHY the Runtime & Model step cannot advance, in operator-readable form.
+// WHY the Runtime & Model step cannot advance, as catalog keys under
+// agents.wizard.blockers (the shell translates them).
 // Empty array = the step is complete; canProceed() case 2 is exactly this.
 //
 // - cli-bridge: a harness is mandatory. With harness NULL the backend derives
@@ -112,13 +114,13 @@ export function runtimeStepBlockers(state: WizardState): string[] {
   if (state.agentRuntime === "manual") return [];
   const blockers: string[] = [];
   if (!state.harness) {
-    blockers.push("Pick a harness — an agent without one cannot be provisioned afterwards.");
+    blockers.push("harness");
   }
   if (state.agentRuntime === "host" && !state.runtimeId) {
-    blockers.push("Pick an LLM runtime — host agents need a runtime binding at creation time.");
+    blockers.push("hostRuntime");
   }
   if (state.agentRuntime === "cli-bridge" && state.harness === "omp" && !state.runtimeId) {
-    blockers.push("Pick an LLM runtime — the omp harness cannot boot without a runtime binding.");
+    blockers.push("ompRuntime");
   }
   return blockers;
 }

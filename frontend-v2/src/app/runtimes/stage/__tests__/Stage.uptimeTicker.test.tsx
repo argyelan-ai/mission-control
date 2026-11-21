@@ -136,6 +136,14 @@ describe("Stage — 60s uptime ticker", () => {
     expect(screen.getByText("up 6 min")).toBeInTheDocument();
   });
 
+  it("counts days past 24 h in normal case, not '38 h 30' in caps", async () => {
+    renderStage((24 + 14) * 60 + 30);
+    await act(flush);
+    const corner = screen.getByText("up 1 day 14 h");
+    expect(corner.className).not.toMatch(/\buppercase\b/);
+    expect(corner.className).not.toMatch(/\bfont-mono\b/);
+  });
+
   it("clears the interval on unmount (no state update after unmount)", async () => {
     const { unmount } = renderStage(2);
     await act(flush);

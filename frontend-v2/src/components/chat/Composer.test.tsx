@@ -1748,14 +1748,15 @@ describe("Composer", () => {
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
     const textarea = screen.getByPlaceholderText(/Message the agent/);
     await user.type(textarea, "/");
-    expect(screen.getByTestId("slash-item-/model")).toHaveAttribute("data-highlighted", "true");
-
-    await user.keyboard("{ArrowDown}");
-    expect(screen.getByTestId("slash-item-/model")).toHaveAttribute("data-highlighted", "false");
+    // MC's own commands lead (MC_SLASH_ORDER): /clear before /model.
     expect(screen.getByTestId("slash-item-/clear")).toHaveAttribute("data-highlighted", "true");
 
-    await user.keyboard("{ArrowUp}");
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByTestId("slash-item-/clear")).toHaveAttribute("data-highlighted", "false");
     expect(screen.getByTestId("slash-item-/model")).toHaveAttribute("data-highlighted", "true");
+
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getByTestId("slash-item-/clear")).toHaveAttribute("data-highlighted", "true");
   });
 
   it("inserts the highlighted command on Enter and does NOT send", async () => {
@@ -1831,6 +1832,48 @@ describe("Composer", () => {
       expect(palette).toHaveTextContent("/mc-verify");
       // Not the static fallback list — that one has /model, which is absent here.
       expect(palette).not.toHaveTextContent("/model");
+    });
+
+    it("puts MC's commands first (/new on top) with MC's words, the harness rest below a heading", async () => {
+      const user = userEvent.setup();
+      withCommands([
+        { name: "mc-tdd", description: "Run the TDD skill" },
+        { name: "compact", description: "Clear conversation history but keep a summary" },
+        { name: "model", description: "Set the AI model" },
+        { name: "new", description: "Start a new session" },
+        { name: "clear", description: "Clear conversation history" },
+      ]);
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
+
+      const rows = screen.getAllByTestId(/^slash-item-/).map((el) => el.getAttribute("data-testid"));
+      expect(rows).toEqual([
+        "slash-item-/new", "slash-item-/clear", "slash-item-/model", "slash-item-/compact", "slash-item-/mc-tdd",
+      ]);
+      // MC's own description, not the harness's English text.
+      expect(screen.getByTestId("slash-item-/new")).toHaveTextContent("Start a new, empty chat");
+      expect(screen.getByTestId("slash-item-/new")).not.toHaveTextContent("Start a new session");
+      // The heading sits right above the first harness command.
+      const heading = screen.getByTestId("slash-group-more");
+      expect(heading.nextElementSibling).toBe(screen.getByTestId("slash-item-/mc-tdd"));
+      expect(screen.getByTestId("slash-item-/new")).toHaveAttribute("data-highlighted", "true");
+    });
+
+    it("never adds an MC command the harness does not offer", async () => {
+      const user = userEvent.setup();
+      withCommands([{ name: "mc-tdd" }]);
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
+      expect(screen.queryByTestId("slash-item-/new")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("slash-group-more")).not.toBeInTheDocument();
+    });
+
+    it("rows are 44 px finger targets, command in mono, description in normal type", async () => {
+      const user = userEvent.setup();
+      withCommands([{ name: "new" }, { name: "clear" }]);
+      await user.type(screen.getByPlaceholderText(/Message the agent/), "/");
+      const row = screen.getByTestId("slash-item-/new");
+      expect(row.className).toMatch(/\bmin-h-touch\b/);
+      expect(row.className).not.toMatch(/\bfont-mono\b/);
+      expect(row.querySelector(".font-mono")?.textContent).toBe("/new");
     });
 
     it("normalizes a name that already carries the slash", async () => {
