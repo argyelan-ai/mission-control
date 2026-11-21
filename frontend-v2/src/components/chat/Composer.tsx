@@ -28,6 +28,7 @@ import { PopoverPortal, anchoredBoxStyle, useAnchoredPosition } from "@/lib/anch
 import { harnessLabel } from "@/components/shared/HarnessIcon";
 import { formatShare } from "@/lib/usage";
 import { isStatusUnknown } from "./StatusLine";
+import { shortModelName } from "./SpeedLine";
 import { appendQuote } from "./chatQuote";
 import { type MentionToken, findMentionToken, insertMention } from "./composer/fileMention";
 import { useChatFileSearch } from "./composer/useChatFileSearch";
@@ -285,6 +286,20 @@ interface ComposerProps {
 /** Dauer des Settle-Pulses der Effort-Saeule — muss zu `effort-settle` in
  *  globals.css passen. */
 export const EFFORT_SETTLE_MS = 320;
+
+/**
+ * A 44 × 44 finger target for every input-bar button without changing how it
+ * looks (DESIGN.md K11, user test 21.11.2026: 28–36 px buttons). An
+ * invisible ::before of at least 44 × 44, centred on the button, takes the
+ * tap; the icon and the visible chip keep their size. Written out in full
+ * (not built from parts) so Tailwind sees every class.
+ */
+const HIT_44 =
+  "relative before:absolute before:left-1/2 before:top-1/2 before:-translate-x-1/2 before:-translate-y-1/2 before:w-full before:h-full before:min-w-11 before:min-h-11 before:content-['']";
+/** The same hit area for a button handed in from outside (plan-mode chip,
+ *  mic) — applied from a wrapper onto its button child. */
+const SLOT_HIT_44 =
+  "contents [&>button]:relative [&>button]:before:absolute [&>button]:before:left-1/2 [&>button]:before:top-1/2 [&>button]:before:-translate-x-1/2 [&>button]:before:-translate-y-1/2 [&>button]:before:w-full [&>button]:before:h-full [&>button]:before:min-w-11 [&>button]:before:min-h-11 [&>button]:before:content-['']";
 
 export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, prefill = null, quote = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
   const t = useTranslations("sessions");
@@ -824,8 +839,9 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    * Label des passenden Dropdown-Eintrags ("Sonnet"); eine volle ID bleibt
    * verbatim. */
   const currentModel = usage?.model ?? capabilities?.model ?? null;
+  // Short and whole (user test 21.11.2026): no provider path, no build date.
   const modelLabel = currentModel
-    ? modelOptions.find((m) => isSameModel(m.name, currentModel))?.label ?? currentModel
+    ? shortModelName(modelOptions.find((m) => isSameModel(m.name, currentModel))?.label ?? currentModel) ?? currentModel
     : "—";
   // Backend-stamped, never a frontend model→window guess (see claudeCommands.ts).
   const win = usage?.contextWindow;
@@ -1113,7 +1129,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             onClick={() => fileInputRef.current?.click()}
             aria-label={t("attachFile")}
             title={t("attachFile")}
-            className="shrink-0 flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+            className={`${HIT_44} shrink-0 flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]`}
             style={{ color: C.textSecondary }}
           >
             <Paperclip size={15} />
@@ -1121,14 +1137,17 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           {/* min-w-0: the model chip is the one element of this row that may
               shrink — with context ring, mode chip and effort chip on a
               390 px phone, a long model name wrapped onto two lines. */}
-          <div className="relative min-w-0 max-w-40" ref={modelBoxRef}>
+          {/* The chip keeps the short model name whole (user test 21.11.2026:
+              "DeepS…"): it does not shrink, the name is short instead
+              (`shortModelName`); a name longer than 10 rem still cuts. */}
+          <div className="relative shrink-0 max-w-40" ref={modelBoxRef}>
             {modelOptions.length === 0 ? (
               /* Fremde CLI (kimi, omp): das Backend meldet explizit keine
                  /model-Aliasse — dann ist der Chip ein ehrliches Label statt
                  eines Dropdowns, das Kauderwelsch in die TUI tippen wuerde. */
               <span
                 data-testid="model-chip-static"
-                title={modelLabel}
+                title={currentModel ?? modelLabel}
                 className="inline-flex max-w-full items-center whitespace-nowrap font-mono text-xs font-medium px-2 py-1 rounded-lg"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
               >
@@ -1144,8 +1163,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               // it doesn't get the accent tint (which in this system means
               // "selected"). It lights up on hover and while open.
               data-testid="model-chip"
-              title={modelLabel}
-              className="inline-flex max-w-full items-center gap-1 whitespace-nowrap font-mono text-xs font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors"
+              title={currentModel ?? modelLabel}
+              className={`${HIT_44} inline-flex max-w-full items-center gap-1 whitespace-nowrap font-mono text-xs font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors`}
               style={{
                 backgroundColor: modelOpen ? C.bgHover : "transparent",
                 color: modelOpen ? C.textPrimary : C.textSecondary,
@@ -1230,7 +1249,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 // there is a breakdown, never how full the window is.
                 aria-label={t("contextUsed", { pct: Math.round(pct) })}
                 onClick={() => setContextOpen((v) => !v)}
-                className="flex items-center gap-1 pl-0.5 cursor-pointer rounded-md"
+                className={`${HIT_44} flex items-center gap-1 pl-0.5 cursor-pointer rounded-md`}
               >
                 <div
                   data-testid="context-ring"
@@ -1315,7 +1334,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               (18.08.2026): a control that is missing when you need it is worse
               than one that waits. */}
           <div className="ml-auto flex items-center gap-1.5">
-          {modeSlot}
+          {modeSlot && <span className={SLOT_HIT_44}>{modeSlot}</span>}
           {(currentEffort ||
             (effortSupported && effortLevels.length > 0) ||
             /* Der Chip erscheint AUCH ohne bekannte Stufe, sobald das Backend
@@ -1349,7 +1368,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   data-level={currentEffort ?? "auto"}
                   data-pending={pendingEffort != null}
                   disabled={pendingEffort != null}
-                  className="inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full cursor-pointer transition-colors disabled:cursor-wait"
+                  className={`${HIT_44} inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full cursor-pointer transition-colors disabled:cursor-wait`}
                   style={{
                     backgroundColor: effortOpen ? C.bgHover : "transparent",
                     color: pendingEffort != null ? C.textMuted : effortOpen ? C.textPrimary : C.textSecondary,
@@ -1574,7 +1593,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 {effortWord(currentEffort)}
               </span>
             ))}
-            {voiceSlot}
+            {voiceSlot && <span className={SLOT_HIT_44}>{voiceSlot}</span>}
             {sessionLive && (
               !showStop ? (
                 <button
@@ -1584,7 +1603,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   disabled={!hasText}
                   data-empty={!hasText}
                   data-testid="send-button"
-                  className="inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer disabled:cursor-not-allowed transition-colors"
+                  className={`${HIT_44} inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer disabled:cursor-not-allowed transition-colors`}
                   style={
                     hasText
                       ? { backgroundColor: C.accent, color: C.onAccent }
@@ -1609,7 +1628,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                      the probe actually confirmed "working". On an unreadable
                      pane the control is offered without animating something we
                      don't know. */
-                  className={`${isWorking ? "animate-pulse " : ""}inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer`}
+                  className={`${HIT_44} ${isWorking ? "animate-pulse " : ""}inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer`}
                   style={{
                     backgroundColor: C.accentSubtle,
                     color: C.textPrimary,

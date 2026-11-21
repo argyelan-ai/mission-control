@@ -217,7 +217,8 @@ function resolveDisplay(
   if (loading && !state) {
     return loadingDisplay(t);
   }
-  if (!connected || !state || isStatusUnknown(state)) {
+  // `isStatusUnknown` spelled out: TS narrows the switch below only on the literal.
+  if (!connected || !state || state.status === "unknown") {
     return unknownDisplay(t, hasTerminal);
   }
 

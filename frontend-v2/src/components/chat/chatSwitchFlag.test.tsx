@@ -18,7 +18,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     api: {
       chatRecord: { listChats: apiMock.listChats, history: apiMock.history },
       runtimes: {
-        listRows: vi.fn(async () => ({ runtimes: [{ id: "rt-1", model_identifier: "qwen38", host: null }] })),
+        listRows: vi.fn(async () => ({ runtimes: [{ id: "rt-1", model_identifier: "qwen38", host: { id: "h-1", slug: "box-a", display_name: "Box A" }, member_hosts: [] }] })),
         compatMatrix: vi.fn(async () => ({ harnesses: [], host_harnesses: [], runtimes: [] })),
       },
       hosts: { pulse: vi.fn(async () => ({ points: [], available: false })) },
