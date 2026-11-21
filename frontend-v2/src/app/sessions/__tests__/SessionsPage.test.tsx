@@ -1129,9 +1129,11 @@ describe("SessionsPage — New chat picker starts a new chat", () => {
     vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([
       mkAgent({ id: "host-1", name: "Boss", agent_runtime: "host", slug: "boss" }),
     ]);
+    vi.spyOn(api.chatRecord, "listChats").mockResolvedValue({ chats: [] });
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -1172,7 +1174,7 @@ describe("SessionsPage — New chat picker starts a new chat", () => {
     expect(latestToast()?.message).toBe("New chats aren't switched on yet — opening your chat with Nova.");
   });
 
-  it("not allowed (403) gets the same honest fallback", async () => {
+  it("not allowed (403): says only admins can, then opens the existing chat", async () => {
     const user = userEvent.setup();
     vi.spyOn(api.chatRecord, "createChat").mockRejectedValue(new Error('API 403: {"detail":"Forbidden"}'));
     renderPage();
@@ -1181,7 +1183,21 @@ describe("SessionsPage — New chat picker starts a new chat", () => {
     await pick(user, /Nova/);
 
     await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
-    expect(latestToast()?.message).toBe("New chats aren't switched on yet — opening your chat with Nova.");
+    expect(latestToast()?.message).toBe("Only admins can start new chats — opening your chat with Nova.");
+  });
+
+  it("a 404 that is not 'record off' (agent gone) is a failure, not 'not switched on'", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api.chatRecord, "createChat").mockRejectedValue(
+      new Error('API 404: {"detail":{"reason":"agent_not_found"}}'),
+    );
+    renderPage();
+    await screen.findAllByText("Nova");
+
+    await pick(user, /Nova/);
+
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
+    expect(latestToast()?.message).toBe("Couldn't start a new chat — opening your chat with Nova.");
   });
 
   it("server error (5xx): says the new chat failed, then opens the existing chat", async () => {
@@ -1240,6 +1256,150 @@ describe("SessionsPage — New chat picker starts a new chat", () => {
 
     await user.click(within(list()).getByRole("option", { name: /Nova/ }));
     expect(create).not.toHaveBeenCalled();
+  });
+
+  // ── A late answer never takes over (critic A1/A2) ──
+  const deferredCreate = () => {
+    let resolve: (v: unknown) => void = () => {};
+    let reject: (e: unknown) => void = () => {};
+    const spy = vi.spyOn(api.chatRecord, "createChat").mockImplementation(
+      () => new Promise((res, rej) => { resolve = res; reject = rej; }) as never,
+    );
+    return { spy, resolve: (v: unknown) => resolve(v), reject: (e: unknown) => reject(e) };
+  };
+
+  it("leaving the page while the chat is made: the late answer does not navigate", async () => {
+    const user = userEvent.setup();
+    const create = deferredCreate();
+    const { unmount } = renderPage();
+    await screen.findAllByText("Nova");
+    await pick(user, /Nova/);
+    await waitFor(() => expect(create.spy).toHaveBeenCalledTimes(1));
+
+    unmount();
+    create.resolve({ id: "late" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(nav.replaced).toEqual([]);
+  });
+
+  it("leaving the picker (back) while the chat is made: no navigation, the list is refreshed", async () => {
+    const user = userEvent.setup();
+    const create = deferredCreate();
+    const { rerender, qc } = renderPage();
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+    await screen.findAllByText("Nova");
+    await pick(user, /Nova/);
+    await waitFor(() => expect(create.spy).toHaveBeenCalledTimes(1));
+
+    nav.searchParamsString = "";
+    rerender(
+      <QueryClientProvider client={qc}>
+        <SessionsPage />
+      </QueryClientProvider>,
+    );
+    create.resolve({ id: "late" });
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["chat-record", "chats"] }));
+    expect(nav.replaced).toEqual([]);
+  });
+
+  it("leaving the picker while the chat fails: the fallback does not navigate either", async () => {
+    const user = userEvent.setup();
+    const create = deferredCreate();
+    const { rerender, qc } = renderPage();
+    await screen.findAllByText("Nova");
+    await pick(user, /Nova/);
+    await waitFor(() => expect(create.spy).toHaveBeenCalledTimes(1));
+
+    nav.searchParamsString = "";
+    rerender(
+      <QueryClientProvider client={qc}>
+        <SessionsPage />
+      </QueryClientProvider>,
+    );
+    create.reject(new Error("API 500: oops"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(nav.replaced).toEqual([]);
+  });
+
+  // ── A hanging request never locks the picker (critic: timeout) ──
+  it("a create that never answers gives up after 15 s: says so, opens the existing chat, list usable again", async () => {
+    const user = userEvent.setup();
+    const create = deferredCreate();
+    renderPage();
+    await screen.findAllByText("Nova");
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await pick(user, /Nova/);
+    await waitFor(() => expect(create.spy).toHaveBeenCalledTimes(1));
+    expect(list()).toHaveAttribute("aria-busy", "true");
+
+    await vi.advanceTimersByTimeAsync(14_000);
+    expect(nav.replaced).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1_500);
+    vi.useRealTimers();
+
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
+    expect(latestToast()?.message).toBe("Couldn't start a new chat — opening your chat with Nova.");
+    expect(list()).not.toHaveAttribute("aria-busy");
+    // The chat that arrives after all does not pull the operator away.
+    create.resolve({ id: "too-late" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]);
+  });
+
+  // ── Taps that go nowhere do not pile up empty chats (critic: empty rows) ──
+  const recordChat = (over: Record<string, unknown>) => ({
+    id: "c", title: "Nova", harness: "omp", model: null, legacyAgentId: "agent-2",
+    agentDefault: false, nativeSessionId: null, pinned: false, archived: false,
+    lastActivityAt: null, createdAt: "2026-11-20T10:00:00Z", ...over,
+  });
+
+  it("an untouched new chat of that agent is opened again instead of making another", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api.chatRecord, "listChats").mockResolvedValue({
+      chats: [
+        recordChat({ id: "default", agentDefault: true }),
+        recordChat({ id: "used", lastActivityAt: "2026-11-20T11:00:00Z" }),
+        recordChat({ id: "archived-empty", archived: true }),
+        recordChat({ id: "other-agent-empty", legacyAgentId: "agent-1" }),
+        recordChat({ id: "empty", createdAt: "2026-11-20T12:00:00Z" }),
+      ],
+    } as never);
+    const create = vi.spyOn(api.chatRecord, "createChat");
+    renderPage();
+    await screen.findAllByText("Nova");
+
+    await pick(user, /Nova/);
+
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=empty"]));
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("only used chats of that agent: a new one is made", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api.chatRecord, "listChats").mockResolvedValue({
+      chats: [recordChat({ id: "used", lastActivityAt: "2026-11-20T11:00:00Z" })],
+    } as never);
+    const create = vi.spyOn(api.chatRecord, "createChat").mockResolvedValue({ id: "fresh" } as never);
+    renderPage();
+    await screen.findAllByText("Nova");
+
+    await pick(user, /Nova/);
+
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=fresh"]));
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("the chat list cannot be read: a new chat is still made", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api.chatRecord, "listChats").mockRejectedValue(new Error("API 500: list"));
+    const create = vi.spyOn(api.chatRecord, "createChat").mockResolvedValue({ id: "fresh" } as never);
+    renderPage();
+    await screen.findAllByText("Nova");
+
+    await pick(user, /Nova/);
+
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=fresh"]));
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });
 
