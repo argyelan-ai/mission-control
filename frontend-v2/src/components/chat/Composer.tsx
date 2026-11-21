@@ -236,11 +236,11 @@ interface ComposerProps {
   /** Kann MC den Bildschirm des Agenten lesen? Nur fuer `cli-bridge` (Docker+tmux)
    *  liefert `capture_pane` echten Text. Bei Host-Agenten (Boss, Hermes, Jarvis)
    *  gibt es diesen Kanal nicht: `_compute_pane_state` leitet dort `working`/`idle`
-   *  allein aus der Transkript-mtime ab und ist sich dabei IMMER sicher — ein Boss,
-   *  der denkt ohne zu schreiben, liest sich als `idle`.
-   *  Seit 21.11.2026 aendert das den Knopf nicht mehr: Stop folgt dem Zustand,
-   *  den auch Statuszeile und Kopf zeigen (Prueftest, „Bereit" neben Stop).
-   *  Bleibt im Vertrag, weil ChatView es weiter mitgibt. */
+   *  aus dem Zug im Transkript ab (nicht beendet = `working`, bis zur
+   *  Stale-Grenze), so dass ein Boss mitten in einem langen Werkzeug-Aufruf
+   *  `working` meldet. Seit 21.11.2026 aendert dieser Wert den Knopf nicht mehr:
+   *  Stop folgt dem Zustand, den auch Statuszeile und Kopf zeigen (Prueftest,
+   *  „Bereit" neben Stop). Bleibt im Vertrag, weil ChatView es weiter mitgibt. */
   paneObservable?: boolean;
   /** Server-derived harness capabilities. Drives the effort chip: no
    *  capabilities (or `canSwitchEffort: false`) means the level is shown
@@ -420,9 +420,11 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   /* Stop only while the state says "working" or is unknown — the same state
    * the status line and the header show (user test 21.11.2026: Boss read
    * "Bereit" next to a Stop). An agent whose pane cannot be read used to get
-   * a Stop at rest too (operator decision 18.08.2026); with the status line
-   * saying "Bereit" that Stop contradicted it, so it now follows the state
-   * like every other agent. */
+   * a Stop at rest too (operator decision 18.08.2026: a missing Stop is worse
+   * than a waiting one). That need is now met by an honest state instead:
+   * the backend reads a host agent's unfinished turn as "working" (silent
+   * tool call, long think) until the stale limit, so Stop is there exactly
+   * while the turn runs and gone when the status line says "Bereit". */
   const showStop = !hasText && (isWorking || statusUnknown);
   /* Die Leiter des Harness, geteilt: die Stufen mit Rang tragen Regler und
    * Saeule; ein Eintrag ohne Rang (Hermes `default` = zurueck zur
@@ -1323,15 +1325,11 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               Nothing at all once the session has ended — neither sending nor
               interrupting can reach a session that is over.
 
-              Host agents (Boss, Hermes, Jarvis) are covered via
-              `paneObservable={false}`: `capture_pane` returns None for them, so
-              `_compute_pane_state` reports a confident `working`/`idle` from
-              transcript mtime alone and never `unknown`
-              (transcript_chat.py:1285-1291) — a Boss that thinks without writing
-              read as `idle` and left no way to interrupt. The cost is a Stop that
-              is also visible while such an agent rests; operator-decided
-              (18.08.2026): a control that is missing when you need it is worse
-              than one that waits. */}
+              Host agents (Boss, Hermes, Jarvis) have no pane: their state
+              comes from the turn in the transcript (backend
+              `_compute_pane_state`, pane-less branch) — an unfinished turn
+              reads "working" until the stale limit, so a silent Boss still
+              gets Stop, and a Boss at rest gets Send like everyone else. */}
           {/* shrink-0: the controls on the right never give way — Send/Stop
               must stay on the screen; the model chip gives way instead. */}
           <div data-testid="composer-actions" className="ml-auto flex shrink-0 items-center gap-1.5">
