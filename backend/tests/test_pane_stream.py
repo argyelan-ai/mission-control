@@ -186,3 +186,31 @@ async def test_ensure_restarts_the_pipe_only_when_it_is_gone(monkeypatch, tmp_pa
     calls.clear()
     monkeypatch.setattr(subprocess, "run", lambda argv, **kw: (_ for _ in ()).throw(OSError("docker weg")))
     assert await pane_stream.ensure(_StubAgent(slug="rex")) is None
+
+
+# ── Host-Agenten: kein Container, kein docker exec ───────────────────────────
+#
+# Live (Prueftest 21.11.2026): beim Schliessen eines Boss-Chats lief
+# ``docker exec mc-agent-boss tmux pipe-pane`` und loggte "No such container"
+# — Boss ist ein Host-Agent und hat keinen Strom. Jede Funktion hier muss bei
+# ``stream_path_for(agent) is None`` vor dem Docker-Aufruf aufhoeren.
+
+
+@pytest.mark.asyncio
+async def test_host_agent_never_reaches_docker(monkeypatch, caplog):
+    calls: list[list[str]] = []
+
+    def _fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, returncode=1, stdout="", stderr="No such container")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    boss = _StubAgent(agent_runtime="host", slug="boss", name="Boss")
+
+    await pane_stream.stop(boss)
+    assert await pane_stream.pane_size(boss) == (80, 24)
+    assert await pane_stream.is_piping(boss) is None
+    assert await pane_stream.ensure(boss) is None
+
+    assert calls == []
+    assert not [r for r in caplog.records if r.name == "mc.pane_stream"]

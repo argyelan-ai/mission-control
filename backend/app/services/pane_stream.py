@@ -57,6 +57,18 @@ def stream_path_for(agent) -> Path | None:
     return AGENTS_ROOT / slug / "claude-config" / STREAM_FILENAME
 
 
+def _container_slug(agent) -> str | None:
+    """Slug des Agenten-Containers — oder None fuer Agenten ohne Strom.
+
+    Gleiche Regel wie :func:`stream_path_for`: ein Host-Agent (Boss) hat
+    keinen ``mc-agent-<slug>``-Container; ein ``docker exec`` dorthin endet
+    nur in "No such container" im Log (Prueftest 21.11.2026).
+    """
+    if stream_path_for(agent) is None:
+        return None
+    return _slug(agent)
+
+
 def _docker_argv(slug: str, *tmux_args: str) -> list[str]:
     # Gleiche env/user-Flags wie capture_pane und agent_chat_input: eine
     # falsche Locale zerlegt mehrbyte Zeichen.
@@ -111,7 +123,7 @@ async def pane_size(agent) -> tuple[int, int]:
     jede Zeile von Sparkys 168 breiter Pane bei Zeichen 80 ab (Live-Gate
     01.09.2026). Ein Fehler ist nie fatal — dann ist die Vorschau nur schmal.
     """
-    slug = _slug(agent)
+    slug = _container_slug(agent)
     if slug is None:
         return 80, 24
 
@@ -136,7 +148,7 @@ async def stop(agent) -> None:
     ``pipe-pane`` OHNE Kommando ist der Ausschalter. Mit Kommando liefe ein
     zweiter Schreiber weiter und die Datei wuechse ohne Zuschauer.
     """
-    slug = _slug(agent)
+    slug = _container_slug(agent)
     if slug is None:
         return
     await asyncio.to_thread(_run, _docker_argv(slug, "pipe-pane", "-t", f"{slug}:0"))
@@ -153,7 +165,7 @@ async def is_piping(agent) -> bool | None:
     tmux' eigenes Flag dafuer. Keine Antwort ist KEIN Urteil: ein Timeout darf
     den Emulator nicht leeren.
     """
-    slug = _slug(agent)
+    slug = _container_slug(agent)
     if slug is None:
         return None
 
