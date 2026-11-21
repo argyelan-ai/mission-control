@@ -10,7 +10,9 @@ calling agent's own chats exist there. The privacy gate of the
 transcript adapters (``transcript_allowed``) runs when an event is WRITTEN
 (importer, live sink); what is in the record stays readable here. While ``CHAT_RECORD_ENABLED`` is off every route
 answers 404 ``{"reason": "chat_record_disabled"}`` — the record does not exist
-for the product until the flag is on.
+for the product until the flag is on. The two lists (``GET /chats``,
+``GET /search``) are the exception: they answer 200, empty, with
+``enabled: false``, because the chat list asks on every page.
 """
 from __future__ import annotations
 
@@ -69,9 +71,13 @@ async def list_record_chats(
     session: AsyncSession = Depends(get_session),
 ):
     """The chat list from the record, newest activity first; ``agentId``
-    = only the chats on that agent's harness."""
-    _require_enabled()
-    return {"chats": await chat_record.list_chats(session, current_user, limit=limit, agent_id=agent_id)}
+    = only the chats on that agent's harness. Flag off: 200, an empty list
+    and ``enabled: false`` — the list sits on every page, and "off" is a
+    state, not a missing page (a 404 here was a red console line per load)."""
+    if not chat_record.enabled():
+        return {"chats": [], "enabled": False}
+    chats = await chat_record.list_chats(session, current_user, limit=limit, agent_id=agent_id)
+    return {"chats": chats, "enabled": True}
 
 
 @router.post("/chats", status_code=201)
@@ -103,9 +109,11 @@ async def search_record(
     current_user=Depends(require_role(Role.VIEWER)),
     session: AsyncSession = Depends(get_session),
 ):
-    """Search across every chat the user can see (Postgres full-text)."""
-    _require_enabled()
-    return {"hits": await chat_record.search(session, current_user, q, limit=limit)}
+    """Search across every chat the user can see (Postgres full-text).
+    Flag off: 200, no hits, ``enabled: false`` (same rule as the list)."""
+    if not chat_record.enabled():
+        return {"hits": [], "enabled": False}
+    return {"hits": await chat_record.search(session, current_user, q, limit=limit), "enabled": True}
 
 
 @router.get("/chats/{chat_id}/history")
