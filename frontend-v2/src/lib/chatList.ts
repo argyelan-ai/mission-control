@@ -23,8 +23,51 @@ import { openHeadQuestions } from "@/lib/inbox";
 import { isAgentWorking } from "@/lib/agentStatus";
 import { chatEntryHref, type ChatKind } from "@/lib/chatHistory";
 
-/** waiting = the operator has to act · working = a turn runs · idle = neither. */
-export type ChatListState = "waiting" | "working" | "idle";
+/** waiting = the operator has to act · working = a turn runs · off = the
+ *  agent's session is not running (not started, switched off, heartbeat
+ *  gone) · idle = none of these. */
+export type ChatListState = "waiting" | "working" | "off" | "idle";
+
+/** What the session lists say about an agent's session beyond its status:
+ *  host rows carry `session_running`, container rows `container_state`,
+ *  both `last_seen_at` (heartbeat). Each is optional — a row without them
+ *  makes no claim either way. */
+export type SessionFacts = {
+  session_running?: boolean;
+  container_state?: string | null;
+  last_seen_at?: string | null;
+};
+
+/** A heartbeat older than this means the session is gone — the same 90 s
+ *  the backend uses for `session_running` and the comms directory's alive. */
+export const SESSION_ALIVE_MS = 90_000;
+
+/**
+ * Is this agent's session not running (user test 21.11.2026: a switched-off
+ * agent looked exactly like a running one in the picker)? True when the
+ * host session is not running, the container is not running, or the last
+ * heartbeat is missing or older than 90 s. A row that carries none of these
+ * facts is not called off — nothing known, nothing claimed (K3).
+ */
+export function isAgentOff(agent: SessionFacts, now: Date = new Date()): boolean {
+  if (agent.session_running === false) return true;
+  if (agent.container_state != null && agent.container_state !== "running") return true;
+  if (agent.last_seen_at === null) return true;
+  if (typeof agent.last_seen_at === "string") {
+    const seen = Date.parse(agent.last_seen_at);
+    if (Number.isNaN(seen) || now.getTime() - seen > SESSION_ALIVE_MS) return true;
+  }
+  return false;
+}
+
+/** The picker's order: running agents first, those that are off below —
+ *  each part keeps the order it came in. Only the picker sorts this way;
+ *  the chat list stays newest first. */
+export function runningFirst<T extends SessionFacts>(agents: readonly T[], now: Date = new Date()): T[] {
+  const on = agents.filter((a) => !isAgentOff(a, now));
+  const off = agents.filter((a) => isAgentOff(a, now));
+  return [...on, ...off];
+}
 
 export type ChatListEntry = {
   key: string;
@@ -52,7 +95,12 @@ export type ChatListSections = {
 };
 
 export type ChatListInput = {
-  agents: Pick<Agent, "id" | "name" | "status" | "last_task_activity_at" | "updated_at">[];
+  agents: (Pick<Agent, "id" | "name" | "status" | "last_task_activity_at" | "updated_at"> &
+    SessionFacts & {
+      /** When the agent's chat last saw anything (backend: newest entry of
+       *  the chat session, else the last task activity). */
+      last_chat_activity_at?: string | null;
+    })[];
   groups: Pick<GroupSummary, "id" | "name" | "status" | "created_at" | "last_message">[];
   headRuns: HeadRun[];
   approvals: Pick<Approval, "agent_id" | "status">[];
@@ -74,7 +122,7 @@ function later(a: string | null | undefined, b: string | null | undefined): stri
   return Date.parse(a) >= Date.parse(b) ? a : b;
 }
 
-export function buildChatList(input: ChatListInput): ChatListEntry[] {
+export function buildChatList(input: ChatListInput, now: Date = new Date()): ChatListEntry[] {
   const pending = new Set(input.approvals.filter((a) => a.status === "pending").map((a) => a.agent_id));
   const entries: ChatListEntry[] = [];
 
@@ -87,9 +135,16 @@ export function buildChatList(input: ChatListInput): ChatListEntry[] {
       title: agent.name,
       // Server facts only, so every device sorts alike (operator pictures
       // 18.11.2026: a per-device "opened at" gave the desktop a Today
-      // section the phone did not have).
-      at: agent.last_task_activity_at ?? null,
-      state: pending.has(agent.id) ? "waiting" : isAgentWorking(agent.status) ? "working" : "idle",
+      // section the phone did not have). The chat's own time first — an
+      // old task must not date a chat held today (user test 21.11.2026).
+      at: agent.last_chat_activity_at ?? agent.last_task_activity_at ?? null,
+      state: pending.has(agent.id)
+        ? "waiting"
+        : isAgentOff(agent, now)
+          ? "off"
+          : isAgentWorking(agent.status)
+            ? "working"
+            : "idle",
       href: chatEntryHref("agent", agent.id),
     });
   }

@@ -54,6 +54,16 @@ interface StatusLineProps {
   hasTerminal?: boolean;
 }
 
+/**
+ * The probe ran and could not classify the agent's state. The one predicate
+ * the status line ("Status unknown") and the composer's Stop share, so the
+ * two never disagree (user test 21.11.2026: "Ready" next to a Stop). Not
+ * `!state`: before the first probe tick nothing is unknown yet.
+ */
+export function isStatusUnknown(state: StateEvent | null): boolean {
+  return state?.status === "unknown";
+}
+
 /** One line, left edge on the message column (px-4 md:px-5). */
 const LINE_CLASS = "flex items-center gap-2 px-4 md:px-5 pb-1.5 text-[12px]";
 
@@ -207,7 +217,7 @@ function resolveDisplay(
   if (loading && !state) {
     return loadingDisplay(t);
   }
-  if (!connected || !state || state.status === "unknown") {
+  if (!connected || !state || isStatusUnknown(state)) {
     return unknownDisplay(t, hasTerminal);
   }
 

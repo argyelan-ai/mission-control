@@ -27,6 +27,7 @@ import { ContextPanel, cacheHitRateOf } from "./ContextPanel";
 import { PopoverPortal, anchoredBoxStyle, useAnchoredPosition } from "@/lib/anchoredPopover";
 import { harnessLabel } from "@/components/shared/HarnessIcon";
 import { formatShare } from "@/lib/usage";
+import { isStatusUnknown } from "./StatusLine";
 import { appendQuote } from "./chatQuote";
 import { type MentionToken, findMentionToken, insertMention } from "./composer/fileMention";
 import { useChatFileSearch } from "./composer/useChatFileSearch";
@@ -235,8 +236,10 @@ interface ComposerProps {
    *  liefert `capture_pane` echten Text. Bei Host-Agenten (Boss, Hermes, Jarvis)
    *  gibt es diesen Kanal nicht: `_compute_pane_state` leitet dort `working`/`idle`
    *  allein aus der Transkript-mtime ab und ist sich dabei IMMER sicher — ein Boss,
-   *  der denkt ohne zu schreiben, liest sich als `idle`. Genau dann fehlte bisher
-   *  der Stop-Knopf, obwohl er der einzige noetige Griff ist. */
+   *  der denkt ohne zu schreiben, liest sich als `idle`.
+   *  Seit 21.11.2026 aendert das den Knopf nicht mehr: Stop folgt dem Zustand,
+   *  den auch Statuszeile und Kopf zeigen (Prueftest, „Bereit" neben Stop).
+   *  Bleibt im Vertrag, weil ChatView es weiter mitgibt. */
   paneObservable?: boolean;
   /** Server-derived harness capabilities. Drives the effort chip: no
    *  capabilities (or `canSwitchEffort: false`) means the level is shown
@@ -283,7 +286,7 @@ interface ComposerProps {
  *  globals.css passen. */
 export const EFFORT_SETTLE_MS = 320;
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, quote = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, prefill = null, quote = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
   const t = useTranslations("sessions");
   // One word per effort level, the same as the bench (round-2 Q2):
   // "High" / "Hoch" instead of the raw "high" the harness reports.
@@ -397,13 +400,15 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    *  Deliberately NOT `!state`: a missing state event means the first probe
    *  tick hasn't landed yet, which is a loading moment, not an unreadable
    *  pane — treating it as unknown would flash a Stop on every mount. */
-  const statusUnknown = state?.status === "unknown";
+  const statusUnknown = isStatusUnknown(state);
   /** Empty input leaves nothing to send, so the button carries the interrupt. */
-  /* Stop wird angeboten, sobald "arbeitet" nicht widerlegbar ist: bestaetigtes
-   * `working`, ein unlesbares Pane (`unknown`) — und neu auch jeder Agent, dessen
-   * Pane wir grundsaetzlich nicht lesen koennen. Ein deaktivierter Senden-Knopf
-   * behauptet dort eine Ruhe, die wir nie festgestellt haben. */
-  const showStop = !hasText && (isWorking || statusUnknown || !paneObservable);
+  /* Stop only while the state says "working" or is unknown — the same state
+   * the status line and the header show (user test 21.11.2026: Boss read
+   * "Bereit" next to a Stop). An agent whose pane cannot be read used to get
+   * a Stop at rest too (operator decision 18.08.2026); with the status line
+   * saying "Bereit" that Stop contradicted it, so it now follows the state
+   * like every other agent. */
+  const showStop = !hasText && (isWorking || statusUnknown);
   /* Die Leiter des Harness, geteilt: die Stufen mit Rang tragen Regler und
    * Saeule; ein Eintrag ohne Rang (Hermes `default` = zurueck zur
    * konfigurierten Stufe) ist kein Punkt auf der Skala, sondern ein eigener
@@ -1599,7 +1604,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   aria-label={t("stop")}
                   title={t("interruptEsc")}
                   data-testid="stop-button-prominent"
-                  data-reason={isWorking ? "working" : !paneObservable ? "unobservable" : "unknown"}
+                  data-reason={isWorking ? "working" : "unknown"}
                   /* The pulse is a claim of live activity, so it only runs when
                      the probe actually confirmed "working". On an unreadable
                      pane the control is offered without animating something we

@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Composer, effortReasonText } from "./Composer";
+import { isStatusUnknown } from "./StatusLine";
 import type { ChatAttachment, StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
@@ -125,13 +126,6 @@ describe("Composer", () => {
   // Stop appears whenever working cannot be DISPROVED and there is nothing to
   // send: confirmed "working", or a pane the probe couldn't classify at all.
   //
-  // Host agents (Boss, Hermes, Jarvis) are covered via `paneObservable={false}`:
-  // `capture_pane` returns None for them, so the backend reports a confident
-  // `working`/`idle` from transcript mtime alone and never `unknown`
-  // (transcript_chat.py:1285-1291) — a Boss thinking without writing read as
-  // `idle` and offered a disabled Send, i.e. no way to interrupt at all. The
-  // accepted cost (operator decision 18.08.2026) is a Stop that stays visible
-  // while such an agent rests.
 
   it("morphs to Stop while the agent works and the input is empty", () => {
     render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />);
@@ -194,36 +188,36 @@ describe("Composer", () => {
     expect(stop).toHaveAttribute("data-reason", "working");
   });
 
-  it("keeps Stop reachable for an agent whose pane cannot be read at all", () => {
-    // Boss idles on the transcript clock even while thinking — without this the
-    // only control on offer was a disabled Send.
+  // User test 21.11.2026 (operator pictures): Boss read "Bereit" in the
+  // header and the status line, and the button next to it was a Stop. The
+  // button now follows the same state the status line shows — Stop only
+  // while working or when the status is unknown, for every agent.
+  it("an idle agent whose pane cannot be read shows the send arrow, as its status line says Ready", () => {
     render(
       <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} paneObservable={false} />
     );
-    const stop = screen.getByTestId("stop-button-prominent");
-    expect(stop).toHaveAttribute("data-reason", "unobservable");
-    expect(stop).not.toHaveClass("animate-pulse"); // kein Puls: Aktivitaet ist nicht bestaetigt
-    expect(screen.queryByTestId("send-button")).not.toBeInTheDocument();
+    expect(screen.getByTestId("send-button")).toBeDisabled();
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
   });
 
-  it("still calls onStop for an unobservable agent", async () => {
+  it("an unobservable agent that works still gets the Stop", async () => {
     const user = userEvent.setup();
     const onStop = vi.fn();
     render(
-      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={onStop} paneObservable={false} />
+      <Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={onStop} paneObservable={false} />
     );
     await user.click(screen.getByTestId("stop-button-prominent"));
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it("lets text win over the unobservable Stop — steering stays possible", async () => {
-    const user = userEvent.setup();
-    render(
-      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} paneObservable={false} />
-    );
-    await user.type(screen.getByPlaceholderText(/Message the agent/), "mach bitte X");
-    expect(screen.getByTestId("send-button")).toBeEnabled();
-    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
+  it("Stop on an unknown status agrees with the status line's 'Status unknown'", () => {
+    const state = mkState("unknown");
+    expect(isStatusUnknown(state)).toBe(true);
+    expect(isStatusUnknown(mkState("idle"))).toBe(false);
+    // Before the first probe tick nothing is unknown yet — no Stop flash.
+    expect(isStatusUnknown(null)).toBe(false);
+    render(<Composer agentId="a1" usage={null} state={state} onSend={vi.fn()} onStop={vi.fn()} paneObservable={false} />);
+    expect(screen.getByTestId("stop-button-prominent")).toHaveAttribute("data-reason", "unknown");
   });
 
   it("does NOT change readable agents: idle cli-bridge keeps the ghost Send", () => {
