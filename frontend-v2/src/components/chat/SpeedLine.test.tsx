@@ -26,7 +26,7 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
-import { SpeedLine, SpeedLineView, boxLabel, lastTps, liveTps } from "./SpeedLine";
+import { SpeedLine, SpeedLineView, boxLabel, lastTps, liveTps, shortModelName } from "./SpeedLine";
 
 const intl = (ui: React.ReactNode) => (
   <NextIntlClientProvider locale="en" messages={en}>
@@ -68,29 +68,41 @@ describe("boxLabel / liveTps", () => {
 });
 
 describe("SpeedLineView", () => {
-  it("with data: box · model and the live tok/s", () => {
+  // User test 21.11.2026: the model stood twice (chip and this line), once
+  // as "mc-openai/DeepSeek-V4.1-Flash-1017". The chip names it; this line
+  // names the box and its speed.
+  it("with data: the box and the live tok/s — the model stands in the chip", () => {
     render(intl(<SpeedLineView box="Box A + Box B" model="qwen3.8-27b" tps={41} live />));
     const line = screen.getByTestId("speed-line");
-    expect(line).toHaveTextContent("Box A + Box B · qwen3.8-27b");
+    expect(line).toHaveTextContent(/^Box A \+ Box B41 tok\/s$/);
+    expect(line).not.toHaveTextContent("qwen3.8-27b");
     expect(screen.getByTestId("speed-line-tps")).toHaveTextContent("41 tok/s");
   });
 
   it("at rest: the last measured tok/s, quiet, not marked live", () => {
     render(intl(<SpeedLineView box="Box A" model="qwen3.8-27b" tps={38} />));
-    expect(screen.getByTestId("speed-line")).toHaveTextContent("Box A · qwen3.8-27b");
+    expect(screen.getByTestId("speed-line")).toHaveTextContent("Box A");
     expect(screen.getByTestId("speed-line-tps")).toHaveTextContent("38 tok/s");
     expect(screen.getByTestId("speed-line-tps")).not.toHaveAttribute("data-live");
   });
 
-  it("a box that never measured: '– tok/s' instead of nothing", () => {
-    render(intl(<SpeedLineView box="Box A" model="qwen3.8-27b" tps={null} />));
+  it("a box that never measured: '– tok/s' only while the chat streams, nothing at rest", () => {
+    const { unmount } = render(intl(<SpeedLineView box="Box A" model="qwen3.8-27b" tps={null} streaming />));
     expect(screen.getByTestId("speed-line-tps")).toHaveTextContent("– tok/s");
+    unmount();
+    render(intl(<SpeedLineView box="Box A" model="qwen3.8-27b" tps={null} />));
+    expect(screen.queryByTestId("speed-line-tps")).toBeNull();
+    expect(screen.getByTestId("speed-line")).toHaveTextContent(/^Box A$/);
   });
 
-  it("a cloud model without a box: only the model", () => {
+  it("a cloud model without a box: no line — the chip names the model", () => {
     render(intl(<SpeedLineView box={null} model="claude-opus-5" tps={null} />));
+    expect(screen.queryByTestId("speed-line")).toBeNull();
+  });
+
+  it("a cloud model with the pair picker: the line is the door, named by the short model", () => {
+    render(intl(<SpeedLineView box={null} model="custom:anthropic/claude-opus-5" tps={null} onPick={() => {}} />));
     expect(screen.getByTestId("speed-line")).toHaveTextContent(/^claude-opus-5$/);
-    expect(screen.queryByTestId("speed-line-tps")).toBeNull();
   });
 
   it("without data: no line at all (K3)", () => {
@@ -109,13 +121,7 @@ describe("SpeedLine (loaded)", () => {
     apiMock.runtimes = [RUNTIME];
     withQuery(<SpeedLine runtimeId="rt-1" model={null} streaming />);
     await waitFor(() => expect(screen.getByTestId("speed-line-tps")).toHaveTextContent("41 tok/s"));
-    expect(screen.getByTestId("speed-line")).toHaveTextContent("Box A + Box B · qwen3.8-27b");
-  });
-
-  it("the transcript's model wins over the runtime row's", async () => {
-    apiMock.runtimes = [RUNTIME];
-    withQuery(<SpeedLine runtimeId="rt-1" model="qwen3.8-27b-nvfp4" streaming={false} />);
-    await waitFor(() => expect(screen.getByTestId("speed-line")).toHaveTextContent("Box A + Box B · qwen3.8-27b-nvfp4"));
+    expect(screen.getByTestId("speed-line")).toHaveTextContent("Box A + Box B");
   });
 
   it("at rest it still shows the box's last measured speed", async () => {
@@ -130,5 +136,38 @@ describe("SpeedLine (loaded)", () => {
   it("steps aside outside a query client instead of throwing", () => {
     render(intl(<SpeedLine runtimeId="rt-1" model="m" streaming />));
     expect(screen.queryByTestId("speed-line")).toBeNull();
+  });
+});
+
+describe("shortModelName (user test 21.11.)", () => {
+  it("drops provider paths and the custom: prefix", () => {
+    expect(shortModelName("mc-openai/DeepSeek-V4.1-Flash-1017")).toBe("DeepSeek-V4.1-Flash-1017");
+    expect(shortModelName("custom:openai/qwen3.8-27b")).toBe("qwen3.8-27b");
+    expect(shortModelName("claude-opus-5")).toBe("claude-opus-5");
+  });
+
+  it("keeps the model's identity: family name and version or build tag stay (critic 21.11.)", () => {
+    // A numeric tail is a version as often as a build date; the family name
+    // is what tells two "V3"s apart. The chip is the only place the model
+    // is named, so nothing that tells models apart may go.
+    expect(shortModelName("Mistral-Large-2411")).toBe("Mistral-Large-2411");
+    expect(shortModelName("deepseek-r1-0528")).toBe("deepseek-r1-0528");
+    expect(shortModelName("Kimi-K2-0905")).toBe("Kimi-K2-0905");
+    expect(shortModelName("Qwen-V3")).toBe("Qwen-V3");
+  });
+
+  it("a label with spaces around a slash is a name, not a provider path", () => {
+    expect(shortModelName("GPT-5.1 / codex")).toBe("GPT-5.1 / codex");
+  });
+
+  it("a catalogue display name wins", () => {
+    expect(shortModelName("custom:anthropic/claude-opus-5", "Opus 5")).toBe("Opus 5");
+  });
+
+  it("nothing in, nothing out — never an empty string the caller's ?? would keep", () => {
+    expect(shortModelName(null)).toBeNull();
+    expect(shortModelName("  ")).toBeNull();
+    expect(shortModelName("custom:")).toBeNull();
+    expect(shortModelName("mc-openai/")).toBeNull();
   });
 });

@@ -4,7 +4,7 @@
  * order, and what its row says.
  */
 import { describe, expect, it } from "vitest";
-import { buildChatList, chatRowTime, sectionChats, type ChatListInput } from "../chatList";
+import { buildChatList, chatRowTime, runningFirst, sectionChats, type ChatListInput } from "../chatList";
 import type { HeadRun } from "../heads";
 
 const NOW = new Date("2026-11-18T15:00:00");
@@ -215,5 +215,72 @@ describe("buildChatList — further chats of an agent (chats slice S2)", () => {
       approvals: [{ agent_id: "a2", status: "pending" }],
     })).filter((e) => e.key === "chat:c-w");
     expect(row.state).toBe("idle");
+  });
+});
+
+describe("buildChatList — dated by the chat, off when not started (user test 21.11.)", () => {
+  const NOW_MS = NOW.getTime();
+  const secAgo = (s: number) => new Date(NOW_MS - s * 1000).toISOString();
+
+  it("an old task with a chat today sorts first and lands in Today", () => {
+    const list = buildChatList(
+      input({
+        agents: [
+          { id: "alpha", name: "Alpha", status: "idle", last_task_activity_at: daysAgo(10), last_chat_activity_at: today(14), updated_at: daysAgo(30) },
+          { id: "z", name: "ZCode", status: "idle", last_task_activity_at: daysAgo(2), updated_at: daysAgo(30) },
+        ],
+        groups: [],
+      }),
+      NOW,
+    );
+    expect(list.map((e) => e.id)).toEqual(["alpha", "z"]);
+    expect(sectionChats(list, NOW).today.map((e) => e.id)).toEqual(["alpha"]);
+  });
+
+  it("a stopped host session, a stopped container or a heartbeat older than 90 s is 'off'", () => {
+    const list = buildChatList(
+      input({
+        agents: [
+          { id: "host-off", name: "Voice", status: "idle", last_task_activity_at: null, updated_at: daysAgo(1), session_running: false, last_seen_at: secAgo(10) },
+          { id: "box-off", name: "Box", status: "idle", last_task_activity_at: null, updated_at: daysAgo(1), container_state: "exited", last_seen_at: secAgo(10) },
+          { id: "stale", name: "Stale", status: "working", last_task_activity_at: null, updated_at: daysAgo(1), last_seen_at: secAgo(91) },
+          { id: "never", name: "Never", status: "idle", last_task_activity_at: null, updated_at: daysAgo(1), last_seen_at: null },
+          { id: "on", name: "Lead", status: "idle", last_task_activity_at: null, updated_at: daysAgo(1), session_running: true, last_seen_at: secAgo(20) },
+          { id: "legacy", name: "Legacy", status: "idle", last_task_activity_at: null, updated_at: daysAgo(1) },
+        ],
+        groups: [],
+      }),
+      NOW,
+    );
+    const state = (id: string) => list.find((e) => e.id === id)?.state;
+    expect(state("host-off")).toBe("off");
+    expect(state("box-off")).toBe("off");
+    expect(state("stale")).toBe("off");
+    expect(state("never")).toBe("off");
+    expect(state("on")).toBe("idle");
+    // Nothing known about the session: no claim either way.
+    expect(state("legacy")).toBe("idle");
+  });
+
+  it("a pending approval still waits, even for an agent that is off", () => {
+    const list = buildChatList(
+      input({
+        agents: [{ id: "a", name: "A", status: "idle", last_task_activity_at: null, updated_at: daysAgo(1), session_running: false }],
+        groups: [],
+        approvals: [{ agent_id: "a", status: "pending" }],
+      }),
+      NOW,
+    );
+    expect(list[0].state).toBe("waiting");
+  });
+
+  it("the picker order puts running agents first and keeps the order inside each part", () => {
+    const agents = [
+      { id: "j", session_running: false },
+      { id: "b", session_running: true, last_seen_at: secAgo(5) },
+      { id: "z", container_state: "exited" },
+      { id: "s", container_state: "running", last_seen_at: secAgo(5) },
+    ];
+    expect(runningFirst(agents, NOW).map((a) => a.id)).toEqual(["b", "s", "j", "z"]);
   });
 });

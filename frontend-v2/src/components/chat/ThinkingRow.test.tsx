@@ -75,6 +75,11 @@ describe("ThinkingRow", () => {
     expect(screen.getByRole("button")).toHaveTextContent("Thought · 1:45");
   });
 
+  it("a thought under one second shows no '0:00' (user test 21.11.)", () => {
+    render(<ThinkingRow ev={mkEvent({ durationMs: 400 })} />);
+    expect(screen.getByRole("button")).not.toHaveTextContent("0:00");
+  });
+
   it("says no duration when none was recorded", () => {
     render(<ThinkingRow ev={mkEvent()} />);
     expect(screen.getByRole("button")).toHaveTextContent(/^Thought$/);
