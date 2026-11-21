@@ -1276,7 +1276,7 @@
     "contextPanelSource": "Quelle",
     "contextPanelCacheRate": "Cache-Trefferquote",
     "contextPanelCost": "Sitzungskosten",
-    "contextPanelNote": "Die Agent-Seite zeigt den zuletzt gemeldeten Wert seiner Arbeits-Sitzung — darum kann die Zahl dort abweichen. Ab ~80 % fasst der Agent den Chat automatisch zusammen.",
+    "contextPanelNote": "Die Agent-Seite zeigt den zuletzt gemeldeten Wert seiner Arbeits-Sitzung — darum kann die Zahl dort abweichen. Kurz bevor der Kontext voll ist, fasst der Agent den Chat automatisch zusammen.",
     "contextPanelClose": "Schliessen",
     "slashCommands": {
       "model": "Modell wechseln",
