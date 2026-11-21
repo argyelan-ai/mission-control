@@ -10,6 +10,7 @@ import time
 import uuid
 import urllib.request
 import urllib.error
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -18,7 +19,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from sqlmodel import select
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 
 from app.auth import Role, generate_agent_token, require_role, require_user
 from app.config import effective_host_ssh_user, settings
@@ -682,9 +683,75 @@ async def agent_terminal_ws(
             pass
 
 
+# ── Chat list rows ────────────────────────────────────────────────────────────
+# The two session lists below feed the chat page, the chat list, the quick
+# sheet and the chat view, polled every few seconds. They used to return
+# `agent.model_dump()`: every prompt document plus the token hash, about
+# 130 KB gzip per poll for six agents. A row carries only what those readers
+# use (frontend `SessionAgent`, lib/types.ts). Prompt documents and the token
+# hash never belong here — the agent detail endpoint serves them.
+
+
+class SessionAgentRow(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: Optional[str] = None
+    emoji: Optional[str] = None
+    status: str
+    run_state: str
+    harness: Optional[str] = None
+    model: Optional[str] = None
+    agent_runtime: str
+    runtime_id: Optional[uuid.UUID] = None
+    board_id: Optional[uuid.UUID] = None
+    current_task_id: Optional[uuid.UUID] = None
+    last_seen_at: Optional[datetime] = None
+    last_task_activity_at: Optional[datetime] = None
+    updated_at: datetime
+    headless_chat: bool = False
+    tasks_in_own_session: bool = False
+
+    # Same text as the old dict response (`isoformat()`, "+00:00"), not
+    # pydantic's "Z" — the wire format stays exactly as it was.
+    @field_serializer("last_seen_at", "last_task_activity_at", "updated_at")
+    def _iso(self, value: Optional[datetime]) -> Optional[str]:
+        return value.isoformat() if value is not None else None
+
+    @classmethod
+    def of(cls, agent: Agent) -> "SessionAgentRow":
+        return cls(
+            id=agent.id,
+            name=agent.name,
+            slug=agent.slug,
+            emoji=agent.emoji,
+            status=agent.status,
+            run_state=agent.run_state,
+            harness=agent.harness,
+            model=agent.model,
+            agent_runtime=agent.agent_runtime,
+            runtime_id=agent.runtime_id,
+            board_id=agent.board_id,
+            current_task_id=agent.current_task_id,
+            last_seen_at=agent.last_seen_at,
+            last_task_activity_at=agent.last_task_activity_at,
+            updated_at=agent.updated_at,
+            headless_chat=agent.headless_chat,
+            tasks_in_own_session=agent.tasks_in_own_session,
+        )
+
+
+class DockerSessionAgentRow(SessionAgentRow):
+    container_state: str
+
+
+class HostSessionAgentRow(SessionAgentRow):
+    session_name: str
+    session_running: bool
+
+
 # ── Docker Session Agents ─────────────────────────────────────────────────────
 
-@router.get("/docker-sessions/agents")
+@router.get("/docker-sessions/agents", response_model=list[DockerSessionAgentRow])
 async def list_docker_session_agents(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
@@ -725,16 +792,19 @@ async def list_docker_session_agents(
     for agent in agents:
         container_name = f"mc-agent-{agent.name.lower().replace(' ', '-')}"
         if container_name in container_state:
-            agent_dict = agent.model_dump()
-            agent_dict["container_state"] = container_state[container_name]
-            filtered.append(agent_dict)
+            filtered.append(
+                DockerSessionAgentRow(
+                    **SessionAgentRow.of(agent).model_dump(),
+                    container_state=container_state[container_name],
+                )
+            )
 
     return filtered
 
 
 # ── Host Session Agents ───────────────────────────────────────────────────────
 
-@router.get("/host-sessions/agents")
+@router.get("/host-sessions/agents", response_model=list[HostSessionAgentRow])
 async def list_host_session_agents(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
@@ -746,7 +816,7 @@ async def list_host_session_agents(
     endpoint every 30s) — not via file mtime, because macOS Docker Desktop
     bind mounts cache the mtime and return stale values.
     """
-    from datetime import datetime, timezone
+    from datetime import timezone
 
     result = await session.exec(
         select(Agent)
@@ -760,14 +830,17 @@ async def list_host_session_agents(
     out = []
     for agent in agents:
         slug = agent.name.lower().replace(" ", "-")
-        agent_dict = agent.model_dump()
-        agent_dict["session_name"] = f"{slug}-host"
-        if agent.last_seen_at is not None:
-            age = (now - agent.last_seen_at).total_seconds()
-            agent_dict["session_running"] = age < 90
-        else:
-            agent_dict["session_running"] = False
-        out.append(agent_dict)
+        running = (
+            agent.last_seen_at is not None
+            and (now - agent.last_seen_at).total_seconds() < 90
+        )
+        out.append(
+            HostSessionAgentRow(
+                **SessionAgentRow.of(agent).model_dump(),
+                session_name=f"{slug}-host",
+                session_running=running,
+            )
+        )
     return out
 
 
