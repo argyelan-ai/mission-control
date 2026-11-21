@@ -1344,6 +1344,18 @@ export function ChatView({
   // keyboard for a focus that happens in the gesture itself.
   const rootRef = useRef<HTMLDivElement>(null);
 
+  // A new chat ("New chat" → pick) opens ready to type: once its empty
+  // history has loaded, the composer gets the focus — once per chat, so a
+  // later re-render never steals it back from wherever the operator went.
+  const newChatEmpty =
+    furtherChat && gateReady && !stream.loading && merged.entries.length === 0 && stream.pendingEchoes.length === 0;
+  const focusedNewChat = useRef<string | null>(null);
+  useEffect(() => {
+    if (!newChatEmpty || !chatParam || focusedNewChat.current === chatParam) return;
+    focusedNewChat.current = chatParam;
+    rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+  }, [newChatEmpty, chatParam]);
+
   // Moved here, AFTER every hook above (review finding on PR #756): every
   // value computed since `stream` is already null/empty-safe for
   // `agent: null, head: null` (`stream` itself comes from
@@ -1760,13 +1772,19 @@ export function ChatView({
                 // Teaches the surface instead of reporting emptiness: a fresh
                 // session genuinely has no transcript yet, and the two things
                 // the operator can do about it are named.
-                <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center">
+                // A further chat that is still empty is a NEW chat ("New
+                // chat" → pick): it says so, and the terminal hint does not
+                // apply — the terminal shows the agent's own session.
+                <div
+                  data-testid={furtherChat ? "chat-empty-new" : "chat-empty"}
+                  className="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center"
+                >
                   <MessagesSquare size={20} style={{ color: C.textDim }} aria-hidden="true" />
                   <span className="text-[13px] font-medium" style={{ color: C.textSecondary }}>
-                    {t("noMessagesYet")}
+                    {furtherChat ? t("newChatWith", { name: agent?.name ?? "" }) : t("noMessagesYet")}
                   </span>
                   <span className="text-[12px] max-w-[42ch]" style={{ color: C.textMuted }}>
-                    {t("noMessagesHint", { name: agent?.name ?? "" })}
+                    {furtherChat ? t("newChatHint") : t("noMessagesHint", { name: agent?.name ?? "" })}
                   </span>
                 </div>
               )

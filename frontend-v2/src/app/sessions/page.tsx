@@ -153,6 +153,26 @@ function agentHasTranscript(agent: AgentWithState | null | undefined): boolean {
   return agent.agent_runtime === "host" && !!agent.slug && BOSS_SLUGS.has(agent.slug);
 }
 
+// ── New chat (chats slice S2) ───────────────────────────────────────────────
+// Can this agent hold a further chat? Mirrors the backend's routing rule
+// exactly (acp_chat_chats._FURTHER_CHAT_SUPPORT): omp over ACP in its
+// container, or Claude Code in a cli-bridge container. Any other agent
+// (host agents, omp without ACP) would get a chat it cannot answer in —
+// the record creates it, the first message then fails with 409
+// `chat_harness_unsupported`. So the picker opens their own chat instead.
+function agentCanStartNewChat(agent: AgentWithState | null | undefined): boolean {
+  if (!agent || agent.agent_runtime !== "cli-bridge") return false;
+  const harness = agent.harness ?? "claude";
+  if (agent.headless_chat) return harness === "omp";
+  return harness === "claude";
+}
+
+/** 404 (record off) and 403 (not an admin): new chats are not there for this
+ *  user — a state, not a fault. Everything else failed. */
+function newChatRefusedAsOff(err: unknown): boolean {
+  return err instanceof Error && /^API 40[34]\b/.test(err.message);
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 function SessionsPageContent() {
@@ -179,6 +199,11 @@ function SessionsPageContent() {
   // the selection back the instant `selected` became null).
   const [selectedHeadId, setSelectedHeadId] = useState<string | null>(null);
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
+  // "New chat" → a pick is asking the record for a new chat: the agent's
+  // name while the request runs. The ref is the double-tap guard (state
+  // lands a render too late for two taps in one frame).
+  const [startingChatFor, setStartingChatFor] = useState<string | null>(null);
+  const startingChat = useRef(false);
   // Mobile (<md) stack navigation: which pane is visible. Desktop (≥md) ignores
   // this and always shows the split. Kept separate from `selected` so a
   // return-to-list action doesn't null `selected` (which would immediately
@@ -608,8 +633,22 @@ function SessionsPageContent() {
   });
 
   function handleSelect(agentId: string) {
+    if (startingChat.current) return;
     const agent = agents.find((a) => a.id === agentId);
     if (!agent) return;
+    // "New chat" means a new chat: in the picker a pick starts one.
+    if (picking) {
+      if (agentCanStartNewChat(agent)) {
+        void startNewChat(agent);
+        return;
+      }
+      notify.info(tCockpit("newChatUnsupported", { name: agent.name }));
+    }
+    openAgentChat(agent);
+  }
+
+  /** The agent's own chat — a pick outside the picker, and every fallback. */
+  function openAgentChat(agent: AgentWithState) {
     setSelected(agent);
     setSelectedGroupId(null);
     setSelectedHeadId(null);
@@ -622,7 +661,33 @@ function SessionsPageContent() {
     if (activePanel === "doc") setActivePanel(null);
   }
 
+  /** Picker → agent: a new, empty chat of that agent, opened in place of the
+   *  picker (replace — back returns to where "New chat" was pressed). When
+   *  the record will not make one, say so and open the agent's own chat;
+   *  never open the old chat silently as if it were new. */
+  async function startNewChat(agent: AgentWithState) {
+    startingChat.current = true;
+    setStartingChatFor(agent.name);
+    try {
+      const chat = await api.chatRecord.createChat(agent.id);
+      // The list asks the record again now: the new row stands there (and
+      // is marked) the moment the chat opens.
+      void qc.invalidateQueries({ queryKey: ["chat-record", "chats"] });
+      arrival.current = "none";
+      router.replace(furtherChatHref(agent.id, chat.id), { scroll: false });
+    } catch (err) {
+      notify.info(
+        tCockpit(newChatRefusedAsOff(err) ? "newChatOff" : "newChatFailed", { name: agent.name }),
+      );
+      openAgentChat(agent);
+    } finally {
+      startingChat.current = false;
+      setStartingChatFor(null);
+    }
+  }
+
   function handleSelectGroup(groupId: string) {
+    if (startingChat.current) return;
     setSelectedGroupId(groupId);
     setSelectedHeadId(null);
     saveLastGroupId(groupId);
@@ -639,6 +704,7 @@ function SessionsPageContent() {
   // head run is not "the last chat" the way an agent/group is, it comes
   // and goes within the 7-day window on its own.
   function handleSelectHead(runId: string, replace = false) {
+    if (startingChat.current) return;
     setSelectedHeadId(runId);
     setMobileView("chat");
     putChatInHistory("head", runId, replace);
@@ -765,8 +831,9 @@ function SessionsPageContent() {
           {/* Desktop: the shell's left column lists the chats, so this list
               shows only as the "New chat" picker, in place of the chat. */}
           <div
-            className={`${onChatScreen ? "hidden" : "flex"} ${picking ? "md:flex md:rounded-xl md:border md:border-[var(--color-border)]" : "md:hidden"} flex-col flex-1 min-h-0 overflow-hidden`}
+            className={`${onChatScreen ? "hidden" : "flex"} ${picking ? "md:flex md:rounded-xl md:border md:border-[var(--color-border)]" : "md:hidden"} ${startingChatFor ? "pointer-events-none" : ""} flex-col flex-1 min-h-0 overflow-hidden`}
             data-testid="session-list-mobile"
+            aria-busy={startingChatFor ? true : undefined}
             style={picking ? { background: C.bgSurface } : undefined}
           >
             {picking && (
@@ -777,6 +844,16 @@ function SessionsPageContent() {
               >
                 {tCockpit("pickTitle")}
               </h1>
+            )}
+            {picking && startingChatFor && (
+              <p
+                role="status"
+                data-testid="chat-picker-starting"
+                className="shrink-0 px-4 pb-2 text-sm"
+                style={{ color: C.textMuted }}
+              >
+                {tCockpit("pickStarting", { name: startingChatFor })}
+              </p>
             )}
             <SessionSidebar
               agents={agents}
