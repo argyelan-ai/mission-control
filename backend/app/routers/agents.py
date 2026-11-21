@@ -408,11 +408,19 @@ async def list_agents(
     # so add the canonical form here instead of duplicating the enum-matching
     # heuristic in TypeScript. Raw `role` stays untouched for display purposes.
     windows = await _shown_windows(session, agents)
+    from app.services.comms_directory import effective_run_state
+    from app.services.transcript_chat import chat_activity_fields, last_chat_activities
+
+    chat_at = await last_chat_activities(agents)
     return [
         {
             **a.model_dump(),
             **_shown_context_fields(a, windows.get(a.runtime_id)),
             **_run_fields(a),
+            # The chat list sorts and dates by the chat (user test 21.11.2026).
+            **chat_activity_fields(a, chat_at.get(a.id)),
+            # "running" only while the heartbeat backs it (same 90 s as alive).
+            "run_state": effective_run_state(a),
             "role_canonical": normalize_agent_role(a.role),
         }
         for a in agents

@@ -191,6 +191,27 @@ def _agent_willing(agent: Agent) -> bool:
     )
 
 
+def effective_run_state(agent: Agent, now: datetime | None = None) -> str:
+    """The agent's ``run_state`` as far as its heartbeat still backs it.
+
+    ``running`` is written by the heartbeat and by dispatch, and nothing
+    clears it when the agent goes away mid-turn — the row says "running"
+    until the next beat, which for an agent that was switched off never
+    comes. Past ``ALIVE_WINDOW_S`` without a sign of life (the same 90 s
+    the session lists use for ``session_running``) it reads as ``idle``.
+    A read-time view: the stored value is untouched, so dispatch guards
+    that read the row keep their own rules. Other states pass through.
+    """
+    state = agent.run_state or "idle"
+    if state != "running":
+        return state
+    now = now or datetime.now(timezone.utc)
+    seen = agent.last_seen_at
+    if seen is None or (now - ensure_aware(seen)).total_seconds() > ALIVE_WINDOW_S:
+        return "idle"
+    return state
+
+
 # rule: R-one-presence-source - alive and listening are decided here only
 async def state_of(principal: Principal, *, redis=None, warming: bool | None = None) -> dict[str, Any]:
     redis = redis or await get_redis()
@@ -224,7 +245,10 @@ async def state_of(principal: Principal, *, redis=None, warming: bool | None = N
         listening = bool(reported_listening) if presence else None
 
     busy = bool(presence.get("busy")) if presence else False
-    if agent is not None and agent.run_state == "running":
+    # A run_state of "running" counts only while the heartbeat backs it: an
+    # agent switched off mid-turn kept "running" in its row and read "busy"
+    # for days (user test 21.11.2026). Same 90 s as "alive".
+    if agent is not None and alive == "yes" and effective_run_state(agent, now) == "running":
         busy = True
 
     return {

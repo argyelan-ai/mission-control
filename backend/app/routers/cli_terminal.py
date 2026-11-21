@@ -707,18 +707,23 @@ class SessionAgentRow(BaseModel):
     current_task_id: Optional[uuid.UUID] = None
     last_seen_at: Optional[datetime] = None
     last_task_activity_at: Optional[datetime] = None
+    # The chat's own last message time (transcript), else the last task
+    # activity — the chat list dates and sorts rows by it.
+    last_chat_activity_at: Optional[datetime] = None
     updated_at: datetime
     headless_chat: bool = False
     tasks_in_own_session: bool = False
 
     # Same text as the old dict response (`isoformat()`, "+00:00"), not
     # pydantic's "Z" — the wire format stays exactly as it was.
-    @field_serializer("last_seen_at", "last_task_activity_at", "updated_at")
+    @field_serializer("last_seen_at", "last_task_activity_at", "last_chat_activity_at", "updated_at")
     def _iso(self, value: Optional[datetime]) -> Optional[str]:
         return value.isoformat() if value is not None else None
 
     @classmethod
-    def of(cls, agent: Agent) -> "SessionAgentRow":
+    def of(cls, agent: Agent, chat_at: Optional[datetime] = None) -> "SessionAgentRow":
+        from app.services.transcript_chat import chat_activity_at
+
         return cls(
             id=agent.id,
             name=agent.name,
@@ -734,6 +739,7 @@ class SessionAgentRow(BaseModel):
             current_task_id=agent.current_task_id,
             last_seen_at=agent.last_seen_at,
             last_task_activity_at=agent.last_task_activity_at,
+            last_chat_activity_at=chat_activity_at(agent, chat_at),
             updated_at=agent.updated_at,
             headless_chat=agent.headless_chat,
             tasks_in_own_session=agent.tasks_in_own_session,
@@ -788,13 +794,18 @@ async def list_docker_session_agents(
     except Exception as e:
         logger.warning("docker ps failed: %s", e)
 
+    from app.services.transcript_chat import last_chat_activities
+
+    chat_at = await last_chat_activities(
+        a for a in agents if f"mc-agent-{a.name.lower().replace(' ', '-')}" in container_state
+    )
     filtered = []
     for agent in agents:
         container_name = f"mc-agent-{agent.name.lower().replace(' ', '-')}"
         if container_name in container_state:
             filtered.append(
                 DockerSessionAgentRow(
-                    **SessionAgentRow.of(agent).model_dump(),
+                    **SessionAgentRow.of(agent, chat_at.get(agent.id)).model_dump(),
                     container_state=container_state[container_name],
                 )
             )
@@ -826,6 +837,9 @@ async def list_host_session_agents(
     )
     agents = list(result.all())
 
+    from app.services.transcript_chat import last_chat_activities
+
+    chat_at = await last_chat_activities(agents)
     now = datetime.now(timezone.utc)
     out = []
     for agent in agents:
@@ -836,7 +850,7 @@ async def list_host_session_agents(
         )
         out.append(
             HostSessionAgentRow(
-                **SessionAgentRow.of(agent).model_dump(),
+                **SessionAgentRow.of(agent, chat_at.get(agent.id)).model_dump(),
                 session_name=f"{slug}-host",
                 session_running=running,
             )
