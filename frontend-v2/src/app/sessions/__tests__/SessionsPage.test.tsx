@@ -3,7 +3,7 @@ import { render, screen, waitFor, fireEvent, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { useAppStore } from "@/lib/store";
+import { useAppStore, useNotificationStore } from "@/lib/store";
 import type { HeadRun } from "@/lib/heads";
 import type { Agent } from "@/lib/types";
 
@@ -1095,12 +1095,151 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     nav.replaced = [];
     nav.pushed = [];
     nav.searchParamsString = "pick=1";
+    vi.spyOn(api.chatRecord, "createChat").mockResolvedValue({ id: "chat-new" } as never);
     renderPage();
     await screen.findAllByText("Agent Two");
 
     await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
-    expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]);
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=chat-new"]));
     expect(nav.pushed).toEqual([]);
+  });
+});
+
+// ── "New chat" really starts a new chat ─────────────────────────────────────
+// Picking an agent in the picker (?pick=1) asks the chat record for a further
+// chat of that agent and opens it. When the record cannot (switched off,
+// not allowed, broken) the operator is told so and gets the existing chat.
+
+describe("SessionsPage — New chat picker starts a new chat", () => {
+  const latestToast = () => {
+    const all = useNotificationStore.getState().notifications;
+    return all.length ? all[all.length - 1] : null;
+  };
+
+  beforeEach(() => {
+    nav.searchParamsString = "pick=1";
+    nav.replaced = [];
+    nav.pushed = [];
+    installLocalStorageShim();
+    useNotificationStore.setState({ notifications: [] });
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "Agent One" }),
+      mkAgent({ id: "agent-2", name: "Sparky", harness: "omp", headless_chat: true } as never),
+    ]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([
+      mkAgent({ id: "host-1", name: "Boss", agent_runtime: "host", slug: "boss" }),
+    ]);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const list = () => screen.getByTestId("session-list-mobile");
+  const pick = (user: ReturnType<typeof userEvent.setup>, name: RegExp) =>
+    user.click(within(list()).getByRole("option", { name }));
+
+  it("pick -> creates a chat for that agent -> opens it in place of the picker", async () => {
+    const user = userEvent.setup();
+    const create = vi.spyOn(api.chatRecord, "createChat").mockResolvedValue({ id: "chat-7" } as never);
+    const { qc } = renderPage();
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+    await screen.findAllByText("Sparky");
+
+    await pick(user, /Sparky/);
+
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=chat-7"]));
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith("agent-2");
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["chat-record", "chats"] });
+    // A step, not a place: nothing pushed, so back returns to where
+    // "New chat" was pressed.
+    expect(nav.pushed).toEqual([]);
+    expect(latestToast()).toBeNull();
+  });
+
+  it("record switched off (404): says so, then opens the existing chat", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api.chatRecord, "createChat").mockRejectedValue(
+      new Error('API 404: {"detail":{"reason":"chat_record_disabled"}}'),
+    );
+    renderPage();
+    await screen.findAllByText("Sparky");
+
+    await pick(user, /Sparky/);
+
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
+    expect(latestToast()?.message).toBe("New chats aren't switched on yet — opening your chat with Sparky.");
+  });
+
+  it("not allowed (403) gets the same honest fallback", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api.chatRecord, "createChat").mockRejectedValue(new Error('API 403: {"detail":"Forbidden"}'));
+    renderPage();
+    await screen.findAllByText("Sparky");
+
+    await pick(user, /Sparky/);
+
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
+    expect(latestToast()?.message).toBe("New chats aren't switched on yet — opening your chat with Sparky.");
+  });
+
+  it("server error (5xx): says the new chat failed, then opens the existing chat", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api.chatRecord, "createChat").mockRejectedValue(new Error("API 500: oops"));
+    renderPage();
+    await screen.findAllByText("Sparky");
+
+    await pick(user, /Sparky/);
+
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
+    expect(latestToast()?.message).toBe("Couldn't start a new chat — opening your chat with Sparky.");
+  });
+
+  it("a double tap creates one chat, and the list is busy while it is made", async () => {
+    const user = userEvent.setup();
+    let finish: (v: unknown) => void = () => {};
+    const create = vi
+      .spyOn(api.chatRecord, "createChat")
+      .mockImplementation(() => new Promise((resolve) => { finish = resolve; }) as never);
+    renderPage();
+    await screen.findAllByText("Sparky");
+
+    await pick(user, /Sparky/);
+    await waitFor(() => expect(list()).toHaveAttribute("aria-busy", "true"));
+    expect(screen.getByTestId("chat-picker-starting")).toHaveTextContent("Starting a new chat with Sparky…");
+    // The second tap lands on a list that is still on screen and busy.
+    fireEvent.click(within(list()).getByRole("option", { name: /Sparky/ }));
+    fireEvent.click(within(list()).getByRole("option", { name: /Agent One/ }));
+    expect(create).toHaveBeenCalledTimes(1);
+
+    finish({ id: "chat-8" });
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=chat-8"]));
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("an agent whose harness cannot hold a further chat opens its chat, with a word why", async () => {
+    const user = userEvent.setup();
+    const create = vi.spyOn(api.chatRecord, "createChat");
+    renderPage();
+    await screen.findAllByText("Boss");
+
+    await pick(user, /Boss/);
+
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=host-1"]));
+    expect(create).not.toHaveBeenCalled();
+    expect(latestToast()?.message).toBe("Boss can't have a second chat yet — opening your chat with Boss.");
+  });
+
+  it("outside the picker a pick still opens the agent's own chat (no new chat)", async () => {
+    const user = userEvent.setup();
+    nav.searchParamsString = "";
+    const create = vi.spyOn(api.chatRecord, "createChat");
+    renderPage();
+    await screen.findAllByText("Sparky");
+
+    await user.click(within(list()).getByRole("option", { name: /Sparky/ }));
+    expect(create).not.toHaveBeenCalled();
   });
 });
 
