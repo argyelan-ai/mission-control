@@ -25,11 +25,13 @@ export function chatListPollMs(pathname: string): number {
 }
 
 /**
- * The record answers 404 while CHAT_RECORD_ENABLED is off: then it is not
- * asked again (one request per page load, not one per poll). Any other
- * failure keeps the poll — the record may be back on the next one.
+ * While CHAT_RECORD_ENABLED is off the record says so (`enabled: false`,
+ * 200 — an older backend answered 404): then it is not asked again (one
+ * request per page load, not one per poll). Any other failure keeps the
+ * poll — the record may be back on the next one.
  */
-export function recordPollMs(error: unknown, poll: number): number | false {
+export function recordPollMs(error: unknown, poll: number, data?: { enabled?: boolean } | null): number | false {
+  if (data?.enabled === false) return false;
   return error instanceof Error && error.message.startsWith("API 404") ? false : poll;
 }
 
@@ -87,12 +89,13 @@ export function useChatList(): ChatListSections & { waitingCount: number; loaded
     queryFn: () => api.groups.list({ includeArchived: true }),
     refetchInterval: poll,
   });
-  // Further chats of an agent (chats slice S2). The record answers 404
-  // while its flag is off: then the list is exactly the one before.
+  // Further chats of an agent (chats slice S2). While its flag is off the
+  // record answers an empty list: then the list is exactly the one before.
   const { data: record } = useQuery({
     queryKey: ["chat-record", "chats"],
     queryFn: () => api.chatRecord.listChats(),
-    refetchInterval: (query) => recordPollMs(query.state.error, poll),
+    refetchInterval: (query) =>
+      recordPollMs(query.state.error, poll, query.state.data as { enabled?: boolean } | undefined),
     retry: false,
   });
   const inbox = useInbox();
