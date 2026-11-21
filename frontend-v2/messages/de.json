@@ -5606,6 +5606,7 @@
     "pickTitle": "Mit wem willst du chatten?",
     "pickStarting": "Neuer Chat mit {name} wird gestartet…",
     "newChatOff": "Neue Chats sind noch nicht eingeschaltet — dein Chat mit {name} geht auf.",
+    "newChatNotAllowed": "Neue Chats können nur Admins starten — dein Chat mit {name} geht auf.",
     "newChatFailed": "Neuer Chat ging nicht — dein Chat mit {name} geht auf.",
     "newChatUnsupported": "{name} kann noch keinen zweiten Chat — dein Chat mit {name} geht auf.",
     "knowledge": {

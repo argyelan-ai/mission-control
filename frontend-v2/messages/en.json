@@ -5606,6 +5606,7 @@
     "pickTitle": "Who do you want to chat with?",
     "pickStarting": "Starting a new chat with {name}…",
     "newChatOff": "New chats aren't switched on yet — opening your chat with {name}.",
+    "newChatNotAllowed": "Only admins can start new chats — opening your chat with {name}.",
     "newChatFailed": "Couldn't start a new chat — opening your chat with {name}.",
     "newChatUnsupported": "{name} can't have a second chat yet — opening your chat with {name}.",
     "knowledge": {

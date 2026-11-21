@@ -5,14 +5,15 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, type RecordChat } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { C } from "@/lib/colors";
 import { BrowserLiveView } from "@/components/shared/BrowserLiveView";
 import { SessionSidebar } from "@/components/chat/SessionSidebar";
 import { ChatView, type CenterView, type DetailLevel, CENTER_VIEWS, DETAIL_LEVELS } from "@/components/chat/ChatView";
 import { DiffPanel } from "@/components/chat/DiffPanel";
-import { furtherChatHref } from "@/components/chat/useRecordChat";
+import { furtherChatHref, isRecordOff } from "@/components/chat/useRecordChat";
+import { RECORD_CHATS_QUERY_KEY } from "@/hooks/useChatSwitch";
 import type { PanelKind } from "@/components/chat/PanelButtons";
 import { agentIsRunning, type AgentWithState } from "@/components/chat/TerminalPanel";
 import { GroupChatView } from "@/components/groupchat/GroupChatView";
@@ -167,10 +168,38 @@ function agentCanStartNewChat(agent: AgentWithState | null | undefined): boolean
   return harness === "claude";
 }
 
-/** 404 (record off) and 403 (not an admin): new chats are not there for this
- *  user — a state, not a fault. Everything else failed. */
-function newChatRefusedAsOff(err: unknown): boolean {
-  return err instanceof Error && /^API 40[34]\b/.test(err.message);
+/** Why a new chat could not be had, as the toast that says so: the record
+ *  is switched off (404 `chat_record_disabled`), only admins may (403), or
+ *  it failed (any other answer, the agent gone, no answer in time). */
+function newChatRefusal(err: unknown): "newChatOff" | "newChatNotAllowed" | "newChatFailed" {
+  if (isRecordOff(err)) return "newChatOff";
+  if (err instanceof Error && /^API 403\b/.test(err.message)) return "newChatNotAllowed";
+  return "newChatFailed";
+}
+
+/** How long a pick waits for the record before it gives up and opens the
+ *  agent's own chat — a hanging request must never lock the picker. */
+const NEW_CHAT_TIMEOUT_MS = 15_000;
+
+/** The newest further chat of this agent that nobody has written in yet:
+ *  "New chat" opens it again instead of piling up empty rows, one per tap
+ *  that went nowhere. Same harness only — after a harness switch the old
+ *  empty chat belongs to the other harness. */
+function untouchedNewChat(
+  chats: readonly RecordChat[],
+  agentId: string,
+  harness: string,
+): RecordChat | null {
+  const empty = chats.filter(
+    (c) =>
+      !c.agentDefault &&
+      !c.archived &&
+      !c.lastActivityAt &&
+      c.legacyAgentId === agentId &&
+      (c.harness ?? "") === harness,
+  );
+  empty.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+  return empty[0] ?? null;
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -204,6 +233,20 @@ function SessionsPageContent() {
   // lands a render too late for two taps in one frame).
   const [startingChatFor, setStartingChatFor] = useState<string | null>(null);
   const startingChat = useRef(false);
+  // Is the operator still where the pick was made? A new chat that arrives
+  // after they left the page or the picker (back swipe, a tab tap, a slow
+  // phone network) must not pull them into it.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const pickingNow = useRef(picking);
+  useEffect(() => {
+    pickingNow.current = picking;
+  }, [picking]);
   // Mobile (<md) stack navigation: which pane is visible. Desktop (≥md) ignores
   // this and always shows the split. Kept separate from `selected` so a
   // return-to-list action doesn't null `selected` (which would immediately
@@ -668,22 +711,54 @@ function SessionsPageContent() {
   async function startNewChat(agent: AgentWithState) {
     startingChat.current = true;
     setStartingChatFor(agent.name);
+    const stillHere = () => mounted.current && pickingNow.current;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const chat = await api.chatRecord.createChat(agent.id);
+      const chat = await Promise.race([
+        reuseOrCreateChat(agent),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("new chat: no answer in time")), NEW_CHAT_TIMEOUT_MS);
+        }),
+      ]);
       // The list asks the record again now: the new row stands there (and
-      // is marked) the moment the chat opens.
-      void qc.invalidateQueries({ queryKey: ["chat-record", "chats"] });
+      // is marked) the moment the chat opens — or, if the operator left
+      // meanwhile, it simply shows up in the list.
+      void qc.invalidateQueries({ queryKey: RECORD_CHATS_QUERY_KEY });
+      if (!stillHere()) return;
       arrival.current = "none";
       router.replace(furtherChatHref(agent.id, chat.id), { scroll: false });
     } catch (err) {
-      notify.info(
-        tCockpit(newChatRefusedAsOff(err) ? "newChatOff" : "newChatFailed", { name: agent.name }),
-      );
+      if (!stillHere()) return;
+      notify.info(tCockpit(newChatRefusal(err), { name: agent.name }));
       openAgentChat(agent);
     } finally {
+      clearTimeout(timer);
       startingChat.current = false;
-      setStartingChatFor(null);
+      if (mounted.current) setStartingChatFor(null);
     }
+  }
+
+  /** An untouched new chat of this agent if there is one, else a new one.
+   *  A list that cannot be read is no reason not to make the chat. */
+  async function reuseOrCreateChat(agent: AgentWithState): Promise<RecordChat> {
+    try {
+      const { chats } = await qc.fetchQuery({
+        queryKey: RECORD_CHATS_QUERY_KEY,
+        queryFn: () => api.chatRecord.listChats(),
+        staleTime: 0,
+      });
+      const reuse = untouchedNewChat(chats ?? [], agent.id, agent.harness ?? "claude");
+      if (reuse) return reuse;
+    } catch {
+      // fall through: make one
+    }
+    const created = api.chatRecord.createChat(agent.id);
+    // A chat that is made after the pick gave up still lands in the list.
+    created.then(
+      () => void qc.invalidateQueries({ queryKey: RECORD_CHATS_QUERY_KEY }),
+      () => {},
+    );
+    return created;
   }
 
   function handleSelectGroup(groupId: string) {
