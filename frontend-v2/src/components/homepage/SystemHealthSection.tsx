@@ -13,16 +13,19 @@ import { timeAgo } from "@/lib/utils";
 import { C, latencyColor } from "./colors";
 import { SectionHeading, ServiceDot, SparklineChart } from "./primitives";
 import { watchdogView } from "./watchdogStatus";
-import { isOperatorEvent } from "@/lib/operatorEvents";
+import { TECHNICAL_EVENT_TYPES, isOperatorEvent } from "@/lib/operatorEvents";
 
 function SystemActivityFeed() {
   const t = useTranslations("home");
   const locale = useLocale();
   const { activeBoardId } = useAppStore();
-  // Fetch a few more than shown: plumbing events are left out (isOperatorEvent).
+  // Plumbing types are left out on the server (before the limit), so a burst
+  // of silent retries cannot push the real events off this short list. The
+  // client filter still catches a plumbing title under a new type.
   const { data: allEvents = [] } = useQuery({
     queryKey: ["activity", activeBoardId, "compact"],
-    queryFn: () => api.activity.list({ board_id: activeBoardId!, limit: 30 }),
+    queryFn: () =>
+      api.activity.list({ board_id: activeBoardId!, limit: 15, exclude_event_type: [...TECHNICAL_EVENT_TYPES] }),
     enabled: !!activeBoardId,
     refetchInterval: 15_000,
   });
