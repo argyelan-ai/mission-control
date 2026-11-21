@@ -63,22 +63,21 @@ export function lastTps(pulse: HostPulse | undefined): number | null {
 }
 
 /**
- * A model id as a person reads it: no provider path ("mc-openai/…"), no
- * "custom:" prefix, no build-date tail ("-1017"), and a family name dropped
- * before a version ("DeepSeek-V4.1-Flash" → "V4.1 Flash"). A display name
- * from the model catalogue wins when the caller has one (user test
- * 21.11.2026: the chip read "DeepS…", the speed line the raw id).
+ * A model id as a person reads it: no provider path ("mc-openai/…") and no
+ * "custom:" prefix — nothing else is cut. The family name and a numeric tail
+ * ("-1017", "-2411", "-0528") are what tell two models apart, and the
+ * composer chip is the only place the model is named (critic 21.11.2026: a
+ * rule that dropped them turned "Qwen-V3" into "V3" and "Mistral-Large-2411"
+ * into "Mistral-Large"). A display name from the model catalogue wins when
+ * the caller has one. Empty is null, so a caller's `?? id` still catches it.
  */
 export function shortModelName(id: string | null | undefined, displayName?: string | null): string | null {
   if (displayName && displayName.trim()) return displayName.trim();
   if (!id || !id.trim()) return null;
   let name = id.trim().replace(/^custom:/i, "");
-  name = name.slice(name.lastIndexOf("/") + 1) || name;
-  const undated = name.replace(/-\d{3,}$/, "");
-  if (undated) name = undated;
-  const versioned = /^[A-Za-z]+-(V\d[\w.]*(?:-[\w.]+)*)$/.exec(name);
-  if (versioned) name = versioned[1].replace(/-/g, " ");
-  return name;
+  // "provider/model" has no spaces; "GPT-5.1 / codex" is a label, not a path.
+  if (!/\s/.test(name)) name = name.slice(name.lastIndexOf("/") + 1);
+  return name.trim() || null;
 }
 
 /** Pure render — tested without queries. Nothing known → nothing shown (K3). */

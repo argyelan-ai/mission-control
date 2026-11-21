@@ -2512,10 +2512,10 @@ describe("Composer — every input-bar button is a 44 px finger target", () => {
     expect(slotHits44(screen.getByTestId("mic-slot").parentElement!)).toBe(true);
   });
 
-  it("the chip names the model short: no provider, no build date", () => {
+  it("the chip names the model without its provider path, identity kept", () => {
     renderFull();
     const chip = screen.getByTestId("model-chip");
-    expect(chip).toHaveTextContent(/^V4\.1 Flash$/);
+    expect(chip).toHaveTextContent(/^DeepSeek-V4\.1-Flash-1017$/);
   });
 
   it("Send/Stop never leave a 390 px screen: the right-hand controls do not shrink, the model chip does", () => {

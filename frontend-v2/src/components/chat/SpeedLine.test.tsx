@@ -141,17 +141,33 @@ describe("SpeedLine (loaded)", () => {
 
 describe("shortModelName (user test 21.11.)", () => {
   it("drops provider paths and the custom: prefix", () => {
-    expect(shortModelName("mc-openai/DeepSeek-V4.1-Flash-1017")).toBe("V4.1 Flash");
+    expect(shortModelName("mc-openai/DeepSeek-V4.1-Flash-1017")).toBe("DeepSeek-V4.1-Flash-1017");
     expect(shortModelName("custom:openai/qwen3.8-27b")).toBe("qwen3.8-27b");
     expect(shortModelName("claude-opus-5")).toBe("claude-opus-5");
+  });
+
+  it("keeps the model's identity: family name and version or build tag stay (critic 21.11.)", () => {
+    // A numeric tail is a version as often as a build date; the family name
+    // is what tells two "V3"s apart. The chip is the only place the model
+    // is named, so nothing that tells models apart may go.
+    expect(shortModelName("Mistral-Large-2411")).toBe("Mistral-Large-2411");
+    expect(shortModelName("deepseek-r1-0528")).toBe("deepseek-r1-0528");
+    expect(shortModelName("Kimi-K2-0905")).toBe("Kimi-K2-0905");
+    expect(shortModelName("Qwen-V3")).toBe("Qwen-V3");
+  });
+
+  it("a label with spaces around a slash is a name, not a provider path", () => {
+    expect(shortModelName("GPT-5.1 / codex")).toBe("GPT-5.1 / codex");
   });
 
   it("a catalogue display name wins", () => {
     expect(shortModelName("custom:anthropic/claude-opus-5", "Opus 5")).toBe("Opus 5");
   });
 
-  it("nothing in, nothing out", () => {
+  it("nothing in, nothing out — never an empty string the caller's ?? would keep", () => {
     expect(shortModelName(null)).toBeNull();
     expect(shortModelName("  ")).toBeNull();
+    expect(shortModelName("custom:")).toBeNull();
+    expect(shortModelName("mc-openai/")).toBeNull();
   });
 });
