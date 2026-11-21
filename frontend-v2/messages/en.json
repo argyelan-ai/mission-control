@@ -4655,7 +4655,10 @@
       "questionOpen": "Answer the open question first, then switch the mode."
     },
     "unconfirmed": "Not confirmed — check the terminal",
-    "you": "You"
+    "you": "You",
+    "approval": {
+      "checkInTerminal": "Check in the terminal"
+    }
   },
   "benchResult": {
     "_owner": "package C — result page (P5), X-Kit (P6), private truncation warning. Add keys below this line only.",

@@ -4655,7 +4655,10 @@
       "questionOpen": "Erst die offene Rückfrage beantworten, dann den Modus wechseln."
     },
     "unconfirmed": "Nicht bestätigt — Terminal prüfen",
-    "you": "Du"
+    "you": "Du",
+    "approval": {
+      "checkInTerminal": "Im Terminal prüfen"
+    }
   },
   "benchResult": {
     "_owner": "package C — result page (P5), X-Kit (P6), private truncation warning. Add keys below this line only.",
