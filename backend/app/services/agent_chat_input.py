@@ -2075,6 +2075,12 @@ _BUILTIN_SLASH_COMMANDS: tuple[dict[str, str | None], ...] = (
     {"name": "model", "description": "Set the AI model for Claude Code"},
     {"name": "effort", "description": "Set effort level for model usage"},
     {"name": "clear", "description": "Clear the conversation history"},
+    # Alias of /clear in Claude Code's own command table (``aliases:
+    # ["reset","new"]``, read from the 2.1.x CLI on 21.11.2026). Listed so the
+    # "/" menu can put /new on top for Claude chats too; typed into the
+    # terminal it is recorded as a reset like /clear (``_terminal_reset``).
+    # Mirror: frontend-v2/src/components/chat/__fixtures__/claudeSlashCommands.json
+    {"name": "new", "description": "Start a new session with empty context (same as /clear)"},
     {"name": "compact", "description": "Compact the conversation to free up context"},
     {"name": "context", "description": "Show context window usage"},
     {"name": "status", "description": "Show session status"},
