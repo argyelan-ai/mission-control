@@ -10,6 +10,18 @@ import { C, alpha } from "@/lib/colors";
 import type { WizardStepProps } from "../types";
 import { TokenDisplay, wizardBtnPrimaryStyle, wizardLabelClass } from "../shared";
 
+/** Backend readiness ids (routers/agents.py agent_health_check) → catalog
+ *  keys under review.check. The backend speaks English ids and raw status
+ *  ("provision_status=…"); the screen shows plain words in its language.
+ *  An id not listed here stays as the backend sends it. */
+const READINESS_CHECK_KEY: Record<string, string> = {
+  provisioned: "provisioned",
+  "cli-bridge helper": "bridgeHelper",
+  heartbeat: "heartbeat",
+  "host heartbeat": "hostHeartbeat",
+  runtime: "runtime",
+};
+
 export function ReviewStep({
   state,
   update,
@@ -157,8 +169,14 @@ export function ReviewStep({
               ) : (
                 <XCircle size={15} style={{ color: C.warning }} />
               )}
-              <span className="text-[var(--color-text-primary)]">{c.label}</span>
-              <span className="text-[11px] text-[var(--color-text-muted)]">{c.detail}</span>
+              <span className="text-[var(--color-text-primary)]">
+                {READINESS_CHECK_KEY[c.label] ? t(`check.${READINESS_CHECK_KEY[c.label]}.label`) : c.label}
+              </span>
+              <span className="text-[11px] text-[var(--color-text-muted)]">
+                {READINESS_CHECK_KEY[c.label]
+                  ? t(`check.${READINESS_CHECK_KEY[c.label]}.${c.ok ? "ok" : "fail"}`)
+                  : c.detail}
+              </span>
             </div>
           ))}
         </div>
