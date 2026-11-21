@@ -4944,6 +4944,7 @@
   },
   "heads": {
     "section": "Head",
+    "sectionHint": "Ein Head ist ein eigener Agent nur für diese Aufgabe: Er arbeitet in einem eigenen Ordner, öffnet einen Pull Request und endet dann.",
     "pair": "Paar",
     "pairPickerAria": "Harness und Runtime für den Head wählen",
     "explain": "Läuft einmal in einer eigenen Kopie des Repos, öffnet einen PR, merged nie.",
@@ -4959,7 +4960,7 @@
     "noPairs": "Noch kein Harness-×-Runtime-Paar eingerichtet.",
     "engineInUse": "Das Modell arbeitet gerade auch für jemand anderen — kann langsamer sein.",
     "needsRepo": "Ein Head braucht ein Repo — oben eins wählen.",
-    "needsRepoProject": "Ein Head braucht ein Registry-Repo — Projekt-Aufgaben gehen noch nicht.",
+    "needsRepoProject": "Ein Head braucht ein Repo aus der Repo-Liste — Aufgaben in einem Projekt gehen noch nicht.",
     "engineDownHint": "Das lokale Modell läuft nicht — starte es unter",
     "runtimesLink": "Runtimes",
     "runAsHead": "Als Head starten",
