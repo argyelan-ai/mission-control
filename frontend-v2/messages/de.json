@@ -1191,7 +1191,7 @@
     },
     "toolGroup": {
       "commands": "{count, plural, one {# Befehl ausgeführt} other {# Befehle ausgeführt}}",
-      "tools": "{count, plural, one {# Tool verwendet} other {# Tools verwendet}}",
+      "tools": "{count, plural, one {# Werkzeug verwendet} other {# Werkzeuge verwendet}}",
       "failed": "{count} fehlgeschlagen",
       "thoughts": "{count, plural, one {nachgedacht} other {#× nachgedacht}}",
       "activity": "Aktivität",

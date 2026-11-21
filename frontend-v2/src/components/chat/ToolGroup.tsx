@@ -79,17 +79,25 @@ export function toolGroupLabel(
   const parts: string[] = [];
   if (summary.commands > 0) parts.push(t("toolGroup.commands", { count: summary.commands }));
   if (summary.tools > 0) parts.push(t("toolGroup.tools", { count: summary.tools }));
-  // The failure used to be carried by colour alone: "35 tools used" with a
-  // red triangle read as "the whole run broke" on the operator's phone
-  // (04.09.2026) — it was one `mc review` 400 out of 35, retried and fine.
-  // Naming the number turns the alarm back into information.
-  if (summary.failed > 0) parts.push(t("toolGroup.failed", { count: summary.failed }));
   if (summary.thoughts > 0) parts.push(t("toolGroup.thoughts", { count: summary.thoughts }));
 
   // Sentence-cases whatever landed first ("thought" → "Thought"; a leading
   // digit is unaffected), so the label reads as one line either way.
   const joined = parts.join(", ");
   return joined.length > 0 ? joined.charAt(0).toUpperCase() + joined.slice(1) : t("toolGroup.activity");
+}
+
+/** The failure as its own words, or null. The failure used to be carried by
+ *  colour alone: "35 tools used" with a red triangle read as "the whole run
+ *  broke" on the operator's phone (04.09.2026) — it was one `mc review` 400
+ *  out of 35, retried and fine. Naming the number turns the alarm back into
+ *  information. It stands FIRST in the row and is never cut (user test
+ *  21.11.2026: a long label truncated it away). */
+export function toolGroupFailed(
+  summary: ActivitySummary,
+  t: (key: string, values?: Record<string, string | number | Date>) => string,
+): string | null {
+  return summary.failed > 0 ? t("toolGroup.failed", { count: summary.failed }) : null;
 }
 
 /** How long the run took — from its first step to the agent's next step
@@ -153,6 +161,7 @@ export function ToolGroup({
 
   const summary = summarizeActivity(events);
   const label = toolGroupLabel(summary, t);
+  const failed = toolGroupFailed(summary, t);
   const Icon = leadingIcon(summary);
   const duration = activityDuration(events, endTs, locale);
   // P2: the run's pictures stay visible below a COLLAPSED group — a
@@ -187,7 +196,23 @@ export function ToolGroup({
           data-testid={summary.hasError ? "tool-group-error-icon" : "tool-group-icon"}
           aria-hidden="true"
         />
-        <span className="flex-1 min-w-0 truncate text-[13px] font-medium" style={{ color: C.textSecondary }}>
+        {/* One line: "N failed · N tools · duration" (user test 21.11.2026).
+            The failure is never cut; only the label may shorten (K15). */}
+        {failed && (
+          <span
+            data-testid="tool-group-failed"
+            className="shrink-0 text-[13px] font-medium"
+            style={{ color: STATUS_TEXT.warning }}
+          >
+            {failed}
+            <span aria-hidden="true" style={{ color: C.textMuted }}> ·</span>
+          </span>
+        )}
+        <span
+          data-testid="tool-group-label"
+          className="flex-1 min-w-0 truncate text-[13px] font-medium"
+          style={{ color: C.textSecondary }}
+        >
           {label}
           {/* The failure was carried by colour and an aria-hidden icon alone,
               which is nothing at all to a screen reader. This puts it into the
@@ -200,12 +225,6 @@ export function ToolGroup({
             · {duration}
           </span>
         )}
-        <span
-          className="shrink-0 font-mono text-[10px] font-medium tabular-nums"
-          style={{ color: summary.hasError ? STATUS_TEXT.warning : C.textMuted }}
-        >
-          {events.length}
-        </span>
         <ChevronRight
           size={13}
           className="shrink-0 transition-transform duration-150"

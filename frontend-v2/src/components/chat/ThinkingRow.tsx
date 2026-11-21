@@ -46,7 +46,9 @@ export const ThinkingRow = memo(function ThinkingRow({
         <Brain size={13} className="shrink-0" style={{ color: C.textDim }} />
         <span className="text-[13px] italic" style={{ color: C.textMuted }}>
           {t("thinkingDone")}
-          {typeof ev.durationMs === "number" && (
+          {/* Under one second a clock reads "0:00" — no duration at all
+              says it better (user test 21.11.2026, K3). */}
+          {typeof ev.durationMs === "number" && ev.durationMs >= 1000 && (
             <span className="not-italic tabular-nums"> · {formatElapsed(ev.durationMs)}</span>
           )}
         </span>
