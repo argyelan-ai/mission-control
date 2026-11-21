@@ -51,7 +51,10 @@ export function useBoundTasks(
   const ids = boundTaskIds(agents);
   const { tasks, refetchers, settled } = useQueries({
     queries: ids.map((id) => ({
-      queryKey: ["task", boardId, id],
+      // Under the `["tasks", boardId]` prefix on purpose: task mutations all
+      // over the app refresh by `["tasks"]` / `["tasks", boardId]`, and the
+      // chat's bound tasks must follow them (the old list query did).
+      queryKey: ["tasks", boardId, "bound", id],
       queryFn: () => api.tasks.get(boardId!, id),
       enabled: !!boardId,
       retry: retryUnlessGone,
