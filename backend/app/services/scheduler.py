@@ -202,11 +202,46 @@ class SchedulerService:
                 await asyncio.sleep(LOCK_REFRESH_INTERVAL_SECONDS)
                 if not self._running:
                     break
-                await self._compare_and_expire(redis, RedisKeys.scheduler_lock(), LOCK_TTL_SECONDS)
+                if await self._compare_and_expire(redis, RedisKeys.scheduler_lock(), LOCK_TTL_SECONDS):
+                    continue
+                await self._heal_lost_lock(redis)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("Scheduler lock refresh failed (will retry next tick)")
+
+    async def _heal_lost_lock(self, redis) -> None:
+        """The refresh found the lock not ours. Two cases (user test
+        21.11.2026: the key was gone and the worker only warned, 60 times an
+        hour, while any second worker could have started its own scheduler):
+
+        - nobody holds it → take it back with SET NX (own id + heartbeat).
+        - another worker holds it → that worker runs the jobs now; stop ours
+          (APScheduler + both loops), leave its lock and heartbeat alone.
+        """
+        from app.redis_client import RedisKeys
+
+        lock_key = RedisKeys.scheduler_lock()
+        if await redis.set(lock_key, self._owner_id, nx=True, ex=LOCK_TTL_SECONDS):
+            await redis.set(
+                RedisKeys.scheduler_lock_heartbeat(), self._owner_id, ex=LOCK_HEARTBEAT_TTL_SECONDS
+            )
+            logger.info("Scheduler lock was gone — re-acquired by this worker")
+            return
+        owner = await redis.get(lock_key)
+        if owner == self._owner_id:
+            return  # we won a race with ourselves: nothing to do
+        logger.warning(
+            "Scheduler lock is held by another worker (owner=%r) — stopping this "
+            "worker's scheduler so jobs never run twice",
+            owner,
+        )
+        self._running = False  # ends the refresh and heartbeat loops
+        heartbeat = getattr(self, "_heartbeat_task", None)
+        if heartbeat is not None:
+            heartbeat.cancel()
+            self._heartbeat_task = None
+        self._scheduler.shutdown(wait=False)
 
     async def _heartbeat_loop(self):
         """Refreshes the short-TTL heartbeat key so other workers can tell
@@ -239,12 +274,9 @@ class SchedulerService:
                 await pipe.watch(key)
                 current = await pipe.get(key)
                 if current != self._owner_id:
+                    # Not ours any more: the caller decides (re-acquire or
+                    # yield) and logs that, once — no warning per tick here.
                     await pipe.unwatch()
-                    logger.warning(
-                        "Scheduler lock no longer owned by this worker (owner=%r) — "
-                        "skipping refresh",
-                        current,
-                    )
                     return False
                 pipe.multi()
                 pipe.expire(key, ttl)

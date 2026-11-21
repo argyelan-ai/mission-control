@@ -1,4 +1,5 @@
 """Tests for the SchedulerService (unit tests with mocked APScheduler)."""
+import asyncio
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -801,3 +802,76 @@ async def test_create_task_with_skip_review_flag():
     # Verify skip_review=True was passed to create_task_internal
     call_kwargs = mock_cti.call_args.kwargs
     assert call_kwargs["skip_review"] is True
+
+
+_real_sleep = asyncio.sleep
+
+
+async def _yielding_sleep(_seconds):
+    await _real_sleep(0)
+
+
+class TestSchedulerLockSelfHeal:
+    """User test 21.11.2026: the lock key vanished (owner None) and the
+    worker only warned once a minute (60 warnings/h) without ever taking it
+    back — any second worker could then start its own scheduler."""
+
+    @pytest.mark.asyncio
+    async def test_lost_lock_is_reacquired_within_one_tick(self, fake_redis, caplog):
+        import logging
+
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._running = True
+        svc._owner_id = "owner-a"
+        svc._scheduler = MagicMock()
+        await fake_redis.set(RedisKeys.scheduler_lock(), "owner-a", ex=120)
+
+        ticks = 0
+
+        async def fake_sleep(_seconds):
+            nonlocal ticks
+            ticks += 1
+            if ticks == 1:
+                await fake_redis.delete(RedisKeys.scheduler_lock())  # key lost
+            if ticks >= 3:
+                svc._running = False
+
+        caplog.set_level(logging.INFO, logger="mc.scheduler")
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)), \
+             patch("app.services.scheduler.asyncio.sleep", new=fake_sleep):
+            await svc._refresh_lock_loop()
+
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "owner-a"
+        assert await fake_redis.ttl(RedisKeys.scheduler_lock()) > 0
+        assert await fake_redis.get(RedisKeys.scheduler_lock_heartbeat()) == "owner-a"
+        assert not [r for r in caplog.records if "no longer owned" in r.getMessage()]
+        reacquired = [r for r in caplog.records if "re-acquired" in r.getMessage()]
+        assert len(reacquired) == 1 and reacquired[0].levelno == logging.INFO
+        svc._scheduler.shutdown.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_lock_owned_by_another_worker_stops_own_scheduler(self, fake_redis):
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._running = True
+        svc._owner_id = "owner-a"
+        svc._scheduler = MagicMock()
+        svc._scheduler.running = True
+        await fake_redis.set(RedisKeys.scheduler_lock(), "owner-b", ex=120)
+        await fake_redis.set(RedisKeys.scheduler_lock_heartbeat(), "owner-b", ex=15)
+
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)), \
+             patch("app.services.scheduler.asyncio.sleep", new=_yielding_sleep):
+            # Must end on its own; without the fix it would warn forever.
+            await asyncio.wait_for(svc._refresh_lock_loop(), timeout=2)
+
+        svc._scheduler.shutdown.assert_called_once_with(wait=False)
+        assert svc._running is False
+        # Never touches the other worker's lock or heartbeat.
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "owner-b"
+        assert await fake_redis.get(RedisKeys.scheduler_lock_heartbeat()) == "owner-b"
