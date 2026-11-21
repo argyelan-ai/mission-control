@@ -811,6 +811,10 @@ export interface Agent {
   // beside the chat, so the chat shows the task's steps itself (spec A).
   // Gate on this, never on a harness name. Absent on older backends = no.
   tasks_in_own_session?: boolean;
+  // Derived by the backend (models/agent.py computed field, the send path's
+  // own routing rule): a new further chat of this agent could run. "New
+  // chat" gates on this, never on a harness name. Absent on older backends = no.
+  can_start_chat?: boolean;
   // Split language fields (Migration 0201) — two audiences, two settings.
   // operator_language: what the agent writes TO the operator (mc report/
   // msg/ask, chat replies). work_language: agent-to-agent traffic (task

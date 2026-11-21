@@ -892,8 +892,8 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     nav.searchParamsString = "";
     installLocalStorageShim();
     vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
-      mkAgent({ id: "agent-1", name: "Agent One" }),
-      mkAgent({ id: "agent-2", name: "Agent Two" }),
+      mkAgent({ id: "agent-1", name: "Agent One", can_start_chat: true }),
+      mkAgent({ id: "agent-2", name: "Agent Two", can_start_chat: true }),
     ]);
     vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([]);
   });
@@ -1143,8 +1143,10 @@ describe("SessionsPage — New chat picker starts a new chat", () => {
     installLocalStorageShim();
     useNotificationStore.setState({ notifications: [] });
     vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
-      mkAgent({ id: "agent-1", name: "Agent One" }),
-      mkAgent({ id: "agent-2", name: "Nova", harness: "omp", headless_chat: true } as never),
+      // The backend decides who can hold a further chat (`can_start_chat`);
+      // the host agent below carries no flag, so it cannot.
+      mkAgent({ id: "agent-1", name: "Agent One", can_start_chat: true }),
+      mkAgent({ id: "agent-2", name: "Nova", harness: "omp", headless_chat: true, can_start_chat: true } as never),
     ]);
     vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([
       mkAgent({ id: "host-1", name: "Boss", agent_runtime: "host", slug: "boss" }),
