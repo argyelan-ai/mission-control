@@ -30,7 +30,7 @@ export function chatListPollMs(pathname: string): number {
  * request per page load, not one per poll). Any other failure keeps the
  * poll — the record may be back on the next one.
  */
-export function recordPollMs(error: unknown, poll: number, data?: { enabled?: boolean } | null): number | false {
+export function recordPollMs(error: unknown, poll: number, data?: { enabled?: boolean; chats?: unknown } | null): number | false {
   if (data?.enabled === false) return false;
   return error instanceof Error && error.message.startsWith("API 404") ? false : poll;
 }
