@@ -903,7 +903,34 @@
         "readiness": "Bereitschafts-Prüfung",
         "waiting": "warte auf die Einrichtung…",
         "hostNote": "Agent auf dem Mac: Die Dateien liegen unter ~/.mc/agents/<slug>/. Mit launchctl auf dem Mac laden (siehe Aktivität) — dann wird der Herzschlag grün.",
-        "done": "Fertig"
+        "done": "Fertig",
+        "check": {
+          "provisioned": {
+            "label": "Eingerichtet",
+            "ok": "erledigt",
+            "fail": "noch nicht eingerichtet"
+          },
+          "bridgeHelper": {
+            "label": "Container-Helfer",
+            "ok": "erreichbar",
+            "fail": "nicht erreichbar"
+          },
+          "heartbeat": {
+            "label": "Herzschlag",
+            "ok": "meldet sich",
+            "fail": "meldet sich noch nicht"
+          },
+          "hostHeartbeat": {
+            "label": "Herzschlag vom Mac",
+            "ok": "vor weniger als 3 Min. gesehen",
+            "fail": "kein Herzschlag — der Dienst auf dem Mac ist evtl. nicht geladen"
+          },
+          "runtime": {
+            "label": "Laufzeit",
+            "ok": "keine automatische Prüfung möglich",
+            "fail": "keine automatische Prüfung möglich"
+          }
+        }
       },
       "copyToken": "Schlüssel kopieren"
     }

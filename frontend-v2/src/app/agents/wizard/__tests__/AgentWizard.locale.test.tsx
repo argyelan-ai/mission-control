@@ -4,7 +4,7 @@
  * shows none of the English wizard sentences and vice versa.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import de from "../../../../../messages/de.json";
 import en from "../../../../../messages/en.json";
@@ -88,6 +88,83 @@ describe("New agent wizard — one language per screen", () => {
       expect(text).not.toMatch(/[äöüÄÖÜß]/);
     });
   }
+
+  // The readiness rows come from the backend as English ids ("provisioned",
+  // "cli-bridge helper", "heartbeat" …). The review step translates them.
+  describe("readiness rows after create", () => {
+    const READINESS = {
+      provision_status: "provisioned",
+      runtime: "cli-bridge",
+      ready: false,
+      checks: [
+        { label: "provisioned", ok: true, detail: "provision_status=provisioned" },
+        { label: "cli-bridge helper", ok: true, detail: "reachable" },
+        { label: "heartbeat", ok: false, detail: "status=offline" },
+      ],
+    };
+    function renderCreated(locale: "de" | "en") {
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (url) =>
+        String(url).includes("/health-check")
+          ? new Response(JSON.stringify(READINESS), { status: 200, headers: { "Content-Type": "application/json" } })
+          : new Response("{}", { status: 404, headers: { "Content-Type": "application/json" } }),
+      );
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      return render(
+        <NextIntlClientProvider locale={locale} messages={locale === "de" ? de : en} onError={() => {}}>
+          <QueryClientProvider client={qc}>
+            <AgentWizard
+              boards={[{ id: "b1", name: "Main" } as never]}
+              defaultBoardId="b1"
+              initialState={{ step: 4, name: "Nova", scopes: ["tasks:read"], agentRuntime: "cli-bridge", createdAgentId: "a1" }}
+              onClose={() => {}}
+              onCreated={() => {}}
+            />
+          </QueryClientProvider>
+        </NextIntlClientProvider>,
+      );
+    }
+
+    it("German: every row German, no backend English", async () => {
+      const { baseElement } = renderCreated("de");
+      expect(await screen.findByText("Eingerichtet")).toBeInTheDocument();
+      const text = baseElement.textContent ?? "";
+      expect(text).toContain("Herzschlag");
+      for (const raw of ["provisioned", "cli-bridge helper", "reachable", "heartbeat", "status=offline"]) {
+        expect(text).not.toContain(raw);
+      }
+    });
+
+    it("English: plain words, not backend ids", async () => {
+      const { baseElement } = renderCreated("en");
+      expect(await screen.findByText("Set up")).toBeInTheDocument();
+      const text = baseElement.textContent ?? "";
+      expect(text).not.toContain("provision_status=");
+      expect(text).not.toContain("cli-bridge helper");
+    });
+
+    it("an unknown check stays as the backend sends it", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(JSON.stringify({ ...READINESS, checks: [{ label: "gpu warm", ok: true, detail: "ok" }] }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        }),
+      );
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <NextIntlClientProvider locale="de" messages={de} onError={() => {}}>
+          <QueryClientProvider client={qc}>
+            <AgentWizard
+              boards={[{ id: "b1", name: "Main" } as never]}
+              defaultBoardId="b1"
+              initialState={{ step: 4, name: "Nova", scopes: [], agentRuntime: "manual", createdAgentId: "a1" }}
+              onClose={() => {}}
+              onCreated={() => {}}
+            />
+          </QueryClientProvider>
+        </NextIntlClientProvider>,
+      );
+      expect(await screen.findByText("gpu warm")).toBeInTheDocument();
+    });
+  });
 
   it("agents.wizard has the same keys in German and English", () => {
     expect([...wiz(de).keys()].sort()).toEqual([...wiz(en).keys()].sort());

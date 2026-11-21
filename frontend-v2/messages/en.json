@@ -903,7 +903,34 @@
         "readiness": "Readiness check",
         "waiting": "waiting for provisioning…",
         "hostNote": "Host agent: files were rendered to ~/.mc/agents/<slug>/. Load onto the Mac via launchctl (see activity event) — the heartbeat will turn green.",
-        "done": "Done"
+        "done": "Done",
+        "check": {
+          "provisioned": {
+            "label": "Set up",
+            "ok": "done",
+            "fail": "not set up yet"
+          },
+          "bridgeHelper": {
+            "label": "Container helper",
+            "ok": "reachable",
+            "fail": "not reachable"
+          },
+          "heartbeat": {
+            "label": "Heartbeat",
+            "ok": "checking in",
+            "fail": "not checking in yet"
+          },
+          "hostHeartbeat": {
+            "label": "Heartbeat from the Mac",
+            "ok": "seen less than 3 min ago",
+            "fail": "no heartbeat — the service on the Mac may not be loaded"
+          },
+          "runtime": {
+            "label": "Runtime",
+            "ok": "no automatic check available",
+            "fail": "no automatic check available"
+          }
+        }
       },
       "copyToken": "Copy token"
     }
