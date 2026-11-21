@@ -1803,19 +1803,19 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
             "container_status": "serving" if reachable else "booted_no_model",
         }
 
-    if runtime_type == "cloud" and _cloud_probe_skipped(runtime):
-        # Not asked, so not judged: "unknown", never "stopped" (which would
-        # read as an outage and invite a start). container_status None like
-        # every cloud answer — the runtimes page hides the chip for both.
-        return {
-            "state": "unknown",
-            "http_reachable": None,
-            "container_status": None,
-            "state_message": "not checked: the provider signs in through its own CLI",
-        }
-
     if runtime_type in ("openai_compatible", "cloud"):
         # Remote-hosted endpoint — we can't start/stop it, only probe.
+        if _cloud_probe_skipped(runtime):
+            # Not asked, so not judged: "unknown", never "stopped" (which
+            # would read as an outage and invite a start). container_status
+            # None like every hosted answer — the runtimes page hides the
+            # chip for both.
+            return {
+                "state": "unknown",
+                "http_reachable": None,
+                "container_status": None,
+                "state_message": "not checked: the provider signs in through its own CLI",
+            }
         reachable = await _probe_http(endpoint, healthcheck_path or "/v1/models")
         return {
             "state": "ready" if reachable else "stopped",
