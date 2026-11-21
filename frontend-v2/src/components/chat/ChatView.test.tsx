@@ -817,7 +817,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ onCenterViewChange });
 
-    await user.click(screen.getByText("Im Terminal prüfen"));
+    await user.click(screen.getByText("Check in the terminal"));
     expect(onCenterViewChange).toHaveBeenCalledWith("terminal");
   });
 
