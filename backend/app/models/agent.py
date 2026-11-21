@@ -324,6 +324,16 @@ class Agent(SQLModel, table=True):
         adapter = adapter_for(self)
         return adapter.find_task_session is not None and adapter.tasks_in_own_session()
 
+    # Chats slice S2 ("New chat"): can this agent hold a further chat? Same
+    # rule the send path routes a chat by (``acp_chat_chats.resolve_chat``),
+    # asked once here so the picker never re-derives it from harness names.
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def can_start_chat(self) -> bool:
+        from app.services.acp_chat_chats import can_start_chat
+
+        return can_start_chat(self)
+
 
 @event.listens_for(Agent, "before_insert")
 def _agent_fill_slug(mapper, connection, target: "Agent") -> None:

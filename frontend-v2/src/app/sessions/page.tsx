@@ -154,17 +154,13 @@ function agentHasTranscript(agent: AgentWithState | null | undefined): boolean {
 }
 
 // ── New chat (chats slice S2) ───────────────────────────────────────────────
-// Can this agent hold a further chat? Mirrors the backend's routing rule
-// exactly (acp_chat_chats._FURTHER_CHAT_SUPPORT): omp over ACP in its
-// container, or Claude Code in a cli-bridge container. Any other agent
+// Can this agent hold a further chat? The backend says so on the agent row
+// (`can_start_chat`, the send path's own routing rule). Any other agent
 // (host agents, omp without ACP) would get a chat it cannot answer in —
 // the record creates it, the first message then fails with 409
 // `chat_harness_unsupported`. So the picker opens their own chat instead.
 function agentCanStartNewChat(agent: AgentWithState | null | undefined): boolean {
-  if (!agent || agent.agent_runtime !== "cli-bridge") return false;
-  const harness = agent.harness ?? "claude";
-  if (agent.headless_chat) return harness === "omp";
-  return harness === "claude";
+  return agent?.can_start_chat === true;
 }
 
 /** Why a new chat could not be had, as the toast that says so: the record

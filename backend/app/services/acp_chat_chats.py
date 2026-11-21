@@ -99,6 +99,14 @@ _FURTHER_CHAT_SUPPORT = {
 }
 
 
+def can_start_chat(agent: Any) -> bool:
+    """True when a new further chat of this agent could run at all — on the
+    agent's own harness, under the same rule ``resolve_chat`` routes by. The
+    UI reads this (``Agent.can_start_chat``) instead of comparing harness
+    names itself (PRINCIPLES §3.4)."""
+    return any(supported(agent) for supported in _FURTHER_CHAT_SUPPORT.values())
+
+
 async def resolve_chat(session: AsyncSession, user: Any, agent: Any, chat_id: uuid.UUID | None) -> str | None:
     """The chat id to hand to the daemon, or None for the agent's own chat.
 

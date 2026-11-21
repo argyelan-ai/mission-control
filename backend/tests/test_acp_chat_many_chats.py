@@ -264,6 +264,32 @@ async def test_only_the_omp_container_daemon_holds_further_chats(monkeypatch, fl
         acp_chat_transport.transport_for(tui, chat_id=str(uuid.uuid4()))
 
 
+@pytest.mark.parametrize(
+    ("harness", "runtime", "record_on", "expected"),
+    [
+        ("omp", "cli-bridge", True, True),
+        ("claude", "cli-bridge", True, True),
+        ("hermes", "host", True, False),
+        ("omp", "cli-bridge", False, False),
+    ],
+)
+async def test_agent_row_says_whether_it_can_start_a_further_chat(
+    auth_client, make_agent, monkeypatch, harness, runtime, record_on, expected
+):
+    """"New chat" gates on this flag, never on a harness name (PRINCIPLES
+    §3.4). It is the send path's own routing rule, on list and detail."""
+    monkeypatch.setattr(settings, "chat_record_enabled", record_on, raising=False)
+    monkeypatch.setattr(settings, "hermes_driver", "acp")
+    agent = await make_agent(name=f"Can chat {harness} {record_on}", harness=harness, agent_runtime=runtime)
+
+    detail = (await auth_client.get(f"/api/v1/agents/{agent.id}")).json()
+    assert detail["can_start_chat"] is expected
+    listed = (await auth_client.get("/api/v1/agents")).json()
+    rows = listed if isinstance(listed, list) else listed.get("items", listed.get("agents", []))
+    row = next(a for a in rows if a["id"] == str(agent.id))
+    assert row["can_start_chat"] is expected
+
+
 # ── the wire ──────────────────────────────────────────────────────────────
 
 
