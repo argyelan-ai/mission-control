@@ -3039,8 +3039,23 @@ class ChatTailerManager:
         if pane_text is _PANE_UNSET:
             pane_text = await capture_pane(agent)
         if pane_text is None:
+            # No pane (host agents: Boss, Hermes, Jarvis). A fresh mtime is
+            # not the only sign of work: a long tool call or a long think
+            # writes nothing for minutes. The turn itself decides — not
+            # ended (last line = request, tool use, tool result) is
+            # "working" until the stale limit, so the header, the status
+            # line and the composer's Stop agree (critic 21.11.2026: the
+            # 20 s window read "Bereit" and hid Stop mid-turn).
+            working = transcript_active
+            if not working:
+                from app.services.chat_turn_state import TURN_BUSY, file_turn_state
+
+                turn = await asyncio.to_thread(
+                    file_turn_state, current_path, getattr(agent, "harness", None)
+                )
+                working = turn.get("state") == TURN_BUSY
             return {
-                "status": "working" if transcript_active else "idle",
+                "status": "working" if working else "idle",
                 "prompt": None,
                 "aliveness": aliveness,
             }
