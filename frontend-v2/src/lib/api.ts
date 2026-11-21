@@ -112,6 +112,7 @@ import type {
   FsMeta,
   FsSearchResult,
   TrashEntry,
+  SessionAgent,
 } from "./types";
 import type {
   HeadChatHistoryResponse,
@@ -1478,9 +1479,9 @@ export const api = {
         method: "POST",
       }),
     listDockerSessions: () =>
-      request<(Agent & { container_state: string })[]>(`/api/v1/docker-sessions/agents`),
+      request<(SessionAgent & { container_state: string })[]>(`/api/v1/docker-sessions/agents`),
     listHostSessions: () =>
-      request<(Agent & { session_name: string; session_running: boolean })[]>(
+      request<(SessionAgent & { session_name: string; session_running: boolean })[]>(
         `/api/v1/host-sessions/agents`,
       ),
     syncConfig: (id: string, opts?: { fileTypes?: string[]; restart?: boolean }) => {

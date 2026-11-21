@@ -723,11 +723,13 @@ describe("SessionsPage — the selected agent follows the live data, not the cli
     );
   });
 
-  it("hands the bound task to the chat as its working-on row", async () => {
+  it("hands the bound task to the chat as its working-on row — by id, never the board's whole list", async () => {
     useAppStore.setState({ activeBoardId: "board-1" });
-    vi.spyOn(api.tasks, "list").mockResolvedValue([
-      { id: "task-1", title: "Login reparieren" } as unknown as Awaited<ReturnType<typeof api.tasks.list>>[number],
-    ]);
+    type TaskRow = Awaited<ReturnType<typeof api.tasks.get>>;
+    const list = vi.spyOn(api.tasks, "list").mockResolvedValue([]);
+    const get = vi
+      .spyOn(api.tasks, "get")
+      .mockResolvedValue({ id: "task-1", title: "Login reparieren" } as unknown as TaskRow);
     vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
       mkAgent({ id: "agent-1", name: "Agent One", current_task_id: "task-1" }),
     ]);
@@ -736,32 +738,50 @@ describe("SessionsPage — the selected agent follows the live data, not the cli
       await waitFor(() =>
         expect(screen.getByTestId("chat-view-working-on")).toHaveTextContent("task-1|Login reparieren")
       );
+      expect(get).toHaveBeenCalledWith("board-1", "task-1");
+      // The board's task list is ~1 MB on a busy board (test team 21.11.2026).
+      expect(list).not.toHaveBeenCalled();
     } finally {
       useAppStore.setState({ activeBoardId: null });
     }
   });
 
-  it("refetches the task list when the agent picks up a task the list does not have yet", async () => {
-    // The board's task list has no refetch of its own. An agent that picks a
-    // task up after the list loaded must still get its working-on row.
+  it("looks up a task the agent picks up after the first load", async () => {
     useAppStore.setState({ activeBoardId: "board-1" });
-    type TaskRow = Awaited<ReturnType<typeof api.tasks.list>>[number];
-    const list = vi
-      .spyOn(api.tasks, "list")
-      .mockResolvedValueOnce([])
-      .mockResolvedValue([{ id: "task-9", title: "Neu aufgenommen" } as unknown as TaskRow]);
+    type TaskRow = Awaited<ReturnType<typeof api.tasks.get>>;
+    const get = vi
+      .spyOn(api.tasks, "get")
+      .mockResolvedValue({ id: "task-9", title: "Neu aufgenommen" } as unknown as TaskRow);
     vi.spyOn(api.agents, "listDockerSessions")
       .mockResolvedValueOnce([mkAgent({ id: "agent-1", name: "Agent One", current_task_id: null })])
       .mockResolvedValue([mkAgent({ id: "agent-1", name: "Agent One", current_task_id: "task-9" })]);
     try {
       const { qc } = renderPage();
-      await waitFor(() => expect(list).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.getByTestId("chat-view-agent-task")).toBeInTheDocument());
+      expect(get).not.toHaveBeenCalled();
       await qc.invalidateQueries({ queryKey: ["agents", "docker-sessions"] });
       await waitFor(() =>
         expect(screen.getByTestId("chat-view-working-on")).toHaveTextContent("task-9|Neu aufgenommen")
       );
-      // A task the list never has (another board) asks once, not in a loop.
-      expect(list.mock.calls.length).toBeLessThanOrEqual(3);
+    } finally {
+      useAppStore.setState({ activeBoardId: null });
+    }
+  });
+
+  it("a bound task of another board (404) is asked a few times, not in a loop", async () => {
+    useAppStore.setState({ activeBoardId: "board-1" });
+    const get = vi.spyOn(api.tasks, "get").mockRejectedValue(new Error("API 404: Task not found"));
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "Agent One", current_task_id: "task-elsewhere" }),
+    ]);
+    try {
+      renderPage();
+      await waitFor(() => expect(get).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 1500));
+      // First load plus the page's "missing → ask again" for this id — a
+      // handful at most, and it stops (1.5 s later still the same few).
+      expect(get.mock.calls.length).toBeLessThanOrEqual(3);
+      expect(screen.getByTestId("chat-view-working-on")).toBeEmptyDOMElement();
     } finally {
       useAppStore.setState({ activeBoardId: null });
     }

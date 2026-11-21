@@ -819,6 +819,40 @@ export interface Agent {
   updated_at: string;
 }
 
+// One row of the chat lists (`/host-sessions/agents`, `/docker-sessions/agents`).
+// The backend sends only these fields (`SessionAgentRow`,
+// backend/app/routers/cli_terminal.py), not the whole agent, so the type must
+// not claim more: a read of a dropped field fails `tsc` instead of silently
+// being `undefined`. Adding a field means adding it on both sides — the drift
+// test (lib/__tests__/sessionAgent.test.ts) compares the two lists.
+export const SESSION_AGENT_KEYS = [
+  "id",
+  "name",
+  "slug",
+  "emoji",
+  "status",
+  "run_state",
+  "harness",
+  "model",
+  "agent_runtime",
+  "runtime_id",
+  "board_id",
+  "current_task_id",
+  "last_seen_at",
+  "last_task_activity_at",
+  "updated_at",
+  "headless_chat",
+  "tasks_in_own_session",
+] as const;
+
+export type SessionAgent = Pick<
+  Agent,
+  Exclude<(typeof SESSION_AGENT_KEYS)[number], "slug">
+> & {
+  // DB column the shared `Agent` type does not declare.
+  slug?: string | null;
+};
+
 // Onboarding-wizard readiness gate (2026-07-10). ready = provisioned + live;
 // NOT a round-tripped message (synchronous trigger retired in Phase 29).
 export interface AgentReadinessCheck {

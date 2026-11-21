@@ -10,6 +10,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Settings } from "lucide-react";
 import { api } from "@/lib/api";
+import { metricsPoll } from "./hostPoll";
 import { C } from "@/lib/colors";
 import type { Device, Host, Runtime } from "@/lib/types";
 import { HeatStrip } from "./HeatStrip";
@@ -48,7 +49,7 @@ export function FreeBox({
   const { data: metrics, isError: metricsFailed } = useQuery({
     queryKey: ["hosts", host.id, "metrics"],
     queryFn: () => api.hosts.metrics(host.id),
-    refetchInterval: 5_000,
+    refetchInterval: metricsPoll,
   });
 
   const { data: recipes } = useQuery({
