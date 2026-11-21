@@ -371,11 +371,28 @@ async def _seed_two_agents(host_home, make_agent):
 
 
 async def test_api_is_404_while_flag_is_off(auth_client):
-    for url in ("/api/v1/chat-record/chats", "/api/v1/chat-record/search?q=loader",
-                f"/api/v1/chat-record/chats/{uuid.uuid4()}/history"):
-        r = await auth_client.get(url)
-        assert r.status_code == 404, url
-        assert r.json()["detail"] == {"reason": "chat_record_disabled"}
+    """A chat's own pages do not exist while the record is off."""
+    r = await auth_client.get(f"/api/v1/chat-record/chats/{uuid.uuid4()}/history")
+    assert r.status_code == 404
+    assert r.json()["detail"] == {"reason": "chat_record_disabled"}
+
+
+async def test_list_and_search_answer_empty_while_flag_is_off(auth_client):
+    """The chat list sits on every page: a 404 there was a red console line
+    per page load and 212 log lines in 3 h (user test 21.11.2026). "Off" is
+    a state, so the two lists answer 200, empty, with ``enabled: false``."""
+    r = await auth_client.get("/api/v1/chat-record/chats")
+    assert r.status_code == 200
+    assert r.json() == {"chats": [], "enabled": False}
+    r = await auth_client.get("/api/v1/chat-record/search?q=loader")
+    assert r.status_code == 200
+    assert r.json() == {"hits": [], "enabled": False}
+
+
+async def test_list_says_enabled_while_flag_is_on(flag_on, auth_client):
+    r = await auth_client.get("/api/v1/chat-record/chats")
+    assert r.status_code == 200
+    assert r.json()["enabled"] is True
 
 
 async def test_api_lists_chats_reads_history_and_pages(host_home, flag_on, make_agent, auth_client):

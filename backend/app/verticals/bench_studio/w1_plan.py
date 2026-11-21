@@ -101,36 +101,80 @@ SERVED_TTL_S = 20.0
 IN_USE_TTL_S = 5.0
 
 _live_cache: dict[tuple[str, str], tuple[float, Any]] = {}
+#: Background refreshes in flight (``stale_ok`` readers), one per key.
+_refreshing: dict[tuple[str, str], asyncio.Task] = {}
 
 
 def clear_live_cache() -> None:
     _live_cache.clear()
+    for task in _refreshing.values():
+        task.cancel()
+    _refreshing.clear()
 
 
-async def _cached(kind: str, endpoint: str, ttl: float, ask) -> Any:
-    """``ask()`` once per ``ttl`` per endpoint; a timeout or error is the
-    answer None and is cached too (that is the whole point: the dead box)."""
-    hit = _live_cache.get((kind, endpoint))
-    if hit is not None and time.monotonic() - hit[0] < ttl:
-        return hit[1]
+async def wait_for_refreshes() -> None:
+    """Let the background refreshes finish (tests; never on a request)."""
+    while _refreshing:
+        await asyncio.gather(*list(_refreshing.values()), return_exceptions=True)
+
+
+async def _ask(key: tuple[str, str], ask) -> Any:
     try:
         value = await asyncio.wait_for(ask(), timeout=LIVE_TIMEOUT_S)
     except Exception:  # noqa: BLE001 — an unreachable box is a state, not an error
         value = None
-    _live_cache[(kind, endpoint)] = (time.monotonic(), value)
+    _live_cache[key] = (time.monotonic(), value)
     return value
 
 
-async def _served(endpoint: str) -> frozenset[str] | None:
+def _refresh_behind(key: tuple[str, str], ask) -> None:
+    if key in _refreshing:
+        return
+
+    async def _run() -> None:
+        try:
+            await _ask(key, ask)
+        finally:
+            # Only drop our own entry: after clear_live_cache() a newer
+            # refresh may already sit under the same key.
+            if _refreshing.get(key) is asyncio.current_task():
+                _refreshing.pop(key, None)
+
+    _refreshing[key] = asyncio.create_task(_run())
+
+
+async def _cached(kind: str, endpoint: str, ttl: float, ask, *, stale_ok: bool = False) -> Any:
+    """``ask()`` once per ``ttl`` per endpoint; a timeout or error is the
+    answer None and is cached too (that is the whole point: the dead box).
+
+    ``stale_ok`` (readers that only SHOW the answer, the contestant picker):
+    an expired answer is returned at once and asked again in the background,
+    so the picker never waits for a sleeping box twice (user test
+    21.11.2026: 24 s cold). A key never asked before is still asked now."""
+    key = (kind, endpoint)
+    hit = _live_cache.get(key)
+    if hit is not None and time.monotonic() - hit[0] < ttl:
+        return hit[1]
+    if hit is not None and stale_ok:
+        _refresh_behind(key, ask)
+        return hit[1]
+    return await _ask(key, ask)
+
+
+async def _served(endpoint: str, *, stale_ok: bool = False) -> frozenset[str] | None:
     from app.services.heads import engine
 
-    return await _cached("served", endpoint, SERVED_TTL_S, lambda: engine.served_models(endpoint))
+    return await _cached(
+        "served", endpoint, SERVED_TTL_S, lambda: engine.served_models(endpoint), stale_ok=stale_ok
+    )
 
 
-async def _in_use(endpoint: str) -> bool | None:
+async def _in_use(endpoint: str, *, stale_ok: bool = False) -> bool | None:
     from app.services.heads import engine
 
-    n = await _cached("in_use", endpoint, IN_USE_TTL_S, lambda: engine.running_requests(endpoint))
+    n = await _cached(
+        "in_use", endpoint, IN_USE_TTL_S, lambda: engine.running_requests(endpoint), stale_ok=stale_ok
+    )
     return None if n is None else n > 0
 
 
@@ -264,8 +308,9 @@ def _recipe_for(rows: list[Runtime], recipes: list[LocalRecipe], served: str | N
     return None
 
 
-async def load_views(session: AsyncSession, *, live: bool = True) -> list[EngineView]:
-    """Every testable engine, local first (catalogue order), then cloud."""
+async def load_views(session: AsyncSession, *, live: bool = True, stale_ok: bool = False) -> list[EngineView]:
+    """Every testable engine, local first (catalogue order), then cloud.
+    ``stale_ok``: see :func:`_cached` — only for readers that just show it."""
     runtimes = [
         rt for rt in (await session.exec(select(Runtime).where(Runtime.enabled == True))).all()  # noqa: E712
         if rt.model_identifier and _protocol(rt) in ("openai", "grok")
@@ -286,12 +331,12 @@ async def load_views(session: AsyncSession, *, live: bool = True) -> list[Engine
         by_endpoint.setdefault(rt.endpoint, []).append(rt)
     endpoints = sorted(by_endpoint)
     if live:
-        served_list = await asyncio.gather(*(_served(ep) for ep in endpoints))
+        served_list = await asyncio.gather(*(_served(ep, stale_ok=stale_ok) for ep in endpoints))
 
         async def _busy(ep: str, served: frozenset[str] | None) -> bool | None:
             # A box that did not answer /models is not asked again for its
             # load: a sleeping box would add its timeout to every sheet.
-            return await _in_use(ep) if served is not None else None
+            return await _in_use(ep, stale_ok=stale_ok) if served is not None else None
 
         in_use_list = await asyncio.gather(*(_busy(ep, sv) for ep, sv in zip(endpoints, served_list)))
     else:
@@ -920,17 +965,45 @@ async def contestant(
     return d
 
 
+#: A contestants answer slower than this is logged at INFO (else DEBUG).
+CONTESTANTS_SLOW_S = 1.0
+
+
 async def list_contestants(session: AsyncSession) -> dict[str, Any]:
-    views = await load_views(session)
+    """The picker list. It only shows the fleet, so live answers may be the
+    last word while a fresh one is asked in the background (``stale_ok``).
+    Each step is timed: the 24 s of the user test 21.11.2026 had no trace."""
+    steps: list[tuple[str, float]] = []
+    t = time.perf_counter()
+
+    def lap(name: str) -> None:
+        nonlocal t
+        now = time.perf_counter()
+        steps.append((name, now - t))
+        t = now
+
+    views = await load_views(session, stale_ok=True)
+    lap("load_views")
     prices = await load_prices(session)
+    lap("load_prices")
     history = await load_history(session, views)
+    lap("load_history")
     lt = await last_tests(session)
+    lap("last_tests")
     out: dict[str, list] = {"local": [], "cloud": []}
     for v in views:
         if not v.served_model and v.locality == "cloud":
             continue
         d = await contestant(session, v, prices=prices, hist=history[v.key], n_runs=c.PRESET_RUNS["standard"], lt=lt)
         out[v.locality].append(d)
+    lap("loop")
+    total = sum(d for _, d in steps)
+    logger.log(
+        logging.INFO if total >= CONTESTANTS_SLOW_S else logging.DEBUG,
+        "bench contestants timing: %s total=%.3fs",
+        " ".join(f"{name}={d:.3f}s" for name, d in steps),
+        total,
+    )
     return out
 
 

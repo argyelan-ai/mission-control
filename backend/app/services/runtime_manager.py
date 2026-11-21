@@ -470,14 +470,44 @@ def join_probe_url(endpoint: str, healthcheck_path: str) -> str:
     `GET /v1/v1/models 404` while serving fine.
 
     Mirrors the normalization in agent_runtime_switch.probe_runtime_model.
+
+    An endpoint stored as a full API route (".../v1/messages" — every
+    Anthropic row; ".../v1/chat/completions") is cut back to its version
+    segment first: a route is never a base (user test 21.11.2026: 306
+    probes an hour at ".../v1/messages/v1/models", all 404).
     """
-    base = endpoint.rstrip("/")
+    from app.services.runtime_protocols import engine_root
+
+    base = (endpoint or "").rstrip("/")
+    for route in _API_ROUTE_SUFFIXES:
+        if base.endswith("/v1" + route):
+            base = base[: -len(route)]
+            break
+    root = engine_root(base)  # base without a trailing "/v1"
     path = healthcheck_path or "/v1/models"
     if not path.startswith("/"):
         path = "/" + path
-    if base.endswith("/v1") and (path == "/v1" or path.startswith("/v1/")):
-        path = path[len("/v1"):] or "/models"
+    if root != base and path == "/v1":
+        return base + "/models"
+    if root != base and path.startswith("/v1/"):
+        return root + path
     return base + path
+
+
+#: API routes an endpoint row may name instead of a base URL (after "/v1").
+_API_ROUTE_SUFFIXES = ("/messages", "/chat/completions", "/completions")
+
+
+def _cloud_probe_skipped(runtime: dict) -> bool:
+    """A hosted provider MC has no way to ask: it is a known provider host
+    (runtime_naming.PROVIDERS) that signs in through its own CLI — no key
+    in MC (``secret_provider`` None) — so its models list would answer 401/404
+    and read as "stopped". The keyed check (config_checks/kinds.py) is no
+    help here: the Claude one spends plan quota and runs on demand only."""
+    from app.services import runtime_naming
+
+    provider = runtime_naming.resolve_provider(runtime.get("endpoint"))
+    return provider is not None and provider.secret_provider is None
 
 
 #: TCP connect limit of one HTTP probe — separate from the 5 s answer limit.
@@ -1775,6 +1805,17 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
 
     if runtime_type in ("openai_compatible", "cloud"):
         # Remote-hosted endpoint — we can't start/stop it, only probe.
+        if _cloud_probe_skipped(runtime):
+            # Not asked, so not judged: "unknown", never "stopped" (which
+            # would read as an outage and invite a start). container_status
+            # None like every hosted answer — the runtimes page hides the
+            # chip for both.
+            return {
+                "state": "unknown",
+                "http_reachable": None,
+                "container_status": None,
+                "state_message": "not checked: the provider signs in through its own CLI",
+            }
         reachable = await _probe_http(endpoint, healthcheck_path or "/v1/models")
         return {
             "state": "ready" if reachable else "stopped",

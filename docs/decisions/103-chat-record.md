@@ -78,7 +78,7 @@ It is produced on every read and thrown away.
    full text stays in the native file. U+0000 is dropped (Postgres refuses it).
    No retention in this slice.
 7. **Read API** (role viewer or higher, 404 `chat_record_disabled` while the flag is
-   off): `GET /api/v1/chat-record/chats`, `GET /api/v1/chat-record/chats/{id}/history`
+   off, except the two lists — see Nachtrag 2026-11-21): `GET /api/v1/chat-record/chats`, `GET /api/v1/chat-record/chats/{id}/history`
    (paging by event id), `GET /api/v1/chat-record/search?q=` (Postgres
    full-text, `simple` configuration — no stemming, because a chat mixes
    languages; GIN index). A chat without owner (all imported ones) is visible
@@ -89,6 +89,19 @@ It is produced on every read and thrown away.
 8. **Nothing else changes in this slice.** Agents, their processes, the
    history page and the frontend run exactly as before. No switch-over of the
    chat UI, no chat creation, no handoff.
+
+## Nachtrag (2026-11-21) — §7: the two lists answer "off" instead of 404
+
+User test 21.11.2026: the chat list asks `GET /chat-record/chats` on every
+page, so with the flag off every page load wrote a red 404 into the browser
+console and the list kept polling. While the flag is off, the two list GETs
+(`GET /api/v1/chat-record/chats` and `GET /api/v1/chat-record/search`) now
+answer **200** with an empty list (`chats: []` / `hits: []`) and
+`enabled: false`; with the flag on they carry `enabled: true`. Every other
+route (`POST /chats`, `GET /chats/{id}/history`, and the rest) still answers
+404 `chat_record_disabled`. "Off" is a state the list shows, not a missing
+page; the record itself still does not exist for the product until the flag
+is on.
 
 ## Alternativen
 
