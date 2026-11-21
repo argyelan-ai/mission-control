@@ -4944,6 +4944,7 @@
   },
   "heads": {
     "section": "Head",
+    "sectionHint": "A head is a separate agent just for this task: it works in its own folder, opens a pull request and then ends.",
     "pair": "Pair",
     "pairPickerAria": "Choose harness and runtime for the head",
     "explain": "Runs once in its own copy of the repo, opens a PR, never merges.",
@@ -4959,7 +4960,7 @@
     "noPairs": "No harness × runtime pair is set up yet.",
     "engineInUse": "The model is also working for someone else — may be slower.",
     "needsRepo": "A head needs a repo — pick one above.",
-    "needsRepoProject": "A head needs a registry repo — project tasks are not supported yet.",
+    "needsRepoProject": "A head needs a repo from the repo list — project tasks are not supported yet.",
     "engineDownHint": "The local model is not running — start it on",
     "runtimesLink": "Runtimes",
     "runAsHead": "Run as head",

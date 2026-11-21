@@ -25,6 +25,11 @@ describe("German UI terms", () => {
     expect(get(key)).toBe(want);
   });
 
+  it("the head texts name no registry jargon, and 'Head' has a one-line explanation", () => {
+    expect(get("heads.needsRepoProject")).not.toMatch(/Registry/);
+    expect(get("heads.sectionHint")).toMatch(/Aufgabe/);
+  });
+
   it("the context sheet says when the chat gets summarised, not the CLI jargon", () => {
     // No invented threshold: nothing in the repo sets one (critic 21.11.).
     expect(get("sessions.contextPanelNote")).toContain("Kurz bevor der Kontext voll ist, fasst der Agent den Chat automatisch zusammen.");

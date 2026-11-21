@@ -594,7 +594,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                 {pairsResp && (
                   <section className="mt-5" data-testid="head-section" aria-labelledby="create-task-head-label">
                     <div className="flex items-center gap-2.5 mb-3">
-                      <span id="create-task-head-label" className="label-sys shrink-0">{tHeads("section")}</span>
+                      <span id="create-task-head-label" className="label-sys shrink-0" title={tHeads("sectionHint")}>{tHeads("section")}</span>
                       <div className="flex-1 h-px" style={{ background: C.borderSubtle }} />
                     </div>
                     <HeadPairPicker

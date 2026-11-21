@@ -2,6 +2,7 @@
  * New task → pair picker + "Run as head" (docs/specs/head-launcher.md §8.1,
  * build plan B1, B3, B4).
  */
+import en from "../../../../messages/en.json";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "fs";
 import path from "path";
@@ -90,6 +91,16 @@ describe("CreateTaskModal — Run as head", () => {
     expect(createSpy.mock.calls[0][1]).toMatchObject({ repo_id: "repo-1", defer_dispatch: true, status: "inbox" });
     expect(dispatchSpy).not.toHaveBeenCalled();
     await waitFor(() => expect(onOpen).toHaveBeenCalledWith("task-9"));
+  });
+
+  it("the 'Head' label explains itself in one line (technical word + tooltip)", async () => {
+    vi.spyOn(api.heads, "pairs").mockResolvedValue({ pairs: [ompLocal], default_pair: ompLocal });
+    renderModal();
+    await openAndFill();
+    await screen.findByTestId("head-pair-trigger");
+    const label = document.getElementById("create-task-head-label");
+    expect(label).toHaveAttribute("title", en.heads.sectionHint);
+    expect(en.heads.sectionHint.length).toBeGreaterThan(20);
   });
 
   it("lists only startable pairs first; the rest behind 'Show more' with one plain sentence each", async () => {
