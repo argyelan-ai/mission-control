@@ -10,7 +10,7 @@ import { X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
 import { api } from "@/lib/api";
-import { isOperatorEvent } from "@/lib/operatorEvents";
+import { TECHNICAL_EVENT_TYPES, isOperatorEvent } from "@/lib/operatorEvents";
 import { useAppStore } from "@/lib/store";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { ActivityEvent } from "@/lib/types";
@@ -24,7 +24,8 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
   const { activeBoardId } = useAppStore();
   const { data: allEvents = [] } = useQuery({
     queryKey: ["activity", "full-history"],
-    queryFn: () => api.activity.list({ board_id: activeBoardId ?? undefined, limit: 100 }),
+    queryFn: () =>
+      api.activity.list({ board_id: activeBoardId ?? undefined, limit: 100, exclude_event_type: [...TECHNICAL_EVENT_TYPES] }),
     refetchInterval: 15_000,
   });
   // Home's history leaves plumbing events out, like the compact stream.
