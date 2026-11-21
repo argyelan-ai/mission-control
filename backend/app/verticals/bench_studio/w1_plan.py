@@ -135,7 +135,10 @@ def _refresh_behind(key: tuple[str, str], ask) -> None:
         try:
             await _ask(key, ask)
         finally:
-            _refreshing.pop(key, None)
+            # Only drop our own entry: after clear_live_cache() a newer
+            # refresh may already sit under the same key.
+            if _refreshing.get(key) is asyncio.current_task():
+                _refreshing.pop(key, None)
 
     _refreshing[key] = asyncio.create_task(_run())
 

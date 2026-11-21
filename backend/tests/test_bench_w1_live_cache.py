@@ -163,3 +163,31 @@ async def test_contestants_logs_its_step_times(session, boxes, caplog):
     assert len(lines) == 1
     for step in ("load_views", "load_prices", "load_history", "last_tests", "loop", "total"):
         assert f"{step}=" in lines[0]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_refresh_never_drops_the_newer_one():
+    """Critic 21.11.2026: clear_live_cache() cancels a started refresh T1;
+    T1's cleanup must not remove a newer refresh T2 for the same key, or a
+    third reader starts a duplicate probe."""
+    key = ("served", "http://probe-race.invalid")
+    gate = asyncio.Event()
+
+    async def ask():
+        await gate.wait()
+        return frozenset()
+
+    w1_plan._refresh_behind(key, ask)
+    await asyncio.sleep(0)  # T1 is running and waits on the gate
+    w1_plan.clear_live_cache()
+    w1_plan._refresh_behind(key, ask)
+    t2 = w1_plan._refreshing.get(key)
+    assert t2 is not None
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)  # T1's cancellation and cleanup have run
+    try:
+        assert w1_plan._refreshing.get(key) is t2
+    finally:
+        gate.set()
+        await w1_plan.wait_for_refreshes()
+    assert key not in w1_plan._refreshing
