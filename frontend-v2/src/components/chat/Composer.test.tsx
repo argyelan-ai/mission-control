@@ -697,9 +697,10 @@ describe("Composer", () => {
       expect(chip.className).toContain("max-w-full");
       expect(chip).toHaveAttribute("title", long);
       expect(chip.querySelector(".truncate")).toHaveTextContent("GLM-5.3-Flash-EXL3-very-long-model-name");
-      // The chip no longer gives way to its neighbours (user test 21.11.2026:
-      // "DeepS…"); only a name beyond 10 rem is cut.
-      expect(chip.parentElement!.className).toContain("shrink-0");
+      // The chip is the one part of the row that gives way (min-w-0): a long
+      // name cuts, it never pushes Send off a 390 px screen.
+      expect(chip.parentElement!.className).toContain("min-w-0");
+      expect(chip.parentElement!.className).not.toContain("shrink-0");
       expect(chip.parentElement!.className).toContain("max-w-40");
     });
 
@@ -2511,12 +2512,25 @@ describe("Composer — every input-bar button is a 44 px finger target", () => {
     expect(slotHits44(screen.getByTestId("mic-slot").parentElement!)).toBe(true);
   });
 
-  it("the chip names the model short and whole: no provider, no build date, no cut", () => {
+  it("the chip names the model short: no provider, no build date", () => {
     renderFull();
     const chip = screen.getByTestId("model-chip");
     expect(chip).toHaveTextContent(/^V4\.1 Flash$/);
-    // It does not give way to its neighbours, so a short name is never cut.
-    expect(chip.parentElement!.className).toContain("shrink-0");
-    expect(chip.parentElement!.className).not.toContain("min-w-0");
+  });
+
+  it("Send/Stop never leave a 390 px screen: the right-hand controls do not shrink, the model chip does", () => {
+    // Critic probe 21.11.2026: a non-shrinking chip with mode chip, mic and
+    // 'Apodex-1.1-mini-NVFP4' put Send at x = 399 px on a 390 px phone.
+    // jsdom has no layout, so this pins the flex contract; the layout itself
+    // is measured in the picture harness (send.right <= 390).
+    renderFull();
+    const actions = screen.getByTestId("composer-actions");
+    expect(actions.className).toContain("shrink-0");
+    expect(actions).toContainElement(screen.getByTestId("send-button"));
+    expect(actions).toContainElement(screen.getByTestId("mic-slot"));
+    expect(actions).toContainElement(screen.getByTestId("mode-slot"));
+    const chipBox = screen.getByTestId("model-chip").parentElement!;
+    expect(chipBox.className).toContain("min-w-0");
+    expect(chipBox.className).not.toContain("shrink-0");
   });
 });

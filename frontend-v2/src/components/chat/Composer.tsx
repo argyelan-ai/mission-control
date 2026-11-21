@@ -1135,12 +1135,11 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             <Paperclip size={15} />
           </button>
           {/* min-w-0: the model chip is the one element of this row that may
-              shrink — with context ring, mode chip and effort chip on a
-              390 px phone, a long model name wrapped onto two lines. */}
-          {/* The chip keeps the short model name whole (user test 21.11.2026:
-              "DeepS…"): it does not shrink, the name is short instead
-              (`shortModelName`); a name longer than 10 rem still cuts. */}
-          <div className="relative shrink-0 max-w-40" ref={modelBoxRef}>
+              shrink. The name is short first (`shortModelName`, user test
+              21.11.2026: "DeepS…"), so it is whole whenever the row has room;
+              with mode chip, effort, mic and a long local model name on a
+              390 px phone it cuts instead of pushing Send off the screen. */}
+          <div className="relative min-w-0 max-w-40" ref={modelBoxRef}>
             {modelOptions.length === 0 ? (
               /* Fremde CLI (kimi, omp): das Backend meldet explizit keine
                  /model-Aliasse — dann ist der Chip ein ehrliches Label statt
@@ -1333,7 +1332,9 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               is also visible while such an agent rests; operator-decided
               (18.08.2026): a control that is missing when you need it is worse
               than one that waits. */}
-          <div className="ml-auto flex items-center gap-1.5">
+          {/* shrink-0: the controls on the right never give way — Send/Stop
+              must stay on the screen; the model chip gives way instead. */}
+          <div data-testid="composer-actions" className="ml-auto flex shrink-0 items-center gap-1.5">
           {modeSlot && <span className={SLOT_HIT_44}>{modeSlot}</span>}
           {(currentEffort ||
             (effortSupported && effortLevels.length > 0) ||
