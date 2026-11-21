@@ -15,6 +15,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { api } from "@/lib/api";
+import { metricsPoll } from "./hostPoll";
 import { C } from "@/lib/colors";
 import type { Device, Runtime, RuntimeLiveStatus } from "@/lib/types";
 import type { HostGroup } from "../grouping";
@@ -185,7 +186,7 @@ function SleepingBox({
   const { data: metrics, isError: metricsFailed } = useQuery({
     queryKey: ["hosts", group.host.id, "metrics"],
     queryFn: () => api.hosts.metrics(group.host.id),
-    refetchInterval: 5_000,
+    refetchInterval: metricsPoll,
   });
   if (metrics?.reachable === true) {
     return (

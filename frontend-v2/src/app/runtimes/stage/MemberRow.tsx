@@ -16,6 +16,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
+import { metricsPoll } from "./hostPoll";
 import { C, STATUS } from "@/lib/colors";
 import type { Device, Host, HostMetrics } from "@/lib/types";
 import { CompactDeviceModeSwitch } from "../DeviceControl";
@@ -136,7 +137,7 @@ export function MemberRowContainer({
   const { data: metrics } = useQuery({
     queryKey: ["hosts", host.id, "metrics"],
     queryFn: () => api.hosts.metrics(host.id),
-    refetchInterval: 5_000,
+    refetchInterval: metricsPoll,
   });
   return (
     <MemberRow

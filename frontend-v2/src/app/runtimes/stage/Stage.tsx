@@ -22,10 +22,11 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { api } from "@/lib/api";
+import { pulsePoll } from "./hostPoll";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import type { Agent, Device, Host, Runtime, RuntimeLiveStatus } from "@/lib/types";
 import { typeLabel } from "../runtimeTypeLabel";
@@ -119,11 +120,12 @@ export function Stage({
   // a head on the card, same gate `useHeadPairsForLabels` elsewhere uses.
   const headPairsForLabels = useHeadPairsForLabels(headsOnCard.length > 0);
 
+  const queryClient = useQueryClient();
   const { data: pulse } = useQuery({
     queryKey: ["hosts", headHost?.host.id, "pulse"],
     queryFn: () => api.hosts.pulse(headHost!.host.id),
     enabled: !!headHost,
-    refetchInterval: 5_000,
+    refetchInterval: pulsePoll(queryClient, headHost?.host.id),
   });
 
   // Team-Lead-Fund 06.09.2026: Agenten hängen an der Slot-Runtime der

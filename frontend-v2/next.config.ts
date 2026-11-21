@@ -30,6 +30,19 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // The bundled fonts never change under the same name: a new font file
+  // gets a new name (src/__tests__/fonts-immutable.test.ts pins every
+  // file's content to its name). So the browser may keep them for a year
+  // and never ask again — before, every page load re-validated all of them
+  // (`max-age=0`, ~180 KB on a cold phone cache).
+  async headers() {
+    return [
+      {
+        source: "/fonts/:file*",
+        headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }],
+      },
+    ];
+  },
   experimental: {
     serverActions: {
       allowedOrigins: [

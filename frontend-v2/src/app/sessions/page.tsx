@@ -29,6 +29,7 @@ import { clampPanelWidth, defaultPanelWidth, loadPanelWidth, panelOverlays, save
 import { loadRecentChats, rememberChat } from "@/lib/recentChats";
 import { CHAT_ENTRY_PARAM, chatUrl, isPhoneViewport, takeDirectLoad, usePhoneViewport, type ChatKind } from "@/lib/chatHistory";
 import { useHeadRuns } from "@/components/heads/useHeadRuns";
+import { useBoundTasks } from "./useBoundTasks";
 import { HeadChatPlaceholder } from "@/components/heads/HeadChatPlaceholder";
 import { newerHeadRunIdFor, sortHeadsForList, type HeadRun } from "@/lib/heads";
 
@@ -248,16 +249,19 @@ function SessionsPageContent() {
     saveSidebarCollapsed(collapsed);
   }
 
+  // Status changes arrive live over SSE; these polls only catch a missed
+  // event, so they ask calmly (test team 21.11.2026: the chat moved
+  // 1.8 MB per idle minute, most of it these two lists).
   const { data: dockerAgents = [], isLoading, isError } = useQuery({
     queryKey: ["agents", "docker-sessions"],
     queryFn: () => api.agents.listDockerSessions(),
-    refetchInterval: 10_000,
+    refetchInterval: 30_000,
   });
 
   const { data: hostAgents = [] } = useQuery({
     queryKey: ["agents", "host-sessions"],
     queryFn: () => api.agents.listHostSessions(),
-    refetchInterval: 5_000,
+    refetchInterval: 15_000,
   });
 
   // Gruppen (ADR-075). Eigene Abfrage neben den Agenten — eine Gruppe hängt
@@ -282,11 +286,12 @@ function SessionsPageContent() {
     refetchInterval: 15_000,
   });
 
-  const { data: tasks = [], refetch: refetchTasks, isSuccess: tasksLoaded } = useQuery({
-    queryKey: ["tasks", activeBoardId],
-    queryFn: () => api.tasks.list(activeBoardId!),
-    enabled: !!activeBoardId,
-  });
+  // Only the tasks the listed agents are bound to — not the board's whole
+  // list (about 1 MB on a busy board) to look up one task per agent.
+  const { tasks, refetch: refetchTasks, isSuccess: tasksLoaded } = useBoundTasks(
+    activeBoardId,
+    [...dockerAgents, ...hostAgents],
+  );
 
   const { data: projects = [] } = useQuery({
     queryKey: ["projects", activeBoardId],
