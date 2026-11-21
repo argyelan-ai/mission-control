@@ -177,9 +177,46 @@ async def test_a_running_turn_with_a_living_heartbeat_is_busy(fake_redis):
     assert st["busy"] is True
 
 
-def test_effective_run_state_resets_after_the_heartbeat_window():
-    from app.services.comms_directory import effective_run_state
+@pytest.mark.asyncio
+async def test_a_running_turn_alive_only_through_presence_is_busy(fake_redis):
+    """Critic 21.11.2026: alive takes the newer of Redis presence and the DB
+    beat; busy must use that same sign of life, or an agent whose DB beat is
+    older than 90 s but whose presence is fresh reads not busy and messages
+    go into its running turn."""
+    import json as _json
 
-    assert effective_run_state(_jarvis_like(91)) == "idle"
-    assert effective_run_state(_jarvis_like(30)) == "running"
-    assert effective_run_state(_jarvis_like(91, run_state="blocked")) == "blocked"
+    from app.services import comms_directory
+
+    agent = _jarvis_like(200)  # DB beat stale, presence below is fresh
+    principal = _Principal(agent)
+    await fake_redis.set(
+        comms_directory.presence_key(principal.kind, principal.id),
+        _json.dumps({"at": utcnow().isoformat(), "listening": True, "busy": False}),
+    )
+    st = await comms_directory.state_of(principal, redis=fake_redis, warming=False)
+    assert st["alive"] == "yes"
+    assert st["busy"] is True
+
+
+@pytest.mark.asyncio
+async def test_agents_list_never_relabels_a_dead_agent_as_idle(client: AsyncClient, home):
+    """Critic 21.11.2026: /agents set run_state "idle" for an agent whose beat
+    is gone — the task form shows that as "bereit" for a switched-off agent,
+    and the single-agent GET still said "running". The listing keeps the
+    stored value like the detail GET; "off" is the UI's call from last_seen
+    (isAgentOff), never a fake "ready"."""
+    tag = uuid.uuid4().hex[:6]
+    user_id = uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(User(id=user_id, email=f"u-{tag}@mc.local", name="Op", role="admin", is_active=True))
+        a = Agent(id=uuid.uuid4(), name=f"Off{tag}", slug=f"off{tag}", role="developer",
+                  agent_runtime="host", harness="claude", run_state="running",
+                  last_seen_at=utcnow() - timedelta(hours=13))
+        s.add(a)
+        await s.commit()
+    headers = {"Authorization": f"Bearer {create_access_token(str(user_id), 'admin')}"}
+    rows = (await client.get("/api/v1/agents", headers=headers)).json()
+    listed = next(r for r in rows if r["slug"] == f"off{tag}")
+    detail = (await client.get(f"/api/v1/agents/{a.id}", headers=headers)).json()
+    assert listed["run_state"] != "idle"
+    assert listed["run_state"] == detail["run_state"]
