@@ -375,8 +375,8 @@ export function Stage({
               Wort-only: ein Phasenbeginn-/Unreachable-Zeitstempel existiert
               im Vertrag (noch) nicht, s. Datei-Kopfkommentar. */}
           <span
-            className="font-mono uppercase shrink-0"
-            style={{ fontSize: "10px", letterSpacing: "0.08em", color: C.textMuted }}
+            className="text-xs tabular-nums shrink-0"
+            style={{ color: C.textMuted }}
           >
             {status === "failed"
               ? crash
@@ -385,7 +385,9 @@ export function Stage({
               : status === "switching"
                 ? t("cornerSwitching")
                 : uptime
-                  ? uptime.hours >= 1
+                  ? uptime.hours >= 24
+                    ? t("cornerUptimeDays", { d: Math.floor(uptime.hours / 24), h: uptime.hours % 24 })
+                    : uptime.hours >= 1
                     ? t("cornerUptimeHours", { h: uptime.hours, m: pad2(uptime.minutes) })
                     : t("cornerUptimeMinutes", { m: uptime.minutes })
                   : t("cornerServing")}

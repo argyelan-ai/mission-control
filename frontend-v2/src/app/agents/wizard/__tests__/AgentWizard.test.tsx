@@ -48,7 +48,7 @@ describe("AgentWizard shell", () => {
     expect(screen.getByText(/Start/)).toBeTruthy();
     expect(screen.getByText(/Identity/)).toBeTruthy();
     expect(screen.getByText(/Runtime/)).toBeTruthy();
-    expect(screen.getByText(/Scopes/)).toBeTruthy();
+    expect(screen.getByText(/Permissions/)).toBeTruthy();
     expect(screen.getByText(/Review/)).toBeTruthy();
   });
 
@@ -182,6 +182,6 @@ describe("AgentWizard step 2 — the gate is readable, not a dead button", () =>
     fireEvent.click(nextBtn());
     // Step 3 reached: the runtime controls are gone and scopes render.
     await waitFor(() => expect(screen.queryByText("Runtime type")).toBeNull());
-    expect(screen.getByText(/Scopes \(/)).toBeTruthy();
+    expect(screen.getByText(/Permissions \(/)).toBeTruthy();
   });
 });

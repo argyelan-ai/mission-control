@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import { useTranslations } from "next-intl";
 import { AlertTriangle, Loader2, Pause, Play, Square, Trash2 } from "lucide-react";
 import { C, alpha } from "@/lib/colors";
+import { stripMarkdown } from "@/lib/docOutline";
 import type { Loop } from "@/lib/types";
 import { canPauseLoop, canStartLoop, canStopLoop, isLoopInactive, LOOP_STATUS_META } from "./loopMeta";
 
@@ -60,7 +61,9 @@ export function LoopCard({ loop, onOpen, onStart, onPause, onStop, onDelete, act
 
         {loop.goal && (
           <p className="text-xs line-clamp-2" style={{ color: C.textSecondary }}>
-            {loop.goal}
+            {/* The goal is Markdown; a two-line preview shows its words,
+                not "## Ziel" and "**". */}
+            {stripMarkdown(loop.goal)}
           </p>
         )}
 

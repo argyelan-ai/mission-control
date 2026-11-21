@@ -50,7 +50,7 @@ const ompQwenDown = mkPair({ runtime_slug: "qwen", runtime_label: "Qwen local", 
 
 async function openAndFill({ withRepo = true } = {}) {
   await userEvent.click(screen.getByRole("button", { name: "New task" }));
-  await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Fix flaky retry test");
+  await userEvent.type(screen.getByPlaceholderText("Short, clear task title"), "Fix flaky retry test");
   if (withRepo) {
     const select = await screen.findByRole("combobox", { name: "Repository" });
     await userEvent.selectOptions(select, repo.id);
@@ -255,7 +255,7 @@ describe("CreateTaskModal — Run as head", () => {
     expect(screen.getByTestId("run-as-head").className).toContain("w-full");
     expect(screen.getByTestId("run-as-head").className).toContain("min-h-[44px]");
     expect(screen.getByTestId("create-task-shortcut-hint").className).toContain("hidden");
-    expect(screen.getByTestId("create-task-shortcut-hint").className).toContain("[@media(hover:hover)]:inline");
+    expect(screen.getByTestId("create-task-shortcut-hint").className).toContain("md:[@media(hover:hover)]:inline");
   });
 
   it("the modal source uses no gradient and no hard-coded English footer", () => {

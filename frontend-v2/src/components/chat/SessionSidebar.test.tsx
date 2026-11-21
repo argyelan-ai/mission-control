@@ -310,7 +310,7 @@ describe("SessionSidebar", () => {
       renderList();
       expect(screen.getByText("Rex")).toBeInTheDocument();
       expect(screen.getByText("Cody")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /Session wählen/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Choose a chat/i })).not.toBeInTheDocument();
     });
 
     it("keeps the task subtitle so a row says what the session is about", () => {
@@ -348,7 +348,7 @@ describe("SessionSidebar", () => {
     );
 
     expect(screen.queryByText("Rex")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Session wählen/i }));
+    await user.click(screen.getByRole("button", { name: /Choose a chat/i }));
     expect(screen.getByText("Rex")).toBeInTheDocument();
   });
 
@@ -367,7 +367,7 @@ describe("SessionSidebar", () => {
       />
     );
 
-    await user.click(screen.getByRole("button", { name: /Session wählen/i }));
+    await user.click(screen.getByRole("button", { name: /Choose a chat/i }));
     await user.click(screen.getByText("Cody"));
     expect(screen.queryByText("Rex")).not.toBeInTheDocument();
   });
@@ -452,7 +452,7 @@ describe("SessionSidebar", () => {
           onToggleCollapse={onToggleCollapse}
         />
       );
-      await user.click(screen.getByRole("button", { name: "Seitenleiste einklappen" }));
+      await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
       expect(onToggleCollapse).toHaveBeenCalledTimes(1);
     });
 
@@ -471,7 +471,7 @@ describe("SessionSidebar", () => {
           onToggleCollapse={onToggleCollapse}
         />
       );
-      await user.click(screen.getByRole("button", { name: "Seitenleiste ausklappen" }));
+      await user.click(screen.getByRole("button", { name: "Expand sidebar" }));
       expect(onToggleCollapse).toHaveBeenCalledTimes(1);
     });
 
@@ -510,7 +510,7 @@ describe("SessionSidebar", () => {
       );
       // Sheet still renders its own collapsed-by-default toggle, unaffected
       // by the rail-only `collapsed` prop.
-      expect(screen.getByRole("button", { name: /Session wählen/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Choose a chat/i })).toBeInTheDocument();
     });
   });
 });

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { RotateCcw } from "lucide-react";
 import { api } from "@/lib/api";
 import { C, alpha } from "@/lib/colors";
@@ -10,6 +11,7 @@ import { wizardLabelClass } from "../shared";
 import { ALL_SCOPES, defaultScopesForRole } from "../scopeDefaults";
 
 export function ScopesStep({ state, update }: WizardStepProps) {
+  const t = useTranslations("agents.wizard.scopes");
   const roleDefaults = useMemo(
     () => defaultScopesForRole(state.role, state.isBoardLead),
     [state.role, state.isBoardLead]
@@ -45,12 +47,12 @@ export function ScopesStep({ state, update }: WizardStepProps) {
     <div className="space-y-5">
       <div>
         <div className="flex items-center justify-between mb-2">
-          <label className={`${wizardLabelClass} mb-0`}>Scopes ({state.scopes.length})</label>
+          <label className={`${wizardLabelClass} mb-0`}>{t("title", { count: state.scopes.length })}</label>
           <button
             onClick={() => update({ scopes: roleDefaults })}
             className="flex items-center gap-1 text-[11px] cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
           >
-            <RotateCcw size={11} /> Role default
+            <RotateCcw size={11} /> {t("roleDefault")}
           </button>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
@@ -66,7 +68,7 @@ export function ScopesStep({ state, update }: WizardStepProps) {
                   backgroundColor: checked ? C.accentSubtle : "var(--color-bg-surface)",
                   border: `1px solid ${deviates ? alpha(C.warning, 0.4) : checked ? C.borderAccent : C.borderSubtle}`,
                 }}
-                title={deviates ? "Deviates from the role default" : undefined}
+                title={deviates ? t("deviates") : undefined}
               >
                 <input
                   type="checkbox"
@@ -83,14 +85,13 @@ export function ScopesStep({ state, update }: WizardStepProps) {
           })}
         </div>
         <p className="mt-2 text-[10px] text-[var(--color-text-muted)]">
-          Orange outline = deviates from the role default. An agent needs at least
-          one scope — an empty list would mean ALL permissions server-side.
+          {t("hint")}
         </p>
       </div>
 
       {plugins.length > 0 && (
         <div>
-          <label className={wizardLabelClass}>CLI Plugins (optional)</label>
+          <label className={wizardLabelClass}>{t("plugins")}</label>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
             {plugins.map((p) => {
               const checked = (state.cliPlugins ?? []).includes(p.key);
@@ -118,7 +119,7 @@ export function ScopesStep({ state, update }: WizardStepProps) {
             })}
           </div>
           <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
-            Empty = all installed plugins (default).
+            {t("pluginsHint")}
           </p>
         </div>
       )}

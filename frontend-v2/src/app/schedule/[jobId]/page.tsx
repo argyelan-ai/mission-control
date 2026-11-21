@@ -237,7 +237,6 @@ export default function ScheduleJobDetailPage() {
         <div
           className="px-6 py-3 flex-shrink-0"
         >
-          <div className="label-sys mb-1">{t("operationsSchedule")}</div>
           <div className="flex items-center gap-3">
             <Link
               href="/schedule"

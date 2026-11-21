@@ -221,7 +221,7 @@ export function ChatMessage({
               background: alpha(C.bgElevated, 0.5),
             }}
           >
-            <span className="sr-only">Du</span>
+            <span className="sr-only">{t("you")}</span>
             {voiceLabel}
             {parsed.attachments.length > 0 && (
               <div className="flex flex-col gap-1.5 mb-1">
@@ -298,7 +298,7 @@ export function ChatMessage({
             opacity: 1,
           }}
         >
-          <span className="sr-only">Du</span>
+          <span className="sr-only">{t("you")}</span>
           {voiceLabel}
           {parsed.attachments.length > 0 && (
             <div className="flex flex-col gap-1.5 mb-1.5">
@@ -318,7 +318,7 @@ export function ChatMessage({
               style={{ color: STATUS_TEXT.warning, borderTop: `1px solid ${C.borderSubtle}` }}
             >
               <AlertTriangle size={12} aria-hidden="true" />
-              <span>Nicht bestätigt — Terminal prüfen</span>
+              <span>{t("unconfirmed")}</span>
             </div>
           )}
           {waitingNote && (

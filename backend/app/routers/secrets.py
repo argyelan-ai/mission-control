@@ -104,13 +104,9 @@ PROVIDER_TEMPLATES = [
         "description": "For the per-agent Discord channels integration",
         "placeholder": "MTQ3...",
     },
-    {
-        "provider": "openclaw",
-        "key": "openclaw_token",
-        "label": "OpenClaw Gateway Token",
-        "description": "Auth token for the OpenClaw gateway (legacy)",
-        "placeholder": "oc-...",
-    },
+    # The OpenClaw gateway token is no longer offered: the gateway is retired
+    # (ADR-039). A value stored earlier is still listed by GET /secrets, which
+    # reads the stored rows, not this template list.
     {
         "provider": "github",
         "key": "github_token",
