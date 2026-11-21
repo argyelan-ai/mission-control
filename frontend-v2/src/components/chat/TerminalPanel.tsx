@@ -12,21 +12,18 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { MonitorOff, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Agent } from "@/lib/types";
+import type { SessionAgent } from "@/lib/types";
 import { C, XTERM_THEME, alpha } from "@/lib/colors";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { TERM_MIN_CONTRAST, TERM_FONT_FAMILY, TERM_COLS, TERM_ROWS, useTerminalScale, type TermViewMode } from "@/lib/terminalScale";
 
-// Docker/host session-list responses include fields the shared `Agent` type
-// doesn't declare (container_state, session_running/name, and the DB-only
-// `slug` column — see backend/app/routers/cli_terminal.py's `model_dump()`).
-// Same local-extension pattern as the old page.tsx used.
-export type AgentWithState = Agent & {
+// One row of the docker/host session lists: the slim `SessionAgent` row the
+// backend sends (not the whole agent) plus the per-list state fields.
+export type AgentWithState = SessionAgent & {
   container_state?: string;     // for cli-bridge / docker runtime
   session_running?: boolean;    // for host runtime
   session_name?: string;        // for host runtime
-  slug?: string | null;
 };
 
 export function agentIsRunning(a: AgentWithState): boolean {
@@ -37,7 +34,7 @@ export function agentIsRunning(a: AgentWithState): boolean {
 // ── WebSocket Terminal Hook ───────────────────────────────────────────────────
 
 function useAgentTerminal(
-  agent: Agent | null,
+  agent: SessionAgent | null,
   term: XTerm | null,
 ): boolean {
   const wsRef = useRef<WebSocket | null>(null);
@@ -252,7 +249,7 @@ export function TerminalPanel({ agent }: { agent: AgentWithState }) {
   return <TerminalPanelRunning agent={agent} />;
 }
 
-function TerminalPanelRunning({ agent }: { agent: Agent }) {
+function TerminalPanelRunning({ agent }: { agent: SessionAgent }) {
   const t = useTranslations("sessions");
   const termRef = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);

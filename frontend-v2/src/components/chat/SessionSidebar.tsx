@@ -29,7 +29,7 @@ import { sortGroups, type GroupSummary } from "@/lib/groupTypes";
 import { HeadChatRow } from "@/components/heads/HeadChatRow";
 import { HeadArchiveSheet } from "@/components/heads/HeadArchiveSheet";
 import { supersededNeedsYouIds, type HeadRun } from "@/lib/heads";
-import type { Agent, AgentStatus, Task, Project } from "@/lib/types";
+import type { SessionAgent, AgentStatus, Task, Project } from "@/lib/types";
 
 // Umschalter Agents · Groups (Marks Wunsch 11.09.: Gruppen standardmässig
 // zu). Der gewählte Tab überlebt den Reload; eine gewählte Gruppe zieht den
@@ -73,10 +73,10 @@ function toDotStatus(status: AgentStatus): DotStatus {
 interface SessionGroup {
   key: string;
   label: string;
-  agents: Agent[];
+  agents: SessionAgent[];
 }
 
-function buildGroups(agents: Agent[], tasks: Task[], projects: Project[]): SessionGroup[] {
+function buildGroups(agents: SessionAgent[], tasks: Task[], projects: Project[]): SessionGroup[] {
   const taskById = new Map(tasks.map((t) => [t.id, t]));
   const projectById = new Map(projects.map((p) => [p.id, p]));
   const buckets = new Map<string, SessionGroup>();
@@ -103,13 +103,13 @@ function buildGroups(agents: Agent[], tasks: Task[], projects: Project[]): Sessi
   return groups;
 }
 
-function taskTitleFor(agent: Agent, tasks: Task[]): string | null {
+function taskTitleFor(agent: SessionAgent, tasks: Task[]): string | null {
   if (!agent.current_task_id) return null;
   return tasks.find((t) => t.id === agent.current_task_id)?.title ?? null;
 }
 
 interface SessionSidebarProps {
-  agents: Agent[];
+  agents: SessionAgent[];
   tasks: Task[];
   projects: Project[];
   selectedId: string | null;
