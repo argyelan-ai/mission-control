@@ -216,8 +216,14 @@ class SchedulerService:
         hour, while any second worker could have started its own scheduler):
 
         - nobody holds it → take it back with SET NX (own id + heartbeat).
-        - another worker holds it → that worker runs the jobs now; stop ours
-          (APScheduler + both loops), leave its lock and heartbeat alone.
+        - another worker holds it AND its heartbeat proves it alive → that
+          worker runs the jobs now; stop ours (APScheduler + both loops),
+          leave its lock and heartbeat alone.
+        - another worker holds it but its heartbeat is gone (it died) →
+          steal the lock now (same path as boot, _steal_stale_lock).
+        - otherwise (heartbeat holds a different id) → keep running; the
+          next tick retries. Yielding to an owner that may be dead would
+          leave no scheduler anywhere once its lock expires.
         """
         from app.redis_client import RedisKeys
 
@@ -231,6 +237,16 @@ class SchedulerService:
         owner = await redis.get(lock_key)
         if owner == self._owner_id:
             return  # we won a race with ourselves: nothing to do
+        heartbeat = await redis.get(RedisKeys.scheduler_lock_heartbeat())
+        if owner is None or heartbeat != owner:
+            if await self._steal_stale_lock(redis):
+                logger.info("Scheduler lock owner had no heartbeat — taken over by this worker")
+            else:
+                logger.debug(
+                    "Scheduler lock held by %r without its own heartbeat — keep running, retry next tick",
+                    owner,
+                )
+            return
         logger.warning(
             "Scheduler lock is held by another worker (owner=%r) — stopping this "
             "worker's scheduler so jobs never run twice",
@@ -255,6 +271,10 @@ class SchedulerService:
                 await asyncio.sleep(LOCK_HEARTBEAT_INTERVAL_SECONDS)
                 if not self._running:
                     break
+                # Only the lock owner writes the heartbeat, so the key really
+                # tells others whether the lock owner is alive.
+                if await redis.get(RedisKeys.scheduler_lock()) != self._owner_id:
+                    continue
                 await redis.set(
                     RedisKeys.scheduler_lock_heartbeat(),
                     self._owner_id,

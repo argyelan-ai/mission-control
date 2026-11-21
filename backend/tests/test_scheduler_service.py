@@ -711,13 +711,15 @@ class TestSchedulerLockLifecycle:
     @pytest.mark.asyncio
     async def test_heartbeat_loop_refreshes_until_stopped(self, fake_redis):
         """Heartbeat loop keeps writing the heartbeat key on its own (tight)
-        cadence, independent of the main lock refresh loop."""
+        cadence, independent of the main lock refresh loop (while we hold
+        the lock — only the owner beats)."""
         from app.redis_client import RedisKeys
         from app.services.scheduler import SchedulerService
 
         svc = SchedulerService.__new__(SchedulerService)
         svc._running = True
         svc._owner_id = "owner-a"
+        await fake_redis.set(RedisKeys.scheduler_lock(), "owner-a", ex=120)
 
         tick_count = 0
 
@@ -875,3 +877,72 @@ class TestSchedulerLockSelfHeal:
         # Never touches the other worker's lock or heartbeat.
         assert await fake_redis.get(RedisKeys.scheduler_lock()) == "owner-b"
         assert await fake_redis.get(RedisKeys.scheduler_lock_heartbeat()) == "owner-b"
+
+    @pytest.mark.asyncio
+    async def test_never_yields_to_a_dead_foreign_owner(self, fake_redis):
+        """Critic 21.11.2026: worker B took the lock during a gap and then
+        crashed. The heartbeat key does not prove B alive (it holds a value
+        B did not write). A must keep its scheduler running instead of
+        stopping for good and leaving no scheduler anywhere."""
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._running = True
+        svc._owner_id = "owner-a"
+        svc._scheduler = MagicMock()
+        await fake_redis.set(RedisKeys.scheduler_lock(), "owner-b", ex=120)
+        await fake_redis.set(RedisKeys.scheduler_lock_heartbeat(), "owner-a", ex=15)
+
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)):
+            await svc._heal_lost_lock(fake_redis)
+
+        svc._scheduler.shutdown.assert_not_called()
+        assert svc._running is True
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "owner-b"
+
+    @pytest.mark.asyncio
+    async def test_takes_over_from_foreign_owner_without_heartbeat(self, fake_redis):
+        """B holds the lock but its heartbeat has expired (B died): A takes
+        the lock right away instead of waiting out B's 120 s TTL."""
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._running = True
+        svc._owner_id = "owner-a"
+        svc._scheduler = MagicMock()
+        await fake_redis.set(RedisKeys.scheduler_lock(), "owner-b", ex=120)
+
+        await svc._heal_lost_lock(fake_redis)
+
+        svc._scheduler.shutdown.assert_not_called()
+        assert svc._running is True
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "owner-a"
+        assert await fake_redis.get(RedisKeys.scheduler_lock_heartbeat()) == "owner-a"
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_loop_does_not_overwrite_foreign_owner_heartbeat(self, fake_redis):
+        """The heartbeat must only be written while we hold the lock, so the
+        heartbeat key really tells whether the lock owner is alive."""
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._running = True
+        svc._owner_id = "owner-a"
+        await fake_redis.set(RedisKeys.scheduler_lock(), "owner-b", ex=120)
+
+        ticks = 0
+
+        async def fake_sleep(_seconds):
+            nonlocal ticks
+            ticks += 1
+            if ticks >= 2:
+                svc._running = False
+
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)), \
+             patch("app.services.scheduler.asyncio.sleep", new=fake_sleep):
+            await svc._heartbeat_loop()
+
+        assert await fake_redis.get(RedisKeys.scheduler_lock_heartbeat()) is None
