@@ -81,10 +81,10 @@ def engines(monkeypatch):  # noqa: F811
     """Spark serves DeepSeek only; the WoL box does not answer."""
     state = {"served": {SPARK_EP: frozenset({DS})}, "in_use": {SPARK_EP: False}}
 
-    async def served(ep):
+    async def served(ep, **_):
         return state["served"].get(ep)
 
-    async def in_use(ep):
+    async def in_use(ep, **_):
         return state["in_use"].get(ep)
 
     monkeypatch.setattr(w1_plan, "_served", served)

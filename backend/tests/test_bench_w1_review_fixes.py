@@ -341,7 +341,7 @@ async def test_unreachable_box_is_not_asked_for_its_load(session, engines, monke
     await seed_fleet(session)
     asked: list[str] = []
 
-    async def in_use(ep):
+    async def in_use(ep, **_):
         asked.append(ep)
         return False
 

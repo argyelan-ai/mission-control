@@ -107,3 +107,59 @@ async def test_the_second_plan_read_asks_no_engine_and_still_says_asleep(session
     by_ep = lambda views: {v.runtime.endpoint: v.reachable for v in views}  # noqa: E731
     assert by_ep(second) == by_ep(first)
     assert by_ep(second)[WOL_EP] is False and by_ep(second)[SPARK_EP] is True
+
+
+# ── The picker list: answer from the last word, refresh behind it ────────
+#
+# User test 21.11.2026: GET /bench/contestants took 24 s cold and the picker
+# waited for every box again whenever its 20 s answer had run out (measured
+# in a fresh process the same day: load_views 2.2 s, everything else
+# < 0.05 s — the sleeping box's timeout). The list only SHOWS boxes, so it
+# may answer from the expired word and refresh it in the background; the
+# runner and the plan keep asking fresh (they act on the answer).
+
+
+@pytest.mark.asyncio
+async def test_list_answers_from_an_expired_word_and_refreshes_behind(boxes, clock):
+    assert await w1_plan._served(WOL_EP) is None  # box asleep, cached
+    boxes["awake"].add(WOL_EP)
+    clock.now += w1_plan.SERVED_TTL_S + 1  # the word expired
+
+    t0 = time.perf_counter()
+    assert await w1_plan._served(WOL_EP, stale_ok=True) is None  # old word, no wait
+    assert time.perf_counter() - t0 < 0.04
+    await w1_plan.wait_for_refreshes()
+    assert boxes["asked"].count(WOL_EP) == 2  # asked again, in the background
+    assert await w1_plan._served(WOL_EP, stale_ok=True) == frozenset({DS})
+
+
+@pytest.mark.asyncio
+async def test_one_background_refresh_per_box_at_a_time(boxes, clock):
+    assert await w1_plan._served(WOL_EP) is None
+    clock.now += w1_plan.SERVED_TTL_S + 1
+    for _ in range(5):
+        await w1_plan._served(WOL_EP, stale_ok=True)
+    await w1_plan.wait_for_refreshes()
+    assert boxes["asked"].count(WOL_EP) == 2
+
+
+@pytest.mark.asyncio
+async def test_without_stale_ok_an_expired_word_is_asked_fresh(boxes, clock):
+    """The runner and the plan act on the answer — they never get an old one."""
+    assert await w1_plan._served(WOL_EP) is None
+    boxes["awake"].add(WOL_EP)
+    clock.now += w1_plan.SERVED_TTL_S + 1
+    assert await w1_plan._served(WOL_EP) == frozenset({DS})
+
+
+@pytest.mark.asyncio
+async def test_contestants_logs_its_step_times(session, boxes, caplog):
+    import logging
+
+    await seed_fleet(session)
+    caplog.set_level(logging.DEBUG, logger="mc.bench_studio")
+    await w1_plan.list_contestants(session)
+    lines = [r.getMessage() for r in caplog.records if "contestants timing" in r.getMessage()]
+    assert len(lines) == 1
+    for step in ("load_views", "load_prices", "load_history", "last_tests", "loop", "total"):
+        assert f"{step}=" in lines[0]
