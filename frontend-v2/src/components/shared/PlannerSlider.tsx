@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { C, alpha } from "@/lib/colors";
 
 type PlannerMode = "direct" | "auto" | "with_planner";
@@ -14,10 +15,11 @@ interface PlannerSliderProps {
   border?: string;
 }
 
-const STOPS: { value: PlannerMode; label: string; hint: string }[] = [
-  { value: "direct", label: "Direkt", hint: "Sofort ausfuehren" },
-  { value: "auto", label: "Auto", hint: "System entscheidet" },
-  { value: "with_planner", label: "Planner", hint: "Plan first" },
+// Words live in the catalog (taskForm.planner.<value> / <value>Hint).
+const STOPS: { value: PlannerMode }[] = [
+  { value: "direct" },
+  { value: "auto" },
+  { value: "with_planner" },
 ];
 
 export function PlannerSlider({
@@ -28,13 +30,14 @@ export function PlannerSlider({
   textSecondary = C.textSecondary,
   border = C.border,
 }: PlannerSliderProps) {
+  const t = useTranslations("taskForm.planner");
   const activeIndex = STOPS.findIndex((s) => s.value === value);
 
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2">
         <span className="text-[10px] shrink-0" style={{ color: textMuted }}>
-          Planung:
+          {t("label")}:
         </span>
         <div className="relative flex items-center flex-1 h-6">
           {/* Track line */}
@@ -80,7 +83,7 @@ export function PlannerSlider({
                     className="text-[9px] font-medium transition-colors"
                     style={{ color: isActive ? accent : textMuted }}
                   >
-                    {stop.label}
+                    {t(stop.value)}
                   </span>
                 </button>
               );
@@ -92,7 +95,7 @@ export function PlannerSlider({
       {/* Active hint */}
       <div className="pl-[52px]">
         <span className="text-[9px]" style={{ color: textSecondary }}>
-          {STOPS[activeIndex]?.hint}
+          {activeIndex >= 0 ? t(`${STOPS[activeIndex].value}Hint`) : null}
         </span>
       </div>
     </div>

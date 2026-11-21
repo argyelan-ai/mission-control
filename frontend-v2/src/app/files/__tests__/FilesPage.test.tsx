@@ -72,6 +72,22 @@ describe("FilesPage — root selector", () => {
     expect(screen.getByText("42")).toBeInTheDocument();
   });
 
+  it("labels a root by its id from the catalog (files.root.<key>), not by the API's English label", async () => {
+    vi.spyOn(api.files, "roots").mockResolvedValue({
+      native_open_available: true,
+      roots: [
+        { key: "workspaces", label: "WS from API", icon: "FolderGit2", native_open: true, indexed_count: 1, deletable: false },
+        { key: "brand-new-root", label: "Brand New", icon: "Folder", native_open: true, indexed_count: 2, deletable: false },
+      ],
+    });
+    vi.spyOn(api.files, "list").mockResolvedValue({ root: "workspaces", subpath: "", entries: [] });
+    renderPage();
+    expect((await screen.findAllByRole("button", { name: /Workspaces/ })).length).toBeGreaterThan(0);
+    expect(screen.queryByText("WS from API")).not.toBeInTheDocument();
+    // A root the catalog does not know yet keeps the API label.
+    expect(screen.getByRole("button", { name: /Brand New/ })).toBeInTheDocument();
+  });
+
   it("clears the selection (action bar disappears) when switching root or navigating", async () => {
     // A directory plus a file so we can both select and navigate.
     vi.spyOn(api.files, "list").mockResolvedValue({

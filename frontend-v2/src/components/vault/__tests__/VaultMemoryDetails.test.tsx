@@ -36,6 +36,13 @@ describe("VaultHeader", () => {
     expect(screen.getByText(/42 notes · 1 agents?/i)).toBeInTheDocument();
   });
 
+  it("titles the page with the menu word, no kicker and no machine path", () => {
+    const { container } = render(<VaultHeader noteCount={1} agentCount={1} />);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(`${en.nav.memory}_`);
+    expect(container.textContent).not.toMatch(/VAULT@|~\/\.MC/i);
+    expect(container.querySelector(".label-sys")).toBeNull();
+  });
+
   it("hides the ⌘K hint on phones", () => {
     render(<VaultHeader noteCount={1} agentCount={1} />);
     const hint = screen.getByText("⌘K");

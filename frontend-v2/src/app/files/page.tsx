@@ -58,7 +58,18 @@ export default function FilesPage() {
     queryFn: () => api.files.roots(),
   });
 
-  const roots = useMemo(() => rootsData?.roots ?? [], [rootsData]);
+  // The API sends each root's id (`key`) plus an English label; the screen
+  // shows the catalog word files.root.<key>, the API label only for a root
+  // this frontend does not know yet. Done once here, so every child (sidebar,
+  // browser, filters, preview) gets the translated label.
+  const tRoot = useTranslations("files.root");
+  const roots = useMemo(
+    () =>
+      (rootsData?.roots ?? []).map((r) =>
+        tRoot.has(r.key) ? { ...r, label: tRoot(r.key) } : r,
+      ),
+    [rootsData, tRoot],
+  );
 
   // Default to the first root once loaded.
   useEffect(() => {
@@ -190,7 +201,6 @@ export default function FilesPage() {
         {/* Header */}
         <div className="flex items-end justify-between mb-6 gap-4">
           <div>
-            <div className="label-sys mb-2">{tr("storageFiles")}</div>
             <h1 className="display text-2xl font-semibold" style={{ color: C.textPrimary }}>
               {tr("title")}
             </h1>

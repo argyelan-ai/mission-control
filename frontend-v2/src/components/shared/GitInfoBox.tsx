@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 import { GitBranch, ExternalLink, Pencil, Check, AlertTriangle, Loader2 } from "lucide-react";
 import type { ProjectGitInfo, Repo } from "@/lib/types";
@@ -58,6 +59,7 @@ export function GitInfoBox({
   warning = C.warning,
   online = C.online,
 }: GitInfoBoxProps) {
+  const t = useTranslations("taskForm.git");
   const [editingBranch, setEditingBranch] = useState(false);
 
   // ── Ad-hoc repo select (create-inline) ──
@@ -107,7 +109,7 @@ export function GitInfoBox({
         style={{ backgroundColor: alpha(deep, 0.53), border: `1px solid ${border}` }}
       >
         <Loader2 size={12} className="animate-spin" style={{ color: textMuted }} />
-        <span style={{ color: textMuted }}>Git-Info laden...</span>
+        <span style={{ color: textMuted }}>{t("loading")}</span>
       </div>
     );
   }
@@ -124,7 +126,7 @@ export function GitInfoBox({
             <div className="flex items-center gap-1.5 flex-1">
               <input
                 autoFocus
-                aria-label="New repository name"
+                aria-label={t("newRepoAria")}
                 value={newRepoName}
                 onChange={(e) => setNewRepoName(e.target.value)}
                 onKeyDown={(e) => {
@@ -142,7 +144,7 @@ export function GitInfoBox({
                 className="px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer disabled:opacity-40"
                 style={{ backgroundColor: alpha(accent, 0.13), color: accent, border: `1px solid ${alpha(accent, 0.4)}` }}
               >
-                {creatingRepo ? "..." : "Create"}
+                {creatingRepo ? "..." : t("create")}
               </button>
               <button
                 type="button"
@@ -150,12 +152,12 @@ export function GitInfoBox({
                 className="px-2 py-1 rounded-lg text-[10px] cursor-pointer"
                 style={{ color: textMuted }}
               >
-                Cancel
+                {t("cancel")}
               </button>
             </div>
           ) : (
             <select
-              aria-label="Repository"
+              aria-label={t("repository")}
               value={repoId ?? ""}
               onChange={(e) => {
                 if (e.target.value === "__create__") { setShowCreateRepo(true); return; }
@@ -167,23 +169,23 @@ export function GitInfoBox({
                 border: `1px solid ${repoId ? alpha(accent, 0.27) : border}`,
               }}
             >
-              <option value="">No repository (default)</option>
+              <option value="">{t("noRepo")}</option>
               {repos.map((r) => (
                 <option key={r.id} value={r.id}>
-                  {r.full_name}{hasRules(r) ? " · Rules ✓" : ""}
+                  {r.full_name}{hasRules(r) ? t("rulesMark") : ""}
                 </option>
               ))}
-              <option value="__create__">+ Create new repository&hellip;</option>
+              <option value="__create__">{t("createRepo")}</option>
             </select>
           )}
         </div>
         <div className="flex items-center gap-1.5">
-          <span style={{ color: textMuted }}>Branch:</span>
+          <span style={{ color: textMuted }}>{t("branch")}</span>
           {editingBranch ? (
             <div className="flex items-center gap-1 flex-1">
               <input
                 autoFocus
-                aria-label="Branch-Name"
+                aria-label={t("branchAria")}
                 value={branchName}
                 onChange={(e) => onBranchNameChange(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") setEditingBranch(false); }}
@@ -216,7 +218,7 @@ export function GitInfoBox({
       >
         <div className="flex items-center gap-2">
           <AlertTriangle size={12} style={{ color: warning }} />
-          <span style={{ color: textSecondary }}>Projekt hat noch kein Repository</span>
+          <span style={{ color: textSecondary }}>{t("noRepoYet")}</span>
           <button
             type="button"
             onClick={onInitRepo}
@@ -224,7 +226,7 @@ export function GitInfoBox({
             className="ml-auto px-2.5 py-1 rounded-lg text-[10px] font-medium cursor-pointer transition-all disabled:opacity-40"
             style={{ backgroundColor: alpha(accent, 0.13), color: accent, border: `1px solid ${alpha(accent, 0.4)}` }}
           >
-            {initLoading ? "..." : "Repo initialisieren"}
+            {initLoading ? "..." : t("initRepo")}
           </button>
         </div>
         {repos.length > 0 && (
@@ -232,13 +234,13 @@ export function GitInfoBox({
             {showLinkRepo ? (
               <>
                 <select
-                  aria-label="Link existing repository"
+                  aria-label={t("linkAria")}
                   value={linkRepoId}
                   onChange={(e) => setLinkRepoId(e.target.value)}
                   className="flex-1 bg-transparent text-[11px] outline-none px-1.5 py-1 rounded-sm cursor-pointer"
                   style={{ color: linkRepoId ? textPrimary : textSecondary, border: `1px solid ${border}` }}
                 >
-                  <option value="">Select repository&hellip;</option>
+                  <option value="">{t("selectRepo")}</option>
                   {repos.map((r) => (
                     <option key={r.id} value={r.id}>{r.full_name}</option>
                   ))}
@@ -250,7 +252,7 @@ export function GitInfoBox({
                   className="px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer disabled:opacity-40"
                   style={{ backgroundColor: alpha(accent, 0.13), color: accent, border: `1px solid ${alpha(accent, 0.4)}` }}
                 >
-                  {linkingRepo ? "..." : "Link"}
+                  {linkingRepo ? "..." : t("link")}
                 </button>
                 <button
                   type="button"
@@ -258,7 +260,7 @@ export function GitInfoBox({
                   className="px-2 py-1 rounded-lg text-[10px] cursor-pointer"
                   style={{ color: textMuted }}
                 >
-                  Cancel
+                  {t("cancel")}
                 </button>
               </>
             ) : (
@@ -268,7 +270,7 @@ export function GitInfoBox({
                 className="text-[10px] cursor-pointer hover:underline"
                 style={{ color: accent }}
               >
-                Link existing repo
+                {t("linkExisting")}
               </button>
             )}
           </div>
@@ -308,10 +310,10 @@ export function GitInfoBox({
             {gitInfo.has_rules ? (
               <>
                 <Check size={10} />
-                Rules active
+                {t("rulesActive")}
               </>
             ) : (
-              "No repo rules yet"
+              t("noRules")
             )}
           </a>
         </div>
@@ -328,18 +330,18 @@ export function GitInfoBox({
               </span>
             ))}
             {remaining > 0 && (
-              <span className="text-[9px]" style={{ color: textMuted }}>+{remaining} weitere</span>
+              <span className="text-[9px]" style={{ color: textMuted }}>{t("moreBranches", { count: remaining })}</span>
             )}
           </div>
         )}
 
         <div className="flex items-center gap-1.5 pl-5">
-          <span style={{ color: textMuted }}>Task-Branch:</span>
+          <span style={{ color: textMuted }}>{t("taskBranch")}</span>
           {editingBranch ? (
             <div className="flex items-center gap-1 flex-1">
               <input
                 autoFocus
-                aria-label="Branch-Name"
+                aria-label={t("branchAria")}
                 value={branchName}
                 onChange={(e) => onBranchNameChange(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") setEditingBranch(false); }}

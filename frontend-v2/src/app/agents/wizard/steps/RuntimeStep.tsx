@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { C, alpha } from "@/lib/colors";
 import type { CompatMatrixHostHarness, Harness, HostHarness } from "@/lib/types";
@@ -9,10 +10,11 @@ import { initialWizardState } from "../types";
 import { ModelInput, wizardLabelClass } from "../shared";
 import { HarnessIcon } from "@/components/shared/HarnessIcon";
 
-const RUNTIMES: { key: WizardAgentRuntime; label: string; hint: string }[] = [
-  { key: "cli-bridge", label: "CLI Bridge (Docker)", hint: "Local container, auto-provisioned" },
-  { key: "host", label: "Host (launchd)", hint: "Native binary via launchd on the Mac" },
-  { key: "manual", label: "Manual", hint: "No auto-provisioning" },
+// Words: agents.wizard.runtime.<labelKey> / <labelKey>Hint.
+const RUNTIMES: { key: WizardAgentRuntime; labelKey: string }[] = [
+  { key: "cli-bridge", labelKey: "cliBridge" },
+  { key: "host", labelKey: "host" },
+  { key: "manual", labelKey: "manual" },
 ];
 
 // Host harnesses come from the backend's HostHarnessAdapter registry, shipped
@@ -27,6 +29,7 @@ const RUNTIMES: { key: WizardAgentRuntime; label: string; hint: string }[] = [
 // all, and every host harness was implicitly treated as a singleton bridge.
 
 export function RuntimeStep({ state, update }: WizardStepProps) {
+  const t = useTranslations("agents.wizard.runtime");
   const isHost = state.agentRuntime === "host";
   const needsHarness = state.agentRuntime === "cli-bridge" || isHost;
 
@@ -124,7 +127,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
     <div className="space-y-5">
       {/* 1. agent_runtime */}
       <div>
-        <label className={wizardLabelClass}>Runtime type</label>
+        <label className={wizardLabelClass}>{t("type")}</label>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           {RUNTIMES.map((r) => {
             const active = state.agentRuntime === r.key;
@@ -143,9 +146,9 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
                   // aktiv trägt die Akzent-Fläche + der Rahmen, nicht die Textfarbe
                   style={{ color: "var(--color-text-primary)" }}
                 >
-                  {r.label}
+                  {t(r.labelKey)}
                 </div>
-                <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{r.hint}</div>
+                <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{t(`${r.labelKey}Hint`)}</div>
               </button>
             );
           })}
@@ -167,20 +170,19 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
               }}
             >
               <span className="font-medium" style={{ color: C.warning }}>
-                Harness list could not be loaded — no harness can be selected
-                until it loads.
+                {t("matrixFailed")}
               </span>{" "}
               <button
                 onClick={() => refetchMatrix()}
                 className="underline cursor-pointer"
                 style={{ color: "var(--color-text-primary)" }}
               >
-                Retry
+                {t("retry")}
               </button>
             </div>
           )}
           <div>
-            <label className={wizardLabelClass}>Harness (CLI)</label>
+            <label className={wizardLabelClass}>{t("harness")}</label>
             <div className="flex gap-2">
               {(isHost ? hostHarnesses : matrix?.harnesses ?? []).map((h) => {
                 const active = state.harness === h.key;
@@ -190,7 +192,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
                     key={h.key}
                     onClick={() => !taken && pickHarness(h.key)}
                     disabled={taken}
-                    title={taken ? `Singleton – a '${h.key}' host agent already exists` : undefined}
+                    title={taken ? t("harnessTaken", { harness: h.key }) : undefined}
                     className="flex-1 rounded-xl px-3 py-2.5 text-sm transition-all"
                     style={{
                       cursor: taken ? "not-allowed" : "pointer",
@@ -211,17 +213,12 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
             </div>
             {isHost && state.harness === "grok" && (
               <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
-                Grok Build talks to the xAI cloud via its own OAuth session — only
-                the <code className="font-mono">grok-cloud</code> runtime is compatible.
+                {t("grokHint", { runtime: "grok-cloud" })}
               </p>
             )}
             {isHost && state.harness === "kimi" && (
               <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
-                Kimi Code talks to the Moonshot cloud over its own file-based OAuth
-                session — only the <code className="font-mono">kimi-cloud</code> runtime
-                is compatible. After provisioning, run{" "}
-                <code className="font-mono">/login</code> once in the Sessions terminal
-                (device code).
+                {t("kimiHint", { runtime: "kimi-cloud", login: "/login" })}
               </p>
             )}
           </div>
@@ -229,7 +226,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
           {/* 3. LLM runtime / provider, filtered by compat matrix */}
           <div>
             <label className={wizardLabelClass}>
-              LLM Runtime / Provider {state.agentRuntime === "host" && "*"}
+              {t("provider")} {state.agentRuntime === "host" && "*"}
             </label>
             {runtimesFailed && (
               <div
@@ -242,15 +239,14 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
                 }}
               >
                 <span className="font-medium" style={{ color: C.warning }}>
-                  Provider list could not be loaded — only the fallback is
-                  selectable until it loads.
+                  {t("providersFailed")}
                 </span>{" "}
                 <button
                   onClick={() => refetchRuntimes()}
                   className="underline cursor-pointer"
                   style={{ color: "var(--color-text-primary)" }}
                 >
-                  Retry
+                  {t("retry")}
                 </button>
               </div>
             )}
@@ -265,7 +261,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
                     color: "var(--color-text-secondary)",
                   }}
                 >
-                  Fallback (docker-compose env)
+                  {t("fallback")}
                 </button>
               )}
               {(runtimesData?.runtimes ?? []).map((rt) => {
@@ -284,7 +280,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
                   <button
                     key={rt.id}
                     disabled={disabled}
-                    title={!harnessOk ? reason : !isHost && rt.single_instance ? "single-instance runtime" : undefined}
+                    title={!harnessOk ? reason : !isHost && rt.single_instance ? t("singleInstance") : undefined}
                     onClick={() => update({ runtimeId: rt.id, model: rt.model_identifier ?? state.model })}
                     className="text-left rounded-lg px-3 py-2.5 text-sm cursor-pointer transition-colors disabled:opacity-35 disabled:cursor-not-allowed"
                     style={{
@@ -296,7 +292,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
                     <span className="block text-[10px] text-[var(--color-text-muted)]">
                       {rt.runtime_type}
                       {rt.model_identifier ? ` · ${rt.model_identifier}` : ""}
-                      {rt.enabled === false ? " · disabled" : ""}
+                      {rt.enabled === false ? t("disabled") : ""}
                     </span>
                   </button>
                 );
@@ -306,7 +302,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
 
           {/* 4. model override */}
           <div>
-            <label className={wizardLabelClass}>Model (optional)</label>
+            <label className={wizardLabelClass}>{t("model")}</label>
             <ModelInput value={state.model} onChange={(v) => update({ model: v })} />
           </div>
 
@@ -320,9 +316,9 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
               }}
             >
               <span className="font-medium" style={{ color: C.warning }}>
-                cli-bridge helper not reachable.
+                {t("bridgeDown")}
               </span>{" "}
-              The agent will be created but stays unprovisioned until the helper is running:{" "}
+              {t("bridgeDownHint")}{" "}
               <code className="font-mono">python3 scripts/cli-bridge.py</code>
             </div>
           )}

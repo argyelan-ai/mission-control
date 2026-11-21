@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Copy, Check } from "lucide-react";
 import { api } from "@/lib/api";
 import { C, alpha } from "@/lib/colors";
@@ -88,6 +89,7 @@ export function ModelInput({
 }
 
 export function TokenDisplay({ token }: { token: string }) {
+  const t = useTranslations("agents.wizard");
   const [copied, setCopied] = useState(false);
   async function copy() {
     await navigator.clipboard.writeText(token);
@@ -107,7 +109,8 @@ export function TokenDisplay({ token }: { token: string }) {
       <button
         onClick={copy}
         className="shrink-0 p-1 rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
-        title="Copy token"
+        title={t("copyToken")}
+        aria-label={t("copyToken")}
       >
         {copied ? <Check size={12} className="text-[var(--color-online)]" /> : <Copy size={12} />}
       </button>

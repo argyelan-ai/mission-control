@@ -2,6 +2,7 @@
  * New task → pair picker + "Run as head" (docs/specs/head-launcher.md §8.1,
  * build plan B1, B3, B4).
  */
+import en from "../../../../messages/en.json";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "fs";
 import path from "path";
@@ -50,7 +51,7 @@ const ompQwenDown = mkPair({ runtime_slug: "qwen", runtime_label: "Qwen local", 
 
 async function openAndFill({ withRepo = true } = {}) {
   await userEvent.click(screen.getByRole("button", { name: "New task" }));
-  await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Fix flaky retry test");
+  await userEvent.type(screen.getByPlaceholderText("Short, clear task title"), "Fix flaky retry test");
   if (withRepo) {
     const select = await screen.findByRole("combobox", { name: "Repository" });
     await userEvent.selectOptions(select, repo.id);
@@ -90,6 +91,16 @@ describe("CreateTaskModal — Run as head", () => {
     expect(createSpy.mock.calls[0][1]).toMatchObject({ repo_id: "repo-1", defer_dispatch: true, status: "inbox" });
     expect(dispatchSpy).not.toHaveBeenCalled();
     await waitFor(() => expect(onOpen).toHaveBeenCalledWith("task-9"));
+  });
+
+  it("the 'Head' label explains itself in one line (technical word + tooltip)", async () => {
+    vi.spyOn(api.heads, "pairs").mockResolvedValue({ pairs: [ompLocal], default_pair: ompLocal });
+    renderModal();
+    await openAndFill();
+    await screen.findByTestId("head-pair-trigger");
+    const label = document.getElementById("create-task-head-label");
+    expect(label).toHaveAttribute("title", en.heads.sectionHint);
+    expect(en.heads.sectionHint.length).toBeGreaterThan(20);
   });
 
   it("lists only startable pairs first; the rest behind 'Show more' with one plain sentence each", async () => {
@@ -255,7 +266,7 @@ describe("CreateTaskModal — Run as head", () => {
     expect(screen.getByTestId("run-as-head").className).toContain("w-full");
     expect(screen.getByTestId("run-as-head").className).toContain("min-h-[44px]");
     expect(screen.getByTestId("create-task-shortcut-hint").className).toContain("hidden");
-    expect(screen.getByTestId("create-task-shortcut-hint").className).toContain("[@media(hover:hover)]:inline");
+    expect(screen.getByTestId("create-task-shortcut-hint").className).toContain("md:[@media(hover:hover)]:inline");
   });
 
   it("the modal source uses no gradient and no hard-coded English footer", () => {

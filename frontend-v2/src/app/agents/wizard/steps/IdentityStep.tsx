@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import type { WizardStepProps } from "../types";
 import { wizardInputClass, wizardInputStyle, wizardLabelClass, wizardSelectStyle } from "../shared";
 
 export function IdentityStep({ state, update, boards }: WizardStepProps) {
+  const tr = useTranslations("agents.wizard.identity");
   // Debounce the preview so we don't POST on every keystroke.
   const [debounced, setDebounced] = useState({
     name: state.name,
@@ -45,12 +47,12 @@ export function IdentityStep({ state, update, boards }: WizardStepProps) {
       {/* Left: form */}
       <div className="space-y-4">
         <div>
-          <label className={wizardLabelClass}>Name *</label>
+          <label className={wizardLabelClass}>{tr("name")}</label>
           <input
             type="text"
             value={state.name}
             onChange={(e) => update({ name: e.target.value })}
-            placeholder="e.g. Cody"
+            placeholder={tr("namePlaceholder")}
             className={wizardInputClass}
             style={wizardInputStyle}
             autoFocus
@@ -58,7 +60,7 @@ export function IdentityStep({ state, update, boards }: WizardStepProps) {
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className={wizardLabelClass}>Emoji</label>
+            <label className={wizardLabelClass}>{tr("emoji")}</label>
             <input
               type="text"
               value={state.emoji}
@@ -69,12 +71,12 @@ export function IdentityStep({ state, update, boards }: WizardStepProps) {
             />
           </div>
           <div>
-            <label className={wizardLabelClass}>Role</label>
+            <label className={wizardLabelClass}>{tr("role")}</label>
             <input
               type="text"
               value={state.role}
               onChange={(e) => update({ role: e.target.value })}
-              placeholder="Developer"
+              placeholder={tr("rolePlaceholder")}
               className={wizardInputClass}
               style={wizardInputStyle}
             />
@@ -82,14 +84,14 @@ export function IdentityStep({ state, update, boards }: WizardStepProps) {
         </div>
         {boards.length > 0 && (
           <div>
-            <label className={wizardLabelClass}>Board</label>
+            <label className={wizardLabelClass}>{tr("board")}</label>
             <select
               value={state.boardId}
               onChange={(e) => update({ boardId: e.target.value })}
               className={`${wizardInputClass} cursor-pointer`}
               style={wizardSelectStyle}
             >
-              <option value="">No board</option>
+              <option value="">{tr("noBoard")}</option>
               {boards.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
@@ -106,7 +108,7 @@ export function IdentityStep({ state, update, boards }: WizardStepProps) {
             className="cursor-pointer accent-[var(--color-accent)]"
           />
           <span className="text-[12px] text-[var(--color-text-secondary)]">
-            Board lead (orchestrator — gets all permissions)
+            {tr("boardLead")}
           </span>
         </label>
       </div>
@@ -114,7 +116,7 @@ export function IdentityStep({ state, update, boards }: WizardStepProps) {
       {/* Right: live SOUL preview */}
       <div>
         <label className={wizardLabelClass}>
-          Persona preview {isFetching && <span className="normal-case">· loading…</span>}
+          {tr("preview")} {isFetching && <span className="normal-case">{tr("loading")}</span>}
         </label>
         <div
           className="rounded-xl p-3 text-[11px] font-mono whitespace-pre-wrap leading-relaxed h-[280px] overflow-y-auto"
@@ -124,7 +126,7 @@ export function IdentityStep({ state, update, boards }: WizardStepProps) {
             color: "var(--color-text-secondary)",
           }}
         >
-          {preview?.soul_md ?? "Enter a name to see the generated persona…"}
+          {preview?.soul_md ?? tr("previewEmpty")}
         </div>
       </div>
     </div>

@@ -35,6 +35,8 @@ export interface SlashCommand {
  *  these passes through as free text — the palette is a shortcut, not a
  *  gate. */
 export const SLASH_COMMANDS: SlashCommand[] = [
+  // Claude Code knows /new as an alias of /clear — MC puts it on top.
+  { command: "/new", descriptionKey: "new" },
   { command: "/model", descriptionKey: "model" },
   { command: "/clear", descriptionKey: "clear" },
   { command: "/compact", descriptionKey: "compact" },

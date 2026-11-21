@@ -1780,9 +1780,19 @@ export const api = {
 
   // ── Activity ────────────────────────────────────────────────────────────────
   activity: {
-    list: (params?: { board_id?: string; agent_id?: string; event_type?: string; severity?: string; limit?: number }) => {
-      const qs = new URLSearchParams(params as Record<string, string>).toString();
-      return request<ActivityEvent[]>(`/api/v1/activity${qs ? `?${qs}` : ""}`);
+    list: (params?: {
+      board_id?: string; agent_id?: string; event_type?: string; severity?: string; limit?: number;
+      /** Left out on the server, before the limit (repeatable param). */
+      exclude_event_type?: readonly string[];
+    }) => {
+      const qs = new URLSearchParams();
+      for (const [k, v] of Object.entries(params ?? {})) {
+        if (v == null) continue;
+        if (Array.isArray(v)) v.forEach((item) => qs.append(k, String(item)));
+        else qs.append(k, String(v));
+      }
+      const q = qs.toString();
+      return request<ActivityEvent[]>(`/api/v1/activity${q ? `?${q}` : ""}`);
     },
     pluginAudit: (params?: { limit?: number; offset?: number }) => {
       const qs = new URLSearchParams(

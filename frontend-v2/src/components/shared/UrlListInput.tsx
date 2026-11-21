@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { C, alpha } from "@/lib/colors";
 
 interface UrlListInputProps {
@@ -24,6 +25,7 @@ export function UrlListInput({
   deep = C.bgDeep,
   accent = C.accent,
 }: UrlListInputProps) {
+  const t = useTranslations("taskForm.urls");
   const [input, setInput] = useState("");
 
   const addUrl = () => {
@@ -51,7 +53,7 @@ export function UrlListInput({
           <button
             type="button"
             onClick={() => removeUrl(i)}
-            aria-label="Remove URL"
+            aria-label={t("remove")}
             className="shrink-0 cursor-pointer hover:opacity-80"
           >
             <X size={10} style={{ color: textMuted }} />
@@ -60,7 +62,7 @@ export function UrlListInput({
       ))}
       <div className="flex items-center gap-1.5">
         <input
-          aria-label="Enter reference URL"
+          aria-label={t("enter")}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addUrl(); } }}
@@ -71,7 +73,7 @@ export function UrlListInput({
         <button
           type="button"
           onClick={addUrl}
-          aria-label="Add URL"
+          aria-label={t("add")}
           disabled={!input.trim()}
           className="px-2 py-1.5 rounded-lg cursor-pointer transition-opacity disabled:opacity-30"
           style={{ backgroundColor: alpha(accent, 0.07), border: `1px solid ${border}` }}

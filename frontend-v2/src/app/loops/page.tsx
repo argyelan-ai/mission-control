@@ -116,7 +116,6 @@ export default function LoopsPage() {
         {/* Header */}
         <div className="flex items-center justify-between gap-3 mb-6">
           <div>
-            <div className="label-sys mb-2">Operations · Loops</div>
             <h1 className="display text-xl font-semibold flex items-center gap-2" style={{ color: C.textPrimary }}>
               <Repeat size={18} style={{ color: C.accent }} />
               {t("title")}

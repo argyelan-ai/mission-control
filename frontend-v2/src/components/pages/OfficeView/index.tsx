@@ -82,7 +82,6 @@ export default function OfficeView() {
         {/* Header — title + zoom cluster (subtitle removed per operator's req) */}
         <header className="shrink-0 flex items-center justify-between gap-4 px-5 lg:px-7 pt-5 pb-4">
           <div>
-            <div className="label-sys mb-1.5">{t("fleetOffice")}</div>
             <h1 className="display text-[26px] font-semibold tracking-tight leading-tight" style={{ color: C.textPrimary }}>
               {t("title")}
             </h1>

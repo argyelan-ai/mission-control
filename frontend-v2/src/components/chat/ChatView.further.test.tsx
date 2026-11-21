@@ -164,6 +164,9 @@ async function send(text: string) {
   const user = userEvent.setup();
   const box = screen.getByRole("textbox");
   await user.type(box, text);
+  // "/new" is a listed command: the "/" menu opens, and Enter there would only
+  // pick it. Escape closes the menu (text stays), the next Enter sends.
+  if (screen.queryByTestId("slash-palette")) await user.keyboard("{Escape}");
   await user.keyboard("{Enter}");
 }
 

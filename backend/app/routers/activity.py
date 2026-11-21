@@ -21,10 +21,15 @@ async def list_activity(
     severity: str | None = Query(None),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
+    # Repeatable. Left out BEFORE the limit, so a burst of plumbing events
+    # (silent dispatch retries) cannot push the real ones off a short list.
+    exclude_event_type: list[str] = Query(default=[]),
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
     query = select(ActivityEvent)
+    if exclude_event_type:
+        query = query.where(ActivityEvent.event_type.notin_(exclude_event_type))  # type: ignore[attr-defined]
     if board_id:
         query = query.where(ActivityEvent.board_id == board_id)
     if agent_id:

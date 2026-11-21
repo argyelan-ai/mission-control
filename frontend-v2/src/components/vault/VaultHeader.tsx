@@ -2,8 +2,10 @@
 
 /**
  * VaultHeader — editorial masthead for the memory page.
- * title: `memory_` in Clash Display (.display) with blinking underscore cursor.
- * subtitle: stats line in uppercase JetBrains Mono.
+ * title: the page's nav word (nav.memory) in Clash Display (.display) with a
+ * blinking underscore cursor — same word as the menu, in every language.
+ * subtitle: stats line. No kicker above the title (DESIGN.md K7) and no
+ * machine path behind the stats.
  */
 
 import type { ReactNode } from "react";
@@ -23,13 +25,12 @@ interface VaultHeaderProps {
 
 export function VaultHeader({ noteCount, noteCountCapped = false, agentCount, actions }: VaultHeaderProps) {
   const t = useTranslations("vault");
+  const tNav = useTranslations("nav");
   const locale = useLocale();
   const notes = `${new Intl.NumberFormat(locale).format(noteCount)}${noteCountCapped ? "+" : ""}`;
   return (
     <div className="flex items-start justify-between mb-8">
       <div>
-        <div className="label-sys mb-2">{t("knowledgeMemory")}</div>
-
         {/* Title with blinking cursor */}
         <h1
           className="display font-semibold leading-none"
@@ -38,7 +39,7 @@ export function VaultHeader({ noteCount, noteCountCapped = false, agentCount, ac
             color: "var(--color-text-primary)",
           }}
         >
-          memory
+          {tNav("memory")}
           <span className="vault-cursor" aria-hidden="true">_</span>
         </h1>
 
@@ -55,8 +56,7 @@ export function VaultHeader({ noteCount, noteCountCapped = false, agentCount, ac
             notes,
             notesCount: noteCountCapped ? noteCount + 1 : noteCount,
             agents: agentCount,
-          })}{" "}
-          · VAULT@~/.MC
+          })}
         </p>
       </div>
 

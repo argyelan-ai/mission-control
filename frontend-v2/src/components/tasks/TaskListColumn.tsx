@@ -529,7 +529,6 @@ export default function TaskListColumn({
     <div className="flex flex-col h-full min-h-0 min-w-0 w-full">
       {/* Header — v3: Micro-Label, Clash-Display-Titel, Akzent-Messmarke */}
       <div className="px-4 pt-4 pb-2 shrink-0">
-        <div className="label-sys mb-1.5">{t("consoleTasks")}</div>
         <div className="flex items-baseline gap-2">
           <h1 className="display text-[20px] font-semibold leading-tight" style={{ color: C.textPrimary }}>
             {t("title")}

@@ -1640,7 +1640,6 @@ export default function AgentDetailPage() {
                 : undefined
             }
           >
-            <div className="label-sys mb-3">Fleet · Agent</div>
             <div className="flex items-start gap-5">
               {/* Emoji */}
               <motion.div

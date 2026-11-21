@@ -23,7 +23,7 @@ function renderForm(onChange = vi.fn()) {
 describe("TaskFormFields — E2E test toggle", () => {
   it("patches e2eTestRequired when the pill is clicked", () => {
     const onChange = renderForm();
-    const pill = screen.getByRole("button", { name: /e2e test/i });
+    const pill = screen.getByRole("button", { name: /click test/i });
     fireEvent.click(pill);
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ e2eTestRequired: true }),

@@ -147,7 +147,12 @@
       "retryUploads": "Retry uploads",
       "shortcutHint": "Cmd+Enter = create · Esc = close",
       "created": "Task created",
-      "createFailed": "Failed to create"
+      "createFailed": "Failed to create",
+      "uploadFailed": "Upload failed",
+      "uploadErrorsOne": "Task created, but {count} reference upload failed: {errors}",
+      "uploadErrorsOther": "Task created, but {count} reference uploads failed: {errors}",
+      "uploadErrorsHint": "Task was created without the failed files. It has not been dispatched yet — dispatch it from the task detail.",
+      "triggerLabel": "New task"
     },
     "title": "Tasks",
     "noBoardSelected": "No board selected",
@@ -206,7 +211,6 @@
     "selectTaskFromList": "Select a task from the list",
     "groupByProjectHint": "Group by project to reach the phase view of a project",
     "statusInProgress": "In Progress",
-    "consoleTasks": "Console · Tasks",
     "openCount": "{count} open",
     "searchPlaceholder": "Search tasks…",
     "searchTasks": "Search tasks",
@@ -540,7 +544,6 @@
   },
   "agents": {
     "title": "Agents",
-    "fleetAgents": "Fleet · Agents",
     "newAgent": "New agent",
     "templates": "Templates",
     "allAgents": "All Agents",
@@ -795,6 +798,141 @@
       "pausedWorking": "Paused · finishing its task",
       "pausedShort": "Paused",
       "pausedHint": "Paused means: MC gives this agent no new tasks. A task that is already running is finished."
+    },
+    "wizard": {
+      "title": "New agent",
+      "close": "Close wizard",
+      "back": "Back",
+      "next": "Next",
+      "steps": {
+        "start": "Start",
+        "identity": "Identity",
+        "runtime": "Runtime & model",
+        "rights": "Permissions & skills",
+        "review": "Review & create"
+      },
+      "blockers": {
+        "harness": "Pick a harness — an agent without one cannot be provisioned afterwards.",
+        "hostRuntime": "Pick an LLM runtime — host agents need a runtime binding at creation time.",
+        "ompRuntime": "Pick an LLM runtime — the omp harness cannot boot without a runtime binding."
+      },
+      "start": {
+        "custom": "Custom",
+        "customHint": "Configure from scratch",
+        "template": "Template",
+        "templateHint": "From a role template",
+        "duplicate": "Duplicate",
+        "duplicateHint": "Copy an existing agent",
+        "selectTemplate": "Select template",
+        "selectAgent": "Select agent to duplicate",
+        "copyName": "{name} Copy"
+      },
+      "identity": {
+        "name": "Name *",
+        "namePlaceholder": "e.g. Cody",
+        "emoji": "Emoji",
+        "role": "Role",
+        "rolePlaceholder": "Developer",
+        "board": "Board",
+        "noBoard": "No board",
+        "boardLead": "Board lead (orchestrator — gets all permissions)",
+        "preview": "Persona preview",
+        "loading": "· loading…",
+        "previewEmpty": "Enter a name to see the generated persona…"
+      },
+      "runtime": {
+        "type": "Runtime type",
+        "cliBridge": "CLI Bridge (Docker)",
+        "cliBridgeHint": "Local container, auto-provisioned",
+        "host": "Host (launchd)",
+        "hostHint": "Native binary via launchd on the Mac",
+        "manual": "Manual",
+        "manualHint": "No auto-provisioning",
+        "matrixFailed": "Harness list could not be loaded — no harness can be selected until it loads.",
+        "retry": "Retry",
+        "harness": "Harness (CLI)",
+        "harnessTaken": "Singleton – a '{harness}' host agent already exists",
+        "grokHint": "Grok Build talks to the xAI cloud via its own OAuth session — only the {runtime} runtime is compatible.",
+        "kimiHint": "Kimi Code talks to the Moonshot cloud over its own file-based OAuth session — only the {runtime} runtime is compatible. After provisioning, run {login} once in the Sessions terminal (device code).",
+        "provider": "LLM runtime / provider",
+        "providersFailed": "Provider list could not be loaded — only the fallback is selectable until it loads.",
+        "fallback": "Fallback (docker-compose env)",
+        "singleInstance": "single-instance runtime",
+        "disabled": " · disabled",
+        "model": "Model (optional)",
+        "bridgeDown": "cli-bridge helper not reachable.",
+        "bridgeDownHint": "The agent will be created but stays unprovisioned until the helper is running:"
+      },
+      "scopes": {
+        "title": "Permissions ({count})",
+        "roleDefault": "Role default",
+        "deviates": "Deviates from the role default",
+        "hint": "Orange outline = deviates from the role default. An agent needs at least one permission — an empty list would mean ALL permissions server-side.",
+        "plugins": "CLI plugins (optional)",
+        "pluginsHint": "Empty = all installed plugins (default)."
+      },
+      "review": {
+        "name": "Name",
+        "role": "Role",
+        "runtime": "Runs as",
+        "harness": "Harness",
+        "harnessDerived": "(derived)",
+        "llmRuntime": "LLM runtime",
+        "fallback": "Fallback",
+        "model": "Model",
+        "modelDefault": "(runtime default)",
+        "scopes": "Permissions",
+        "scopesCount": "{count} selected",
+        "boardLead": "Board lead",
+        "yes": "yes",
+        "no": "no",
+        "runtimeValue": {
+          "cli-bridge": "Container (Docker)",
+          "host": "Host (Mac)",
+          "manual": "Manual"
+        },
+        "grokTitle": "Grok Build CLI must be logged in on the host.",
+        "grokBody": "Without a valid xAI OAuth session ({file}) dispatches will stall. One-time on the Mac: {cmd}.",
+        "creating": "Creating…",
+        "create": "Create agent",
+        "created": "Agent \"{name}\" created",
+        "hostFilesFailed": "Host files could not be rendered — retry later via the provision button.",
+        "createFailed": "Creation failed: {message}",
+        "errorFallback": "error",
+        "token": "Agent token (shown only once — save it now!)",
+        "readiness": "Readiness check",
+        "waiting": "waiting for provisioning…",
+        "hostNote": "Host agent: files were rendered to ~/.mc/agents/<slug>/. Load onto the Mac via launchctl (see activity event) — the heartbeat will turn green.",
+        "done": "Done",
+        "check": {
+          "provisioned": {
+            "label": "Set up",
+            "ok": "done",
+            "fail": "not set up yet"
+          },
+          "bridgeHelper": {
+            "label": "Container helper",
+            "ok": "reachable",
+            "fail": "not reachable"
+          },
+          "heartbeat": {
+            "label": "Heartbeat",
+            "ok": "checking in",
+            "fail": "not checking in yet"
+          },
+          "hostHeartbeat": {
+            "label": "Heartbeat from the Mac",
+            "ok": "seen less than 3 min ago",
+            "fail": "no heartbeat — the service on the Mac may not be loaded"
+          },
+          "runtime": {
+            "label": "Runtime",
+            "ok": "no automatic check available",
+            "fail": "no automatic check available"
+          }
+        }
+      },
+      "copyToken": "Copy token"
     }
   },
   "inbox": {
@@ -1138,15 +1276,16 @@
     "contextPanelSource": "Source",
     "contextPanelCacheRate": "Cache hit rate",
     "contextPanelCost": "Session cost",
-    "contextPanelNote": "The agent page shows the last reported figure of its work session — so the number there can differ. The CLI status line shows what is left until auto-compaction. Different session or basis, both correct.",
+    "contextPanelNote": "The agent page shows the last reported figure of its work session — so the number there can differ. Shortly before the context is full, the agent summarises the chat automatically.",
     "contextPanelClose": "Close",
     "slashCommands": {
       "model": "Switch model",
       "clear": "Clear history",
-      "compact": "Compact context",
+      "compact": "Summarise the chat to free up room",
       "context": "Show context usage",
       "status": "Show session status",
-      "help": "Show help"
+      "help": "Show help",
+      "new": "Start a new, empty chat"
     },
     "effortLevel": "Effort level",
     "effortLevelCurrent": "Effort level: {level}",
@@ -1367,7 +1506,14 @@
         "reject_always": "always rejected"
       }
     },
-    "messagePlaceholderTaskRunning": "Goes to the chat, not the task…"
+    "messagePlaceholderTaskRunning": "Goes to the chat, not the task…",
+    "effortLevelHint": "Effort = how thoroughly the model thinks before it answers. Higher is more careful but slower. Ultracode is the most thorough level and applies to this session only.",
+    "slashGroupMore": "More",
+    "slashGroupMoreRaw": "More",
+    "sidebarExpand": "Expand sidebar",
+    "sidebarCollapse": "Collapse sidebar",
+    "sidebarTitle": "Chats",
+    "sidebarPick": "Choose a chat"
   },
   "shell": {
     "searchPlaceholder": "Search or command...",
@@ -1454,7 +1600,6 @@
   },
   "schedule": {
     "title": "Schedule",
-    "operationsSchedule": "Operations · Schedule",
     "tabOverview": "Overview",
     "tabWeek": "Week",
     "tabHealth": "Health",
@@ -1663,7 +1808,6 @@
   },
   "office": {
     "title": "Org Chart",
-    "fleetOffice": "Fleet · Office",
     "zoomOut": "Zoom out",
     "zoomOutTitle": "Zoom out (⌘−)",
     "zoomIn": "Zoom in",
@@ -1704,7 +1848,6 @@
     "tabList": "List",
     "tabGraph": "Graph",
     "tabTrash": "Trash",
-    "knowledgeMemory": "Knowledge · Memory",
     "taskBanner": "{count} notes and files for this task",
     "showAllNotes": "Show all notes",
     "clearVoiceHighlight": "Clear voice highlight",
@@ -1980,7 +2123,6 @@
   },
   "files": {
     "title": "Files",
-    "storageFiles": "Storage · Files",
     "subtitle": "Search deliverables, workspaces, vault, and more",
     "reindex": "Reindex",
     "reindexing": "Reindexing…",
@@ -2026,7 +2168,18 @@
     "filterRoot": "Root",
     "viewMode": "View mode",
     "listView": "List view",
-    "gridView": "Grid view"
+    "gridView": "Grid view",
+    "root": {
+      "deliverables": "Deliverables",
+      "workspaces": "Workspaces",
+      "vault": "Vault",
+      "attachments": "Attachments",
+      "references": "References",
+      "mcp-screenshots": "Screenshots",
+      "media": "Media",
+      "shared-artifacts": "Shared Artifacts",
+      "shared-deliverables": "Sidecar Output"
+    }
   },
   "filePreview": {
     "download": "Download",
@@ -4007,7 +4160,8 @@
       "checkingLine": "Checking…",
       "noReadingsLine": "no readings · state unknown",
       "kpiSpeedNoAgentNote": "no agent — e.g. a bench run or an API call",
-      "kpiSpeedNoAgentHint": "No agent on this box is working. The load comes from somewhere else — for example a bench run or a direct API call."
+      "kpiSpeedNoAgentHint": "No agent on this box is working. The load comes from somewhere else — for example a bench run or a direct API call.",
+      "cornerUptimeDays": "up {d, plural, one {# day} other {# days}} {h} h"
     },
     "cockpit": {
       "modeNoDevice": "No node agent is paired with this box — the mode list is unavailable.",
@@ -4526,6 +4680,11 @@
       "failed": "Mode not switched — try again.",
       "busy": "The agent is busy — switch the mode when the reply has ended.",
       "questionOpen": "Answer the open question first, then switch the mode."
+    },
+    "unconfirmed": "Not confirmed — check the terminal",
+    "you": "You",
+    "approval": {
+      "checkInTerminal": "Check in the terminal"
     }
   },
   "benchResult": {
@@ -4785,6 +4944,7 @@
   },
   "heads": {
     "section": "Head",
+    "sectionHint": "A head is a separate agent just for this task: it works in its own folder, opens a pull request and then ends.",
     "pair": "Pair",
     "pairPickerAria": "Choose harness and runtime for the head",
     "explain": "Runs once in its own copy of the repo, opens a PR, never merges.",
@@ -4800,7 +4960,7 @@
     "noPairs": "No harness × runtime pair is set up yet.",
     "engineInUse": "The model is also working for someone else — may be slower.",
     "needsRepo": "A head needs a repo — pick one above.",
-    "needsRepoProject": "A head needs a registry repo — project tasks are not supported yet.",
+    "needsRepoProject": "A head needs a repo from the repo list — project tasks are not supported yet.",
     "engineDownHint": "The local model is not running — start it on",
     "runtimesLink": "Runtimes",
     "runAsHead": "Run as head",
@@ -5532,6 +5692,227 @@
         "previous_session_gone": "The earlier session no longer exists.",
         "bad_model": "This model name does not work."
       }
+    }
+  },
+  "taskForm": {
+    "template": "Template:",
+    "reset": "Reset",
+    "templates": {
+      "bug": {
+        "label": "Bug fix",
+        "description": "What is broken? How do you reproduce it? What should happen instead?",
+        "acceptance": "The bug is gone, the repro steps no longer fail, a test covers the case."
+      },
+      "feature": {
+        "label": "Feature",
+        "description": "What should become possible? Who uses it? Why?",
+        "acceptance": "The new feature is live and a typical user flow works."
+      },
+      "research": {
+        "label": "Research",
+        "description": "What do you want to find out? Which sources do you have in mind?",
+        "acceptance": "Summary with 3+ primary sources and a clear recommendation."
+      }
+    },
+    "title": "Title",
+    "titlePlaceholder": "Short, clear task title",
+    "description": "Description",
+    "optional": "(optional)",
+    "descriptionPlaceholder": "What needs to be done?",
+    "acceptance": "Acceptance criteria",
+    "acceptancePlaceholder": "What must be true when it is done?",
+    "acceptancePlaceholderLong": "Acceptance criteria — what must be true when it is done?",
+    "scopeOut": "Out of scope",
+    "scopeOutPlaceholder": "What is NOT part of it?",
+    "scopeOutPlaceholderLong": "Out of scope — what is NOT part of it?",
+    "risks": "Risks",
+    "risksPlaceholder": "Risks — what must not break?",
+    "sectionProject": "Project",
+    "phase": "Phase",
+    "noPhase": "No phase (optional)",
+    "basedOn": "Based on",
+    "basedOnAria": "Based on deliverable",
+    "noDeliverable": "No deliverable",
+    "sectionFiles": "Reference files",
+    "addFiles": "Add files",
+    "removeFile": "Remove {name}",
+    "fileNoteAria": "Note for reference files",
+    "fileNotePlaceholder": "Note for the agent (optional)",
+    "sectionAssign": "Assignment",
+    "agent": "Agent",
+    "agentAuto": "Auto — best available",
+    "agentAutoIfEmpty": "Agent (auto if empty)",
+    "agentSelected": "Agent: {name}",
+    "agentState": {
+      "idle": "ready",
+      "running": "working",
+      "blocked": "blocked"
+    },
+    "priority": "Priority",
+    "priorityAria": "Priority {level}",
+    "priorityLevel": {
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "critical": "critical"
+    },
+    "sectionRun": "Execution",
+    "type": "Type",
+    "taskType": {
+      "story": "Feature",
+      "bug": "Bug fix",
+      "revision": "Revision",
+      "chore": "Maintenance"
+    },
+    "deadline": "Deadline",
+    "workspace": "Workspace:",
+    "adHoc": "(one-off)",
+    "newTaskSlug": "new-task",
+    "advanced": "Advanced",
+    "advancedSummary": "· Approval · Login · Links · Brief",
+    "approval": "Approval",
+    "approvalAria": "Approval rule",
+    "approvalOption": {
+      "auto": "Auto",
+      "never": "Never",
+      "on_plan": "On plan",
+      "on_execution": "On execution",
+      "on_publish": "On publish",
+      "on_sensitive_action": "On risk",
+      "always": "Always"
+    },
+    "browser": "Browser",
+    "browserTitle": "The agent may drive a browser for this task",
+    "auth": "Login",
+    "authTitle": "The task needs a login or key",
+    "reportBack": "Report back",
+    "reportBackTitle": "Send a short report to a channel when the task is done",
+    "e2e": "Click test",
+    "e2eTitle": "After review, a tester agent drives the real user flows in a browser before the task can complete",
+    "humanReview": "I review it",
+    "humanReviewTitle": "You review this task yourself instead of a review agent",
+    "skipReview": "Skip review",
+    "skipReviewTitle": "Task goes straight to done — no review stage (typical for scheduled/report jobs)",
+    "blockerToMe": "Blockers to me",
+    "blockerToMeTitle": "Blockers on this task come straight to you instead of going to Boss first",
+    "credFromVault": "From the vault",
+    "credInline": "Enter once",
+    "credSelectAria": "Choose a login",
+    "credSelect": "Choose a login…",
+    "credInlineAria": "One-time login",
+    "credInlinePlaceholder": "Username: admin\nPassword: ...",
+    "channel": "Channel:",
+    "format": "Format:",
+    "reportFormat": {
+      "summary": "Summary",
+      "screenshot": "Screenshot",
+      "before_after": "Before/after"
+    },
+    "referenceUrls": "Reference links",
+    "intake": "Task brief",
+    "intakeSummary": "(request type, autonomy, result format)",
+    "intakeAria": "Task brief details",
+    "requestKind": "Request type",
+    "requestKindOption": {
+      "auto": "Automatic",
+      "code_change": "Code change",
+      "content_create": "Create content",
+      "research": "Research",
+      "browser_task": "Browser automation",
+      "credential_task": "With logins / keys",
+      "mixed": "Mixed"
+    },
+    "autonomy": "Autonomy",
+    "autonomyOption": {
+      "unset": "Not set",
+      "advise_only": "Advise only",
+      "draft_only": "Draft only",
+      "execute_low_risk": "Do low-risk steps itself",
+      "execute_with_approval_on_risk": "Ask before risky steps",
+      "manual_dispatch_required": "Start manually"
+    },
+    "desiredOutput": "Desired result",
+    "desiredOutputPlaceholder": "What should come out at the end? (PR, screenshot, link to the live page …)",
+    "referenceNotes": "Reference notes",
+    "referenceNotesPlaceholder": "Reference notes — templates, inspiration …",
+    "publish": "Publishing:",
+    "publishAllowed": "Allowed",
+    "publishDraft": "Draft only",
+    "publishAgentDecides": "(agent decides)",
+    "modeQuick": "Quick",
+    "modeStructured": "Structured",
+    "structuredHint": "You touched structured fields — switch to Structured to edit them.",
+    "repoCreateFailed": "Creating the repository failed",
+    "repoLinked": "Repository linked",
+    "repoLinkFailed": "Linking the repository failed",
+    "planner": {
+      "label": "Planning",
+      "direct": "Direct",
+      "directHint": "Run right away",
+      "auto": "Auto",
+      "autoHint": "System decides",
+      "with_planner": "Plan first",
+      "with_plannerHint": "A planner writes the plan first"
+    },
+    "git": {
+      "loading": "Loading git info…",
+      "newRepoAria": "New repository name",
+      "create": "Create",
+      "cancel": "Cancel",
+      "repository": "Repository",
+      "noRepo": "No repository (default)",
+      "rulesMark": " · Rules ✓",
+      "createRepo": "+ Create new repository…",
+      "branch": "Branch:",
+      "branchAria": "Branch name",
+      "noRepoYet": "The project has no repository yet",
+      "initRepo": "Set up repository",
+      "linkAria": "Link existing repository",
+      "selectRepo": "Select repository…",
+      "link": "Link",
+      "linkExisting": "Link existing repo",
+      "rulesActive": "Rules active",
+      "noRules": "No repo rules yet",
+      "moreBranches": "+{count} more",
+      "taskBranch": "Task branch:"
+    },
+    "project": {
+      "search": "Search projects…",
+      "namePlaceholder": "Project name",
+      "placeholder": "Project (optional)",
+      "notFound": "No project found",
+      "createNew": "Create new project",
+      "create": "Create",
+      "cancel": "Cancel",
+      "typeAria": "Project type",
+      "status": {
+        "active": "active",
+        "draft": "draft",
+        "planning": "planning",
+        "paused": "paused",
+        "done": "done",
+        "archived": "archived"
+      },
+      "type": {
+        "feature": "Feature",
+        "website": "Website",
+        "content": "Content",
+        "research": "Research",
+        "automation": "Automation",
+        "design": "Design",
+        "free": "Free-form"
+      }
+    },
+    "urls": {
+      "remove": "Remove link",
+      "enter": "Enter reference link",
+      "add": "Add link"
+    },
+    "priorityGlyph": {
+      "low": "L",
+      "medium": "M",
+      "high": "H",
+      "critical": "!"
     }
   }
 }
