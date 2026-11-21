@@ -36,3 +36,31 @@ describe("host polling slows down for a box that does not answer", () => {
     expect(pulsePoll(qc, undefined)()).toBe(5_000);
   });
 });
+
+describe("every metrics/pulse query on the stage uses the box-aware interval", () => {
+  // One observer with a fixed 5 s keeps its own timer and polls a sleeping
+  // box every 5 s again, whatever the others say.
+  it("no stage file polls host metrics or pulse at a fixed interval", async () => {
+    const { readdirSync, readFileSync, statSync } = await import("node:fs");
+    const path = await import("node:path");
+    const root = path.resolve(__dirname, "..");
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const f of readdirSync(dir)) {
+        const p = path.join(dir, f);
+        if (statSync(p).isDirectory()) { if (f !== "__tests__") walk(p); }
+        else if (/\.tsx?$/.test(f)) files.push(p);
+      }
+    };
+    walk(root);
+    const offenders: string[] = [];
+    for (const file of files) {
+      const src = readFileSync(file, "utf8");
+      const re = /queryKey:\s*\[\s*"hosts",[^\]]*"(metrics|pulse)"\s*\],[\s\S]{0,300}?refetchInterval:\s*([^,\n]+)/g;
+      for (const m of src.matchAll(re)) {
+        if (/^\d/.test(m[2].trim())) offenders.push(`${path.basename(file)}: ${m[1]} ${m[2].trim()}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});
