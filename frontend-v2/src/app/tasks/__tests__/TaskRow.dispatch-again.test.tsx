@@ -76,6 +76,9 @@ describe("TaskRow — Dispatch again lives in the ⋯ menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: /Dispatch again/ }));
     await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Yes, dispatch" }));
     await waitFor(() => expect(err).toHaveBeenCalledWith(expect.stringContaining("board locked")));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // ConfirmDialog leaves through a framer-motion exit animation, so the
+    // dialog stays in the DOM a moment after it closes; on a busy CI runner
+    // that took longer than waitFor's 1 s default (run 45015295712: 1.7 s).
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument(), { timeout: 5000 });
   });
 });
