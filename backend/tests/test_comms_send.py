@@ -233,6 +233,69 @@ async def test_brake_after_six_replies_creates_an_approval_card(client: AsyncCli
     assert r.status_code == 201, r.text
 
 
+async def _age_conversation(thread_id: str, by: timedelta) -> None:
+    """Move the conversation's last message back in time."""
+    from app.models.comms import CommsConversation
+    async with AsyncSession(test_engine) as s:
+        conv = await s.get(CommsConversation, uuid.UUID(thread_id))
+        conv.last_message_at = utcnow() - by
+        s.add(conv)
+        await s.commit()
+
+
+@pytest.mark.asyncio
+async def test_brake_counts_only_within_the_quiet_window(client: AsyncClient):
+    """Three messages, two quiet hours, three more: a fresh exchange, no brake."""
+    _, a_h = await _agent("Ping")
+    _, b_h = await _agent("Pong")
+    r = await _send(client, a_h, "pong", "old 0")
+    tid = r.json()["thread_id"]
+    await _send(client, b_h, "ping", "old 1")
+    await _send(client, a_h, "pong", "old 2")
+
+    await _age_conversation(tid, timedelta(hours=2))
+
+    for i in range(3):
+        h, to = (b_h, "ping") if i % 2 == 0 else (a_h, "pong")
+        r = await _send(client, h, to, f"new {i}")
+        assert r.status_code == 201, (i, r.text)
+        assert r.json()["paused"] is False, i
+
+    from app.models.approval import Approval
+    async with AsyncSession(test_engine) as s:
+        assert (await s.exec(select(Approval).where(Approval.action_type == "comms_continue"))).all() == []
+    # And the conversation still runs.
+    assert (await _send(client, a_h, "pong", "new 3")).status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_a_short_pause_inside_the_window_does_not_reset_the_brake(client: AsyncClient):
+    _, a_h = await _agent("Ping")
+    _, b_h = await _agent("Pong")
+    tid = (await _send(client, a_h, "pong", "t 0")).json()["thread_id"]
+    await _send(client, b_h, "ping", "t 1")
+    await _send(client, a_h, "pong", "t 2")
+    await _age_conversation(tid, timedelta(minutes=30))
+    await _send(client, b_h, "ping", "t 3")
+    await _send(client, a_h, "pong", "t 4")
+    r = await _send(client, b_h, "ping", "t 5")
+    assert r.status_code == 201 and r.json()["paused"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_pulled_brake_is_not_released_by_the_quiet_window(client: AsyncClient):
+    """A pending approval card keeps the conversation paused, however old."""
+    _, a_h = await _agent("Ping")
+    _, b_h = await _agent("Pong")
+    tid = (await _send(client, a_h, "pong", "t 0")).json()["thread_id"]
+    for i in range(1, 6):
+        h, to = (b_h, "ping") if i % 2 else (a_h, "pong")
+        await _send(client, h, to, f"t {i}")
+    await _age_conversation(tid, timedelta(hours=5))
+    r = await _send(client, a_h, "pong", "after the quiet hours")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "paused_awaiting_operator"
+
+
 @pytest.mark.asyncio
 async def test_rejected_brake_stops_the_conversation(client: AsyncClient, auth_client):
     _, a_h = await _agent("Ping")

@@ -15,6 +15,10 @@ tier of §6 rule 4 happens here, in this order:
 7. the loop brake: after 6 messages in one conversation without the
    operator, the conversation pauses and the operator gets an approval card
    ("let it continue?"); it runs again only after that card is approved.
+   The count covers one exchange, not the conversation's lifetime: when the
+   last message is older than `BRAKE_QUIET_RESET` (60 minutes), the next
+   message starts a fresh count. An already pulled brake (pending card) is
+   never released by that quiet time — only the card releases it.
 
 The message itself goes through `messaging.post_message` into a thread of
 kind "session" (§6 rule 3: no parallel queue), never mirrored into the
@@ -52,6 +56,9 @@ from app.utils import ensure_aware, utcnow
 logger = logging.getLogger(__name__)
 
 MAX_REPLIES = 6
+# Quiet time after which the brake count starts again (one exchange, not the
+# whole lifetime of a conversation).
+BRAKE_QUIET_RESET = timedelta(minutes=60)
 RATE_PER_MINUTE = 10
 MAX_OPEN = 50
 DEDUPE_S = 600
@@ -228,6 +235,14 @@ async def _check_brake(session: AsyncSession, conv: CommsConversation) -> None:
     raise SendRefused(409, "stopped_by_operator", "The operator stopped this conversation.")
 
 
+def _reset_after_quiet(conv: CommsConversation) -> None:
+    """Start a fresh brake count when the conversation was quiet for
+    `BRAKE_QUIET_RESET`. Only called for a conversation that is not paused."""
+    last = ensure_aware(conv.last_message_at) if conv.last_message_at else None
+    if last is not None and utcnow() - last >= BRAKE_QUIET_RESET:
+        conv.replies_without_operator = 0
+
+
 async def _pull_brake(session: AsyncSession, conv: CommsConversation, a: Principal, b: Principal) -> None:
     agent_id = a.id if a.kind == "agent" else (b.id if b.kind == "agent" else None)
     card = Approval(
@@ -296,6 +311,8 @@ async def send(session: AsyncSession, sender: Principal, to: str, body: str) -> 
             )
         ).one()
     await _check_brake(session, conv)
+    # After the brake check on purpose: a paused conversation stays paused.
+    _reset_after_quiet(conv)
 
     message = await post_message(
         session,
