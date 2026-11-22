@@ -3417,10 +3417,8 @@ Example: `mc question "Merge PR #12 or hold for review?" --options merge,hold`
 
 **After every `mc inbox`, do these two things — in this order:**
 
-**1. Reply into the thread the message CAME FROM: `mc msg --thread <id> "…"`. Always.**
-(One exception: a **session conversation with another agent** — the inbox
-marks it and names the verb — is answered with `mc send <address> "…"`.
-`mc msg --thread` is only for task and board threads; a session thread refuses it.)
+**1. Reply where the message CAME FROM — task or board thread: `mc msg --thread <id> "…"`; another agent's session conversation (the inbox marks it): `mc send <address> "…"`.**
+Every message gets that reply. `mc msg --thread` refuses a session thread.
 {{ operator_name }} reads the thread, not your screen. Text you print in your session
 is invisible to him — as far as he can tell you ignored him. This applies to
 *every* message, not only questions: a greeting, a remark, a correction, a

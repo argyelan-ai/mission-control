@@ -495,9 +495,13 @@ def test_soul_session_reply_rule_names_mc_send(role):
     assert paras, "SOUL.md never mentions session conversations"
     for p in paras:
         assert 'mc send <address> "…"' in p, f"session paragraph without mc send:\n{p}"
-    # The inbox reply rule itself carries the exception.
-    inbox_rule = next(p for p in re.split(r"\n\s*\n", soul) if "Reply into the thread the message CAME FROM" in p)
-    assert "mc send" in inbox_rule
+    # The bold inbox reply rule itself carries both verbs; a weaker model
+    # follows the bold line, so the exception must not trail behind it.
+    rule_line = next(line for line in soul.splitlines() if line.startswith("**1. Reply"))
+    assert 'mc msg --thread <id> "…"' in rule_line
+    assert 'mc send <address> "…"' in rule_line
+    assert "session conversation" in rule_line
+    assert "Always." not in rule_line
 
 
 @pytest.mark.parametrize("role", ROLES)
