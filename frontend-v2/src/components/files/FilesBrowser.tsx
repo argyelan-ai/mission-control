@@ -67,12 +67,9 @@ export function sharedDisplayNames(entries: FsEntry[]): Set<string> {
 }
 
 /** The raw name under a shared display name (see sharedDisplayNames). */
-function RawName({ name, size }: { name: string; size: "xs" | "sm" }) {
+function RawName({ name }: { name: string }) {
   return (
-    <div
-      className={`${size === "sm" ? "text-[11px]" : "text-[10px]"} font-mono truncate`}
-      style={{ color: C.textDim }}
-    >
+    <div className="text-xs font-mono truncate" style={{ color: C.textDim }}>
       {name}
     </div>
   );
@@ -257,7 +254,7 @@ function EntryLabel({ entry, showRaw = false }: { entry: FsEntry; showRaw?: bool
         <div className="truncate text-sm" style={{ color: C.textPrimary }}>
           {label}
         </div>
-        <RawName name={entry.name} size="sm" />
+        <RawName name={entry.name} />
       </div>
     );
   }
@@ -442,7 +439,7 @@ function FileGridCard({
         >
           {entry.display_name || entry.name}
         </div>
-        {showRaw && entry.display_name && <RawName name={entry.name} size="xs" />}
+        {showRaw && entry.display_name && <RawName name={entry.name} />}
         {entry.agent_slug && (
           <div className="mt-1">
             <AgentBadge slug={entry.agent_slug} />
