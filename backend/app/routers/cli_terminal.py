@@ -711,6 +711,7 @@ class SessionAgentRow(BaseModel):
     updated_at: datetime
     headless_chat: bool = False
     tasks_in_own_session: bool = False
+    can_start_chat: bool = False  # "New chat" gates on it (Agent.can_start_chat)
 
     # Same text as the old dict response (`isoformat()`, "+00:00"), not
     # pydantic's "Z" — the wire format stays exactly as it was.
@@ -741,6 +742,7 @@ class SessionAgentRow(BaseModel):
             updated_at=agent.updated_at,
             headless_chat=agent.headless_chat,
             tasks_in_own_session=agent.tasks_in_own_session,
+            can_start_chat=agent.can_start_chat,
         )
 
 

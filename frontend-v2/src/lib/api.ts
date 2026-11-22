@@ -392,6 +392,11 @@ export const api = {
   // treat any failure as "no record chats".
   chatRecord: {
     listChats: () => request<{ chats: RecordChat[] }>("/api/v1/chat-record/chats"),
+    /** A new, empty chat on an agent's harness (S2) — "New chat" → pick an
+     *  agent. Admins only (403 otherwise); no title, so its row reads
+     *  "<agent> · chat <n>" in the viewer's own language. */
+    createChat: (agentId: string) =>
+      request<RecordChat>("/api/v1/chat-record/chats", { method: "POST", body: JSON.stringify({ agentId }) }),
     history: (chatId: string, limit = 200) =>
       request<RecordHistory>(`/api/v1/chat-record/chats/${encodeURIComponent(chatId)}/history?limit=${limit}`),
     /** Move a chat to another pair (ADR-105). Refusals come as errors —

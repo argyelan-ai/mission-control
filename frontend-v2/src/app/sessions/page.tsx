@@ -5,14 +5,15 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, type RecordChat } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { C } from "@/lib/colors";
 import { BrowserLiveView } from "@/components/shared/BrowserLiveView";
 import { SessionSidebar } from "@/components/chat/SessionSidebar";
 import { ChatView, type CenterView, type DetailLevel, CENTER_VIEWS, DETAIL_LEVELS } from "@/components/chat/ChatView";
 import { DiffPanel } from "@/components/chat/DiffPanel";
-import { furtherChatHref } from "@/components/chat/useRecordChat";
+import { furtherChatHref, isRecordOff } from "@/components/chat/useRecordChat";
+import { RECORD_CHATS_QUERY_KEY } from "@/hooks/useChatSwitch";
 import type { PanelKind } from "@/components/chat/PanelButtons";
 import { agentIsRunning, type AgentWithState } from "@/components/chat/TerminalPanel";
 import { GroupChatView } from "@/components/groupchat/GroupChatView";
@@ -153,6 +154,50 @@ function agentHasTranscript(agent: AgentWithState | null | undefined): boolean {
   return agent.agent_runtime === "host" && !!agent.slug && BOSS_SLUGS.has(agent.slug);
 }
 
+// ── New chat (chats slice S2) ───────────────────────────────────────────────
+// Can this agent hold a further chat? The backend says so on the agent row
+// (`can_start_chat`, the send path's own routing rule). Any other agent
+// (host agents, omp without ACP) would get a chat it cannot answer in —
+// the record creates it, the first message then fails with 409
+// `chat_harness_unsupported`. So the picker opens their own chat instead.
+function agentCanStartNewChat(agent: AgentWithState | null | undefined): boolean {
+  return agent?.can_start_chat === true;
+}
+
+/** Why a new chat could not be had, as the toast that says so: the record
+ *  is switched off (404 `chat_record_disabled`), only admins may (403), or
+ *  it failed (any other answer, the agent gone, no answer in time). */
+function newChatRefusal(err: unknown): "newChatOff" | "newChatNotAllowed" | "newChatFailed" {
+  if (isRecordOff(err)) return "newChatOff";
+  if (err instanceof Error && /^API 403\b/.test(err.message)) return "newChatNotAllowed";
+  return "newChatFailed";
+}
+
+/** How long a pick waits for the record before it gives up and opens the
+ *  agent's own chat — a hanging request must never lock the picker. */
+const NEW_CHAT_TIMEOUT_MS = 15_000;
+
+/** The newest further chat of this agent that nobody has written in yet:
+ *  "New chat" opens it again instead of piling up empty rows, one per tap
+ *  that went nowhere. Same harness only — after a harness switch the old
+ *  empty chat belongs to the other harness. */
+function untouchedNewChat(
+  chats: readonly RecordChat[],
+  agentId: string,
+  harness: string,
+): RecordChat | null {
+  const empty = chats.filter(
+    (c) =>
+      !c.agentDefault &&
+      !c.archived &&
+      !c.lastActivityAt &&
+      c.legacyAgentId === agentId &&
+      (c.harness ?? "") === harness,
+  );
+  empty.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+  return empty[0] ?? null;
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 function SessionsPageContent() {
@@ -179,6 +224,25 @@ function SessionsPageContent() {
   // the selection back the instant `selected` became null).
   const [selectedHeadId, setSelectedHeadId] = useState<string | null>(null);
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
+  // "New chat" → a pick is asking the record for a new chat: the agent's
+  // name while the request runs. The ref is the double-tap guard (state
+  // lands a render too late for two taps in one frame).
+  const [startingChatFor, setStartingChatFor] = useState<string | null>(null);
+  const startingChat = useRef(false);
+  // Is the operator still where the pick was made? A new chat that arrives
+  // after they left the page or the picker (back swipe, a tab tap, a slow
+  // phone network) must not pull them into it.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const pickingNow = useRef(picking);
+  useEffect(() => {
+    pickingNow.current = picking;
+  }, [picking]);
   // Mobile (<md) stack navigation: which pane is visible. Desktop (≥md) ignores
   // this and always shows the split. Kept separate from `selected` so a
   // return-to-list action doesn't null `selected` (which would immediately
@@ -608,8 +672,22 @@ function SessionsPageContent() {
   });
 
   function handleSelect(agentId: string) {
+    if (startingChat.current) return;
     const agent = agents.find((a) => a.id === agentId);
     if (!agent) return;
+    // "New chat" means a new chat: in the picker a pick starts one.
+    if (picking) {
+      if (agentCanStartNewChat(agent)) {
+        void startNewChat(agent);
+        return;
+      }
+      notify.info(tCockpit("newChatUnsupported", { name: agent.name }));
+    }
+    openAgentChat(agent);
+  }
+
+  /** The agent's own chat — a pick outside the picker, and every fallback. */
+  function openAgentChat(agent: AgentWithState) {
     setSelected(agent);
     setSelectedGroupId(null);
     setSelectedHeadId(null);
@@ -622,7 +700,65 @@ function SessionsPageContent() {
     if (activePanel === "doc") setActivePanel(null);
   }
 
+  /** Picker → agent: a new, empty chat of that agent, opened in place of the
+   *  picker (replace — back returns to where "New chat" was pressed). When
+   *  the record will not make one, say so and open the agent's own chat;
+   *  never open the old chat silently as if it were new. */
+  async function startNewChat(agent: AgentWithState) {
+    startingChat.current = true;
+    setStartingChatFor(agent.name);
+    const stillHere = () => mounted.current && pickingNow.current;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const chat = await Promise.race([
+        reuseOrCreateChat(agent),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("new chat: no answer in time")), NEW_CHAT_TIMEOUT_MS);
+        }),
+      ]);
+      // The list asks the record again now: the new row stands there (and
+      // is marked) the moment the chat opens — or, if the operator left
+      // meanwhile, it simply shows up in the list.
+      void qc.invalidateQueries({ queryKey: RECORD_CHATS_QUERY_KEY });
+      if (!stillHere()) return;
+      arrival.current = "none";
+      router.replace(furtherChatHref(agent.id, chat.id), { scroll: false });
+    } catch (err) {
+      if (!stillHere()) return;
+      notify.info(tCockpit(newChatRefusal(err), { name: agent.name }));
+      openAgentChat(agent);
+    } finally {
+      clearTimeout(timer);
+      startingChat.current = false;
+      if (mounted.current) setStartingChatFor(null);
+    }
+  }
+
+  /** An untouched new chat of this agent if there is one, else a new one.
+   *  A list that cannot be read is no reason not to make the chat. */
+  async function reuseOrCreateChat(agent: AgentWithState): Promise<RecordChat> {
+    try {
+      const { chats } = await qc.fetchQuery({
+        queryKey: RECORD_CHATS_QUERY_KEY,
+        queryFn: () => api.chatRecord.listChats(),
+        staleTime: 0,
+      });
+      const reuse = untouchedNewChat(chats ?? [], agent.id, agent.harness ?? "claude");
+      if (reuse) return reuse;
+    } catch {
+      // fall through: make one
+    }
+    const created = api.chatRecord.createChat(agent.id);
+    // A chat that is made after the pick gave up still lands in the list.
+    created.then(
+      () => void qc.invalidateQueries({ queryKey: RECORD_CHATS_QUERY_KEY }),
+      () => {},
+    );
+    return created;
+  }
+
   function handleSelectGroup(groupId: string) {
+    if (startingChat.current) return;
     setSelectedGroupId(groupId);
     setSelectedHeadId(null);
     saveLastGroupId(groupId);
@@ -639,6 +775,7 @@ function SessionsPageContent() {
   // head run is not "the last chat" the way an agent/group is, it comes
   // and goes within the 7-day window on its own.
   function handleSelectHead(runId: string, replace = false) {
+    if (startingChat.current) return;
     setSelectedHeadId(runId);
     setMobileView("chat");
     putChatInHistory("head", runId, replace);
@@ -765,8 +902,9 @@ function SessionsPageContent() {
           {/* Desktop: the shell's left column lists the chats, so this list
               shows only as the "New chat" picker, in place of the chat. */}
           <div
-            className={`${onChatScreen ? "hidden" : "flex"} ${picking ? "md:flex md:rounded-xl md:border md:border-[var(--color-border)]" : "md:hidden"} flex-col flex-1 min-h-0 overflow-hidden`}
+            className={`${onChatScreen ? "hidden" : "flex"} ${picking ? "md:flex md:rounded-xl md:border md:border-[var(--color-border)]" : "md:hidden"} ${startingChatFor ? "pointer-events-none" : ""} flex-col flex-1 min-h-0 overflow-hidden`}
             data-testid="session-list-mobile"
+            aria-busy={startingChatFor ? true : undefined}
             style={picking ? { background: C.bgSurface } : undefined}
           >
             {picking && (
@@ -777,6 +915,16 @@ function SessionsPageContent() {
               >
                 {tCockpit("pickTitle")}
               </h1>
+            )}
+            {picking && startingChatFor && (
+              <p
+                role="status"
+                data-testid="chat-picker-starting"
+                className="shrink-0 px-4 pb-2 text-sm"
+                style={{ color: C.textMuted }}
+              >
+                {tCockpit("pickStarting", { name: startingChatFor })}
+              </p>
             )}
             <SessionSidebar
               agents={agents}
