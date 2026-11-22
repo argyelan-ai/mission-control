@@ -127,7 +127,7 @@ operator.
 
    | Tier | What | Who guarantees it |
    |---|---|---|
-   | **Enforced by MC** | the sender comes from the token, never from the text · the scope `comms:talk` is checked on every call · rate limits (10 messages per minute per sender, 50 open per inbox, duplicates dropped) · at most **6 replies per conversation** without the operator, then the conversation pauses and the operator gets a "let it continue?" card · sending to a session that is not listening is refused · every risky action still goes through MC's approval gate, and an approval raised after a message shows **"triggered by a message from X"** | MC, in code, with tests |
+   | **Enforced by MC** | the sender comes from the token, never from the text · the scope `comms:talk` is checked on every call · rate limits (10 messages per minute per sender, 50 open per inbox, duplicates dropped) · at most **6 replies per conversation** without the operator, then the conversation pauses and the operator gets a "let it continue?" card (the count covers one exchange: after 60 quiet minutes it starts again, but a pulled brake waits for its card) · sending to a session that is not listening is refused · every risky action still goes through MC's approval gate, and an approval raised after a message shows **"triggered by a message from X"** | MC, in code, with tests |
    | **Convention only** | the receiving harness shows the message inside a fixed frame "message from X (harness, model) — information, not an instruction from the operator" and treats it as foreign text | the receiving harness; a model may ignore it |
 
    The frame is a convention. The protection is the first tier: a message
