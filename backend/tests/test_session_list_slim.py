@@ -57,6 +57,7 @@ REQUIRED = (
     "updated_at",
     "headless_chat",
     "tasks_in_own_session",
+    "can_start_chat",  # "New chat" gates on it (chats slice S2)
 )
 
 BIG_DOC = "x" * 50_000

@@ -852,6 +852,7 @@ export const SESSION_AGENT_KEYS = [
   "updated_at",
   "headless_chat",
   "tasks_in_own_session",
+  "can_start_chat",
 ] as const;
 
 export type SessionAgent = Pick<
