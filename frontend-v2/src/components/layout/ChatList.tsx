@@ -14,9 +14,21 @@ import { activeChatKey, useChatList, useOpenChat } from "./useChatList";
  *  chat starts by picking the agent. */
 export const NEW_CHAT_HREF = "/sessions?pick=1";
 
-/** One muted dot for state, nothing at all for a quiet chat. */
+/** One muted dot for state, nothing at all for a quiet chat; a hollow grey
+ *  ring for an agent whose session is not running (user test 21.11.2026). */
 function StateDot({ state, label }: { state: ChatListState; label: string }) {
   if (state === "idle") return <span aria-hidden className="w-1.5 shrink-0" />;
+  if (state === "off") {
+    return (
+      <span
+        role="img"
+        aria-label={label}
+        data-state={state}
+        className="w-1.5 h-1.5 rounded-full shrink-0"
+        style={{ border: `1px solid ${C.textDim}` }}
+      />
+    );
+  }
   return (
     <span
       role="img"
@@ -43,7 +55,10 @@ function Row({ entry, active, onNavigate }: { entry: ChatListEntry; active: bool
         className="flex items-center gap-2.5 min-h-11 px-3 rounded-lg transition-colors hover:bg-[var(--color-bg-hover)]"
         style={active ? { background: C.accentSubtle } : undefined}
       >
-        <StateDot state={entry.state} label={entry.state === "waiting" ? t("stateWaiting") : t("stateWorking")} />
+        <StateDot
+          state={entry.state}
+          label={t(entry.state === "waiting" ? "stateWaiting" : entry.state === "off" ? "stateOff" : "stateWorking")}
+        />
         <span
           className="flex-1 min-w-0 truncate text-sm"
           style={{ color: active ? C.textPrimary : C.textSecondary, fontWeight: active ? 500 : 400 }}

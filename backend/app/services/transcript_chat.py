@@ -1382,6 +1382,69 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     return newest_path, meta
 
 
+def last_chat_activity(agent) -> datetime | None:
+    """When the agent's chat last saw anything — the newest entry of the
+    session its chat page shows, or ``None`` when there is none to read.
+
+    The chat list sorted and dated each agent by ``last_task_activity_at``:
+    an agent the operator chatted with today but whose last TASK was two
+    weeks ago sat under "Earlier" with the old date (user test 21.11.2026:
+    dated 8.11. while the chat had 20.11.). This is the chat's own time.
+
+    Same session, same privacy gate as ``GET /agents/{id}/chat/history``
+    (``adapter_for`` → ``resolve_transcript_dir`` → ``find_active_session``
+    → ``transcript_allowed``): a session the chat would not show gives no
+    time either. The entry's own ``timestamp`` wins over the file mtime
+    (``last_entry_timestamp``: a touched old file lies). Reads files only —
+    callers run it in a thread. Never raises: a list must not break on one
+    unreadable directory.
+    """
+    try:
+        from app.services.transcript_adapters import adapter_for
+
+        adapter = adapter_for(agent)
+        tdir = adapter.resolve_transcript_dir(agent)
+        if tdir is None:
+            return None
+        active = adapter.find_active_session(tdir)
+        if active is None:
+            return None
+        path, _meta = active
+        if not adapter.transcript_allowed(agent, path):
+            return None
+        ts = last_entry_timestamp(path)
+        if ts is None:
+            ts = path.stat().st_mtime
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except Exception:  # noqa: BLE001 — a list field never breaks the list
+        logger.debug("last_chat_activity: %s not readable", getattr(agent, "slug", None), exc_info=True)
+        return None
+
+
+async def last_chat_activities(agents) -> dict[Any, datetime | None]:
+    """``agent.id → last_chat_activity`` for a whole list, in ONE thread
+    hop (the session lists poll every few seconds; the per-file reads are
+    cached by ``last_entry_timestamp``)."""
+    agents = list(agents)
+    return await asyncio.to_thread(lambda: {a.id: last_chat_activity(a) for a in agents})
+
+
+def chat_activity_at(agent, chat_at: datetime | None) -> datetime | None:
+    """``last_chat_activity_at`` for a list row: the chat's own time, else
+    the last task activity (an agent without a readable transcript keeps
+    the date it had before), always timezone-aware."""
+    at = chat_at or getattr(agent, "last_task_activity_at", None)
+    if at is not None and at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return at
+
+
+def chat_activity_fields(agent, chat_at: datetime | None) -> dict[str, Any]:
+    """``chat_activity_at`` as ISO text, for dict-shaped listings."""
+    at = chat_activity_at(agent, chat_at)
+    return {"last_chat_activity_at": at.isoformat() if at is not None else None}
+
+
 async def resolve_aliveness(agent, session_path: Path, adapter: Any | None = None) -> str:
     """Classifies a session's liveness for the history/tailer meta —
     ``"active" | "idle" | "ended"``. Fixes the old live-only semantics
@@ -2976,8 +3039,23 @@ class ChatTailerManager:
         if pane_text is _PANE_UNSET:
             pane_text = await capture_pane(agent)
         if pane_text is None:
+            # No pane (host agents: Boss, Hermes, Jarvis). A fresh mtime is
+            # not the only sign of work: a long tool call or a long think
+            # writes nothing for minutes. The turn itself decides — not
+            # ended (last line = request, tool use, tool result) is
+            # "working" until the stale limit, so the header, the status
+            # line and the composer's Stop agree (critic 21.11.2026: the
+            # 20 s window read "Bereit" and hid Stop mid-turn).
+            working = transcript_active
+            if not working:
+                from app.services.chat_turn_state import TURN_BUSY, file_turn_state
+
+                turn = await asyncio.to_thread(
+                    file_turn_state, current_path, getattr(agent, "harness", None)
+                )
+                working = turn.get("state") == TURN_BUSY
             return {
-                "status": "working" if transcript_active else "idle",
+                "status": "working" if working else "idle",
                 "prompt": None,
                 "aliveness": aliveness,
             }

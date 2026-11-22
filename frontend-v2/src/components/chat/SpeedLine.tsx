@@ -22,6 +22,9 @@ export type SpeedLineFacts = {
   /** true = measured right now while this chat streams; false = the last
    *  value the box measured (the operator wants a number at rest too). */
   live?: boolean;
+  /** A turn runs in this chat. Only then does a box without any measured
+   *  speed say "– tok/s"; at rest an empty placeholder is noise (K3). */
+  streaming?: boolean;
   /** Set = the line is the door to the pair picker (chat record on). */
   onPick?: () => void;
 };
@@ -59,12 +62,38 @@ export function lastTps(pulse: HostPulse | undefined): number | null {
   return null;
 }
 
+/**
+ * A model id as a person reads it: no provider path ("mc-openai/…") and no
+ * "custom:" prefix — nothing else is cut. The family name and a numeric tail
+ * ("-1017", "-2411", "-0528") are what tell two models apart, and the
+ * composer chip is the only place the model is named (critic 21.11.2026: a
+ * rule that dropped them turned "Qwen-V3" into "V3" and "Mistral-Large-2411"
+ * into "Mistral-Large"). A display name from the model catalogue wins when
+ * the caller has one. Empty is null, so a caller's `?? id` still catches it.
+ */
+export function shortModelName(id: string | null | undefined, displayName?: string | null): string | null {
+  if (displayName && displayName.trim()) return displayName.trim();
+  if (!id || !id.trim()) return null;
+  let name = id.trim().replace(/^custom:/i, "");
+  // "provider/model" has no spaces; "GPT-5.1 / codex" is a label, not a path.
+  if (!/\s/.test(name)) name = name.slice(name.lastIndexOf("/") + 1);
+  return name.trim() || null;
+}
+
 /** Pure render — tested without queries. Nothing known → nothing shown (K3). */
-export function SpeedLineView({ box, model, tps, live = false, onPick }: SpeedLineFacts) {
+export function SpeedLineView({ box, model, tps, live = false, streaming = false, onPick }: SpeedLineFacts) {
   const t = useTranslations("cockpit.speed");
   const ts = useTranslations("cockpit.switch");
-  if (!box && !model) return null;
-  const parts = [box, model].filter(Boolean).join(" · ");
+  // The line names the whole model again (operator 22.11.2026): on a
+  // 390 px phone the composer's chip gives way to Send/Stop and cuts the
+  // name ("DeepSeek-V…"). The chip stays; this line is where the full name
+  // can be read — without the provider path, never cut (it wraps instead).
+  // A cloud model without a box and without the picker door gets no line:
+  // its chip is not cut, and "fable" under "Fable" only repeats it.
+  if (!box && !onPick) return null;
+  const parts = [box, shortModelName(model)].filter(Boolean).join(" · ");
+  if (!parts) return null;
+  const showTps = !!box && (tps != null || streaming);
   const body = (
     <>
       <span
@@ -72,11 +101,12 @@ export function SpeedLineView({ box, model, tps, live = false, onPick }: SpeedLi
         className="w-1.5 h-1.5 rounded-full shrink-0"
         style={{ background: live ? C.info : C.textDim }}
       />
-      <span className="truncate min-w-0">{parts}</span>
-      {/* A local box always shows a speed: live while streaming, else the
-          last measured one, else "– tok/s". A cloud model has no box and
-          no measured speed — nothing is shown then (K3). */}
-      {box && (
+      <span data-testid="speed-line-label" className="min-w-0 [overflow-wrap:anywhere]">{parts}</span>
+      {/* A local box shows a speed: live while streaming, else the last
+          measured one; "– tok/s" only while a turn runs and nothing was
+          ever measured. A cloud model has no box and no measured speed —
+          nothing is shown then (K3). */}
+      {showTps && (
         <span
           data-testid="speed-line-tps"
           data-live={live || undefined}
@@ -129,7 +159,8 @@ export function pairForLine(
 
 /**
  * The speed line under the composer (variant C, operator decision
- * 2026-11-18): dot · box · model · live tok/s. Model from the transcript
+ * 2026-11-18): dot · box · model · live tok/s; the model by its whole
+ * name, since the chip cuts it on a phone (22.11.2026). Model from the transcript
  * (usage) first, the agent's runtime row second; the box from that row's
  * host binding (ADR-048); the tok/s from the box's pulse.
  */
@@ -169,6 +200,7 @@ function SpeedLineLoaded({ runtimeId: boundRuntime, model: liveModel, streaming 
         model={model ?? runtime?.model_identifier ?? null}
         tps={live ?? lastTps(pulse)}
         live={live != null}
+        streaming={streaming}
         onPick={door ? () => setPicking(true) : undefined}
       />
       {door && sw.chat && (

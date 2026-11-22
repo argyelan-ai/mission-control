@@ -37,7 +37,7 @@ function mkAgent(overrides: Partial<Agent> = {}): Agent {
     heartbeat_md: null,
     rules_md: null,
     memory_md: null,
-    last_seen_at: null,
+    last_seen_at: new Date().toISOString(), // a running session (user test 21.11.: off rows say so)
     last_task_activity_at: null,
     current_task_id: null,
     context_tokens: 0,
@@ -181,6 +181,19 @@ describe("SessionSidebar", () => {
     expect(screen.getByText("Rex")).toBeInTheDocument();
     expect(screen.getByText("Wire the sidebar")).toBeInTheDocument();
     expect(screen.queryByText("Ad-hoc")).not.toBeInTheDocument();
+  });
+
+  it("an agent whose session is not running sits below the running ones, hollow dot and 'not started' (user test 21.11.)", () => {
+    const voice = { ...mkAgent({ id: "j", name: "Voice", agent_runtime: "host" }), session_running: false } as Agent;
+    const lead = { ...mkAgent({ id: "b", name: "Lead", agent_runtime: "host" }), session_running: true } as Agent;
+    render(
+      <SessionSidebar agents={[voice, lead]} tasks={[]} projects={[]} selectedId={null} onSelect={() => {}} variant="list" />
+    );
+    const rows = screen.getAllByRole("option");
+    expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining("Lead"), expect.stringContaining("Voice")]);
+    expect(within(rows[1]).getByTestId("session-off-dot")).toBeInTheDocument();
+    expect(rows[1].textContent).toMatch(/stateOff|not started/);
+    expect(within(rows[0]).queryByTestId("session-off-dot")).toBeNull();
   });
 
   it("falls back to the Ad-hoc group for an agent with no project-bound task", () => {

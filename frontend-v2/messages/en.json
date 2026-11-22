@@ -5438,6 +5438,7 @@
     "emptyChats": "No chats yet",
     "stateWaiting": "waits for you",
     "stateWorking": "working",
+    "stateOff": "not started",
     "more": "More",
     "settings": "Settings",
     "pickTitle": "Who do you want to chat with?",

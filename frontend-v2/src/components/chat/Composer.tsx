@@ -27,6 +27,8 @@ import { ContextPanel, cacheHitRateOf } from "./ContextPanel";
 import { PopoverPortal, anchoredBoxStyle, useAnchoredPosition } from "@/lib/anchoredPopover";
 import { harnessLabel } from "@/components/shared/HarnessIcon";
 import { formatShare } from "@/lib/usage";
+import { isStatusUnknown } from "./StatusLine";
+import { shortModelName } from "./SpeedLine";
 import { appendQuote } from "./chatQuote";
 import { type MentionToken, findMentionToken, insertMention } from "./composer/fileMention";
 import { useChatFileSearch } from "./composer/useChatFileSearch";
@@ -234,9 +236,11 @@ interface ComposerProps {
   /** Kann MC den Bildschirm des Agenten lesen? Nur fuer `cli-bridge` (Docker+tmux)
    *  liefert `capture_pane` echten Text. Bei Host-Agenten (Boss, Hermes, Jarvis)
    *  gibt es diesen Kanal nicht: `_compute_pane_state` leitet dort `working`/`idle`
-   *  allein aus der Transkript-mtime ab und ist sich dabei IMMER sicher — ein Boss,
-   *  der denkt ohne zu schreiben, liest sich als `idle`. Genau dann fehlte bisher
-   *  der Stop-Knopf, obwohl er der einzige noetige Griff ist. */
+   *  aus dem Zug im Transkript ab (nicht beendet = `working`, bis zur
+   *  Stale-Grenze), so dass ein Boss mitten in einem langen Werkzeug-Aufruf
+   *  `working` meldet. Seit 21.11.2026 aendert dieser Wert den Knopf nicht mehr:
+   *  Stop folgt dem Zustand, den auch Statuszeile und Kopf zeigen (Prueftest,
+   *  „Bereit" neben Stop). Bleibt im Vertrag, weil ChatView es weiter mitgibt. */
   paneObservable?: boolean;
   /** Server-derived harness capabilities. Drives the effort chip: no
    *  capabilities (or `canSwitchEffort: false`) means the level is shown
@@ -283,7 +287,21 @@ interface ComposerProps {
  *  globals.css passen. */
 export const EFFORT_SETTLE_MS = 320;
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, quote = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
+/**
+ * A 44 × 44 finger target for every input-bar button without changing how it
+ * looks (DESIGN.md K11, user test 21.11.2026: 28–36 px buttons). An
+ * invisible ::before of at least 44 × 44, centred on the button, takes the
+ * tap; the icon and the visible chip keep their size. Written out in full
+ * (not built from parts) so Tailwind sees every class.
+ */
+const HIT_44 =
+  "relative before:absolute before:left-1/2 before:top-1/2 before:-translate-x-1/2 before:-translate-y-1/2 before:w-full before:h-full before:min-w-11 before:min-h-11 before:content-['']";
+/** The same hit area for a button handed in from outside (plan-mode chip,
+ *  mic) — applied from a wrapper onto its button child. */
+const SLOT_HIT_44 =
+  "contents [&>button]:relative [&>button]:before:absolute [&>button]:before:left-1/2 [&>button]:before:top-1/2 [&>button]:before:-translate-x-1/2 [&>button]:before:-translate-y-1/2 [&>button]:before:w-full [&>button]:before:h-full [&>button]:before:min-w-11 [&>button]:before:min-h-11 [&>button]:before:content-['']";
+
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, prefill = null, quote = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
   const t = useTranslations("sessions");
   // One word per effort level, the same as the bench (round-2 Q2):
   // "High" / "Hoch" instead of the raw "high" the harness reports.
@@ -397,13 +415,17 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    *  Deliberately NOT `!state`: a missing state event means the first probe
    *  tick hasn't landed yet, which is a loading moment, not an unreadable
    *  pane — treating it as unknown would flash a Stop on every mount. */
-  const statusUnknown = state?.status === "unknown";
+  const statusUnknown = isStatusUnknown(state);
   /** Empty input leaves nothing to send, so the button carries the interrupt. */
-  /* Stop wird angeboten, sobald "arbeitet" nicht widerlegbar ist: bestaetigtes
-   * `working`, ein unlesbares Pane (`unknown`) — und neu auch jeder Agent, dessen
-   * Pane wir grundsaetzlich nicht lesen koennen. Ein deaktivierter Senden-Knopf
-   * behauptet dort eine Ruhe, die wir nie festgestellt haben. */
-  const showStop = !hasText && (isWorking || statusUnknown || !paneObservable);
+  /* Stop only while the state says "working" or is unknown — the same state
+   * the status line and the header show (user test 21.11.2026: Boss read
+   * "Bereit" next to a Stop). An agent whose pane cannot be read used to get
+   * a Stop at rest too (operator decision 18.08.2026: a missing Stop is worse
+   * than a waiting one). That need is now met by an honest state instead:
+   * the backend reads a host agent's unfinished turn as "working" (silent
+   * tool call, long think) until the stale limit, so Stop is there exactly
+   * while the turn runs and gone when the status line says "Bereit". */
+  const showStop = !hasText && (isWorking || statusUnknown);
   /* Die Leiter des Harness, geteilt: die Stufen mit Rang tragen Regler und
    * Saeule; ein Eintrag ohne Rang (Hermes `default` = zurueck zur
    * konfigurierten Stufe) ist kein Punkt auf der Skala, sondern ein eigener
@@ -819,8 +841,9 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    * Label des passenden Dropdown-Eintrags ("Sonnet"); eine volle ID bleibt
    * verbatim. */
   const currentModel = usage?.model ?? capabilities?.model ?? null;
+  // Short and whole (user test 21.11.2026): no provider path, no build date.
   const modelLabel = currentModel
-    ? modelOptions.find((m) => isSameModel(m.name, currentModel))?.label ?? currentModel
+    ? shortModelName(modelOptions.find((m) => isSameModel(m.name, currentModel))?.label ?? currentModel) ?? currentModel
     : "—";
   // Backend-stamped, never a frontend model→window guess (see claudeCommands.ts).
   const win = usage?.contextWindow;
@@ -1108,14 +1131,16 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             onClick={() => fileInputRef.current?.click()}
             aria-label={t("attachFile")}
             title={t("attachFile")}
-            className="shrink-0 flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+            className={`${HIT_44} shrink-0 flex items-center justify-center w-7 h-7 rounded-lg cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]`}
             style={{ color: C.textSecondary }}
           >
             <Paperclip size={15} />
           </button>
           {/* min-w-0: the model chip is the one element of this row that may
-              shrink — with context ring, mode chip and effort chip on a
-              390 px phone, a long model name wrapped onto two lines. */}
+              shrink. The name is short first (`shortModelName`, user test
+              21.11.2026: "DeepS…"), so it is whole whenever the row has room;
+              with mode chip, effort, mic and a long local model name on a
+              390 px phone it cuts instead of pushing Send off the screen. */}
           <div className="relative min-w-0 max-w-40" ref={modelBoxRef}>
             {modelOptions.length === 0 ? (
               /* Fremde CLI (kimi, omp): das Backend meldet explizit keine
@@ -1123,7 +1148,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                  eines Dropdowns, das Kauderwelsch in die TUI tippen wuerde. */
               <span
                 data-testid="model-chip-static"
-                title={modelLabel}
+                title={currentModel ?? modelLabel}
                 className="inline-flex max-w-full items-center whitespace-nowrap font-mono text-xs font-medium px-2 py-1 rounded-lg"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
               >
@@ -1139,8 +1164,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               // it doesn't get the accent tint (which in this system means
               // "selected"). It lights up on hover and while open.
               data-testid="model-chip"
-              title={modelLabel}
-              className="inline-flex max-w-full items-center gap-1 whitespace-nowrap font-mono text-xs font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors"
+              title={currentModel ?? modelLabel}
+              className={`${HIT_44} inline-flex max-w-full items-center gap-1 whitespace-nowrap font-mono text-xs font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors`}
               style={{
                 backgroundColor: modelOpen ? C.bgHover : "transparent",
                 color: modelOpen ? C.textPrimary : C.textSecondary,
@@ -1225,7 +1250,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 // there is a breakdown, never how full the window is.
                 aria-label={t("contextUsed", { pct: Math.round(pct) })}
                 onClick={() => setContextOpen((v) => !v)}
-                className="flex items-center gap-1 pl-0.5 cursor-pointer rounded-md"
+                className={`${HIT_44} flex items-center gap-1 pl-0.5 cursor-pointer rounded-md`}
               >
                 <div
                   data-testid="context-ring"
@@ -1300,17 +1325,15 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               Nothing at all once the session has ended — neither sending nor
               interrupting can reach a session that is over.
 
-              Host agents (Boss, Hermes, Jarvis) are covered via
-              `paneObservable={false}`: `capture_pane` returns None for them, so
-              `_compute_pane_state` reports a confident `working`/`idle` from
-              transcript mtime alone and never `unknown`
-              (transcript_chat.py:1285-1291) — a Boss that thinks without writing
-              read as `idle` and left no way to interrupt. The cost is a Stop that
-              is also visible while such an agent rests; operator-decided
-              (18.08.2026): a control that is missing when you need it is worse
-              than one that waits. */}
-          <div className="ml-auto flex items-center gap-1.5">
-          {modeSlot}
+              Host agents (Boss, Hermes, Jarvis) have no pane: their state
+              comes from the turn in the transcript (backend
+              `_compute_pane_state`, pane-less branch) — an unfinished turn
+              reads "working" until the stale limit, so a silent Boss still
+              gets Stop, and a Boss at rest gets Send like everyone else. */}
+          {/* shrink-0: the controls on the right never give way — Send/Stop
+              must stay on the screen; the model chip gives way instead. */}
+          <div data-testid="composer-actions" className="ml-auto flex shrink-0 items-center gap-1.5">
+          {modeSlot && <span className={SLOT_HIT_44}>{modeSlot}</span>}
           {(currentEffort ||
             (effortSupported && effortLevels.length > 0) ||
             /* Der Chip erscheint AUCH ohne bekannte Stufe, sobald das Backend
@@ -1344,7 +1367,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   data-level={currentEffort ?? "auto"}
                   data-pending={pendingEffort != null}
                   disabled={pendingEffort != null}
-                  className="inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full cursor-pointer transition-colors disabled:cursor-wait"
+                  className={`${HIT_44} inline-flex items-center justify-center gap-1 w-12 h-9 md:h-8 rounded-full cursor-pointer transition-colors disabled:cursor-wait`}
                   style={{
                     backgroundColor: effortOpen ? C.bgHover : "transparent",
                     color: pendingEffort != null ? C.textMuted : effortOpen ? C.textPrimary : C.textSecondary,
@@ -1569,7 +1592,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 {effortWord(currentEffort)}
               </span>
             ))}
-            {voiceSlot}
+            {voiceSlot && <span className={SLOT_HIT_44}>{voiceSlot}</span>}
             {sessionLive && (
               !showStop ? (
                 <button
@@ -1579,7 +1602,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   disabled={!hasText}
                   data-empty={!hasText}
                   data-testid="send-button"
-                  className="inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer disabled:cursor-not-allowed transition-colors"
+                  className={`${HIT_44} inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer disabled:cursor-not-allowed transition-colors`}
                   style={
                     hasText
                       ? { backgroundColor: C.accent, color: C.onAccent }
@@ -1599,12 +1622,12 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                   aria-label={t("stop")}
                   title={t("interruptEsc")}
                   data-testid="stop-button-prominent"
-                  data-reason={isWorking ? "working" : !paneObservable ? "unobservable" : "unknown"}
+                  data-reason={isWorking ? "working" : "unknown"}
                   /* The pulse is a claim of live activity, so it only runs when
                      the probe actually confirmed "working". On an unreadable
                      pane the control is offered without animating something we
                      don't know. */
-                  className={`${isWorking ? "animate-pulse " : ""}inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer`}
+                  className={`${HIT_44} ${isWorking ? "animate-pulse " : ""}inline-flex items-center justify-center w-9 h-9 md:w-8 md:h-8 rounded-full cursor-pointer`}
                   style={{
                     backgroundColor: C.accentSubtle,
                     color: C.textPrimary,

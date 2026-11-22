@@ -224,7 +224,11 @@ async def state_of(principal: Principal, *, redis=None, warming: bool | None = N
         listening = bool(reported_listening) if presence else None
 
     busy = bool(presence.get("busy")) if presence else False
-    if agent is not None and agent.run_state == "running":
+    # A run_state of "running" counts only while the agent is alive (the
+    # newer of presence and DB beat, as above): an agent switched off
+    # mid-turn kept "running" in its row and read "busy" for days (user test
+    # 21.11.2026). The stored value is untouched; dispatch keeps its rules.
+    if agent is not None and alive == "yes" and agent.run_state == "running":
         busy = True
 
     return {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext } from "react";
+import { useContext, useEffect, useState } from "react";
 import { QueryClientContext } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
 import { isSwitching, useChatSwitch } from "@/hooks/useChatSwitch";
@@ -45,8 +45,8 @@ export function isTurnRunning(state: StateEvent | null, sending = false): boolea
 
 /**
  * The one muted line under the chat title (variant C): "Working for 3 min",
- * "Ready". The model is named once, in the speed line under the composer
- * (operator pictures 18.11.2026: the same id stood in both places). The duration counts from the operator's last
+ * "Ready". The model is named once, in the composer's chip (operator
+ * pictures 18.11.2026 and user test 21.11.2026: the same id stood twice). The duration counts from the operator's last
  * message in the transcript — the start of the running turn — and only
  * shows from one minute on (K17). Nothing known → no line (K3).
  */
@@ -85,6 +85,18 @@ export function SublineView({
   const locale = useLocale();
   const now = useNow(30_000);
   const kind = sublineKind(state, aliveness, sending);
+  // When the operator last sent, locally. The duration never starts before
+  // it: right after a send the transcript still ends with the PREVIOUS
+  // operator message, and the header read "Working for 23 h" (user test
+  // 21.11.2026). Kept until the turn ends, so a send flag that clears
+  // before the new message reaches the transcript changes nothing.
+  const [sentAt, setSentAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (sending) setSentAt((prev) => prev ?? Date.now());
+  }, [sending]);
+  useEffect(() => {
+    if (kind !== "working") setSentAt(null);
+  }, [kind]);
   if (switching && aliveness !== "ended") {
     return (
       <span data-testid="chat-header-subline" data-kind="switching" className="text-xs leading-tight truncate" style={{ color: C.textMuted }}>
@@ -96,8 +108,10 @@ export function SublineView({
 
   let text: string | null;
   if (kind === "working") {
-    const started = turnStartedAt ? Date.parse(turnStartedAt) : NaN;
-    const seconds = Number.isNaN(started) ? null : (now - started) / 1000;
+    const floor = sentAt ?? (sending ? now : null);
+    let started = turnStartedAt ? Date.parse(turnStartedAt) : NaN;
+    if (floor != null && (Number.isNaN(started) || started < floor)) started = floor;
+    const seconds = Number.isNaN(started) ? null : Math.max(0, now - started) / 1000;
     const span = seconds != null && seconds >= 60 ? formatSpan(seconds, locale) : null;
     text = span ? t("workingFor", { span }) : t("working");
   } else if (kind === "waiting") {

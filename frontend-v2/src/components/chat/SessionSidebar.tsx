@@ -21,6 +21,7 @@ import { useTranslations } from "next-intl";
 import { Archive, ChevronDown, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { C } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
+import { isAgentOff, runningFirst, type SessionFacts } from "@/lib/chatList";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { GroupRow } from "@/components/groupchat/GroupRow";
 import { ArchivedGroupsSection } from "@/components/groupchat/ArchivedGroupsSection";
@@ -176,6 +177,7 @@ export function SessionSidebar({
 }: SessionSidebarProps) {
   const t = useTranslations("sessions.groups");
   const th = useTranslations("heads");
+  const tc = useTranslations("cockpit");
   const [sheetOpen, setSheetOpen] = useState(false);
   const [headArchiveOpen, setHeadArchiveOpen] = useState(false);
   const showHeads = !!onSelectHead && ((heads?.length ?? 0) > 0 || archivedCount > 0);
@@ -386,8 +388,11 @@ export function SessionSidebar({
             {group.label}
           </div>
           <div className="flex flex-col">
-            {group.agents.map((agent) => {
-              const taskTitle = taskTitleFor(agent, tasks);
+            {/* Running agents first, those whose session is not running
+                below — in the picker only (user test 21.11.2026). */}
+            {runningFirst(group.agents as (typeof group.agents[number] & SessionFacts)[]).map((agent) => {
+              const off = isAgentOff(agent);
+              const taskTitle = off ? tc("stateOff") : taskTitleFor(agent, tasks);
               const selected = agent.id === selectedId;
               const showTerminalChip = !hasTranscript(agent.id);
               return (
@@ -408,7 +413,16 @@ export function SessionSidebar({
                     borderTop: stack ? `1px solid ${C.borderSubtle}` : undefined,
                   }}
                 >
-                  <StatusDot status={toDotStatus(agent.status)} size="sm" pulse={agent.status === "busy"} />
+                  {off ? (
+                    <span
+                      data-testid="session-off-dot"
+                      aria-hidden="true"
+                      className="w-1.5 h-1.5 rounded-full shrink-0"
+                      style={{ border: `1px solid ${C.textDim}` }}
+                    />
+                  ) : (
+                    <StatusDot status={toDotStatus(agent.status)} size="sm" pulse={agent.status === "busy"} />
+                  )}
                   <span className="flex-1 min-w-0">
                     <span
                       className={`block font-medium truncate ${stack ? "text-[14px]" : "text-[13px]"}`}

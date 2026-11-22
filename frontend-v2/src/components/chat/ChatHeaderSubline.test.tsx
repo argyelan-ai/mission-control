@@ -4,7 +4,7 @@
  * known. The model is named once, in the speed line (operator 18.11.2026).
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 import en from "../../../messages/en.json";
 import de from "../../../messages/de.json";
@@ -48,6 +48,34 @@ describe("ChatHeaderSubline", () => {
     vi.useFakeTimers({ now: new Date("2026-11-18T12:03:20Z") });
     renderLine({ state: st("working"), aliveness: "active", turnStartedAt: "2026-11-18T12:00:00Z" });
     expect(screen.getByTestId("chat-header-subline")).toHaveTextContent(/^Working for 3 min$/);
+  });
+
+  it("right after a send it never counts from the previous turn (user test 21.11.: 'Working for 23 h')", () => {
+    vi.useFakeTimers({ now: new Date("2026-11-21T12:00:00Z") });
+    renderLine({ state: st("idle"), aliveness: "active", turnStartedAt: "2026-11-20T13:00:00Z", sending: true });
+    expect(screen.getByTestId("chat-header-subline")).toHaveTextContent(/^Working$/);
+  });
+
+  it("counts from the local send until the transcript shows the new message", () => {
+    vi.useFakeTimers({ now: new Date("2026-11-21T12:00:00Z") });
+    const old = "2026-11-20T13:00:00Z";
+    const wrap = (props: Partial<React.ComponentProps<typeof ChatHeaderSubline>>) => (
+      <NextIntlClientProvider locale="en" messages={en}>
+        <ChatHeaderSubline state={st("working")} aliveness="active" turnStartedAt={old} {...props} />
+      </NextIntlClientProvider>
+    );
+    const { rerender } = render(wrap({ sending: true }));
+    // The send flag clears on the first sign of the turn; the transcript may
+    // still lack the operator's new message — the old one must not date it.
+    rerender(wrap({ sending: false }));
+    expect(screen.getByTestId("chat-header-subline")).toHaveTextContent(/^Working$/);
+    act(() => {
+      vi.advanceTimersByTime(125_000);
+    });
+    expect(screen.getByTestId("chat-header-subline")).toHaveTextContent(/^Working for 2 min$/);
+    // Once the new message is in the transcript, it is the start again.
+    rerender(wrap({ sending: false, turnStartedAt: "2026-11-21T12:01:00Z" }));
+    expect(screen.getByTestId("chat-header-subline")).toHaveTextContent(/^Working for 1 min$/);
   });
 
   it("says only Working under a minute (K17: no seconds)", () => {

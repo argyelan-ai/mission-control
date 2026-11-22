@@ -16,7 +16,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ToolGroup, summarizeActivity, toolGroupLabel, type ActivityEvent } from "./ToolGroup";
+import { ToolGroup, summarizeActivity, toolGroupFailed, toolGroupLabel, type ActivityEvent } from "./ToolGroup";
 import type { ThinkingEvent, ToolEvent } from "@/lib/chatTypes";
 import { STATUS_TEXT } from "@/lib/colors";
 import en from "../../../messages/en.json";
@@ -137,14 +137,18 @@ describe("toolGroupLabel", () => {
     expect(toolGroupLabel(s, tEn)).toBe("1 tool used, thought");
   });
 
-  it("names how many tools failed in the visible line", () => {
+  // User test 21.11.2026: the failure stands FIRST and on its own, so a
+  // long label can never cut it off ("N failed · N tools · duration").
+  it("keeps the failure out of the label — it has its own part, first", () => {
     const s = summarizeActivity([tool(), tool({ status: "error" }), tool(), thinking()]);
-    expect(toolGroupLabel(s, tEn)).toBe("3 tools used, 1 failed, thought");
+    expect(toolGroupLabel(s, tEn)).toBe("3 tools used, thought");
+    expect(toolGroupFailed(s, tEn)).toBe("1 failed");
+    expect(toolGroupFailed(summarizeActivity([tool()]), tEn)).toBeNull();
   });
 
   it("pluralises the count, not the invariant word 'failed'", () => {
     const s = summarizeActivity([tool({ status: "error" }), tool({ status: "error" })]);
-    expect(toolGroupLabel(s, tEn)).toBe("2 tools used, 2 failed");
+    expect(toolGroupFailed(s, tEn)).toBe("2 failed");
   });
 
   it("falls back to 'Activity' for an empty summary", () => {
@@ -153,7 +157,8 @@ describe("toolGroupLabel", () => {
 
   it("renders the matching German wording in the German UI", () => {
     const s = summarizeActivity([tool({ name: "Bash" }), tool({ name: "Read" }), thinking()]);
-    expect(toolGroupLabel(s, tDe)).toBe("1 Befehl ausgeführt, 1 Tool verwendet, nachgedacht");
+    expect(toolGroupLabel(s, tDe)).toBe("1 Befehl ausgeführt, 1 Werkzeug verwendet, nachgedacht");
+    expect(toolGroupLabel(summarizeActivity([tool(), tool()]), tDe)).toBe("2 Werkzeuge verwendet");
   });
 });
 
@@ -183,11 +188,6 @@ describe("ToolGroup", () => {
     expect(chip).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Read foo.py")).toBeInTheDocument();
     expect(screen.getByText("npm test")).toBeInTheDocument();
-  });
-
-  it("shows the row count next to the label", () => {
-    render(<ToolGroup events={RUN} detailLevel="normal" />);
-    expect(screen.getByTestId("tool-group")).toHaveTextContent("2");
   });
 
   it("shows a warning icon when the run contains a failed tool", () => {
@@ -309,5 +309,28 @@ describe("ToolGroup — how long the grouped work took", () => {
     expect(screen.queryByTestId("tool-group-duration")).toBeNull();
     rerender(<ToolGroup events={run()} endTs="2026-08-17T09:00:00Z" />);
     expect(screen.queryByTestId("tool-group-duration")).toBeNull();
+  });
+});
+
+describe("ToolGroup — one line: failed · tools · duration (user test 21.11.)", () => {
+  it("shows no bare trailing count, and the failure before the label, never truncated", () => {
+    const run: ActivityEvent[] = [
+      tool({ ts: "2026-08-17T10:00:00Z", status: "error" }),
+      tool({ ts: "2026-08-17T10:01:00Z" }),
+      tool({ ts: "2026-08-17T10:02:00Z" }),
+    ];
+    render(<ToolGroup events={run} endTs="2026-08-17T10:03:00Z" />);
+    const button = screen.getByRole("button");
+    const failed = screen.getByTestId("tool-group-failed");
+    const label = screen.getByTestId("tool-group-label");
+    const duration = screen.getByTestId("tool-group-duration");
+    expect(failed.className).not.toContain("truncate");
+    expect(failed.className).toContain("shrink-0");
+    // Reading order: failed, then the label, then the duration.
+    expect(failed.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(label.compareDocumentPosition(duration) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The old bare "3" at the end is gone.
+    expect(button.textContent?.trim().endsWith("3")).toBe(false);
+    expect(button.querySelector(".font-mono")).toBeNull();
   });
 });

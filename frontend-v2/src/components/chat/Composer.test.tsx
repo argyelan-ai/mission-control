@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Composer, effortReasonText } from "./Composer";
+import { isStatusUnknown } from "./StatusLine";
 import type { ChatAttachment, StateEvent, UsageEvent } from "@/lib/chatTypes";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
@@ -60,7 +61,8 @@ describe("Composer", () => {
       <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} voiceSlot={<button data-testid="mic-slot">mic</button>} />,
     );
     const mic = screen.getByTestId("mic-slot");
-    expect(mic.nextElementSibling).toBe(screen.getByTestId("send-button"));
+    // The slot sits in a hit-area wrapper (user test 21.11.2026, K11).
+    expect(mic.parentElement!.nextElementSibling).toBe(screen.getByTestId("send-button"));
     rerender(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
     expect(screen.queryByTestId("mic-slot")).toBeNull();
   });
@@ -125,13 +127,6 @@ describe("Composer", () => {
   // Stop appears whenever working cannot be DISPROVED and there is nothing to
   // send: confirmed "working", or a pane the probe couldn't classify at all.
   //
-  // Host agents (Boss, Hermes, Jarvis) are covered via `paneObservable={false}`:
-  // `capture_pane` returns None for them, so the backend reports a confident
-  // `working`/`idle` from transcript mtime alone and never `unknown`
-  // (transcript_chat.py:1285-1291) — a Boss thinking without writing read as
-  // `idle` and offered a disabled Send, i.e. no way to interrupt at all. The
-  // accepted cost (operator decision 18.08.2026) is a Stop that stays visible
-  // while such an agent rests.
 
   it("morphs to Stop while the agent works and the input is empty", () => {
     render(<Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={vi.fn()} />);
@@ -194,36 +189,36 @@ describe("Composer", () => {
     expect(stop).toHaveAttribute("data-reason", "working");
   });
 
-  it("keeps Stop reachable for an agent whose pane cannot be read at all", () => {
-    // Boss idles on the transcript clock even while thinking — without this the
-    // only control on offer was a disabled Send.
+  // User test 21.11.2026 (operator pictures): Boss read "Bereit" in the
+  // header and the status line, and the button next to it was a Stop. The
+  // button now follows the same state the status line shows — Stop only
+  // while working or when the status is unknown, for every agent.
+  it("an idle agent whose pane cannot be read shows the send arrow, as its status line says Ready", () => {
     render(
       <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} paneObservable={false} />
     );
-    const stop = screen.getByTestId("stop-button-prominent");
-    expect(stop).toHaveAttribute("data-reason", "unobservable");
-    expect(stop).not.toHaveClass("animate-pulse"); // kein Puls: Aktivitaet ist nicht bestaetigt
-    expect(screen.queryByTestId("send-button")).not.toBeInTheDocument();
+    expect(screen.getByTestId("send-button")).toBeDisabled();
+    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
   });
 
-  it("still calls onStop for an unobservable agent", async () => {
+  it("an unobservable agent that works still gets the Stop", async () => {
     const user = userEvent.setup();
     const onStop = vi.fn();
     render(
-      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={onStop} paneObservable={false} />
+      <Composer agentId="a1" usage={null} state={mkState("working")} onSend={vi.fn()} onStop={onStop} paneObservable={false} />
     );
     await user.click(screen.getByTestId("stop-button-prominent"));
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it("lets text win over the unobservable Stop — steering stays possible", async () => {
-    const user = userEvent.setup();
-    render(
-      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} paneObservable={false} />
-    );
-    await user.type(screen.getByPlaceholderText(/Message the agent/), "mach bitte X");
-    expect(screen.getByTestId("send-button")).toBeEnabled();
-    expect(screen.queryByTestId("stop-button-prominent")).not.toBeInTheDocument();
+  it("Stop on an unknown status agrees with the status line's 'Status unknown'", () => {
+    const state = mkState("unknown");
+    expect(isStatusUnknown(state)).toBe(true);
+    expect(isStatusUnknown(mkState("idle"))).toBe(false);
+    // Before the first probe tick nothing is unknown yet — no Stop flash.
+    expect(isStatusUnknown(null)).toBe(false);
+    render(<Composer agentId="a1" usage={null} state={state} onSend={vi.fn()} onStop={vi.fn()} paneObservable={false} />);
+    expect(screen.getByTestId("stop-button-prominent")).toHaveAttribute("data-reason", "unknown");
   });
 
   it("does NOT change readable agents: idle cli-bridge keeps the ghost Send", () => {
@@ -684,7 +679,9 @@ describe("Composer", () => {
       render(
         <Composer agentId="a1" usage={mkUsage({ model: "kimi-code/k3", effort: null })} capabilities={FOREIGN} state={null} onSend={vi.fn()} onStop={vi.fn()} />
       );
-      expect(screen.getByTestId("model-chip-static")).toHaveTextContent("kimi-code/k3");
+      // Short name on the chip (user test 21.11.2026), full id in the tooltip.
+      expect(screen.getByTestId("model-chip-static")).toHaveTextContent(/^k3$/);
+      expect(screen.getByTestId("model-chip-static")).toHaveAttribute("title", "kimi-code/k3");
       expect(screen.queryByRole("button", { name: /kimi-code/ })).not.toBeInTheDocument();
     });
 
@@ -699,8 +696,11 @@ describe("Composer", () => {
       expect(chip.className).toContain("whitespace-nowrap");
       expect(chip.className).toContain("max-w-full");
       expect(chip).toHaveAttribute("title", long);
-      expect(chip.querySelector(".truncate")).toHaveTextContent(long);
+      expect(chip.querySelector(".truncate")).toHaveTextContent("GLM-5.3-Flash-EXL3-very-long-model-name");
+      // The chip is the one part of the row that gives way (min-w-0): a long
+      // name cuts, it never pushes Send off a 390 px screen.
       expect(chip.parentElement!.className).toContain("min-w-0");
+      expect(chip.parentElement!.className).not.toContain("shrink-0");
       expect(chip.parentElement!.className).toContain("max-w-40");
     });
 
@@ -2447,5 +2447,90 @@ describe("Composer @ file mention", () => {
     await user.click(await screen.findByTestId("mention-item-src/Composer.tsx"));
     await user.keyboard("{Enter}");
     expect(onSend).toHaveBeenCalledWith("look at @src/Composer.tsx ");
+  });
+});
+
+// User test 21.11.2026 (F10): the input bar's buttons were 28–36 px — under
+// the 44 px finger target (DESIGN.md K11). Every control keeps its look and
+// gets a 44 × 44 hit area: a real 44 px box, or an invisible ::before of at
+// least 44 × 44 centred on it. Same kind of class check as the settings
+// rows' ≥ 44 px test. The number of buttons does not change (operator's call).
+describe("Composer — every input-bar button is a 44 px finger target", () => {
+  const classes = (el: Element) => (el.getAttribute("class") ?? "").split(/\s+/);
+  const hits44 = (el: Element) => {
+    const c = classes(el);
+    const box = (c.includes("h-11") || c.includes("min-h-11")) && (c.includes("w-11") || c.includes("w-12") || c.includes("min-w-11"));
+    const halo = c.includes("relative") && c.includes("before:min-h-11") && c.includes("before:min-w-11") && c.includes("before:absolute");
+    return box || halo;
+  };
+  const slotHits44 = (el: Element) => {
+    const c = classes(el);
+    return c.includes("[&>button]:before:min-h-11") && c.includes("[&>button]:before:min-w-11") && c.includes("[&>button]:relative");
+  };
+
+  function renderFull(state: StateEvent["status"] = "idle") {
+    return render(
+      <Composer
+        agentId="a1"
+        usage={mkUsage({ model: "DeepSeek-V4.1-Flash-1017" })}
+        state={mkState(state)}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        capabilities={{
+          effortLevels: ["low", "medium", "high"],
+          canSwitchEffort: true,
+          modelOptions: [{ command: "mc-openai/DeepSeek-V4.1-Flash-1017", label: "DeepSeek-V4.1-Flash-1017", contextWindow: null }],
+          model: "mc-openai/DeepSeek-V4.1-Flash-1017",
+        }}
+        modeSlot={<button type="button" data-testid="mode-slot" className="h-9 px-2">plan</button>}
+        voiceSlot={<button type="button" data-testid="mic-slot" className="w-11 h-11">mic</button>}
+      />,
+    );
+  }
+
+  it("attach, model, context, effort and send each hit 44 × 44", () => {
+    renderFull();
+    for (const el of [
+      screen.getByRole("button", { name: /attach/i }),
+      screen.getByTestId("model-chip"),
+      screen.getByTestId("context-ring").closest("button")!,
+      screen.getByTestId("effort-chip"),
+      screen.getByTestId("send-button"),
+    ]) {
+      expect(hits44(el), el.outerHTML.slice(0, 160)).toBe(true);
+    }
+  });
+
+  it("the Stop in the send button's place hits 44 × 44 too", () => {
+    renderFull("working");
+    expect(hits44(screen.getByTestId("stop-button-prominent"))).toBe(true);
+  });
+
+  it("buttons handed in from outside (plan mode, mic) get the same hit area", () => {
+    renderFull();
+    expect(slotHits44(screen.getByTestId("mode-slot").parentElement!)).toBe(true);
+    expect(slotHits44(screen.getByTestId("mic-slot").parentElement!)).toBe(true);
+  });
+
+  it("the chip names the model without its provider path, identity kept", () => {
+    renderFull();
+    const chip = screen.getByTestId("model-chip");
+    expect(chip).toHaveTextContent(/^DeepSeek-V4\.1-Flash-1017$/);
+  });
+
+  it("Send/Stop never leave a 390 px screen: the right-hand controls do not shrink, the model chip does", () => {
+    // Critic probe 21.11.2026: a non-shrinking chip with mode chip, mic and
+    // 'Apodex-1.1-mini-NVFP4' put Send at x = 399 px on a 390 px phone.
+    // jsdom has no layout, so this pins the flex contract; the layout itself
+    // is measured in the picture harness (send.right <= 390).
+    renderFull();
+    const actions = screen.getByTestId("composer-actions");
+    expect(actions.className).toContain("shrink-0");
+    expect(actions).toContainElement(screen.getByTestId("send-button"));
+    expect(actions).toContainElement(screen.getByTestId("mic-slot"));
+    expect(actions).toContainElement(screen.getByTestId("mode-slot"));
+    const chipBox = screen.getByTestId("model-chip").parentElement!;
+    expect(chipBox.className).toContain("min-w-0");
+    expect(chipBox.className).not.toContain("shrink-0");
   });
 });
