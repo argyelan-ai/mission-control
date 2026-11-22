@@ -140,14 +140,19 @@
       "discardBody": "Was du in diesem Formular eingegeben hast, geht verloren.",
       "discardConfirm": "Verwerfen",
       "discardKeep": "Weiter bearbeiten",
-      "title": "Neuer Task",
+      "title": "Neue Aufgabe",
       "close": "Schliessen",
       "cancel": "Abbrechen",
-      "create": "Task anlegen",
+      "create": "Aufgabe anlegen",
       "retryUploads": "Uploads wiederholen",
       "shortcutHint": "Cmd+Enter = anlegen · Esc = schliessen",
-      "created": "Task angelegt",
-      "createFailed": "Anlegen fehlgeschlagen"
+      "created": "Aufgabe angelegt",
+      "createFailed": "Anlegen fehlgeschlagen",
+      "uploadFailed": "Hochladen fehlgeschlagen",
+      "uploadErrorsOne": "Aufgabe angelegt, aber {count} Referenzdatei konnte nicht hochgeladen werden: {errors}",
+      "uploadErrorsOther": "Aufgabe angelegt, aber {count} Referenzdateien konnten nicht hochgeladen werden: {errors}",
+      "uploadErrorsHint": "Die Aufgabe wurde ohne die fehlerhaften Dateien angelegt. Sie ist noch nicht gestartet — starte sie in den Details der Aufgabe.",
+      "triggerLabel": "Neue Aufgabe"
     },
     "title": "Aufgaben",
     "noBoardSelected": "Kein Board ausgewählt",
@@ -206,7 +211,6 @@
     "selectTaskFromList": "Aufgabe aus der Liste wählen",
     "groupByProjectHint": "Nach Projekt gruppieren, um zur Phasenansicht eines Projekts zu gelangen",
     "statusInProgress": "In Arbeit",
-    "consoleTasks": "Konsole · Aufgaben",
     "openCount": "{count} offen",
     "searchPlaceholder": "Aufgaben suchen…",
     "searchTasks": "Aufgaben suchen",
@@ -540,7 +544,6 @@
   },
   "agents": {
     "title": "Agenten",
-    "fleetAgents": "Fleet · Agenten",
     "newAgent": "Neuer Agent",
     "templates": "Templates",
     "allAgents": "Alle Agenten",
@@ -795,6 +798,141 @@
       "pausedWorking": "Pausiert · beendet laufende Aufgabe",
       "pausedShort": "Pausiert",
       "pausedHint": "Pausiert heisst: MC gibt diesem Agenten keine neuen Aufgaben. Eine laufende Aufgabe wird noch zu Ende geführt."
+    },
+    "wizard": {
+      "title": "Neuer Agent",
+      "close": "Assistent schliessen",
+      "back": "Zurück",
+      "next": "Weiter",
+      "steps": {
+        "start": "Start",
+        "identity": "Name & Rolle",
+        "runtime": "Motor & Modell",
+        "rights": "Rechte & Fähigkeiten",
+        "review": "Prüfen & anlegen"
+      },
+      "blockers": {
+        "harness": "Wähle ein Werkzeug (Harness) — ohne kann der Agent später nicht eingerichtet werden.",
+        "hostRuntime": "Wähle einen KI-Motor — Agenten auf dem Mac brauchen ihn schon beim Anlegen.",
+        "ompRuntime": "Wähle einen KI-Motor — omp startet ohne verbundenen Motor nicht."
+      },
+      "start": {
+        "custom": "Eigener",
+        "customHint": "Von Grund auf einrichten",
+        "template": "Vorlage",
+        "templateHint": "Aus einer Rollen-Vorlage",
+        "duplicate": "Kopieren",
+        "duplicateHint": "Einen vorhandenen Agenten kopieren",
+        "selectTemplate": "Vorlage wählen",
+        "selectAgent": "Agent zum Kopieren wählen",
+        "copyName": "{name} Kopie"
+      },
+      "identity": {
+        "name": "Name *",
+        "namePlaceholder": "z. B. Cody",
+        "emoji": "Emoji",
+        "role": "Rolle",
+        "rolePlaceholder": "Entwickler",
+        "board": "Board",
+        "noBoard": "Kein Board",
+        "boardLead": "Board-Leitung (verteilt die Arbeit — bekommt alle Rechte)",
+        "preview": "Vorschau der Persona",
+        "loading": "· lädt…",
+        "previewEmpty": "Gib einen Namen ein, um die erzeugte Persona zu sehen…"
+      },
+      "runtime": {
+        "type": "Wo der Agent läuft",
+        "cliBridge": "Container (Docker)",
+        "cliBridgeHint": "Lokaler Container, richtet sich selbst ein",
+        "host": "Direkt auf dem Mac",
+        "hostHint": "Programm läuft direkt auf dem Mac (launchd)",
+        "manual": "Manuell",
+        "manualHint": "Keine automatische Einrichtung",
+        "matrixFailed": "Die Werkzeug-Liste konnte nicht geladen werden — bis dahin ist keine Auswahl möglich.",
+        "retry": "Nochmal versuchen",
+        "harness": "Werkzeug (Harness)",
+        "harnessTaken": "Nur einmal möglich — es gibt schon einen '{harness}'-Agenten auf dem Mac",
+        "grokHint": "Grok Build spricht über die eigene Anmeldung mit der xAI-Cloud — nur der Motor {runtime} passt.",
+        "kimiHint": "Kimi Code spricht über die eigene Anmeldung mit der Moonshot-Cloud — nur der Motor {runtime} passt. Nach dem Einrichten einmal {login} im Chat-Terminal ausführen (Gerätecode).",
+        "provider": "KI-Motor / Anbieter",
+        "providersFailed": "Die Anbieter-Liste konnte nicht geladen werden — bis dahin ist nur der Standard wählbar.",
+        "fallback": "Standard (aus der Docker-Einstellung)",
+        "singleInstance": "Motor nur für einen Agenten",
+        "disabled": " · ausgeschaltet",
+        "model": "Modell (optional)",
+        "bridgeDown": "Container-Helfer nicht erreichbar.",
+        "bridgeDownHint": "Der Agent wird angelegt, bleibt aber uneingerichtet, bis der Helfer läuft:"
+      },
+      "scopes": {
+        "title": "Rechte ({count})",
+        "roleDefault": "Standard der Rolle",
+        "deviates": "Weicht vom Standard der Rolle ab",
+        "hint": "Oranger Rand = weicht vom Standard der Rolle ab. Ein Agent braucht mindestens ein Recht — eine leere Liste hiesse auf dem Server ALLE Rechte.",
+        "plugins": "Erweiterungen (optional)",
+        "pluginsHint": "Leer = alle installierten Erweiterungen (Standard)."
+      },
+      "review": {
+        "name": "Name",
+        "role": "Rolle",
+        "runtime": "Läuft als",
+        "harness": "Werkzeug",
+        "harnessDerived": "(automatisch)",
+        "llmRuntime": "KI-Motor",
+        "fallback": "Standard",
+        "model": "Modell",
+        "modelDefault": "(Standard des Motors)",
+        "scopes": "Rechte",
+        "scopesCount": "{count} gewählt",
+        "boardLead": "Board-Leitung",
+        "yes": "ja",
+        "no": "nein",
+        "runtimeValue": {
+          "cli-bridge": "Container (Docker)",
+          "host": "Direkt auf dem Mac",
+          "manual": "Manuell"
+        },
+        "grokTitle": "Grok Build muss auf dem Mac angemeldet sein.",
+        "grokBody": "Ohne gültige xAI-Anmeldung ({file}) bleiben Aufträge hängen. Einmalig auf dem Mac: {cmd}.",
+        "creating": "Wird angelegt…",
+        "create": "Agent anlegen",
+        "created": "Agent „{name}“ angelegt",
+        "hostFilesFailed": "Die Dateien für den Mac konnten nicht erzeugt werden — später über „Einrichten“ nochmal versuchen.",
+        "createFailed": "Anlegen fehlgeschlagen: {message}",
+        "errorFallback": "Fehler",
+        "token": "Agent-Schlüssel (nur einmal sichtbar — jetzt speichern!)",
+        "readiness": "Bereitschafts-Prüfung",
+        "waiting": "warte auf die Einrichtung…",
+        "hostNote": "Agent auf dem Mac: Die Dateien liegen unter ~/.mc/agents/<slug>/. Mit launchctl auf dem Mac laden (siehe Aktivität) — dann wird der Herzschlag grün.",
+        "done": "Fertig",
+        "check": {
+          "provisioned": {
+            "label": "Eingerichtet",
+            "ok": "erledigt",
+            "fail": "noch nicht eingerichtet"
+          },
+          "bridgeHelper": {
+            "label": "Container-Helfer",
+            "ok": "erreichbar",
+            "fail": "nicht erreichbar"
+          },
+          "heartbeat": {
+            "label": "Herzschlag",
+            "ok": "meldet sich",
+            "fail": "meldet sich noch nicht"
+          },
+          "hostHeartbeat": {
+            "label": "Herzschlag vom Mac",
+            "ok": "vor weniger als 3 Min. gesehen",
+            "fail": "kein Herzschlag — der Dienst auf dem Mac ist evtl. nicht geladen"
+          },
+          "runtime": {
+            "label": "Laufzeit",
+            "ok": "keine automatische Prüfung möglich",
+            "fail": "keine automatische Prüfung möglich"
+          }
+        }
+      },
+      "copyToken": "Schlüssel kopieren"
     }
   },
   "inbox": {
@@ -1114,7 +1252,7 @@
     "options": "Optionen",
     "closeOptions": "Optionen schliessen",
     "sectionView": "Ansicht",
-    "sectionPanels": "Panels",
+    "sectionPanels": "Ansichten",
     "messagePlaceholder": "Nachricht an den Agenten…",
     "send": "Senden",
     "stop": "Stop",
@@ -1138,20 +1276,21 @@
     "contextPanelSource": "Quelle",
     "contextPanelCacheRate": "Cache-Trefferquote",
     "contextPanelCost": "Sitzungskosten",
-    "contextPanelNote": "Die Agent-Seite zeigt den zuletzt gemeldeten Wert seiner Arbeits-Sitzung — darum kann die Zahl dort abweichen. Die CLI-Statuszeile zeigt den Rest bis zur Auto-Komprimierung. Andere Sitzung bzw. Basis, beide korrekt.",
+    "contextPanelNote": "Die Agent-Seite zeigt den zuletzt gemeldeten Wert seiner Arbeits-Sitzung — darum kann die Zahl dort abweichen. Kurz bevor der Kontext voll ist, fasst der Agent den Chat automatisch zusammen.",
     "contextPanelClose": "Schliessen",
     "slashCommands": {
       "model": "Modell wechseln",
       "clear": "Verlauf löschen",
-      "compact": "Kontext komprimieren",
+      "compact": "Chat zusammenfassen, um Platz zu schaffen",
       "context": "Kontext-Nutzung anzeigen",
-      "status": "Session-Status anzeigen",
-      "help": "Hilfe anzeigen"
+      "status": "Sitzungs-Status anzeigen",
+      "help": "Hilfe anzeigen",
+      "new": "Neuen, leeren Chat beginnen"
     },
-    "effortLevel": "Effort-Stufe",
-    "effortLevelCurrent": "Effort-Stufe: {level}",
-    "effortLevelLocked": "Effort-Stufe: {level} (nicht umschaltbar)",
-    "effortLockedHint": "Effort lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal.",
+    "effortLevel": "Denktiefe",
+    "effortLevelCurrent": "Denktiefe: {level}",
+    "effortLevelLocked": "Denktiefe: {level} (nicht umschaltbar)",
+    "effortLockedHint": "Die Denktiefe lässt sich für diesen Agenten nicht über den Chat umstellen — seine Runtime hat kein steuerbares Terminal.",
     "agentCardNoTranscript": "Für diesen Auftrag gibt es kein eigenes Protokoll.",
     "agentCardLoading": "Protokoll wird geladen …",
     "agentCardExpand": "Protokoll des Subagenten anzeigen",
@@ -1160,8 +1299,8 @@
     "notificationDone": "fertig",
     "notificationFailed": "fehlgeschlagen",
     "effortLockedForeignHarness": "Diese CLI kennt kein /effort — es gibt hier keine Stufen zum Umschalten.",
-    "effortLockedModelNoEffort": "Das Modell {model} kennt keine Effort-Stufen — die CLI meldet das selbst. Mit einem anderen Modell erscheint der Regler wieder.",
-    "effortLockedModelNoEffortGeneric": "Das aktuelle Modell kennt keine Effort-Stufen — die CLI meldet das selbst. Mit einem anderen Modell erscheint der Regler wieder.",
+    "effortLockedModelNoEffort": "Das Modell {model} kennt keine Denktiefe-Stufen — die CLI meldet das selbst. Mit einem anderen Modell erscheint der Regler wieder.",
+    "effortLockedModelNoEffortGeneric": "Das aktuelle Modell kennt keine Denktiefe-Stufen — die CLI meldet das selbst. Mit einem anderen Modell erscheint der Regler wieder.",
     "effortLockedStateMissing": "Der Agent hat seine Einstellungen noch nicht gemeldet — die Denkstufe erscheint, sobald er es tut.",
     "effortLockedHarnessNoEffort": "{harness} bietet keine Denkstufe an.",
     "effortLockedHarnessNoEffortGeneric": "Der Harness dieses Agenten bietet keine Denkstufe an.",
@@ -1171,10 +1310,10 @@
     "effortBecomesDefaultShared": "wird Standard — auch für deine lokalen Claude-Sessions (geteilte Config)",
     "effortApplying": "wird gesetzt …",
     "effortAgentBusy": "Agent arbeitet gerade — nach dem Zug erneut versuchen",
-    "effortRejectedReason": "Effort abgelehnt: {reason}",
-    "effortRejected": "Effort-Wechsel abgelehnt",
-    "effortUnconfirmed": "Effort-Wechsel nicht bestätigt — im Terminal prüfen",
-    "effortFailed": "Effort-Wechsel fehlgeschlagen",
+    "effortRejectedReason": "Denktiefe abgelehnt: {reason}",
+    "effortRejected": "Wechsel der Denktiefe abgelehnt",
+    "effortUnconfirmed": "Wechsel der Denktiefe nicht bestätigt — im Terminal prüfen",
+    "effortFailed": "Wechsel der Denktiefe fehlgeschlagen",
     "helperLine": {
       "count": "{count, plural, one {# Helfer} other {# Helfer}}",
       "working": "{count, plural, one {# arbeitet} other {# arbeiten}}",
@@ -1367,7 +1506,14 @@
         "reject_always": "immer abgelehnt"
       }
     },
-    "messagePlaceholderTaskRunning": "An den Chat, nicht an die Aufgabe…"
+    "messagePlaceholderTaskRunning": "An den Chat, nicht an die Aufgabe…",
+    "effortLevelHint": "Denktiefe = wie gründlich das Modell nachdenkt, bevor es antwortet. Höher ist sorgfältiger, aber langsamer. Ultracode ist die gründlichste Stufe und gilt nur für diese Sitzung.",
+    "slashGroupMore": "Weitere",
+    "slashGroupMoreRaw": "Weitere (Englisch)",
+    "sidebarExpand": "Seitenleiste ausklappen",
+    "sidebarCollapse": "Seitenleiste einklappen",
+    "sidebarTitle": "Chats",
+    "sidebarPick": "Chat wählen"
   },
   "shell": {
     "searchPlaceholder": "Suchen oder Befehl...",
@@ -1454,7 +1600,6 @@
   },
   "schedule": {
     "title": "Zeitplan",
-    "operationsSchedule": "Betrieb · Zeitplan",
     "tabOverview": "Übersicht",
     "tabWeek": "Woche",
     "tabHealth": "Zustand",
@@ -1663,7 +1808,6 @@
   },
   "office": {
     "title": "Organigramm",
-    "fleetOffice": "Fleet · Office",
     "zoomOut": "Rauszoomen",
     "zoomOutTitle": "Rauszoomen (⌘−)",
     "zoomIn": "Reinzoomen",
@@ -1704,7 +1848,6 @@
     "tabList": "Liste",
     "tabGraph": "Graph",
     "tabTrash": "Papierkorb",
-    "knowledgeMemory": "Wissen · Memory",
     "taskBanner": "{count} Notizen und Dateien zu dieser Aufgabe",
     "showAllNotes": "Alle Notizen anzeigen",
     "clearVoiceHighlight": "Voice-Highlight entfernen",
@@ -1980,7 +2123,6 @@
   },
   "files": {
     "title": "Dateien",
-    "storageFiles": "Speicher · Dateien",
     "subtitle": "Deliverables, Workspaces, Vault und mehr durchsuchen",
     "reindex": "Neu indizieren",
     "reindexing": "Indiziere…",
@@ -2026,7 +2168,18 @@
     "filterRoot": "Root",
     "viewMode": "Ansicht",
     "listView": "Listenansicht",
-    "gridView": "Rasteransicht"
+    "gridView": "Rasteransicht",
+    "root": {
+      "deliverables": "Ergebnisse",
+      "workspaces": "Arbeitsordner",
+      "vault": "Wissensablage",
+      "attachments": "Anhänge",
+      "references": "Referenzen",
+      "mcp-screenshots": "Bildschirmfotos",
+      "media": "Medien",
+      "shared-artifacts": "Geteilte Dateien",
+      "shared-deliverables": "Ausgabe des Helfer-Containers"
+    }
   },
   "filePreview": {
     "download": "Herunterladen",
@@ -3429,10 +3582,10 @@
       "kindAgentHint": "Geräte, die sich selbst melden, kannst du hier nicht anlegen – sie brauchen einen Pairing-Code, sonst bleiben sie für immer grau.",
       "kindAgentHintLink": "Pairing-Code erzeugen",
       "fieldRole": "Rolle",
-      "roleHead": "Head",
-      "roleWorker": "Worker",
+      "roleHead": "Hauptbox",
+      "roleWorker": "Zweitbox",
       "roleNone": "Keine",
-      "roleHint": "Im Zweibox-Betrieb führt der Head, der Worker hilft mit. Ein-Box-Rezepte ignorieren die Rolle.",
+      "roleHint": "Im Zweibox-Betrieb führt die Hauptbox, die Zweitbox rechnet mit. Ein-Box-Rezepte ignorieren die Rolle.",
       "roleSuggested": "Vorschlag: erste Box Head, weitere Worker – jederzeit änderbar.",
       "fieldSshHostOptional": "SSH-Adresse (optional)",
       "sshHostOptionalHint": "Ohne SSH-Zugang meldet die Box nur – starten kann MC sie dann nicht.",
@@ -3964,8 +4117,8 @@
       "asleepLastSeen": "schläft · zuletzt gesehen {time}",
       "wake": "Wecken",
       "tpsValue": "{tps} tok/s",
-      "topologyDuo": "duo",
-      "topologySolo": "solo",
+      "topologyDuo": "2 Boxen",
+      "topologySolo": "1 Box",
       "latencyValue": "{ms} ms",
       "switchingTo": "wechselt zu {model}",
       "engineUnreachable": "Engine antwortet nicht",
@@ -3980,8 +4133,8 @@
       "cornerServing": "läuft",
       "cornerSwitching": "wechselt",
       "cornerUnreachable": "nicht erreichbar",
-      "cornerUptimeHours": "seit {h} h {m}",
-      "cornerUptimeMinutes": "seit {m} min",
+      "cornerUptimeHours": "läuft seit {h} h {m}",
+      "cornerUptimeMinutes": "läuft seit {m} min",
       "restartHint": "Startet das laufende Modell auf dieser Box neu.",
       "restartMultiNodeHint": "Verbund: beide Boxen werden zusammen gestoppt und neu gestartet.",
       "cornerCrashed": "ausgefallen",
@@ -4007,7 +4160,8 @@
       "checkingLine": "Wird geprüft…",
       "noReadingsLine": "keine Messwerte · Zustand unbekannt",
       "kpiSpeedNoAgentNote": "ohne Agent — z. B. Bench oder API-Aufruf",
-      "kpiSpeedNoAgentHint": "Kein Agent dieser Box arbeitet. Die Last kommt von woanders — zum Beispiel von einem Bench-Lauf oder einem direkten API-Aufruf."
+      "kpiSpeedNoAgentHint": "Kein Agent dieser Box arbeitet. Die Last kommt von woanders — zum Beispiel von einem Bench-Lauf oder einem direkten API-Aufruf.",
+      "cornerUptimeDays": "läuft seit {d, plural, one {# Tag} other {# Tagen}} {h} h"
     },
     "cockpit": {
       "modeNoDevice": "Kein Node-Agent mit dieser Box gekoppelt — die Modus-Liste ist nicht verfügbar.",
@@ -4526,6 +4680,11 @@
       "failed": "Modus nicht gewechselt — bitte nochmal versuchen.",
       "busy": "Der Agent arbeitet gerade — wechsle den Modus, wenn die Antwort fertig ist.",
       "questionOpen": "Erst die offene Rückfrage beantworten, dann den Modus wechseln."
+    },
+    "unconfirmed": "Nicht bestätigt — Terminal prüfen",
+    "you": "Du",
+    "approval": {
+      "checkInTerminal": "Im Terminal prüfen"
     }
   },
   "benchResult": {
@@ -4785,6 +4944,7 @@
   },
   "heads": {
     "section": "Head",
+    "sectionHint": "Ein Head ist ein eigener Agent nur für diese Aufgabe: Er arbeitet in einem eigenen Ordner, öffnet einen Pull Request und endet dann.",
     "pair": "Paar",
     "pairPickerAria": "Harness und Runtime für den Head wählen",
     "explain": "Läuft einmal in einer eigenen Kopie des Repos, öffnet einen PR, merged nie.",
@@ -4800,13 +4960,13 @@
     "noPairs": "Noch kein Harness-×-Runtime-Paar eingerichtet.",
     "engineInUse": "Das Modell arbeitet gerade auch für jemand anderen — kann langsamer sein.",
     "needsRepo": "Ein Head braucht ein Repo — oben eins wählen.",
-    "needsRepoProject": "Ein Head braucht ein Registry-Repo — Projekt-Tasks gehen noch nicht.",
+    "needsRepoProject": "Ein Head braucht ein Repo aus der Repo-Liste — Aufgaben in einem Projekt gehen noch nicht.",
     "engineDownHint": "Das lokale Modell läuft nicht — starte es unter",
     "runtimesLink": "Runtimes",
     "runAsHead": "Als Head starten",
     "starting": "Startet…",
-    "onlyCreate": "Nur Task anlegen",
-    "startFailed": "Task angelegt, aber der Head ist nicht gestartet: {message}",
+    "onlyCreate": "Nur Aufgabe anlegen",
+    "startFailed": "Aufgabe angelegt, aber der Head ist nicht gestartet: {message}",
     "started": "Head gestartet",
     "answered": "Beantwortet",
     "reason": {
@@ -4951,9 +5111,9 @@
       "unknown": "Etwas ist schiefgelaufen.",
       "head_not_active": "Dieser Head ist schon beendet."
     },
-    "keepTask": "Task behalten, schliessen",
+    "keepTask": "Aufgabe behalten, schliessen",
     "retryStart": "Head erneut starten",
-    "keptHeld": "Der Task bleibt angehalten in der Inbox — die Flotte nimmt ihn nicht.",
+    "keptHeld": "Die Aufgabe bleibt angehalten im Eingang — die Flotte nimmt sie nicht.",
     "steps": {
       "context": "Kontext-Brief",
       "plan": "Plan",
@@ -5349,7 +5509,7 @@
     "home": "Zur Startseite"
   },
   "comms": {
-    "reachable": "{count} erreichbar",
+    "reachable": "{count, plural, one {# Agent erreichbar} other {# Agenten erreichbar}}",
     "reachableAria": "{count, plural, one {1 Session erreichbar} other {# Sessions erreichbar}} — Telefonbuch öffnen",
     "directoryTitle": "Erreichbar",
     "directoryOf": "{reachable} von {total}",
@@ -5533,6 +5693,227 @@
         "previous_session_gone": "Die frühere Sitzung gibt es nicht mehr.",
         "bad_model": "Dieser Modellname geht nicht."
       }
+    }
+  },
+  "taskForm": {
+    "template": "Vorlage:",
+    "reset": "Zurücksetzen",
+    "templates": {
+      "bug": {
+        "label": "Fehler beheben",
+        "description": "Was geht nicht? Wie stellt man es nach? Was sollte stattdessen passieren?",
+        "acceptance": "Der Fehler ist weg, die Schritte zum Nachstellen klappen ohne Fehler, ein Test deckt den Fall ab."
+      },
+      "feature": {
+        "label": "Neue Funktion",
+        "description": "Was soll neu möglich sein? Wer benutzt es? Warum?",
+        "acceptance": "Die neue Funktion ist live, ein typischer Ablauf funktioniert."
+      },
+      "research": {
+        "label": "Recherche",
+        "description": "Was willst du herausfinden? Welche Quellen hast du im Kopf?",
+        "acceptance": "Zusammenfassung mit 3+ Primärquellen und klarer Empfehlung."
+      }
+    },
+    "title": "Titel",
+    "titlePlaceholder": "Kurzer, klarer Aufgabentitel",
+    "description": "Beschreibung",
+    "optional": "(optional)",
+    "descriptionPlaceholder": "Was soll gemacht werden?",
+    "acceptance": "Abnahmekriterien",
+    "acceptancePlaceholder": "Was muss erfüllt sein?",
+    "acceptancePlaceholderLong": "Abnahmekriterien — was muss erfüllt sein?",
+    "scopeOut": "Nicht dabei",
+    "scopeOutPlaceholder": "Was gehört NICHT dazu?",
+    "scopeOutPlaceholderLong": "Nicht dabei — was gehört NICHT dazu?",
+    "risks": "Risiken",
+    "risksPlaceholder": "Risiken — was darf nicht kaputtgehen?",
+    "sectionProject": "Projekt",
+    "phase": "Phase",
+    "noPhase": "Keine Phase (optional)",
+    "basedOn": "Basiert auf",
+    "basedOnAria": "Basiert auf Ergebnis",
+    "noDeliverable": "Kein Ergebnis",
+    "sectionFiles": "Referenzdateien",
+    "addFiles": "Dateien hinzufügen",
+    "removeFile": "{name} entfernen",
+    "fileNoteAria": "Notiz zu den Referenzdateien",
+    "fileNotePlaceholder": "Notiz für den Agenten (optional)",
+    "sectionAssign": "Zuweisung",
+    "agent": "Agent",
+    "agentAuto": "Automatisch — bester verfügbarer",
+    "agentAutoIfEmpty": "Agent (automatisch, wenn leer)",
+    "agentSelected": "Agent: {name}",
+    "agentState": {
+      "idle": "bereit",
+      "running": "arbeitet",
+      "blocked": "blockiert"
+    },
+    "priority": "Priorität",
+    "priorityAria": "Priorität {level}",
+    "priorityLevel": {
+      "low": "niedrig",
+      "medium": "mittel",
+      "high": "hoch",
+      "critical": "kritisch"
+    },
+    "sectionRun": "Ausführung",
+    "type": "Typ",
+    "taskType": {
+      "story": "Neue Funktion",
+      "bug": "Fehler beheben",
+      "revision": "Überarbeitung",
+      "chore": "Wartung"
+    },
+    "deadline": "Frist",
+    "workspace": "Arbeitsplatz:",
+    "adHoc": "(einmalig)",
+    "newTaskSlug": "neue-aufgabe",
+    "advanced": "Erweitert",
+    "advancedSummary": "· Freigabe · Login · Links · Auftrag",
+    "approval": "Freigabe",
+    "approvalAria": "Freigabe-Regel",
+    "approvalOption": {
+      "auto": "Automatisch",
+      "never": "Nie",
+      "on_plan": "Beim Plan",
+      "on_execution": "Bei Ausführung",
+      "on_publish": "Bei Veröffentlichung",
+      "on_sensitive_action": "Bei Risiko",
+      "always": "Immer"
+    },
+    "browser": "Browser",
+    "browserTitle": "Der Agent darf für diese Aufgabe einen Browser steuern",
+    "auth": "Login",
+    "authTitle": "Die Aufgabe braucht einen Login oder Schlüssel",
+    "reportBack": "Rückmeldung",
+    "reportBackTitle": "Nach dem Abschluss einen kurzen Bericht in einen Kanal schicken",
+    "e2e": "Klicktest",
+    "e2eTitle": "Nach der Prüfung klickt ein Test-Agent die echten Abläufe im Browser durch, bevor die Aufgabe fertig ist",
+    "humanReview": "Ich prüfe selbst",
+    "humanReviewTitle": "Du prüfst diese Aufgabe selbst statt eines Prüf-Agenten",
+    "skipReview": "Ohne Prüfung",
+    "skipReviewTitle": "Die Aufgabe geht direkt auf erledigt — ohne Prüfung (typisch für geplante Berichte)",
+    "blockerToMe": "Hindernisse an mich",
+    "blockerToMeTitle": "Hindernisse bei dieser Aufgabe kommen direkt zu dir statt zuerst zum Boss",
+    "credFromVault": "Aus dem Tresor",
+    "credInline": "Einmalig eingeben",
+    "credSelectAria": "Login auswählen",
+    "credSelect": "Login wählen…",
+    "credInlineAria": "Einmal-Login",
+    "credInlinePlaceholder": "Benutzername: admin\nPasswort: ...",
+    "channel": "Kanal:",
+    "format": "Format:",
+    "reportFormat": {
+      "summary": "Zusammenfassung",
+      "screenshot": "Bildschirmfoto",
+      "before_after": "Vorher/Nachher"
+    },
+    "referenceUrls": "Referenz-Links",
+    "intake": "Auftrag",
+    "intakeSummary": "(Auftragstyp, Selbstständigkeit, Ergebnis-Format)",
+    "intakeAria": "Auftrags-Details",
+    "requestKind": "Auftragstyp",
+    "requestKindOption": {
+      "auto": "Automatisch",
+      "code_change": "Code-Änderung",
+      "content_create": "Inhalt erstellen",
+      "research": "Recherche",
+      "browser_task": "Browser-Steuerung",
+      "credential_task": "Mit Logins / Schlüsseln",
+      "mixed": "Gemischt"
+    },
+    "autonomy": "Selbstständigkeit",
+    "autonomyOption": {
+      "unset": "Nicht festgelegt",
+      "advise_only": "Nur beraten",
+      "draft_only": "Nur Entwurf",
+      "execute_low_risk": "Kleine Risiken selbst ausführen",
+      "execute_with_approval_on_risk": "Bei Risiko vorher fragen",
+      "manual_dispatch_required": "Nur manuell starten"
+    },
+    "desiredOutput": "Gewünschtes Ergebnis",
+    "desiredOutputPlaceholder": "Was soll am Ende rauskommen? (PR, Bildschirmfoto, Link zur fertigen Seite …)",
+    "referenceNotes": "Referenz-Notizen",
+    "referenceNotesPlaceholder": "Referenz-Notizen — Vorlagen, Inspirationen …",
+    "publish": "Veröffentlichung:",
+    "publishAllowed": "Erlaubt",
+    "publishDraft": "Nur Entwurf",
+    "publishAgentDecides": "(Agent entscheidet)",
+    "modeQuick": "Schnell",
+    "modeStructured": "Strukturiert",
+    "structuredHint": "Du hast strukturierte Felder angefasst — wechsle zu „Strukturiert“, um sie zu bearbeiten.",
+    "repoCreateFailed": "Repository anlegen fehlgeschlagen",
+    "repoLinked": "Repository verknüpft",
+    "repoLinkFailed": "Repository verknüpfen fehlgeschlagen",
+    "planner": {
+      "label": "Planung",
+      "direct": "Direkt",
+      "directHint": "Sofort ausführen",
+      "auto": "Automatisch",
+      "autoHint": "System entscheidet",
+      "with_planner": "Erst planen",
+      "with_plannerHint": "Zuerst schreibt ein Planer den Plan"
+    },
+    "git": {
+      "loading": "Git-Infos werden geladen…",
+      "newRepoAria": "Name des neuen Repositorys",
+      "create": "Anlegen",
+      "cancel": "Abbrechen",
+      "repository": "Repository",
+      "noRepo": "Kein Repository (Standard)",
+      "rulesMark": " · Regeln ✓",
+      "createRepo": "+ Neues Repository anlegen…",
+      "branch": "Zweig:",
+      "branchAria": "Name des Zweigs",
+      "noRepoYet": "Das Projekt hat noch kein Repository",
+      "initRepo": "Repository einrichten",
+      "linkAria": "Vorhandenes Repository verknüpfen",
+      "selectRepo": "Repository wählen…",
+      "link": "Verknüpfen",
+      "linkExisting": "Vorhandenes Repository verknüpfen",
+      "rulesActive": "Regeln aktiv",
+      "noRules": "Noch keine Repository-Regeln",
+      "moreBranches": "+{count} weitere",
+      "taskBranch": "Zweig der Aufgabe:"
+    },
+    "project": {
+      "search": "Projekte suchen…",
+      "namePlaceholder": "Projektname",
+      "placeholder": "Projekt (optional)",
+      "notFound": "Kein Projekt gefunden",
+      "createNew": "Neues Projekt anlegen",
+      "create": "Anlegen",
+      "cancel": "Abbrechen",
+      "typeAria": "Projektart",
+      "status": {
+        "active": "aktiv",
+        "draft": "Entwurf",
+        "planning": "in Planung",
+        "paused": "pausiert",
+        "done": "fertig",
+        "archived": "archiviert"
+      },
+      "type": {
+        "feature": "Neue Funktion",
+        "website": "Webseite",
+        "content": "Inhalte",
+        "research": "Recherche",
+        "automation": "Automatisierung",
+        "design": "Design",
+        "free": "Frei"
+      }
+    },
+    "urls": {
+      "remove": "Link entfernen",
+      "enter": "Referenz-Link eingeben",
+      "add": "Link hinzufügen"
+    },
+    "priorityGlyph": {
+      "low": "N",
+      "medium": "M",
+      "high": "H",
+      "critical": "!"
     }
   }
 }

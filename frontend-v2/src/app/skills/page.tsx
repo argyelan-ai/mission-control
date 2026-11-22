@@ -392,7 +392,6 @@ export default function SkillsPage() {
         {/* ── Header ── */}
         <div className="flex items-start justify-between mb-6 gap-4">
           <div>
-            <div className="label-sys mb-2">System · Skills</div>
             <h1 className="display text-2xl font-semibold" style={{ color: "var(--color-text-primary)" }}>{t("title")}</h1>
             <p className="text-[13px] mt-1" style={{ color: "var(--color-text-secondary)" }}>
               {t("subtitle")}

@@ -25,7 +25,7 @@ const discardDialog = () => screen.queryByRole("dialog", { name: "Discard draft?
 
 async function openAndType(title?: string) {
   await userEvent.click(screen.getByRole("button", { name: "New task" }));
-  const input = await screen.findByRole("textbox", { name: /Titel/ });
+  const input = await screen.findByRole("textbox", { name: /Title/ });
   // The modal moves focus to the title field ~80 ms after opening; keys
   // pressed before that land outside the dialog.
   await waitFor(() => expect(input).toHaveFocus());
@@ -95,7 +95,7 @@ describe("CreateTaskModal — discard draft", () => {
     renderModal();
     await openAndType("Write the release notes");
     await userEvent.click(screen.getByRole("button", { name: /Project \(optional\)/ }));
-    const search = await screen.findByPlaceholderText("Search projects...");
+    const search = await screen.findByPlaceholderText("Search projects…");
     search.focus();
     await userEvent.keyboard("{Escape}");
 
@@ -103,7 +103,7 @@ describe("CreateTaskModal — discard draft", () => {
     await new Promise((r) => setTimeout(r, 400));
     expect(discardDialog()).not.toBeInTheDocument();
     expect(formDialog()).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: /Titel/ })).toHaveValue("Write the release notes");
-    await waitFor(() => expect(screen.queryByPlaceholderText("Search projects...")).not.toBeInTheDocument());
+    expect(screen.getByRole("textbox", { name: /Title/ })).toHaveValue("Write the release notes");
+    await waitFor(() => expect(screen.queryByPlaceholderText("Search projects…")).not.toBeInTheDocument());
   });
 });

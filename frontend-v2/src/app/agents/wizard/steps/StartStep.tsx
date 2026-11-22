@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Sparkles, LayoutTemplate, Copy } from "lucide-react";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
@@ -9,16 +10,18 @@ import type { StartMode, WizardStepProps } from "../types";
 import { initialWizardState } from "../types";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
-const MODES: { key: StartMode; label: string; icon: typeof Sparkles; hint: string }[] = [
-  { key: "custom", label: "Custom", icon: Sparkles, hint: "Configure from scratch" },
-  { key: "template", label: "Template", icon: LayoutTemplate, hint: "From a role template" },
-  { key: "duplicate", label: "Duplicate", icon: Copy, hint: "Copy an existing agent" },
+// Words: agents.wizard.start.<key> / <key>Hint.
+const MODES: { key: StartMode; icon: typeof Sparkles }[] = [
+  { key: "custom", icon: Sparkles },
+  { key: "template", icon: LayoutTemplate },
+  { key: "duplicate", icon: Copy },
 ];
 
 // Prefillable fields only — board/step are shell-owned and must survive a mode switch.
 const RESET_PREFILL = initialWizardState(null);
 
 export function StartStep({ state, update }: WizardStepProps) {
+  const t = useTranslations("agents.wizard.start");
   const { data: templates } = useQuery({
     queryKey: ["agent-templates"],
     queryFn: () => api.agentTemplates.list(),
@@ -30,18 +33,18 @@ export function StartStep({ state, update }: WizardStepProps) {
     enabled: state.startMode === "duplicate",
   });
 
-  function pickTemplate(t: AgentTemplate) {
+  function pickTemplate(tpl: AgentTemplate) {
     update({
       startMode: "template",
-      templateId: t.id,
-      name: t.name,
-      emoji: t.emoji ?? "",
-      role: t.role ?? "",
-      soulMd: t.soul_md,
-      scopes: t.scopes,
-      model: t.default_model ?? "",
-      skillFilter: t.skill_filter,
-      cliPlugins: t.cli_plugins,
+      templateId: tpl.id,
+      name: tpl.name,
+      emoji: tpl.emoji ?? "",
+      role: tpl.role ?? "",
+      soulMd: tpl.soul_md,
+      scopes: tpl.scopes,
+      model: tpl.default_model ?? "",
+      skillFilter: tpl.skill_filter,
+      cliPlugins: tpl.cli_plugins,
     });
   }
 
@@ -51,7 +54,7 @@ export function StartStep({ state, update }: WizardStepProps) {
     update({
       startMode: "duplicate",
       sourceAgentId: src.id,
-      name: `${src.name} Copy`,
+      name: t("copyName", { name: src.name }),
       emoji: src.emoji ?? "",
       role: src.role ?? "",
       soulMd: src.soul_md,
@@ -109,9 +112,9 @@ export function StartStep({ state, update }: WizardStepProps) {
                 // Textfarbe — Akzent und text-primary stehen 1.06:1 zueinander.
                 style={{ color: "var(--color-text-primary)" }}
               >
-                {m.label}
+                {t(m.key)}
               </div>
-              <div className="text-[11px] text-[var(--color-text-muted)] mt-0.5">{m.hint}</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] mt-0.5">{t(`${m.key}Hint`)}</div>
             </button>
           );
         })}
@@ -120,26 +123,26 @@ export function StartStep({ state, update }: WizardStepProps) {
       {state.startMode === "template" && (
         <div className="space-y-2">
           <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">
-            Select template
+            {t("selectTemplate")}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto">
-            {(templates ?? []).map((t) => {
-              const active = state.templateId === t.id;
+            {(templates ?? []).map((tpl) => {
+              const active = state.templateId === tpl.id;
               return (
                 <button
-                  key={t.id}
-                  onClick={() => pickTemplate(t)}
+                  key={tpl.id}
+                  onClick={() => pickTemplate(tpl)}
                   className="flex items-center gap-2 text-left rounded-lg px-3 py-2.5 cursor-pointer transition-colors"
                   style={{
                     backgroundColor: active ? C.accentSubtle : "var(--color-bg-surface)",
                     border: `1px solid ${active ? C.borderAccent : C.borderSubtle}`,
                   }}
                 >
-                  <span className="text-lg">{t.emoji}</span>
+                  <span className="text-lg">{tpl.emoji}</span>
                   <span className="flex-1">
-                    <span className="block text-sm text-[var(--color-text-primary)]">{t.name}</span>
+                    <span className="block text-sm text-[var(--color-text-primary)]">{tpl.name}</span>
                     <span className="block text-[10px] text-[var(--color-text-muted)]">
-                      {t.role ?? "—"}
+                      {tpl.role ?? "—"}
                     </span>
                   </span>
                 </button>
@@ -152,7 +155,7 @@ export function StartStep({ state, update }: WizardStepProps) {
       {state.startMode === "duplicate" && (
         <div className="space-y-2">
           <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">
-            Select agent to duplicate
+            {t("selectAgent")}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto">
             {(agents ?? []).map((a) => {

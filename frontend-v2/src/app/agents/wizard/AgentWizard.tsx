@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { X, ChevronLeft, ChevronRight, Check } from "lucide-react";
 import { C } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
@@ -41,6 +42,7 @@ export function AgentWizard({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const t = useTranslations("agents.wizard");
   useBodyScrollLock(true);
   // Esc closes (panel register rule 4) — backdrop click is on the overlay below.
   useEscapeKey(onClose);
@@ -63,7 +65,7 @@ export function AgentWizard({
       <motion.div
         role="dialog"
         aria-modal="true"
-        aria-label="New agent"
+        aria-label={t("title")}
         initial={{ opacity: 0, scale: 0.97, y: 8 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.97, y: 8 }}
@@ -76,11 +78,11 @@ export function AgentWizard({
         <div className="px-5 py-4 border-b" style={{ borderColor: C.borderSubtle }}>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-              New agent
+              {t("title")}
             </h2>
             <button
               onClick={onClose}
-              aria-label="Close wizard"
+              aria-label={t("close")}
               className="cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors touch-hit"
             >
               <X size={16} />
@@ -110,7 +112,7 @@ export function AgentWizard({
                           : "var(--color-text-muted)",
                       }}
                     >
-                      {s.label}
+                      {t(`steps.${s.key}`)}
                     </span>
                   </div>
                   {i < WIZARD_STEPS.length - 1 && (
@@ -145,7 +147,7 @@ export function AgentWizard({
             disabled={state.step === 0}
             className="flex items-center gap-1.5 px-4 py-2 text-sm rounded-xl cursor-pointer transition-colors text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            <ChevronLeft size={15} /> Back
+            <ChevronLeft size={15} /> {t("back")}
           </button>
           {!isLastStep && (
             <>
@@ -157,7 +159,7 @@ export function AgentWizard({
                   data-testid="step-blockers"
                   className="mx-3 flex-1 text-right text-[11px] text-[var(--color-text-muted)]"
                 >
-                  {runtimeStepBlockers(state).join(" ")}
+                  {runtimeStepBlockers(state).map((k) => t(`blockers.${k}`)).join(" ")}
                 </span>
               )}
               <button
@@ -166,7 +168,7 @@ export function AgentWizard({
                 className="flex items-center gap-1.5 px-5 py-2 text-sm rounded-xl font-medium text-[var(--color-on-accent)] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-all"
                 style={wizardBtnPrimaryStyle}
               >
-                Next <ChevronRight size={15} />
+                {t("next")} <ChevronRight size={15} />
               </button>
             </>
           )}

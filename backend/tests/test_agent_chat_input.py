@@ -1811,14 +1811,45 @@ async def test_slash_command_capabilities_docker_merges_builtins_and_skills(monk
 
     names = [c["name"] for c in caps["slashCommands"]]
     assert names == [
-        "model", "effort", "clear", "compact", "context", "status", "help", "resume",
+        "model", "effort", "clear", "new", "compact", "context", "status", "help", "resume",
         "mc-debug", "mc-review-geben",
     ]
-    skill_entries = {c["name"]: c["description"] for c in caps["slashCommands"][8:]}
+    skill_entries = {c["name"]: c["description"] for c in caps["slashCommands"][len(agent_chat_input._BUILTIN_SLASH_COMMANDS):]}
     assert skill_entries == {
         "mc-debug": "Debug MC issues systematically",
         "mc-review-geben": "Give a structured code review",
     }
+
+
+async def test_claude_builtins_offer_new_as_clear_alias(monkeypatch, tmp_path):
+    """Claude Code accepts ``/new`` (an alias of ``/clear``, read from the
+    CLI's own command table) — so a Claude terminal agent's "/" menu lists it,
+    and MC's palette can put it on top like on every other chat."""
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(agent_chat_input, "_slash_commands_cache", {})
+    agent = _StubAgent(slug="boss", agent_runtime="host")
+    names = [c["name"] for c in (await agent_chat_input.slash_command_capabilities(agent))["slashCommands"]]
+    assert "new" in names
+    assert names.index("new") == names.index("clear") + 1
+    # Typed into the terminal, MC records it as a session reset like /clear.
+    assert agent_chat_input._terminal_reset("/new") is not None
+
+
+def test_claude_builtins_match_the_frontend_fixture():
+    """The Composer tests feed the exact list a Claude agent gets from here
+    (``__fixtures__/claudeSlashCommands.json``) — so a palette picture or test
+    can never again show a command the backend does not send."""
+    import json
+    import pathlib
+
+    from app.services import agent_chat_input
+
+    fixture = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "frontend-v2" / "src" / "components" / "chat" / "__fixtures__" / "claudeSlashCommands.json"
+    )
+    assert list(agent_chat_input._BUILTIN_SLASH_COMMANDS) == json.loads(fixture.read_text(encoding="utf-8"))
 
 
 async def test_slash_command_capabilities_missing_skills_dir_builtins_only(monkeypatch, tmp_path):
@@ -1852,7 +1883,7 @@ async def test_slash_command_capabilities_malformed_skill_md_included_with_no_de
     agent = _StubAgent(slug="rex", agent_runtime="cli-bridge")
     caps = await agent_chat_input.slash_command_capabilities(agent)
 
-    skill_entries = {c["name"]: c["description"] for c in caps["slashCommands"][8:]}
+    skill_entries = {c["name"]: c["description"] for c in caps["slashCommands"][len(agent_chat_input._BUILTIN_SLASH_COMMANDS):]}
     assert skill_entries == {
         "broken-skill": None,
         "good-skill": "A perfectly normal skill",

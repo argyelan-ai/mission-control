@@ -55,11 +55,11 @@ const C = {
 
 // Template metadata duplicated here only for the header chip — the actual
 // template-prefill logic lives in TaskFormFields. Keep in sync with the
-// `TEMPLATES` map there.
-const TEMPLATE_CHIP_META: Record<string, { label: string; icon: typeof Bug; color: string }> = {
-  bug:      { label: "Bug Fix",  icon: Bug,        color: C.error },
-  feature:  { label: "Feature",  icon: Sparkles,   color: C.accent },
-  research: { label: "Research", icon: SearchIcon, color: C.info },
+// `TEMPLATES` map there. The chip's word is taskForm.templates.<key>.label.
+const TEMPLATE_CHIP_META: Record<string, { icon: typeof Bug; color: string }> = {
+  bug:      { icon: Bug,        color: C.error },
+  feature:  { icon: Sparkles,   color: C.accent },
+  research: { icon: SearchIcon, color: C.info },
 };
 
 // New, manually created tasks default to human review ON (Mark, 05.07.) —
@@ -90,6 +90,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
   const t = useTranslations("tasks.createModal");
   const tHeads = useTranslations("heads");
   const tNight = useTranslations("nightShift");
+  const tForm = useTranslations("taskForm");
   const pairReason = usePairReason();
 
   // Modal state
@@ -362,7 +363,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
             await api.references.upload({ taskId }, staged.file, referenceNote.trim() || undefined);
             newlyUploaded.push(staged.id);
           } catch (err) {
-            const msg = err instanceof Error && err.message ? err.message : "Upload failed";
+            const msg = err instanceof Error && err.message ? err.message : t("uploadFailed");
             failures.push(`${staged.file.name}: ${msg}`);
           }
         }
@@ -462,8 +463,8 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
       <button
         onClick={() => setOpen(true)}
         disabled={!activeBoardId}
-        aria-label="New task"
-        title="New task"
+        aria-label={t("triggerLabel")}
+        title={t("triggerLabel")}
         className="flex items-center justify-center min-h-touch min-w-touch rounded-lg transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
         style={{
           color: C.accent,
@@ -542,7 +543,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                       }}
                     >
                       <currentTemplate.icon size={9} />
-                      {currentTemplate.label}
+                      {tForm(`templates.${payload.activeTemplate}.label`)}
                     </span>
                   )}
                 </div>
@@ -561,10 +562,10 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                   <AlertTriangle size={12} className="shrink-0 mt-0.5" />
                   <div className="flex flex-col gap-0.5">
                     <span>
-                      Task created, but {referenceUploadErrors.length} reference upload{referenceUploadErrors.length > 1 ? "s" : ""} failed: {referenceUploadErrors.join("; ")}
+                      {t(referenceUploadErrors.length > 1 ? "uploadErrorsOther" : "uploadErrorsOne", { count: referenceUploadErrors.length, errors: referenceUploadErrors.join("; ") })}
                     </span>
                     <span style={{ opacity: 0.85 }}>
-                      Task was created without the failed files. It has not been dispatched yet — dispatch it from the task detail.
+                      {t("uploadErrorsHint")}
                     </span>
                   </div>
                 </div>
@@ -593,7 +594,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                 {pairsResp && (
                   <section className="mt-5" data-testid="head-section" aria-labelledby="create-task-head-label">
                     <div className="flex items-center gap-2.5 mb-3">
-                      <span id="create-task-head-label" className="label-sys shrink-0">{tHeads("section")}</span>
+                      <span id="create-task-head-label" className="label-sys shrink-0" title={tHeads("sectionHint")}>{tHeads("section")}</span>
                       <div className="flex-1 h-px" style={{ background: C.borderSubtle }} />
                     </div>
                     <HeadPairPicker
@@ -650,7 +651,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                 style={{ borderTop: `1px solid ${C.borderSubtle}` }}
                 data-testid="create-task-footer"
               >
-                <span className="hidden [@media(hover:hover)]:inline text-[10px]" style={{ color: C.textMuted }} data-testid="create-task-shortcut-hint">
+                <span className="hidden md:[@media(hover:hover)]:inline text-[10px]" style={{ color: C.textMuted }} data-testid="create-task-shortcut-hint">
                   {t("shortcutHint")}
                 </span>
                 <div className="flex flex-col-reverse sm:flex-row sm:items-center gap-2 w-full sm:w-auto">

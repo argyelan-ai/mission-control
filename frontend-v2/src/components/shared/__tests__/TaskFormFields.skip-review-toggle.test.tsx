@@ -60,7 +60,7 @@ describe("TaskFormFields — Skip review toggle", () => {
   it("turning humanReviewRequired ON forces skipReview OFF (mutual exclusion)", () => {
     // Start with skipReview=true, humanReviewRequired=false
     const onChange = renderForm(vi.fn(), { skipReview: true, humanReviewRequired: false });
-    const [pill] = screen.getAllByRole("button", { name: /human review/i });
+    const [pill] = screen.getAllByRole("button", { name: /I review it/i });
     fireEvent.click(pill);
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ humanReviewRequired: true, skipReview: false }),

@@ -178,6 +178,7 @@ export function SessionSidebar({
   const t = useTranslations("sessions.groups");
   const th = useTranslations("heads");
   const tc = useTranslations("cockpit");
+  const ts = useTranslations("sessions");
   const [sheetOpen, setSheetOpen] = useState(false);
   const [headArchiveOpen, setHeadArchiveOpen] = useState(false);
   const showHeads = !!onSelectHead && ((heads?.length ?? 0) > 0 || archivedCount > 0);
@@ -499,7 +500,7 @@ export function SessionSidebar({
             </>
           ) : (
             <span className="text-[13px]" style={{ color: C.textMuted }}>
-              Session wählen
+              {ts("sidebarPick")}
             </span>
           )}
           <ChevronDown
@@ -533,8 +534,8 @@ export function SessionSidebar({
           <button
             type="button"
             onClick={onToggleCollapse}
-            aria-label="Seitenleiste ausklappen"
-            title="Seitenleiste ausklappen"
+            aria-label={ts("sidebarExpand")}
+            title={ts("sidebarExpand")}
             className="flex items-center justify-center w-9 h-9 rounded-md shrink-0 mb-1"
             style={{ color: C.textMuted }}
           >
@@ -631,8 +632,8 @@ export function SessionSidebar({
           <button
             type="button"
             onClick={onToggleCollapse}
-            aria-label="Seitenleiste einklappen"
-            title="Seitenleiste einklappen"
+            aria-label={ts("sidebarCollapse")}
+            title={ts("sidebarCollapse")}
             className="flex items-center justify-center w-7 h-7 rounded-md shrink-0 cursor-pointer"
             style={{ color: C.textMuted }}
           >

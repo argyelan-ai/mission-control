@@ -15,6 +15,7 @@
  * operator finds what to tap. The voice itself never answers the card.
  */
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
 import type { ChatPrompt } from "@/lib/chatTypes";
 
@@ -30,6 +31,7 @@ interface ApprovalCardProps {
 const ATTENTION_PULSE_MS = 2_000;
 
 export function ApprovalCard({ prompt, onAnswer, onShowTerminal, attention = false }: ApprovalCardProps) {
+  const t = useTranslations("chat.approval");
   const [answered, setAnswered] = useState(false);
   const [pulsing, setPulsing] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -85,7 +87,7 @@ export function ApprovalCard({ prompt, onAnswer, onShowTerminal, attention = fal
         className="self-start text-xs underline decoration-dotted underline-offset-2"
         style={{ color: C.textMuted }}
       >
-        Im Terminal prüfen
+        {t("checkInTerminal")}
       </button>
     </div>
   );

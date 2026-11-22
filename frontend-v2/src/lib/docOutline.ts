@@ -45,8 +45,9 @@ export interface DocOutline {
 const GOAL_TITLE = /^(ziel|goal|auftrag|objective)\b/i;
 
 /** Markdown-Auszeichnung für eine einzeilige Vorschau entfernen. Absichtlich
- *  grob: das Ergebnis ist Text zum Überfliegen, kein Rendering. */
-function stripMarkdown(raw: string): string {
+ *  grob: das Ergebnis ist Text zum Überfliegen, kein Rendering. Auch für die
+ *  Ziel-Vorschau der Loop-Karte. */
+export function stripMarkdown(raw: string): string {
   return raw
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")

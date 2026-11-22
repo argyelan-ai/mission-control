@@ -817,7 +817,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ onCenterViewChange });
 
-    await user.click(screen.getByText("Im Terminal prüfen"));
+    await user.click(screen.getByText("Check in the terminal"));
     expect(onCenterViewChange).toHaveBeenCalledWith("terminal");
   });
 
@@ -1530,7 +1530,7 @@ describe("ChatView", () => {
     renderChatView();
 
     expect(screen.getByTestId("echo-bubble")).toHaveAttribute("data-echo-status", "unconfirmed");
-    expect(screen.getByText("Nicht bestätigt — Terminal prüfen")).toBeInTheDocument();
+    expect(screen.getByText("Not confirmed — check the terminal")).toBeInTheDocument();
   });
 
   it("does not show the empty state while an echo is on screen", () => {
@@ -1608,7 +1608,7 @@ describe("ChatView", () => {
       screen.queryByText("Queued — sent when the current reply ends")
     ).not.toBeInTheDocument();
     // The whole point: nothing here looks like a problem.
-    expect(screen.queryByText("Nicht bestätigt — Terminal prüfen")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not confirmed — check the terminal")).not.toBeInTheDocument();
   });
 
   // Operator finding 03.09.2026: a queued steer could neither be withdrawn nor
@@ -1888,7 +1888,7 @@ describe("ChatView", () => {
 
     expect(screen.getByTestId("echo-bubble")).toHaveAttribute("data-echo-status", "starting");
     expect(screen.getByText("Agent starting — will be delivered…")).toBeInTheDocument();
-    expect(screen.queryByText("Nicht bestätigt — Terminal prüfen")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not confirmed — check the terminal")).not.toBeInTheDocument();
   });
 
   it("routes a 409 agent_starting to the calm state and a retry, not to a failure", async () => {

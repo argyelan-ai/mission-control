@@ -23,7 +23,7 @@ function renderForm(onChange = vi.fn()) {
 describe("TaskFormFields — Human review toggle", () => {
   it("patches humanReviewRequired when the pill is clicked", () => {
     const onChange = renderForm();
-    const pill = screen.getByRole("button", { name: /human review/i });
+    const pill = screen.getByRole("button", { name: /I review it/i });
     fireEvent.click(pill);
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ humanReviewRequired: true }),

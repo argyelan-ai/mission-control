@@ -558,7 +558,6 @@ export default function SchedulePage() {
           {/* No decorative icon before the title: no other page has one, and it
               pushed the heading 28px past the shared left edge. */}
           <div>
-            <div className="label-sys mb-1">{t("operationsSchedule")}</div>
             <h1
               className="display text-xl font-semibold"
               style={{ color: C.textPrimary }}

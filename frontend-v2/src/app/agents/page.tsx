@@ -673,7 +673,6 @@ export default function AgentsPage() {
         {/* Header */}
         <div className="flex items-center justify-between gap-4">
           <div>
-            <div className="label-sys mb-2">{t("fleetAgents")}</div>
             <h1 className="display text-2xl font-semibold text-[var(--color-text-primary)]">
               {t("title")}
             </h1>

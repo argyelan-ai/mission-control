@@ -1,0 +1,11 @@
+[
+  {"name": "model", "description": "Set the AI model for Claude Code"},
+  {"name": "effort", "description": "Set effort level for model usage"},
+  {"name": "clear", "description": "Clear the conversation history"},
+  {"name": "new", "description": "Start a new session with empty context (same as /clear)"},
+  {"name": "compact", "description": "Compact the conversation to free up context"},
+  {"name": "context", "description": "Show context window usage"},
+  {"name": "status", "description": "Show session status"},
+  {"name": "help", "description": "Show available commands"},
+  {"name": "resume", "description": "Resume a previous session"}
+]
