@@ -169,17 +169,24 @@ def test_project_json_flag(capsys):
 
 # ── mc agents ─────────────────────────────────────────────────────────────
 
+# Real comms/who shape: `alive` is the string "yes" / "no" / "unknown"
+# (comms_directory.Alive), never a bool.
 WHO = {
     "me": "builder",
     "sessions": [
         {"address": "lead", "label": "Lead", "kind": "agent", "harness": "claude",
-         "alive": True, "listening": True},
+         "alive": "yes", "listening": True},
         {"address": "builder", "label": "Builder", "kind": "agent", "harness": "omp",
-         "alive": False, "listening": None},
+         "alive": "unknown", "listening": None},
         {"address": "claude@desk:repo", "label": "terminal", "kind": "session",
-         "harness": "claude", "alive": True, "listening": True},
+         "harness": "claude", "alive": "yes", "listening": True},
     ],
 }
+
+
+def _state_of(out, name):
+    line = next(line for line in out.splitlines() if line.startswith(name))
+    return line.rsplit("  ", 1)[-1].strip()
 
 
 def test_agents_lists_the_roster_with_presence(capsys):
@@ -196,6 +203,8 @@ def test_agents_lists_the_roster_with_presence(capsys):
     assert "yes" in lead_line and "lead" in lead_line and "alive" in lead_line
     builder_line = next(line for line in lines if line.startswith("Builder"))
     assert "(you)" in builder_line
+    assert _state_of(out, "Lead") == "alive, listening"
+    assert _state_of(out, "Builder") == "unknown (warming up)"
     # Sessions that are reachable but not on the board are listed too.
     assert "claude@desk:repo" in out
     assert 'mc send <address> "…"' in out
@@ -221,8 +230,52 @@ def test_agents_json_flag_merges_presence(capsys):
     assert commands._cmd_agents(_args(["agents", "--json"]), client, _cfg()) == 0
     data = json.loads(capsys.readouterr().out)
     lead = next(a for a in data["agents"] if a["name"] == "Lead")
-    assert lead["address"] == "lead" and lead["alive"] is True
+    assert lead["address"] == "lead" and lead["alive"] == "yes"
     assert [s["address"] for s in data["other_sessions"]] == ["claude@desk:repo"]
+
+
+def test_agents_offline_agent_is_shown_offline_not_alive(capsys):
+    who = {"me": None, "sessions": [
+        {"address": "lead", "label": "Lead", "kind": "agent", "harness": "claude",
+         "alive": "no", "listening": False},
+        {"address": "builder", "label": "Builder", "kind": "agent", "harness": "omp",
+         "alive": "yes", "listening": False},
+    ]}
+    client = _client({
+        ("GET", f"/api/v1/agent/boards/{BOARD}/agents"): ROSTER,
+        ("GET", "/api/v1/agent/comms/who"): who,
+    })
+    assert commands._cmd_agents(_args(["agents"]), client, _cfg()) == 0
+    out = capsys.readouterr().out
+    assert _state_of(out, "Lead") == "offline"
+    assert _state_of(out, "Builder") == "alive"
+
+
+def test_agents_terminal_session_with_an_agent_s_name_is_not_merged_into_it(capsys):
+    # A guest terminal session's label is its folder name; it must never take
+    # over the agent row, even when it sorts first.
+    who = {"me": None, "sessions": [
+        {"address": "claude@desk:Lead", "label": "Lead", "kind": "session",
+         "harness": "claude", "alive": "yes", "listening": True},
+        {"address": "lead-agent", "label": "Lead", "kind": "agent", "harness": "claude",
+         "alive": "no", "listening": False},
+    ]}
+    client = _client({
+        ("GET", f"/api/v1/agent/boards/{BOARD}/agents"): ROSTER,
+        ("GET", "/api/v1/agent/comms/who"): who,
+    })
+    assert commands._cmd_agents(_args(["agents", "--json"]), client, _cfg()) == 0
+    data = json.loads(capsys.readouterr().out)
+    lead = next(a for a in data["agents"] if a["name"] == "Lead")
+    assert lead["address"] == "lead-agent" and lead["alive"] == "no"
+    assert [s["address"] for s in data["other_sessions"]] == ["claude@desk:Lead"]
+
+
+@pytest.mark.parametrize("needle", ["", "   "])
+def test_project_blank_name_is_refused(needle):
+    client = _client({("GET", f"/api/v1/agent/boards/{BOARD}/projects"): PROJECTS[:1]})
+    with pytest.raises(UsageError):
+        commands._cmd_project(_args(["project", needle]), client, _cfg())
 
 
 def test_new_verbs_are_registered_with_their_backend_scope():

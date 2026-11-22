@@ -3242,6 +3242,8 @@ def _resolve_project_id(needle: str, client: Client, cfg: Config) -> str:
     resp = client.request("GET", f"/api/v1/agent/boards/{board_id}/projects") or []
     projects = resp if isinstance(resp, list) else resp.get("projects", [])
     low = needle.strip().lower()
+    if not low:
+        raise UsageError("Projekt fehlt: `mc project <id-oder-name>` — Liste: `mc projects`.")
     exact = [p for p in projects if (p.get("name") or "").lower() == low]
     matches = exact or [
         p for p in projects
@@ -3286,6 +3288,12 @@ def _add_project_args(p):
     p.add_argument("--json", action="store_true", help="Raw JSON")
 
 
+# comms/who sends `alive` as "yes" / "no" / "unknown" (comms_directory.Alive);
+# a non-empty string is truthy, so it must be mapped, never tested as a bool.
+_ALIVE_LABEL = {"yes": "alive", True: "alive", "no": "offline", False: "offline",
+                "unknown": "unknown (warming up)", None: "unknown (warming up)"}
+
+
 def _cmd_agents(args, client, cfg):
     """mc agents — the board's agents (name, role, lead) plus who is reachable.
 
@@ -3308,9 +3316,12 @@ def _cmd_agents(args, client, cfg):
     merged = []
     for a in roster:
         name = a.get("name") or ""
+        # Only agent principals: a guest terminal session's label is its
+        # folder name and must never take over an agent row.
         row = next(
             (s for s in sessions
-             if s.get("address") not in used
+             if s.get("kind") == "agent"
+             and s.get("address") not in used
              and (s.get("label") == name or s.get("address") == name.strip().lower())),
             None,
         )
@@ -3335,7 +3346,7 @@ def _cmd_agents(args, client, cfg):
             return "-"
         if r.get("alive") is None and r.get("address") is None:
             return "not reachable"
-        state = "alive" if r.get("alive") else ("unknown" if r.get("alive") is None else "offline")
+        state = _ALIVE_LABEL.get(r.get("alive"), "unknown (warming up)")
         if r.get("listening"):
             state += ", listening"
         return state
