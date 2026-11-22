@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from .client import Client
 from .config import Config
-from .errors import ServerError, UsageError
+from .errors import CLIError, ServerError, UsageError
 
 
 @dataclass(frozen=True)
@@ -1826,6 +1826,15 @@ def _session_inbox(client, *, peek: bool = False) -> int:
     return 0
 
 
+_SESSION_FRAME_RE = re.compile(r"^\[Message from (\S+) \(")
+
+
+def _session_sender_address(body: str) -> str:
+    """The sender's address from the comms frame line, else a placeholder."""
+    m = _SESSION_FRAME_RE.match(body.splitlines()[0] if body else "")
+    return m.group(1) if m else "<address>"
+
+
 def _cmd_inbox(args, client, cfg):
     """mc inbox — Nudge+Pull: neue Thread-Nachrichten abholen + acken (W2.1).
 
@@ -1852,7 +1861,16 @@ def _cmd_inbox(args, client, cfg):
             f"von {m.get('sender', '?')} · typ {m.get('message_type', '?')}]"
         )
         block = f"# Neue Nachricht (Interaction 2.0)\n\n{m.get('body') or ''}\n\n{footer}"
-        if m.get("thread_kind") == "group":
+        if m.get("thread_kind") == "session":
+            # Session conversation (ADR-100): written only through the send
+            # path (brake, limits). `mc msg --thread` into it is refused with
+            # 409 — live finding 2026-11-22, an agent tried exactly that.
+            sender_addr = _session_sender_address(m.get("body") or "")
+            block += (
+                "\n\nSession-Gespräch mit einem anderen Agenten — antworten: "
+                f"`mc send {sender_addr} \"…\"` (nicht `mc msg --thread`)."
+            )
+        elif m.get("thread_kind") == "group":
             # Gruppen-Thread ohne Rundenbrief (Operator-@-Mention): die
             # Raum-Regeln liegen im Referenz-Doc, nicht in der SOUL.
             block += (
@@ -3155,6 +3173,210 @@ def _add_me_args(p):
     pass
 
 
+# ── Discovery: projects / agents (one verb per question) ─────────────────
+#
+# Live finding 2026-11-22: asked "which projects exist?", a host agent listed
+# folders on disk because the CLI had no verb for the board's projects; a
+# container agent looking for colleagues probed three API paths by hand
+# before it found comms/who. These verbs answer both questions in one call.
+
+def _discovery_board_id(client: Client, cfg: Config, verb: str) -> str:
+    """The caller's board: env/context first, else its own /me record."""
+    if getattr(cfg, "board_id", None):
+        return cfg.board_id
+    me = client.request("GET", "/api/v1/agent/me")
+    board_id = me.get("board_id") if isinstance(me, dict) else None
+    if not board_id:
+        raise UsageError(
+            f"`mc {verb}` braucht ein Board — BOARD_ID ist nicht gesetzt und "
+            "/api/v1/agent/me liefert keins."
+        )
+    return board_id
+
+
+def _print_table(headers: list[str], rows: list[list[str]]) -> None:
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+    for row in [headers] + rows:
+        print("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip())
+
+
+def _project_where(p: dict) -> str:
+    return p.get("github_repo_url") or p.get("workspace_path") or "-"
+
+
+def _cmd_projects(args, client, cfg):
+    """mc projects — the projects of the agent's board (not folders on disk)."""
+    board_id = _discovery_board_id(client, cfg, "projects")
+    resp = client.request("GET", f"/api/v1/agent/boards/{board_id}/projects") or []
+    projects = resp if isinstance(resp, list) else resp.get("projects", [])
+    if getattr(args, "json", False):
+        print(json.dumps(projects, indent=2, default=str))
+        return 0
+    if not projects:
+        print("No projects on this board.")
+        return 0
+    _print_table(
+        ["ID", "NAME", "STATUS", "REPO/PATH"],
+        [[str(p.get("id", ""))[:8], p.get("name") or "?", p.get("status") or "-", _project_where(p)]
+         for p in projects],
+    )
+    print(f"\n{len(projects)} projects · details: mc project <id-or-name>")
+    return 0
+
+
+def _add_projects_args(p):
+    p.add_argument("--json", action="store_true", help="Raw JSON list")
+
+
+_UUID_FULL_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+def _resolve_project_id(needle: str, client: Client, cfg: Config) -> str:
+    """UUID passes through; otherwise exact name, then unique name/id prefix."""
+    if _UUID_FULL_RE.match(needle):
+        return needle
+    board_id = _discovery_board_id(client, cfg, "project")
+    resp = client.request("GET", f"/api/v1/agent/boards/{board_id}/projects") or []
+    projects = resp if isinstance(resp, list) else resp.get("projects", [])
+    low = needle.strip().lower()
+    if not low:
+        raise UsageError("Projekt fehlt: `mc project <id-oder-name>` — Liste: `mc projects`.")
+    exact = [p for p in projects if (p.get("name") or "").lower() == low]
+    matches = exact or [
+        p for p in projects
+        if (p.get("name") or "").lower().startswith(low) or str(p.get("id", "")).lower().startswith(low)
+    ]
+    if len(matches) == 1:
+        return str(matches[0]["id"])
+    names = ", ".join(sorted(p.get("name") or "?" for p in (matches or projects)))
+    if not matches:
+        raise UsageError(f"Kein Projekt '{needle}' auf diesem Board. Vorhanden: {names or '(keine)'}")
+    raise UsageError(f"'{needle}' ist mehrdeutig: {names} — nimm die ID aus `mc projects`.")
+
+
+def _cmd_project(args, client, cfg):
+    """mc project <id-or-name> — one project with its phases and briefing."""
+    project_id = _resolve_project_id(args.project, client, cfg)
+    p = client.request("GET", f"/api/v1/agent/projects/{project_id}") or {}
+    if getattr(args, "json", False):
+        print(json.dumps(p, indent=2, default=str))
+        return 0
+    print(f"{p.get('name')}  ({p.get('status') or '-'})  id {p.get('id')}")
+    for label, key in (("type", "project_type"), ("priority", "priority"),
+                       ("progress", "progress_pct"), ("repo", "github_repo_url"),
+                       ("path", "workspace_path")):
+        val = p.get(key)
+        if val not in (None, ""):
+            print(f"  {label}: {val}{'%' if key == 'progress_pct' else ''}")
+    if p.get("description"):
+        print(f"\n{p['description']}")
+    phases = p.get("phases") or []
+    if phases:
+        print("\nPhases:")
+        for ph in phases:
+            print(f"  {ph.get('order', '-')}. {ph.get('title')} · {ph.get('status')}")
+    if p.get("briefing_doc"):
+        print(f"\n--- briefing ---\n{p['briefing_doc']}")
+    return 0
+
+
+def _add_project_args(p):
+    p.add_argument("project", help="Project id (full or first chars) or name — see `mc projects`")
+    p.add_argument("--json", action="store_true", help="Raw JSON")
+
+
+# comms/who sends `alive` as "yes" / "no" / "unknown" (comms_directory.Alive);
+# a non-empty string is truthy, so it must be mapped, never tested as a bool.
+_ALIVE_LABEL = {"yes": "alive", True: "alive", "no": "offline", False: "offline",
+                "unknown": "unknown (warming up)", None: "unknown (warming up)"}
+
+
+def _cmd_agents(args, client, cfg):
+    """mc agents — the board's agents (name, role, lead) plus who is reachable.
+
+    Presence comes from comms/who when the caller may read it (comms:talk);
+    without it the roster still prints."""
+    board_id = _discovery_board_id(client, cfg, "agents")
+    resp = client.request("GET", f"/api/v1/agent/boards/{board_id}/agents") or []
+    roster = resp if isinstance(resp, list) else resp.get("agents", [])
+    who = None
+    try:
+        who = client.request("GET", "/api/v1/agent/comms/who")
+    except CLIError:
+        who = None
+    if not isinstance(who, dict):
+        who = None
+    sessions = (who or {}).get("sessions") or []
+    me = who.get("me") if who else None
+
+    used: set[str] = set()
+    merged = []
+    for a in roster:
+        name = a.get("name") or ""
+        # Only agent principals: a guest terminal session's label is its
+        # folder name and must never take over an agent row.
+        row = next(
+            (s for s in sessions
+             if s.get("kind") == "agent"
+             and s.get("address") not in used
+             and (s.get("label") == name or s.get("address") == name.strip().lower())),
+            None,
+        )
+        if row:
+            used.add(row.get("address"))
+        merged.append({
+            **a,
+            "address": row.get("address") if row else None,
+            "harness": row.get("harness") if row else None,
+            "alive": row.get("alive") if row else None,
+            "listening": row.get("listening") if row else None,
+        })
+    others = [s for s in sessions if s.get("address") not in used]
+
+    if getattr(args, "json", False):
+        print(json.dumps({"agents": merged, "other_sessions": others,
+                          "presence": who is not None}, indent=2, default=str))
+        return 0
+
+    def _state(r):
+        if who is None:
+            return "-"
+        if r.get("alive") is None and r.get("address") is None:
+            return "not reachable"
+        state = _ALIVE_LABEL.get(r.get("alive"), "unknown (warming up)")
+        if r.get("listening"):
+            state += ", listening"
+        return state
+
+    rows = []
+    for r in merged:
+        addr = r.get("address") or "-"
+        if me and r.get("address") == me:
+            addr += " (you)"
+        rows.append([r.get("name") or "?", r.get("role") or "-",
+                     "yes" if r.get("is_board_lead") else "no", addr, _state(r)])
+    _print_table(["NAME", "ROLE", "LEAD", "ADDRESS", "STATE"], rows)
+    if who is None:
+        print("\n(presence unavailable — this token may not read `mc who`)")
+    elif others:
+        print("\nOther reachable sessions (not on this board):")
+        for s in others:
+            line = f"  {s.get('address')} · {s.get('kind')} · {s.get('harness') or '-'}"
+            if s.get("address") == me:
+                line += " · (you)"
+            print(line)
+    if who is not None:
+        print('\nTalk to one: mc send <address> "…"')
+    return 0
+
+
+def _add_agents_args(p):
+    p.add_argument("--json", action="store_true", help="Raw JSON (roster merged with presence)")
+
+
 # ── Plugin Management (Board Lead) ───────────────────────────────────────
 
 def _resolve_target_agent_id(name_or_id: str, client: Client, cfg: Config) -> str:
@@ -4034,6 +4256,30 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="",
         handler=_cmd_me,
         add_args=_add_me_args,
+    ),
+    "projects": CommandSpec(
+        name="projects",
+        help="The board's projects (name, status, repo/path) — not folders on disk",
+        endpoints=("GET /boards/{board_id}/projects",),
+        scope="tasks:read",
+        handler=_cmd_projects,
+        add_args=_add_projects_args,
+    ),
+    "project": CommandSpec(
+        name="project",
+        help="One project with phases and briefing — mc project <id-or-name>",
+        endpoints=("GET /boards/{board_id}/projects", "GET /projects/{project_id}"),
+        scope="project:read",
+        handler=_cmd_project,
+        add_args=_add_project_args,
+    ),
+    "agents": CommandSpec(
+        name="agents",
+        help="The board's agents (name, role, lead) with reachability from comms/who",
+        endpoints=("GET /boards/{board_id}/agents", "GET /comms/who"),
+        scope="tasks:read",
+        handler=_cmd_agents,
+        add_args=_add_agents_args,
     ),
     "plugin-list": CommandSpec(
         name="plugin-list",

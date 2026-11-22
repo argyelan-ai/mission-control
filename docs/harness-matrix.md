@@ -233,7 +233,7 @@ Places: `C` = container (cli-bridge image), `H` = host (launchd adapter). Number
 116. [`scripts/comms/claude-code/hooks.example.json:1-8`](../scripts/comms/claude-code/hooks.example.json#L1-L8)
 117. [`scripts/comms/claude-code/mc-comms-hook.py:138`](../scripts/comms/claude-code/mc-comms-hook.py#L138)
 118. [`scripts/comms/claude-code/mc-comms-hook.py:152`](../scripts/comms/claude-code/mc-comms-hook.py#L152)
-119. [`scripts/mc-cli/mc_cli/commands.py:3870-3871`](../scripts/mc-cli/mc_cli/commands.py#L3870-L3871)
+119. [`scripts/mc-cli/mc_cli/commands.py:4092-4093`](../scripts/mc-cli/mc_cli/commands.py#L4092-L4093)
 120. [`scripts/mc-mcp.py:991-992`](../scripts/mc-mcp.py#L991-L992)
 121. [`backend/app/services/harness_compat.py:337-343`](../backend/app/services/harness_compat.py#L337-L343)
 122. [`backend/app/services/harness_compat.py:344-350`](../backend/app/services/harness_compat.py#L344-L350)

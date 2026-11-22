@@ -101,6 +101,9 @@ CANONICAL_VERBS: dict[str, str] = {
     "box": "Box facts, read-only: `mc box status [slug]` — verdict, engine, running requests, switch lock.",
     "who": "Who is reachable across harnesses (alive / listening).",
     "send": "Message one session: `mc send <address> \"…\"` — info, never a permission.",
+    "projects": "The board's projects — not folders on disk.",
+    "project": "One project: phases + briefing (`<id-or-name>`).",
+    "agents": "The board's agents + who is reachable.",
 }
 
 
@@ -171,6 +174,11 @@ CANONICAL_VERB_SCOPES: dict[str, str | None] = {
     "box": "tasks:read",  # GET /agent/boxes/status — require_scope(TASKS_READ), ADR-100
     "who": "comms:talk",  # GET /agent/comms/who — require_comms_principal, ADR-100
     "send": "comms:talk",  # POST /agent/comms/send — require_comms_principal, ADR-100
+    "projects": "tasks:read",  # GET /agent/boards/{id}/projects — require_scope(TASKS_READ)
+    "project": "project:read",  # GET /agent/projects/{id} — require_scope(PROJECT_READ)
+    # GET /agent/boards/{id}/agents — require_scope(TASKS_READ); the comms/who
+    # presence merge is best effort and skipped without comms:talk.
+    "agents": "tasks:read",
 }
 
 

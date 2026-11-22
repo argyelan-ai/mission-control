@@ -473,3 +473,63 @@ def test_tasks_doc_says_the_browser_runs_in_its_own_container():
 def test_tasks_doc_teaches_several_checklist_items_in_one_call():
     content = generate_reference_docs({"operator_name": "Operator"})["tasks"]
     assert 'mc checklist add "Step one" "Step two"' in content
+
+
+# ── Session replies and discovery verbs (live finding 2026-11-22) ────────
+#
+# A host agent answered another agent's session conversation with
+# `mc msg --thread` (409) because SOUL/TOOLS taught "reply into the thread
+# the message came from" without the session exception; asked "which
+# projects?", it listed folders on disk because no doc named `mc projects`.
+
+def _paragraphs_mentioning(text: str, needle: str) -> list[str]:
+    return [p for p in re.split(r"\n\s*\n", text) if needle in p.lower()]
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_soul_session_reply_rule_names_mc_send(role):
+    agent = _make_agent(role)
+    agent.comm_v2 = True
+    soul = render_agent_file("SOUL.md.j2", build_agent_context(agent, agents_on_board=[]))
+    paras = _paragraphs_mentioning(soul, "session conversation")
+    assert paras, "SOUL.md never mentions session conversations"
+    for p in paras:
+        assert 'mc send <address> "…"' in p, f"session paragraph without mc send:\n{p}"
+    # The bold inbox reply rule itself carries both verbs; a weaker model
+    # follows the bold line, so the exception must not trail behind it.
+    rule_line = next(line for line in soul.splitlines() if line.startswith("**1. Reply"))
+    assert 'mc msg --thread <id> "…"' in rule_line
+    assert 'mc send <address> "…"' in rule_line
+    assert "session conversation" in rule_line
+    assert "Always." not in rule_line
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_soul_teaches_find_things_verbs(role):
+    agent = _make_agent(role)
+    soul = render_agent_file("SOUL.md.j2", build_agent_context(agent, agents_on_board=[]))
+    block = soul.split("**Find things", 1)[1].split("\n\n\n", 1)[0]
+    for verb in ("`mc projects`", "`mc agents`", "`mc who`", "`mc docs`", "mc send <address>"):
+        assert verb in block, f"Find-things block misses {verb}"
+    assert "never a folder listing or raw curl" in soul
+
+
+def test_tools_md_session_reply_names_mc_send_and_projects_use_the_verb():
+    tools_md = generate_tools_md(
+        name="TestAgent", emoji="🤖", raw_token="tok", board_id="board-uuid-123",
+        is_board_lead=True, comm_v2=True,
+    )
+    paras = _paragraphs_mentioning(tools_md, "session conversation")
+    assert paras and all("mc send <address>" in p for p in paras)
+    assert "mc projects" in tools_md
+    # Listing is the verb now; only the create call (POST) keeps its curl.
+    assert 'curl -s "$MC_API_URL/api/v1/agent/boards/board-uuid-123/projects"' not in tools_md
+    assert "mc project <project_id>" in tools_md
+
+
+def test_l2_docs_session_reply_names_mc_send():
+    docs = generate_reference_docs({"operator_name": "Mark"})
+    for topic in ("groupchat", "report"):
+        paras = _paragraphs_mentioning(docs[topic], "session conversation")
+        assert paras, f"docs/{topic}.md misses the session-conversation rule"
+        assert all('mc send <address> "…"' in p for p in paras), topic

@@ -1975,7 +1975,10 @@ async def _resolve_message_target(
         else:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Kein aktiver Task — message nur aus aktiver Arbeit heraus moeglich.",
+                detail=(
+                    "Kein aktiver Task. Für Nachrichten an andere Agenten: "
+                    "mc send <name> \"…\" (Adressen: mc who)."
+                ),
             )
     return dm, None
 
@@ -2148,7 +2151,10 @@ async def agent_post_thread_message(
         # path (brake, rate limit, inbox cap) — never around it.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Session conversations are answered with `mc send <address> \"…\"` (POST /api/v1/agent/comms/send).",
+            detail=(
+                "Session conversations are answered with `mc send <address> \"…\"` "
+                "(addresses: `mc who`). `mc msg --thread` is only for task and board threads."
+            ),
         )
     thread = await thread_agent_may_write_to(session, agent, thread_id)
     if thread is None:
