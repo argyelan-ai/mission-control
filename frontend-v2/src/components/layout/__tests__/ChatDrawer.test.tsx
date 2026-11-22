@@ -344,6 +344,24 @@ describe("chat column (desktop)", () => {
     expect(within(nav).getByRole("link", { name: /^Chat/ })).toHaveAttribute("aria-current", "page");
   });
 
+  it("lights More on the More page (aria-current), and nothing else", async () => {
+    nav.pathname = "/more";
+    wrap(<ChatSidebar />);
+    const column = screen.getByTestId("chat-sidebar");
+    const menu = within(column).getByRole("navigation", { name: "Main navigation" });
+    expect(within(menu).getByRole("link", { name: "More" })).toHaveAttribute("aria-current", "page");
+    for (const name of [/^Chat/, "Models", "Knowledge"]) {
+      expect(within(menu).getByRole("link", { name })).not.toHaveAttribute("aria-current");
+    }
+  });
+
+  it("More is not lit on a tab's page", () => {
+    nav.pathname = "/runtimes";
+    wrap(<ChatSidebar />);
+    const menu = within(screen.getByTestId("chat-sidebar")).getByRole("navigation", { name: "Main navigation" });
+    expect(within(menu).getByRole("link", { name: "More" })).not.toHaveAttribute("aria-current");
+  });
+
   it("adds failed journey tests to the count next to Chat (admin)", async () => {
     user.current = { id: "u1", role: "admin" };
     data.approvals = [{ id: "p1", agent_id: "a3", status: "pending" }];

@@ -36,6 +36,7 @@ export function ChatSidebar() {
   const setCommandPaletteOpen = useAppStore((s) => s.setCommandPaletteOpen);
   const pathname = usePathname() ?? "/";
   const active = activeTabFor(pathname);
+  const moreOn = pathname === MORE_HREF;
   // Inbox "For you" plus a red journey run — the same sum as the inbox tab.
   const count = useWaitingCount();
   const recent = useRecentChats();
@@ -117,10 +118,16 @@ export function ChatSidebar() {
         })}
         <Link
           href={MORE_HREF}
+          aria-current={moreOn ? "page" : undefined}
           className="flex items-center gap-3 min-h-10 px-3 rounded-lg text-sm transition-colors hover:bg-[var(--color-bg-hover)]"
-          style={{ color: C.textMuted }}
+          style={{
+            // Lit like a tab row on /more; otherwise the quieter foot link.
+            color: moreOn ? C.textPrimary : C.textMuted,
+            fontWeight: moreOn ? 500 : 400,
+            ...(moreOn ? { background: C.accentSubtle } : null),
+          }}
         >
-          <LayoutGrid size={17} strokeWidth={1.75} aria-hidden />
+          <LayoutGrid size={17} strokeWidth={moreOn ? 2 : 1.75} aria-hidden />
           {t("more")}
         </Link>
       </nav>
