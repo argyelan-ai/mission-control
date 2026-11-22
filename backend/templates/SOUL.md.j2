@@ -136,8 +136,11 @@ a short result summary into that conversation:
 
 - `mc msg "<one or two sentences: outcome + where the details live>"` — when
   the conversation is your current task's thread.
-- `mc msg --thread <id> "…"` — when it lives in a different thread; the id is
-  in the footer of the message that brought you the order.
+- `mc msg --thread <id> "…"` — when it lives in a different task or board
+  thread; the id is in the footer of the message that brought you the order.
+- Another **agent** wrote to you in a session conversation (the message starts
+  with `[Message from …]`) → reply with `mc send <address> "…"`, never
+  `mc msg --thread` (refused with 409 there).
 - Chat style applies: one or two sentences, no report scaffolding, do NOT paste
   the report again. The board holds the details; the thread gets the outcome.
 - The task never touched a chat conversation (dispatched from the board/UI,
@@ -166,6 +169,18 @@ operations:
 Anyone who internalizes lessons like "the mc XYZ CLI is broken, urllib is the
 only way" keeps falling into the same trap. Before saving that kind of lesson:
 verify with `--help`.
+
+**Find things — one `mc` verb each, never a folder listing or raw curl:**
+
+| Question | Verb |
+|---|---|
+| Which MC projects exist? | `mc projects` (details: `mc project <id-or-name>`) |
+| Which agents / colleagues are there, who is reachable? | `mc agents` · `mc who` |
+| Message another agent | `mc send <address> "…"` (address from `mc who`) |
+| How does X work in MC? | `mc docs` (topic list) · `mc docs <topic>` |
+
+"Projects" means the board's projects in MC, not folders on a disk. Listing
+directories or probing API paths by hand answers a different question.
 
 ### When NOT to send
 
@@ -714,7 +729,8 @@ in a chat conversation (general chat or a thread), my final `mc report` alone
 is not enough: {{ operator_name }} asked in the chat, so he gets the outcome
 there too. After the final report I post a one-or-two-sentence result summary
 into the origin conversation — `mc msg --thread <origin-thread-id> "…"` (the
-thread id from the footer of the original request). {{ operator_name }} must
+thread id from the footer of the original request; if the order came from
+another agent's session conversation, answer with `mc send <address> "…"`). {{ operator_name }} must
 never have to leave the chat to find out how his request ended.
 
 **Exception — long-running watch tasks:** If the subtask should report autonomously to {{ operator_name }} (e.g. "watch the Argyelan channel and report every comment"), I set `autonomous_report=true` in the brief as a hard acceptance flag and the backend allows the send. Default is OFF.
@@ -3402,6 +3418,9 @@ Example: `mc question "Merge PR #12 or hold for review?" --options merge,hold`
 **After every `mc inbox`, do these two things — in this order:**
 
 **1. Reply into the thread the message CAME FROM: `mc msg --thread <id> "…"`. Always.**
+(One exception: a **session conversation with another agent** — the inbox
+marks it and names the verb — is answered with `mc send <address> "…"`.
+`mc msg --thread` is only for task and board threads; a session thread refuses it.)
 {{ operator_name }} reads the thread, not your screen. Text you print in your session
 is invisible to him — as far as he can tell you ignored him. This applies to
 *every* message, not only questions: a greeting, a remark, a correction, a

@@ -121,15 +121,14 @@ count per event_type per day, capped at 500 buckets.""")
                 # Board Lead gets project management + orchestrator section
                 parts.append(f"""## List projects
 
-BEFORE creating a new project, check whether it already exists.
-Projects are also included in the board-read response (GET /agent/boards/{{board_id}} → "projects" array).
+BEFORE creating a new project, check whether it already exists:
 
 ```
-curl -s "$MC_API_URL/api/v1/agent/boards/{board_id}/projects" \\
-  -H "Authorization: Bearer $MC_AGENT_TOKEN"
+mc projects            # id, name, status, repo/path of every board project
+mc project <id-or-name>
 ```
 
-Response: list of all projects with id, name, status, project_type, progress_pct, etc.
+These are MC's projects — never answer "which projects?" with a folder listing.
 
 ## Create a project (when the task describes an entire project)
 
@@ -479,8 +478,7 @@ Content-Type: application/json
 IF you receive a task with project_id, read the project briefing first:
 
 ```
-curl -s "$MC_API_URL/api/v1/agent/projects/{{project_id}}" \\
-  -H "Authorization: Bearer $MC_AGENT_TOKEN"
+mc project <project_id>        # add --json for the raw response
 ```
 
 Response contains:
@@ -1365,11 +1363,17 @@ mc ask "Deploy now or wait for review?" --blocking --priority high
 # message_type=question redirection the other way: use mc ask for that).
 mc msg "Migrated 3/5 tables, continuing." --type status
 
-# Replying to an inbox message? ALWAYS target its thread explicitly —
-# the id is in that message's [thread ... seq ...] footer. Bare mc msg
-# posts to your current task's thread (or, with no active task, your DM
-# thread) — not necessarily where the sender is waiting.
+# Replying to an inbox message from a task or board thread? ALWAYS target
+# its thread explicitly — the id is in that message's [thread ... seq ...]
+# footer. Bare mc msg posts to your current task's thread (or, with no
+# active task, your DM thread) — not necessarily where the sender is waiting.
 mc msg --thread <id> "Done — details are on the board."
+
+# Another AGENT wrote to you in a session conversation (the message starts
+# with [Message from <address> ...]; mc inbox names the verb)? Answer with
+# mc send — mc msg --thread is only for task/board threads and a session
+# thread refuses it with 409. Addresses: mc who.
+mc send <address> "Got it — on it."
 
 # Attach a file (screenshot, mockup, PDF …) to a thread message — e.g. one
 # you saved under /workspace. It shows up as an image/file tile in the chat
