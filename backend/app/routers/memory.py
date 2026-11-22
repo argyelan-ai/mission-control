@@ -15,6 +15,7 @@ from sqlmodel import select, func
 from app.auth import require_user
 from app.database import get_session
 from app.models.memory import BoardMemory
+from app.services.board_memory_gate import require_board_memory_writes
 from app.utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -141,7 +142,7 @@ async def list_memory(
     return result.all()
 
 
-@router.post("/boards/{board_id}/memory", status_code=status.HTTP_201_CREATED)
+@router.post("/boards/{board_id}/memory", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_board_memory_writes)])
 async def create_memory(
     board_id: uuid.UUID,
     payload: MemoryCreate,
@@ -161,7 +162,7 @@ async def create_memory(
     return memory
 
 
-@router.patch("/boards/{board_id}/memory/{memory_id}")
+@router.patch("/boards/{board_id}/memory/{memory_id}", dependencies=[Depends(require_board_memory_writes)])
 async def update_memory(
     board_id: uuid.UUID,
     memory_id: uuid.UUID,
@@ -181,7 +182,7 @@ async def update_memory(
     return memory
 
 
-@router.delete("/boards/{board_id}/memory/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/boards/{board_id}/memory/{memory_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_board_memory_writes)])
 async def delete_memory(
     board_id: uuid.UUID,
     memory_id: uuid.UUID,
@@ -339,7 +340,7 @@ async def get_knowledge_entry(
     }
 
 
-@router.post("/knowledge", status_code=status.HTTP_201_CREATED)
+@router.post("/knowledge", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_board_memory_writes)])
 async def create_knowledge(
     payload: KnowledgeCreate,
     session: AsyncSession = Depends(get_session),
@@ -397,7 +398,7 @@ async def create_knowledge(
     return entry
 
 
-@router.patch("/knowledge/{entry_id}")
+@router.patch("/knowledge/{entry_id}", dependencies=[Depends(require_board_memory_writes)])
 async def update_knowledge(
     entry_id: uuid.UUID,
     payload: KnowledgeUpdate,
@@ -416,7 +417,7 @@ async def update_knowledge(
     return entry
 
 
-@router.delete("/knowledge/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/knowledge/{entry_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_board_memory_writes)])
 async def delete_knowledge(
     entry_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
@@ -491,7 +492,7 @@ async def user_memory_query(
 # Migration 0091). Inline image previews + auth-gated GET in /memory viewer.
 
 
-@router.post("/knowledge/{entry_id}/attachments", status_code=status.HTTP_201_CREATED)
+@router.post("/knowledge/{entry_id}/attachments", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_board_memory_writes)])
 async def upload_attachment(
     entry_id: uuid.UUID,
     file: UploadFile = File(...),
@@ -608,6 +609,7 @@ async def get_attachment(
 @router.delete(
     "/knowledge/{entry_id}/attachments/{filename}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_board_memory_writes)],
 )
 async def delete_attachment(
     entry_id: uuid.UUID,
@@ -661,7 +663,7 @@ async def delete_attachment(
 # Auth: require_user JWT (matches the rest of the /knowledge surface).
 
 
-@router.post("/knowledge/{entry_id}/merge_into/{target_id}", status_code=status.HTTP_200_OK)
+@router.post("/knowledge/{entry_id}/merge_into/{target_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(require_board_memory_writes)])
 async def merge_into(
     entry_id: uuid.UUID,
     target_id: uuid.UUID,
@@ -707,7 +709,7 @@ async def merge_into(
     return {"merged_into": str(target_id), "deleted": src_id}
 
 
-@router.post("/knowledge/{entry_id}/keep_both", status_code=status.HTTP_200_OK)
+@router.post("/knowledge/{entry_id}/keep_both", status_code=status.HTTP_200_OK, dependencies=[Depends(require_board_memory_writes)])
 async def keep_both(
     entry_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
@@ -724,7 +726,7 @@ async def keep_both(
     return {"kept_both": str(entry_id)}
 
 
-@router.post("/knowledge/{entry_id}/unrelated", status_code=status.HTTP_200_OK)
+@router.post("/knowledge/{entry_id}/unrelated", status_code=status.HTTP_200_OK, dependencies=[Depends(require_board_memory_writes)])
 async def mark_unrelated(
     entry_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),

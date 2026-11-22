@@ -652,6 +652,11 @@ async def unarchive_group(
     return await _serialize_group(session, group)
 
 
+# Deliberately NOT behind the board_memory write switch (board_memory_gate):
+# this is the operator's own "keep the result" in the Finish dialog, not a
+# background second truth. The dialog treats any refusal as a failure, and
+# with "delete everything" a skipped write would lose the result. Clean-up
+# PR H removes the group tab and gates this route with it.
 @router.post("/groups/{group_id}/memorize", status_code=status.HTTP_201_CREATED)
 async def memorize_group_result(
     group_id: uuid.UUID,

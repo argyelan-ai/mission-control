@@ -25,6 +25,7 @@ from app.config import settings
 from app.database import engine
 from app.models.agent import Agent, AgentMetrics
 from app.models.memory import BoardMemory
+from app.services.board_memory_gate import board_memory_write_skipped
 from app.utils import ensure_aware, utcnow
 from app.models.task import Task, TaskComment
 from app.redis_client import RedisKeys, get_redis
@@ -599,6 +600,10 @@ class IntelligenceService:
 
     async def _maybe_daily_destillation(self, insights: dict, config=None) -> None:
         """Once daily: distill patterns into readable insights via Ollama."""
+        # The report lands only in the legacy board_memory table: with its
+        # write switch off, skip before the LLM call (board_memory_gate).
+        if board_memory_write_skipped("intelligence_daily_report"):
+            return
         try:
             redis = await get_redis()
             # Dedup: max 1x per 20 hours
