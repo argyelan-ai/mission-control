@@ -222,6 +222,25 @@ describe("FilesBrowser", () => {
     expect(label.closest("td")).toHaveClass("max-w-0");
   });
 
+  it("two folders with the same display_name show their raw names (touch has no tooltip)", async () => {
+    vi.spyOn(api.files, "list").mockResolvedValue({
+      root: "vault", subpath: "",
+      entries: [
+        mkEntry({ name: "aaaa1111-0000-4000-8000-000000000001", type: "directory", is_directory: true, display_name: "Weekly report" }),
+        mkEntry({ name: "bbbb2222-0000-4000-8000-000000000002", type: "directory", is_directory: true, display_name: "Weekly report" }),
+        mkEntry({ name: "cccc3333-0000-4000-8000-000000000003", type: "directory", is_directory: true, display_name: "Fix login" }),
+      ],
+    });
+    renderWithQuery(
+      <FilesBrowser root={ROOT} subpath="" onNavigate={() => {}} onSelectFile={() => {}} {...noSel} />
+    );
+    expect(await screen.findAllByText("Weekly report")).toHaveLength(2);
+    expect(screen.getByText("aaaa1111-0000-4000-8000-000000000001")).toBeInTheDocument();
+    expect(screen.getByText("bbbb2222-0000-4000-8000-000000000002")).toBeInTheDocument();
+    // a unique name keeps K3: no raw second line
+    expect(screen.queryByText("cccc3333-0000-4000-8000-000000000003")).toBeNull();
+  });
+
   it("a plain long name truncates with its full text as tooltip", async () => {
     vi.spyOn(api.files, "list").mockResolvedValue({
       root: "vault", subpath: "",
@@ -368,6 +387,21 @@ describe("FilesBrowser — grid view", () => {
     );
     await screen.findByText("notes.md");
     expect(fetchBlob).not.toHaveBeenCalled();
+  });
+
+  it("grid cards with the same display_name show their raw names too", async () => {
+    vi.spyOn(api.files, "list").mockResolvedValue({
+      root: "vault", subpath: "",
+      entries: [
+        mkEntry({ name: "aaaa1111-0000-4000-8000-000000000001", type: "directory", is_directory: true, display_name: "Weekly report" }),
+        mkEntry({ name: "bbbb2222-0000-4000-8000-000000000002", type: "directory", is_directory: true, display_name: "Weekly report" }),
+      ],
+    });
+    renderWithQuery(
+      <FilesBrowser root={ROOT} subpath="" onNavigate={() => {}} onSelectFile={() => {}} view="grid" {...noSel} />
+    );
+    expect(await screen.findAllByText("Weekly report")).toHaveLength(2);
+    expect(screen.getByText("aaaa1111-0000-4000-8000-000000000001")).toBeInTheDocument();
   });
 
   it("renders display_name + agent badge on grid cards too", async () => {

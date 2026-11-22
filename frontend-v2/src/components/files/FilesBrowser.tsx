@@ -52,6 +52,32 @@ interface FilesBrowserProps {
   headerActions?: ReactNode;
 }
 
+/** Display names that more than one entry of this listing carries. Those
+ *  entries show their raw name as a small second line: the tooltip that
+ *  tells them apart on a desktop does not exist on touch. */
+export function sharedDisplayNames(entries: FsEntry[]): Set<string> {
+  const seen = new Set<string>();
+  const shared = new Set<string>();
+  for (const e of entries) {
+    if (!e.display_name) continue;
+    if (seen.has(e.display_name)) shared.add(e.display_name);
+    seen.add(e.display_name);
+  }
+  return shared;
+}
+
+/** The raw name under a shared display name (see sharedDisplayNames). */
+function RawName({ name, size }: { name: string; size: "xs" | "sm" }) {
+  return (
+    <div
+      className={`${size === "sm" ? "text-[11px]" : "text-[10px]"} font-mono truncate`}
+      style={{ color: C.textDim }}
+    >
+      {name}
+    </div>
+  );
+}
+
 export function FilesBrowser({
   root, subpath, onNavigate, onSelectFile, selectedSubpath,
   selected, onToggleSelect, onToggleSelectAll, view = "list", headerActions,
@@ -79,6 +105,7 @@ export function FilesBrowser({
   }
 
   const entries = sortEntries(data?.entries ?? [], sort.key, sort.dir);
+  const shared = sharedDisplayNames(entries);
 
   // Subpaths of the files (not folders) in the current directory — the unit of
   // selection. Folders are not selectable in v1.
@@ -184,6 +211,7 @@ export function FilesBrowser({
               <FileRow
                 key={entry.name}
                 entry={entry}
+                showRaw={!!entry.display_name && shared.has(entry.display_name)}
                 subpath={subpath}
                 selected={selectedSubpath === (subpath ? `${subpath}/${entry.name}` : entry.name)}
                 checked={selected.has(subpath ? `${subpath}/${entry.name}` : entry.name)}
@@ -217,11 +245,22 @@ function AgentBadge({ slug }: { slug: string }) {
 
 /** Display label for a folder/file: `display_name` (e.g. a task title) when
  *  there is one, otherwise the raw name. The raw name (often a task UUID) is
- *  no second line any more (K3) — it stays in the tooltip. Truncates inside
+ *  no second line any more (K3) — it stays in the tooltip, unless another
+ *  entry carries the same display name (`showRaw`). Truncates inside
  *  its cell (`min-w-0`); the full text is always in `title`. */
-function EntryLabel({ entry }: { entry: FsEntry }) {
+function EntryLabel({ entry, showRaw = false }: { entry: FsEntry; showRaw?: boolean }) {
   const label = entry.display_name || entry.name;
   const tooltip = entry.display_name ? `${entry.display_name}\n${entry.name}` : entry.name;
+  if (showRaw && entry.display_name) {
+    return (
+      <div className="min-w-0" title={tooltip}>
+        <div className="truncate text-sm" style={{ color: C.textPrimary }}>
+          {label}
+        </div>
+        <RawName name={entry.name} size="sm" />
+      </div>
+    );
+  }
   return (
     <span className="min-w-0 truncate text-sm" style={{ color: C.textPrimary }} title={tooltip}>
       {label}
@@ -230,9 +269,10 @@ function EntryLabel({ entry }: { entry: FsEntry }) {
 }
 
 function FileRow({
-  entry, subpath, selected, checked, onNavigate, onSelectFile, onToggleSelect,
+  entry, showRaw, subpath, selected, checked, onNavigate, onSelectFile, onToggleSelect,
 }: {
   entry: FsEntry;
+  showRaw: boolean;
   subpath: string;
   selected: boolean;
   checked: boolean;
@@ -271,7 +311,7 @@ function FileRow({
       <td className="px-4 py-2.5 max-w-0 w-full">
         <div className="flex items-center gap-2.5 min-w-0">
           <Icon size={15} style={{ color, flexShrink: 0 }} />
-          <EntryLabel entry={entry} />
+          <EntryLabel entry={entry} showRaw={showRaw} />
           {entry.agent_slug && <AgentBadge slug={entry.agent_slug} />}
           {entry.is_directory && <ChevronRight size={13} style={{ color: C.textDim, flexShrink: 0 }} />}
         </div>
@@ -346,10 +386,11 @@ function useThumbnailUrl(rootKey: string, subpath: string, enabled: boolean): st
 }
 
 function FileGridCard({
-  root, entry, subpath, selected, checked, onNavigate, onSelectFile, onToggleSelect,
+  root, entry, showRaw, subpath, selected, checked, onNavigate, onSelectFile, onToggleSelect,
 }: {
   root: FsRoot;
   entry: FsEntry;
+  showRaw: boolean;
   subpath: string;
   selected: boolean;
   checked: boolean;
@@ -392,7 +433,8 @@ function FileGridCard({
       </div>
 
       <div className="px-2 py-2 min-w-0">
-        {/* Same as the list row: the name, the raw UUID only as tooltip. */}
+        {/* Same as the list row: the name, the raw UUID only as tooltip —
+            or as a second line when the name is shared. */}
         <div
           className="text-xs truncate"
           style={{ color: C.textPrimary }}
@@ -400,6 +442,7 @@ function FileGridCard({
         >
           {entry.display_name || entry.name}
         </div>
+        {showRaw && entry.display_name && <RawName name={entry.name} size="xs" />}
         {entry.agent_slug && (
           <div className="mt-1">
             <AgentBadge slug={entry.agent_slug} />
@@ -428,6 +471,7 @@ function FileGrid({
   someSelected: boolean;
   onToggleSelectAll: (subpaths: string[], on: boolean) => void;
 }) {
+  const shared = sharedDisplayNames(entries);
   const tr = useTranslations("files");
   const selectAllRef = useRef<HTMLInputElement | null>(null);
 
@@ -456,6 +500,7 @@ function FileGrid({
             key={entry.name}
             root={root}
             entry={entry}
+            showRaw={!!entry.display_name && shared.has(entry.display_name)}
             subpath={subpath}
             selected={selectedSubpath === (subpath ? `${subpath}/${entry.name}` : entry.name)}
             checked={selected.has(subpath ? `${subpath}/${entry.name}` : entry.name)}
