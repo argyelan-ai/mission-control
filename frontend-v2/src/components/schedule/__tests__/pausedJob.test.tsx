@@ -90,12 +90,13 @@ describe("JobsTable — paused job", () => {
     const onTrigger = vi.fn();
     render(<JobsTable jobs={[PAUSED]} onEdit={noop} onDelete={noop} onTrigger={onTrigger} onToggleEnabled={noop} onSnooze={noop} onDuplicate={noop} />);
     const card = screen.getByTestId("job-card");
-    // The card list shows up to 1100 px (one breakpoint, on the list's wrapper).
-    expect(card.closest(".min-\\[1100px\\]\\:hidden")).not.toBeNull();
+    // The card list shows while the table's column is narrower than 880 px
+    // (one container breakpoint, on the list's wrapper).
+    expect(card.closest(".\\@min-\\[880px\\]\\:hidden")).not.toBeNull();
     expect(within(card).getByText("Morning Briefing for the whole team")).not.toHaveClass("truncate");
     expect(within(card).getByText(/— \(paused\)/)).toBeInTheDocument();
-    // The table itself only from 1100 px up.
-    expect(screen.getByRole("region", { name: "Jobs table" }).className).toMatch(/hidden min-\[1100px\]:block/);
+    // The table itself only from an 880 px column up.
+    expect(screen.getByRole("region", { name: "Jobs table" }).className).toMatch(/hidden @min-\[880px\]:block/);
     await userEvent.click(within(card).getByRole("button", { name: "Actions for Morning Briefing for the whole team" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Run now" }));
     expect(onTrigger).toHaveBeenCalledWith("job-1");

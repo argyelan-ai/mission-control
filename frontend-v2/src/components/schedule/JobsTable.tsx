@@ -115,7 +115,9 @@ export function JobsTable({
   };
 
   return (
-    <div className="flex flex-col gap-3">
+    // @container: the card/table switch below reads this column's width, not
+    // the viewport's — beside the sidebar the two differ by ~330 px.
+    <div className="@container flex flex-col gap-3">
       {/* ── Search + Tag-Filter ── */}
       <div className="flex flex-col gap-2">
         <div className="relative">
@@ -231,10 +233,11 @@ export function JobsTable({
         )}
       </AnimatePresence>
 
-      {/* ── Up to ~1100 px: one card per job. The table needs ~640 px of
-          its own; beside the sidebar at 1024 px it cut names and the last
-          run ("Morning Bri…"), so tablets get the phone's cards. ── */}
-      <div className="min-[1100px]:hidden flex flex-col gap-2">
+      {/* ── Column under 880 px: one card per job. At a ~680 px column
+          (1024 px beside the sidebar) the table cut names and the last run
+          ("Morning Bri…"); from 880 px the fr tracks get ~82 px each
+          (Last run ~123 px), so narrower columns get the phone's cards. ── */}
+      <div className="@min-[880px]:hidden flex flex-col gap-2">
         {filteredJobs.length === 0 ? (
           <div
             className="rounded-lg border border-dashed p-8 text-center text-sm"
@@ -258,9 +261,9 @@ export function JobsTable({
         )}
       </div>
 
-      {/* ── Table from 1100 px up ── */}
+      {/* ── Table from an 880 px column up ── */}
       <div
-        className="hidden min-[1100px]:block overflow-x-auto"
+        className="hidden @min-[880px]:block overflow-x-auto"
         style={{ overscrollBehaviorX: "contain" } as React.CSSProperties}
         tabIndex={0}
         role="region"
