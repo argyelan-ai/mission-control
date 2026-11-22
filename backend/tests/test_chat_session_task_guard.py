@@ -965,3 +965,46 @@ async def test_chat_reply_by_task_id_on_its_review_runs_card_is_refused(client):
     )
     assert resp.status_code == 409, resp.text
     assert await _comments(task_id) == []
+
+
+# ── Wrong-verb refusals name the right verb (live finding 22.11.2026) ─────
+#
+# A container agent ran `mc msg` with no task and no conversation and got a
+# bare "Kein aktiver Task"; a host agent answered another agent's session
+# conversation with `mc msg --thread` and got a 409. Both refusals must name
+# the verb that works: `mc send <name> "…"`, addresses from `mc who`.
+
+
+async def test_msg_without_active_task_points_at_mc_send(client):
+    _board, _agent, _task, token = await _setup(status="done", assigned=False, worked=False)
+    resp = await client.post(
+        "/api/v1/agent/tasks/current/messages",
+        json={"body": "anyone there?"},
+        headers=_auth(token, chat=False, attempt=False),
+    )
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail.startswith("Kein aktiver Task")
+    assert 'mc send <name> "…"' in detail
+    assert "mc who" in detail
+
+
+async def test_session_conversation_refusal_names_mc_send_and_mc_who(client):
+    from app.models.thread import Thread
+
+    _board, agent_id, _task, token = await _setup(status="done", assigned=False, worked=False)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        th = Thread(kind="session", agent_id=agent_id)
+        s.add(th)
+        await s.commit()
+        thread_id = th.id
+    resp = await client.post(
+        f"/api/v1/agent/threads/{thread_id}/messages",
+        json={"body": "reply around the brake", "message_type": "message"},
+        headers=_auth(token, chat=False, attempt=False),
+    )
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert 'mc send <address> "…"' in detail
+    assert "mc who" in detail
+    assert "mc msg --thread" in detail and "task" in detail
