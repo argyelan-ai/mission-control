@@ -68,20 +68,24 @@ describe("boxLabel / liveTps", () => {
 });
 
 describe("SpeedLineView", () => {
-  // User test 21.11.2026: the model stood twice (chip and this line), once
-  // as "mc-openai/DeepSeek-V4.1-Flash-1017". The chip names it; this line
-  // names the box and its speed.
-  it("with data: the box and the live tok/s — the model stands in the chip", () => {
-    render(intl(<SpeedLineView box="Box A + Box B" model="qwen3.8-27b" tps={41} live />));
-    const line = screen.getByTestId("speed-line");
-    expect(line).toHaveTextContent(/^Box A \+ Box B41 tok\/s$/);
-    expect(line).not.toHaveTextContent("qwen3.8-27b");
+  // Operator 22.11.2026: on a 390 px phone the chip cuts the model
+  // ("DeepSeek-V…"), so this line names it whole again — without the
+  // provider path that the user test of 21.11. objected to.
+  it("with data: box · whole model and the live tok/s", () => {
+    render(intl(<SpeedLineView box="Box A + Box B" model="mc-openai/DeepSeek-V4.1-Flash-1017" tps={41} live />));
+    expect(screen.getByTestId("speed-line-label")).toHaveTextContent(/^Box A \+ Box B · DeepSeek-V4\.1-Flash-1017$/);
+    expect(screen.getByTestId("speed-line")).not.toHaveTextContent("mc-openai/");
     expect(screen.getByTestId("speed-line-tps")).toHaveTextContent("41 tok/s");
+  });
+
+  it("the model name is never cut: the label wraps instead of truncating", () => {
+    render(intl(<SpeedLineView box="Box A" model="DeepSeek-V4.1-Flash-1017" tps={41} live />));
+    expect(screen.getByTestId("speed-line-label")).not.toHaveClass("truncate");
   });
 
   it("at rest: the last measured tok/s, quiet, not marked live", () => {
     render(intl(<SpeedLineView box="Box A" model="qwen3.8-27b" tps={38} />));
-    expect(screen.getByTestId("speed-line")).toHaveTextContent("Box A");
+    expect(screen.getByTestId("speed-line")).toHaveTextContent("Box A · qwen3.8-27b");
     expect(screen.getByTestId("speed-line-tps")).toHaveTextContent("38 tok/s");
     expect(screen.getByTestId("speed-line-tps")).not.toHaveAttribute("data-live");
   });
@@ -92,10 +96,10 @@ describe("SpeedLineView", () => {
     unmount();
     render(intl(<SpeedLineView box="Box A" model="qwen3.8-27b" tps={null} />));
     expect(screen.queryByTestId("speed-line-tps")).toBeNull();
-    expect(screen.getByTestId("speed-line")).toHaveTextContent(/^Box A$/);
+    expect(screen.getByTestId("speed-line")).toHaveTextContent(/^Box A · qwen3\.8-27b$/);
   });
 
-  it("a cloud model without a box: no line — the chip names the model", () => {
+  it("a cloud model without a box: no line — its chip is not cut, the line would only repeat it", () => {
     render(intl(<SpeedLineView box={null} model="claude-opus-5" tps={null} />));
     expect(screen.queryByTestId("speed-line")).toBeNull();
   });
@@ -121,7 +125,13 @@ describe("SpeedLine (loaded)", () => {
     apiMock.runtimes = [RUNTIME];
     withQuery(<SpeedLine runtimeId="rt-1" model={null} streaming />);
     await waitFor(() => expect(screen.getByTestId("speed-line-tps")).toHaveTextContent("41 tok/s"));
-    expect(screen.getByTestId("speed-line")).toHaveTextContent("Box A + Box B");
+    expect(screen.getByTestId("speed-line")).toHaveTextContent("Box A + Box B · qwen3.8-27b");
+  });
+
+  it("the transcript's model wins over the runtime row's", async () => {
+    apiMock.runtimes = [RUNTIME];
+    withQuery(<SpeedLine runtimeId="rt-1" model="qwen3.8-27b-nvfp4" streaming={false} />);
+    await waitFor(() => expect(screen.getByTestId("speed-line")).toHaveTextContent("Box A + Box B · qwen3.8-27b-nvfp4"));
   });
 
   it("at rest it still shows the box's last measured speed", async () => {

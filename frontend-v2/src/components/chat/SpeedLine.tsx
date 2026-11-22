@@ -84,13 +84,16 @@ export function shortModelName(id: string | null | undefined, displayName?: stri
 export function SpeedLineView({ box, model, tps, live = false, streaming = false, onPick }: SpeedLineFacts) {
   const t = useTranslations("cockpit.speed");
   const ts = useTranslations("cockpit.switch");
-  // The model is named once: in the composer's chip (user test 21.11.2026).
-  // Only a line that is the pair picker's door and has no box to name
-  // carries the model, as the door's label.
-  const label = box ?? (onPick ? shortModelName(model) : null);
-  if (!label) return null;
+  // The line names the whole model again (operator 22.11.2026): on a
+  // 390 px phone the composer's chip gives way to Send/Stop and cuts the
+  // name ("DeepSeek-V…"). The chip stays; this line is where the full name
+  // can be read — without the provider path, never cut (it wraps instead).
+  // A cloud model without a box and without the picker door gets no line:
+  // its chip is not cut, and "fable" under "Fable" only repeats it.
+  if (!box && !onPick) return null;
+  const parts = [box, shortModelName(model)].filter(Boolean).join(" · ");
+  if (!parts) return null;
   const showTps = !!box && (tps != null || streaming);
-  const parts = label;
   const body = (
     <>
       <span
@@ -98,7 +101,7 @@ export function SpeedLineView({ box, model, tps, live = false, streaming = false
         className="w-1.5 h-1.5 rounded-full shrink-0"
         style={{ background: live ? C.info : C.textDim }}
       />
-      <span className="truncate min-w-0">{parts}</span>
+      <span data-testid="speed-line-label" className="min-w-0 [overflow-wrap:anywhere]">{parts}</span>
       {/* A local box shows a speed: live while streaming, else the last
           measured one; "– tok/s" only while a turn runs and nothing was
           ever measured. A cloud model has no box and no measured speed —
@@ -156,8 +159,8 @@ export function pairForLine(
 
 /**
  * The speed line under the composer (variant C, operator decision
- * 2026-11-18): dot · box · live tok/s; since the user test 21.11.2026 the
- * model stands only in the composer's chip. Model from the transcript
+ * 2026-11-18): dot · box · model · live tok/s; the model by its whole
+ * name, since the chip cuts it on a phone (22.11.2026). Model from the transcript
  * (usage) first, the agent's runtime row second; the box from that row's
  * host binding (ADR-048); the tok/s from the box's pulse.
  */
