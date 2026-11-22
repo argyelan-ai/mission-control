@@ -348,14 +348,18 @@ export function Stage({
 
   return (
     <div
-      className="relative rounded-xl overflow-hidden"
+      // flex-col + order: on a narrow card (phone, < 600 px of card width)
+      // the actions — "Switch model" first — come right under the name, so
+      // the one primary action is on the first screen; on a wide card they
+      // stay at the end. Layout only: the DOM order is unchanged.
+      className="relative flex flex-col rounded-xl overflow-hidden"
       style={{ background: C.bgSurface, border: `1px solid ${C.border}`, containerType: "inline-size" }}
       data-testid="stage-card"
       data-status={status}
     >
       <FlowEdge kind={flowKind} />
 
-      <div className="relative px-4 pt-4" style={{ zIndex: 2, opacity: status === "switching" ? 0.75 : 1 }}>
+      <div className="relative order-0 px-4 pt-4" style={{ zIndex: 2, opacity: status === "switching" ? 0.75 : 1 }}>
         <div className="flex items-center gap-2.5">
           <span className="w-2 h-2 rounded-full shrink-0" style={{ background: dotColor }} />
           {/* Wraps to a second line instead of being cut: on a phone the
@@ -421,12 +425,12 @@ export function Stage({
         )}
       </div>
 
-      <div className="relative" style={{ zIndex: 2 }}>
+      <div className="relative order-2" style={{ zIndex: 2 }} data-testid="stage-kpi-slot">
         <KpiRow cells={cells} />
       </div>
 
       <div
-        className={`relative stage-members grid grid-cols-1 ${isDuo ? "" : ""}`}
+        className={`relative order-3 stage-members grid grid-cols-1 ${isDuo ? "" : ""}`}
         style={{ zIndex: 2, borderTop: `1px solid ${C.borderSubtle}` }}
         data-testid="stage-members"
         data-duo={isDuo ? "true" : "false"}
@@ -458,7 +462,7 @@ export function Stage({
         </AnimatePresence>
       </div>
 
-      <div className="relative" style={{ zIndex: 2 }}>
+      <div className="relative order-4 @max-[600px]:order-1" style={{ zIndex: 2 }} data-testid="stage-actions-slot">
         {status === "switching" ? (
           <PhaseBar phase={live?.phase} targetLabel={t("switchLog")} cancelLabel={t("cancel")} />
         ) : (

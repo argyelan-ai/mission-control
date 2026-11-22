@@ -81,3 +81,26 @@ describe("Agents roster status", () => {
     expect(role).not.toContainElement(marker);
   });
 });
+
+describe("Agents roster on the phone — the name keeps its room", () => {
+  it("puts the provision badge under the name below sm, beside it from sm up", async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(api.boards, "list").mockResolvedValue([] as never);
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      agent({ id: "z", name: "ZCode Workstation", provision_status: "local" }),
+    ]);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><AgentsPage /></QueryClientProvider>);
+
+    const link = await screen.findByRole("link", { name: "Open agent: ZCode Workstation" });
+    const badges = within(link).getAllByTestId("agent-row-provision");
+    expect(badges).toHaveLength(2);
+    const [beside, under] = badges;
+    // beside the name only from sm up …
+    expect(beside.className).toMatch(/max-sm:hidden/);
+    // … on the phone on the second line, so the name line holds only the name
+    expect(under.className).toMatch(/\bsm:hidden\b/);
+    const nameLine = within(link).getByText("ZCode Workstation").parentElement!;
+    expect(nameLine).not.toContainElement(under);
+  });
+});

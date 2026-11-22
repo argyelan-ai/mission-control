@@ -63,6 +63,16 @@ describe("RuntimesPage — empty views (fresh install)", () => {
     expect(await screen.findByRole("heading", { name: "Add device" })).toBeInTheDocument();
   });
 
+  it("the header + is a 44 px target (K11)", async () => {
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [] });
+    renderPage();
+    await screen.findByTestId("runtimes-empty-fleet");
+    for (const plus of screen.getAllByTestId("add-runtime-icon")) {
+      expect(plus.className).toMatch(/\bw-11\b/);
+      expect(plus.className).toMatch(/\bh-11\b/);
+    }
+  });
+
   it("0 runtimes: Fleet's secondary action opens the '+' add-runtime dialog", async () => {
     vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [] });
     renderPage();

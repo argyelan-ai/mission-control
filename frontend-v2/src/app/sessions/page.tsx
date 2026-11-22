@@ -7,7 +7,7 @@ import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
 import { api, type RecordChat } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { BrowserLiveView } from "@/components/shared/BrowserLiveView";
 import { SessionSidebar } from "@/components/chat/SessionSidebar";
 import { ChatView, type CenterView, type DetailLevel, CENTER_VIEWS, DETAIL_LEVELS } from "@/components/chat/ChatView";
@@ -26,6 +26,7 @@ import { notify } from "@/lib/notify";
 import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
 import { useElementWidth } from "@/hooks/useElementWidth";
 import { PanelResizeHandle } from "@/components/chat/PanelResizeHandle";
+import { useComposerInset } from "@/components/chat/useComposerInset";
 import { clampPanelWidth, defaultPanelWidth, loadPanelWidth, panelOverlays, savePanelWidth } from "@/lib/panelWidth";
 import { loadRecentChats, rememberChat } from "@/lib/recentChats";
 import { CHAT_ENTRY_PARAM, chatUrl, isPhoneViewport, takeDirectLoad, usePhoneViewport, type ChatKind } from "@/lib/chatHistory";
@@ -264,6 +265,8 @@ function SessionsPageContent() {
   const [islandRef, islandWidth] = useElementWidth<HTMLDivElement>();
   const panelWidth = clampPanelWidth(panelWidthChoice ?? defaultPanelWidth(islandWidth), islandWidth);
   const panelOverlay = panelOverlays(islandWidth);
+  // Overlay mode: panel and veil stop above the composer (send stays free).
+  const composerInset = useComposerInset(panelOverlay && activePanel !== null, selected?.id);
 
   // Persisted state is read from localStorage after mount (SSR has no
   // window) — same pattern as loadLastAgentId's restore effect below.
@@ -855,7 +858,7 @@ function SessionsPageContent() {
   return (
     // On the chat screen the chat header replaces the app bar; the tab bar
     // stays under the composer (variant C, operator decision 2026-11-18).
-    <AppShell fullHeight mobileHideAppBar={onChatScreen}>
+    <AppShell fullHeight mobileHideAppBar={onChatScreen} skipToComposer>
       {/* Full-bleed on mobile: AppShell's <main> pads the content column so
           ordinary pages breathe (px-4, 1rem bottom, and a top inset of
           safe-area + 5.5rem against a fixed header that is only safe-area +
@@ -1056,6 +1059,18 @@ function SessionsPageContent() {
               corners; background stays unconditional (the mobile overlay
               needs an opaque backing too), only the border/radius are
               desktop-only (mobile is edge-to-edge, no island chrome). */}
+          {/* Overlay mode (desktop, chat + panel do not fit): a veil dims the
+              chat — a click on it closes the panel — and ends above the
+              composer like the panel itself. */}
+          {activePanel && panelOverlay && (
+            <div
+              data-testid="side-panel-backdrop"
+              aria-hidden="true"
+              onClick={() => setActivePanel(null)}
+              className="hidden md:block md:absolute md:inset-x-0 md:top-0 md:bottom-(--panel-bottom) md:z-20 cursor-pointer"
+              style={{ background: alpha(C.scrim, 0.4), ["--panel-bottom" as string]: `${composerInset}px` }}
+            />
+          )}
           {activePanel && (
             <div
               // Mobile: a sheet filling everything below whichever bar is
@@ -1079,21 +1094,30 @@ function SessionsPageContent() {
               data-overlay={panelOverlay || undefined}
               className={`fixed inset-x-0 bottom-0 z-40 flex flex-col overflow-hidden md:inset-auto md:w-(--panel-w) md:shrink-0 ${
                 panelOverlay
-                  ? "md:absolute md:inset-y-0 md:right-0 md:z-30 md:shadow-[var(--shadow-elevated)]"
+                  ? "md:absolute md:top-0 md:bottom-(--panel-bottom) md:right-0 md:z-30 md:border-l md:rounded-br-xl md:shadow-[var(--shadow-elevated)]"
                   : "md:relative md:z-auto"
               } ${onChatScreen ? "top-[var(--mobile-chat-topbar-h)]" : "top-[var(--mobile-appbar-h)]"}`}
-              style={{ background: C.bgSurface, ["--panel-w" as string]: `${panelWidth}px` }}
+              style={{
+                background: C.bgSurface,
+                borderColor: C.border,
+                ["--panel-w" as string]: `${panelWidth}px`,
+                ["--panel-bottom" as string]: `${composerInset}px`,
+              }}
             >
-              <PanelResizeHandle
-                width={panelWidth}
-                islandWidth={islandWidth}
-                onResize={setPanelWidthChoice}
-                onCommit={savePanelWidth}
-                onReset={() => {
-                  setPanelWidthChoice(null);
-                  savePanelWidth(null);
-                }}
-              />
+              {/* Overlay: no drag handle — the chat behind cannot get its
+                  400 px back by dragging, the handle only promised that. */}
+              {!panelOverlay && (
+                <PanelResizeHandle
+                  width={panelWidth}
+                  islandWidth={islandWidth}
+                  onResize={setPanelWidthChoice}
+                  onCommit={savePanelWidth}
+                  onReset={() => {
+                    setPanelWidthChoice(null);
+                    savePanelWidth(null);
+                  }}
+                />
+              )}
               {/* Title bar with ✕: on the phone always; on the desktop only
                   while the panel lies over the chat — then it covers the
                   chat header, whose button would otherwise be the only way
@@ -1118,7 +1142,7 @@ function SessionsPageContent() {
               </div>
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                 {activePanel === "diff" && selectedLive && (
-                  <DiffPanel agentId={selectedLive.id} refreshHot={chatStatus === "working"} />
+                  <DiffPanel agentId={selectedLive.id} refreshHot={chatStatus === "working"} compact={panelOverlay} />
                 )}
                 {activePanel === "browser" && (
                   <BrowserLiveView agentId={selectedLive?.id} agentName={selectedLive?.name} />

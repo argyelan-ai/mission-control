@@ -22,6 +22,7 @@ import {
   MessageSquare,
   Send,
   ChevronLeft,
+  ChevronDown,
   Bot,
   type LucideIcon,
 } from "lucide-react";
@@ -45,7 +46,7 @@ import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
 import { ClaudeAccountTab } from "@/components/settings/ClaudeAccountTab";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { LanguageSection } from "@/components/settings/LanguageSection";
-import { MorePagesSection } from "@/components/settings/MorePagesSection";
+import { MORE_HREF } from "@/lib/mobileNav";
 import { NightShiftTab } from "@/components/settings/NightShiftTab";
 import { PhoneAccountPanel } from "@/components/settings/PhoneAccountPanel";
 import { BoardsCard } from "@/components/settings/BoardsCard";
@@ -64,6 +65,9 @@ import {
   useRunCheck,
 } from "@/lib/configChecks";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
+
+/** The Settings entry that opens the More page instead of a section. */
+const MORE_SECTION = "more";
 
 // ── Section Registry ──────────────────────────────────────────────────────────
 // SECTIONS / GROUP_ORDER live in components/settings/sections.ts — the desktop
@@ -1703,6 +1707,9 @@ function UsersSection() {
     queryKey: ["admin-users"],
     queryFn: api.auth.users.list,
   });
+  const [showInactive, setShowInactive] = useState(false);
+  const activeUsers = (users ?? []).filter((u) => u.is_active);
+  const inactiveUsers = (users ?? []).filter((u) => !u.is_active);
 
   return (
     <SectionMotion sectionKey="users">
@@ -1750,7 +1757,7 @@ function UsersSection() {
         </div>
       ) : (
         <div className="space-y-2">
-          {users?.map((user) => (
+          {activeUsers.map((user) => (
             <UserRow
               key={user.id}
               user={user}
@@ -1759,6 +1766,37 @@ function UsersSection() {
               }
             />
           ))}
+          {/* Deactivated accounts fold into one line: they are history, not
+              something to manage on every visit (five test accounts pushed
+              the active ones off the phone screen). */}
+          {inactiveUsers.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowInactive((v) => !v)}
+              aria-expanded={showInactive}
+              data-testid="users-inactive-fold"
+              className="flex items-center gap-2 min-h-11 px-1 text-sm cursor-pointer"
+              style={{ color: C.textMuted }}
+            >
+              <ChevronDown
+                size={14}
+                aria-hidden
+                className="transition-transform"
+                style={{ transform: showInactive ? "rotate(0deg)" : "rotate(-90deg)" }}
+              />
+              {t("deactivatedCount", { count: inactiveUsers.length })}
+            </button>
+          )}
+          {showInactive &&
+            inactiveUsers.map((user) => (
+              <UserRow
+                key={user.id}
+                user={user}
+                onUpdated={() =>
+                  queryClient.invalidateQueries({ queryKey: ["admin-users"] })
+                }
+              />
+            ))}
         </div>
       )}
     </SectionMotion>
@@ -2143,6 +2181,7 @@ function AboutSection() {
   // feature switch is on. While it is on screen it carries the "update
   // available" line, so the System card below drops its own (K3).
   const updateGate = useUpdateCardGate(isAdmin);
+  const buildCommit = process.env.NEXT_PUBLIC_GIT_COMMIT || null;
   const cardCarriesUpdate = updateGate === "shown" || updateGate === "managed";
   return (
     <SectionMotion sectionKey="about">
@@ -2162,10 +2201,13 @@ function AboutSection() {
           <div className="space-y-4">
             {[
               { label: t("version"), value: version?.current ?? "…" },
+              // Which build runs: the commit the frontend image was built from
+              // (NEXT_PUBLIC_GIT_COMMIT at build time). Left out when unknown (K3).
+              ...(buildCommit ? [{ label: t("commit"), value: buildCommit.slice(0, 7), testId: "about-commit" }] : []),
               { label: t("frontend"), value: "Next.js 15 + TypeScript + Tailwind v4" },
               { label: t("backend"), value: "FastAPI + PostgreSQL + Redis" },
-            ].map(({ label, value }) => (
-              <div key={label} className="flex items-center justify-between">
+            ].map(({ label, value, testId }: { label: string; value: string; testId?: string }) => (
+              <div key={label} className="flex items-center justify-between" data-testid={testId}>
                 <span className="text-sm" style={{ color: "var(--color-text-secondary)" }}>
                   {label}
                 </span>
@@ -2263,8 +2305,18 @@ function SettingsContent() {
   // Desktop side nav: switch in place (replace) — the nav stays on screen, a
   // history entry per click would only make "back" tedious.
   const selectSection = (id: string) => {
+    // More is its own page now (/more) — a real step forward, not a section.
+    if (id === MORE_SECTION) {
+      router.push(MORE_HREF);
+      return;
+    }
     router.replace(sectionHref(id), { scroll: false });
   };
+  // Old links to Settings › More (bookmarks, the phone list row) land on the
+  // More page; replace, so "back" does not bounce into this redirect again.
+  useEffect(() => {
+    if (sectionParam === MORE_SECTION) router.replace(MORE_HREF);
+  }, [sectionParam, router]);
 
   // Phone: the list and a section are two screens of one scroll container.
   // Opening a row pushes a history entry (PhoneSectionList links); the back
@@ -2428,7 +2480,12 @@ function SettingsContent() {
           {/* 3xl, not 2xl: two nav columns already eat ~530 px of a 1440 px
               screen, and the dense sections (autonomy matrix, key lists) were
               being squeezed while 300 px sat empty on the right. */}
-          <div className="max-w-3xl min-w-0">
+          {/* Costs is a wide table: it takes the whole content width (its
+              columns and dates were squeezed at 3xl). */}
+          <div
+            data-testid="settings-section-body"
+            className={cn("min-w-0", activeSection !== "costs" && "max-w-3xl")}
+          >
             <AnimatePresence mode="wait">
               {activeSection === "profile" && <ProfileSection />}
               {activeSection === "security" && <SecuritySection />}
@@ -2452,7 +2509,12 @@ function SettingsContent() {
               {activeSection === "telegram" && isAdmin && <TelegramTab />}
               {activeSection === "ai-providers" && isAdmin && <AiProvidersTab />}
               {activeSection === "credentials" && isAdmin && <CredentialsTab />}
-              {activeSection === "costs" && isAdmin && <CostPricesTab />}
+              {activeSection === "costs" && isAdmin && (
+                <SectionMotion sectionKey="costs">
+                  <SectionHeader title={t("sections.costs")} description={t("costs.sectionDescription")} />
+                  <CostPricesTab />
+                </SectionMotion>
+              )}
               {activeSection === "night-shift" && isAdmin && <NightShiftTab />}
               {activeSection === "users" && isAdmin && <UsersSection />}
               {activeSection === "appearance" && (
@@ -2467,11 +2529,6 @@ function SettingsContent() {
               )}
               {activeSection === "shortcuts" && <ShortcutsSection />}
               {activeSection === "about" && <AboutSection />}
-              {activeSection === "more" && (
-                <SectionMotion sectionKey="more">
-                  <MorePagesSection />
-                </SectionMotion>
-              )}
             </AnimatePresence>
           </div>
         </div>

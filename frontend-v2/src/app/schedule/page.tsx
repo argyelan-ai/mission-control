@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Activity, AlertTriangle, Clock, Heart } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
+import { PAGE_WIDE } from "@/components/layout/AppShellWidth";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { ConfirmDialog, PromptDialog } from "@/components/shared/ConfirmDialog";
 import { JobsTable } from "@/components/schedule/JobsTable";
@@ -548,7 +549,7 @@ export default function SchedulePage() {
 
   return (
     <AppShell>
-      <div className="flex flex-col h-full overflow-hidden">
+      <div className={`flex flex-col h-full overflow-hidden ${PAGE_WIDE}`}>
         {/* Tab switcher header — no px here: AppShell's main already pads the
             content column, and a second inset pushed the title 24px past the
             left edge every other page starts at. */}
@@ -600,8 +601,9 @@ export default function SchedulePage() {
           </div>
         </div>
 
-        {/* Messmarke: 1px-Linie mit Akzent-Segment — Header-Trenner */}
-        <div className="relative h-px mx-6 flex-shrink-0" style={{ backgroundColor: C.border }}>
+        {/* Messmarke: 1px-Linie mit Akzent-Segment — Header-Trenner. No
+            inset: the accent segment starts under the title's first letter. */}
+        <div data-testid="schedule-title-rule" className="relative h-px flex-shrink-0" style={{ backgroundColor: C.border }}>
           <div
             className="absolute left-0 -top-px h-[2px] w-16"
             style={{ backgroundColor: C.accent }}
@@ -610,14 +612,16 @@ export default function SchedulePage() {
 
         {/* Tab content */}
         {activeTab === "overview" && (
-          <div className="flex flex-col flex-1 overflow-y-auto">
-            <div className="px-6 pt-5 pb-4">
+          // One left edge with the title (K9): AppShell already pads the
+          // column; the extra px-6 pushed the jobs 24 px to the right.
+          <div data-testid="schedule-overview" className="flex flex-col flex-1 overflow-y-auto">
+            <div className="pt-5 pb-4">
               <ScheduleHeader
                 jobs={jobs}
                 onNewJob={() => setModal({ open: true, job: null })}
               />
             </div>
-            <div className="px-6 pb-6">
+            <div className="pb-6">
               <JobsTable
                 jobs={jobs}
                 onEdit={(job) => setModal({ open: true, job })}

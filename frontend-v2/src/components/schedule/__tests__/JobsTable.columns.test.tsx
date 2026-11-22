@@ -75,3 +75,27 @@ describe("JobsTable column grid", () => {
     expect(headerCols).toMatch(/_192px\]$/);
   });
 });
+
+describe("JobsTable below ~1100 px", () => {
+  const noop = vi.fn();
+  const props = { onEdit: noop, onDelete: noop, onTrigger: noop, onToggleEnabled: noop, onSnooze: noop, onDuplicate: noop };
+
+  it("shows row cards up to 1100 px and the column table only from there", () => {
+    render(<JobsTable jobs={[job]} {...props} />);
+    const table = screen.getByRole("region", { name: "Jobs table" });
+    expect(table.className).toContain("hidden");
+    expect(table.className).toContain("min-[1100px]:block");
+    const cards = screen.getByTestId("job-card").parentElement!;
+    expect(cards.className).toContain("min-[1100px]:hidden");
+    expect(cards.className).not.toContain("md:hidden");
+  });
+
+  it("gives Last run more width than Agent", () => {
+    render(<JobsTable jobs={[job]} {...props} />);
+    const header = within(screen.getByRole("region", { name: "Jobs table" })).getByText("Name").parentElement;
+    const tracks = gridCols(header).replace(/^grid-cols-\[|\]$/g, "").split("_");
+    const fr = (t: string) => Number((t.match(/([\d.]+)fr/) ?? [])[1] ?? 0);
+    // checkbox · status · name · trigger · next · last · agent · actions
+    expect(fr(tracks[5])).toBeGreaterThan(fr(tracks[6]));
+  });
+});

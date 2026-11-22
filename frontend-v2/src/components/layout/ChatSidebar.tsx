@@ -6,9 +6,9 @@ import { useTranslations } from "next-intl";
 import { LayoutGrid, Search } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { C, P2 } from "@/lib/colors";
-import { activeTabFor, chatTabHref, TAB_HREFS, TAB_ICONS, TAB_LABEL_KEYS, TAB_ORDER } from "@/lib/mobileNav";
+import { activeTabFor, chatTabHref, MORE_HREF, TAB_HREFS, TAB_ICONS, TAB_LABEL_KEYS, TAB_ORDER } from "@/lib/mobileNav";
 import { badgeLabel } from "@/lib/inbox";
-import { useInbox } from "@/hooks/useInbox";
+import { useWaitingCount } from "@/hooks/useWaitingCount";
 import { NavVoiceButton } from "@/components/voice/live/NavVoiceButton";
 import { ChatList } from "./ChatList";
 import { useRecentChats } from "./MobileTabBar";
@@ -20,8 +20,7 @@ const _dot = _BRAND.lastIndexOf(".");
 const BRAND_MAIN = _dot > 0 ? _BRAND.slice(0, _dot) : _BRAND;
 const BRAND_ACCENT = _dot > 0 ? _BRAND.slice(_dot) : "";
 
-/** Settings › More: every page that left the main navigation. */
-export const MORE_HREF = "/settings?section=more";
+export { MORE_HREF };
 
 /**
  * ChatSidebar — the desktop's one column (operator decision 2026-11-18,
@@ -37,7 +36,8 @@ export function ChatSidebar() {
   const setCommandPaletteOpen = useAppStore((s) => s.setCommandPaletteOpen);
   const pathname = usePathname() ?? "/";
   const active = activeTabFor(pathname);
-  const { count } = useInbox();
+  // Inbox "For you" plus a red journey run — the same sum as the inbox tab.
+  const count = useWaitingCount();
   const recent = useRecentChats();
   const badge = badgeLabel(count);
 

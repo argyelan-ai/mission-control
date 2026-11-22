@@ -2,6 +2,7 @@
 
 /**
  * Home → one quiet line with last night's journey tests (E6, docs/journeys.md).
+ * A red run also waits in the inbox and counts next to Chat (useFailedJourneys).
  *
  *   ✓ Journey tests: 3 of 3 passed, 1 known gap · 5 h 12 min ago
  *   ✕ Journey tests: Cost & local share failed · 5 h 12 min ago
@@ -20,13 +21,35 @@ import { formatAbsolute, formatAge } from "@/lib/taskDetail/format";
 
 export const JOURNEYS_KEY = ["system", "journeys"] as const;
 
-export function JourneysLine() {
-  const q = useQuery<JourneysResponse>({
+function useJourneys() {
+  return useQuery<JourneysResponse>({
     queryKey: JOURNEYS_KEY,
     queryFn: () => api.system.journeys(),
     retry: false,
     refetchInterval: 15 * 60_000,
   });
+}
+
+/** How many journeys a result counts as failed (0 unless the run is red). */
+export function failedJourneyCount(result: JourneysResult | null | undefined): number {
+  if (!result || result.status !== "red") return 0;
+  return result.failed.length || Math.max(1, result.total - result.passed);
+}
+
+/**
+ * Last night's red journey run, for the places that wait on the operator:
+ * the inbox ("For you") and the count next to Chat in the sidebar. A green,
+ * skipped or unfinished run counts 0 — nothing to answer there.
+ */
+export function useFailedJourneys(): { result: JourneysResult | null; count: number } {
+  const q = useJourneys();
+  const result = q.data?.result ?? null;
+  const count = failedJourneyCount(result);
+  return { result: count > 0 ? result : null, count };
+}
+
+export function JourneysLine() {
+  const q = useJourneys();
   if (!q.data?.result) return null;
   return <JourneysLineView result={q.data.result} />;
 }

@@ -159,7 +159,7 @@ function PriceRow({
       >
         {price.priority}
       </td>
-      <td className="px-3 py-2.5 text-xs" style={{ color: "var(--color-text-muted)" }}>
+      <td className="px-3 py-2.5 text-xs whitespace-nowrap tabular-nums" style={{ color: "var(--color-text-muted)" }}>
         {price.valid_from.slice(0, 10)}
       </td>
       <td

@@ -48,13 +48,15 @@ const data = vi.hoisted(() => ({
   groups: [] as unknown[],
   // null = the record is off (404), like the live default
   recordChats: null as unknown[] | null,
+  // last night's journey tests (GET /system/journeys); null = no run yet
+  journeys: null as unknown,
 }));
 vi.mock("@/lib/api", () => ({
   clearToken: vi.fn(),
   api: {
     approvals: { list: vi.fn(async () => data.approvals) },
     boards: { list: vi.fn(async () => []) },
-    system: { status: vi.fn(async () => null) },
+    system: { status: vi.fn(async () => null), journeys: vi.fn(async () => ({ result: data.journeys })) },
     tasks: { list: vi.fn(async () => []), comments: { list: vi.fn(async () => []) } },
     agents: {
       list: vi.fn(async () => []),
@@ -333,9 +335,20 @@ describe("chat column (desktop)", () => {
       ["Chat", "/sessions"],
       ["Models", "/runtimes"],
       ["Knowledge", "/knowledge"],
-      ["More", "/settings?section=more"],
+      ["More", "/more"],
     ]);
     expect(within(nav).getByRole("link", { name: /^Chat/ })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("adds failed journey tests to the count next to Chat", async () => {
+    data.approvals = [{ id: "p1", agent_id: "a3", status: "pending" }];
+    data.journeys = {
+      status: "red", finished_at: new Date().toISOString(), commit: "abc", total: 3, passed: 1,
+      failed: ["J-usage", "J-setup"], known_gaps: 0, reason: null,
+    };
+    wrap(<ChatSidebar />);
+    await waitFor(() => expect(screen.getByTestId("chat-sidebar-badge")).toHaveTextContent("3"));
+    data.journeys = null;
   });
 
   it("carries the waiting count next to Chat", async () => {

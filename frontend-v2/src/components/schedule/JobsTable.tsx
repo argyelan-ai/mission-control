@@ -231,8 +231,10 @@ export function JobsTable({
         )}
       </AnimatePresence>
 
-      {/* ── Phone: one card per job (round-3 t4 S8 — the table was cut off) ── */}
-      <div className="md:hidden flex flex-col gap-2">
+      {/* ── Up to ~1100 px: one card per job. The table needs ~640 px of
+          its own; beside the sidebar at 1024 px it cut names and the last
+          run ("Morning Bri…"), so tablets get the phone's cards. ── */}
+      <div className="min-[1100px]:hidden flex flex-col gap-2">
         {filteredJobs.length === 0 ? (
           <div
             className="rounded-lg border border-dashed p-8 text-center text-sm"
@@ -256,9 +258,9 @@ export function JobsTable({
         )}
       </div>
 
-      {/* ── Table from md up ── */}
+      {/* ── Table from 1100 px up ── */}
       <div
-        className="hidden md:block overflow-x-auto"
+        className="hidden min-[1100px]:block overflow-x-auto"
         style={{ overscrollBehaviorX: "contain" } as React.CSSProperties}
         tabIndex={0}
         role="region"

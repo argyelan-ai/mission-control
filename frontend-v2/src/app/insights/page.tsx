@@ -19,6 +19,7 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import AppShell from "@/components/layout/AppShell";
+import { PAGE_WIDE } from "@/components/layout/AppShellWidth";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { browserTimeZone, type HeatMetric } from "@/lib/insights";
@@ -75,18 +76,20 @@ export default function InsightsPage() {
 
   return (
     <AppShell>
-      <div className="max-w-6xl mx-auto">
+      <div className={PAGE_WIDE}>
         <div className="flex items-center justify-between gap-3">
           <h1 className="display text-2xl font-semibold" style={{ color: C.textPrimary }}>
             {t("title")}
           </h1>
-          {ready && !failed && <MetricSwitch value={metric} onChange={setMetric} />}
+          {/* Rendered at once, not after the data: the switch is part of the
+              title row, and appearing late moved the row (CLS 0.51). */}
+          {!failed && <MetricSwitch value={metric} onChange={setMetric} />}
         </div>
 
         {failed ? (
           <p className="mt-6 text-sm" style={{ color: C.textSecondary }}>{t("loadFailed")}</p>
         ) : !ready ? (
-          <div className="mt-6 h-32" aria-busy="true" />
+          <InsightsSkeleton />
         ) : (
           <>
             <InsightsHero days={byDay.data} weeks={byWeek.data} metric={metric} />
@@ -112,5 +115,27 @@ export default function InsightsPage() {
         </div>
       </div>
     </AppShell>
+  );
+}
+
+/**
+ * Placeholder at the final height of hero, heatmap and the four cards, so
+ * "What got done" and the details below stay where they land once the data
+ * is in (no jump on the phone). Heights measured at 390, 1024 and 1440 px.
+ */
+function InsightsSkeleton() {
+  const block = "rounded-lg motion-safe:animate-pulse";
+  const fill = { background: C.bgSurface };
+  return (
+    <div aria-busy="true" data-testid="insights-skeleton">
+      <div className={`mt-6 h-52 md:h-24 ${block}`} style={fill} />
+      <div className={`mt-12 h-76 md:h-72 lg:h-80 ${block}`} style={fill} />
+      <div className="mt-12 grid grid-cols-1 lg:grid-cols-2 gap-12">
+        <div className={`h-56 lg:h-52 ${block}`} style={fill} />
+        <div className={`h-44 lg:h-52 ${block}`} style={fill} />
+        <div className={`h-72 lg:h-64 ${block}`} style={fill} />
+        <div className={`h-24 lg:h-64 ${block}`} style={fill} />
+      </div>
+    </div>
   );
 }

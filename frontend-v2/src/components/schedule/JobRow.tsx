@@ -37,7 +37,9 @@ import { timeAgo } from "@/lib/utils";
  * header, and every `fr` column drifted out of line.
  */
 export const JOB_GRID_COLS =
-  "grid-cols-[24px_24px_minmax(0,2fr)_minmax(0,1.5fr)_1fr_1fr_minmax(0,1fr)_192px]";
+  // "Last run" takes width from "Agent": "vor etwa 2 Monaten" was cut at
+  // 1440 px while the agent column mostly holds "—".
+  "grid-cols-[24px_24px_minmax(0,2fr)_minmax(0,1.5fr)_1fr_minmax(0,1.5fr)_minmax(0,0.5fr)_192px]";
 
 interface JobRowProps {
   job: ScheduledJob;

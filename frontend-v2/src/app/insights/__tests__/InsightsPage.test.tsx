@@ -143,3 +143,22 @@ describe("InsightsPage", () => {
     expect(screen.queryByTestId("done-heads")).toBeNull();
   });
 });
+
+describe("InsightsPage — no jump while loading", () => {
+  it("shows the switch and a skeleton at once, before the data is in", () => {
+    vi.spyOn(api.intelligence, "byDay").mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api.intelligence, "byWeek").mockReturnValue(new Promise(() => {}));
+    renderPage();
+    expect(screen.getByRole("radiogroup", { name: "Which usage the page shows" })).toBeInTheDocument();
+    const skeleton = screen.getByTestId("insights-skeleton");
+    expect(skeleton).toHaveAttribute("aria-busy", "true");
+    // hero + heatmap + the four cards, each a block with a fixed height
+    expect(skeleton.querySelectorAll("[class*='h-']").length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("drops the skeleton once the data is in", async () => {
+    renderPage();
+    await screen.findByTestId("hero-cost");
+    expect(screen.queryByTestId("insights-skeleton")).toBeNull();
+  });
+});

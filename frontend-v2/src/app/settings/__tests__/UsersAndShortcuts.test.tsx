@@ -128,6 +128,8 @@ describe("Settings › Users — deactivating asks first", () => {
     const update = vi.spyOn(api.auth.users, "update").mockResolvedValue({} as never);
     renderPage();
 
+    // deactivated accounts are folded away — open the fold first
+    await userEvent.click(await screen.findByRole("button", { name: "1 deactivated" }, { timeout: 5000 }));
     await userEvent.click(await screen.findByRole("button", { name: "Activate" }, { timeout: 5000 }));
     expect(update).toHaveBeenCalledWith("u2", { is_active: true });
   });

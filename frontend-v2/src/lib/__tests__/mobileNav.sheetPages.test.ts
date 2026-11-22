@@ -14,7 +14,12 @@ describe("sheetPages", () => {
   it("covers every NAV_ITEM that is neither a tab nor Settings", () => {
     const { usedMost, others } = sheetPages();
     const expected = NAV_ITEMS.map((i) => i.href).filter(
-      (h) => !Object.values(TAB_HREFS).includes(h) && h !== "/settings",
+      (h) =>
+        !Object.values(TAB_HREFS).includes(h) &&
+        h !== "/settings" &&
+        // Memory and Skills sit under the Knowledge tab already
+        h !== "/memory" &&
+        h !== "/skills",
     );
     expect([...hrefs(usedMost), ...hrefs(others)].sort()).toEqual(expected.sort());
   });
@@ -22,7 +27,7 @@ describe("sheetPages", () => {
   it("Used most follows phoneRank, Others are alphabetical by the given label", () => {
     const { usedMost, others } = sheetPages();
     // Runtimes is the Models tab now, so it is not offered again
-    expect(hrefs(usedMost)).toEqual(["/agents", "/insights", "/memory"]);
+    expect(hrefs(usedMost)).toEqual(["/agents", "/insights"]);
     const labels = others.map((i) => i.label);
     expect(labels).toEqual([...labels].sort((a, b) => a.localeCompare(b)));
     // German labels sort differently — the caller's label decides
@@ -46,5 +51,14 @@ describe("sheetPages", () => {
     const offered = [...hrefs(usedMost), ...hrefs(others)];
     expect(offered).not.toContain("/office");
     expect(offered).not.toContain("/loops");
+  });
+});
+
+describe("sheetPages — no duplicates of a tab", () => {
+  it("leaves out Memory and Skills: the Knowledge tab already leads there", () => {
+    const { usedMost, others } = sheetPages();
+    const offered = [...hrefs(usedMost), ...hrefs(others)];
+    expect(offered).not.toContain("/memory");
+    expect(offered).not.toContain("/skills");
   });
 });

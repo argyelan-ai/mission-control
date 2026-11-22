@@ -101,12 +101,19 @@ export default function LoginPage() {
   }
 
   if (mode === "loading") {
+    // The first paint is a page too: a landmark and a title for screen
+    // readers (the audit found /login without <main> and h1 here).
     return (
-      <div
+      <main
+        aria-busy="true"
         className="min-h-dvh flex items-center justify-center"
         style={{ backgroundColor: "var(--color-bg-deep)" }}
       >
         <AmbientBackground />
+        <h1 className="sr-only">
+          {BRAND_MAIN}
+          {BRAND_ACCENT}
+        </h1>
         <div
           className="w-5 h-5 border-2 border-t-transparent animate-spin"
           style={{
@@ -114,7 +121,7 @@ export default function LoginPage() {
             borderTopColor: "transparent",
           }}
         />
-      </div>
+      </main>
     );
   }
 

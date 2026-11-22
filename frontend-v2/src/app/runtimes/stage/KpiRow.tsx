@@ -40,7 +40,9 @@ function CellBody({ cell, copied, onCopy }: { cell: KpiCell; copied: boolean; on
         <button
           type="button"
           onClick={onCopy}
-          className="flex items-center gap-1.5 text-left cursor-pointer"
+          // min-h-11: a 44 px tap target for the copy (K11); the value
+          // keeps its size, the button only grows its hit area.
+          className="flex items-center gap-1.5 min-h-11 text-left cursor-pointer"
           style={{ color: C.textPrimary }}
         >
           <span className="display font-semibold text-[20px] leading-tight tabular-nums truncate">

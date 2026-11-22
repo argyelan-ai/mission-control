@@ -215,25 +215,16 @@ function AgentBadge({ slug }: { slug: string }) {
   );
 }
 
-/** Display label for a folder/file: `display_name` (e.g. a task title) as the
- *  primary label with the raw name (often a task UUID) shown small and muted
- *  underneath — full name always available via `title` for a11y/tooltips. */
+/** Display label for a folder/file: `display_name` (e.g. a task title) when
+ *  there is one, otherwise the raw name. The raw name (often a task UUID) is
+ *  no second line any more (K3) — it stays in the tooltip. Truncates inside
+ *  its cell (`min-w-0`); the full text is always in `title`. */
 function EntryLabel({ entry }: { entry: FsEntry }) {
-  if (entry.display_name) {
-    return (
-      <div className="min-w-0">
-        <div className="text-sm truncate" style={{ color: C.textPrimary }} title={entry.display_name}>
-          {entry.display_name}
-        </div>
-        <div className="text-[11px] font-mono truncate" style={{ color: C.textDim }} title={entry.name}>
-          {entry.name}
-        </div>
-      </div>
-    );
-  }
+  const label = entry.display_name || entry.name;
+  const tooltip = entry.display_name ? `${entry.display_name}\n${entry.name}` : entry.name;
   return (
-    <span className="text-sm truncate" style={{ color: C.textPrimary }}>
-      {entry.name}
+    <span className="min-w-0 truncate text-sm" style={{ color: C.textPrimary }} title={tooltip}>
+      {label}
     </span>
   );
 }
@@ -275,7 +266,9 @@ function FileRow({
           />
         )}
       </td>
-      <td className="px-4 py-2.5">
+      {/* max-w-0 + w-full: the name cell takes the free width but never
+          more, so a long name truncates instead of pushing the row wide. */}
+      <td className="px-4 py-2.5 max-w-0 w-full">
         <div className="flex items-center gap-2.5 min-w-0">
           <Icon size={15} style={{ color, flexShrink: 0 }} />
           <EntryLabel entry={entry} />
@@ -399,20 +392,14 @@ function FileGridCard({
       </div>
 
       <div className="px-2 py-2 min-w-0">
-        {entry.display_name ? (
-          <>
-            <div className="text-xs truncate" style={{ color: C.textPrimary }} title={entry.display_name}>
-              {entry.display_name}
-            </div>
-            <div className="text-[10px] font-mono truncate" style={{ color: C.textDim }} title={entry.name}>
-              {entry.name}
-            </div>
-          </>
-        ) : (
-          <div className="text-xs truncate" style={{ color: C.textPrimary }} title={entry.name}>
-            {entry.name}
-          </div>
-        )}
+        {/* Same as the list row: the name, the raw UUID only as tooltip. */}
+        <div
+          className="text-xs truncate"
+          style={{ color: C.textPrimary }}
+          title={entry.display_name ? `${entry.display_name}\n${entry.name}` : entry.name}
+        >
+          {entry.display_name || entry.name}
+        </div>
         {entry.agent_slug && (
           <div className="mt-1">
             <AgentBadge slug={entry.agent_slug} />

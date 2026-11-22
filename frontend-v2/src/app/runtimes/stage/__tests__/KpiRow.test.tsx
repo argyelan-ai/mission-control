@@ -102,3 +102,11 @@ describe("KpiRow — tappable cell (review fix round 5: a bare `title` tooltip n
     }
   });
 });
+
+describe("KpiRow — the endpoint copy target", () => {
+  it("is at least 44 px tall (K11)", () => {
+    render(<KpiRow cells={[{ value: ":8000", label: "Endpoint · slot", copyValue: "http://example.invalid:8000/v1" }]} />);
+    const copy = screen.getByRole("button", { name: /:8000/ });
+    expect(copy.className).toMatch(/\bmin-h-11\b/);
+  });
+});

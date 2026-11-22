@@ -409,3 +409,14 @@ describe("DiffPanel", () => {
     await waitFor(() => expect(changesMock).toHaveBeenCalledTimes(2));
   });
 });
+
+describe("DiffPanel — compact tabs (panel laid over the chat)", () => {
+  it("names the three tabs short: Chat · Working · Commit", async () => {
+    diffMock.mockResolvedValue(mkDiff());
+    renderWithQuery(<DiffPanel agentId="agent-1" compact />);
+    const tabs = await screen.findAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Chat", "Working", "Commit"]);
+    // the full name stays the accessible label
+    expect(screen.getByRole("tab", { name: "This chat" })).toBeInTheDocument();
+  });
+});
