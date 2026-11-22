@@ -27,9 +27,13 @@ vi.mock("@/components/inbox/BetweenAgents", () => ({
   BetweenAgents: () => null,
   useConversations: () => ({ data: [] }),
 }));
+// Journey tests are an operator signal: admins only (useFailedJourneys).
+const who = vi.hoisted(() => ({ role: "admin" }));
+type S = { activeBoardId: string; currentUser: { id: string; role: string } };
+const storeState = (): S => ({ activeBoardId: "board-1", currentUser: { id: "u1", role: who.role } });
 vi.mock("@/lib/store", () => ({
   useAppStore: Object.assign(
-    (sel?: (s: { activeBoardId: string }) => unknown) => (sel ? sel({ activeBoardId: "board-1" }) : { activeBoardId: "board-1" }),
+    (sel?: (s: S) => unknown) => (sel ? sel(storeState()) : storeState()),
     { setState: () => {} },
   ),
   useNotificationStore: (sel?: (s: { notifications: never[] }) => unknown) =>
@@ -52,7 +56,10 @@ function renderInbox() {
   );
 }
 
-beforeEach(() => apiMock.journeys.mockReset());
+beforeEach(() => {
+  apiMock.journeys.mockReset();
+  who.role = "admin";
+});
 
 describe("Inbox — failed journey tests", () => {
   it("shows a red run under For you and counts it in the tab", async () => {
@@ -70,5 +77,21 @@ describe("Inbox — failed journey tests", () => {
     expect(await screen.findByText("All clear")).toBeInTheDocument();
     expect(screen.queryByTestId("inbox-journeys")).toBeNull();
     expect(screen.queryByTestId("inbox-tab-you-count")).toBeNull();
+  });
+
+  it("a red run from a runner that stopped days ago no longer waits here", async () => {
+    apiMock.journeys.mockResolvedValue({ result: { ...RED, finished_at: "2026-01-01T00:00:00Z" } });
+    renderInbox();
+    expect(await screen.findByText("All clear")).toBeInTheDocument();
+    expect(screen.queryByTestId("inbox-journeys")).toBeNull();
+    expect(screen.queryByTestId("inbox-tab-you-count")).toBeNull();
+  });
+
+  it("a member does not get the operator's journey signal", async () => {
+    who.role = "member";
+    apiMock.journeys.mockResolvedValue({ result: RED });
+    renderInbox();
+    expect(await screen.findByText("All clear")).toBeInTheDocument();
+    expect(screen.queryByTestId("inbox-journeys")).toBeNull();
   });
 });

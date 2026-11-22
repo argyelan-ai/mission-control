@@ -86,8 +86,10 @@ export function sheetPages(
     ...CHROME_ITEMS,
     ...FROZEN_ITEMS.map((i) => i.href),
   ]);
-  // A page a tab already leads to (Memory and Skills under Knowledge,
-  // `activeTabFor`) is not offered a second time.
+  // Memory and Skills sit as links on the Knowledge landing, so they are not
+  // offered a second time. Benchmark lights the Models tab (`activeTabFor`)
+  // but stays here on purpose: Models links to it only from a runtime's bench
+  // card, which is not always shown — More is its one sure way in on the phone.
   const underTab = (href: string) => activeTabFor(href) === "knowledge";
   const pages = items.filter((i) => !skip.has(i.href) && !underTab(i.href));
   const usedMost = pages

@@ -75,10 +75,14 @@ vi.mock("@/lib/api", () => ({
 }));
 
 const palette = vi.hoisted(() => ({ open: vi.fn() }));
+// The journey count is admin-only; the journey test signs in as admin.
+const user = vi.hoisted(() => ({ current: null as null | { id: string; role: string } }));
 vi.mock("@/lib/store", () => {
   const state = {
     activeBoardId: "board-1",
-    currentUser: null,
+    get currentUser() {
+      return user.current;
+    },
     sidebarCollapsed: false,
     toggleSidebar: () => {},
     setCommandPaletteOpen: palette.open,
@@ -340,7 +344,8 @@ describe("chat column (desktop)", () => {
     expect(within(nav).getByRole("link", { name: /^Chat/ })).toHaveAttribute("aria-current", "page");
   });
 
-  it("adds failed journey tests to the count next to Chat", async () => {
+  it("adds failed journey tests to the count next to Chat (admin)", async () => {
+    user.current = { id: "u1", role: "admin" };
     data.approvals = [{ id: "p1", agent_id: "a3", status: "pending" }];
     data.journeys = {
       status: "red", finished_at: new Date().toISOString(), commit: "abc", total: 3, passed: 1,
@@ -349,6 +354,7 @@ describe("chat column (desktop)", () => {
     wrap(<ChatSidebar />);
     await waitFor(() => expect(screen.getByTestId("chat-sidebar-badge")).toHaveTextContent("3"));
     data.journeys = null;
+    user.current = null;
   });
 
   it("carries the waiting count next to Chat", async () => {

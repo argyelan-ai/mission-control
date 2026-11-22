@@ -62,8 +62,17 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
+// The journey count is admin-only; the journey test signs in as admin.
+const user = vi.hoisted(() => ({ current: null as null | { id: string; role: string } }));
 vi.mock("@/lib/store", () => {
-  const state = { activeBoardId: "board-1", currentUser: null, setActiveBoardId: () => {}, pinnedNav: undefined };
+  const state = {
+    activeBoardId: "board-1",
+    get currentUser() {
+      return user.current;
+    },
+    setActiveBoardId: () => {},
+    pinnedNav: undefined,
+  };
   return {
     useAppStore: Object.assign((sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state), {
       setState: () => {},
@@ -176,6 +185,7 @@ describe("phone tab bar", () => {
   });
 
   it("Chat badge counts failed journey tests too (same number as the desktop sidebar)", async () => {
+    user.current = { id: "u1", role: "admin" };
     data.approvals = [{ id: "a1", status: "pending" }];
     data.journeys = {
       status: "red", finished_at: new Date().toISOString(), commit: "abc", total: 3, passed: 1,
@@ -183,6 +193,7 @@ describe("phone tab bar", () => {
     };
     renderNav();
     await waitFor(() => expect(screen.getByTestId("chat-badge")).toHaveTextContent("3"));
+    user.current = null;
   });
 
   it("shows no badge when nothing waits", async () => {

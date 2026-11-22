@@ -62,3 +62,10 @@ describe("sheetPages — no duplicates of a tab", () => {
     expect(offered).not.toContain("/skills");
   });
 });
+
+describe("sheetPages — Benchmark stays although it lights the Models tab", () => {
+  it("offers /bench: Models links to it only from a runtime's bench card", () => {
+    const { usedMost, others } = sheetPages();
+    expect([...hrefs(usedMost), ...hrefs(others)]).toContain("/bench");
+  });
+});
