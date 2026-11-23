@@ -22,8 +22,9 @@ reader the history page uses (``read_history``).
 
 Runs on its own every ``chat_record_import_interval`` seconds in the
 background services (:class:`ChatRecordSync`) while the flag is on — the
-live sink only writes while somebody has the chat open, this sweep covers
-every chat nobody watches. By hand: ``python -m app.services.chat_record_import``
+live sink only writes while somebody has the agent's chat open, a further
+chat is kept live from its sends (``chat_record_follow``), this sweep
+covers every chat nobody watches. By hand: ``python -m app.services.chat_record_import``
 (``--dry-run`` only counts).
 """
 from __future__ import annotations
@@ -98,6 +99,96 @@ def session_files(adapter: Any, tdir: Path) -> list[Path]:
 
         files = [p for p in tdir.glob("*.jsonl") if p.is_file() and not is_command_only_session(p)]
     return sorted(files, key=lambda p: p.stat().st_mtime)
+
+
+def further_chat_root(agent: Any, adapter: Any, chat_id: Any) -> Path | None:
+    """The folder a further chat's session files live under, or ``None``
+    when this harness keeps none (no transcript folder). omp: the agent's
+    session tree (the chat's copy sits in ``<cwd folder>/.mc/`` beside the
+    default session's). Claude Code: the chat's own config dir
+    ``claude-config/chats/<chat id>/`` (``claude_chat_runner``)."""
+    if adapter.name == "claude":
+        if getattr(agent, "agent_runtime", None) != "cli-bridge" or not getattr(agent, "slug", None):
+            return None
+        from app.services import claude_chat_runner
+
+        try:
+            return claude_chat_runner.host_chat_dir(agent.slug, str(chat_id))
+        except ValueError:
+            return None
+    if adapter.name == "omp":
+        return adapter.resolve_transcript_dir(agent)
+    return None
+
+
+def further_chat_files(agent: Any, adapter: Any, chat_id: Any, native_session_id: str | None) -> list[Path]:
+    """The session file(s) of a further chat's CURRENT native session —
+    empty until the chat is pinned and its file exists. omp: the bridge's
+    copy when there is one (each native session once, never a task
+    session). Claude Code: the pinned file under the chat's own config
+    dir, which the agent-level reader (``session_files``) never sees."""
+    if not native_session_id:
+        return []
+    if adapter.name == "claude":
+        if further_chat_root(agent, adapter, chat_id) is None:
+            return []
+        from app.services import claude_chat_runner
+
+        try:
+            found = claude_chat_runner.pinned_transcript(agent.slug, str(chat_id), native_session_id)
+        except ValueError:
+            return []
+        return [found] if found is not None else []
+    if adapter.name == "omp":
+        tdir = adapter.resolve_transcript_dir(agent)
+        if tdir is None or not tdir.is_dir():
+            return []
+        return _omp_files_of_session(tdir, native_session_id[:200])
+    return []
+
+
+def _omp_files_of_session(tdir: Path, native: str) -> list[Path]:
+    """The chat file of ONE omp session under ``tdir``: looked up by its
+    native id in the file name (``<ts>_<id>.jsonl``, the same places
+    ``session_files`` globs), the bridge's copy preferred, never a task
+    session. The follower asks every few seconds: a full ``session_files``
+    scan reads every session of the agent (live: ~0.35 s for 136 files)."""
+    from app.services import omp_chat
+
+    chosen: Path | None = None
+    for pattern in omp_chat._SESSION_GLOBS:
+        for path in tdir.glob(pattern.replace("*.jsonl", f"*_{native}.jsonl")):
+            if omp_chat.session_id_for(path) != native or not path.is_file():
+                continue
+            if omp_chat.is_task_session(path):
+                return []
+            chosen = omp_chat.bridge_sibling(path)
+            if omp_chat.is_bridge_file(chosen):
+                return [chosen]
+    return [chosen] if chosen is not None else []
+
+
+async def _further_claude_files(db: AsyncSession, agent: Any, adapter: Any) -> list[Path]:
+    """The pinned session files of an agent's further Claude chats — they
+    live under ``claude-config/chats/<chat id>/``, outside the folder
+    ``session_files`` reads, and would otherwise never reach the record."""
+    if adapter.name != "claude" or getattr(agent, "agent_runtime", None) != "cli-bridge":
+        return []
+    from app.models.chat_record import Chat
+
+    rows = (
+        await db.exec(
+            select(Chat.id, Chat.native_session_id).where(
+                Chat.legacy_agent_id == agent.id,
+                Chat.agent_default.is_(False),
+                Chat.native_session_id.isnot(None),
+            )
+        )
+    ).all()
+    files: list[Path] = []
+    for chat_id, native in rows:
+        files.extend(await asyncio.to_thread(further_chat_files, agent, adapter, chat_id, native))
+    return files
 
 
 def _read_events(agent: Any, adapter: Any, path: Path) -> tuple[list[dict[str, Any]], str | None, dict | None]:
@@ -238,9 +329,10 @@ async def import_agent(
 
     adapter = adapter if adapter is not None else adapter_for(agent)
     tdir = adapter.resolve_transcript_dir(agent)
-    if tdir is None:
-        return
-    files = await asyncio.to_thread(session_files, adapter, tdir)
+    files = await asyncio.to_thread(session_files, adapter, tdir) if tdir is not None else []
+    # A further Claude chat's file lives in its own config dir, so it does not
+    # need the agent's default folder to exist.
+    files += [p for p in await _further_claude_files(db, agent, adapter) if p not in files]
     if not files:
         return
     stats.agents += 1

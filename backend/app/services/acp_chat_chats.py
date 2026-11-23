@@ -134,7 +134,47 @@ async def resolve_chat(session: AsyncSession, user: Any, agent: Any, chat_id: uu
     supported = _FURTHER_CHAT_SUPPORT.get(harness)
     if supported is None or not supported(agent):
         raise ChatHarnessUnsupportedError(harness)
+    # The chat tailer's live sink only follows the agent's DEFAULT session,
+    # and a further chat's view never opens that stream: without this its
+    # message and answer reached the record only by the 10-minute sweep
+    # (live finding 23.11.2026). Keep this chat's own files live instead.
+    from app.services.chat_record_follow import FOLLOWER
+
+    FOLLOWER.follow(agent, chat.id)
     return str(chat.id)
+
+
+async def follow_viewed_chat(session: AsyncSession, chat: Any) -> None:
+    """A further chat's view polls its history every few seconds: keep that
+    chat live in the record while somebody looks at it. The send starts the
+    follow (``resolve_chat``), but the follow lives in memory, so a restart
+    or deploy mid-turn, or 15 quiet minutes (a long tool run), ends it; the
+    chat then waited up to 10 minutes for the sweep (live finding
+    23.11.2026). Only a further, unarchived chat on a harness its agent can
+    run is followed; the agent's own chat has the tailer's live sink.
+    Never raises."""
+    try:
+        if (
+            chat is None
+            or chat.agent_default
+            or chat.archived_at is not None
+            or chat.legacy_agent_id is None
+            or not getattr(settings, "chat_record_enabled", False)
+        ):
+            return
+        from app.models.agent import Agent
+
+        agent = await session.get(Agent, chat.legacy_agent_id)
+        if agent is None:
+            return
+        supported = _FURTHER_CHAT_SUPPORT.get(chat.harness or chat_record.harness_name(agent))
+        if supported is None or not supported(agent):
+            return
+        from app.services.chat_record_follow import FOLLOWER
+
+        FOLLOWER.follow(agent, chat.id)
+    except Exception:  # a read never fails over the live record
+        logger.warning("chat record: could not follow viewed chat %s", getattr(chat, "id", None), exc_info=True)
 
 
 async def new_chat_for_reset(session: AsyncSession, user: Any, agent: Any, text: str) -> tuple[dict, str] | None:
