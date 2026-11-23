@@ -18,10 +18,13 @@ import asyncio
 import logging
 import mimetypes
 import os
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sqlalchemy import delete, update
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -38,7 +41,7 @@ logger = logging.getLogger("mc.file_indexer")
 # Compared case-insensitively: the deployment FS is case-insensitive (APFS),
 # so "Node_Modules" must prune like "node_modules" (mirrors
 # task_workspace_files.py's case folding). Without this list the walk counts
-# dependency/build/cache dumps and blows max_entries (50 000) every round.
+# dependency/build/cache dumps and blows the per-root cap.
 SKIP_DIRS: frozenset[str] = frozenset(
     {
         # VCS / package managers
@@ -177,84 +180,229 @@ async def capture_deliverable(session: AsyncSession, deliverable, agent=None) ->
     return entry
 
 
+async def capture_deliverable_id(
+    deliverable_id,
+    *,
+    session_factory: Callable[[], AsyncSession] | None = None,
+) -> bool:
+    """Index one freshly registered deliverable in its own short session.
+
+    Called right after the deliverable-create endpoints answer (background
+    task), so a new deliverable is searchable at once instead of after the
+    next walk. Best-effort: never raises — the walk is the safety net.
+    """
+    from app.models.deliverable import TaskDeliverable
+
+    factory = session_factory or async_session_maker
+    try:
+        async with factory() as session:
+            deliverable = await session.get(TaskDeliverable, deliverable_id)
+            if deliverable is None:
+                return False
+            entry = await capture_deliverable(session, deliverable)
+            if entry is None:
+                return False
+            await session.commit()
+            return True
+    except Exception:  # noqa: BLE001 — best-effort, logged
+        logger.warning("file_indexer capture failed for deliverable %s", deliverable_id, exc_info=True)
+        return False
+
+
+# Per-root cap (entries walked per root and round). Live 2026-11-23 every
+# indexed root holds < 3 000 entries; the cap only guards against a runaway
+# tree. One root hitting it never starves the others any more.
+DEFAULT_MAX_ENTRIES_PER_ROOT = 20_000
+
+def _indexed_roots() -> list:
+    """Roots the walk covers — browsable and ``indexed`` (not workspaces)."""
+    return [r for r in browsable_roots() if r.indexed]
+
+
+# Scanned entry: name, is_dir, size, mime, mtime
+_Scan = tuple[str, bool, int, "str | None", float]
+
+
+def _scan_root(base: Path, max_entries: int) -> tuple[dict[str, _Scan], bool]:
+    """Walk one root (pruning SKIP_DIRS), stop at ``max_entries``."""
+    entries: dict[str, _Scan] = {}
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if not _skip_dir(d)]
+        for nm, is_dir in [(d, True) for d in dirnames] + [(f, False) for f in filenames]:
+            full = Path(dirpath) / nm
+            try:
+                rel = str(full.relative_to(base))
+                st = full.stat()
+            except (OSError, ValueError):
+                continue
+            mime = None if is_dir else mimetypes.guess_type(nm)[0]
+            entries[rel] = (nm, is_dir, 0 if is_dir else st.st_size, mime, st.st_mtime)
+            if len(entries) >= max_entries:
+                return entries, True
+    return entries, False
+
+
 async def run_once(
     *,
-    max_entries: int = 50_000,
+    max_entries: int = DEFAULT_MAX_ENTRIES_PER_ROOT,
     batch_size: int = 1_000,
     session_factory: Callable[[], AsyncSession] | None = None,
 ) -> dict:
-    """Walk the browsable roots, upsert entries, prune vanished ones.
+    """Reconcile the index with the indexed roots on disk.
 
-    The filesystem walk happens OUTSIDE any database transaction — no session
-    is open while os.walk runs (a long walk must never hold a transaction;
-    incident 2026-09-14: one 1789 s open transaction per round). Results are
-    written in short committed batches, one transaction per batch, plus one
-    transaction for the prune pass.
+    * Walks :func:`indexed_roots` only — ``workspaces`` (code checkouts) is
+      browsed live, never indexed.
+    * ``max_entries`` caps each root separately, so one big root cannot eat
+      the budget of the others.
+    * Writes only what changed: new rows are inserted, rows whose
+      size/mtime/kind differ are updated, rows whose file vanished are
+      deleted. An unchanged round writes nothing.
+    * Rows of roots that are no longer indexed or registered are pruned —
+      except rows captured for a deliverable/task (provenance only the capture
+      knows).
 
-    ``session_factory`` defaults to the app-wide ``async_session_maker``;
-    tests inject a factory bound to their engine.
+    The filesystem walk happens OUTSIDE any database transaction (incident
+    2026-09-14: one 1789 s open transaction per round). Writes run in short
+    committed batches. ``session_factory`` defaults to ``async_session_maker``;
+    tests inject one bound to their engine.
     """
     factory = session_factory or async_session_maker
+    t0 = time.monotonic()
 
     # --- Phase 1: scan the filesystem. NO session, NO transaction. ---------
-    scan: list[tuple[str, str, str, bool, int, str | None, float]] = []
-    walked_roots: set[str] = set()
+    scans: dict[str, dict[str, _Scan]] = {}
+    bases: dict[str, Path] = {}
     truncated_roots: set[str] = set()
-    for r in browsable_roots():
+    for r in _indexed_roots():
         base = r.container_path
         if not base.exists() or not base.is_dir():
             continue
-        walked_roots.add(r.key)
-        stop = False
-        for dirpath, dirnames, filenames in os.walk(base):
-            dirnames[:] = [d for d in dirnames if not _skip_dir(d)]
-            for nm, is_dir in [(d, True) for d in dirnames] + [(f, False) for f in filenames]:
-                full = Path(dirpath) / nm
-                try:
-                    rel = str(full.relative_to(base))
-                    st = full.stat()
-                except (OSError, ValueError):
-                    continue
-                mime = None if is_dir else mimetypes.guess_type(nm)[0]
-                scan.append(
-                    (r.key, rel, nm, is_dir, 0 if is_dir else st.st_size, mime, st.st_mtime)
-                )
-                if len(scan) >= max_entries:
-                    truncated_roots.add(r.key)
-                    stop = True
-                    break
-            if stop:
-                break
+        entries, truncated = _scan_root(base, max_entries)
+        scans[r.key] = entries
+        bases[r.key] = base
+        if truncated:
+            truncated_roots.add(r.key)
+    walked_roots = set(scans)
+    indexed_keys = {r.key for r in _indexed_roots()}
 
-    # --- Phase 2: write in short, committed batches -------------------------
-    seen: set[tuple[str, str]] = {(root, rel) for root, rel, *_ in scan}
-    for start in range(0, len(scan), batch_size):
-        chunk = scan[start : start + batch_size]
+    # --- Phase 2: read the current rows of the walked roots (columns only) -
+    existing: dict[tuple[str, str], tuple] = {}
+    if walked_roots:
         async with factory() as session:
-            for root_key, rel, nm, is_dir, size, mime, mtime in chunk:
-                await _upsert(
-                    session, root_key, rel,
-                    name=nm, is_directory=is_dir, size=size, mime=mime, mtime=mtime,
+            rows = (
+                await session.exec(
+                    select(
+                        FileIndexEntry.id,
+                        FileIndexEntry.root_key,
+                        FileIndexEntry.rel_path,
+                        FileIndexEntry.is_directory,
+                        FileIndexEntry.size,
+                        FileIndexEntry.mtime,
+                    ).where(FileIndexEntry.root_key.in_(walked_roots))  # type: ignore[union-attr]
+                )
+            ).all()
+        for rid, root_key, rel, is_dir, size, mtime in rows:
+            existing[(root_key, rel)] = (rid, bool(is_dir), int(size or 0), float(mtime or 0.0))
+
+    # --- Phase 3: diff (pure, no DB) ---------------------------------------
+    inserts: list[tuple[str, str, _Scan]] = []
+    updates: list[dict] = []
+    deletes: list = []
+    for root_key, entries in scans.items():
+        for rel, sc in entries.items():
+            cur = existing.get((root_key, rel))
+            if cur is None:
+                inserts.append((root_key, rel, sc))
+            elif (cur[1], cur[2], cur[3]) != (sc[1], sc[2], sc[4]):
+                updates.append(
+                    {"id": cur[0], "is_directory": sc[1], "size": sc[2], "mime": sc[3], "mtime": sc[4]}
+                )
+    for (root_key, rel), cur in existing.items():
+        if rel in scans[root_key]:
+            continue
+        if root_key in truncated_roots:
+            # Not reached because of the cap — delete only if really gone.
+            if os.path.lexists(bases[root_key] / rel):
+                continue
+        deletes.append(cur[0])
+
+    # --- Phase 4: write in short, committed batches -------------------------
+    now = datetime.now(timezone.utc)
+    for start in range(0, len(inserts), batch_size):
+        chunk = inserts[start : start + batch_size]
+        try:
+            async with factory() as session:
+                for root_key, rel, (nm, is_dir, size, mime, mtime) in chunk:
+                    session.add(
+                        FileIndexEntry(
+                            root_key=root_key, rel_path=rel, name=nm, is_directory=is_dir,
+                            size=size, mime=mime, mtime=mtime, indexed_at=now,
+                        )
+                    )
+                await session.commit()
+        except IntegrityError:
+            # A capture inserted one of these rows meanwhile → upsert per row.
+            async with factory() as session:
+                for root_key, rel, (nm, is_dir, size, mime, mtime) in chunk:
+                    await _upsert(
+                        session, root_key, rel,
+                        name=nm, is_directory=is_dir, size=size, mime=mime, mtime=mtime,
+                    )
+                await session.commit()
+    for start in range(0, len(updates), batch_size):
+        chunk = updates[start : start + batch_size]
+        async with factory() as session:
+            for u in chunk:
+                await session.exec(
+                    update(FileIndexEntry)
+                    .where(FileIndexEntry.id == u["id"])
+                    .values(
+                        is_directory=u["is_directory"], size=u["size"], mime=u["mime"],
+                        mtime=u["mtime"], indexed_at=now,
+                    )
                 )
             await session.commit()
-
-    # --- Phase 3: prune entries whose file vanished — own short transaction -
     pruned = 0
-    async with factory() as session:
-        rows = (await session.exec(select(FileIndexEntry))).all()
-        for row in rows:
-            if row.root_key in walked_roots and (row.root_key, row.rel_path) not in seen:
-                await session.delete(row)
-                pruned += 1
-        await session.commit()
+    for start in range(0, len(deletes), batch_size):
+        chunk = deletes[start : start + batch_size]
+        async with factory() as session:
+            await session.exec(delete(FileIndexEntry).where(FileIndexEntry.id.in_(chunk)))  # type: ignore[union-attr]
+            await session.commit()
+        pruned += len(chunk)
 
-    _log_truncation(len(scan), max_entries, truncated_roots)
+    # Rows of roots that are no longer indexed (workspaces) or no longer
+    # registered at all (retired roots, never sensitive ones): walk leftovers
+    # go, captured deliverable/task rows stay. One statement, no-op once clean.
+    async with factory() as session:
+        res = await session.exec(
+            delete(FileIndexEntry).where(
+                FileIndexEntry.root_key.not_in(indexed_keys),  # type: ignore[union-attr]
+                FileIndexEntry.deliverable_id.is_(None),  # type: ignore[union-attr]
+                FileIndexEntry.task_id.is_(None),  # type: ignore[union-attr]
+            )
+        )
+        await session.commit()
+        pruned_orphans = int(res.rowcount or 0)
+
+    per_root = {k: len(v) for k, v in sorted(scans.items())}
+    duration = round(time.monotonic() - t0, 3)
+    logger.info(
+        "file_indexer round: %.2fs per_root=[%s] inserted=%d updated=%d pruned=%d orphans=%d",
+        duration,
+        " ".join(f"{k}={n}" for k, n in per_root.items()),
+        len(inserts), len(updates), pruned, pruned_orphans,
+    )
+    _log_truncation(max_entries, truncated_roots)
     return {
-        "indexed": len(scan),
-        "pruned": pruned,
+        "indexed": sum(per_root.values()),
+        "per_root": per_root,
+        "inserted": len(inserts),
+        "updated": len(updates),
+        "pruned": pruned + pruned_orphans,
         "roots": sorted(walked_roots),
         "truncated": bool(truncated_roots),
         "truncated_roots": sorted(truncated_roots),
+        "duration_s": duration,
     }
 
 
@@ -264,19 +412,17 @@ async def run_once(
 _truncated_last_run: bool = False
 
 
-def _log_truncation(count: int, max_entries: int, truncated_roots: set[str]) -> None:
+def _log_truncation(max_entries: int, truncated_roots: set[str]) -> None:
     global _truncated_last_run
     truncated = bool(truncated_roots)
     if truncated and not _truncated_last_run:
         logger.warning(
-            "file_indexer hit max_entries=%d — index truncated at %d entries "
-            "(roots: %s); extend SKIP_DIRS or raise max_entries",
-            max_entries, count, ", ".join(sorted(truncated_roots)) or "-",
+            "file_indexer hit max_entries=%d per root — index truncated "
+            "(roots: %s); extend SKIP_DIRS or raise the cap",
+            max_entries, ", ".join(sorted(truncated_roots)) or "-",
         )
     elif not truncated and _truncated_last_run:
-        logger.info(
-            "file_indexer back under max_entries=%d — %d entries indexed", max_entries, count
-        )
+        logger.info("file_indexer back under max_entries=%d per root", max_entries)
     _truncated_last_run = truncated
 
 
@@ -330,8 +476,7 @@ class FileIndexer:
                 got = await redis.set("mc:file-indexer:lock", "1", nx=True, ex=300)
                 if not got:
                     continue
-                result = await run_once()
-                logger.info("file_indexer walk: %s", result)
+                await run_once()  # logs its own per-root line once per round
             except asyncio.CancelledError:
                 break
             except Exception:  # noqa: BLE001
