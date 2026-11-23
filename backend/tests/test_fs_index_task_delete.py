@@ -57,6 +57,12 @@ async def _seed(scopes: list[str]):
 async def _capture_then_delete(client: AsyncClient, tmp_path, monkeypatch, *, via: str) -> None:
     monkeypatch.setattr(settings, "home_host", str(tmp_path))
     monkeypatch.setattr(file_indexer, "async_session_maker", _factory)
+    # The deliverable-create background task also runs the vault sync on
+    # ``app.database.engine`` (a pooled engine). On the Postgres lane a pooled
+    # connection opened in this test's event loop outlives it and shows up as
+    # 'idle in transaction' in later tests (test_stream_db_release). Point it
+    # at the NullPool test engine — the same pattern as the other bg-task tests.
+    monkeypatch.setattr("app.database.engine", test_engine)
     scopes = ["tasks:read", "tasks:write", "tasks:manage", "knowledge:read", "knowledge:write"]
     board_id, task_id, raw = await _seed(scopes)
     agent_headers = {"Authorization": f"Bearer {raw}"}
