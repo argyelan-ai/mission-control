@@ -257,6 +257,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Claude chat idle sweep failed to schedule: %s", e, exc_info=True)
     yield
+    # Further-chat live follows (chat_record_follow): API process only, fed
+    # by the send route and the chat's history poll. End them before the
+    # loop closes instead of leaving pending tasks behind.
+    try:
+        from app.services import chat_record_follow as _chat_record_follow
+        await _chat_record_follow.FOLLOWER.stop()
+    except Exception as e:
+        logger.warning("chat record follows stop failed (non-fatal): %s", e)
     _claude_chat_sweep = getattr(app.state, "claude_chat_sweep_task", None)
     if _claude_chat_sweep is not None and not _claude_chat_sweep.done():
         _claude_chat_sweep.cancel()

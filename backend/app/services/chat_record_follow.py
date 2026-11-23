@@ -20,8 +20,12 @@ So its events reached the record only through the 10-minute importer sweep
 :class:`ChatFollower` closes that gap from the send side: every message sent
 to a further chat (``acp_chat_chats.resolve_chat``) starts — or extends — a
 small task that imports that chat's own session file(s) as they grow, about
-once a second, until the chat has been quiet for :data:`IDLE_STOP_SECONDS`
-(longer than the sweep interval, so the sweep takes over seamlessly). The
+once a second, until the chat has been quiet for :data:`IDLE_STOP_SECONDS`.
+The follow lives in memory only, so a restart or deploy ends it, and so does a
+quiet stretch (a long tool run). The chat's view re-arms it: every poll of
+its history (``acp_chat_chats.follow_viewed_chat``) starts or extends the
+follow, so a chat somebody looks at never waits for the sweep. A chat nobody
+looks at and nobody writes to is left to the sweep. The
 writer is the importer itself (``import_session_file``): same keys as the
 live sink and the sweep, idempotent, only changed rows are written; an
 unchanged file costs one ``stat``.
@@ -181,7 +185,10 @@ class ChatFollower:
                     written = await imp.import_session_file(db, state.agent, state.adapter, path)
                     await db.commit()
                 except Exception:
-                    # Tried again once the file grows; the sweep marks it.
+                    # Forget the size: the next tick tries again even when
+                    # the file does not grow any more (the last write of a
+                    # turn) — never left to the sweep.
+                    state.sizes.pop(str(path), None)
                     await db.rollback()
                     self.errors += 1
                     logger.warning("chat record: live import of %s failed", path.name, exc_info=True)

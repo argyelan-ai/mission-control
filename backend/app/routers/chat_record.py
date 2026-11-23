@@ -145,6 +145,13 @@ async def get_record_history(
     chat = await chat_record.get_chat(session, current_user, chat_id)
     if chat is None:
         raise HTTPException(status_code=404, detail="Chat not found")
+    if before is None and not kinds:
+        # The view of a further chat polls this page: keep the chat live in
+        # the record while it is looked at (a restart or a quiet stretch
+        # ends the follow a send started).
+        from app.services.acp_chat_chats import follow_viewed_chat
+
+        await follow_viewed_chat(session, chat)
     history = await chat_record.chat_history(session, chat.id, limit=limit, before=before, kinds=kinds)
     history["chat"] = {
         "id": str(chat.id),

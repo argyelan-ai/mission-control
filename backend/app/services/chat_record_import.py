@@ -141,10 +141,31 @@ def further_chat_files(agent: Any, adapter: Any, chat_id: Any, native_session_id
         return [found] if found is not None else []
     if adapter.name == "omp":
         tdir = adapter.resolve_transcript_dir(agent)
-        if tdir is None:
+        if tdir is None or not tdir.is_dir():
             return []
-        return [p for p in session_files(adapter, tdir) if adapter.session_id_for(p) == native_session_id[:200]]
+        return _omp_files_of_session(tdir, native_session_id[:200])
     return []
+
+
+def _omp_files_of_session(tdir: Path, native: str) -> list[Path]:
+    """The chat file of ONE omp session under ``tdir``: looked up by its
+    native id in the file name (``<ts>_<id>.jsonl``, the same places
+    ``session_files`` globs), the bridge's copy preferred, never a task
+    session. The follower asks every few seconds: a full ``session_files``
+    scan reads every session of the agent (live: ~0.35 s for 136 files)."""
+    from app.services import omp_chat
+
+    chosen: Path | None = None
+    for pattern in omp_chat._SESSION_GLOBS:
+        for path in tdir.glob(pattern.replace("*.jsonl", f"*_{native}.jsonl")):
+            if omp_chat.session_id_for(path) != native or not path.is_file():
+                continue
+            if omp_chat.is_task_session(path):
+                return []
+            chosen = omp_chat.bridge_sibling(path)
+            if omp_chat.is_bridge_file(chosen):
+                return [chosen]
+    return [chosen] if chosen is not None else []
 
 
 async def _further_claude_files(db: AsyncSession, agent: Any, adapter: Any) -> list[Path]:
@@ -308,9 +329,9 @@ async def import_agent(
 
     adapter = adapter if adapter is not None else adapter_for(agent)
     tdir = adapter.resolve_transcript_dir(agent)
-    if tdir is None:
-        return
-    files = await asyncio.to_thread(session_files, adapter, tdir)
+    files = await asyncio.to_thread(session_files, adapter, tdir) if tdir is not None else []
+    # A further Claude chat's file lives in its own config dir, so it does not
+    # need the agent's default folder to exist.
     files += [p for p in await _further_claude_files(db, agent, adapter) if p not in files]
     if not files:
         return

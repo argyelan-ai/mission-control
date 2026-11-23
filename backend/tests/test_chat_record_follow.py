@@ -196,3 +196,174 @@ async def test_no_database_round_trip_before_the_chat_has_files(make_agent, host
 class _Admin:
     id = None
     role = "admin"
+
+
+# ── critic round (23.11.2026) ──────────────────────────────────────────────
+
+
+async def test_viewing_a_further_chat_rearms_its_follow(
+    auth_client, make_agent, host_home, flag_on, follower,  # noqa: F811
+):
+    """The follow lives in memory and is started by a send. After a restart
+    or deploy mid-turn, or after 15 quiet minutes (a long tool run), it is
+    gone — and the chat fell back to the 10-minute sweep, the reported
+    symptom. The chat's view polls its history every few seconds: that poll
+    keeps the follow alive. The agent's own chat is never followed here
+    (the tailer's live sink writes it)."""
+    agent = await make_agent(name="Omp View", slug="omp-view", agent_runtime="cli-bridge", harness="omp")
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        chat = await chat_record.create_chat(s, None, agent, title="Chat 2")
+        await chat_record.pin_native_session(s, chat, "s-view")
+        await s.commit()
+        default = await chat_record.ensure_agent_chat(s, agent)
+        await s.commit()
+    assert not follower.following(chat.id)  # nothing sent since the "restart"
+    try:
+        resp = await auth_client.get(f"/api/v1/chat-record/chats/{chat.id}/history")
+        assert resp.status_code == 200, resp.text
+        assert follower.following(chat.id), "viewing a further chat must re-arm its live follow"
+        resp = await auth_client.get(f"/api/v1/chat-record/chats/{default.id}/history")
+        assert resp.status_code == 200, resp.text
+        assert not follower.following(default.id)
+        # The re-armed follow really writes: the agent answers after the restart.
+        copy = (host_home / ".mc" / "agents" / "omp-view" / "omp-sessions" / "--workspace--"
+                / ".mc" / "2026-11-23T13-01-40-000Z_s-view.jsonl")
+        head = {"type": "session", "version": 3, "id": "s-view", "timestamp": "2026-11-23T13:01:40.000Z",
+                "cwd": "/workspace", "bridge": "acp"}
+        _write(copy, [head, _omp_line("m1", "user", "still there?", "2026-11-23T13:01:41.000Z"),
+                      _omp_line("m2", "assistant", "Yes.", "2026-11-23T13:02:18.000Z")])
+        assert await _wait_written(follower, 2, 10) < 10
+    finally:
+        await follower.stop()
+    assert await _texts(chat.id) == ["still there?", "Yes."]
+
+
+async def test_viewing_does_not_follow_a_chat_whose_harness_the_agent_cannot_run(
+    auth_client, make_agent, host_home, flag_on, follower,  # noqa: F811
+):
+    # An omp chat on an agent that does not run omp over ACP in a container.
+    agent = await make_agent(name="Omp Host", slug="omp-host", agent_runtime="host", harness="omp")
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        chat = await chat_record.create_chat(s, None, agent, title="Chat 2")
+        await s.commit()
+    resp = await auth_client.get(f"/api/v1/chat-record/chats/{chat.id}/history")
+    assert resp.status_code == 200, resp.text
+    assert not follower.following(chat.id)
+
+
+async def test_a_failed_live_import_is_tried_again_without_the_file_growing(
+    make_agent, host_home, flag_on, follower, monkeypatch,  # noqa: F811
+):
+    """The last write of a turn does not grow the file again: a failed import
+    (DB hiccup, lock) must not wait for the sweep."""
+    from app.services import chat_record_import
+
+    real = chat_record_import.import_session_file
+    calls = []
+
+    async def _flaky(*a, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("database hiccup")
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(chat_record_import, "import_session_file", _flaky)
+    agent = await make_agent(name="Omp Retry", slug="omp-retry", agent_runtime="cli-bridge", harness="omp")
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        chat = await chat_record.create_chat(s, None, agent, title="Chat 2")
+        await chat_record.pin_native_session(s, chat, "s-retry")
+        await s.commit()
+    copy = (host_home / ".mc" / "agents" / "omp-retry" / "omp-sessions" / "--workspace--"
+            / ".mc" / "2026-11-23T13-01-40-000Z_s-retry.jsonl")
+    head = {"type": "session", "version": 3, "id": "s-retry", "timestamp": "2026-11-23T13:01:40.000Z",
+            "cwd": "/workspace", "bridge": "acp"}
+    _write(copy, [head, _omp_line("m1", "user", "q", "2026-11-23T13:01:41.000Z"),
+                  _omp_line("m2", "assistant", "a", "2026-11-23T13:02:18.000Z")])
+    follower.follow(agent, chat.id)
+    try:
+        took = await _wait_written(follower, 2, 6)
+    finally:
+        await follower.stop()
+    assert follower.errors == 1
+    assert took < 6, f"failed import never retried (calls={len(calls)})"
+    assert await _texts(chat.id) == ["q", "a"]
+
+
+def test_omp_further_chat_files_are_found_without_scanning_the_whole_folder(tmp_path, monkeypatch):
+    """One lookup per followed chat per few seconds: only the chat's own
+    files (by native id), never a stat + header read of every session."""
+    from app.services import chat_record_import, omp_chat
+    from app.services.transcript_adapters import adapter_for
+
+    root = tmp_path / "omp-sessions"
+    folder = root / "--workspace--"
+    own = folder / "2026-11-23T13-02-04_s-mine.jsonl"
+    copy = folder / ".mc" / "2026-11-23T13-02-04-123Z_s-mine.jsonl"
+    other = folder / "2026-11-23T12-00-00_s-other.jsonl"
+    _write(own, [{"type": "session", "id": "s-mine", "cwd": "/workspace"}])
+    _write(copy, [{"type": "session", "id": "s-mine", "cwd": "/workspace", "bridge": "acp"}])
+    _write(other, [{"type": "session", "id": "s-other", "cwd": "/workspace"}])
+
+    class _Agent:
+        slug = "x"
+        harness = "omp"
+        agent_runtime = "cli-bridge"
+
+    import dataclasses
+
+    adapter = dataclasses.replace(adapter_for(_Agent()), resolve_transcript_dir=lambda agent: root)
+
+    def _no_full_scan(*a, **kw):
+        raise AssertionError("full-folder scan")
+
+    monkeypatch.setattr(chat_record_import, "session_files", _no_full_scan)
+    looked_at = []
+    real_header = omp_chat._session_header
+    monkeypatch.setattr(omp_chat, "_session_header",
+                        lambda p: looked_at.append(p.name) or real_header(p))
+    assert chat_record_import.further_chat_files(_Agent(), adapter, "c", "s-mine") == [copy]
+    assert other.name not in looked_at
+    assert chat_record_import.further_chat_files(_Agent(), adapter, "c", "s-none") == []
+
+
+async def test_sweep_reads_further_claude_chats_even_without_the_default_folder(
+    make_agent, claude_home, flag_on,  # noqa: F811
+):
+    import dataclasses
+
+    from app.services import chat_record_import, claude_chat_runner
+    from app.services.transcript_adapters import adapter_for
+
+    agent = await make_agent(name="Claude NoDir", slug="claude-nodir", agent_runtime="cli-bridge",
+                             harness="claude")
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        chat = await chat_record.create_chat(s, None, agent, title="Chat 2")
+        await s.commit()
+    path = claude_chat_runner.transcript_path("claude-nodir", str(chat.id), chat.native_session_id)
+    _write(path, [_user("u1", "2026-11-23T13:01:41.000Z", "hi"),
+                  _assistant_text("a1", "2026-11-23T13:01:44.000Z", "hello")])
+    adapter = dataclasses.replace(adapter_for(agent), resolve_transcript_dir=lambda a: None)
+    stats = chat_record_import.ImportStats()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        await chat_record_import.import_agent(s, agent, stats, adapter=adapter)
+    assert await _texts(chat.id) == ["hi", "hello"]
+
+
+def test_the_api_shutdown_ends_every_follow():
+    """The follower lives in the API process, which runs without the
+    background services (``ENABLE_BACKGROUND_SERVICES=false`` there) — so its
+    stop belongs in the API lifespan, not in ``stop_background_services``."""
+    import inspect
+
+    from app import main
+
+    src = inspect.getsource(main.lifespan)
+    assert "chat_record_follow" in src and "FOLLOWER.stop()" in src.split("yield", 1)[1]
+
+
+async def test_stop_ends_running_follows(make_agent, host_home, flag_on, follower):  # noqa: F811
+    agent = await make_agent(name="Omp Stop", slug="omp-stop", agent_runtime="cli-bridge", harness="omp")
+    follower.follow(agent, "00000000-0000-4000-8000-000000000003")
+    assert follower.following("00000000-0000-4000-8000-000000000003")
+    await follower.stop()
+    assert not follower.following("00000000-0000-4000-8000-000000000003")
