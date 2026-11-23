@@ -140,6 +140,20 @@ async def list_roots(
 ):
     roots = []
     for r in browsable_roots():
+        entry = {
+            "key": r.key,
+            "label": r.label,
+            "icon": r.icon,
+            "native_open": r.native_open,
+            "deletable": r.deletable,
+            "indexed": r.indexed,
+        }
+        if not r.indexed:
+            # Browsed live from disk, never indexed: no count at all — the
+            # sidebar shows a badge whenever ``indexed_count`` is present, and
+            # a "0" would read as an empty or broken folder.
+            roots.append(entry)
+            continue
         try:
             count = (
                 await session.exec(
@@ -148,16 +162,7 @@ async def list_roots(
             ).one()
         except Exception:  # noqa: BLE001 — index may be empty/missing
             count = 0
-        roots.append(
-            {
-                "key": r.key,
-                "label": r.label,
-                "icon": r.icon,
-                "native_open": r.native_open,
-                "deletable": r.deletable,
-                "indexed_count": int(count or 0),
-            }
-        )
+        roots.append({**entry, "indexed_count": int(count or 0)})
     return {"roots": roots, "native_open_available": await _native_open_reachable()}
 
 

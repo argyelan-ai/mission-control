@@ -58,3 +58,17 @@ async def test_recent_rejects_unknown_and_sensitive_root(auth_client: AsyncClien
 async def test_recent_requires_auth(client: AsyncClient):
     resp = await client.get("/api/v1/files/recent")
     assert resp.status_code == 401
+
+
+async def test_roots_send_no_count_for_a_root_that_is_not_indexed(auth_client: AsyncClient):
+    """The Files sidebar renders ``indexed_count`` as a badge whenever the key
+    is present. ``workspaces`` is browsed live, never indexed — a ``0`` badge
+    there would read as an empty or broken folder. Indexed roots keep theirs."""
+    await _seed()
+    resp = await auth_client.get("/api/v1/files/roots")
+    assert resp.status_code == 200, resp.text
+    roots = {r["key"]: r for r in resp.json()["roots"]}
+    assert "indexed_count" not in roots["workspaces"], roots["workspaces"]
+    assert roots["workspaces"]["indexed"] is False
+    assert roots["vault"]["indexed_count"] == 2  # old.md + sub/
+    assert roots["vault"]["indexed"] is True
