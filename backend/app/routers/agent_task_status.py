@@ -1028,6 +1028,11 @@ async def agent_delete_task(
         sub.parent_task_id = None
         session.add(sub)
 
+    # file_index: detach deliverable_id/task_id first — NO-ACTION FKs would
+    # block deleting the deliverables and the task below.
+    from app.services.file_indexer import release_task_refs
+    await release_task_refs(session, task_id)
+
     # Delete dependent data
     for model, fk in [
         (TaskComment, TaskComment.task_id),
@@ -1068,14 +1073,6 @@ async def agent_delete_task(
         delete_mcp_media_for_task(task_id)
     except Exception:
         pass
-
-    # file_index: task_id-Provenance loesen (FK wuerde den Delete blocken).
-    from app.models.file_index import FileIndexEntry
-    for fi in (await session.exec(
-        select(FileIndexEntry).where(FileIndexEntry.task_id == task_id)
-    )).all():
-        fi.task_id = None
-        session.add(fi)
 
     await session.delete(task)
     await session.commit()

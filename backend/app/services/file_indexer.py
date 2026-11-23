@@ -209,6 +209,29 @@ async def capture_deliverable_id(
         return False
 
 
+async def release_task_refs(session: AsyncSession, task_id) -> None:
+    """Detach ``file_index`` rows from a task that is about to be deleted.
+
+    ``file_index.task_id`` and ``file_index.deliverable_id`` are bare NO-ACTION
+    foreign keys (migration 0129). Every path that deletes a task or its
+    ``TaskDeliverable`` rows must call this BEFORE those deletes, or Postgres
+    raises a ForeignKeyViolation at commit. The rows themselves stay: the
+    files are still on disk and remain findable. Runs as immediate SQL, so it
+    does not depend on the ORM flush order.
+    """
+    from app.models.deliverable import TaskDeliverable
+
+    deliverable_ids = select(TaskDeliverable.id).where(TaskDeliverable.task_id == task_id)
+    await session.exec(
+        update(FileIndexEntry)
+        .where(FileIndexEntry.deliverable_id.in_(deliverable_ids))  # type: ignore[union-attr]
+        .values(deliverable_id=None)
+    )
+    await session.exec(
+        update(FileIndexEntry).where(FileIndexEntry.task_id == task_id).values(task_id=None)
+    )
+
+
 # Per-root cap (entries walked per root and round). Live 2026-11-23 every
 # indexed root holds < 3 000 entries; the cap only guards against a runaway
 # tree. One root hitting it never starves the others any more.

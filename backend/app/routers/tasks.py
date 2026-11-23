@@ -2445,7 +2445,11 @@ async def delete_task(
         ue.task_id = None
         session.add(ue)
 
-    # 6e. Delete task deliverables (non-nullable FK → RESTRICT)
+    # 6e. Delete task deliverables (non-nullable FK → RESTRICT). First detach
+    # the files index (deliverable_id/task_id are NO-ACTION FKs — the
+    # deliverable capture writes them, so the delete would fail otherwise).
+    from app.services.file_indexer import release_task_refs
+    await release_task_refs(session, task_id)
     from app.models.deliverable import TaskDeliverable
     del_result = await session.exec(
         select(TaskDeliverable).where(TaskDeliverable.task_id == task_id)
@@ -2476,15 +2480,6 @@ async def delete_task(
         delete_mcp_media_for_task(task_id)
     except Exception:
         pass
-
-    # 6i. file_index: task_id-Provenance lösen — der FK blockte sonst den
-    # Task-Delete (Live-Smoke-Fund; betraf latent auch Deliverable-Captures).
-    from app.models.file_index import FileIndexEntry
-    for fi in (await session.exec(
-        select(FileIndexEntry).where(FileIndexEntry.task_id == task_id)
-    )).all():
-        fi.task_id = None
-        session.add(fi)
 
     # 7. Clear agent current_task_id
     agent_result = await session.exec(
