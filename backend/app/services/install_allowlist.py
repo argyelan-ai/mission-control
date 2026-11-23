@@ -52,3 +52,19 @@ def list_allowed_sources(install_type: str) -> list[str]:
     if install_type not in _PATTERNS:
         return []
     return [p.pattern for p in _PATTERNS[install_type]]
+
+
+# A skill name becomes a folder name in the shared skills library. Same
+# character set as the local-skill source pattern above; no dots, no slashes,
+# so a name can never leave the library folder.
+_SKILL_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,99}$")
+
+
+def validate_skill_name(name: str) -> bool:
+    """Return True for a safe skill folder name, else raise AllowlistError."""
+    if not name or not _SKILL_NAME.match(name):
+        raise AllowlistError(
+            f"Skill name {name!r} is not allowed (lowercase letters, digits, "
+            "'-' and '_' only, max 100 characters)"
+        )
+    return True

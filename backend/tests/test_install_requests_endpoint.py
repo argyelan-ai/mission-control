@@ -20,6 +20,25 @@ from tests.conftest import test_engine
 
 # ── Helper ────────────────────────────────────────────────────────────────
 
+PINNED = "0123456789abcdef0123456789abcdef01234567"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_skills_root_and_no_network(tmp_path, monkeypatch):
+    """Point the skills library at an empty temp dir and pin refs without
+    calling GitHub."""
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    calls: list[tuple[str, str | None]] = []
+
+    async def fake_resolve(source, ref):
+        calls.append((source, ref))
+        return PINNED
+
+    monkeypatch.setattr(
+        "app.services.install_executor.resolve_skill_commit", fake_resolve
+    )
+    return calls
+
 
 async def _make_agent(
     *,
@@ -270,3 +289,131 @@ async def test_install_request_mcp_happy_path(client: AsyncClient, fake_redis):
     assert body["status"] == "pending"
     assert body["existing"] is False
     uuid.UUID(body["approval_id"])  # must be valid UUID
+
+
+# ── PR 0: no board, pinned commit, no overwrite, L1 never trusted ────────
+
+
+async def _make_boardless_agent(name: str, scopes: list[str]):
+    from app.models.agent import Agent
+    from app.auth import generate_agent_token
+
+    raw_token, token_hash = generate_agent_token()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent = Agent(name=name, role="developer", scopes=scopes,
+                      board_id=None, agent_token_hash=token_hash)
+        s.add(agent)
+        await s.commit()
+        await s.refresh(agent)
+    return agent, raw_token
+
+
+async def _approval_row(approval_id: str):
+    from app.models.approval import Approval
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        return await s.get(Approval, uuid.UUID(approval_id))
+
+
+def _skill_body(target_id, **kw):
+    return {
+        "type": "skill", "operation": "install",
+        "source": "github:obra/skill-board-free", "name": "board-free",
+        "target_agent_id": str(target_id), "reason": "chat without a board",
+        **kw,
+    }
+
+
+@pytest.mark.asyncio
+async def test_install_request_without_board_is_accepted(client: AsyncClient, fake_redis):
+    """Chats and personas have no board. approvals.board_id is optional."""
+    agent, token = await _make_boardless_agent("Boardless", scopes=[])
+
+    resp = await client.post(
+        "/api/v1/agent/install-requests",
+        headers={"Authorization": f"Bearer {token}"},
+        json=_skill_body(agent.id),
+    )
+    assert resp.status_code == 201, resp.text
+    row = await _approval_row(resp.json()["approval_id"])
+    assert row.board_id is None
+    assert row.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_install_request_pins_commit_in_payload(
+    client: AsyncClient, fake_redis, _isolated_skills_root_and_no_network,
+):
+    agent, token = await _make_boardless_agent("Pinner", scopes=[])
+
+    resp = await client.post(
+        "/api/v1/agent/install-requests",
+        headers={"Authorization": f"Bearer {token}"},
+        json=_skill_body(agent.id, ref="v1.2.0"),
+    )
+    assert resp.status_code == 201, resp.text
+    row = await _approval_row(resp.json()["approval_id"])
+    assert row.payload["commit"] == PINNED
+    assert row.payload["ref"] == "v1.2.0"
+    assert _isolated_skills_root_and_no_network == [
+        ("github:obra/skill-board-free", "v1.2.0")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_install_request_unpinnable_ref_is_400(client: AsyncClient, fake_redis, monkeypatch):
+    agent, token = await _make_boardless_agent("Unpinnable", scopes=[])
+
+    async def broken(source, ref):
+        raise RuntimeError("ref 'nope' not found")
+
+    monkeypatch.setattr("app.services.install_executor.resolve_skill_commit", broken)
+    resp = await client.post(
+        "/api/v1/agent/install-requests",
+        headers={"Authorization": f"Bearer {token}"},
+        json=_skill_body(agent.id, ref="nope"),
+    )
+    assert resp.status_code == 400
+    assert "commit" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_install_request_for_existing_library_skill_is_409(
+    client: AsyncClient, fake_redis, tmp_path,
+):
+    (tmp_path / ".mc" / "skills" / "board-free").mkdir(parents=True)
+    agent, token = await _make_boardless_agent("Collider", scopes=[])
+
+    resp = await client.post(
+        "/api/v1/agent/install-requests",
+        headers={"Authorization": f"Bearer {token}"},
+        json=_skill_body(agent.id),
+    )
+    assert resp.status_code == 409
+    assert "never overwritten" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_install_request_bad_skill_name_is_400(client: AsyncClient, fake_redis):
+    agent, token = await _make_boardless_agent("Traverser", scopes=[])
+
+    resp = await client.post(
+        "/api/v1/agent/install-requests",
+        headers={"Authorization": f"Bearer {token}"},
+        json=_skill_body(agent.id, name="../../etc"),
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_install_request_l1_is_never_stored(client: AsyncClient, fake_redis):
+    agent, token = await _make_boardless_agent("Selfie", scopes=[])
+
+    resp = await client.post(
+        "/api/v1/agent/install-requests",
+        headers={"Authorization": f"Bearer {token}"},
+        json=_skill_body(agent.id, autonomy_level="L1"),
+    )
+    assert resp.status_code == 201, resp.text
+    row = await _approval_row(resp.json()["approval_id"])
+    assert row.autonomy_level == "L2"

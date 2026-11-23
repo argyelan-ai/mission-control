@@ -1,8 +1,11 @@
-"""Verify _trigger_sync_config triggers container restart for cli-bridge agents
-so claude-code picks up new .mcp.json / settings.json after install/uninstall.
+"""_trigger_sync_config: per-runtime apply registry, honest result, and NO
+automatic container restart.
+
+Before: every install restarted the agent's docker container, which killed
+every running chat turn of that agent. Host and openclaw agents got only a
+log line while the install reported success.
 """
-import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,118 +23,115 @@ def _fake_redis_for_install(fake_redis, monkeypatch):
         return fake_redis
 
     monkeypatch.setattr("app.redis_client.get_redis", _get_fake)
-    # _trigger_sync_config imports engine from app.database
     monkeypatch.setattr("app.database.engine", test_engine)
 
 
-@pytest.mark.asyncio
-async def test_trigger_sync_config_restarts_cli_bridge_container(
-    async_session: AsyncSession,
-):
-    """After sync for a cli-bridge agent, the container must be restarted."""
-    agent = Agent(
-        name="Rex", role="Reviewer", scopes=[],
-        cli_skills=[], cli_plugins=[], mcp_servers=[],
-        agent_runtime="cli-bridge",
+async def _agent(session: AsyncSession, **kw) -> Agent:
+    agent = Agent(role="Reviewer", scopes=[], **kw)
+    session.add(agent)
+    await session.commit()
+    await session.refresh(agent)
+    return agent
+
+
+def _sync_patches():
+    return (
+        patch("app.services.docker_agent_sync.sync_docker_agent_files",
+              new_callable=AsyncMock),
+        patch("app.services.docker_agent_sync.restart_docker_agent_container"),
+        patch("app.services.mcp_sync.sync_agent_mcp_to_disk"),
     )
-    async_session.add(agent)
-    await async_session.commit()
-    await async_session.refresh(agent)
-
-    from app.services.install_executor import _trigger_sync_config
-
-    with patch("app.services.docker_agent_sync.sync_docker_agent_files",
-               new_callable=AsyncMock) as mock_sync, \
-         patch("app.services.docker_agent_sync.restart_docker_agent_container") as mock_restart, \
-         patch("app.services.mcp_sync.sync_agent_mcp_to_disk") as mock_mcp_sync:
-        mock_restart.return_value = {"status": "restarted", "container": "mc-agent-rex"}
-
-        await _trigger_sync_config(agent.id)
-
-        mock_sync.assert_awaited_once()
-        mock_mcp_sync.assert_called_once()
-        mock_restart.assert_called_once()
-        # The agent passed to restart should have matching id
-        called_agent = mock_restart.call_args[0][0]
-        assert called_agent.id == agent.id
 
 
 @pytest.mark.asyncio
-async def test_trigger_sync_config_restart_failure_is_non_fatal(
+async def test_docker_agent_files_synced_but_container_never_restarted(
     async_session: AsyncSession,
 ):
-    """If container restart fails, the install should not error — files are
-    already on disk and will be picked up on next organic restart."""
-    agent = Agent(
-        name="Rex", role="Reviewer", scopes=[],
-        agent_runtime="cli-bridge",
-    )
-    async_session.add(agent)
-    await async_session.commit()
-    await async_session.refresh(agent)
-
+    agent = await _agent(async_session, name="Rex", agent_runtime="cli-bridge",
+                         harness="claude")
     from app.services.install_executor import _trigger_sync_config
 
-    with patch("app.services.docker_agent_sync.sync_docker_agent_files",
-               new_callable=AsyncMock), \
-         patch("app.services.docker_agent_sync.restart_docker_agent_container",
-               side_effect=RuntimeError("docker daemon unavailable")), \
-         patch("app.services.mcp_sync.sync_agent_mcp_to_disk"):
-        # Must not raise — restart failure is logged but non-fatal
-        await _trigger_sync_config(agent.id)
+    p_sync, p_restart, p_mcp = _sync_patches()
+    with p_sync as mock_sync, p_restart as mock_restart, p_mcp as mock_mcp:
+        report = await _trigger_sync_config(agent.id, "skill")
+
+    mock_sync.assert_awaited_once()
+    mock_mcp.assert_called_once()
+    mock_restart.assert_not_called()
+    assert report["status"] == "needs_restart"
+    assert report["note"] == "takes effect at next chat start"
+    assert report["runtime"] == "cli-bridge"
+    assert report["harness"] == "claude"
 
 
 @pytest.mark.asyncio
-async def test_trigger_sync_config_host_agent_skips_all_sync(
-    async_session: AsyncSession,
+@pytest.mark.parametrize("harness", ["omp", "kimi"])
+async def test_harness_that_ignores_skill_files_reports_not_applied(
+    async_session: AsyncSession, harness: str,
 ):
-    """Host agents (Boss) — DB state updated but file sync skipped entirely.
-    Boss's claude-config dir name ('boss-host') doesn't match derived slug
-    ('boss'), so writing would land in wrong directory. Operator regenerates
-    manually and runs launchctl kickstart."""
-    agent = Agent(
-        name="Boss", role="orchestrator", scopes=[],
-        agent_runtime="host",
-    )
-    async_session.add(agent)
-    await async_session.commit()
-    await async_session.refresh(agent)
-
+    """Capability matrix says omp/kimi ignore MC skill files -> never claim
+    the skill will work there."""
+    agent = await _agent(async_session, name=f"H-{harness}",
+                         agent_runtime="cli-bridge", harness=harness)
     from app.services.install_executor import _trigger_sync_config
 
-    with patch("app.services.docker_agent_sync.sync_docker_agent_files",
-               new_callable=AsyncMock) as mock_sync, \
-         patch("app.services.docker_agent_sync.restart_docker_agent_container") as mock_restart, \
-         patch("app.services.mcp_sync.sync_agent_mcp_to_disk") as mock_mcp_sync:
-        await _trigger_sync_config(agent.id)
+    p_sync, p_restart, p_mcp = _sync_patches()
+    with p_sync, p_restart as mock_restart, p_mcp:
+        report = await _trigger_sync_config(agent.id, "skill")
 
-        # Host agents: no file writes, no docker calls — operator does it
-        mock_sync.assert_not_awaited()
-        mock_restart.assert_not_called()
-        mock_mcp_sync.assert_not_called()
+    mock_restart.assert_not_called()
+    assert report["status"] == "not_applied"
+    assert harness in report["note"]
 
 
 @pytest.mark.asyncio
-async def test_trigger_sync_config_openclaw_skips_everything(
+async def test_host_agent_reports_not_applied_and_writes_nothing(
     async_session: AsyncSession,
 ):
-    """openclaw agents (Henry) manage themselves via Gateway — no action here."""
-    agent = Agent(
-        name="Henry", role="Lead", scopes=[],
-        agent_runtime="openclaw",
-    )
-    async_session.add(agent)
-    await async_session.commit()
-    await async_session.refresh(agent)
-
+    agent = await _agent(async_session, name="Lead", agent_runtime="host")
     from app.services.install_executor import _trigger_sync_config
 
-    with patch("app.services.docker_agent_sync.sync_docker_agent_files",
-               new_callable=AsyncMock) as mock_sync, \
-         patch("app.services.docker_agent_sync.restart_docker_agent_container") as mock_restart, \
-         patch("app.services.mcp_sync.sync_agent_mcp_to_disk") as mock_mcp_sync:
-        await _trigger_sync_config(agent.id)
+    p_sync, p_restart, p_mcp = _sync_patches()
+    with p_sync as mock_sync, p_restart as mock_restart, p_mcp as mock_mcp:
+        report = await _trigger_sync_config(agent.id, "skill")
 
-        mock_sync.assert_not_awaited()
-        mock_restart.assert_not_called()
-        mock_mcp_sync.assert_not_called()
+    mock_sync.assert_not_awaited()
+    mock_restart.assert_not_called()
+    mock_mcp.assert_not_called()
+    assert report["status"] == "not_applied"
+    assert report["runtime"] == "host"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime", ["openclaw", "manual", "claude-code"])
+async def test_runtime_without_install_path_reports_not_applied(
+    async_session: AsyncSession, runtime: str,
+):
+    """No special openclaw branch any more (gateway retired, ADR-039): any
+    runtime without a registry entry is reported honestly."""
+    agent = await _agent(async_session, name=f"R-{runtime}", agent_runtime=runtime)
+    from app.services.install_executor import _trigger_sync_config
+
+    p_sync, p_restart, p_mcp = _sync_patches()
+    with p_sync as mock_sync, p_restart as mock_restart, p_mcp:
+        report = await _trigger_sync_config(agent.id, "plugin")
+
+    mock_sync.assert_not_awaited()
+    mock_restart.assert_not_called()
+    assert report["status"] == "not_applied"
+    assert runtime in report["note"]
+
+
+def test_registry_has_no_openclaw_entry():
+    from app.services.install_executor import RUNTIME_APPLIERS
+
+    assert set(RUNTIME_APPLIERS) == {"cli-bridge", "host"}
+
+
+def test_executor_source_never_restarts_a_container():
+    """Structural guard: the restart helper is not referenced at all."""
+    import inspect
+
+    import app.services.install_executor as mod
+
+    assert "restart_docker_agent_container" not in inspect.getsource(mod)

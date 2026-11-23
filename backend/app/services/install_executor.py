@@ -5,16 +5,42 @@ skills filesystem ops). It does NOT call HTTP-endpoints — those require
 user-auth, and bypassing them would create an auth-hole. The privileged
 install path is its own boundary.
 
-Dispatch table:
-  "install_skill"   -> _install_skill()
-  "uninstall_skill" -> _uninstall_skill()
+Dispatch table: see ``_HANDLERS`` (skill / plugin / mcp, install + uninstall).
 
-Plugin handlers are added in Task 5.
+Rules this module keeps (PR 0 of the extensions concept):
+
+* **"All" stays "all".** ``cli_skills`` / ``cli_plugins`` / ``mcp_servers``
+  ``None`` means "this agent loads everything". An install never turns that
+  into ``[name]`` (that silently took every other item away). An uninstall
+  from "all" is refused with a clear error instead of collapsing to ``[]``.
+* **No automatic restart.** The install writes files; it never restarts an
+  agent container (that killed running chat turns). The per-runtime result
+  says ``needs_restart`` = "takes effect at next chat start".
+* **One skills root.** Installed skills live in exactly one place: the
+  central library ``plugin_manager._custom_skills_dir()`` (``~/.mc/skills``,
+  resolved against ``HOME_HOST``) — the same folder
+  ``sync_agent_skills_to_disk`` copies from. ADR-104 indexes that folder in
+  place and explicitly rejects a second copy under the knowledge root; when
+  the skills move there, ``_custom_skills_dir()`` is the one line to change.
+* **Never overwrite a skill.** A name that already exists in the library is
+  refused; the library is shared by every agent.
+* **Pinned version.** A GitHub skill is fetched at an exact commit SHA (from
+  the request payload, resolved at request time) and that SHA is logged.
+* **Honest per-runtime result.** ``RUNTIME_APPLIERS`` maps the agent's
+  runtime to an applier; the harness capability matrix
+  (``harness_compat.HARNESS_CAPABILITIES``) decides whether the harness reads
+  the item at all. Result: ``applied`` / ``needs_restart`` / ``not_applied``,
+  stored in the install log's JSON detail (``previous_state["apply"]`` — the
+  only JSON column on ``install_log``; no migration).
 """
+import asyncio
 import logging
+import os
+import re
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -32,6 +58,44 @@ class InstallResult:
     error: str | None = None
     installed_version: str | None = None
     install_log_id: uuid.UUID | None = None
+    #: Per-runtime outcome: {"runtime", "harness", "status", "note"} where
+    #: status is "applied" | "needs_restart" | "not_applied". None when the
+    #: install did not get that far.
+    apply: dict[str, Any] | None = None
+
+
+class SkillExistsError(RuntimeError):
+    """A skill with this name already exists in the shared library."""
+
+
+class AllItemsUninstallError(ValueError):
+    """Uninstall asked on an agent that loads every item (allowlist None)."""
+
+
+def _with_name(current: list[str] | None, name: str) -> list[str] | None:
+    """Add ``name`` to an allowlist. ``None`` (= all) stays ``None``."""
+    if current is None:
+        return None
+    items = list(current)
+    if name not in items:
+        items.append(name)
+    return items
+
+
+def _without_name(current: list[str] | None, name: str, field: str) -> list[str]:
+    """Remove ``name`` from an allowlist. ``None`` (= all) cannot shrink by
+    one name without listing everything else, so it is refused."""
+    if current is None:
+        raise AllItemsUninstallError(
+            f"Agent loads all {field} (no allowlist); removing {name!r} alone "
+            "would remove everything. Set an explicit list in the agent "
+            "settings first."
+        )
+    return [x for x in current if x != name]
+
+
+def _apply_detail(apply: Any) -> dict[str, Any] | None:
+    return apply if isinstance(apply, dict) else None
 
 
 class InstallExecutor:
@@ -58,39 +122,47 @@ class InstallExecutor:
         target_id = uuid.UUID(payload["target_agent_id"])
         name = payload["name"]
         source = payload.get("source", "")
+        commit = payload.get("commit")
 
         agent = await self._get_agent(target_id)
-        previous_state = {"cli_skills": list(agent.cli_skills) if agent.cli_skills else None}
+        previous_state = {
+            "cli_skills": list(agent.cli_skills) if agent.cli_skills is not None else None
+        }
 
-        # Append name to cli_skills allowlist (or leave as None if already None=all)
-        current = list(agent.cli_skills) if agent.cli_skills is not None else []
-        if name not in current:
-            current.append(name)
-        agent.cli_skills = current
+        # Files first: a refused or broken source never touches the agent row.
+        info = await _call_skill_install(source, name, commit)
+        info = info or {}
+        installed_version = info.get("installed_version")
+        created_dir = bool(info.get("created_dir"))
+
+        agent.cli_skills = _with_name(agent.cli_skills, name)
         await self.session.commit()
 
         try:
-            result = await _call_skill_install(source, name)
-            installed_version = result.get("installed_version") if result else None
-            await _trigger_sync_config(agent.id)
+            apply = await _trigger_sync_config(agent.id, "skill")
         except Exception as e:
-            # Rollback
             agent.cli_skills = previous_state["cli_skills"]
             await self.session.commit()
+            if created_dir:
+                # We created this library folder in this run — take it back.
+                _remove_skill_dir(name)
             log = await self._write_log(
                 approval, result="rolled_back", error=str(e),
                 previous_state=previous_state,
+                commit=info.get("commit"),
             )
             return InstallResult(result="rolled_back", error=str(e),
                                  install_log_id=log.id)
 
+        apply = _apply_detail(apply)
         log = await self._write_log(
             approval, result="success",
             installed_version=installed_version,
             previous_state=previous_state,
+            apply=apply, commit=info.get("commit"),
         )
         return InstallResult(result="success", installed_version=installed_version,
-                             install_log_id=log.id)
+                             install_log_id=log.id, apply=apply)
 
     async def _uninstall_skill(self, approval: Approval) -> InstallResult:
         payload = approval.payload or {}
@@ -98,14 +170,15 @@ class InstallExecutor:
         name = payload["name"]
 
         agent = await self._get_agent(target_id)
-        previous_state = {"cli_skills": list(agent.cli_skills) if agent.cli_skills else None}
+        previous_state = {
+            "cli_skills": list(agent.cli_skills) if agent.cli_skills is not None else None
+        }
 
-        current = list(agent.cli_skills) if agent.cli_skills is not None else []
-        agent.cli_skills = [s for s in current if s != name]
+        agent.cli_skills = _without_name(agent.cli_skills, name, "skills")
         await self.session.commit()
 
         try:
-            await _trigger_sync_config(agent.id)
+            apply = await _trigger_sync_config(agent.id, "skill")
         except Exception as e:
             agent.cli_skills = previous_state["cli_skills"]
             await self.session.commit()
@@ -116,10 +189,11 @@ class InstallExecutor:
             return InstallResult(result="rolled_back", error=str(e),
                                  install_log_id=log.id)
 
+        apply = _apply_detail(apply)
         log = await self._write_log(
-            approval, result="success", previous_state=previous_state,
+            approval, result="success", previous_state=previous_state, apply=apply,
         )
-        return InstallResult(result="success", install_log_id=log.id)
+        return InstallResult(result="success", install_log_id=log.id, apply=apply)
 
     # ───────────────────── Plugin handlers ─────────────────────
 
@@ -130,18 +204,17 @@ class InstallExecutor:
         source = payload.get("source", "")
 
         agent = await self._get_agent(target_id)
-        previous_state = {"cli_plugins": list(agent.cli_plugins) if agent.cli_plugins else None}
+        previous_state = {
+            "cli_plugins": list(agent.cli_plugins) if agent.cli_plugins is not None else None
+        }
 
-        current = list(agent.cli_plugins) if agent.cli_plugins is not None else []
-        if name not in current:
-            current.append(name)
-        agent.cli_plugins = current
+        agent.cli_plugins = _with_name(agent.cli_plugins, name)
         await self.session.commit()
 
         try:
             result = await _call_plugin_install(source, name)
             installed_version = result.get("installed_version") if result else None
-            await _trigger_sync_config(agent.id)
+            apply = await _trigger_sync_config(agent.id, "plugin")
         except Exception as e:
             agent.cli_plugins = previous_state["cli_plugins"]
             await self.session.commit()
@@ -152,13 +225,14 @@ class InstallExecutor:
             return InstallResult(result="rolled_back", error=str(e),
                                  install_log_id=log.id)
 
+        apply = _apply_detail(apply)
         log = await self._write_log(
             approval, result="success",
             installed_version=installed_version,
-            previous_state=previous_state,
+            previous_state=previous_state, apply=apply,
         )
         return InstallResult(result="success", installed_version=installed_version,
-                             install_log_id=log.id)
+                             install_log_id=log.id, apply=apply)
 
     async def _uninstall_plugin(self, approval: Approval) -> InstallResult:
         payload = approval.payload or {}
@@ -166,14 +240,15 @@ class InstallExecutor:
         name = payload["name"]
 
         agent = await self._get_agent(target_id)
-        previous_state = {"cli_plugins": list(agent.cli_plugins) if agent.cli_plugins else None}
+        previous_state = {
+            "cli_plugins": list(agent.cli_plugins) if agent.cli_plugins is not None else None
+        }
 
-        current = list(agent.cli_plugins) if agent.cli_plugins is not None else []
-        agent.cli_plugins = [p for p in current if p != name]
+        agent.cli_plugins = _without_name(agent.cli_plugins, name, "plugins")
         await self.session.commit()
 
         try:
-            await _trigger_sync_config(agent.id)
+            apply = await _trigger_sync_config(agent.id, "plugin")
         except Exception as e:
             agent.cli_plugins = previous_state["cli_plugins"]
             await self.session.commit()
@@ -184,10 +259,11 @@ class InstallExecutor:
             return InstallResult(result="rolled_back", error=str(e),
                                  install_log_id=log.id)
 
+        apply = _apply_detail(apply)
         log = await self._write_log(
-            approval, result="success", previous_state=previous_state,
+            approval, result="success", previous_state=previous_state, apply=apply,
         )
-        return InstallResult(result="success", install_log_id=log.id)
+        return InstallResult(result="success", install_log_id=log.id, apply=apply)
 
     # ───────────────────── MCP handlers ─────────────────────
 
@@ -199,13 +275,10 @@ class InstallExecutor:
 
         agent = await self._get_agent(target_id)
         previous_state = {
-            "mcp_servers": list(agent.mcp_servers) if agent.mcp_servers else None
+            "mcp_servers": list(agent.mcp_servers) if agent.mcp_servers is not None else None
         }
 
-        current = list(agent.mcp_servers) if agent.mcp_servers is not None else []
-        if name not in current:
-            current.append(name)
-        agent.mcp_servers = current
+        agent.mcp_servers = _with_name(agent.mcp_servers, name)
         await self.session.commit()
 
         proposed_config = payload.get("proposed_config")
@@ -221,7 +294,7 @@ class InstallExecutor:
                     "requirements.txt / pyproject.toml) or required env vars "
                     "(e.g. API keys) are missing."
                 )
-            await _trigger_sync_config(agent.id)
+            apply = await _trigger_sync_config(agent.id, "mcp")
         except Exception as e:
             agent.mcp_servers = previous_state["mcp_servers"]
             await self.session.commit()
@@ -239,13 +312,14 @@ class InstallExecutor:
             return InstallResult(result="rolled_back", error=err_text,
                                  install_log_id=log.id)
 
+        apply = _apply_detail(apply)
         log = await self._write_log(
             approval, result="success",
             installed_version=installed_version,
-            previous_state=previous_state,
+            previous_state=previous_state, apply=apply,
         )
         return InstallResult(result="success", installed_version=installed_version,
-                             install_log_id=log.id)
+                             install_log_id=log.id, apply=apply)
 
     async def _uninstall_mcp(self, approval: Approval) -> InstallResult:
         payload = approval.payload or {}
@@ -254,15 +328,14 @@ class InstallExecutor:
 
         agent = await self._get_agent(target_id)
         previous_state = {
-            "mcp_servers": list(agent.mcp_servers) if agent.mcp_servers else None
+            "mcp_servers": list(agent.mcp_servers) if agent.mcp_servers is not None else None
         }
 
-        current = list(agent.mcp_servers) if agent.mcp_servers is not None else []
-        agent.mcp_servers = [s for s in current if s != name]
+        agent.mcp_servers = _without_name(agent.mcp_servers, name, "MCP servers")
         await self.session.commit()
 
         try:
-            await _trigger_sync_config(agent.id)
+            apply = await _trigger_sync_config(agent.id, "mcp")
         except Exception as e:
             agent.mcp_servers = previous_state["mcp_servers"]
             await self.session.commit()
@@ -292,11 +365,12 @@ class InstallExecutor:
                 name, agent.id, registry_cleanup_error,
             )
 
+        apply = _apply_detail(apply)
         log = await self._write_log(
             approval, result="success", previous_state=previous_state,
-            error=registry_cleanup_error,
+            error=registry_cleanup_error, apply=apply,
         )
-        return InstallResult(result="success", install_log_id=log.id)
+        return InstallResult(result="success", install_log_id=log.id, apply=apply)
 
     async def _mcp_is_orphaned(self, name: str) -> bool:
         """True if no agent references the MCP anymore.
@@ -332,8 +406,20 @@ class InstallExecutor:
         error: str | None = None,
         installed_version: str | None = None,
         previous_state: dict[str, Any] | None = None,
+        apply: dict[str, Any] | None = None,
+        commit: str | None = None,
     ) -> InstallLog:
         payload = approval.payload or {}
+        # install_log has one JSON column. The rollback state stays under its
+        # own keys; the per-runtime result and the pinned commit ride along
+        # under reserved keys (no new column, no migration).
+        detail: dict[str, Any] | None = dict(previous_state) if previous_state else None
+        if apply is not None or commit:
+            detail = detail or {}
+            if apply is not None:
+                detail["apply"] = apply
+            if commit:
+                detail["commit"] = commit
         log = InstallLog(
             approval_id=approval.id,
             requester_agent_id=uuid.UUID(payload["requester_agent_id"])
@@ -345,7 +431,7 @@ class InstallExecutor:
             result=result,
             error=error,
             installed_version=installed_version,
-            previous_state=previous_state,
+            previous_state=detail,
         )
         self.session.add(log)
         await self.session.commit()
@@ -366,58 +452,126 @@ _HANDLERS: dict[str, Any] = {
 
 # ───────────────────── Service-layer wrappers (patchable in tests) ─────────────────────
 
-async def _call_skill_install(source: str, name: str) -> dict[str, Any]:
-    """Install a skill from source. Supports github: clone and local ref.
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_GIT_TIMEOUT_S = 120
 
-    Repo layout handling:
-    - Single-skill repo (e.g. obra/skill-foo): `<repo>/SKILL.md` at the root →
-      clone directly to `~/.mc/skills/<name>/`.
-    - Multi-skill monorepo (e.g. google-labs-code/stitch-skills with
-      `skills/<name>/SKILL.md`): clone to temp, extract only the requested
-      sub-skill (`skills/<name>/` or `skill-<name>/`) to
-      `~/.mc/skills/<name>/`, discard the rest.
 
-    Live bug 2026-04-24: installing shadcn-ui from google-labs-code/stitch-skills
-    cloned the WHOLE repo to ~/.mc/skills/shadcn-ui/. The real SKILL.md
-    lived under skills/shadcn-ui/SKILL.md. sync_agent_skills_to_disk found no
-    SKILL.md at the root → skipped the skill → the worker container didn't see it.
+def skills_root() -> Path:
+    """THE one root for installed skills (see module docstring)."""
+    from app.services.plugin_manager import _custom_skills_dir
+    return _custom_skills_dir()
 
-    IMPORTANT: resolve `~/.mc/skills` against the HOST path, not against
-    the container user's home (the backend runs as mcuser). The HOME_HOST
-    env var is set explicitly in the backend container.
-    """
-    import asyncio
-    import os
+
+def _remove_skill_dir(name: str) -> None:
+    """Remove a library folder this install created (rollback only)."""
     import shutil
-    import subprocess
-    import tempfile
-    from pathlib import Path
+    target = skills_root() / name
+    try:
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+    except OSError as e:  # rollback must not mask the original error
+        logger.error("Rollback: could not remove skill dir %s: %s", target, e)
 
-    _home_host = os.environ.get("HOME_HOST", os.path.expanduser("~"))
-    skills_dir = Path(_home_host) / ".mc" / "skills" / name
+
+async def _git(*args: str, cwd: Path | None = None) -> str:
+    """Run git non-interactively; return stdout or raise RuntimeError."""
+    import subprocess
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    proc = await asyncio.create_subprocess_exec(
+        "git", *args, cwd=str(cwd) if cwd else None, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=_GIT_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise RuntimeError(f"git {args[0]} timed out after {_GIT_TIMEOUT_S}s")
+    if proc.returncode != 0:
+        raise RuntimeError(f"git {args[0]} failed: {err.decode(errors='replace').strip()}")
+    return out.decode(errors="replace")
+
+
+def github_url(source: str) -> str:
+    return f"https://github.com/{source.removeprefix('github:')}.git"
+
+
+async def resolve_skill_commit(source: str, ref: str | None) -> str:
+    """Turn ``ref`` (SHA, tag, branch or None = default branch) into the exact
+    40-hex commit SHA for a ``github:`` skill source.
+
+    Called at request time so the operator approves one fixed version; the
+    executor then installs exactly that commit. A full SHA is taken as is.
+    """
+    if ref and _SHA_RE.match(ref.lower()):
+        return ref.lower()
+    wanted = ref or "HEAD"
+    out = await _git("ls-remote", github_url(source), wanted)
+    peeled: str | None = None
+    plain: str | None = None
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 2 or not _SHA_RE.match(parts[0]):
+            continue
+        if parts[1].endswith("^{}"):
+            peeled = parts[0]  # annotated tag -> the commit it points to
+        elif plain is None:
+            plain = parts[0]
+    sha = peeled or plain
+    if not sha:
+        raise RuntimeError(f"ref {wanted!r} not found in {source}")
+    return sha
+
+
+async def _fetch_commit(url: str, commit: str | None, dest: Path) -> str:
+    """Fetch exactly ``commit`` (or the default branch when None, legacy
+    requests) into ``dest`` and return the checked-out SHA."""
+    dest.mkdir(parents=True)
+    await _git("init", "-q", cwd=dest)
+    await _git("remote", "add", "origin", url, cwd=dest)
+    await _git("fetch", "-q", "--depth", "1", "origin", commit or "HEAD", cwd=dest)
+    await _git("-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD", cwd=dest)
+    head = (await _git("rev-parse", "HEAD", cwd=dest)).strip()
+    if commit and head != commit:
+        raise RuntimeError(f"fetched {head} but {commit} was approved")
+    return head
+
+
+async def _call_skill_install(
+    source: str, name: str, commit: str | None = None,
+) -> dict[str, Any]:
+    """Install a skill into the one skills root.
+
+    Returns ``{"installed_version", "commit", "created_dir"}``.
+
+    Repo layouts (multi-skill monorepos, live bug 2026-04-24): the requested
+    skill is taken from ``/SKILL.md``, ``/skills/<name>/SKILL.md`` or
+    ``/<name>/SKILL.md``; the rest of the repo is discarded.
+
+    A name that already exists in the library is refused
+    (``SkillExistsError``) — the library is shared by every agent, so
+    overwriting would silently replace another agent's skill.
+
+    The root resolves against ``HOME_HOST`` (the backend runs as a different
+    user inside its container).
+    """
+    import shutil
+    import tempfile
+
+    from app.services.install_allowlist import validate_skill_name
+    validate_skill_name(name)
+    skills_dir = skills_root() / name
 
     if source.startswith("github:"):
-        repo = source.removeprefix("github:")
-        url = f"https://github.com/{repo}.git"
-
-        # Clone into a temp location, then extract the right path.
-        # This avoids a wrongly-structured repo polluting the skills
-        # library.
+        if skills_dir.exists() or skills_dir.is_symlink():
+            raise SkillExistsError(
+                f"Skill {name!r} already exists in the skills library; "
+                "refusing to overwrite it. Remove or rename the existing "
+                "skill first."
+            )
         with tempfile.TemporaryDirectory() as tmp:
             tmp_clone = Path(tmp) / "clone"
-            proc = await asyncio.create_subprocess_exec(
-                "git", "clone", "--depth", "1", url, str(tmp_clone),
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            )
-            _, stderr = await proc.communicate()
-            if proc.returncode != 0:
-                raise RuntimeError(f"git clone failed: {stderr.decode()}")
+            head = await _fetch_commit(github_url(source), commit, tmp_clone)
 
-            # Detect repo layout:
-            # a) <repo>/SKILL.md        → single-skill repo
-            # b) <repo>/skills/<name>/  → multi-skill monorepo (common with
-            #    google-labs-code/stitch-skills, anthropic/agent-skills etc.)
-            # c) <repo>/<name>/SKILL.md → some orgs use a sub-dir per skill
             if (tmp_clone / "SKILL.md").exists():
                 source_dir = tmp_clone
             elif (tmp_clone / "skills" / name / "SKILL.md").exists():
@@ -425,32 +579,31 @@ async def _call_skill_install(source: str, name: str) -> dict[str, Any]:
             elif (tmp_clone / name / "SKILL.md").exists():
                 source_dir = tmp_clone / name
             else:
-                # Layout unclear — give a useful error with the found dir contents
-                top = ", ".join(sorted(p.name for p in tmp_clone.iterdir()))[:200]
+                top = ", ".join(sorted(p.name for p in tmp_clone.iterdir()
+                                       if p.name != ".git"))[:200]
                 raise RuntimeError(
-                    f"Repo {url} hat kein erkennbares Skill-Layout: weder "
-                    f"/SKILL.md, /skills/{name}/SKILL.md, noch /{name}/SKILL.md. "
-                    f"Top-Level Inhalt: {top}"
+                    f"Repo {source} has no skill layout: none of "
+                    f"/SKILL.md, /skills/{name}/SKILL.md, /{name}/SKILL.md. "
+                    f"Top level: {top}"
                 )
 
-            # Overwrite existing install dir
-            if skills_dir.exists():
-                shutil.rmtree(skills_dir)
-            shutil.copytree(source_dir, skills_dir)
+            skills_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source_dir, skills_dir,
+                            ignore=shutil.ignore_patterns(".git"))
 
-        # Version from SKILL.md frontmatter (optional)
-        skill_md = skills_dir / "SKILL.md"
         version = None
+        skill_md = skills_dir / "SKILL.md"
         if skill_md.exists():
             for line in skill_md.read_text().splitlines()[:20]:
                 if line.startswith("version:"):
                     version = line.split(":", 1)[1].strip().strip('"\'')
                     break
-        return {"installed_version": version}
+        return {"installed_version": version or head[:12], "commit": head,
+                "created_dir": True}
     elif source.startswith("~/.mc/skills/"):
         if not skills_dir.exists():
             raise FileNotFoundError(f"Local skill {name!r} not found at {skills_dir}")
-        return {"installed_version": None}
+        return {"installed_version": None, "commit": None, "created_dir": False}
     else:
         raise ValueError(f"Unsupported skill source: {source!r}")
 
@@ -525,20 +678,81 @@ async def _call_mcp_uninstall(name: str) -> None:
     await loop.run_in_executor(None, _sync_uninstall)
 
 
-async def _trigger_sync_config(agent_id: uuid.UUID) -> None:
-    """Fire sync-config for the agent with Redis-lock.
+# ───────────────────── Per-runtime apply registry ─────────────────────
+#
+# Which agent field a kind of item lives in, and which harness capability
+# (harness_compat.HARNESS_CAPABILITIES) says the harness actually reads it.
+# MCP rides on the same Claude-Code config consumer as plugins (.mcp.json next
+# to settings.json); the matrix has no separate MCP column yet.
+_KIND_CAPABILITY: dict[str, str] = {
+    "skill": "cli_skills",
+    "plugin": "cli_plugins",
+    "mcp": "cli_plugins",
+}
 
-    Runtime branch:
-    - cli-bridge agents: calls sync_docker_agent_files() directly (service layer).
-      This renders templates into the claude-config bind-mount that the Docker
-      container reads — no HTTP auth required, pure service call.
-    - openclaw / host agents: sync-config requires the RPC WebSocket singleton
-      that lives only in the router layer. We log a warning and skip — the
-      operator must trigger sync-config manually via UI or API after the install.
-      This is acceptable for Phase 1; a background RPC helper can be extracted
-      in a later task if needed.
+NEEDS_RESTART_NOTE = "takes effect at next chat start"
 
-    A Redis lock ensures at most one concurrent install per agent.
+ApplyFn = Callable[[Any, Agent, str], Awaitable[dict[str, Any]]]
+
+
+def _harness_of(agent: Agent) -> str:
+    # Rows from before ADR-056 have no harness; docker agents back then were
+    # all Claude-Code images.
+    return getattr(agent, "harness", None) or "claude"
+
+
+async def _apply_docker(session: Any, agent: Agent, kind: str) -> dict[str, Any]:
+    """Docker agents: render files into the claude-config bind mount. No
+    container restart — a restart kills every running chat turn of the agent;
+    the files are read when the next chat starts."""
+    from app.services.docker_agent_sync import sync_docker_agent_files
+    from app.services.harness_compat import capabilities_for
+
+    harness = _harness_of(agent)
+    await sync_docker_agent_files(session, agent)
+    from app.services.mcp_sync import sync_agent_mcp_to_disk
+    try:
+        sync_agent_mcp_to_disk(agent)
+    except Exception as e:
+        logger.warning("MCP sync failed for agent %s: %s", agent.id, e)
+        if kind == "mcp":
+            return {"runtime": "cli-bridge", "harness": harness,
+                    "status": "not_applied", "note": f"MCP config sync failed: {e}"}
+
+    caps = capabilities_for(harness)
+    if not getattr(caps, _KIND_CAPABILITY[kind]):
+        return {"runtime": "cli-bridge", "harness": harness, "status": "not_applied",
+                "note": f"harness {harness} does not read MC-managed {kind} files"}
+    return {"runtime": "cli-bridge", "harness": harness, "status": "needs_restart",
+            "note": NEEDS_RESTART_NOTE}
+
+
+async def _apply_host(session: Any, agent: Agent, kind: str) -> dict[str, Any]:
+    """Host agents: the install path does not write their config files (their
+    config dir does not follow the derived slug). Say so instead of logging a
+    warning and reporting success."""
+    return {"runtime": "host", "harness": getattr(agent, "harness", None),
+            "status": "not_applied",
+            "note": "host agent config files are not written by the install "
+                    "path; regenerate them in the agent settings"}
+
+
+#: agent_runtime -> applier. A runtime without an entry gets "not_applied".
+#: "applied" (live without a restart) is reserved for a harness that reloads
+#: its config in a running session; none does today.
+RUNTIME_APPLIERS: dict[str, ApplyFn] = {
+    "cli-bridge": _apply_docker,
+    "host": _apply_host,
+}
+
+
+async def _trigger_sync_config(agent_id: uuid.UUID, kind: str = "skill") -> dict[str, Any]:
+    """Write the agent's files for its runtime and report honestly.
+
+    Returns ``{"runtime", "harness", "status", "note"}`` with status
+    ``applied`` | ``needs_restart`` | ``not_applied``. Raises when the file
+    sync itself fails (the caller rolls back). A Redis lock keeps at most one
+    install per agent at a time.
     """
     from app.redis_client import get_redis
     from app.database import engine
@@ -554,60 +768,15 @@ async def _trigger_sync_config(agent_id: uuid.UUID) -> None:
             agent = await session.get(Agent, agent_id)
             if agent is None:
                 raise ValueError(f"Agent {agent_id} not found for sync-config")
-
-            runtime = getattr(agent, "agent_runtime", "openclaw")
-            if runtime == "cli-bridge":
-                from app.services.docker_agent_sync import (
-                    sync_docker_agent_files,
-                    restart_docker_agent_container,
-                )
-                await sync_docker_agent_files(session, agent)
-                # Also sync MCP config per agent
-                from app.services.mcp_sync import sync_agent_mcp_to_disk
-                try:
-                    sync_agent_mcp_to_disk(agent)
-                except Exception as e:
-                    logger.warning("MCP sync failed for agent %s: %s", agent.id, e)
-                # Restart container so claude-code picks up the new .mcp.json /
-                # settings.json / SOUL.md on next session start. Without this,
-                # a running session reads the old configs until it organically
-                # restarts — new MCP/skill/plugin assignments would not take
-                # effect until then.
-                try:
-                    restart_result = restart_docker_agent_container(agent)
-                    logger.info(
-                        "_trigger_sync_config: cli-bridge sync + restart done "
-                        "for agent %s: %s", agent_id, restart_result,
-                    )
-                except Exception as e:
-                    # Restart failure is non-fatal: files are on disk, agent
-                    # will pick them up on its next organic restart. Log loud.
-                    logger.error(
-                        "Container restart failed for agent %s after install — "
-                        "files synced but new config not active until next restart: %s",
-                        agent.id, e,
-                    )
-            elif runtime == "host":
-                # Host agents (Boss): DB state updated, but .mcp.json / settings.json
-                # sync is deliberately skipped here — Boss's claude-config dir name
-                # diverges from the canonical slug (Boss → "boss" per convention,
-                # but actual dir is "boss-host" per ADR-014). Writing to the
-                # derived slug would land in the wrong directory. For now, operator
-                # must regenerate host configs manually after an install affecting
-                # a host agent. See follow-up: add explicit slug column to Agent.
-                logger.warning(
-                    "_trigger_sync_config: host agent %s — DB state updated but "
-                    "claude-config files NOT synced (slug-vs-dirname mismatch). "
-                    "Regenerate manually + restart: launchctl kickstart -k "
-                    "gui/$(id -u)/com.openclaw.%s",
-                    agent.name, agent.name.lower(),
-                )
+            runtime = agent.agent_runtime
+            applier = RUNTIME_APPLIERS.get(runtime)
+            if applier is None:
+                report = {"runtime": runtime, "harness": getattr(agent, "harness", None),
+                          "status": "not_applied",
+                          "note": f"runtime {runtime!r} has no install path"}
             else:
-                # openclaw agents (Henry) — self-managed via Gateway config.patch.
-                # Skip here; Gateway handles its own session-reset protocol.
-                logger.info(
-                    "_trigger_sync_config: agent %s runtime=openclaw — "
-                    "self-managed via Gateway, skipping.", agent.name,
-                )
+                report = await applier(session, agent, kind)
+            logger.info("install apply for agent %s: %s", agent_id, report)
+            return report
     finally:
         await redis.delete(lock_key)

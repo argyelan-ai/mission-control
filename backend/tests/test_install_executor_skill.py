@@ -53,7 +53,7 @@ async def test_install_skill_appends_to_cli_skills(async_session: AsyncSession):
     assert "skill-a" in agent.cli_skills  # kept existing
     assert result.result == "success"
     assert result.installed_version == "1.2.0"
-    mock_sync.assert_awaited_once_with(agent.id)
+    mock_sync.assert_awaited_once_with(agent.id, "skill")
 
 
 @pytest.mark.asyncio
@@ -154,7 +154,8 @@ def test_call_skill_install_uses_home_host_for_local_path(tmp_path, monkeypatch)
 
     # Should resolve via HOME_HOST and find the skill
     result = asyncio.run(_call_skill_install("~/.mc/skills/my-skill", "my-skill"))
-    assert result == {"installed_version": None}
+    assert result["installed_version"] is None
+    assert result["created_dir"] is False
 
 
 def test_call_skill_install_local_missing_raises(tmp_path, monkeypatch):
@@ -194,24 +195,19 @@ def test_github_clone_extracts_from_multi_skill_monorepo(tmp_path, monkeypatch):
     (fake_repo / "README.md").write_text("# Repo readme")
     (fake_repo / "LICENSE").write_text("MIT")
 
-    async def fake_exec(*args, **kwargs):
-        # args are ("git", "clone", "--depth", "1", url, target_dir)
-        target = args[5]
+    async def fake_fetch(url, commit, dest):
         import shutil as _sh
-        _sh.copytree(str(fake_repo), target)
+        _sh.copytree(str(fake_repo), dest)
+        return "a" * 40
 
-        class _Proc:
-            returncode = 0
-            async def communicate(self):
-                return (b"", b"")
-        return _Proc()
-
-    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("app.services.install_executor._fetch_commit", fake_fetch)
 
     result = asyncio.run(_call_skill_install(
         "github:fake-org/multi-skill-repo", "shadcn-ui",
     ))
-    assert result == {"installed_version": None}
+    # No frontmatter version -> the pinned commit names the version.
+    assert result["installed_version"] == "a" * 12
+    assert result["commit"] == "a" * 40
 
     installed = tmp_path / ".mc" / "skills" / "shadcn-ui"
     assert installed.exists()
@@ -239,21 +235,15 @@ def test_github_clone_single_skill_repo(tmp_path, monkeypatch):
     (fake_repo / "examples").mkdir()
     (fake_repo / "examples" / "demo.md").write_text("demo")
 
-    async def fake_exec(*args, **kwargs):
-        target = args[5]
+    async def fake_fetch(url, commit, dest):
         import shutil as _sh
-        _sh.copytree(str(fake_repo), target)
+        _sh.copytree(str(fake_repo), dest)
+        return "a" * 40
 
-        class _Proc:
-            returncode = 0
-            async def communicate(self):
-                return (b"", b"")
-        return _Proc()
-
-    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("app.services.install_executor._fetch_commit", fake_fetch)
 
     result = asyncio.run(_call_skill_install("github:obra/skill-solo", "solo"))
-    assert result == {"installed_version": "1.2.3"}
+    assert result["installed_version"] == "1.2.3"
 
     installed = tmp_path / ".mc" / "skills" / "solo"
     assert (installed / "SKILL.md").exists()
@@ -272,21 +262,15 @@ def test_github_clone_unknown_layout_raises(tmp_path, monkeypatch):
     (fake_repo / "src").mkdir()
     (fake_repo / "src" / "app.py").write_text("# not a skill")
 
-    async def fake_exec(*args, **kwargs):
-        target = args[5]
+    async def fake_fetch(url, commit, dest):
         import shutil as _sh
-        _sh.copytree(str(fake_repo), target)
+        _sh.copytree(str(fake_repo), dest)
+        return "a" * 40
 
-        class _Proc:
-            returncode = 0
-            async def communicate(self):
-                return (b"", b"")
-        return _Proc()
-
-    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("app.services.install_executor._fetch_commit", fake_fetch)
 
     with pytest.raises(RuntimeError) as exc_info:
         asyncio.run(_call_skill_install("github:fake/weird", "weird"))
     # Error should show top-level content for debugging
-    assert "kein erkennbares Skill-Layout" in str(exc_info.value)
+    assert "no skill layout" in str(exc_info.value)
     assert "src" in str(exc_info.value)
