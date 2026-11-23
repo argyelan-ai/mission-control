@@ -38,6 +38,7 @@ from app.services.fs_roots import (
     browsable_roots,
     get_browsable_root,
     get_deletable_root,
+    indexed_roots,
 )
 
 logger = logging.getLogger("mc.files")
@@ -139,6 +140,20 @@ async def list_roots(
 ):
     roots = []
     for r in browsable_roots():
+        entry = {
+            "key": r.key,
+            "label": r.label,
+            "icon": r.icon,
+            "native_open": r.native_open,
+            "deletable": r.deletable,
+            "indexed": r.indexed,
+        }
+        if not r.indexed:
+            # Browsed live from disk, never indexed: no count at all — the
+            # sidebar shows a badge whenever ``indexed_count`` is present, and
+            # a "0" would read as an empty or broken folder.
+            roots.append(entry)
+            continue
         try:
             count = (
                 await session.exec(
@@ -147,16 +162,7 @@ async def list_roots(
             ).one()
         except Exception:  # noqa: BLE001 — index may be empty/missing
             count = 0
-        roots.append(
-            {
-                "key": r.key,
-                "label": r.label,
-                "icon": r.icon,
-                "native_open": r.native_open,
-                "deletable": r.deletable,
-                "indexed_count": int(count or 0),
-            }
-        )
+        roots.append({**entry, "indexed_count": int(count or 0)})
     return {"roots": roots, "native_open_available": await _native_open_reachable()}
 
 
@@ -269,6 +275,54 @@ async def search_files(
     rows = rows[:capped]
     return {
         "has_more": has_more,
+        "results": [
+            {
+                "root": r.root_key,
+                "rel_path": r.rel_path,
+                "name": r.name,
+                "size": r.size,
+                "mime": r.mime,
+                "mtime": r.mtime,
+                "agent_slug": r.agent_slug,
+                "task_id": str(r.task_id) if r.task_id else None,
+            }
+            for r in rows
+        ]
+    }
+
+
+RECENT_MAX = 200
+
+
+@router.get("/recent")
+async def recent_files(
+    limit: int = 50,
+    root: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Newest files first across the indexed roots — straight from the index.
+
+    Code checkouts (``workspaces``, not indexed) and directories never appear.
+    ``root`` narrows to one indexed root; unknown or sensitive → 404.
+    """
+    keys = [r.key for r in indexed_roots()]
+    if root is not None:
+        if root not in keys:
+            raise HTTPException(status_code=404, detail="Unknown or non-indexed root")
+        keys = [root]
+    capped = min(max(limit, 1), RECENT_MAX)
+    stmt = (
+        select(FileIndexEntry)
+        .where(
+            FileIndexEntry.is_directory == False,  # noqa: E712
+            FileIndexEntry.root_key.in_(keys),  # type: ignore[union-attr]
+        )
+        .order_by(FileIndexEntry.mtime.desc(), FileIndexEntry.rel_path.asc())  # type: ignore[union-attr]
+        .limit(capped)
+    )
+    rows = (await session.exec(stmt)).all()
+    return {
         "results": [
             {
                 "root": r.root_key,

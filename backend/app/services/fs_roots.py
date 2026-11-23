@@ -68,6 +68,10 @@ class FsRoot:
     sensitive: bool  # never browsable through the Files API
     container_override: str | None = None  # absolute container path (named volume)
     deletable: bool = False  # trashable via Files /delete (host-backed, non-sensitive only)
+    # Walked by the background file index (search / "recent"). ``workspaces``
+    # holds whole code checkouts (~900k entries live) and is browsed live from
+    # disk instead — indexing it starved every other root of the index cap.
+    indexed: bool = True
 
     @property
     def container_path(self) -> Path:
@@ -87,7 +91,7 @@ class FsRoot:
 # Ordered registry. Browsable roots first (UI order), sensitive ones last.
 _ROOTS: tuple[FsRoot, ...] = (
     FsRoot("deliverables", "Deliverables", "Package", "deliverables", True, False, deletable=True),
-    FsRoot("workspaces", "Workspaces", "FolderGit2", "workspaces", True, False),
+    FsRoot("workspaces", "Workspaces", "FolderGit2", "workspaces", True, False, indexed=False),
     FsRoot("vault", "Vault", "BookOpen", "vault", True, False),
     FsRoot("attachments", "Attachments", "Paperclip", "attachments", True, False),
     # Referenz-/Asset-Uploads für Tasks & Projekte (ADR-053). Löschen läuft
@@ -178,6 +182,11 @@ def get_deletable_root(key: str) -> FsRoot:
 def browsable_roots() -> list[FsRoot]:
     """All roots the Files API may expose (sensitive roots filtered out)."""
     return [r for r in _ROOTS if not r.sensitive]
+
+
+def indexed_roots() -> list[FsRoot]:
+    """Browsable roots the background file index walks (``indexed=True``)."""
+    return [r for r in browsable_roots() if r.indexed]
 
 
 def sensitive_subpaths() -> frozenset[str]:

@@ -201,6 +201,7 @@
     "GET /api/v1/files/content",
     "GET /api/v1/files/list",
     "GET /api/v1/files/meta",
+    "GET /api/v1/files/recent",
     "GET /api/v1/files/roots",
     "GET /api/v1/files/search",
     "GET /api/v1/files/trash",

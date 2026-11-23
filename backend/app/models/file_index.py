@@ -32,6 +32,10 @@ class FileIndexEntry(SQLModel, table=True):
     mtime: float = 0.0
 
     # Provenance (nullable — walked entries that aren't deliverables have none).
+    # Both FKs are NO ACTION (migration 0129): any code that deletes a task or
+    # a TaskDeliverable must NULL these first — see
+    # ``file_indexer.release_task_refs`` (task delete) and the Files /delete
+    # cascade. Otherwise Postgres rejects the delete.
     agent_slug: str | None = Field(default=None, index=True)
     runtime: str | None = None  # cli-bridge | host | claude-code | manual
     task_id: uuid.UUID | None = Field(

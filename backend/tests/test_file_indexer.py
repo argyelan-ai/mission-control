@@ -16,7 +16,7 @@ from app.config import settings
 from app.models.agent import Agent
 from app.models.deliverable import TaskDeliverable
 from app.models.file_index import FileIndexEntry
-from app.services import file_indexer
+from app.services import file_indexer, fs_roots
 from app.services.file_indexer import (
     capture_deliverable,
     reusable_deliverables,
@@ -37,6 +37,7 @@ def _tmp_roots_only(monkeypatch, tmp_path) -> list:
     machine) can't leak into counts."""
     keep = [r for r in browsable_roots() if r.container_override is None]
     monkeypatch.setattr(file_indexer, "browsable_roots", lambda: keep)
+    monkeypatch.setattr(fs_roots, "browsable_roots", lambda: keep)  # the walk's indexed_roots()
     return keep
 
 
@@ -53,6 +54,8 @@ def _reference_entries(roots) -> set[tuple[str, str]]:
     pruned only by the OLD skip list. Independent of the new implementation."""
     out: set[tuple[str, str]] = set()
     for r in roots:
+        if not r.indexed:  # workspaces: deliberately not indexed (P1)
+            continue
         base = r.container_path
         if not base.is_dir():
             continue
@@ -172,7 +175,8 @@ async def test_run_once_indexes_and_prunes(async_session, tmp_path, monkeypatch)
 
 async def test_run_once_skips_noise_dirs(async_session, tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "home_host", str(tmp_path))
-    ws = tmp_path / ".mc" / "workspaces" / "dev"
+    # vault: an indexed root (workspaces is no longer walked at all)
+    ws = tmp_path / ".mc" / "vault" / "dev"
     (ws / "node_modules" / "left-pad").mkdir(parents=True)
     (ws / "node_modules" / "left-pad" / "index.js").write_text("module.exports=1")
     (ws / "app.py").write_text("print(1)")
@@ -194,7 +198,7 @@ async def test_run_once_skips_noise_dirs(async_session, tmp_path, monkeypatch):
     await run_once(session_factory=_factory)
     rels = {
         row.rel_path
-        for row in (await async_session.exec(select(FileIndexEntry).where(FileIndexEntry.root_key == "workspaces"))).all()
+        for row in (await async_session.exec(select(FileIndexEntry).where(FileIndexEntry.root_key == "vault"))).all()
     }
     assert "dev/app.py" in rels
     assert "dev/src/mc.egg-info/PKG-INFO" not in rels
@@ -209,7 +213,7 @@ async def test_run_once_no_transaction_during_scan(async_session, tmp_path, monk
     transactions during the walk and this test goes red."""
     monkeypatch.setattr(settings, "home_host", str(tmp_path))
     _tmp_roots_only(monkeypatch, tmp_path)
-    ws = tmp_path / ".mc" / "workspaces" / "proj"
+    ws = tmp_path / ".mc" / "vault" / "proj"
     ws.mkdir(parents=True)
     for i in range(5):
         (ws / f"f{i}.txt").write_text("x")

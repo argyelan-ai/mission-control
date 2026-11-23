@@ -3042,6 +3042,11 @@ async def _sync_deliverable_to_vault_bg(deliverable_id: uuid.UUID) -> None:
     best-effort enrichment, not a deliverable-create blocker."""
     from app.database import engine
     from app.services.deliverable_wrapper import sync_deliverable_id
+    from app.services.file_indexer import capture_deliverable_id
+
+    # Files index row at once (search / "recent"), independent of the vault
+    # sync below. Best-effort: it logs and never raises.
+    await capture_deliverable_id(deliverable_id)
 
     try:
         async with AsyncSession(engine, expire_on_commit=False) as bg_session:
