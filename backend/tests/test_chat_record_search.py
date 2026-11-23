@@ -233,6 +233,8 @@ async def test_pg_prefix_uses_the_word_index():
     assert await _search("eploy") == []  # inside a word: not a word start
     # tsquery syntax in the input is plain text, never an error
     assert await _search("deplo:* & !(") != []
+    # quotes and backslashes inside a term are escaped in the literal tsquery
+    assert await _search("o'k\\x it''s\\") == []
 
 
 # ── critic round 1: dotted terms, sidechain, UTF-16, candidate cap ────────
