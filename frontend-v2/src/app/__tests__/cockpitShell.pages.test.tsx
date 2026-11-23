@@ -66,10 +66,10 @@ describe("Knowledge landing", () => {
   });
 });
 
-describe("Settings › More", () => {
+describe("More page", () => {
   it("reaches every page that left the main navigation", () => {
     render(<MorePagesSection />);
-    const links = hrefs(screen.getByTestId("settings-more-links"));
+    const links = hrefs(screen.getByTestId("more-pages"));
     for (const h of ["/home", "/tasks", "/inbox", "/repos", "/schedule", "/agents", "/files"]) {
       expect(links).toContain(h);
     }
@@ -77,13 +77,15 @@ describe("Settings › More", () => {
 
   it("no longer offers the frozen pages Office and Loops (Etappe 2; the URL still works)", () => {
     render(<MorePagesSection />);
-    const links = hrefs(screen.getByTestId("settings-more-links"));
+    const links = hrefs(screen.getByTestId("more-pages"));
     for (const h of ["/office", "/loops"]) expect(links).not.toContain(h);
   });
 
   it("does not repeat the three tabs or Settings itself", () => {
     render(<MorePagesSection />);
-    const links = hrefs(screen.getByTestId("settings-more-links"));
-    for (const h of ["/sessions", "/runtimes", "/knowledge", "/settings"]) expect(links).not.toContain(h);
+    const links = hrefs(screen.getByTestId("more-pages"));
+    for (const h of ["/sessions", "/runtimes", "/knowledge", "/settings", "/memory", "/skills"]) {
+      expect(links).not.toContain(h);
+    }
   });
 });

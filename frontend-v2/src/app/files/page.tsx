@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Search, RefreshCw, X } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
+import { PAGE_WIDE } from "@/components/layout/AppShellWidth";
 import { api } from "@/lib/api";
 import type { FsRoot, FsSearchResult } from "@/lib/types";
 import { C } from "@/lib/colors";
@@ -197,7 +198,7 @@ export default function FilesPage() {
 
   return (
     <AppShell>
-      <div className="max-w-[1400px] mx-auto">
+      <div className={PAGE_WIDE}>
         {/* Header */}
         <div className="flex items-end justify-between mb-6 gap-4">
           <div>

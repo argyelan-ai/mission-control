@@ -5,9 +5,10 @@ import { useQueryClient, useMutation } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import AppShell from "@/components/layout/AppShell";
+import { PAGE_READ } from "@/components/layout/AppShellWidth";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTranslations } from "next-intl";
-import { CheckCircle, Inbox, Clock, MessageCircleQuestion, ChevronRight } from "lucide-react";
+import { CheckCircle, Inbox, Clock, MessageCircleQuestion, ChevronRight, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import { useApprovalStream } from "@/lib/sse";
 import { useAppStore } from "@/lib/store";
@@ -19,6 +20,7 @@ import { ApprovalCard } from "@/components/inbox/ApprovalCard";
 import { ReviewTaskRow } from "@/components/inbox/ReviewTaskRow";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { useInbox } from "@/hooks/useInbox";
+import { JourneysLineView, useFailedJourneys } from "@/components/home/JourneysLine";
 import { BetweenAgents, useConversations } from "@/components/inbox/BetweenAgents";
 import { chatEntryHref } from "@/lib/chatHistory";
 import { resolveErrorKey } from "@/lib/inbox";
@@ -147,6 +149,9 @@ function InboxView() {
     count: totalCount,
     agentMap,
   } = useInbox();
+  // Last night's red journey run (E6) waits here too, not only on /home.
+  const { result: failedJourneys, count: journeysCount } = useFailedJourneys();
+  const forYouCount = totalCount + journeysCount;
 
   // SSE auto-refresh
   useApprovalStream(() => {
@@ -191,7 +196,7 @@ function InboxView() {
 
   return (
     <AppShell>
-    <div className="flex flex-col gap-6 max-w-2xl">
+    <div className={`flex flex-col gap-6 ${PAGE_READ}`}>
       {/* Header: the title and the two tabs. The eyebrow and the "N pending"
           line + pill left (K2/K3, K7): the "For you" tab carries that number
           now, exactly once. */}
@@ -202,7 +207,7 @@ function InboxView() {
         <InboxTabs
           tab={tab}
           onChange={(next) => go(next)}
-          forYou={totalCount}
+          forYou={forYouCount}
           between={conversations.data ? conversations.data.length : null}
         />
       </div>
@@ -258,6 +263,25 @@ function InboxView() {
               </Link>
             ))}
           </div>
+        </section>
+      )}
+
+      {/* Journey tests — last night's run failed. The line names which
+          ones (the same line Home shows); fixing them is a chat away. */}
+      {failedJourneys && (
+        <section data-testid="inbox-journeys">
+          <div className="flex items-center gap-2 mb-3">
+            {/* Muted: the row below carries the red mark already (K6). */}
+            <span className="text-[var(--color-text-muted)]">
+              <XCircle size={14} />
+            </span>
+            <span className="text-xs uppercase tracking-wider font-semibold text-[var(--color-text-muted)]">
+              {t("journeysFailedCount", { count: journeysCount })}
+            </span>
+          </div>
+          <GlassCard className="py-3">
+            <JourneysLineView result={failedJourneys} />
+          </GlassCard>
         </section>
       )}
 
@@ -370,7 +394,7 @@ function InboxView() {
       )}
 
       {/* Empty state */}
-      {totalCount === 0 && (
+      {forYouCount === 0 && (
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}

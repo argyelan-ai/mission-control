@@ -2,6 +2,7 @@
 
 /**
  * Home → one quiet line with last night's journey tests (E6, docs/journeys.md).
+ * A red run also waits in the inbox and counts next to Chat (useFailedJourneys).
  *
  *   ✓ Journey tests: 3 of 3 passed, 1 known gap · 5 h 12 min ago
  *   ✕ Journey tests: Cost & local share failed · 5 h 12 min ago
@@ -14,19 +15,58 @@ import { useLocale, useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, MinusCircle, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAppStore } from "@/lib/store";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { journeysReason, type JourneysResponse, type JourneysResult } from "@/lib/journeys";
 import { formatAbsolute, formatAge } from "@/lib/taskDetail/format";
 
 export const JOURNEYS_KEY = ["system", "journeys"] as const;
 
-export function JourneysLine() {
-  const q = useQuery<JourneysResponse>({
+function useJourneys() {
+  return useQuery<JourneysResponse>({
     queryKey: JOURNEYS_KEY,
     queryFn: () => api.system.journeys(),
     retry: false,
     refetchInterval: 15 * 60_000,
   });
+}
+
+/**
+ * How old a red run may be and still wait on someone: one nightly cycle plus
+ * slack. An older red run means the runner stopped (job paused, box off) — it
+ * stays as the dated line on Home but no longer counts as waiting, so the
+ * badge can never get stuck on a run nobody repeats.
+ */
+export const JOURNEYS_FRESH_MS = 36 * 3600_000;
+
+/** How many journeys a result counts as failed (0 unless the run is red and fresh). */
+export function failedJourneyCount(
+  result: JourneysResult | null | undefined,
+  now: number = Date.now(),
+): number {
+  if (!result || result.status !== "red") return 0;
+  const finished = result.finished_at ? Date.parse(result.finished_at) : NaN;
+  if (!Number.isFinite(finished) || now - finished > JOURNEYS_FRESH_MS) return 0;
+  return result.failed.length || Math.max(1, result.total - result.passed);
+}
+
+/**
+ * Last night's red journey run, for the places that wait on the operator:
+ * the inbox ("For you") and the count next to Chat in the sidebar. A green,
+ * skipped, unfinished or stale run counts 0 — nothing to answer there. Only
+ * admins get it: journey tests are an operator signal, a member cannot act
+ * on them (the same gate as the other operator-only cards).
+ */
+export function useFailedJourneys(): { result: JourneysResult | null; count: number } {
+  const q = useJourneys();
+  const isAdmin = useAppStore((s) => s.currentUser?.role === "admin");
+  const result = q.data?.result ?? null;
+  const count = isAdmin ? failedJourneyCount(result) : 0;
+  return { result: count > 0 ? result : null, count };
+}
+
+export function JourneysLine() {
+  const q = useJourneys();
   if (!q.data?.result) return null;
   return <JourneysLineView result={q.data.result} />;
 }

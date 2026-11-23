@@ -52,10 +52,15 @@ export type ChangesTab = "chat" | DiffScope;
 
 const TAB_STORAGE_KEY = "mc.chat.changestab";
 
-const TABS: { key: ChangesTab; labelKey: "tabChat" | "scopeWorktree" | "scopeLastCommit" }[] = [
-  { key: "chat", labelKey: "tabChat" },
-  { key: "worktree", labelKey: "scopeWorktree" },
-  { key: "last-commit", labelKey: "scopeLastCommit" },
+const TABS: {
+  key: ChangesTab;
+  labelKey: "tabChat" | "scopeWorktree" | "scopeLastCommit";
+  /** One word for the narrow panel laid over the chat (`compact`). */
+  shortKey: "tabChatShort" | "scopeWorktreeShort" | "scopeLastCommitShort";
+}[] = [
+  { key: "chat", labelKey: "tabChat", shortKey: "tabChatShort" },
+  { key: "worktree", labelKey: "scopeWorktree", shortKey: "scopeWorktreeShort" },
+  { key: "last-commit", labelKey: "scopeLastCommit", shortKey: "scopeLastCommitShort" },
 ];
 
 function loadTab(): ChangesTab {
@@ -219,9 +224,12 @@ interface DiffPanelProps {
    *  false (no polling) so a standalone render never spins up a timer nobody
    *  asked for. */
   refreshHot?: boolean;
+  /** Narrow panel laid over the chat (1024 px): one-word tab labels, the
+   *  full name stays the accessible label. "Letzter Commit" was cut off. */
+  compact?: boolean;
 }
 
-export function DiffPanel({ agentId, refreshHot = false }: DiffPanelProps) {
+export function DiffPanel({ agentId, refreshHot = false, compact = false }: DiffPanelProps) {
   const t = useTranslations("sessions.diff");
   const locale = useLocale();
   const queryClient = useQueryClient();
@@ -299,11 +307,12 @@ export function DiffPanel({ agentId, refreshHot = false }: DiffPanelProps) {
             className="flex items-center rounded-md overflow-hidden min-w-0"
             style={{ border: `1px solid ${C.border}` }}
           >
-            {TABS.map(({ key, labelKey }) => (
+            {TABS.map(({ key, labelKey, shortKey }) => (
               <button
                 key={key}
                 type="button"
                 role="tab"
+                aria-label={compact ? t(labelKey) : undefined}
                 onClick={() => setTab(key)}
                 aria-selected={active === key}
                 // Phone: 12 px so three tabs + refresh fit 393 px in both
@@ -316,7 +325,7 @@ export function DiffPanel({ agentId, refreshHot = false }: DiffPanelProps) {
                   borderRight: key !== "last-commit" ? `1px solid ${C.border}` : undefined,
                 }}
               >
-                {t(labelKey)}
+                {compact ? t(shortKey) : t(labelKey)}
               </button>
             ))}
           </div>

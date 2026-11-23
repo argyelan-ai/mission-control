@@ -871,7 +871,7 @@ export default function RuntimesPage() {
       aria-label={t("addRuntime")}
       title={t("addRuntime")}
       data-testid="add-runtime-icon"
-      className="flex items-center justify-center w-9 h-9 rounded-md transition-all cursor-pointer shrink-0"
+      className="flex items-center justify-center w-11 h-11 rounded-md transition-all cursor-pointer shrink-0"
       style={{
         color: C.accent,
         border: `1px solid ${C.borderAccent}`,

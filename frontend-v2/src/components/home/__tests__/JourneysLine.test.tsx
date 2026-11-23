@@ -9,7 +9,8 @@ import en from "../../../../messages/en.json";
 import de from "../../../../messages/de.json";
 import { api } from "@/lib/api";
 import { journeysReason, type JourneysResult } from "@/lib/journeys";
-import { JourneysLine, JourneysLineView } from "../JourneysLine";
+import { failedJourneyCount, JourneysLine, JourneysLineView, useFailedJourneys } from "../JourneysLine";
+import { useAppStore, type AuthUser } from "@/lib/store";
 
 function wrap(ui: ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -108,5 +109,53 @@ describe("JourneysLine", () => {
     const { container } = wrap(<JourneysLine />);
     await vi.waitFor(() => expect(spy).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("failedJourneyCount — only a fresh red run waits on someone", () => {
+  const now = Date.parse("2026-11-22T12:00:00Z");
+  const hoursAgo = (h: number) => new Date(now - h * 3600_000).toISOString();
+
+  it("counts a red run from last night", () => {
+    expect(failedJourneyCount(mk({ status: "red", passed: 2, failed: ["J-a"], finished_at: hoursAgo(10) }), now)).toBe(1);
+  });
+
+  it("a red run older than one nightly cycle plus slack counts 0 (the dated Home line keeps it)", () => {
+    expect(failedJourneyCount(mk({ status: "red", passed: 2, failed: ["J-a"], finished_at: hoursAgo(37) }), now)).toBe(0);
+    expect(failedJourneyCount(mk({ status: "red", passed: 2, failed: ["J-a"], finished_at: "2020-01-01T00:00:00Z" }), now)).toBe(0);
+  });
+
+  it("a red run without a finish time counts 0 — its age is unknown", () => {
+    expect(failedJourneyCount(mk({ status: "red", passed: 2, failed: ["J-a"], finished_at: null }), now)).toBe(0);
+  });
+
+  it("red then green clears the count", () => {
+    expect(failedJourneyCount(mk({ status: "green", finished_at: hoursAgo(1) }), now)).toBe(0);
+  });
+});
+
+describe("useFailedJourneys — the operator's signal, admins only", () => {
+  beforeEach(() => vi.restoreAllMocks());
+  const red = () => mk({ status: "red", passed: 2, failed: ["J-a"], finished_at: new Date(Date.now() - 3600_000).toISOString() });
+
+  function Probe() {
+    const { count } = useFailedJourneys();
+    return <span data-testid="count">{count}</span>;
+  }
+
+  it("an admin sees a fresh red run counted", async () => {
+    useAppStore.setState({ currentUser: { id: "u1", role: "admin" } as AuthUser });
+    vi.spyOn(api.system, "journeys").mockResolvedValue({ result: red() });
+    wrap(<Probe />);
+    await vi.waitFor(() => expect(screen.getByTestId("count")).toHaveTextContent("1"));
+  });
+
+  it("a member never gets the journey count — nothing there to act on", async () => {
+    useAppStore.setState({ currentUser: { id: "u2", role: "member" } as AuthUser });
+    const spy = vi.spyOn(api.system, "journeys").mockResolvedValue({ result: red() });
+    wrap(<Probe />);
+    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByTestId("count")).toHaveTextContent("0");
   });
 });

@@ -1037,7 +1037,8 @@
     "viewConversation": "Gespräch ansehen",
     "typeCommsContinue": "Gesprächsbremse",
     "typeCredentialRead": "Zugriff auf Zugangsdaten",
-    "typeConfigChange": "Konfigurationsänderung"
+    "typeConfigChange": "Konfigurationsänderung",
+    "journeysFailedCount": "Ablauf-Tests fehlgeschlagen ({count})"
   },
   "sessions": {
     "groups": {
@@ -1448,7 +1449,10 @@
         "push_failed": "Der Push ist fehlgeschlagen.",
         "pr_failed": "Der Pull Request konnte nicht geöffnet werden.",
         "unknown": "Das hat nicht geklappt."
-      }
+      },
+      "tabChatShort": "Chat",
+      "scopeWorktreeShort": "Stand",
+      "scopeLastCommitShort": "Commit"
     },
     "panels": {
       "diff": "Änderungen",
@@ -1542,7 +1546,8 @@
     "boardPicker": "Board wählen",
     "collapseSidebar": "Leiste einklappen",
     "expandSidebar": "Leiste ausklappen",
-    "voiceButton": "Sprache (Jarvis)"
+    "voiceButton": "Sprache (Jarvis)",
+    "skipToComposer": "Zum Eingabefeld"
   },
   "login": {
     "consoleAccess": "Konsole · Zugang",
@@ -2441,7 +2446,8 @@
       "deactivateBody": "{name} wird abgemeldet und kann sich nicht mehr anmelden, bis ein Admin das Konto wieder aktiviert. Es wird nichts gelöscht.",
       "deactivateConfirm": "Benutzer deaktivieren",
       "save": "Speichern",
-      "cancel": "Abbrechen"
+      "cancel": "Abbrechen",
+      "deactivatedCount": "{count} deaktiviert"
     },
     "shortcuts": {
       "title": "Tastaturkürzel",
@@ -2468,7 +2474,8 @@
       "updateAvailable": "Update verfügbar: {version}",
       "releaseNotes": "Release-Notes →",
       "links": "Links",
-      "credits": "Mit Sorgfalt gebaut vom Operator & Claude"
+      "credits": "Mit Sorgfalt gebaut vom Operator & Claude",
+      "commit": "Commit"
     },
     "credentials": {
       "title": "Zugangsdaten-Vault",
@@ -2648,7 +2655,8 @@
       "recomputeConfirm": "Neu berechnen",
       "deleteTitle": "Preis löschen",
       "deleteBody": "Preis für \"{pattern}\" wirklich löschen?",
-      "delete": "Löschen"
+      "delete": "Löschen",
+      "sectionDescription": "Was jedes Modell pro Million Tokens kostet — die Grundlage aller Kostenangaben in MC."
     },
     "telegram": {
       "title": "Telegram",
@@ -5621,7 +5629,9 @@
     },
     "more_page": {
       "title": "Mehr",
-      "lead": "Alle Seiten ausserhalb der Hauptnavigation. Alle funktionieren wie bisher."
+      "lead": "Alle Seiten ausserhalb der Hauptnavigation. Alle funktionieren wie bisher.",
+      "usedMost": "Häufig",
+      "others": "Weitere"
     },
     "header": {
       "working": "Arbeitet",

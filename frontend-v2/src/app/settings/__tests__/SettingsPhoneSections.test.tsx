@@ -7,7 +7,7 @@
  * the `md:hidden` / `hidden md:block` classes that decide it in the browser.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode, MouseEvent } from "react";
@@ -173,7 +173,8 @@ describe("Settings on the phone — section list", () => {
 });
 
 describe("Settings on the phone — an opened section", () => {
-  it.each(SHOWN)("opens %s as its own screen with a back button", (id) => {
+  // "more" is no section any more: it forwards to the More page (below).
+  it.each(SHOWN.filter((id) => id !== "more"))("opens %s as its own screen with a back button", (id) => {
     nav.search = `section=${id}`;
     renderPage();
     expect(phoneList()).toBeNull();
@@ -181,7 +182,7 @@ describe("Settings on the phone — an opened section", () => {
     const column = screen.getByTestId("settings-section");
     expect(classes(column)).not.toContain("hidden");
     // Something of the section is rendered (its header or its loader).
-    expect(column.querySelector(".max-w-3xl")!.childElementCount).toBeGreaterThan(0);
+    expect(within(column).getByTestId("settings-section-body").childElementCount).toBeGreaterThan(0);
   });
 
   it("leaves the account panel on the list — an open section shows only the section", () => {
@@ -235,5 +236,19 @@ describe("Settings on the phone — an opened section", () => {
     nav.search = "section=nope";
     renderPage();
     expect(phoneList()).not.toBeNull();
+  });
+});
+
+describe("Settings › More forwards to the More page", () => {
+  it("an old link to ?section=more lands on /more (replace, no extra back step)", async () => {
+    nav.search = "section=more";
+    renderPage();
+    await waitFor(() => expect(nav.replace).toHaveBeenCalledWith("/more"));
+  });
+
+  it("the desktop nav entry More opens /more", async () => {
+    renderPage();
+    await userEvent.click(screen.getByRole("button", { name: "More" }));
+    expect(nav.push).toHaveBeenCalledWith("/more");
   });
 });

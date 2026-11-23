@@ -353,7 +353,11 @@ function AgentRosterRow({
             {agent.name}
           </span>
           {agent.provision_status !== "provisioned" && (
-            <Pill color={prov.color} size="sm">{t(prov.labelKey)}</Pill>
+            // From sm up beside the name; on the phone it moves to the
+            // second line (below), so the name keeps its room ("ZCo…").
+            <Pill color={prov.color} size="sm" className="max-sm:hidden" data-testid="agent-row-provision">
+              {t(prov.labelKey)}
+            </Pill>
           )}
           {agent.harness && (
             // "hermes" (ADR-060, host-only) has no HARNESS_LABELS entry — fall
@@ -389,8 +393,13 @@ function AgentRosterRow({
             never pushes the name into "G…" on a phone. Only the role
             truncates: a long role cut "· Paused" off (round-4 K5, t5
             NICE-1, 100 px of 409) — the state never shrinks. */}
-        {(agent.role || statusView.paused) && (
-          <span className="flex min-w-0 text-[10px] mt-0.5" style={{ color: C.textMuted }}>
+        {(agent.role || statusView.paused || agent.provision_status !== "provisioned") && (
+          <span className="flex items-center min-w-0 text-[10px] mt-0.5" style={{ color: C.textMuted }}>
+            {agent.provision_status !== "provisioned" && (
+              <Pill color={prov.color} size="sm" className="sm:hidden shrink-0 mr-2" data-testid="agent-row-provision">
+                {t(prov.labelKey)}
+              </Pill>
+            )}
             {agent.role && <span className="truncate min-w-0">{agent.role}</span>}
             {statusView.paused && (
               // Muted on purpose: the ocker dot already carries the colour

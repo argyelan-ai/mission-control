@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { useAppStore } from "@/lib/store";
+import { C } from "@/lib/colors";
 import { useBoardsBootstrap } from "@/lib/boards";
 import { api, getToken, getStoredUser, setStoredUser } from "@/lib/api";
 import { SETUP_PATH, shouldRedirectToSetup } from "@/lib/firstRun";
@@ -30,8 +32,12 @@ export default function AppShell({
   wide = false,
   mobileTitle,
   mobileAction,
+  skipToComposer = false,
 }: {
   children: React.ReactNode;
+  /** Chat pages: a skip link "to the message input" as the first tab stop
+   *  on the desktop — past the sidebar's chat list straight to the composer. */
+  skipToComposer?: boolean;
   /** Phone: the page title in the app bar, read like the chat header (the
    *  three tab pages). The page then hides its own h1 below md. */
   mobileTitle?: string;
@@ -66,6 +72,7 @@ export default function AppShell({
   mobileHideAppBar?: boolean;
 }) {
   const router = useRouter();
+  const tShell = useTranslations("shell");
   const { setCurrentUser } = useAppStore();
   const [authorized, setAuthorized] = useState(false);
 
@@ -132,6 +139,24 @@ export default function AppShell({
       className="flex overflow-hidden relative app-shell-height"
       style={{ backgroundColor: "var(--color-p2-bg)" }}
     >
+      {/* Skip link (a11y): the first tab stop on a chat page. Invisible until
+          focused, desktop only (the phone has no tab key to skip with). */}
+      {skipToComposer && (
+        <a
+          href="#composer"
+          onClick={(e) => {
+            e.preventDefault();
+            document
+              .querySelector<HTMLTextAreaElement>('[data-testid="composer-dropzone"] textarea')
+              ?.focus();
+          }}
+          className="sr-only max-md:hidden focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-3 focus:rounded-md text-sm font-medium"
+          style={{ background: C.accent, color: C.onAccent }}
+        >
+          {tShell("skipToComposer")}
+        </a>
+      )}
+
       <AmbientBackground />
 
       {/* Phone: top app bar (wordmark + voice) */}

@@ -446,3 +446,28 @@ describe("Stage — model title on a phone", () => {
     expect(title.className).toMatch(/line-clamp-2/);
   });
 });
+
+describe("Stage — Switch model in reach on the phone", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(api.hosts, "pulse").mockResolvedValue({ points: [], now_tps: null, idle_seconds: null, available: false });
+    vi.spyOn(api.hosts, "metrics").mockResolvedValue({ reachable: true, gpu_util_pct: 10, vram_used_mb: 1024, vram_total_mb: 8192, gpu_temp_c: 40 });
+    vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({ runtime_slug: "rt", count: 0, agents: [] });
+  });
+
+  it("on a narrow card the actions follow the name, before the instruments and boxes", async () => {
+    const rt = makeRuntime({ display_name: "Model A", host: { id: "spark", slug: "spark", display_name: "Box" } });
+    renderWithQuery(<Stage runtime={rt} members={[{ host: makeHost({ slug: "spark", display_name: "Box" }), role: "head" }]} onOpenCockpit={() => {}} />);
+    const card = await screen.findByTestId("stage-card");
+    expect(card.className).toMatch(/\bflex\b/);
+    expect(card.className).toMatch(/\bflex-col\b/);
+    const actions = screen.getByTestId("stage-actions-slot");
+    // narrow card (< 600 px, the card's own width): right under the name
+    expect(actions.className).toMatch(/@max-\[600px\]:order-1/);
+    expect(screen.getByTestId("stage-kpi-slot").className).toMatch(/\border-2\b/);
+    expect(screen.getByTestId("stage-members").className).toMatch(/\border-3\b/);
+    // wide card: at the end as before
+    expect(actions.className).toMatch(/\border-4\b/);
+  });
+});

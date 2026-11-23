@@ -58,6 +58,7 @@ journeys:
     job: "When I want to know what the work cost and how much ran locally, I want tokens and cost per week, source and task."
     source: "operator decision 2026-09-29; ROADMAP E0 (baseline per week x source); PRINCIPLES section 5 rule 4"
     steps:
+      - {feature: F-more}  # Insights sits under More (not one of the three tabs)
       - {feature: F-insights}  # cost/token rollups by week, day, model, task, source
     end_state: "The operator can see cost and local share and steer accordingly"
     test: e2e/journeys/J-usage.spec.ts
@@ -66,7 +67,7 @@ features:
   - id: F-home
     name: "Home: what needs me, last night's report"
     # "/" redirects to the last chat since ADR-102 principle 1 ("MC opens in
-    # the last chat"); the dashboard itself lives at /home (Settings > More).
+    # the last chat"); the dashboard itself lives at /home (More).
     ui: {route: [/, /home]}
     api:
       # Activity feed and live stream on Home (ActivityHistoryPanel,
@@ -388,6 +389,13 @@ features:
     source: "ADR-102 principle 1 (few menus: chat, models, knowledge) and principle 6"
     # A landing only: counts from the vault notes list and the skills list,
     # both owned by F-memory / F-skills.
+  - id: F-more
+    name: "More: every page outside Chat, Models and Knowledge"
+    ui: {route: /more}
+    status: active
+    source: "ADR-102 principle 1 (few menus: chat, models, knowledge); operator decision 2026-11-18"
+    # Its own page since 2026-11-22 (was Settings > More; /settings?section=more
+    # forwards here). Generated from lib/nav.ts (sheetPages), no API of its own.
   - id: F-memory
     name: "Memory: the vault"
     ui: {route: [/memory, /memory/graph]}

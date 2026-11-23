@@ -3,10 +3,11 @@
  *
  * Shell „Drei Daumen" (operator decision 2026-11-18): the tab bar holds only
  * Chat · Models · Knowledge, the chat drawer holds the chats plus Models ·
- * Knowledge · Settings, and every other page sits in Settings › More.
- * Everything the earlier menus offered must still be reachable on the phone
- * without typing a URL — through the app bar, the tab bar, the drawer or
- * Settings › More (account, board, log out and theme stay in Settings).
+ * Knowledge · Settings, Memory and Skills sit on the Knowledge landing, and
+ * every other page sits on the More page (/more). Everything the earlier
+ * menus offered must still be reachable on the phone without typing a URL —
+ * through the app bar, the tab bar, the drawer, the Knowledge landing or More
+ * (account, board, log out and theme stay in Settings).
  *
  * The expected set is built from the whole navigation tree (NAV_TREE +
  * CHROME_ITEMS), not from the new menus' own generators, so dropping a
@@ -60,7 +61,12 @@ vi.mock("@/lib/api", () => ({
     },
     groups: { list: vi.fn(async () => []) },
     heads: { list: vi.fn(async () => ({ runs: [] })), pairs: vi.fn(async () => null) },
+    vault: { list: vi.fn(async () => ({ count: 0, items: [] })) },
+    skills: { list: vi.fn(async () => ({ skills: [], total: 0 })) },
   },
+}));
+vi.mock("@/components/layout/AppShell", () => ({
+  default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
 const store = vi.hoisted(() => ({
@@ -90,6 +96,7 @@ import MobileNav, { MobileNavProvider } from "../MobileNav";
 import { MobileTabBar } from "../MobileTabBar";
 import { ChatDrawer } from "../ChatDrawer";
 import { MorePagesSection } from "@/components/settings/MorePagesSection";
+import KnowledgePage from "@/app/knowledge/page";
 import { PhoneAccountPanel } from "@/components/settings/PhoneAccountPanel";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 
@@ -118,7 +125,7 @@ const OLD_DRAWER_ROUTES = [
   ...CHROME_ITEMS,
 ];
 
-/** Every route reachable on the phone without a URL: app bar + tab bar + drawer + Settings › More. */
+/** Every route reachable on the phone without a URL: app bar + tab bar + drawer + Knowledge + More. */
 async function reachablePhoneRoutes(): Promise<Set<string>> {
   renderPhoneChrome();
   const found = new Set<string>();
@@ -128,7 +135,10 @@ async function reachablePhoneRoutes(): Promise<Set<string>> {
   linksIn(screen.getByTestId("chat-drawer")).forEach((h) => found.add(h));
   cleanup();
   wrap(<MorePagesSection />);
-  linksIn(screen.getByTestId("settings-more")).forEach((h) => found.add(h));
+  linksIn(screen.getByTestId("more-pages")).forEach((h) => found.add(h));
+  cleanup();
+  wrap(<KnowledgePage />);
+  linksIn(screen.getByTestId("knowledge-links")).forEach((h) => found.add(h));
   return found;
 }
 
@@ -141,12 +151,12 @@ beforeEach(() => {
   voice.toggleButton.mockClear();
 });
 
-describe("phone navigation completeness (tab bar + drawer + Settings › More)", () => {
+describe("phone navigation completeness (tab bar + drawer + Knowledge + More)", () => {
   it("the navigation tree is not empty (guards the guard)", () => {
     expect(OLD_DRAWER_ROUTES.length).toBeGreaterThanOrEqual(15);
   });
 
-  it("every route of the navigation tree is reachable via app bar, tab bar, drawer or Settings › More", async () => {
+  it("every route of the navigation tree is reachable via app bar, tab bar, drawer, Knowledge or More", async () => {
     const found = await reachablePhoneRoutes();
     const missing = OLD_DRAWER_ROUTES.filter((h) => !found.has(h));
     expect(missing).toEqual([]);

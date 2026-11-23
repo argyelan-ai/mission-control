@@ -75,3 +75,31 @@ describe("JobsTable column grid", () => {
     expect(headerCols).toMatch(/_192px\]$/);
   });
 });
+
+describe("JobsTable in a narrow content column", () => {
+  const noop = vi.fn();
+  const props = { onEdit: noop, onDelete: noop, onTrigger: noop, onToggleEnabled: noop, onSnooze: noop, onDuplicate: noop };
+
+  it("switches cards/table on the width of its own column, not the viewport", () => {
+    // Beside the 256 px sidebar the viewport says little about the room the
+    // table gets (1100 px viewport ≈ 760 px column, still cut). The table's
+    // root is a size container and the switch reads its width.
+    const { container } = render(<JobsTable jobs={[job]} {...props} />);
+    expect((container.firstElementChild as HTMLElement).className).toContain("@container");
+    const table = screen.getByRole("region", { name: "Jobs table" });
+    expect(table.className).toContain("hidden");
+    expect(table.className).toContain("@min-[880px]:block");
+    const cards = screen.getByTestId("job-card").parentElement!;
+    expect(cards.className).toContain("@min-[880px]:hidden");
+    expect(`${table.className} ${cards.className}`).not.toMatch(/(^|\s)min-\[\d+px\]:/);
+  });
+
+  it("gives Last run more width than Agent", () => {
+    render(<JobsTable jobs={[job]} {...props} />);
+    const header = within(screen.getByRole("region", { name: "Jobs table" })).getByText("Name").parentElement;
+    const tracks = gridCols(header).replace(/^grid-cols-\[|\]$/g, "").split("_");
+    const fr = (t: string) => Number((t.match(/([\d.]+)fr/) ?? [])[1] ?? 0);
+    // checkbox · status · name · trigger · next · last · agent · actions
+    expect(fr(tracks[5])).toBeGreaterThan(fr(tracks[6]));
+  });
+});

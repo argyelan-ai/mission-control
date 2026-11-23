@@ -1037,7 +1037,8 @@
     "viewConversation": "View conversation",
     "typeCommsContinue": "Conversation brake",
     "typeCredentialRead": "Credential access",
-    "typeConfigChange": "Config change"
+    "typeConfigChange": "Config change",
+    "journeysFailedCount": "Journey tests failed ({count})"
   },
   "sessions": {
     "groups": {
@@ -1448,7 +1449,10 @@
         "push_failed": "The push failed.",
         "pr_failed": "The pull request couldn't be opened.",
         "unknown": "That didn't work."
-      }
+      },
+      "tabChatShort": "Chat",
+      "scopeWorktreeShort": "Working",
+      "scopeLastCommitShort": "Commit"
     },
     "panels": {
       "diff": "Changes",
@@ -1542,7 +1546,8 @@
     "boardPicker": "Choose board",
     "collapseSidebar": "Collapse sidebar",
     "expandSidebar": "Expand sidebar",
-    "voiceButton": "Voice (Jarvis)"
+    "voiceButton": "Voice (Jarvis)",
+    "skipToComposer": "Skip to message input"
   },
   "login": {
     "consoleAccess": "Console · Access",
@@ -2441,7 +2446,8 @@
       "deactivateBody": "{name} is signed out and can no longer log in until an admin activates the account again. Nothing is deleted.",
       "deactivateConfirm": "Deactivate user",
       "save": "Save",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "deactivatedCount": "{count} deactivated"
     },
     "shortcuts": {
       "title": "Keyboard Shortcuts",
@@ -2468,7 +2474,8 @@
       "updateAvailable": "Update available: {version}",
       "releaseNotes": "Release notes →",
       "links": "Links",
-      "credits": "Built with care by the Operator & Claude"
+      "credits": "Built with care by the Operator & Claude",
+      "commit": "Commit"
     },
     "credentials": {
       "title": "Credentials Vault",
@@ -2648,7 +2655,8 @@
       "recomputeConfirm": "Recompute",
       "deleteTitle": "Delete price",
       "deleteBody": "Really delete the price for \"{pattern}\"?",
-      "delete": "Delete"
+      "delete": "Delete",
+      "sectionDescription": "What each model costs per million tokens — the basis of every cost figure in MC."
     },
     "telegram": {
       "title": "Telegram",
@@ -5621,7 +5629,9 @@
     },
     "more_page": {
       "title": "More",
-      "lead": "Every page outside the main navigation. All still work as before."
+      "lead": "Every page outside the main navigation. All still work as before.",
+      "usedMost": "Used most",
+      "others": "Others"
     },
     "header": {
       "working": "Working",

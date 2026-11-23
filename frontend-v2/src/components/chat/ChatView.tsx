@@ -1515,12 +1515,13 @@ export function ChatView({
                 style={{ background: headerBadge === "live" ? C.online : C.textDim }}
               />
             )}
-            <span
+            {/* The chat's name is the page's h1 (a11y) — same look as before. */}
+            <h1
               className="text-base leading-tight md:text-sm font-semibold md:font-medium truncate min-w-0"
               style={{ color: C.textPrimary }}
             >
               {furtherTitle ?? agent.name}
-            </span>
+            </h1>
           </span>
           <ChatHeaderSubline
             state={statusState}

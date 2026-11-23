@@ -8,7 +8,7 @@ import { C } from "@/lib/colors";
 import { activeTabFor, chatTabHref, TAB_HREFS, TAB_ICONS, TAB_LABEL_KEYS, TAB_ORDER, type MobileTabKey } from "@/lib/mobileNav";
 import { badgeLabel } from "@/lib/inbox";
 import { loadRecentChats, RECENT_CHATS_EVENT, type ChatRef } from "@/lib/recentChats";
-import { useInbox } from "@/hooks/useInbox";
+import { useWaitingCount } from "@/hooks/useWaitingCount";
 import { useKeyboardOpen } from "@/hooks/useKeyboardOpen";
 
 /** The last chats of this device, kept fresh when another screen opens one. */
@@ -73,7 +73,8 @@ function TabIcon({ tab, active, badge }: { tab: MobileTabKey; active: boolean; b
 export function MobileTabBar() {
   const t = useTranslations("cockpit");
   const pathname = usePathname() ?? "/";
-  const { count } = useInbox();
+  // Inbox "For you" plus a red journey run — the same number as the sidebar.
+  const count = useWaitingCount();
   const recent = useRecentChats();
   const keyboardOpen = useKeyboardOpen();
   const active = activeTabFor(pathname);

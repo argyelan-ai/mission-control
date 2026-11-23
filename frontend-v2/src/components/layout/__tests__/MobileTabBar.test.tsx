@@ -40,6 +40,7 @@ const data = vi.hoisted(() => ({
   reviews: [] as unknown[],
   runs: [] as unknown[],
   hostAgents: [] as unknown[],
+  journeys: null as unknown,
 }));
 vi.mock("@/lib/api", () => ({
   clearToken: vi.fn(),
@@ -57,11 +58,21 @@ vi.mock("@/lib/api", () => ({
     },
     groups: { list: vi.fn(async () => []) },
     heads: { list: vi.fn(async () => ({ runs: data.runs })), pairs: vi.fn(async () => null) },
+    system: { journeys: vi.fn(async () => ({ result: data.journeys })) },
   },
 }));
 
+// The journey count is admin-only; the journey test signs in as admin.
+const user = vi.hoisted(() => ({ current: null as null | { id: string; role: string } }));
 vi.mock("@/lib/store", () => {
-  const state = { activeBoardId: "board-1", currentUser: null, setActiveBoardId: () => {}, pinnedNav: undefined };
+  const state = {
+    activeBoardId: "board-1",
+    get currentUser() {
+      return user.current;
+    },
+    setActiveBoardId: () => {},
+    pinnedNav: undefined,
+  };
   return {
     useAppStore: Object.assign((sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state), {
       setState: () => {},
@@ -124,6 +135,7 @@ beforeEach(() => {
   data.reviews = [];
   data.runs = [];
   data.hostAgents = [];
+  data.journeys = null;
   localStorage.clear();
   voice.toggleButton.mockClear();
 });
@@ -170,6 +182,18 @@ describe("phone tab bar", () => {
     renderNav();
     await waitFor(() => expect(screen.getByTestId("chat-badge")).toHaveTextContent("4"));
     expect(within(bar()).getByRole("link", { name: "Chat, 4 waiting for you" })).toHaveAttribute("href", "/sessions");
+  });
+
+  it("Chat badge counts failed journey tests too (same number as the desktop sidebar)", async () => {
+    user.current = { id: "u1", role: "admin" };
+    data.approvals = [{ id: "a1", status: "pending" }];
+    data.journeys = {
+      status: "red", finished_at: new Date().toISOString(), commit: "abc", total: 3, passed: 1,
+      failed: ["J-usage", "J-setup"], known_gaps: 0, reason: null,
+    };
+    renderNav();
+    await waitFor(() => expect(screen.getByTestId("chat-badge")).toHaveTextContent("3"));
+    user.current = null;
   });
 
   it("shows no badge when nothing waits", async () => {
@@ -314,14 +338,16 @@ describe("⊕ sheet — variant B, level 2 Pages", () => {
     expect(within(level).getByRole("heading", { name: "Pages" })).toBeInTheDocument();
     const hrefs = [...level.querySelectorAll("a[data-page]")].map((a) => a.getAttribute("href"));
     // Runtimes is a tab now (Models), so "Used most" starts at Agents
-    expect(hrefs.slice(0, 3)).toEqual(["/agents", "/insights", "/memory"]);
+    expect(hrefs.slice(0, 2)).toEqual(["/agents", "/insights"]);
     // the rest alphabetical by label — Home, Inbox and Tasks left the bar;
     // Office and Loops are frozen (Etappe 2) and offered nowhere
-    expect(hrefs.slice(3)).toEqual([
-      "/bench", "/files", "/home", "/inbox", "/repos", "/schedule", "/skills", "/tasks",
+    expect(hrefs.slice(2)).toEqual([
+      "/bench", "/files", "/home", "/inbox", "/repos", "/schedule", "/tasks",
     ]);
-    // tab-bar places and Settings are not repeated
-    for (const h of ["/sessions", "/runtimes", "/knowledge", "/settings"]) expect(hrefs).not.toContain(h);
+    // tab-bar places, pages under a tab (Memory, Skills) and Settings are not repeated
+    for (const h of ["/sessions", "/runtimes", "/knowledge", "/settings", "/memory", "/skills"]) {
+      expect(hrefs).not.toContain(h);
+    }
   });
 
   it("‹ Back returns to level 1", async () => {

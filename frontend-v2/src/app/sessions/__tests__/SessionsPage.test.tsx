@@ -51,8 +51,8 @@ vi.mock("@/components/shared/BrowserLiveView", () => ({
 // suite tests. A thin stub keeps it hermetic; DiffPanel's own scope-switch/
 // polling/empty-state behavior is covered by DiffPanel.test.tsx.
 vi.mock("@/components/chat/DiffPanel", () => ({
-  DiffPanel: ({ agentId }: { agentId: string }) => (
-    <div data-testid="diff-panel-stub">Diff-Panel: {agentId}</div>
+  DiffPanel: ({ agentId, compact }: { agentId: string; compact?: boolean }) => (
+    <div data-testid="diff-panel-stub" data-compact={compact ? "true" : undefined}>Diff-Panel: {agentId}</div>
   ),
 }));
 
@@ -123,6 +123,8 @@ vi.mock("@/components/chat/ChatView", () => ({
           the live row or a stale click-time snapshot is observable here. */}
       <span data-testid="chat-view-agent-task">{(agent as { current_task_id?: string | null })?.current_task_id ?? ""}</span>
       <span data-testid="chat-view-agent-status">{(agent as { status?: string })?.status ?? ""}</span>
+      {/* The composer pill's anchor — the overlaid panel stops above it. */}
+      <div data-testid="composer-dropzone" />
       <button
         type="button"
         onClick={() => onCenterViewChange(centerView === "chat" ? "terminal" : "chat")}
@@ -480,6 +482,47 @@ describe("SessionsPage — the header's panel buttons switch the panel slot's co
     expect(bar.className).not.toContain("md:hidden");
     await user.click(within(bar).getByRole("button", { name: "Close panel" }));
     expect(screen.queryByTestId("side-panel")).not.toBeInTheDocument();
+  });
+
+  it("as an overlay: dims the chat (a click closes), drops the drag handle, short tabs, composer stays free", async () => {
+    // Operator finding at 1024 px: the panel lay over the send button, the
+    // chat behind it was not dimmed and the handle suggested a drag that
+    // could not give the chat its 400 px back.
+    const real = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const box = (top: number, bottom: number, width: number) =>
+        ({ width, height: bottom - top, top, left: 0, right: width, bottom, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+      if (this.dataset.testid === "chat-island") return box(0, 700, 620);
+      if (this.dataset.testid === "composer-dropzone") return box(560, 660, 580);
+      return real.call(this);
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+    const panel = await screen.findByTestId("side-panel");
+    expect(panel).toHaveAttribute("data-overlay", "true");
+    // no drag handle while it lies over the chat
+    expect(screen.queryByRole("separator", { name: "Resize panel" })).toBeNull();
+    // the diff tabs get their short labels
+    expect(screen.getByTestId("diff-panel-stub")).toHaveAttribute("data-compact", "true");
+    // panel and veil end above the composer: island bottom 700 − composer top 560 + 8
+    await waitFor(() => expect(panel.style.getPropertyValue("--panel-bottom")).toBe("148px"));
+    const veil = screen.getByTestId("side-panel-backdrop");
+    expect(veil.style.getPropertyValue("--panel-bottom")).toBe("148px");
+    await user.click(veil);
+    expect(screen.queryByTestId("side-panel")).not.toBeInTheDocument();
+  });
+
+  it("side by side: no veil, the drag handle stays, full tab labels", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+    await screen.findByTestId("side-panel");
+    expect(screen.queryByTestId("side-panel-backdrop")).toBeNull();
+    expect(screen.getByRole("separator", { name: "Resize panel" })).toBeInTheDocument();
+    expect(screen.getByTestId("diff-panel-stub")).not.toHaveAttribute("data-compact");
   });
 
   it("side by side, the panel's own title bar stays phone-only (the header buttons close it)", async () => {
