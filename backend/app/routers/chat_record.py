@@ -26,7 +26,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import Role, require_agent, require_role
 from app.database import get_session
 from app.scopes import Scope, require_scope
-from app.services import chat_record, chat_switch, chat_turn_state
+from app.services import chat_record, chat_record_search, chat_switch, chat_turn_state
 
 router = APIRouter(prefix="/api/v1/chat-record", tags=["chat-record"])
 
@@ -106,14 +106,19 @@ async def create_record_chat(
 async def search_record(
     q: str = Query(..., min_length=2, max_length=200),
     limit: int = Query(50, ge=1, le=200),
+    agent_id: uuid.UUID | None = Query(None, alias="agentId"),
     current_user=Depends(require_role(Role.VIEWER)),
     session: AsyncSession = Depends(get_session),
 ):
-    """Search across every chat the user can see (Postgres full-text).
+    """Search the user's and the assistant's messages in every chat the user
+    can see: every word matches a word start, one best hit per chat (event to
+    jump to + snippet), exact before word start before inside a word, then
+    newest. ``limit`` counts chats; ``agentId`` narrows to one agent.
     Flag off: 200, no hits, ``enabled: false`` (same rule as the list)."""
     if not chat_record.enabled():
         return {"hits": [], "enabled": False}
-    return {"hits": await chat_record.search(session, current_user, q, limit=limit), "enabled": True}
+    hits = await chat_record_search.search(session, current_user, q, limit=limit, agent_id=agent_id)
+    return {"hits": hits, "enabled": True}
 
 
 @router.get("/chats/{chat_id}/history")
