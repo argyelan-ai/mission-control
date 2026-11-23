@@ -273,6 +273,25 @@ async def test_word_parts_still_match_when_the_text_splits_them():
     assert [h["chatTitle"] for h in await _search("it's")] == ["Talk"]
 
 
+@pytest.mark.parametrize("query", ["chat_record", "chat_rec", "search_record", "_record"])
+async def test_snake_case_terms_are_found(query):
+    """Postgres splits a snake_case word on "_" ("chat_record" -> chat, record);
+    the query must still find it, as the old plainto_tsquery route did.
+    Runs on both lanes; the Postgres lane is the one that proves the fix."""
+    await _chat("Snake", [("message", "user", "open chat_record now, then search_record", 1)])
+    hits = await _search(query)
+    assert [h["chatTitle"] for h in hits] == ["Snake"], query
+    start, end = hits[0]["highlight"]
+    assert query.lstrip("_") in hits[0]["snippet"][start:end].lower()
+
+
+def test_snake_case_pieces_match_the_postgres_parser():
+    """Pieces are letters and digits only, the way Postgres splits a word."""
+    assert chat_record_search._parts("chat_record") == ["chat", "record"]
+    assert "('chat_record':* | ('chat':* & 'record':*))" == chat_record_search.tsquery_of(["chat_record"])
+    assert chat_record_search._parts("deploy") == []
+
+
 async def test_subagent_traffic_is_not_searched():
     """A subagent's prompt (role user) and answers (role assistant) are stored
     with sidechain=true; they are not the operator's conversation."""

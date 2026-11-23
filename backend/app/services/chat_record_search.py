@@ -57,6 +57,10 @@ SNIPPET_LEAD = 50
 EXACT, PREFIX, SUBSTRING = 3, 2, 1
 _MATCH_NAME = {EXACT: "exact", PREFIX: "prefix", SUBSTRING: "substring"}
 _WORD = re.compile(r"\w+")
+#: A word piece the way the Postgres parser splits a word: letters and digits
+#: only. "_" is a word character to Python but a separator to Postgres, so
+#: "chat_record" is stored as "chat" + "record".
+_PIECE = re.compile(r"[^\W_]+")
 #: Anything that is not a word character at the start or end of a term.
 _EDGE = re.compile(r"^\W+|\W+$")
 _SPACE = re.compile(r"\s+")
@@ -77,8 +81,9 @@ def terms_of(query: str) -> list[str]:
 
 
 def _parts(term: str) -> list[str]:
-    """The word pieces of a term ("it's" → it, s); empty for a plain word."""
-    parts = _WORD.findall(term)
+    """The word pieces of a term ("it's" → it, s; "chat_record" → chat,
+    record); empty for a plain word."""
+    parts = _PIECE.findall(term)
     return parts if parts != [term] else []
 
 
