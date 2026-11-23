@@ -233,3 +233,106 @@ async def test_pg_prefix_uses_the_word_index():
     assert await _search("eploy") == []  # inside a word: not a word start
     # tsquery syntax in the input is plain text, never an error
     assert await _search("deplo:* & !(") != []
+
+
+# ── critic round 1: dotted terms, sidechain, UTF-16, candidate cap ────────
+
+
+def test_terms_keep_dotted_tokens_and_drop_edge_punctuation():
+    """A query word is split on spaces only, so file names, versions, IPs and
+    e-mails stay one term; punctuation at the edges ("deploy.sh,") and
+    tsquery syntax ("!(", ":*") never reach the query."""
+    assert chat_record_search.terms_of("Deploy.sh, (v0.9) !( deplo:* bob@ex DEPLOY.SH") == [
+        "deploy.sh", "v0.9", "deplo", "bob@ex",
+    ]
+    assert chat_record_search.terms_of("&| !(") == []
+
+
+@pytest.mark.parametrize("query", [
+    "deploy.sh", "deploy.s", "chat_record.py", "chat_record", "1.5", "v0.9",
+    "203.0.113.77", "203.0", "bob@example.com", "bob@ex", "deploy.sh,",
+])
+async def test_dotted_terms_are_found(query):
+    """File names, versions, IPs and e-mails are the most common thing a dev
+    operator searches for. The Postgres parser keeps them as ONE word
+    ("deploy.sh"), so the query must not split them on the dot."""
+    await _chat("Ops", [("message", "user",
+                         "run deploy.sh after chat_record.py, then 1.5.2 or v0.9 on "
+                         "203.0.113.77 and mail bob@example.com", 1)])
+    hits = await _search(query)
+    assert [h["chatTitle"] for h in hits] == ["Ops"], query
+    start, end = hits[0]["highlight"]
+    assert hits[0]["snippet"][start:end].lower().startswith(query.rstrip(","))
+
+
+async def test_word_parts_still_match_when_the_text_splits_them():
+    """'it's' is two words to Postgres ("it", "s"); the query still finds it."""
+    await _chat("Talk", [("message", "user", "well it's done", 1)])
+    assert [h["chatTitle"] for h in await _search("it's")] == ["Talk"]
+
+
+async def test_subagent_traffic_is_not_searched():
+    """A subagent's prompt (role user) and answers (role assistant) are stored
+    with sidechain=true; they are not the operator's conversation."""
+    chat = Chat(title="Side")
+    sess = ChatSession(chat_id=chat.id, native_session_id=f"n-{uuid.uuid4()}")
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(chat)
+        await s.flush()
+        s.add(sess)
+        await s.flush()
+        for seq, (role, side) in enumerate([("user", True), ("assistant", True)], start=1):
+            s.add(ChatEvent(
+                chat_id=chat.id, session_id=sess.id, seq=seq, source_key=f"k{seq}",
+                ts=T0, kind="message", role=role,
+                payload={"kind": "message", "role": role, "text": "walrus", "sidechain": side},
+                search_text="walrus",
+            ))
+        await s.commit()
+    assert await _search("walrus") == []
+    mine = await _chat("Mine", [("message", "user", "walrus", 2)])
+    assert [h["chatId"] for h in await _search("walrus")] == [mine["chat"]]
+
+
+async def test_highlight_counts_utf16_units_for_the_browser():
+    """The highlight is read by a JS client: emoji before the match are two
+    UTF-16 units each, and a letter that grows on lower() ("İ") must not
+    shift the mark."""
+    await _chat("Emoji", [("message", "user", "😀😀😀 İ deploy it", 1)])
+    hit = (await _search("deploy"))[0]
+    start, end = hit["highlight"]
+    units = hit["snippet"].encode("utf-16-le")
+    assert units[start * 2:end * 2].decode("utf-16-le") == "deploy"
+
+
+async def test_candidate_cap_is_reported(monkeypatch):
+    """When the newest candidates fill the cap, the answer says so, so the
+    client can ask to refine the search."""
+    monkeypatch.setattr(chat_record_search, "CANDIDATE_CAP", 3)
+    await _chat("Few", [("message", "user", "lighthouse", 1)])
+    async with AsyncSession(test_engine) as s:
+        res = await chat_record_search.search(s, ADMIN, "lighthouse", with_meta=True)
+    assert res["truncated"] is False
+    await _chat("Many", [("message", "user", f"lighthouses {j}", 10 + j) for j in range(3)])
+    async with AsyncSession(test_engine) as s:
+        res = await chat_record_search.search(s, ADMIN, "lighthouse", with_meta=True)
+    assert res["truncated"] is True
+
+
+@pytest.mark.postgres
+async def test_pg_exact_hit_in_an_old_chat_survives_the_cap(monkeypatch):
+    """Newer word-start matches fill the cap; the older exact match is still
+    found (second pass for exact words) and ranks first."""
+    monkeypatch.setattr(chat_record_search, "CANDIDATE_CAP", 3)
+    old = await _chat("Old", [("message", "user", "deploy", 1)])
+    await _chat("New", [("message", "user", f"deployment {j}", 10 + j) for j in range(3)])
+    hits = await _search("deploy")
+    assert hits[0]["chatId"] == old["chat"]
+    assert hits[0]["match"] == "exact"
+
+
+async def test_route_reports_truncated(flag_on, auth_client):
+    await _chat("R", [("message", "user", "beacon", 1)])
+    r = await auth_client.get("/api/v1/chat-record/search", params={"q": "beacon"})
+    assert r.status_code == 200
+    assert r.json()["truncated"] is False

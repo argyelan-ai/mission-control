@@ -114,11 +114,15 @@ async def search_record(
     can see: every word matches a word start, one best hit per chat (event to
     jump to + snippet), exact before word start before inside a word, then
     newest. ``limit`` counts chats; ``agentId`` narrows to one agent.
+    ``highlight`` is in UTF-16 units (JS string indices); ``truncated: true``
+    means the candidate cap was hit and older hits may be missing.
     Flag off: 200, no hits, ``enabled: false`` (same rule as the list)."""
     if not chat_record.enabled():
         return {"hits": [], "enabled": False}
-    hits = await chat_record_search.search(session, current_user, q, limit=limit, agent_id=agent_id)
-    return {"hits": hits, "enabled": True}
+    res = await chat_record_search.search(
+        session, current_user, q, limit=limit, agent_id=agent_id, with_meta=True
+    )
+    return {**res, "enabled": True}
 
 
 @router.get("/chats/{chat_id}/history")
