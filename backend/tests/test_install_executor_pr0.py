@@ -247,8 +247,10 @@ def test_resolve_ref_pins_branch_head_and_passes_full_sha(monkeypatch, two_commi
     repo, old, new = two_commit_repo
     monkeypatch.setattr("app.services.install_executor.github_url",
                         lambda source: f"file://{repo}")
+    _git("tag", "v1", old, cwd=repo)
     assert asyncio.run(resolve_skill_commit("github:obra/skill-pin", None)) == new
     assert asyncio.run(resolve_skill_commit("github:obra/skill-pin", "main")) == new
+    # a full SHA is accepted when it is the tip of a branch or tag of the repo
     assert asyncio.run(resolve_skill_commit("github:obra/skill-pin", old.upper())) == old
     with pytest.raises(RuntimeError):
         asyncio.run(resolve_skill_commit("github:obra/skill-pin", "no-such-ref"))
@@ -302,3 +304,147 @@ async def test_per_runtime_result_lands_in_install_log(async_session):
     assert log.previous_state["apply"] == not_applied
     # rollback state is still where it was
     assert log.previous_state["cli_skills"] == ["a"]
+
+
+# ── Critic round: exact ref match, SHA reachability, honest docker sync ───
+
+
+def test_resolve_ref_matches_the_exact_branch_not_a_suffix_decoy(monkeypatch, two_commit_repo):
+    """`git ls-remote <url> main` also lists refs/heads/aaa/main and
+    refs/tags/other/main. The pin must be refs/heads/main itself."""
+    from app.services.install_executor import resolve_skill_commit
+
+    repo, old, new = two_commit_repo
+    _git("branch", "aaa/main", old, cwd=repo)
+    _git("tag", "-a", "-m", "decoy", "other/main", old, cwd=repo)
+    monkeypatch.setattr("app.services.install_executor.github_url",
+                        lambda source: f"file://{repo}")
+    assert asyncio.run(resolve_skill_commit("github:obra/skill-pin", "main")) == new
+
+
+def test_resolve_annotated_tag_pins_the_commit_not_the_tag_object(monkeypatch, two_commit_repo):
+    from app.services.install_executor import resolve_skill_commit
+
+    repo, old, new = two_commit_repo
+    _git("tag", "-a", "-m", "release", "v2.0", old, cwd=repo)
+    monkeypatch.setattr("app.services.install_executor.github_url",
+                        lambda source: f"file://{repo}")
+    assert asyncio.run(resolve_skill_commit("github:obra/skill-pin", "v2.0")) == old
+
+
+def test_resolve_branch_and_tag_with_same_name_but_other_commit_is_refused(
+    monkeypatch, two_commit_repo,
+):
+    from app.services.install_executor import resolve_skill_commit
+
+    repo, old, new = two_commit_repo
+    _git("tag", "main", old, cwd=repo)
+    monkeypatch.setattr("app.services.install_executor.github_url",
+                        lambda source: f"file://{repo}")
+    with pytest.raises(RuntimeError, match="ambiguous"):
+        asyncio.run(resolve_skill_commit("github:obra/skill-pin", "main"))
+
+
+def test_resolve_refuses_a_sha_that_no_branch_or_tag_of_the_repo_points_to(
+    monkeypatch, two_commit_repo,
+):
+    """GitHub serves objects of the whole fork network through the parent
+    URL, so a SHA from someone's fork would be fetchable under an allowlisted
+    name. Only a SHA that a branch or tag of the allowlisted repo itself
+    points to is accepted."""
+    from app.services.install_executor import resolve_skill_commit
+
+    repo, old, new = two_commit_repo
+    monkeypatch.setattr("app.services.install_executor.github_url",
+                        lambda source: f"file://{repo}")
+    # `old` is no tip of any branch/tag here (only an ancestor of main)
+    with pytest.raises(RuntimeError, match="branch or tag"):
+        asyncio.run(resolve_skill_commit("github:obra/skill-pin", old))
+    # an unknown SHA (e.g. a fork commit) is refused too
+    with pytest.raises(RuntimeError, match="branch or tag"):
+        asyncio.run(resolve_skill_commit("github:obra/skill-pin", "f" * 40))
+
+
+def test_resolve_ignores_pull_request_refs(monkeypatch, two_commit_repo):
+    """refs/pull/* on GitHub hold commits from anyone's fork."""
+    from app.services.install_executor import resolve_skill_commit
+
+    repo, old, new = two_commit_repo
+    _git("update-ref", "refs/pull/1/head", old, cwd=repo)
+    monkeypatch.setattr("app.services.install_executor.github_url",
+                        lambda source: f"file://{repo}")
+    with pytest.raises(RuntimeError):
+        asyncio.run(resolve_skill_commit("github:obra/skill-pin", old))
+    with pytest.raises(RuntimeError):
+        asyncio.run(resolve_skill_commit("github:obra/skill-pin", "refs/pull/1/head"))
+
+
+def test_resolve_uses_a_short_request_time_timeout(monkeypatch):
+    """ls-remote runs inside the agent's HTTP request: it must not hang for
+    the 120 s install timeout."""
+    from app.services import install_executor as ie
+
+    seen = {}
+
+    async def fake_git(*args, cwd=None, timeout=None):
+        seen["timeout"] = timeout
+        return "1" * 40 + "\tHEAD\n"
+
+    monkeypatch.setattr(ie, "_git", fake_git)
+    asyncio.run(ie.resolve_skill_commit("github:obra/skill-pin", None))
+    assert seen["timeout"] is not None and seen["timeout"] <= 15
+
+
+def test_copytree_failure_after_copy_leaves_no_orphan_folder(tmp_path, monkeypatch):
+    """Anything that fails after the folder was copied must take the folder
+    back, or every retry is refused as 'already exists'."""
+    from app.services.install_executor import _call_skill_install
+
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    repo = tmp_path / "bad-repo"
+    repo.mkdir()
+    (repo / "SKILL.md").write_bytes(b"version: \xff\xfe not utf8\n")
+
+    async def fake_fetch(url, commit, dest):
+        import shutil
+        shutil.copytree(repo, dest)
+        return "a" * 40
+
+    monkeypatch.setattr("app.services.install_executor._fetch_commit", fake_fetch)
+    with pytest.raises(Exception):
+        asyncio.run(_call_skill_install("github:obra/skill-bad", "bad", "a" * 40))
+    assert not (tmp_path / ".mc" / "skills" / "bad").exists()
+
+
+@pytest.mark.asyncio
+async def test_agent_row_commit_failure_removes_the_new_folder(
+    async_session, tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    (tmp_path / ".mc" / "skills").mkdir(parents=True)
+    agent = await _agent(async_session, cli_skills=["a"])
+    approval = await _approval(async_session, agent, "install_skill",
+                               name="late", source="github:obra/skill-late",
+                               commit="c" * 40)
+
+    async def fake_install(source, name, commit=None):
+        (tmp_path / ".mc" / "skills" / name).mkdir()
+        return {"installed_version": "x", "commit": commit, "created_dir": True}
+
+    real_commit = async_session.commit
+    calls = {"n": 0}
+
+    async def flaky_commit():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("db down")
+        return await real_commit()
+
+    monkeypatch.setattr("app.services.install_executor._call_skill_install", fake_install)
+    monkeypatch.setattr(async_session, "commit", flaky_commit)
+    with patch("app.services.install_executor._trigger_sync_config",
+               new_callable=AsyncMock, return_value=NEEDS_RESTART):
+        result = await InstallExecutor(async_session).execute(approval)
+
+    assert result.result in ("failed", "rolled_back")
+    assert not (tmp_path / ".mc" / "skills" / "late").exists()

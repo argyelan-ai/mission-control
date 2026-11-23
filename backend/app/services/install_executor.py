@@ -135,17 +135,22 @@ class InstallExecutor:
         installed_version = info.get("installed_version")
         created_dir = bool(info.get("created_dir"))
 
-        agent.cli_skills = _with_name(agent.cli_skills, name)
-        await self.session.commit()
+        try:
+            agent.cli_skills = _with_name(agent.cli_skills, name)
+            await self.session.commit()
+        except BaseException:
+            if created_dir:
+                _remove_skill_dir(name)
+            raise
 
         try:
             apply = await _trigger_sync_config(agent.id, "skill")
         except Exception as e:
-            agent.cli_skills = previous_state["cli_skills"]
-            await self.session.commit()
             if created_dir:
                 # We created this library folder in this run — take it back.
                 _remove_skill_dir(name)
+            agent.cli_skills = previous_state["cli_skills"]
+            await self.session.commit()
             log = await self._write_log(
                 approval, result="rolled_back", error=str(e),
                 previous_state=previous_state,
@@ -454,6 +459,8 @@ _HANDLERS: dict[str, Any] = {
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _GIT_TIMEOUT_S = 120
+#: ls-remote runs inside the agent's install request; keep it short.
+_LS_REMOTE_TIMEOUT_S = 15
 
 
 def skills_root() -> Path:
@@ -473,8 +480,10 @@ def _remove_skill_dir(name: str) -> None:
         logger.error("Rollback: could not remove skill dir %s: %s", target, e)
 
 
-async def _git(*args: str, cwd: Path | None = None) -> str:
+async def _git(*args: str, cwd: Path | None = None,
+               timeout: float | None = None) -> str:
     """Run git non-interactively; return stdout or raise RuntimeError."""
+    limit = timeout or _GIT_TIMEOUT_S
     import subprocess
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     proc = await asyncio.create_subprocess_exec(
@@ -482,10 +491,10 @@ async def _git(*args: str, cwd: Path | None = None) -> str:
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=_GIT_TIMEOUT_S)
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=limit)
     except asyncio.TimeoutError:
         proc.kill()
-        raise RuntimeError(f"git {args[0]} timed out after {_GIT_TIMEOUT_S}s")
+        raise RuntimeError(f"git {args[0]} timed out after {limit:g}s")
     if proc.returncode != 0:
         raise RuntimeError(f"git {args[0]} failed: {err.decode(errors='replace').strip()}")
     return out.decode(errors="replace")
@@ -495,31 +504,78 @@ def github_url(source: str) -> str:
     return f"https://github.com/{source.removeprefix('github:')}.git"
 
 
-async def resolve_skill_commit(source: str, ref: str | None) -> str:
-    """Turn ``ref`` (SHA, tag, branch or None = default branch) into the exact
-    40-hex commit SHA for a ``github:`` skill source.
-
-    Called at request time so the operator approves one fixed version; the
-    executor then installs exactly that commit. A full SHA is taken as is.
-    """
-    if ref and _SHA_RE.match(ref.lower()):
-        return ref.lower()
-    wanted = ref or "HEAD"
-    out = await _git("ls-remote", github_url(source), wanted)
-    peeled: str | None = None
-    plain: str | None = None
+def _parse_ls_remote(out: str) -> dict[str, str]:
+    refs: dict[str, str] = {}
     for line in out.splitlines():
         parts = line.split()
-        if len(parts) != 2 or not _SHA_RE.match(parts[0]):
-            continue
-        if parts[1].endswith("^{}"):
-            peeled = parts[0]  # annotated tag -> the commit it points to
-        elif plain is None:
-            plain = parts[0]
-    sha = peeled or plain
-    if not sha:
-        raise RuntimeError(f"ref {wanted!r} not found in {source}")
-    return sha
+        if len(parts) == 2 and _SHA_RE.match(parts[0]):
+            refs[parts[1]] = parts[0]
+    return refs
+
+
+def _commit_of(refs: dict[str, str], name: str) -> str | None:
+    """Commit a ref points to; an annotated tag is peeled to its commit."""
+    return refs.get(f"{name}^{{}}") or refs.get(name)
+
+
+def _is_own_ref(name: str) -> bool:
+    # Only the repo's own branches and tags. refs/pull/* (and similar) carry
+    # commits from anyone's fork.
+    return name.startswith(("refs/heads/", "refs/tags/"))
+
+
+async def resolve_skill_commit(source: str, ref: str | None) -> str:
+    """Turn ``ref`` (branch, tag, full SHA or None = default branch) into the
+    exact 40-hex commit SHA for a ``github:`` skill source.
+
+    Called at request time so the operator approves one fixed version; the
+    executor then installs exactly that commit.
+
+    * A name matches **exactly** ``refs/heads/<ref>`` or ``refs/tags/<ref>``
+      (``git ls-remote <url> <ref>`` alone tail-matches, so ``main`` would
+      also hit ``aaa/main``). A branch and a tag of the same name that point
+      to different commits are refused as ambiguous.
+    * A full SHA is accepted only when a branch or tag of the allowlisted repo
+      points to it. GitHub serves objects of the whole fork network through
+      the parent URL, so an arbitrary SHA could come from anyone's fork.
+    """
+    url = github_url(source)
+    refs = _parse_ls_remote(
+        await _git("ls-remote", url, timeout=_LS_REMOTE_TIMEOUT_S)
+    )
+
+    if ref is None:
+        sha = refs.get("HEAD")
+        if not sha:
+            raise RuntimeError(f"{source} has no default branch")
+        return sha
+
+    if _SHA_RE.match(ref.lower()):
+        sha = ref.lower()
+        own = {_commit_of(refs, n.removesuffix("^{}"))
+               for n in refs if _is_own_ref(n)}
+        if sha not in own:
+            raise RuntimeError(
+                f"commit {sha[:12]} is not the tip of a branch or tag of "
+                f"{source}; pin by branch or tag name"
+            )
+        return sha
+
+    if ref.startswith("refs/"):
+        candidates = [ref] if _is_own_ref(ref) else []
+    else:
+        candidates = [f"refs/heads/{ref}", f"refs/tags/{ref}"]
+    found = {c: _commit_of(refs, c) for c in candidates}
+    shas = {v for v in found.values() if v}
+    if not shas:
+        raise RuntimeError(f"branch or tag {ref!r} not found in {source}")
+    if len(shas) > 1:
+        raise RuntimeError(
+            f"ref {ref!r} is ambiguous in {source}: a branch and a tag of "
+            "that name point to different commits; use refs/heads/... or "
+            "refs/tags/..."
+        )
+    return shas.pop()
 
 
 async def _fetch_commit(url: str, commit: str | None, dest: Path) -> str:
@@ -588,16 +644,28 @@ async def _call_skill_install(
                 )
 
             skills_dir.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(source_dir, skills_dir,
-                            ignore=shutil.ignore_patterns(".git"))
-
-        version = None
-        skill_md = skills_dir / "SKILL.md"
-        if skill_md.exists():
-            for line in skill_md.read_text().splitlines()[:20]:
-                if line.startswith("version:"):
-                    version = line.split(":", 1)[1].strip().strip('"\'')
-                    break
+            try:
+                skills_dir.mkdir()  # atomic: a concurrent install loses here
+            except FileExistsError:
+                raise SkillExistsError(
+                    f"Skill {name!r} already exists in the skills library; "
+                    "refusing to overwrite it."
+                )
+            try:
+                shutil.copytree(source_dir, skills_dir, dirs_exist_ok=True,
+                                ignore=shutil.ignore_patterns(".git"))
+                version = None
+                skill_md = skills_dir / "SKILL.md"
+                if skill_md.exists():
+                    for line in skill_md.read_text().splitlines()[:20]:
+                        if line.startswith("version:"):
+                            version = line.split(":", 1)[1].strip().strip('"\'')
+                            break
+            except BaseException:
+                # This run created the folder: take it back, or every retry
+                # is refused as "already exists".
+                _remove_skill_dir(name)
+                raise
         return {"installed_version": version or head[:12], "commit": head,
                 "created_dir": True}
     elif source.startswith("~/.mc/skills/"):
@@ -701,6 +769,33 @@ def _harness_of(agent: Agent) -> str:
     return getattr(agent, "harness", None) or "claude"
 
 
+#: The sync_docker_agent_files result key that proves the item's file was
+#: written. MCP is written by mcp_sync (checked separately).
+_KIND_SYNC_KEY: dict[str, str] = {"skill": "skills", "plugin": "settings.json"}
+
+
+def _sync_failure(results: Any, kind: str) -> str | None:
+    """``sync_docker_agent_files`` never raises: it returns ``"error: ..."``
+    / ``{"_error": ...}`` markers. Raise on an error (caller rolls back);
+    return a note when the item's file was honestly skipped."""
+    if not isinstance(results, dict):
+        raise RuntimeError(f"docker file sync returned no result: {results!r}")
+    if "_error" in results:
+        raise RuntimeError(f"docker file sync error: {results['_error']}")
+    key = _KIND_SYNC_KEY.get(kind)
+    if key is None:
+        return None
+    value = results.get(key)
+    if value is None:
+        raise RuntimeError(
+            f"docker file sync did not run the {key} step: {results}")
+    if str(value).startswith("error"):
+        raise RuntimeError(f"docker file sync {key} error: {value}")
+    if key == "settings.json" and not str(value).startswith("written"):
+        return f"settings.json not written: {value}"
+    return None
+
+
 async def _apply_docker(session: Any, agent: Agent, kind: str) -> dict[str, Any]:
     """Docker agents: render files into the claude-config bind mount. No
     container restart — a restart kills every running chat turn of the agent;
@@ -709,7 +804,11 @@ async def _apply_docker(session: Any, agent: Agent, kind: str) -> dict[str, Any]
     from app.services.harness_compat import capabilities_for
 
     harness = _harness_of(agent)
-    await sync_docker_agent_files(session, agent)
+    results = await sync_docker_agent_files(session, agent)
+    not_written = _sync_failure(results, kind)
+    if not_written:
+        return {"runtime": "cli-bridge", "harness": harness,
+                "status": "not_applied", "note": not_written}
     from app.services.mcp_sync import sync_agent_mcp_to_disk
     try:
         sync_agent_mcp_to_disk(agent)

@@ -164,7 +164,8 @@ async def create_install_request(
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 f"A skill named {body.name!r} already exists in the skills "
-                "library; it is never overwritten",
+                "library; it is never overwritten. To give it to this agent, "
+                f"request source '~/.mc/skills/{body.name}' instead",
             )
         try:
             commit = await install_executor.resolve_skill_commit(body.source, body.ref)
@@ -176,10 +177,15 @@ async def create_install_request(
 
     # 7. Create Approval row. No board needed: approvals.board_id is optional
     #    and the global pending list shows board-less approvals.
+    # The operator approves one fixed version: name the source and the
+    # pinned commit in the text they read.
+    origin = f" from {body.source}" if body.source else ""
+    if commit:
+        origin += f"@{commit[:12]}"
     description = (
         f"{requester.name} requests to "
         f"{body.operation} {body.type} "
-        f"{body.name!r} on agent {target.name!r}: "
+        f"{body.name!r}{origin} on agent {target.name!r}: "
         f"{body.reason[:200]}"
     )
     payload_data = {

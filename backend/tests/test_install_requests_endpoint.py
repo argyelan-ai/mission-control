@@ -417,3 +417,40 @@ async def test_install_request_l1_is_never_stored(client: AsyncClient, fake_redi
     assert resp.status_code == 201, resp.text
     row = await _approval_row(resp.json()["approval_id"])
     assert row.autonomy_level == "L2"
+
+
+@pytest.mark.asyncio
+async def test_install_request_409_names_the_local_source_to_assign_instead(
+    client: AsyncClient, fake_redis, tmp_path,
+):
+    """A second agent asking for a skill already in the library is told how
+    to get it: request the local source."""
+    (tmp_path / ".mc" / "skills" / "board-free").mkdir(parents=True)
+    agent, token = await _make_boardless_agent("Second", scopes=[])
+
+    resp = await client.post(
+        "/api/v1/agent/install-requests",
+        headers={"Authorization": f"Bearer {token}"},
+        json=_skill_body(agent.id),
+    )
+    assert resp.status_code == 409
+    assert "~/.mc/skills/board-free" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_install_request_description_shows_source_and_pinned_commit(
+    client: AsyncClient, fake_redis,
+):
+    """The operator approves one fixed version, so the approval text names
+    the source and the pinned commit."""
+    agent, token = await _make_boardless_agent("Shower", scopes=[])
+
+    resp = await client.post(
+        "/api/v1/agent/install-requests",
+        headers={"Authorization": f"Bearer {token}"},
+        json=_skill_body(agent.id),
+    )
+    assert resp.status_code == 201, resp.text
+    row = await _approval_row(resp.json()["approval_id"])
+    assert "github:obra/skill-board-free" in row.description
+    assert PINNED[:12] in row.description

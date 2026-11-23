@@ -34,10 +34,18 @@ async def _agent(session: AsyncSession, **kw) -> Agent:
     return agent
 
 
-def _sync_patches():
+HEALTHY_SYNC = {
+    "SOUL.md": "written",
+    "settings.json": "written (full render from template, model=m)",
+    "skills": "synced (2 ok)",
+}
+
+
+def _sync_patches(sync_result: dict | None = None):
     return (
         patch("app.services.docker_agent_sync.sync_docker_agent_files",
-              new_callable=AsyncMock),
+              new_callable=AsyncMock,
+              return_value=HEALTHY_SYNC if sync_result is None else sync_result),
         patch("app.services.docker_agent_sync.restart_docker_agent_container"),
         patch("app.services.mcp_sync.sync_agent_mcp_to_disk"),
     )
@@ -135,3 +143,48 @@ def test_executor_source_never_restarts_a_container():
     import app.services.install_executor as mod
 
     assert "restart_docker_agent_container" not in inspect.getsource(mod)
+
+
+# ── sync_docker_agent_files never raises; it returns error markers ────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,sync_result", [
+    ("skill", {"_error": "claude-config dir not found"}),
+    ("skill", {"SOUL.md": "written", "skills": "error: boom"}),
+    # .env sanitize failure returns early: the skills step never ran
+    ("skill", {"SOUL.md": "written", ".env": "error sanitizing: x"}),
+    ("plugin", {"_error": "claude-config dir not found"}),
+    ("plugin", {"settings.json": "error: render failed", "skills": "synced (1 ok)"}),
+])
+async def test_docker_sync_error_markers_are_not_reported_as_success(
+    async_session: AsyncSession, kind: str, sync_result: dict,
+):
+    agent = await _agent(async_session, name=f"E-{kind}-{len(sync_result)}",
+                         agent_runtime="cli-bridge", harness="claude")
+    from app.services.install_executor import _trigger_sync_config
+
+    p_sync, p_restart, p_mcp = _sync_patches(sync_result)
+    with p_sync, p_restart, p_mcp:
+        with pytest.raises(RuntimeError, match="error|did not run"):
+            await _trigger_sync_config(agent.id, kind)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [
+    "skipped (file does not exist — provision first)",
+    "unchanged (no runtime or no model_identifier)",
+])
+async def test_plugin_not_written_to_settings_reports_not_applied(
+    async_session: AsyncSession, value: str,
+):
+    agent = await _agent(async_session, name=f"P-{value[:4]}",
+                         agent_runtime="cli-bridge", harness="claude")
+    from app.services.install_executor import _trigger_sync_config
+
+    p_sync, p_restart, p_mcp = _sync_patches({"settings.json": value,
+                                              "skills": "synced (0 ok)"})
+    with p_sync, p_restart, p_mcp:
+        report = await _trigger_sync_config(agent.id, "plugin")
+    assert report["status"] == "not_applied"
+    assert "settings.json" in report["note"]
