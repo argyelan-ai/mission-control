@@ -134,6 +134,13 @@ async def resolve_chat(session: AsyncSession, user: Any, agent: Any, chat_id: uu
     supported = _FURTHER_CHAT_SUPPORT.get(harness)
     if supported is None or not supported(agent):
         raise ChatHarnessUnsupportedError(harness)
+    # The chat tailer's live sink only follows the agent's DEFAULT session,
+    # and a further chat's view never opens that stream: without this its
+    # message and answer reached the record only by the 10-minute sweep
+    # (live finding 23.11.2026). Keep this chat's own files live instead.
+    from app.services.chat_record_follow import FOLLOWER
+
+    FOLLOWER.follow(agent, chat.id)
     return str(chat.id)
 
 
