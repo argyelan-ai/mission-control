@@ -16,7 +16,7 @@ from app.config import settings
 from app.models.agent import Agent
 from app.models.deliverable import TaskDeliverable
 from app.models.file_index import FileIndexEntry
-from app.services import file_indexer
+from app.services import file_indexer, fs_roots
 from app.services.file_indexer import (
     capture_deliverable,
     reusable_deliverables,
@@ -37,6 +37,7 @@ def _tmp_roots_only(monkeypatch, tmp_path) -> list:
     machine) can't leak into counts."""
     keep = [r for r in browsable_roots() if r.container_override is None]
     monkeypatch.setattr(file_indexer, "browsable_roots", lambda: keep)
+    monkeypatch.setattr(fs_roots, "browsable_roots", lambda: keep)  # the walk's indexed_roots()
     return keep
 
 

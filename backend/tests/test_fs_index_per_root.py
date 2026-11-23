@@ -31,7 +31,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.config import settings
 from app.models.deliverable import TaskDeliverable
 from app.models.file_index import FileIndexEntry
-from app.services import file_indexer
+from app.services import file_indexer, fs_roots
 from app.services.file_indexer import run_once
 from app.services.fs_roots import browsable_roots
 from tests.conftest import test_engine
@@ -46,6 +46,7 @@ def _host_roots_only(monkeypatch) -> None:
     out of the walk — every other root derives from home_host=tmp_path."""
     keep = [r for r in browsable_roots() if r.container_override is None]
     monkeypatch.setattr(file_indexer, "browsable_roots", lambda: keep)
+    monkeypatch.setattr(fs_roots, "browsable_roots", lambda: keep)
 
 
 async def _rows(session: AsyncSession, root: str | None = None) -> list[FileIndexEntry]:
@@ -284,3 +285,85 @@ async def test_new_deliverable_gets_index_row_at_once(client: AsyncClient, tmp_p
     assert str(rows[0].deliverable_id) == resp.json()["id"]
     assert rows[0].task_id == task_id
     assert rows[0].size == len("%PDF-1.4 hello")
+
+
+# --- Races between the walk and a capture (critic finding, minor) ---------
+
+async def test_walk_keeps_captured_row_created_after_the_scan(async_session, tmp_path, monkeypatch):
+    """A deliverable written + captured after the walk passed its folder is in
+    the DB rows but not in the scan. Its file exists, so the row (with the
+    provenance only the capture knows) must stay."""
+    monkeypatch.setattr(settings, "home_host", str(tmp_path))
+    _host_roots_only(monkeypatch)
+    vault = tmp_path / ".mc" / "vault"
+    _mk(vault / "seen.md")
+
+    real_scan = file_indexer._scan_root
+
+    def scan_before_capture(base, max_entries):
+        entries, truncated = real_scan(base, max_entries)
+        if base == vault:
+            # the capture lands between the walk (phase 1) and the row read
+            _mk(vault / "late.pdf", "%PDF")
+        return entries, truncated
+
+    monkeypatch.setattr(file_indexer, "_scan_root", scan_before_capture)
+    # The captured row (as the capture writes it) is already in the DB when
+    # run_once reads rows; the scan above does not contain the file.
+    task_id = uuid.uuid4()
+    async_session.add(
+        FileIndexEntry(root_key="vault", rel_path="late.pdf", name="late.pdf", task_id=task_id, agent_slug="writer")
+    )
+    await async_session.commit()
+
+    await run_once(session_factory=_factory)
+
+    async with _factory() as s:
+        rows = {r.rel_path: r for r in await _rows(s, "vault")}
+    assert "late.pdf" in rows, "captured row deleted although its file exists"
+    assert rows["late.pdf"].task_id == task_id and rows["late.pdf"].agent_slug == "writer"
+
+
+async def test_walk_still_deletes_captured_row_whose_file_is_gone(async_session, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "home_host", str(tmp_path))
+    _host_roots_only(monkeypatch)
+    _mk(tmp_path / ".mc" / "vault" / "keep.md")
+    async_session.add(FileIndexEntry(root_key="vault", rel_path="gone.pdf", name="gone.pdf", task_id=uuid.uuid4()))
+    await async_session.commit()
+
+    await run_once(session_factory=_factory)
+
+    async with _factory() as s:
+        rels = {r.rel_path for r in await _rows(s, "vault")}
+    assert "gone.pdf" not in rels
+
+
+async def test_capture_retries_once_when_the_walk_inserted_the_row_first(async_session, monkeypatch):
+    """The walk can insert the plain row between the capture's read and its
+    commit → unique (root_key, rel_path) IntegrityError. One retry turns it
+    into an update, so the provenance is not lost."""
+    from sqlalchemy.exc import IntegrityError
+
+    deliv = TaskDeliverable(task_id=uuid.uuid4(), deliverable_type="file", title="d", path="/x/y")
+    async_session.add(deliv)
+    await async_session.commit()
+    await async_session.refresh(deliv)
+
+    calls = {"n": 0}
+
+    async def flaky_capture(session, deliverable, agent=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise IntegrityError("INSERT INTO file_index", {}, Exception("unique"))
+        return await file_indexer._upsert(
+            session, "vault", "y", name="y", is_directory=False, size=1, mime=None, mtime=1.0,
+            task_id=deliverable.task_id, deliverable_id=deliverable.id,
+        )
+
+    monkeypatch.setattr(file_indexer, "capture_deliverable", flaky_capture)
+    ok = await file_indexer.capture_deliverable_id(deliv.id, session_factory=_factory)
+
+    assert ok is True and calls["n"] == 2
+    async with _factory() as s:
+        row = (await s.exec(select(FileIndexEntry).where(FileIndexEntry.rel_path == "y"))).one()
+    assert row.deliverable_id == deliv.id

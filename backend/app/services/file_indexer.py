@@ -32,7 +32,7 @@ from app.config import settings
 from app.database import async_session_maker
 from app.models.file_index import FileIndexEntry
 from app.redis_client import get_redis
-from app.services import fs_service
+from app.services import fs_roots, fs_service
 from app.services.fs_roots import browsable_roots, mc_home
 
 logger = logging.getLogger("mc.file_indexer")
@@ -194,19 +194,29 @@ async def capture_deliverable_id(
     from app.models.deliverable import TaskDeliverable
 
     factory = session_factory or async_session_maker
-    try:
-        async with factory() as session:
-            deliverable = await session.get(TaskDeliverable, deliverable_id)
-            if deliverable is None:
-                return False
-            entry = await capture_deliverable(session, deliverable)
-            if entry is None:
-                return False
-            await session.commit()
-            return True
-    except Exception:  # noqa: BLE001 — best-effort, logged
-        logger.warning("file_indexer capture failed for deliverable %s", deliverable_id, exc_info=True)
-        return False
+    for attempt in (1, 2):
+        try:
+            async with factory() as session:
+                deliverable = await session.get(TaskDeliverable, deliverable_id)
+                if deliverable is None:
+                    return False
+                entry = await capture_deliverable(session, deliverable)
+                if entry is None:
+                    return False
+                await session.commit()
+                return True
+        except IntegrityError:
+            # The walk inserted the plain row between our read and our commit
+            # (unique root_key + rel_path). Once more: the row exists now, so
+            # _upsert updates it and the provenance is kept.
+            if attempt == 1:
+                continue
+            logger.warning("file_indexer capture lost a race twice for deliverable %s", deliverable_id)
+            return False
+        except Exception:  # noqa: BLE001 — best-effort, logged
+            logger.warning("file_indexer capture failed for deliverable %s", deliverable_id, exc_info=True)
+            return False
+    return False
 
 
 async def release_task_refs(session: AsyncSession, task_id) -> None:
@@ -236,10 +246,6 @@ async def release_task_refs(session: AsyncSession, task_id) -> None:
 # indexed root holds < 3 000 entries; the cap only guards against a runaway
 # tree. One root hitting it never starves the others any more.
 DEFAULT_MAX_ENTRIES_PER_ROOT = 20_000
-
-def _indexed_roots() -> list:
-    """Roots the walk covers — browsable and ``indexed`` (not workspaces)."""
-    return [r for r in browsable_roots() if r.indexed]
 
 
 # Scanned entry: name, is_dir, size, mime, mtime
@@ -296,7 +302,7 @@ async def run_once(
     scans: dict[str, dict[str, _Scan]] = {}
     bases: dict[str, Path] = {}
     truncated_roots: set[str] = set()
-    for r in _indexed_roots():
+    for r in fs_roots.indexed_roots():
         base = r.container_path
         if not base.exists() or not base.is_dir():
             continue
@@ -306,7 +312,7 @@ async def run_once(
         if truncated:
             truncated_roots.add(r.key)
     walked_roots = set(scans)
-    indexed_keys = {r.key for r in _indexed_roots()}
+    indexed_keys = {r.key for r in fs_roots.indexed_roots()}
 
     # --- Phase 2: read the current rows of the walked roots (columns only) -
     existing: dict[tuple[str, str], tuple] = {}
@@ -321,11 +327,14 @@ async def run_once(
                         FileIndexEntry.is_directory,
                         FileIndexEntry.size,
                         FileIndexEntry.mtime,
+                        FileIndexEntry.task_id,
+                        FileIndexEntry.deliverable_id,
                     ).where(FileIndexEntry.root_key.in_(walked_roots))  # type: ignore[union-attr]
                 )
             ).all()
-        for rid, root_key, rel, is_dir, size, mtime in rows:
-            existing[(root_key, rel)] = (rid, bool(is_dir), int(size or 0), float(mtime or 0.0))
+        for rid, root_key, rel, is_dir, size, mtime, task_id, deliverable_id in rows:
+            captured = task_id is not None or deliverable_id is not None
+            existing[(root_key, rel)] = (rid, bool(is_dir), int(size or 0), float(mtime or 0.0), captured)
 
     # --- Phase 3: diff (pure, no DB) ---------------------------------------
     inserts: list[tuple[str, str, _Scan]] = []
@@ -343,8 +352,10 @@ async def run_once(
     for (root_key, rel), cur in existing.items():
         if rel in scans[root_key]:
             continue
-        if root_key in truncated_roots:
-            # Not reached because of the cap — delete only if really gone.
+        if root_key in truncated_roots or cur[4]:
+            # Not reached because of the cap, or a captured row (task /
+            # deliverable provenance) whose file may have been written after
+            # the walk passed its folder — delete only if really gone.
             if os.path.lexists(bases[root_key] / rel):
                 continue
         deletes.append(cur[0])
