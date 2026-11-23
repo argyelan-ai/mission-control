@@ -70,3 +70,16 @@ def test_unknown_type_rejected():
 def test_empty_source_rejected():
     with pytest.raises(AllowlistError):
         validate_source("skill", "")
+
+
+@pytest.mark.parametrize("name", ["web-performance", "shadcn-ui", "a", "x_y-1"])
+def test_skill_name_ok(name):
+    from app.services.install_allowlist import validate_skill_name
+    assert validate_skill_name(name) is True
+
+
+@pytest.mark.parametrize("name", ["", "..", "../x", "a/b", "A", ".x", "-x", "x" * 101])
+def test_skill_name_rejected(name):
+    from app.services.install_allowlist import AllowlistError, validate_skill_name
+    with pytest.raises(AllowlistError):
+        validate_skill_name(name)

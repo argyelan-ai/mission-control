@@ -23,7 +23,12 @@ from app.models.agent import Agent
 from app.models.approval import Approval
 from app.redis_client import RedisKeys, get_redis
 from app.scopes import get_agent_effective_scopes
-from app.services.install_allowlist import AllowlistError, validate_source
+from app.services import install_executor
+from app.services.install_allowlist import (
+    AllowlistError,
+    validate_skill_name,
+    validate_source,
+)
 
 router = APIRouter(prefix="/api/v1/agent/install-requests", tags=["install-requests"])
 
@@ -38,7 +43,14 @@ class InstallRequestCreate(BaseModel):
     name: str
     target_agent_id: uuid.UUID
     reason: str = Field(..., min_length=5, max_length=2000)
+    # Accepted for old callers, never trusted: an install request always waits
+    # for the operator (stored as "L2"), whatever the requester sends.
     autonomy_level: Literal["L1", "L2", "L3"] | None = "L2"
+    # Skill from GitHub: the version to install — a commit SHA, tag or branch.
+    # Resolved to an exact commit SHA at request time; the operator approves
+    # that commit and the executor installs exactly it. Empty = default branch
+    # as of now (still pinned to the SHA it resolves to today).
+    ref: str | None = Field(default=None, max_length=200)
     proposed_config: dict | None = None
     # Callback coupling: if the requester makes the request in the context of
     # a running task, we post an install_completed comment on that task after
@@ -84,6 +96,11 @@ async def create_install_request(
             validate_source(body.type, body.source)
         except AllowlistError as e:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Source not in allowlist: {e}")
+    if body.type == "skill":
+        try:
+            validate_skill_name(body.name)
+        except AllowlistError as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
 
     # 2. Target agent must exist
     target = await session.get(Agent, body.target_agent_id)
@@ -134,18 +151,41 @@ async def create_install_request(
                 existing=True,
             )
 
-    # 6. Target must have a board (required for Approval.board_id FK)
-    if target.board_id is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Target agent must be assigned to a board before install requests can be created",
-        )
+    # 6. GitHub skill: refuse a name the shared library already has, and pin
+    #    the version to an exact commit before the operator sees the request.
+    commit: str | None = None
+    if (
+        body.operation == "install"
+        and body.type == "skill"
+        and body.source
+        and body.source.startswith("github:")
+    ):
+        if (install_executor.skills_root() / body.name).exists():
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"A skill named {body.name!r} already exists in the skills "
+                "library; it is never overwritten. To give it to this agent, "
+                f"request source '~/.mc/skills/{body.name}' instead",
+            )
+        try:
+            commit = await install_executor.resolve_skill_commit(body.source, body.ref)
+        except Exception as e:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Could not pin {body.source} to a commit: {e}",
+            )
 
-    # 7. Create Approval row
+    # 7. Create Approval row. No board needed: approvals.board_id is optional
+    #    and the global pending list shows board-less approvals.
+    # The operator approves one fixed version: name the source and the
+    # pinned commit in the text they read.
+    origin = f" from {body.source}" if body.source else ""
+    if commit:
+        origin += f"@{commit[:12]}"
     description = (
         f"{requester.name} requests to "
         f"{body.operation} {body.type} "
-        f"{body.name!r} on agent {target.name!r}: "
+        f"{body.name!r}{origin} on agent {target.name!r}: "
         f"{body.reason[:200]}"
     )
     payload_data = {
@@ -158,6 +198,8 @@ async def create_install_request(
         "reason": body.reason,
         "proposed_config": body.proposed_config,
         "requester_task_id": str(body.task_id) if body.task_id else None,
+        "ref": body.ref,
+        "commit": commit,
     }
     approval = Approval(
         board_id=target.board_id,
@@ -165,7 +207,7 @@ async def create_install_request(
         action_type=action_type,
         description=description,
         payload=payload_data,
-        autonomy_level=body.autonomy_level,
+        autonomy_level="L2",
         expires_at=datetime.now(timezone.utc) + timedelta(days=7),
         status="pending",
     )
