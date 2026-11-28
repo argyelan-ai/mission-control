@@ -315,6 +315,26 @@ export type RecordChat = {
   runtimeId?: string | null;
 };
 
+/** One hit of the record's message search (`GET /chat-record/search`, #1068):
+ *  the best message of one chat. `highlight` = [start, end) of the match in
+ *  `snippet`, in UTF-16 units — plain JavaScript string indices. */
+export type RecordSearchHit = {
+  chatId: string;
+  chatTitle: string | null;
+  agentId: string | null;
+  eventId: string;
+  kind: string;
+  role: string;
+  ts: string | null;
+  snippet: string;
+  highlight: [number, number];
+  match?: string;
+  matches?: number;
+};
+
+/** `enabled: false` while CHAT_RECORD_ENABLED is off (200, no hits). */
+export type RecordSearchResult = { hits: RecordSearchHit[]; enabled: boolean; truncated?: boolean };
+
 /** One side of a chat switch (ADR-105): what the chat ran on before, or
  *  runs on after. `sessionId` is the native session (never shown). */
 export type SwitchPair = {
@@ -397,6 +417,12 @@ export const api = {
      *  "<agent> · chat <n>" in the viewer's own language. */
     createChat: (agentId: string) =>
       request<RecordChat>("/api/v1/chat-record/chats", { method: "POST", body: JSON.stringify({ agentId }) }),
+    /** Messages of every chat the viewer can see — one best hit per chat
+     *  (concept "Suche", P3/P5). Flag off: `{hits: [], enabled: false}`. */
+    search: (q: string, limit = 8) =>
+      request<RecordSearchResult>(
+        `/api/v1/chat-record/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+      ),
     history: (chatId: string, limit = 200) =>
       request<RecordHistory>(`/api/v1/chat-record/chats/${encodeURIComponent(chatId)}/history?limit=${limit}`),
     /** Move a chat to another pair (ADR-105). Refusals come as errors —

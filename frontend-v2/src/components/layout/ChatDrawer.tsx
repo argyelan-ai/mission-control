@@ -4,8 +4,9 @@ import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { BookOpen, Gauge, PanelLeft, Settings, type LucideIcon } from "lucide-react";
+import { BookOpen, Gauge, PanelLeft, Search, Settings, type LucideIcon } from "lucide-react";
 import { alpha, C } from "@/lib/colors";
+import { useAppStore } from "@/lib/store";
 import { TAB_HREFS } from "@/lib/mobileNav";
 import { ChatList } from "./ChatList";
 import { useMobileNav, useMobileNavOptional } from "./MobileNav";
@@ -56,6 +57,8 @@ function FooterLink({ href, icon: Icon, label, onNavigate }: { href: string; ico
  */
 export function ChatDrawer() {
   const t = useTranslations("cockpit");
+  const tShell = useTranslations("shell");
+  const setCommandPaletteOpen = useAppStore((s) => s.setCommandPaletteOpen);
   const { drawerOpen, setDrawerOpen } = useMobileNav();
   const reduce = useReducedMotion();
   const close = () => setDrawerOpen(false);
@@ -129,8 +132,25 @@ export function ChatDrawer() {
             exit={{ x: "-100%" }}
             transition={{ duration: reduce ? 0 : 0.25, ease: [0.16, 1, 0.3, 1] }}
           >
-            <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-3">
+            {/* The magnifier sits on the "New chat" row, right of it (concept
+                "Suche" 5.2): the list's first row leaves it 48 px. It opens
+                the search full screen; the drawer closes underneath. After the
+                list in the DOM, so Tab reaches "New chat" first. */}
+            <div className="relative flex-1 min-h-0 overflow-y-auto px-3 pt-3 [&_[data-testid=chat-list-new]]:mr-12">
               <ChatList onNavigate={close} />
+              <button
+                type="button"
+                onClick={() => {
+                  close();
+                  setCommandPaletteOpen(true);
+                }}
+                aria-label={tShell("search")}
+                data-testid="drawer-search"
+                className="absolute top-3 right-3 flex items-center justify-center w-11 h-11 rounded-lg cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+                style={{ color: C.textSecondary }}
+              >
+                <Search size={18} strokeWidth={1.75} aria-hidden />
+              </button>
             </div>
             <nav
               aria-label={t("mainNav")}

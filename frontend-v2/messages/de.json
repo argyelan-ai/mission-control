@@ -1522,7 +1522,16 @@
     "sidebarPick": "Chat wählen"
   },
   "shell": {
-    "searchPlaceholder": "Suchen oder Befehl...",
+    "searchPlaceholder": "Suchen …",
+    "searchGroupRecent": "Zuletzt",
+    "searchGroupChats": "Chats",
+    "searchGroupMessages": "In Nachrichten",
+    "searchGroupCommands": "Befehle",
+    "searchGroupPages": "Seiten",
+    "searchSearching": "Sucht in Nachrichten…",
+    "searchAgentSettings": "Einstellungen von {name}",
+    "searchCancel": "Abbrechen",
+    "searchDialog": "Suche",
     "noResults": "Keine Treffer",
     "navigation": "Navigation",
     "actions": "Aktionen",
