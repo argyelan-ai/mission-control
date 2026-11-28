@@ -1522,7 +1522,7 @@
     "sidebarPick": "Chat wählen"
   },
   "shell": {
-    "searchPlaceholder": "Chats, Nachrichten, Seiten suchen…",
+    "searchPlaceholder": "Suchen …",
     "searchGroupRecent": "Zuletzt",
     "searchGroupChats": "Chats",
     "searchGroupMessages": "In Nachrichten",

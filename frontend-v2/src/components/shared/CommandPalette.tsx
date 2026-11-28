@@ -226,10 +226,9 @@ function PaletteLayer({ onClose }: { onClose: () => void }) {
         }
       }}
     >
-      <div
-        className="flex items-center gap-3 px-4 shrink-0"
-        style={{ borderBottom: `1px solid ${C.borderSubtle}` }}
-      >
+      {/* palette-input-row (globals.css): the field's focus shows as the
+          row's accent underline, not as the global ring around the field. */}
+      <div className="palette-input-row flex items-center gap-3 px-4 shrink-0">
         <Search size={16} aria-hidden style={{ color: C.textMuted, flexShrink: 0 }} />
         {/* 16 px text: iOS zooms into any smaller field. */}
         <Command.Input
@@ -278,7 +277,9 @@ function PaletteLayer({ onClose }: { onClose: () => void }) {
                 title={titleOf(e)}
                 agentName={agentNameOf(e)}
                 time={chatRowTime(e.at, locale)}
-                settingsLabel={e.kind === "agent" && !e.chatId ? t("searchAgentSettings", { name: e.title }) : null}
+                // only while searching: in the recent list a gear on every
+                // agent row would be noise (K4)
+                settingsLabel={typing && e.kind === "agent" && !e.chatId ? t("searchAgentSettings", { name: e.title }) : null}
                 onOpen={() => navigate(e.href)}
                 onSettings={() => navigate(`/agents/${e.id}`)}
               />

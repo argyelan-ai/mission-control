@@ -149,6 +149,8 @@ describe("CommandPalette — empty box = recent chats", () => {
       expect.arrayContaining([expect.stringContaining("Sparky"), expect.stringContaining("Hermes")]),
     );
     expect(group("palette-group-pages")).toBeNull();
+    // the settings gear appears only while searching — not on every recent row
+    expect(screen.queryByTestId("palette-agent-settings")).toBeNull();
   });
 
   it("puts a pinned chat first", async () => {
