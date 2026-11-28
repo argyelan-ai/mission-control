@@ -31,8 +31,11 @@ again when the approved install reads the staged files):
   commands), `allowed-tools` / `disallowed-tools` (grant tools) and any key
   MC does not know yet. Frontmatter that is not closed or not valid YAML is
   refused too.
-- inline shell in any text file: `` !`command` `` or a code fence opened
-  with `!`.
+- inline shell in any text file: `` !`command` ``, or the characters
+  ```` ```! ```` anywhere (mid-line, in a quote or list, after four
+  backticks: Claude Code runs every such block), or a fence opened with `!`
+  after spaces or with `~~~`. The rule is on the safe side: a reference
+  file that only *shows* this syntax is refused too.
 
 So a skill that uses `allowed-tools` (common for local skills) **cannot be
 shared in this round**. Remove the key (or wait for the code round) to share it.
@@ -107,7 +110,9 @@ The import answers `201` with the pending approval(s). It answers `200` with
 
 1. The whole file is checked in memory: size, paths, names, hashes, text rule.
 2. Each skill is written to `~/.mc/extensions/staging/<tree sha256>/`.
-   Nothing goes into the skills library yet.
+   Nothing goes into the skills library yet. The staged folder (at most
+   5 MB) is not removed after approve, reject or expiry yet; cleanup is a
+   later slice.
 3. Approvals are created, `pending`, 7 days:
    - **skill** -> `install_skill` with source `bundle:<tree sha256>`, the
      same payload shape as an agent's install request. On approval the

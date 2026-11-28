@@ -101,8 +101,11 @@ SKILL_FRONTMATTER_KEYS = frozenset({
 # strict reading finds no end, the file is refused. One check covers both.
 _FRONTMATTER_OPEN_RE = re.compile(r"\A---\s*\n")
 _FRONTMATTER_STRICT_RE = re.compile(r"\A---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|\Z)")
-# Inline shell: ``!`cmd` `` anywhere, or a fence opened with ``!``.
-_INLINE_SHELL_RE = re.compile(r"!`|^[ \t]*(?:```|~~~)[ \t]*!", re.MULTILINE)
+# Inline shell: ``!`cmd` `` anywhere; the substring ```` ```! ```` anywhere
+# (Claude Code runs every such block, not only line-start fences, and its own
+# detector is a plain substring test); or a line-start fence opened with ``!``
+# after spaces or with ``~~~`` (kept on the safe side).
+_INLINE_SHELL_RE = re.compile(r"!`|```!|^[ \t]*(?:```|~~~)[ \t]*!", re.MULTILINE)
 
 
 class BundleError(ValueError):
