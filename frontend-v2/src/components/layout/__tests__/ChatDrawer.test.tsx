@@ -147,6 +147,19 @@ describe("chat drawer (phone)", () => {
     expect(screen.getByTestId("drawer-button")).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("has a magnifier next to New chat that opens the search and closes the drawer (concept P5)", async () => {
+    palette.open.mockClear();
+    const drawer = await openDrawer();
+    const search = within(drawer).getByTestId("drawer-search");
+    expect(search).toHaveAccessibleName("Search");
+    // same scroll box as "New chat", which leaves it room on its right
+    expect(search.parentElement).toContainElement(within(drawer).getByTestId("chat-list-new"));
+    expect(search.parentElement?.className).toContain("[&_[data-testid=chat-list-new]]:mr-12");
+    await userEvent.click(search);
+    expect(palette.open).toHaveBeenCalledWith(true);
+    await waitFor(() => expect(screen.queryByTestId("chat-drawer")).toBeNull());
+  });
+
   it("shows two chats of the same agent once the record has a further chat (chats slice S2)", async () => {
     data.recordChats = [
       { id: "d-1", title: "Recipe rework", legacyAgentId: "a1", agentDefault: true, archived: false, lastActivityAt: iso(0, 9) },
