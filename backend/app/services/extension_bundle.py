@@ -30,6 +30,12 @@ Rules (extensions concept, section 6):
   (scripts, hooks, binaries, unknown types) is refused as ``contains_code``;
   so is a persona that lists plugins or MCP servers. Code is red and refused
   by default in this round.
+* **Text that runs is code too.** Claude Code runs parts of a ``SKILL.md``:
+  frontmatter ``hooks`` / ``shell``, tool grants (``allowed-tools``) and
+  inline shell (``!`cmd` `` and ``!`` fences). The frontmatter of every
+  ``SKILL.md`` must use only the keys in ``SKILL_FRONTMATTER_KEYS``; inline
+  shell is refused in every text file. Checked on export, import and again
+  when the executor loads the staged files.
 * **Nothing private leaves.** Export refuses token-shaped secrets and home
   paths, and never writes agent ids, template ids, scopes, env or plugin /
   MCP server lists (only their count).
@@ -44,6 +50,7 @@ import os
 import re
 import shutil
 import stat
+import unicodedata
 import uuid
 import zipfile
 from dataclasses import dataclass, field
@@ -78,6 +85,24 @@ _SECRET_RES = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
 )
 _HOME_PATH_RE = re.compile(r"(/Users/|/home/|[A-Za-z]:\\Users\\)[A-Za-z0-9._-]+")
+
+# SKILL.md frontmatter keys that only describe a skill. Everything else is
+# refused: ``hooks`` / ``shell`` run commands, ``allowed-tools`` /
+# ``disallowed-tools`` grant tools, and an unknown key could be a capability
+# a newer Claude Code adds.
+SKILL_FRONTMATTER_KEYS = frozenset({
+    "name", "description", "license", "version", "metadata", "argument-hint",
+    "when_to_use", "user-invocable", "disable-model-invocation",
+})
+# Claude Code opens frontmatter with ``---`` + line end (_OPEN) and closes it
+# either at a line that is exactly ``---`` (_STRICT) or, in a lenient reader,
+# at the first ``---`` anywhere. The lenient block is always a prefix of the
+# strict one, so every key it sees is also in the strict block; and when the
+# strict reading finds no end, the file is refused. One check covers both.
+_FRONTMATTER_OPEN_RE = re.compile(r"\A---\s*\n")
+_FRONTMATTER_STRICT_RE = re.compile(r"\A---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|\Z)")
+# Inline shell: ``!`cmd` `` anywhere, or a fence opened with ``!``.
+_INLINE_SHELL_RE = re.compile(r"!`|^[ \t]*(?:```|~~~)[ \t]*!", re.MULTILINE)
 
 
 class BundleError(ValueError):
@@ -147,11 +172,44 @@ def check_text_file(rel: str, data: bytes, mode: int = 0) -> None:
     if data.startswith(b"#!"):
         raise BundleError("contains_code", f"{rel}: starts with a #! line")
     try:
-        data.decode("utf-8")
+        text = data.decode("utf-8")
     except UnicodeDecodeError:
         raise BundleError("contains_code", f"{rel}: not UTF-8 text")
     if b"\0" in data:
         raise BundleError("contains_code", f"{rel}: binary content")
+    if _INLINE_SHELL_RE.search(text):
+        raise BundleError("contains_code",
+                          f"{rel}: inline shell (!`...` or a ! fence) runs commands")
+    if PurePosixPath(rel).name.casefold() == "skill.md":
+        check_skill_frontmatter(rel, text)
+
+
+def check_skill_frontmatter(rel: str, text: str) -> None:
+    """Refuse a SKILL.md whose frontmatter carries anything but description
+    keys (``contains_code``). Unparseable frontmatter is refused too: what
+    cannot be read cannot be shown to be harmless."""
+    body = text[1:] if text.startswith("\ufeff") else text
+    if not _FRONTMATTER_OPEN_RE.match(body):
+        return
+    m = _FRONTMATTER_STRICT_RE.match(body)
+    if not m:
+        raise BundleError("contains_code", f"{rel}: frontmatter is not closed")
+    import yaml
+    try:
+        meta = yaml.safe_load(m.group(1))
+    except yaml.YAMLError:
+        raise BundleError("contains_code", f"{rel}: frontmatter is not valid YAML")
+    if meta is None:
+        return
+    if not isinstance(meta, dict):
+        raise BundleError("contains_code", f"{rel}: frontmatter is not a mapping")
+    extra = sorted(str(k) for k in meta if k not in SKILL_FRONTMATTER_KEYS)
+    if extra:
+        raise BundleError(
+            "contains_code",
+            f"{rel}: frontmatter key(s) {', '.join(extra)} are not shared in "
+            "this round (hooks, shell and tool grants run code; only "
+            f"{', '.join(sorted(SKILL_FRONTMATTER_KEYS))} are allowed)")
 
 
 def check_shareable_text(where: str, text: str) -> None:
@@ -167,6 +225,22 @@ def check_shareable_text(where: str, text: str) -> None:
 # ── export ─────────────────────────────────────────────────────────────────
 
 
+def _skill_files(root: Path) -> list[tuple[str, Path]]:
+    """The files that make up a skill folder: dot segments (``.git``,
+    ``.DS_Store``) are skipped. Used for export and for the 'identical skill
+    already installed' check, so both see the same skill. A symlink raises."""
+    out: list[tuple[str, Path]] = []
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root).as_posix()
+        if any(part.startswith(".") for part in PurePosixPath(rel).parts):
+            continue
+        if p.is_symlink():
+            raise BundleError("unsafe_path", f"{root.name}/{rel}: symlinks are not shared")
+        if p.is_file():
+            out.append((rel, p))
+    return out
+
+
 def read_skill_dir(name: str) -> dict[str, bytes]:
     """The files of a library skill, checked as an import would check them."""
     validate_name(name)
@@ -174,14 +248,7 @@ def read_skill_dir(name: str) -> dict[str, bytes]:
     if root.is_symlink() or not (root / "SKILL.md").is_file():
         raise BundleError("not_found", f"skill {name!r} not found in the library")
     files: dict[str, bytes] = {}
-    for p in sorted(root.rglob("*")):
-        rel = p.relative_to(root).as_posix()
-        if any(part.startswith(".") for part in PurePosixPath(rel).parts):
-            continue  # .git, .DS_Store: not part of the skill
-        if p.is_symlink():
-            raise BundleError("unsafe_path", f"{name}/{rel}: symlinks are not exported")
-        if p.is_dir():
-            continue
+    for rel, p in _skill_files(root):
         data = p.read_bytes()
         _safe_relpath(rel)
         check_text_file(f"{name}/{rel}", data, p.stat().st_mode)
@@ -315,6 +382,7 @@ def parse_bundle(data: bytes) -> ParsedBundle:
         if sum(i.file_size for i in infos) > MAX_TOTAL_BYTES:
             raise BundleError("too_large", "bundle content is larger than 5 MB")
         entries: dict[str, tuple[bytes, int]] = {}
+        folded_seen: dict[str, str] = {}
         for info in infos:
             name = info.filename
             if info.is_dir():
@@ -326,6 +394,13 @@ def parse_bundle(data: bytes) -> ParsedBundle:
                 raise BundleError("unsafe_path", f"{rel}: symlinks are not allowed")
             if rel in entries:
                 raise BundleError("invalid_bundle", f"{rel}: listed twice")
+            folded = unicodedata.normalize("NFC", rel).casefold()
+            if folded in folded_seen:
+                # On a case-insensitive disk (macOS) the two would overwrite
+                # each other in staging and fail only after approval.
+                raise BundleError("unsafe_path", f"{rel}: differs from "
+                                  f"{folded_seen[folded]} only in letter case")
+            folded_seen[folded] = rel
             try:
                 blob = zf.read(info)
             except Exception:
@@ -496,14 +571,31 @@ def load_staged_skill(sha: str, name: str) -> dict[str, bytes]:
     return files
 
 
+def staged_preview(sha: str) -> dict[str, Any]:
+    """Read-only view of a staged skill, so the operator can read what an
+    ``install_skill`` / ``import_persona`` approval would install. Verified
+    exactly as at install (content rules + sha256)."""
+    if not isinstance(sha, str) or not _SHA_RE.match(sha):
+        raise BundleError("bad_request", "sha256 must be 64 lowercase hex characters")
+    try:
+        name = json.loads((staging_root() / sha / "meta.json").read_text()).get("name")
+    except (OSError, json.JSONDecodeError):
+        raise BundleError("not_found", f"no staged bundle {sha[:12]}")
+    files = load_staged_skill(sha, name)
+    return {"name": name, "sha256": sha,
+            "files": [{"path": p, "size": len(b), "text": b.decode("utf-8")}
+                      for p, b in sorted(files.items())]}
+
+
 def library_tree_sha(name: str) -> str | None:
     """Tree sha256 of an installed library skill, None if absent/unreadable."""
     root = skills_library() / name
     if not root.is_dir() or root.is_symlink():
         return None
-    files = {p.relative_to(root).as_posix(): p.read_bytes()
-             for p in sorted(root.rglob("*")) if p.is_file() and not p.is_symlink()}
-    return tree_sha256(files)
+    try:
+        return tree_sha256({rel: p.read_bytes() for rel, p in _skill_files(root)})
+    except (BundleError, OSError):
+        return None  # a symlink or unreadable file: never "identical"
 
 
 def install_staged_skill(sha: str, name: str) -> dict[str, Any]:
@@ -720,8 +812,11 @@ async def on_approval_resolved(session: Any, approval: Any, status: str) -> None
     and the quick-resolve path call it for non-core action types)."""
     if approval.action_type != PERSONA_ACTION or status != "approved":
         return
+    from app.services.activity import emit_event
+
+    name = ((approval.payload or {}).get("persona") or {}).get("name") or "?"
     try:
-        await apply_persona_import(session, approval)
+        template = await apply_persona_import(session, approval)
     except Exception as e:
         logger.warning("persona import %s failed: %s", approval.id, e)
         try:
@@ -732,6 +827,25 @@ async def on_approval_resolved(session: Any, approval: Any, status: str) -> None
         approval.failure_reason = f"{reason}: {e}"[:2000]
         session.add(approval)
         await session.commit()
+        try:
+            await emit_event(
+                session, event_type="extension.persona_import_failed",
+                title=f"Persona import failed: {name} ({reason})", severity="warning",
+                detail={"approval_id": str(approval.id), "name": name,
+                        "reason": reason, "error": str(e)[:500]},
+            )
+        except Exception:
+            logger.exception("persona import %s: event not stored", approval.id)
+        return
+    try:
+        await emit_event(
+            session, event_type="extension.persona_imported",
+            title=f"Persona imported: {name}", severity="info",
+            detail={"approval_id": str(approval.id), "name": name,
+                    "template_id": str(template.id)},
+        )
+    except Exception:
+        logger.exception("persona import %s: event not stored", approval.id)
 
 
 def register_hooks() -> None:

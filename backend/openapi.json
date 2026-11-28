@@ -3032,6 +3032,15 @@
         ]
       }
     },
+    "/api/v1/extensions/staged/{sha}": {
+      "get": {
+        "operationId": "staged_extension_api_v1_extensions_staged__sha__get",
+        "summary": "Staged Extension",
+        "tags": [
+          "extensions"
+        ]
+      }
+    },
     "/api/v1/files/content": {
       "get": {
         "operationId": "get_content_api_v1_files_content_get",

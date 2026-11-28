@@ -2,6 +2,7 @@
 
 GET  /api/v1/extensions/export?skill=<name> | ?template=<id>  -> .mcext download
 POST /api/v1/extensions/import  (multipart ``file``, optional ``target_agent_id``)
+GET  /api/v1/extensions/staged/<sha256>  -> read-only content of a staged skill
 
 Admin only. An import never installs: it validates, stages and creates
 PENDING approvals (see ``services/extension_bundle.py``). See
@@ -26,6 +27,7 @@ eb.register_hooks()
 _STATUS = {
     "not_found": status.HTTP_404_NOT_FOUND,
     "exists": status.HTTP_409_CONFLICT,
+    "bad_request": status.HTTP_400_BAD_REQUEST,
 }
 
 
@@ -89,3 +91,17 @@ async def import_extension(
         "existing": not outcome.created,
         "approvals": outcome.approvals,
     }
+
+
+@router.get("/staged/{sha}")
+async def staged_extension(
+    sha: str,
+    _admin=Depends(require_role(Role.ADMIN)),
+) -> dict:
+    """What a pending bundle approval would install, re-verified (sha256 and
+    content rules). Read only; lets the operator read foreign content before
+    approving it."""
+    try:
+        return eb.staged_preview(sha)
+    except eb.BundleError as e:
+        raise _http(e, status.HTTP_422_UNPROCESSABLE_ENTITY)

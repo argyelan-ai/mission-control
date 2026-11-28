@@ -199,6 +199,7 @@
     "GET /api/v1/deploy/services",
     "GET /api/v1/docker-sessions/agents",
     "GET /api/v1/extensions/export",
+    "GET /api/v1/extensions/staged/{sha}",
     "GET /api/v1/files/content",
     "GET /api/v1/files/list",
     "GET /api/v1/files/meta",
