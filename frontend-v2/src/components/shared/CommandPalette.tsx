@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { Command } from "cmdk";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AudioLines, MessageSquare, MessageSquareText, Search, Settings, SquarePen, Users, type LucideIcon } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 import { NAV_TREE, type NavItem } from "@/lib/nav";
@@ -13,6 +13,8 @@ import { api, type RecordChat, type RecordSearchHit } from "@/lib/api";
 import { chatRowTime, type ChatListEntry } from "@/lib/chatList";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { useChatList } from "@/components/layout/useChatList";
+// One link for both "New chat" doors (list button + palette): the draft (P4).
+import { NEW_CHAT_HREF } from "@/components/layout/ChatList";
 import { useVoiceContext } from "@/components/voice/VoiceWidget";
 import { useVoiceLiveCall } from "@/components/voice/live/VoiceLiveCall";
 import { C, alpha } from "@/lib/colors";
@@ -27,10 +29,17 @@ import {
   wantsMessageSearch,
 } from "./paletteSearch";
 
-/** Where "New chat" leads — the draft (P4). Mirrors `NEW_CHAT_HREF` in
- *  `layout/ChatList.tsx`; not imported, so the palette does not pull the
- *  whole list component in. */
-const NEW_CHAT_HREF = "/sessions?new=1";
+/** Is this error "the route is not there" (an older backend)? Only that
+ *  and `enabled: false` switch the message search off — a 5xx, a network
+ *  flap or an expired login only empty that one query. */
+function isMissingRoute(error: unknown): boolean {
+  return error instanceof Error && /^API 404\b/.test(error.message);
+}
+
+/** "The record's search is off here" — kept in the query cache (not in the
+ *  box's own state) so the next open neither asks nor flashes "Searching…".
+ *  A reload asks again. */
+const SEARCH_OFF_KEY = ["chat-record", "search-off"] as const;
 
 // ── Styles (tokens only) ────────────────────────────────────────────────────
 // Selected = accent-subtle surface + 2 px accent bar on the left (inset, no
@@ -161,7 +170,14 @@ function PaletteLayer({ onClose }: { onClose: () => void }) {
   );
 
   // ── In messages: the record's search, quiet when it is off or missing ───
-  const [recordOff, setRecordOff] = useState(false);
+  const queryClient = useQueryClient();
+  const { data: recordOff = false } = useQuery({
+    queryKey: SEARCH_OFF_KEY,
+    queryFn: () => false,
+    initialData: false,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
   const askServer = wantsMessageSearch(debounced) && !recordOff;
   const search = useQuery({
     queryKey: ["chat-record", "search", debounced],
@@ -172,18 +188,20 @@ function PaletteLayer({ onClose }: { onClose: () => void }) {
   });
   useEffect(() => {
     // Off (enabled: false) or an older backend without the route: hide the
-    // group and stop asking for as long as the box is open.
-    if (search.data?.enabled === false || search.isError) setRecordOff(true);
-  }, [search.data, search.isError]);
+    // group and stop asking until the page reloads.
+    if (search.data?.enabled === false || (search.isError && isMissingRoute(search.error))) {
+      queryClient.setQueryData(SEARCH_OFF_KEY, true);
+    }
+  }, [search.data, search.isError, search.error, queryClient]);
   const hits = useMemo(() => {
-    if (!wantsMessageSearch(query) || recordOff || !search.data?.enabled) return [];
+    if (!wantsMessageSearch(query) || recordOff || search.isError || !search.data?.enabled) return [];
     const out: { hit: RecordSearchHit; target: ChatListEntry }[] = [];
     for (const hit of search.data.hits ?? []) {
       const target = messageHitTarget(hit, entries, recordChats);
       if (target) out.push({ hit, target });
     }
     return out;
-  }, [query, recordOff, search.data, entries, recordChats]);
+  }, [query, recordOff, search.isError, search.data, entries, recordChats]);
   const searching =
     wantsMessageSearch(query) && !recordOff && (debounced !== query.trim() || search.isFetching) && hits.length === 0;
 
@@ -280,6 +298,7 @@ function PaletteLayer({ onClose }: { onClose: () => void }) {
                 // only while searching: in the recent list a gear on every
                 // agent row would be noise (K4)
                 settingsLabel={typing && e.kind === "agent" && !e.chatId ? t("searchAgentSettings", { name: e.title }) : null}
+                gearSlot={typing}
                 onOpen={() => navigate(e.href)}
                 onSettings={() => navigate(`/agents/${e.id}`)}
               />
@@ -409,6 +428,7 @@ function ChatItem({
   agentName,
   time,
   settingsLabel,
+  gearSlot,
   onOpen,
   onSettings,
 }: {
@@ -417,6 +437,9 @@ function ChatItem({
   agentName: string | null;
   time: string | null;
   settingsLabel: string | null;
+  /** While searching some rows carry the gear: every row keeps its slot, so
+   *  the times stand in one column (K-alignment). */
+  gearSlot: boolean;
   onOpen: () => void;
   onSettings: () => void;
 }) {
@@ -450,6 +473,7 @@ function ChatItem({
           <Settings size={16} aria-hidden />
         </button>
       )}
+      {!settingsLabel && gearSlot && <span aria-hidden data-testid="palette-gear-slot" className="shrink-0 w-11 h-11 -mr-3" />}
     </Command.Item>
   );
 }

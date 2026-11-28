@@ -37,6 +37,15 @@ describe("matchScore — exact > word start > inside > fuzzy", () => {
     expect(matchScore("xyz", "Kühlstand")).toBeNull();
   });
 
+  it("one letter plus punctuation ('c++', 'c#') is not the letter alone", () => {
+    expect(matchScore("c++", "Cooling stand")).toBeNull();
+    expect(matchScore("c#", "Release crew chat")).toBeNull();
+    expect(matchScore("c++", "C++ build")).not.toBeNull();
+    expect(matchScore("c#", "Notes on c# generics")).not.toBeNull();
+    // a plain single letter still starts a word
+    expect(matchScore("c", "Cooling stand")).toBe(SCORE_WORD_START);
+  });
+
   it("folds umlauts and case", () => {
     expect(matchScore("kuhl", "Kühlstand")).toBe(SCORE_WORD_START);
   });
@@ -117,9 +126,12 @@ describe("messageHitTarget", () => {
     expect(t?.href).not.toContain("chat=");
   });
 
-  it("a further chat the list has no row for yet still opens by id", () => {
+  it("a further chat the list shows no row for leads nowhere — no chat URL the backend refuses", () => {
+    // The list and the palette read the same record query, so a further
+    // chat without a row is one the list hides on purpose: archived, or on
+    // a harness whose daemon holds no further chats (only omp does).
     const t = messageHitTarget({ chatId: "c3", agentId: "a1" }, rows, [{ id: "c3", agentDefault: false, legacyAgentId: "a1" }]);
-    expect(t?.href).toContain("chat=c3");
+    expect(t).toBeNull();
   });
 
   it("an agent the list does not show leads nowhere", () => {

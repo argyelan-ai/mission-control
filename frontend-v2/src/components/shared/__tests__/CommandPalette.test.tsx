@@ -79,6 +79,7 @@ const jarvis = vi.hoisted(() => ({ toggleButton: vi.fn() }));
 vi.mock("@/components/voice/VoiceWidget", () => ({ useVoiceContext: () => jarvis }));
 
 import CommandPalette from "../CommandPalette";
+import { NEW_CHAT_HREF } from "@/components/layout/ChatList";
 
 const row = (key: string, title: string, at: string, extra: Record<string, unknown> = {}) => {
   const [kind, id] = key.split(":");
@@ -128,8 +129,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function renderPalette() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderPalette(qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   return render(
     <QueryClientProvider client={qc}>
       <CommandPalette />
@@ -189,6 +189,19 @@ describe("CommandPalette — typing: groups and ranking", () => {
     expect(nav.push).toHaveBeenCalledWith("/agents/a2");
   });
 
+  it("while searching every chat row keeps the gear's slot, so the times line up", () => {
+    renderPalette();
+    fireEvent.change(input(), { target: { value: "a" } });
+    const items = within(group("palette-group-chats")!).getAllByTestId("palette-chat");
+    expect(items.length).toBeGreaterThan(1);
+    for (const item of items) {
+      const last = item.lastElementChild!;
+      const testId = last.getAttribute("data-testid");
+      expect(["palette-agent-settings", "palette-gear-slot"]).toContain(testId);
+    }
+    expect(items.some((i) => i.querySelector('[data-testid="palette-gear-slot"]'))).toBe(true);
+  });
+
   it("groups stand in the order Chats → Commands → Pages", () => {
     renderPalette();
     fireEvent.change(input(), { target: { value: "se" } });
@@ -201,6 +214,8 @@ describe("CommandPalette — typing: groups and ranking", () => {
     fireEvent.change(input(), { target: { value: "new" } });
     fireEvent.click(within(group("palette-group-commands")!).getByText(en.cockpit.newChat));
     expect(nav.push).toHaveBeenCalledWith("/sessions?new=1");
+    // one link for both doors (list button + palette) — they cannot drift
+    expect(nav.push).toHaveBeenCalledWith(NEW_CHAT_HREF);
   });
 
   it("no fake 'New task' command that only opens a page", () => {
@@ -253,9 +268,40 @@ describe("CommandPalette — 'In messages' (server search)", () => {
     renderPalette();
     fireEvent.change(input(), { target: { value: "alpha" } });
     await waitFor(() => expect(apiMock.chatRecord.search).toHaveBeenCalled());
-    await act(async () => {});
-    expect(group("palette-group-messages")).toBeNull();
+    // the answer may still be on its way: wait for it, never for one tick
+    await waitFor(() => expect(group("palette-group-messages")).toBeNull());
+    expect(screen.queryByText(en.shell.searchSearching)).toBeNull();
     expect(group("palette-group-chats")).toBeInTheDocument();
+  });
+
+  it("'off' outlives the box: the next open asks no more and flashes no 'Searching…'", async () => {
+    rec.search = { hits: [], enabled: false };
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = renderPalette(qc);
+    fireEvent.change(input(), { target: { value: "alpha" } });
+    await waitFor(() => expect(apiMock.chatRecord.search).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(group("palette-group-messages")).toBeNull());
+    view.unmount();
+    renderPalette(qc);
+    fireEvent.change(input(), { target: { value: "beta" } });
+    expect(screen.queryByText(en.shell.searchSearching)).toBeNull();
+    await new Promise((r) => setTimeout(r, 400));
+    expect(screen.queryByText(en.shell.searchSearching)).toBeNull();
+    expect(apiMock.chatRecord.search).toHaveBeenCalledTimes(1);
+  });
+
+  it("a server error (500) shows nothing for that query but does not switch the search off", async () => {
+    rec.searchError = new Error("API 500: boom");
+    renderPalette();
+    fireEvent.change(input(), { target: { value: "alpha" } });
+    await waitFor(() => expect(apiMock.chatRecord.search).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(group("palette-group-messages")).toBeNull());
+    rec.searchError = null;
+    rec.search = { enabled: true, hits: [{ chatId: "c2", agentId: "a1", snippet: "beta notes", highlight: [0, 4] }] };
+    rec.chats = [{ id: "c2", agentDefault: false, legacyAgentId: "a1", pinned: false }];
+    fireEvent.change(input(), { target: { value: "beta" } });
+    await waitFor(() => expect(apiMock.chatRecord.search).toHaveBeenCalledTimes(2));
+    expect(await screen.findByTestId("palette-message-hit")).toBeInTheDocument();
   });
 
   it("once the record says it is off, typing on asks the server no more", async () => {
@@ -273,8 +319,7 @@ describe("CommandPalette — 'In messages' (server search)", () => {
     renderPalette();
     fireEvent.change(input(), { target: { value: "alpha" } });
     await waitFor(() => expect(apiMock.chatRecord.search).toHaveBeenCalled());
-    await act(async () => {});
-    expect(group("palette-group-messages")).toBeNull();
+    await waitFor(() => expect(group("palette-group-messages")).toBeNull());
     expect(screen.queryByText(en.shell.searchSearching)).toBeNull();
     expect(group("palette-group-chats")).toBeInTheDocument();
   });

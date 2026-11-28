@@ -8,7 +8,6 @@
  * match; equal scores keep the chat list's order (newest first).
  */
 import type { RecordChat, RecordSearchHit } from "@/lib/api";
-import { chatEntryHref } from "@/lib/chatHistory";
 import type { ChatListEntry } from "@/lib/chatList";
 
 /** The server search starts at three characters (concept 5.2) … */
@@ -58,11 +57,16 @@ export function matchScore(query: string, text: string): number | null {
   if (t === q) return SCORE_EXACT;
   const terms = words(query);
   if (terms.length === 0) return null;
+  const compact = terms.join("");
+  // "c++" / "c#" fold to the one term "c", which starts half of all words:
+  // a query that is one letter plus punctuation must appear as typed.
+  if (compact.length < 2 && q.replace(/\s+/g, "").length > compact.length) {
+    return t.includes(q) ? SCORE_INSIDE : null;
+  }
   const textWords = words(text);
   if (terms.every((term) => textWords.some((w) => w.startsWith(term)))) return SCORE_WORD_START;
   // one letter only ever starts a word — "s" must not list everything with an s
   if (q.length >= 2 && terms.every((term) => t.includes(term))) return SCORE_INSIDE;
-  const compact = terms.join("");
   if (compact.length >= 3 && isSubsequence(compact, textWords.join(""))) return SCORE_FUZZY;
   return null;
 }
@@ -141,9 +145,12 @@ export function recentChats(
 
 /**
  * Where a message hit leads: the row of its chat in the list (a further
- * chat → `&chat=`, the agent's own chat → the agent row). The chat view has
- * no message anchor yet, so the chat opens at its end. A hit of a chat the
- * list does not show (agent archived or not listed) leads nowhere → null.
+ * chat → its own row, the agent's own chat → the agent row). The chat view
+ * has no message anchor yet, so the chat opens at its end. A hit of a chat
+ * the list does not show leads nowhere → null: the list reads the same
+ * record query, so a further chat without a row is one it hides on purpose
+ * (archived, agent not listed, or a harness whose daemon holds no further
+ * chats — the backend would refuse its chat id).
  */
 export function messageHitTarget(
   hit: Pick<RecordSearchHit, "chatId" | "agentId">,
@@ -156,13 +163,8 @@ export function messageHitTarget(
   const chat = recordChats.find((c) => c.id === hit.chatId);
   const agentId = chat?.legacyAgentId ?? hit.agentId;
   if (!agentId) return null;
-  const agentRow = byKey.get(`agent:${agentId}`);
-  if (!agentRow) return null;
-  // A further chat the list has no row for yet (just made): open it by id.
-  if (chat && !chat.agentDefault) {
-    return { ...agentRow, key: `chat:${chat.id}`, chatId: chat.id, href: `${chatEntryHref("agent", agentId)}&chat=${encodeURIComponent(chat.id)}` };
-  }
-  return agentRow;
+  if (chat && !chat.agentDefault) return null;
+  return byKey.get(`agent:${agentId}`) ?? null;
 }
 
 /** The snippet cut around the highlighted match (UTF-16 = JS indices); a
