@@ -171,6 +171,8 @@ describe("ChatView — New chat draft", () => {
     // Nothing to set yet, no live voice on a chat that does not exist.
     expect(screen.queryByRole("button", { name: "Chat options" })).toBeNull();
     expect(screen.queryByTestId("voice-dock")).toBeNull();
+    // No state line: nothing runs until the first send.
+    expect(screen.queryByText("Ready")).toBeNull();
     await waitFor(() => expect(screen.getByRole("textbox")).toHaveFocus());
     // No row of the chat list is marked while the draft is open.
     expect(screen.getByTestId("open-chat")).toHaveTextContent("draft");

@@ -2038,6 +2038,8 @@ export function ChatView({
             />
           ) : (
             <>
+              {/* A draft claims no state ("Ready" of what?) until the first send. */}
+              {!draft && (
               <StatusLine
                 state={statusState}
                 connected={stream.connected}
@@ -2049,6 +2051,7 @@ export function ChatView({
                 loading={firstStatePending}
                 hasTerminal={!headlessChat}
               />
+              )}
               {!isAdmin ? (
                 <AdminOnlyNotice compact message={t("inputAdminOnly")} />
               ) : agent && (furtherChat || draft) ? (
