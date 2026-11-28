@@ -214,13 +214,15 @@ describe("ChatView — New chat draft", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("claims nothing about a chat that does not exist yet: no effort chip, no speed line", () => {
+  it("claims nothing about a chat that does not exist yet: no model or effort chip, no speed line", () => {
     // Capabilities that put the effort chip on any other composer.
     record = mkRecord({ capabilities: { effortReason: "model_no_effort", effortLevels: [], canSwitchEffort: false } as never });
     renderDraft(vi.fn());
     expect(screen.getByRole("textbox")).toBeInTheDocument();
     expect(screen.queryByTestId("effort-chip")).toBeNull();
     expect(screen.queryByTestId("effort-chip-static")).toBeNull();
+    expect(screen.queryByTestId("model-chip")).toBeNull();
+    expect(screen.queryByTestId("model-chip-static")).toBeNull();
     expect(screen.queryByTestId("speed-line-stub")).toBeNull();
   });
 

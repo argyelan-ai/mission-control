@@ -285,8 +285,8 @@ interface ComposerProps {
   /** A line above the input — the "New chat" draft's agent chip (P4,
    *  `AgentChip`). Absent = nothing above the pill. */
   chipSlot?: ReactNode;
-  /** No effort chip at all — the "New chat" draft: there is no session yet
-   *  whose effort it could show or set. */
+  /** No model chip and no effort chip — the "New chat" draft: there is no
+   *  session yet whose model or effort they could show or set (K3). */
   noEffort?: boolean;
   /** Overrides the default placeholder — while a task runs in this agent's
    *  chat it says where a message goes ("to the chat, not the task", D12). */
@@ -1189,6 +1189,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               21.11.2026: "DeepS…"), so it is whole whenever the row has room;
               with mode chip, effort, mic and a long local model name on a
               390 px phone it cuts instead of pushing Send off the screen. */}
+          {!noEffort && (
           <div className="relative min-w-0 max-w-40" ref={modelBoxRef}>
             {modelOptions.length === 0 ? (
               /* Fremde CLI (kimi, omp): das Backend meldet explizit keine
@@ -1279,6 +1280,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               </PopoverPortal>
             )}
           </div>
+          )}
 
           {usage && pct != null && (
             // The ring stays the compact indicator and the tooltip stays the

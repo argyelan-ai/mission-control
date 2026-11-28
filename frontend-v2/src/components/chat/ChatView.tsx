@@ -1022,8 +1022,8 @@ export function ChatView({
         paneObservable={agent.agent_runtime === "cli-bridge" || headlessChat}
         capabilities={stream.capabilities}
         chipSlot={draft?.chip ?? null}
-        // The effort belongs to the agent's running session, not to a chat
-        // that does not exist yet.
+        // Model and effort belong to the agent's running session, not to a
+        // chat that does not exist yet.
         noEffort={!!draft}
         modeSlot={
           headlessChat && !furtherChat && !draft ? (
