@@ -15,6 +15,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -63,9 +64,9 @@ class InstallRequestCreate(BaseModel):
     # Without task_id there's no auto-callback — requester must poll manually.
     task_id: uuid.UUID | None = None
     # Chat coupling (agent without a task): the requester's own chat in MC's
-    # chat record. On rejected / installed / failed, one system line is
-    # written into that chat (notify_requester_chat). Only the requester's
-    # own chats are accepted.
+    # chat record, stored on the request. notify_requester_chat writes one
+    # line into it on rejected / installed / failed — held until concept PR 2
+    # (CHAT_LINE_ENABLED). Only the requester's own chats are accepted.
     chat_id: uuid.UUID | None = None
 
 
@@ -98,6 +99,17 @@ async def create_install_request(
 
     Returns 201 on new request, 200 if an identical pending request already exists.
     """
+    # 0. This round installs plain-text skills only. Plugins and MCP servers
+    #    carry executable code: refused by default (extensions concept,
+    #    section 6). Removing them (uninstall) stays possible.
+    if body.operation == "install" and body.type != "skill":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Installing {'an MCP server' if body.type == 'mcp' else 'a plugin'} "
+            "is not offered in this round: only "
+            "plain-text skills can be requested. Uninstall still works.",
+        )
+
     # 1. Allowlist check (install only — uninstall doesn't need a source)
     if body.operation == "install":
         if not body.source:
@@ -163,6 +175,17 @@ async def create_install_request(
             payload.get("name") == body.name
             and payload.get("target_agent_id") == str(body.target_agent_id)
         ):
+            # Another chat asks for the same pending request: remember it, so
+            # the feedback reaches every chat that asked, not only the first.
+            new_chat = str(body.chat_id) if body.chat_id else None
+            known = [payload.get("requester_chat_id"), *(payload.get("extra_chat_ids") or [])]
+            if new_chat and new_chat not in known:
+                row.payload = {
+                    **payload,
+                    "extra_chat_ids": [*(payload.get("extra_chat_ids") or []), new_chat],
+                }
+                session.add(row)
+                await session.commit()
             response.status_code = status.HTTP_200_OK
             return InstallRequestResponse(
                 approval_id=row.id,
@@ -205,6 +228,31 @@ async def create_install_request(
                 status.HTTP_400_BAD_REQUEST,
                 f"Could not read {body.source}@{commit[:12]}: {e}",
             )
+
+    # 6b. Library skill: the same plain-text check, on the library folder.
+    #     Local and cheap; the executor checks it again at install time.
+    if (
+        body.operation == "install"
+        and body.type == "skill"
+        and body.source
+        and body.source.startswith("~/.mc/skills/")
+    ):
+        if body.source != f"~/.mc/skills/{body.name}":
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Source {body.source!r} does not name the skill {body.name!r}; "
+                f"use '~/.mc/skills/{body.name}'",
+            )
+        folder = install_executor.skills_root() / body.name
+        if not folder.is_dir():
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"No skill {body.name!r} in the skills library (mc ext search lists them)",
+            )
+        try:
+            files = text_only_files(folder)[:MAX_LISTED_FILES]
+        except SkillContentError as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
 
     # 7. Create Approval row. No board needed: approvals.board_id is optional
     #    and the global pending list shows board-less approvals.
@@ -271,72 +319,17 @@ async def create_install_request(
 
 # ── Content check: plain text only (extensions concept, section 6) ─────────
 #
-# A skill is plain text the agent reads. Anything that can run (scripts,
-# binaries, executable bits, symlinks) is refused in this round — before the
-# operator sees the request. The commit is pinned, so the files read here are
-# exactly the files the executor installs after approval.
+# The helpers live in install_executor, so the request check and the install
+# pick the same folder and apply the same rule (see there).
 
-#: File types that count as plain text in a skill folder.
-TEXT_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
-#: Plain-text files that usually carry no suffix.
-TEXT_NAMES = frozenset({"LICENSE", "LICENCE", "COPYING", "NOTICE"})
+from app.services.install_executor import (  # noqa: E402
+    SkillContentError,
+    skill_source_dir,
+    text_only_files,
+)
+
 #: Files named in the approval payload at most (the card shows the list).
 MAX_LISTED_FILES = 50
-
-
-class SkillContentError(ValueError):
-    """The skill holds something other than plain text."""
-
-
-def _skill_folder(clone, name: str):
-    """The requested skill inside the clone — the same three layouts the
-    executor accepts (``install_executor._call_skill_install``)."""
-    for candidate in (clone, clone / "skills" / name, clone / name):
-        if (candidate / "SKILL.md").is_file():
-            return candidate
-    raise SkillContentError(
-        f"No skill layout: none of /SKILL.md, /skills/{name}/SKILL.md, /{name}/SKILL.md"
-    )
-
-
-def text_only_files(folder) -> list[str]:
-    """Relative paths of every file in ``folder`` (``.git`` left out), or
-    ``SkillContentError`` naming the files that are not plain text."""
-    files: list[str] = []
-    bad: list[str] = []
-    for path in sorted(folder.rglob("*")):
-        rel = path.relative_to(folder)
-        if rel.parts and rel.parts[0] == ".git":
-            continue
-        if path.is_symlink():
-            bad.append(f"{rel.as_posix()} (symlink)")
-            continue
-        if path.is_dir():
-            continue
-        name = rel.as_posix()
-        if path.suffix.lower() not in TEXT_SUFFIXES and path.name not in TEXT_NAMES:
-            bad.append(name)
-            continue
-        if path.stat().st_mode & 0o111:
-            bad.append(f"{name} (executable)")
-            continue
-        data = path.read_bytes()
-        try:
-            data.decode("utf-8")
-        except UnicodeDecodeError:
-            bad.append(f"{name} (not UTF-8 text)")
-            continue
-        if b"\x00" in data:
-            bad.append(f"{name} (binary)")
-            continue
-        files.append(name)
-    if bad:
-        shown = ", ".join(bad[:5]) + (f" and {len(bad) - 5} more" if len(bad) > 5 else "")
-        raise SkillContentError(
-            "Only plain-text skills (SKILL.md plus .md/.txt files) can be "
-            f"requested; this one also contains: {shown}"
-        )
-    return files
 
 
 async def inspect_skill_commit(source: str, name: str, commit: str) -> list[str]:
@@ -350,7 +343,7 @@ async def inspect_skill_commit(source: str, name: str, commit: str) -> list[str]
         await install_executor._fetch_commit(
             install_executor.github_url(source), commit, clone
         )
-        files = text_only_files(_skill_folder(clone, name))
+        files = text_only_files(skill_source_dir(clone, name))
     return files[:MAX_LISTED_FILES]
 
 
@@ -359,6 +352,12 @@ async def inspect_skill_commit(source: str, name: str, commit: str) -> list[str]
 #: ``teammate`` / ``source.title`` of the line — lets a later chat card
 #: (concept PR 2) find and localise it from the structured ``install`` field.
 CHAT_LINE_TITLE = "install-request"
+
+#: Held until concept PR 2: the line renders in the operator's chat-record
+#: view and is English-only today, which would mix languages in a German UI.
+#: The requester's chat ids are stored on the request either way, so PR 2
+#: only flips this switch (and localises the card).
+CHAT_LINE_ENABLED = False
 
 
 def _outcome_of(status_: str, install_result, install_exception) -> tuple[str, str | None]:
@@ -423,42 +422,29 @@ async def notify_requester_chat(
     (flag off, chat gone, no session yet) only means no line. Returns True
     when a line was written."""
     try:
+        if not CHAT_LINE_ENABLED:
+            return False
         payload = approval.payload or {}
-        chat_id_str = payload.get("requester_chat_id")
-        if not chat_id_str or not chat_record.enabled():
-            return False
-        chat = await session.get(Chat, uuid.UUID(chat_id_str))
-        if chat is None:
-            return False
-        row = await _chat_session_row(session, chat)
-        if row is None:
-            logger.info("install feedback: chat %s has no session yet — no line", chat.id)
+        chat_ids = [c for c in (payload.get("requester_chat_id"),
+                                *(payload.get("extra_chat_ids") or [])) if c]
+        if not chat_ids or not chat_record.enabled():
             return False
         outcome, error = _outcome_of(status_, install_result, install_exception)
         key = f"{CHAT_LINE_TITLE}:{approval.id}:{outcome}"
-        event = {
-            "kind": "message",
-            "uuid": key,
-            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "role": "teammate",
-            "teammate": CHAT_LINE_TITLE,
-            "source": {"kind": "system", "title": CHAT_LINE_TITLE},
-            "text": _chat_line_text(payload, approval.action_type, outcome, error),
-            "model": None,
-            "sidechain": False,
-            "install": {
-                "approval_id": str(approval.id),
-                "action_type": approval.action_type,
-                "name": payload.get("name"),
-                "target_agent_name": payload.get("target_agent_name"),
-                "commit": payload.get("commit"),
-                "outcome": outcome,
-                "error": error,
-            },
-        }
-        await chat_record.upsert_events(session, chat.id, row.id, [(key, event)])
-        await session.commit()
-        return True
+        written = False
+        for chat_id_str in chat_ids:
+            chat = await session.get(Chat, uuid.UUID(chat_id_str))
+            if chat is None:
+                continue
+            row = await _chat_session_row(session, chat)
+            if row is None:
+                logger.info("install feedback: chat %s has no session yet — no line", chat.id)
+                continue
+            written |= await _write_line(session, chat, row, approval, payload,
+                                         key, outcome, error)
+        if written:
+            await session.commit()
+        return written
     except Exception as e:  # noqa: BLE001 — feedback must never break the resolve
         logger.warning("install feedback into chat failed: %s", e)
         try:
@@ -466,6 +452,34 @@ async def notify_requester_chat(
         except Exception:
             pass
         return False
+
+
+async def _write_line(session: AsyncSession, chat: Chat, row: ChatSession,
+                      approval: Approval, payload: dict, key: str,
+                      outcome: str, error: str | None) -> bool:
+    """One feedback event into one chat (no commit; the caller commits)."""
+    event = {
+        "kind": "message",
+        "uuid": key,
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "role": "teammate",
+        "teammate": CHAT_LINE_TITLE,
+        "source": {"kind": "system", "title": CHAT_LINE_TITLE},
+        "text": _chat_line_text(payload, approval.action_type, outcome, error),
+        "model": None,
+        "sidechain": False,
+        "install": {
+            "approval_id": str(approval.id),
+            "action_type": approval.action_type,
+            "name": payload.get("name"),
+            "target_agent_name": payload.get("target_agent_name"),
+            "commit": payload.get("commit"),
+            "outcome": outcome,
+            "error": error,
+        },
+    }
+    await chat_record.upsert_events(session, chat.id, row.id, [(key, event)])
+    return True
 
 
 # ── Status + search (read-only, for `mc ext status` / `mc ext search`) ────
@@ -513,16 +527,22 @@ async def list_install_requests(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """The calling agent's own install requests (filed by it or for it), newest first."""
+    me = str(agent.id)
     rows = (
         await session.exec(
             select(Approval)
-            .where(Approval.action_type.in_(_INSTALL_ACTIONS))
+            .where(
+                Approval.action_type.in_(_INSTALL_ACTIONS),
+                or_(
+                    Approval.payload["requester_agent_id"].as_string() == me,  # type: ignore[index]
+                    Approval.payload["target_agent_id"].as_string() == me,  # type: ignore[index]
+                ),
+            )
             .order_by(Approval.created_at.desc())
-            .limit(500)
+            .limit(limit)
         )
     ).all()
-    mine = [r for r in rows if _concerns(r, agent)][:limit]
-    return {"requests": [_request_out(r) for r in mine]}
+    return {"requests": [_request_out(r) for r in rows if _concerns(r, agent)]}
 
 
 def _frontmatter(text: str) -> dict[str, str]:
@@ -565,11 +585,21 @@ async def search_extensions(
                     meta = {}
             hay = f"{entry.name} {meta.get('name', '')} {meta.get('description', '')}".lower()
             if all(w in hay for w in words):
+                # Same check a request runs: say up front what would be refused.
+                try:
+                    text_only_files(entry)
+                    text_only, refused = True, None
+                except (SkillContentError, OSError) as e:
+                    text_only, refused = False, str(e)
                 found.append({
                     "name": entry.name,
                     "description": meta.get("description"),
                     "source": f"~/.mc/skills/{entry.name}",
+                    "text_only": text_only,
+                    "refused_reason": refused,
                 })
+                if len(found) >= 50:
+                    break
     return {
         "library": found[:50],
         "allowed_sources": list_allowed_sources("skill"),

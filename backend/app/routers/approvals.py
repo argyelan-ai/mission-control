@@ -801,8 +801,9 @@ async def resolve_approval(
             install_result=install_result,
             install_exception=install_exception,
         )
-        # Agent without a task: one system line into its chat (chat_id on
-        # the request). No chat_id = nothing written.
+        # Agent without a task: one line into its chat (chat_id on the
+        # request). Held until concept PR 2 localises it
+        # (install_requests.CHAT_LINE_ENABLED); today nothing is written.
         from app.routers.install_requests import notify_requester_chat
         await notify_requester_chat(
             session, approval, "approved",

@@ -104,13 +104,27 @@ def test_request_passes_ref_target_chat_and_task(capsys):
     assert body["task_id"] == TASK
 
 
-def test_request_takes_the_chat_from_the_environment(monkeypatch):
+def test_request_ignores_a_phantom_chat_env(monkeypatch):
+    """Nothing in MC sets MC_CHAT_ID; the CLI must not pretend it does."""
     monkeypatch.setenv("MC_CHAT_ID", CHAT)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     client = _client()
     commands._cmd_ext(_args([
         "ext", "request", "x", "--source", "~/.mc/skills/x", "--reason", "needed now",
     ]), client, _cfg())
-    assert _post_body(client)["chat_id"] == CHAT
+    assert "chat_id" not in _post_body(client)
+
+
+def test_search_says_which_library_skills_cannot_be_requested(capsys):
+    client = _client({("GET", "/api/v1/agent/install-requests/search"): {
+        "library": [{"name": "ingest", "description": None, "source": "~/.mc/skills/ingest",
+                     "text_only": False, "refused_reason": "contains: setup.sh"}],
+        "allowed_sources": [],
+    }})
+    commands._cmd_ext(_args(["ext", "search", "ingest"]), client, _cfg())
+    out = capsys.readouterr().out
+    assert "cannot be requested" in out and "setup.sh" in out
+    assert "request with" not in out
 
 
 def test_request_finds_the_chat_of_a_further_claude_chat(monkeypatch):

@@ -271,8 +271,9 @@ async def test_install_request_empty_scopes_treated_as_all(
 
 
 @pytest.mark.asyncio
-async def test_install_request_mcp_happy_path(client: AsyncClient, fake_redis):
-    """MCP install-requests should be accepted (Phase 2)."""
+async def test_install_request_mcp_install_is_refused_this_round(client: AsyncClient, fake_redis):
+    """MCP servers carry executable code: refused by default this round
+    (extensions concept, section 6). Uninstall stays possible."""
     board_id = await _make_board(slug="mc-dev-7")
     boss, token = await _make_agent(
         name="Boss Host MCP", scopes=["agents:manage"], board_id=board_id
@@ -293,11 +294,8 @@ async def test_install_request_mcp_happy_path(client: AsyncClient, fake_redis):
             "reason": "Agent braucht Filesystem-Zugriff für Task-Workspace",
         },
     )
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["status"] == "pending"
-    assert body["existing"] is False
-    uuid.UUID(body["approval_id"])  # must be valid UUID
+    assert resp.status_code == 400, resp.text
+    assert "not offered" in resp.text
 
 
 # ── PR 0: no board, pinned commit, no overwrite, L1 never trusted ────────

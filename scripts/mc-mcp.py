@@ -1106,13 +1106,10 @@ _UUID_CHARS = set("0123456789abcdef-")
 
 
 def _ext_chat_id(chat_id: str) -> str:
-    """chat_id, else MC_CHAT_ID, else the chat of a further Claude Code chat
+    """chat_id, else the chat of a further Claude Code chat
     (CLAUDE_CONFIG_DIR=<config>/chats/<chat id>/) — same rule as `mc ext`."""
     if chat_id:
         return chat_id
-    env = os.environ.get("MC_CHAT_ID", "").strip()
-    if env:
-        return env
     parent, _, last = os.environ.get("CLAUDE_CONFIG_DIR", "").rstrip("/").rpartition("/")
     if parent.endswith("/chats") and len(last) == 36 and set(last.lower()) <= _UUID_CHARS:
         return last
@@ -1136,10 +1133,11 @@ def ext_request(name: str, source: str, reason: str, ref: str = "",
     """Ask the operator for a skill — files a request that waits for approval.
 
     Never installs anything itself, and never use curl or your own shell to
-    install. Skills only: MC pins the version to one commit and accepts only
-    plain-text skills (SKILL.md plus .md/.txt files). An existing name is
-    refused, never overwritten. Feedback: one system line in your chat (and
-    a comment on task_id, if given); check any time with ext_status.
+    install. Skills only: MC reads the files of both sources and accepts only
+    plain-text skills (SKILL.md plus .md/.txt files); a GitHub skill is pinned
+    to one commit. Plugins and MCP servers cannot be requested this round. An
+    existing name is refused, never overwritten. Feedback: a comment on
+    task_id, if given; check any time with ext_status.
 
     Args:
         name: skill name (folder name in the skills library)
@@ -1147,7 +1145,7 @@ def ext_request(name: str, source: str, reason: str, ref: str = "",
         reason: why you need it — the operator reads this (min. 5 chars)
         ref: version, a commit SHA or tag (empty = default branch, pinned now)
         target_agent_id: another agent's UUID (needs agents:manage); empty = yourself
-        chat_id: chat for the feedback line; empty = MC_CHAT_ID / the chat you run in
+        chat_id: your chat id, stored on the request; empty = the further chat you run in
         task_id: task for the feedback comment (optional)
     """
     target = target_agent_id
@@ -1176,7 +1174,7 @@ def ext_request(name: str, source: str, reason: str, ref: str = "",
     head = (f"Request {rid} is already waiting for the operator."
             if (resp or {}).get("existing")
             else f"Request {rid} filed — it waits for the operator's approval.")
-    tail = "" if (chat or task_id) else " No chat or task given: poll ext_status."
+    tail = "" if task_id else " No task given: the result shows up in ext_status."
     return f"{head} Check it with ext_status(request_id=\"{rid}\").{tail}"
 
 

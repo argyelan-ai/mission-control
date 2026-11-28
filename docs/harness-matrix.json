@@ -269,10 +269,10 @@
     "guest-session": {"status": "yes", "note": "the hook reports busy on prompt and idle on stop", "evidence": ["scripts/comms/claude-code/mc-comms-hook.py:138", "scripts/comms/claude-code/mc-comms-hook.py:152"]}
    }},
    {"id": "box-status", "label": "Box status (`mc box status`)", "cells": {
-    "claude": {"status": "yes", "note": "`mc box` verb (scope tasks:read)", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4267-4268"]},
-    "openclaude": {"status": "yes", "note": "`mc box` verb in the image", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4267-4268", "docker/mc-agent-base/Dockerfile:128-131"]},
-    "omp": {"status": "yes", "note": "`mc box` verb, live in the container", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4267-4268", "live:2026-11-02 omp container: `mc` on PATH, verbs include finish/hello/who/send/box"]},
-    "kimi": {"status": "yes", "note": "`mc box` verb in the image", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4267-4268", "docker/mc-kimi-agent/Dockerfile:123-126"]},
+    "claude": {"status": "yes", "note": "`mc box` verb (scope tasks:read)", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4268-4269"]},
+    "openclaude": {"status": "yes", "note": "`mc box` verb in the image", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4268-4269", "docker/mc-agent-base/Dockerfile:128-131"]},
+    "omp": {"status": "yes", "note": "`mc box` verb, live in the container", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4268-4269", "live:2026-11-02 omp container: `mc` on PATH, verbs include finish/hello/who/send/box"]},
+    "kimi": {"status": "yes", "note": "`mc box` verb in the image", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4268-4269", "docker/mc-kimi-agent/Dockerfile:123-126"]},
     "hermes": {"status": "yes", "note": "`mc_box_status` MCP tool", "evidence": ["scripts/mc-mcp.py:991-992"]},
     "grok": {"status": "open", "note": "depends on the `mc` CLI on the grok host, which is unproven"},
     "jarvis": {"status": "no", "note": "voice worker, no task loop — not wired", "since": "2026-09-16", "recheck": "jarvis gains a task loop (it would then enter the dev ring)", "evidence": ["backend/app/services/host_harness_adapter.py:363-375"]},
@@ -291,11 +291,11 @@
     "guest-session": {"status": "no", "note": "a terminal session is not an MC agent — the operator's own CLI setup", "since": "2026-11-01", "recheck": "ADR-100 gives guest sessions this capability", "evidence": ["docs/decisions/100-foundation-and-cross-harness-comms.md:97-104"]}
    }},
    {"id": "ext-request", "label": "Ask the operator for a skill (`mc ext` / MCP `ext_request`)", "cells": {
-    "claude": {"status": "yes", "note": "`mc ext search|request|status` (require_agent; request waits for the operator, plain-text skills only); the installed skill takes effect from the next chat start", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4254-4266", "docker/mc-claude-agent/Dockerfile:164-167"]},
-    "openclaude": {"status": "yes", "note": "`mc ext` verb in the image", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4254-4266", "docker/mc-agent-base/Dockerfile:128-131"]},
-    "omp": {"status": "partial", "note": "`mc ext` verb in the image, the request works — but MC skill files are not applied to omp (see skills-plugins)", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4254-4266", "docker/omp-bridge/Dockerfile:150-152"]},
-    "kimi": {"status": "partial", "note": "`mc ext` verb in the image; MC skill files are not applied to kimi (see skills-plugins)", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4254-4266", "docker/mc-kimi-agent/Dockerfile:123-126"]},
-    "hermes": {"status": "partial", "note": "MCP tools `ext_request` / `ext_status`; MC skill files are not applied to hermes (see skills-plugins)", "evidence": ["scripts/mc-mcp.py:1133-1134"]},
+    "claude": {"status": "yes", "note": "`mc ext search|request|status` (require_agent; request waits for the operator, plain-text skills only); the installed skill takes effect from the next chat start", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4255-4267", "docker/mc-claude-agent/Dockerfile:164-167"]},
+    "openclaude": {"status": "yes", "note": "`mc ext` verb in the image", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4255-4267", "docker/mc-agent-base/Dockerfile:128-131"]},
+    "omp": {"status": "partial", "note": "`mc ext` verb in the image, the request works — but MC skill files are not applied to omp (see skills-plugins)", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4255-4267", "docker/omp-bridge/Dockerfile:150-152"]},
+    "kimi": {"status": "partial", "note": "`mc ext` verb in the image; MC skill files are not applied to kimi (see skills-plugins)", "evidence": ["scripts/mc-cli/mc_cli/commands.py:4255-4267", "docker/mc-kimi-agent/Dockerfile:123-126"]},
+    "hermes": {"status": "partial", "note": "MCP tools `ext_request` / `ext_status`; MC skill files are not applied to hermes (see skills-plugins)", "evidence": ["scripts/mc-mcp.py:1130-1131"]},
     "grok": {"status": "open", "note": "depends on the `mc` CLI on the grok host, which is unproven"},
     "jarvis": {"status": "no", "note": "voice worker, no tool loop", "since": "2026-11-28", "recheck": "jarvis gains a task loop or an MCP client", "evidence": ["backend/app/services/host_harness_adapter.py:363-375"]},
     "guest-session": {"status": "open", "note": "the install-request routes take an agent token; whether a guest session token passes require_agent is not measured"}

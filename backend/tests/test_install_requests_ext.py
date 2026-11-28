@@ -59,9 +59,13 @@ def _no_network(tmp_path, monkeypatch):
 
 @pytest.fixture
 def record_on(monkeypatch):
+    """Chat record on AND the held chat line switched on — the writer stays
+    tested for concept PR 2, which localises it and flips the switch."""
     from app.config import settings
+    from app.routers import install_requests
 
     monkeypatch.setattr(settings, "chat_record_enabled", True, raising=False)
+    monkeypatch.setattr(install_requests, "CHAT_LINE_ENABLED", True)
 
 
 async def _board() -> uuid.UUID:

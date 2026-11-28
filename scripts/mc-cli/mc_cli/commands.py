@@ -3381,10 +3381,11 @@ def _add_agents_args(p):
 #
 # `mc ext request` files an install request that waits for the operator in
 # the inbox — it never installs anything itself. Skills only (plain text):
-# MC pins the version to a commit and refuses anything executable. Feedback
-# arrives as a system line in the chat named by --chat / MC_CHAT_ID (or the
-# further Claude chat the CLI runs in), as a comment on the task when one is
-# in context, and always via `mc ext status`.
+# MC reads the files of both sources and refuses anything executable; a
+# GitHub skill is pinned to a commit. Feedback: a comment on the task when
+# one is in context, and always via `mc ext status`. The chat id (--chat, or
+# the further Claude chat the CLI runs in) is stored on the request for a
+# later chat card; no line is written into the chat yet.
 
 _EXT_BASE = "/api/v1/agent/install-requests"
 _UUID_TEXT = re.compile(
@@ -3393,13 +3394,10 @@ _UUID_TEXT = re.compile(
 
 
 def _ext_chat_id(explicit: str | None) -> str | None:
-    """The chat to send feedback to: --chat, else MC_CHAT_ID, else the chat
-    of a further Claude Code chat (CLAUDE_CONFIG_DIR=<config>/chats/<id>/)."""
+    """The requester's chat: --chat, else the chat of a further Claude Code
+    chat (CLAUDE_CONFIG_DIR=<config>/chats/<id>/). Stored on the request."""
     if explicit:
         return explicit
-    env = (os.environ.get("MC_CHAT_ID") or "").strip()
-    if env:
-        return env
     cfg_dir = (os.environ.get("CLAUDE_CONFIG_DIR") or "").rstrip("/")
     parent, _, last = cfg_dir.rpartition("/")
     if parent.endswith("/chats") and _UUID_TEXT.match(last):
@@ -3463,7 +3461,10 @@ def _cmd_ext(args, client, cfg):
             print("In the skills library:")
             for s in found:
                 desc = f" — {s['description']}" if s.get("description") else ""
-                print(f"  {s.get('name')}{desc}\n    request with: --source {s.get('source')}")
+                if s.get("text_only") is False:
+                    print(f"  {s.get('name')}{desc}\n    cannot be requested: {s.get('refused_reason')}")
+                else:
+                    print(f"  {s.get('name')}{desc}\n    request with: --source {s.get('source')}")
         else:
             print(f"Nothing in the skills library matches '{query}'.")
         allowed = resp.get("allowed_sources") or []
@@ -3496,8 +3497,8 @@ def _cmd_ext(args, client, cfg):
         else:
             print(f"Request {rid} filed — it waits for the operator's approval.")
         print(f"Check it with: mc ext status {rid}")
-        if not chat_id and not task_id:
-            print("(no chat or task given: no feedback line — poll `mc ext status`)")
+        if not task_id:
+            print("(no task given: the result shows up in `mc ext status`)")
         return 0
 
     # status (default)
@@ -3528,7 +3529,7 @@ def _add_ext_args(p):
     p_req.add_argument("--for", dest="target", default=None,
                        help="Target agent (name on your board or UUID); default: yourself")
     p_req.add_argument("--chat", default=None,
-                       help="Chat that gets the feedback line (default: MC_CHAT_ID)")
+                       help="Your chat id, stored on the request (default: the further chat you run in)")
     p_req.add_argument("--task", default=None,
                        help="Task that gets the feedback comment (default: your current task)")
     p_search = sub.add_parser("search", help="Search the skills library by name/description")

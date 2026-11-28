@@ -67,12 +67,14 @@ def test_ext_request_posts_a_skill_request_for_myself(mod):
     assert APPROVAL in out and "operator" in out
 
 
-def test_ext_request_takes_the_chat_from_the_environment(mod, monkeypatch):
+def test_ext_request_ignores_a_phantom_chat_env(mod, monkeypatch):
+    """Nothing in MC sets MC_CHAT_ID; the tool must not pretend it does."""
     monkeypatch.setenv("MC_CHAT_ID", CHAT)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     calls = []
     with patch.object(mod, "_agent_call", side_effect=_fake(calls)):
         _fn(mod.ext_request)(name="x", source="~/.mc/skills/x", reason="needed now")
-    assert [c for c in calls if c[0] == "POST"][0][2]["chat_id"] == CHAT
+    assert "chat_id" not in [c for c in calls if c[0] == "POST"][0][2]
 
 
 def test_ext_request_reports_backend_errors_plainly(mod):

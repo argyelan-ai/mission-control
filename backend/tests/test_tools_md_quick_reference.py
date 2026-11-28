@@ -88,9 +88,10 @@ def test_flow5_plugin_mgmt_only_board_lead():
     assert "mc plugin-list" in flows_lead
     assert "mc plugin-assign" in flows_lead
     assert "mc worker-restart" in flows_lead
-    # Install request with task_id coupling
-    assert "install-requests" in flows_lead
-    assert "task_id" in flows_lead
+    # Skill request with task coupling; no plugin/MCP install this round
+    assert "mc ext request" in flows_lead
+    assert "--task" in flows_lead
+    assert '\\"type\\": \\"mcp\\"' not in flows_lead and '"type": "mcp"' not in flows_lead
 
 
 def test_flow6_memory_knowledge_read():
