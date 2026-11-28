@@ -846,6 +846,30 @@ mc report "Deploy check: APP_NAME.your-domain.com — [OK/issues]" --photo <deli
 8. Record deploy (POST /api/v1/agent/deploy/record)
 """
 
+    # ── Extensions: ask for a capability (every agent, require_agent only) ──
+    extension_section = """---
+
+## Extensions — ask the operator for a skill (`mc ext`)
+
+When you need a skill you do not have (or the operator says "install X"),
+file a request. The operator approves or rejects it in the inbox; you never
+install anything yourself — never via curl, never via your own shell or
+your harness's install command.
+
+    mc ext search <words>          # skills library: name + description, plus allowed sources
+    mc ext request <name> --source <src> --reason "why you need it" [--ref <sha|tag>] [--for <agent>] [--chat <chat-id>]
+    mc ext status [<request-id>]   # your requests: pending / approved / rejected, failure reason
+
+- Sources: `~/.mc/skills/<name>` (already in the library) or `github:<owner>/<repo>`
+  from an allowed owner. MC pins the version to one commit and reads the
+  files first: only plain-text skills (SKILL.md plus .md/.txt files) pass.
+- Feedback: a system line in your chat (`--chat`, else `MC_CHAT_ID`, else the
+  chat you run in) and a comment on your current task, when there is one.
+  Without either, poll `mc ext status`.
+- An installed skill takes effect from the next chat start, not in this turn.
+- A name that already exists is refused, never overwritten.
+"""
+
     # ── Install request section ───────────────────────────────────────────
     install_request_section = ""
     if _has(Scope.AGENTS_MANAGE):
@@ -1686,7 +1710,7 @@ Rules:
     quick_ref = "\n\n".join(flow_blocks)
 
     # ── Assemble ───────────────────────────────────────────────────────────
-    sections = [s for s in [knowledge_section, vault_section, vault_remember_section, memory_section, heartbeat_section, help_request_section, comm_v2_section, install_request_section, credentials_section, deploy_section] if s]
+    sections = [s for s in [knowledge_section, vault_section, vault_remember_section, memory_section, heartbeat_section, help_request_section, comm_v2_section, extension_section, install_request_section, credentials_section, deploy_section] if s]
     main_body = "\n\n".join(sections)
 
     return f"""# {emoji} {name} — Mission Control Tools

@@ -37,6 +37,15 @@ def _isolated_skills_root_and_no_network(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "app.services.install_executor.resolve_skill_commit", fake_resolve
     )
+
+    async def fake_fetch(url, commit, dest):
+        # The pinned commit is read before the operator sees the request
+        # (plain text only) — a plain SKILL.md, no network.
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "SKILL.md").write_text("---\nname: x\n---\n")
+        return commit
+
+    monkeypatch.setattr("app.services.install_executor._fetch_commit", fake_fetch)
     return calls
 
 

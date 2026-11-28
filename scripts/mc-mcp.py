@@ -1100,6 +1100,100 @@ def mc_send(to: str, body: str) -> str:
     return line
 
 
+# ── Extensions: ask for a capability (same as `mc ext`) ─────────────────────
+
+_UUID_CHARS = set("0123456789abcdef-")
+
+
+def _ext_chat_id(chat_id: str) -> str:
+    """chat_id, else MC_CHAT_ID, else the chat of a further Claude Code chat
+    (CLAUDE_CONFIG_DIR=<config>/chats/<chat id>/) — same rule as `mc ext`."""
+    if chat_id:
+        return chat_id
+    env = os.environ.get("MC_CHAT_ID", "").strip()
+    if env:
+        return env
+    parent, _, last = os.environ.get("CLAUDE_CONFIG_DIR", "").rstrip("/").rpartition("/")
+    if parent.endswith("/chats") and len(last) == 36 and set(last.lower()) <= _UUID_CHARS:
+        return last
+    return ""
+
+
+def _ext_line(r: dict) -> str:
+    line = f"{r.get('approval_id')} · {r.get('status')} · {r.get('action_type')} '{r.get('name')}'"
+    if r.get("commit"):
+        line += f" @ {str(r['commit'])[:12]}"
+    if r.get("target_agent_name"):
+        line += f" · for {r['target_agent_name']}"
+    if r.get("failure_reason"):
+        line += f" · failed: {r['failure_reason']}"
+    return line
+
+
+@mcp.tool()
+def ext_request(name: str, source: str, reason: str, ref: str = "",
+                target_agent_id: str = "", chat_id: str = "", task_id: str = "") -> str:
+    """Ask the operator for a skill — files a request that waits for approval.
+
+    Never installs anything itself, and never use curl or your own shell to
+    install. Skills only: MC pins the version to one commit and accepts only
+    plain-text skills (SKILL.md plus .md/.txt files). An existing name is
+    refused, never overwritten. Feedback: one system line in your chat (and
+    a comment on task_id, if given); check any time with ext_status.
+
+    Args:
+        name: skill name (folder name in the skills library)
+        source: "~/.mc/skills/<name>" (library) or "github:<owner>/<repo>" (allowed owners)
+        reason: why you need it — the operator reads this (min. 5 chars)
+        ref: version, a commit SHA or tag (empty = default branch, pinned now)
+        target_agent_id: another agent's UUID (needs agents:manage); empty = yourself
+        chat_id: chat for the feedback line; empty = MC_CHAT_ID / the chat you run in
+        task_id: task for the feedback comment (optional)
+    """
+    target = target_agent_id
+    if not target:
+        me = _agent_call("GET", "/agent/me")
+        if _is_error(me):
+            return f"Error: {me['error']}"
+        target = (me or {}).get("id") or ""
+        if not target:
+            return "Error: could not read your own agent id (GET /agent/me)"
+    body = {
+        "type": "skill", "operation": "install", "name": name, "source": source,
+        "target_agent_id": target, "reason": reason,
+    }
+    if ref:
+        body["ref"] = ref
+    chat = _ext_chat_id(chat_id)
+    if chat:
+        body["chat_id"] = chat
+    if task_id:
+        body["task_id"] = task_id
+    resp = _agent_call("POST", "/agent/install-requests", json=body)
+    if _is_error(resp):
+        return f"Error: {resp['error']}"
+    rid = (resp or {}).get("approval_id")
+    head = (f"Request {rid} is already waiting for the operator."
+            if (resp or {}).get("existing")
+            else f"Request {rid} filed — it waits for the operator's approval.")
+    tail = "" if (chat or task_id) else " No chat or task given: poll ext_status."
+    return f"{head} Check it with ext_status(request_id=\"{rid}\").{tail}"
+
+
+@mcp.tool()
+def ext_status(request_id: str = "") -> str:
+    """Your install requests (pending / approved / rejected, failure reason),
+    or one of them by id. Read-only, same as `mc ext status`."""
+    path = f"/agent/install-requests/{request_id}" if request_id else "/agent/install-requests"
+    resp = _agent_call("GET", path)
+    if _is_error(resp):
+        return f"Error: {resp['error']}"
+    rows = [resp] if request_id else ((resp or {}).get("requests") or [])
+    if not rows:
+        return "No install requests."
+    return "\n".join(_ext_line(r) for r in rows)
+
+
 @_operator_tool
 def mc_complete_phase(project_id: str, phase_id: str) -> str:
     """Phase als abgeschlossen markieren.

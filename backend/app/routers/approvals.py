@@ -44,6 +44,12 @@ _CORE_HANDLED_ACTION_TYPES = {
     "install_mcp", "uninstall_mcp",
 }
 
+_INSTALL_ACTION_TYPES = frozenset({
+    "install_skill", "uninstall_skill",
+    "install_plugin", "uninstall_plugin",
+    "install_mcp", "uninstall_mcp",
+})
+
 
 STOPPED_BLOCKER_DETAIL = (
     "Task is stopped (run_control set) — approving the blocker would not "
@@ -795,6 +801,16 @@ async def resolve_approval(
             install_result=install_result,
             install_exception=install_exception,
         )
+        # Agent without a task: one system line into its chat (chat_id on
+        # the request). No chat_id = nothing written.
+        from app.routers.install_requests import notify_requester_chat
+        await notify_requester_chat(
+            session, approval, "approved",
+            install_result=install_result, install_exception=install_exception,
+        )
+    elif approval.action_type in _INSTALL_ACTION_TYPES and approval.status == "rejected":
+        from app.routers.install_requests import notify_requester_chat
+        await notify_requester_chat(session, approval, "rejected")
 
     # ── Generic vertical hook (ADR-044): action_types without a dedicated
     # core handler above let overlay verticals react to the resolution

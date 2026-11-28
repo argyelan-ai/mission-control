@@ -203,7 +203,9 @@ def test_agent_with_exactly_one_scope_sees_every_verb_gated_by_it(scope):
 def test_base_verbs_always_present_even_with_a_single_unrelated_scope():
     """Base verbs (no require_scope beyond require_agent: me, recover,
     inbox, docs) must survive even the narrowest possible agent."""
-    base_verbs = {v for v, s in CANONICAL_VERB_SCOPES.items() if s is None}
+    # Only base verbs that are card verbs: a base capability verb (`ext`)
+    # lives in `mc docs tasks` like every capability verb, not on the card.
+    base_verbs = {v for v, s in CANONICAL_VERB_SCOPES.items() if s is None and v in CARD_VERBS}
     assert base_verbs, "expected at least one base (scope=None) verb"
     agent = _make_agent(scopes=[Scope.HEARTBEAT.value])
     card = _card(agent)
