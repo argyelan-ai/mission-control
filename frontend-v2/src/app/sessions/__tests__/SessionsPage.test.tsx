@@ -1025,7 +1025,7 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     const bothVisible = () => !isHidden(list()) && !isHidden(chat());
     expect(bothVisible()).toBe(false);
 
-    await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
+    await user.click(await within(list()).findByRole("option", { name: /Agent Two/ }));
     expect(bothVisible()).toBe(false);
 
     await user.click(screen.getByRole("button", { name: "Stub Back" }));
@@ -1112,7 +1112,7 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findAllByText("Agent One");
-    await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
+    await user.click(await within(list()).findByRole("option", { name: /Agent Two/ }));
     expect(JSON.parse(localStorage.getItem("mc-recent-chats") ?? "[]")[0]).toEqual({ kind: "agent", id: "agent-2" });
   });
 
@@ -1194,6 +1194,32 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     await screen.findByTestId("chat-view-draft");
     expect(isHidden(list())).toBe(true);
   });
+
+  // "All chats" (the quiet link under the chat list): the full list — head
+  // runs with their archive, groups and the group archive — on the desktop
+  // too, where the shell's column has none of them (critic 28.11.).
+  it("?all=1 shows the full list in place of the chat, on the desktop too", async () => {
+    nav.searchParamsString = "all=1";
+    localStorage.setItem("mc-sessions-last-agent", "agent-2");
+    renderPage();
+    const title = await screen.findByTestId("all-chats-title");
+    expect(title).toHaveTextContent("All chats");
+    expect(isHidden(list())).toBe(false);
+    expect(list().className).toContain("md:flex");
+    expect(list().className).not.toContain("md:hidden");
+    expect(screen.getByTestId("chat-island").className).toContain("md:hidden");
+    expect(screen.queryByTestId("chat-view-draft")).toBeNull();
+  });
+
+  it("a pick in the full list opens that chat and leaves ?all=1", async () => {
+    const user = userEvent.setup();
+    nav.searchParamsString = "all=1";
+    nav.replaced = [];
+    renderPage();
+    await screen.findByTestId("all-chats-title");
+    await user.click(await within(list()).findByRole("option", { name: /Agent Two/ }));
+    await waitFor(() => expect(nav.replaced.at(-1)).toBe("/sessions?agent=agent-2"));
+  });
 });
 
 // ── "New chat" = an empty draft, the agent in a chip (concept P1 + P4) ─────
@@ -1228,6 +1254,9 @@ describe("SessionsPage — New chat draft", () => {
     vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([
       mkAgent({ id: "host-1", name: "Boss", agent_runtime: "host", slug: "boss", last_seen_at: RECENT }),
       mkAgent({ id: "host-2", name: "Test Worker", agent_runtime: "host", last_seen_at: OLD }),
+      // Alive, but no chat transcript: its "chat" is a terminal — not a chat
+      // partner, so the chip never offers it.
+      mkAgent({ id: "host-3", name: "Hermes", agent_runtime: "host", slug: "hermes", last_seen_at: RECENT }),
     ]);
     vi.spyOn(api.chatRecord, "listChats").mockResolvedValue({ chats: [], enabled: true } as never);
   });
@@ -1253,6 +1282,7 @@ describe("SessionsPage — New chat draft", () => {
     expect(within(menu).getByTestId("agent-chip-new-group")).toHaveTextContent("New group");
     expect(within(menu).queryByText("Stopped")).toBeNull();
     expect(within(menu).queryByText("Test Worker")).toBeNull();
+    expect(within(menu).queryByText("Hermes")).toBeNull();
   });
 
   it("starts with the last used agent that can start a chat", async () => {
@@ -1355,6 +1385,59 @@ describe("SessionsPage — New chat draft", () => {
     await user.click(screen.getByRole("button", { name: "Draft Send" }));
     await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-1&chat=chat-1"]));
     expect(create).toHaveBeenCalledWith("agent-1");
+  });
+
+  it("two quick sends while the chat is still being made: ONE chat, both lines into it, in order", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }]));
+    let finish: (v: unknown) => void = () => {};
+    const create = vi.spyOn(api.chatRecord, "createChat").mockImplementation(
+      () => new Promise((resolve) => { finish = resolve; }) as never,
+    );
+    const sent: string[] = [];
+    record.sendToChat.mockImplementation(async (_a: string, chatId: string, text: string) => {
+      sent.push(`${chatId}:${text}`);
+    });
+    renderPage();
+    await chipButton();
+
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
+    finish({ id: "chat-7" });
+
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(sent).toEqual(["chat-7:Sag PONG", "chat-7:Sag PONG"]);
+    expect(record.draftRejected).toBe(0);
+    expect(new Set(nav.replaced)).toEqual(new Set(["/sessions?agent=agent-2&chat=chat-7"]));
+  });
+
+  it("while the record has not answered yet, the chip claims nothing and a send waits for it", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }]));
+    let answer: (v: unknown) => void = () => {};
+    vi.spyOn(api.chatRecord, "listChats").mockImplementation(
+      () => new Promise((resolve) => { answer = resolve; }) as never,
+    );
+    const create = vi.spyOn(api.chatRecord, "createChat");
+    const sendText = vi.spyOn(api.chat, "sendText").mockResolvedValue(undefined as never);
+    renderPage();
+    const chip = await chipButton();
+    expect(chip).toHaveTextContent("Nova");
+    expect(chip).not.toHaveTextContent("With Nova");
+    expect(chip).not.toHaveTextContent("New chats are off");
+
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(create).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
+
+    // The record says it is off: the line goes quietly into the own chat.
+    answer({ chats: [], enabled: false });
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
+    expect(sendText).toHaveBeenCalledWith("agent-2", "Sag PONG");
+    expect(create).not.toHaveBeenCalled();
+    expect(latestToast()).toBeNull();
   });
 
   it("leaving the page while the chat is made: the late answer does not navigate", async () => {
@@ -1650,7 +1733,7 @@ describe("SessionsPage — phone history puts the list behind every chat", () =>
     const user = userEvent.setup();
     renderPage();
     await screen.findAllByText("Agent One");
-    await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
+    await user.click(await within(list()).findByRole("option", { name: /Agent Two/ }));
     expect(nav.pushed).toEqual(["/sessions?agent=agent-2"]);
     expect(isHidden(chat())).toBe(false);
   });

@@ -60,9 +60,9 @@ export function isAgentOff(agent: SessionFacts, now: Date = new Date()): boolean
   return false;
 }
 
-/** The picker's order: running agents first, those that are off below —
- *  each part keeps the order it came in. Only the picker sorts this way;
- *  the chat list stays newest first. */
+/** The full list's order (the phone's list screen and "All chats"):
+ *  running agents first, those that are off below — each part keeps the
+ *  order it came in. The shell's chat list stays newest first. */
 export function runningFirst<T extends SessionFacts>(agents: readonly T[], now: Date = new Date()): T[] {
   const on = agents.filter((a) => !isAgentOff(a, now));
   const off = agents.filter((a) => isAgentOff(a, now));
@@ -329,20 +329,20 @@ export function defaultNewChatAgent<T extends NewChatAgent>(
 }
 
 /**
- * The first message of a new chat, handed from the draft to the real chat it
- * became: the draft sent it already; the chat that opens next shows it as its
- * own echo until the record confirms it, so the line never blinks out between
- * the two screens. Taken once. Key: the record chat id, or `agent:<id>` for
- * an agent's own chat.
+ * The first lines of a new chat, handed from the draft to the real chat it
+ * became: the draft sent them already; the chat that opens next shows them
+ * as its own echoes until the record confirms them, so no line blinks out
+ * between the two screens. Taken once. Key: the record chat id, or
+ * `agent:<id>` for an agent's own chat. Two quick sends hand over two lines.
  */
-const handedMessages = new Map<string, string>();
+const handedMessages = new Map<string, string[]>();
 
 export function handOverFirstMessage(key: string, text: string): void {
-  handedMessages.set(key, text);
+  handedMessages.set(key, [...(handedMessages.get(key) ?? []), text]);
 }
 
-export function takeHandedMessage(key: string): string | null {
-  const text = handedMessages.get(key) ?? null;
+export function takeHandedMessages(key: string): string[] {
+  const texts = handedMessages.get(key) ?? [];
   handedMessages.delete(key);
-  return text;
+  return texts;
 }

@@ -78,7 +78,7 @@ import { SpeedLine } from "./SpeedLine";
 import { DrawerButton } from "@/components/layout/ChatDrawer";
 import { setOpenChat } from "@/components/layout/useChatList";
 import { furtherChatLabel, newChatIdOf, sendToChat, useRecordChat } from "./useRecordChat";
-import { takeHandedMessage } from "@/lib/chatList";
+import { takeHandedMessages } from "@/lib/chatList";
 import { useCommsDirectory } from "@/hooks/useCommsDirectory";
 import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
 import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
@@ -1022,6 +1022,9 @@ export function ChatView({
         paneObservable={agent.agent_runtime === "cli-bridge" || headlessChat}
         capabilities={stream.capabilities}
         chipSlot={draft?.chip ?? null}
+        // The effort belongs to the agent's running session, not to a chat
+        // that does not exist yet.
+        noEffort={!!draft}
         modeSlot={
           headlessChat && !furtherChat && !draft ? (
             <ModeChip
@@ -1399,8 +1402,7 @@ export function ChatView({
   echoSentRef.current = stream.echoSent;
   useEffect(() => {
     if (!handoffKey) return;
-    const text = takeHandedMessage(handoffKey);
-    if (text) echoSentRef.current(text, false);
+    for (const text of takeHandedMessages(handoffKey)) echoSentRef.current(text, false);
   }, [handoffKey]);
   useEffect(() => {
     if (!newChatEmpty || !chatParam || focusedNewChat.current === chatParam) return;
@@ -2053,7 +2055,12 @@ export function ChatView({
               />
               )}
               {!isAdmin ? (
-                <AdminOnlyNotice compact message={t("inputAdminOnly")} />
+                <>
+                  {/* The draft's chip stays for a viewer too: it says new
+                      chats are off and still opens an agent's own chat. */}
+                  {draft && <div className="px-3 pt-2 md:px-4">{draft.chip}</div>}
+                  <AdminOnlyNotice compact message={t("inputAdminOnly")} />
+                </>
               ) : agent && (furtherChat || draft) ? (
                 // A further chat: the composer alone. Live voice and the
                 // mode chip act on the agent's own chat, not this one.
@@ -2078,7 +2085,9 @@ export function ChatView({
               ) : null}
               {/* The speed line under the input (variant C, operator
                   decision 2026-11-18): box · model · live tok/s. */}
-              {agent && (
+              {/* Not under a draft: box, model and tok/s belong to a chat
+                  that exists (K3). */}
+              {agent && !draft && (
                 <SpeedLine
                   runtimeId={agent.runtime_id ?? null}
                   model={stream.usage?.model ?? stream.capabilities?.model ?? agent.model ?? null}

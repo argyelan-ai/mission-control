@@ -344,6 +344,19 @@ describe("chat column (desktop)", () => {
     expect(within(nav).getByRole("link", { name: /^Chat/ })).toHaveAttribute("aria-current", "page");
   });
 
+  // Head runs with their archive, groups and the group archive are not rows
+  // of this list; a quiet link under it leads to the full list (critic
+  // 28.11.: without it they were out of reach on the desktop).
+  it("ends the list with a quiet 'All chats' link to the full list (desktop only)", async () => {
+    wrap(<ChatSidebar />);
+    const column = screen.getByTestId("chat-sidebar");
+    const all = await within(column).findByTestId("chat-list-all");
+    expect(all).toHaveTextContent("All chats");
+    expect(all).toHaveAttribute("href", "/sessions?all=1");
+    expect(all.className).toContain("hidden");
+    expect(all.className).toContain("md:flex");
+  });
+
   it("lights More on the More page (aria-current), and nothing else", async () => {
     nav.pathname = "/more";
     wrap(<ChatSidebar />);

@@ -182,6 +182,13 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   ]).finally(() => clearTimeout(timer));
 }
 
+/** Is the chat record on? Its list says `enabled: false` while it is off;
+ *  a list that could not be read cannot make a chat either. */
+function recordOnOf(list: unknown, failed: boolean): boolean {
+  if (failed || list === undefined) return false;
+  return (list as { enabled?: boolean }).enabled !== false;
+}
+
 /** Send once more if the agent is still booting (409 `agent_starting`). */
 async function sendRetryingStart(send: () => Promise<unknown>): Promise<void> {
   try {
@@ -205,6 +212,10 @@ function SessionsPageContent() {
   const { activeBoardId } = useAppStore();
   // "New chat" (drawer and desktop column) opens an empty draft (P4).
   const drafting = searchParams.get("new") === "1" || searchParams.get("pick") === "1";
+  // "All chats" (the quiet link under the shell's chat list): the full list
+  // — agents by project, head runs with their archive, groups and the group
+  // archive — in place of the chat, on the desktop too.
+  const allChats = searchParams.get("all") === "1" && !drafting;
   const isAdmin = useIsAdmin();
   const [selected, setSelected] = useState<AgentWithState | null>(null);
   // Gruppen-Auswahl liegt bewusst NEBEN der Agenten-Auswahl statt in einer
@@ -220,9 +231,14 @@ function SessionsPageContent() {
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
   // The draft's agent as chosen in the chip; null = the default.
   const [draftAgentId, setDraftAgentId] = useState<string | null>(null);
-  // A chat made for a first send that then failed: the next try reuses it
-  // instead of making a second one.
-  const draftChat = useRef<{ agentId: string; chatId: string } | null>(null);
+  // The chat a draft's first send makes — kept as the PROMISE, set before
+  // anything is awaited: a second send while the first is still on its way
+  // (a quick second Enter on a slow phone network) goes into the same chat,
+  // and a retry after a failed send reuses it too. A fresh draft forgets it.
+  const draftChat = useRef<{ agentId: string; chatId: Promise<string> } | null>(null);
+  // The draft's sends, one after the other: the lines reach the chat in the
+  // order they were typed.
+  const draftQueue = useRef<Promise<unknown>>(Promise.resolve());
   // Is the operator still in the draft? A new chat that arrives after they
   // left the page or the draft (back swipe, a tab tap, a slow phone network)
   // must not pull them into it.
@@ -236,6 +252,7 @@ function SessionsPageContent() {
   const draftingNow = useRef(drafting);
   useEffect(() => {
     draftingNow.current = drafting;
+    if (drafting) draftChat.current = null;
   }, [drafting]);
   // Mobile (<md) stack navigation: which pane is visible. Desktop (≥md) ignores
   // this and always shows the split. Kept separate from `selected` so a
@@ -485,6 +502,10 @@ function SessionsPageContent() {
   useEffect(() => {
     if (drafting) setMobileView("chat");
   }, [drafting]);
+  // "All chats" is the list screen (on the phone the list it already has).
+  useEffect(() => {
+    if (allChats) setMobileView("list");
+  }, [allChats]);
 
   // Remember the selection for the next visit.
   useEffect(() => {
@@ -619,7 +640,7 @@ function SessionsPageContent() {
     // Leaving the draft for a chat replaces it: the draft is a step, not a
     // place back goes to — and the URL must lose ?new=1, or the draft
     // would stay over the chat.
-    if (drafting) {
+    if (drafting || allChats) {
       router.replace(chatUrl(kind, id), { scroll: false });
       return;
     }
@@ -687,15 +708,23 @@ function SessionsPageContent() {
   // New chats need the record on (its list says `enabled: false` otherwise)
   // and an admin (only admins may create chats). Shared query with the chat
   // list — one request serves both.
-  const { data: recordList } = useQuery({
+  const recordQuery = {
     queryKey: RECORD_CHATS_QUERY_KEY,
     queryFn: () => api.chatRecord.listChats(),
     retry: false,
-    enabled: drafting,
-  });
-  const recordOn = (recordList as { enabled?: boolean } | undefined)?.enabled !== false;
-  const newChatsOn = isAdmin && recordOn;
-  const choices = useMemo(() => newChatChoices(agents, { newChatsOn }), [agents, newChatsOn]);
+  } as const;
+  const { data: recordList, isError: recordError } = useQuery({ ...recordQuery, enabled: drafting });
+  // Not answered yet = unknown: the chip claims nothing and a send waits
+  // for the answer (never "With X" first and "off" a moment later). An
+  // unreachable record cannot make a chat: off.
+  const recordKnown = recordList !== undefined || recordError;
+  // While unknown the chip's menu is drawn as if on (so the default agent
+  // does not jump once the answer comes); the send checks the real answer.
+  const newChatsOn = isAdmin && (recordKnown ? recordOnOf(recordList, recordError) : true);
+  // Only chat partners: an agent without a chat transcript (Hermes, Jarvis)
+  // opens a terminal, not a chat — the chip leaves it out.
+  const chatAgents = useMemo(() => agents.filter((a) => agentHasTranscript(a)), [agents]);
+  const choices = useMemo(() => newChatChoices(chatAgents, { newChatsOn }), [chatAgents, newChatsOn]);
   const draftAgent: AgentWithState | null = useMemo(() => {
     const offered = [...choices.canStart, ...choices.onlyOne];
     const picked = draftAgentId ? offered.find((a) => a.id === draftAgentId) : undefined;
@@ -709,11 +738,27 @@ function SessionsPageContent() {
    *  place of the draft. An agent without a further chat (or new chats
    *  off) gets the line in its own chat, which then opens. Rejects — with a
    *  toast — to hand the text back to the composer. */
-  async function sendDraft(text: string): Promise<void> {
+  function sendDraft(text: string): Promise<void> {
     const agent = draftAgent;
-    if (!agent) throw new Error("new chat: no agent");
+    if (!agent) return Promise.reject(new Error("new chat: no agent"));
+    const run = draftQueue.current.then(() => sendDraftNow(agent, text));
+    draftQueue.current = run.catch(() => {});
+    return run;
+  }
+
+  async function sendDraftNow(agent: AgentWithState, text: string): Promise<void> {
     const stillDrafting = () => mounted.current && draftingNow.current;
-    const intoNewChat = newChatsOn && choices.canStart.some((a) => a.id === agent.id);
+    // The record's answer decides where the line goes — wait for it if the
+    // chip is still waiting too.
+    let canMake = newChatsOn;
+    if (!recordKnown && isAdmin) {
+      try {
+        canMake = recordOnOf(await qc.fetchQuery(recordQuery), false);
+      } catch {
+        canMake = false;
+      }
+    }
+    const intoNewChat = canMake && choices.canStart.some((a) => a.id === agent.id);
     if (!intoNewChat) {
       try {
         await sendRetryingStart(() => api.chat.sendText(agent.id, text));
@@ -726,15 +771,17 @@ function SessionsPageContent() {
       return;
     }
     try {
-      let chatId = draftChat.current?.agentId === agent.id ? draftChat.current.chatId : null;
-      if (!chatId) {
-        const chat = await withTimeout(api.chatRecord.createChat(agent.id), NEW_CHAT_TIMEOUT_MS);
-        chatId = chat.id;
-        draftChat.current = { agentId: agent.id, chatId };
+      if (draftChat.current?.agentId !== agent.id) {
+        const made = withTimeout(api.chatRecord.createChat(agent.id), NEW_CHAT_TIMEOUT_MS).then((c) => c.id);
+        const entry = { agentId: agent.id, chatId: made };
+        draftChat.current = entry;
+        // A chat that could not be made is not kept: the next try asks again.
+        made.catch(() => {
+          if (draftChat.current === entry) draftChat.current = null;
+        });
       }
-      const id = chatId;
+      const id = await draftChat.current!.chatId;
       await sendRetryingStart(() => sendToChat(agent.id, id, text));
-      draftChat.current = null;
       handOverFirstMessage(id, text);
       // The list asks the record again now: the new row stands there (and
       // is marked) the moment the chat opens.
@@ -832,7 +879,7 @@ function SessionsPageContent() {
   // list + chat side by side, so every branch below resolves via `md:` classes.
   // Auch eine Gruppe ist ein „Chat-Bildschirm" im Handy-Stapel — sonst
   // tippt man eine Gruppe an und landet wieder in der Liste.
-  const onChatScreen = drafting || (mobileView === "chat" && (!!selectedLive || !!selectedGroupId || !!selectedHeadId));
+  const onChatScreen = !allChats && (drafting || (mobileView === "chat" && (!!selectedLive || !!selectedGroupId || !!selectedHeadId)));
   // On the phone the list screen keeps the last chat mounted but hidden; a
   // live voice call must float there, not dock into the invisible chat.
   const phone = usePhoneViewport();
@@ -892,12 +939,24 @@ function SessionsPageContent() {
               area of its own and left the page blank whenever a restored
               selection kept `mobileView` on "list". */}
           {/* Desktop: the shell's left column lists the chats, so this list
-              is a phone screen only. ("New chat" is a draft now, not a
-              picker over this list — concept P4.) */}
+              shows there only as "All chats" (?all=1), in place of the chat —
+              the one place for head runs, their archive and the group
+              archive. ("New chat" is a draft now, not a picker over this
+              list — concept P4.) */}
           <div
-            className={`${onChatScreen ? "hidden" : "flex"} md:hidden flex-col flex-1 min-h-0 overflow-hidden`}
+            className={`${onChatScreen ? "hidden" : "flex"} ${allChats ? "md:flex md:rounded-xl md:border md:border-[var(--color-border)]" : "md:hidden"} flex-col flex-1 min-h-0 overflow-hidden`}
             data-testid="session-list-mobile"
+            style={allChats ? { background: C.bgSurface } : undefined}
           >
+            {allChats && (
+              <h1
+                data-testid="all-chats-title"
+                className="shrink-0 px-4 pt-4 pb-2 text-base font-semibold"
+                style={{ color: C.textPrimary }}
+              >
+                {tCockpit("allChats")}
+              </h1>
+            )}
             <SessionSidebar
               agents={agents}
               tasks={tasks}
@@ -935,7 +994,7 @@ function SessionsPageContent() {
               Fast-Schwarz war anstrengend). */}
           <div
             ref={islandRef}
-            className={`${onChatScreen || activePanel ? "flex" : "hidden"} md:flex flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:flex-row md:relative md:rounded-xl md:border md:border-[var(--color-border)]`}
+            className={`${onChatScreen || activePanel ? "flex" : "hidden"} ${allChats ? "md:hidden" : "md:flex"} flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:flex-row md:relative md:rounded-xl md:border md:border-[var(--color-border)]`}
             data-testid="chat-island"
           >
           <div
@@ -963,6 +1022,7 @@ function SessionsPageContent() {
                         agent={draftAgent}
                         choices={choices}
                         newChatsOn={newChatsOn}
+                        known={recordKnown || !isAdmin}
                         onPick={setDraftAgentId}
                         onOpenOwnChat={(id) => router.replace(chatUrl("agent", id), { scroll: false })}
                         onNewGroup={() => setCreateGroupOpen(true)}

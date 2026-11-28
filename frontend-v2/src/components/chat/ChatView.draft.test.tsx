@@ -46,7 +46,9 @@ vi.mock("@/lib/api", () => ({
     },
   },
 }));
-vi.mock("@/hooks/useIsAdmin", () => ({ useIsAdmin: () => true }));
+const adminMock = vi.hoisted(() => ({ admin: true }));
+vi.mock("@/hooks/useIsAdmin", () => ({ useIsAdmin: () => adminMock.admin }));
+vi.mock("./SpeedLine", () => ({ SpeedLine: () => <div data-testid="speed-line-stub" /> }));
 const navMock = vi.hoisted(() => ({ params: new URLSearchParams() }));
 vi.mock("next/navigation", () => ({ useSearchParams: () => navMock.params }));
 vi.mock("@/components/layout/ChatDrawer", () => ({ DrawerButton: () => null }));
@@ -147,6 +149,7 @@ let record: RecordChatResult;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  adminMock.admin = true;
   navMock.params = new URLSearchParams("new=1");
   mockChatStream.mockReturnValue(mkStream());
   record = mkRecord();
@@ -200,6 +203,25 @@ describe("ChatView — New chat draft", () => {
 
     await waitFor(() => expect(record.echoFailed).toHaveBeenCalledWith("Sag PONG"));
     await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("Sag PONG"));
+  });
+
+  it("no admin: the chip still stands (it says new chats are off), above the admin notice", () => {
+    adminMock.admin = false;
+    renderDraft(vi.fn());
+    const chip = screen.getByTestId("agent-chip-stub");
+    const notice = screen.getByText("Read-only: only admins can type into a live session.");
+    expect(chip.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("claims nothing about a chat that does not exist yet: no effort chip, no speed line", () => {
+    // Capabilities that put the effort chip on any other composer.
+    record = mkRecord({ capabilities: { effortReason: "model_no_effort", effortLevels: [], canSwitchEffort: false } as never });
+    renderDraft(vi.fn());
+    expect(screen.getByRole("textbox")).toBeInTheDocument();
+    expect(screen.queryByTestId("effort-chip")).toBeNull();
+    expect(screen.queryByTestId("effort-chip-static")).toBeNull();
+    expect(screen.queryByTestId("speed-line-stub")).toBeNull();
   });
 
   it("nobody alive: header and chip, no input to type into", () => {

@@ -34,6 +34,9 @@ export interface AgentChipProps {
   choices: NewChatChoices;
   /** New chats can be made (record on and the viewer is an admin). */
   newChatsOn: boolean;
+  /** The record has answered whether new chats are on. Until then the chip
+   *  names the agent only — no claim it might take back a moment later. */
+  known?: boolean;
   /** A "New chat" row: this agent answers the draft. */
   onPick: (agentId: string) => void;
   /** An "Only one chat" row: open that agent's own chat. */
@@ -47,14 +50,16 @@ export function agentChipLabel(
   agent: NewChatAgent | null,
   choices: NewChatChoices,
   newChatsOn: boolean,
+  known = true,
 ): string {
   if (!agent) return t("agentChipNone");
+  if (!known) return agent.name;
   if (!newChatsOn) return t("newChatOff", { name: agent.name });
   if (choices.canStart.some((a) => a.id === agent.id)) return t("agentChipWith", { name: agent.name });
   return t("agentChipOwnChat", { name: agent.name });
 }
 
-export function AgentChip({ agent, choices, newChatsOn, onPick, onOpenOwnChat, onNewGroup }: AgentChipProps) {
+export function AgentChip({ agent, choices, newChatsOn, known = true, onPick, onOpenOwnChat, onNewGroup }: AgentChipProps) {
   const t = useTranslations("cockpit");
   const phone = usePhoneViewport();
   const [open, setOpen] = useState(false);
@@ -81,7 +86,7 @@ export function AgentChip({ agent, choices, newChatsOn, onPick, onOpenOwnChat, o
     };
   }, [popoverOpen]);
 
-  const label = agentChipLabel(t, agent, choices, newChatsOn);
+  const label = agentChipLabel(t, agent, choices, newChatsOn, known);
   const close = () => setOpen(false);
 
   const menu = (
@@ -171,7 +176,7 @@ export function AgentChip({ agent, choices, newChatsOn, onPick, onOpenOwnChat, o
         ref={chipRef}
         type="button"
         data-testid="agent-chip-button"
-        data-mode={!agent ? "none" : !newChatsOn ? "off" : choices.canStart.some((a) => a.id === agent.id) ? "new" : "own"}
+        data-mode={!agent ? "none" : !known ? "pending" : !newChatsOn ? "off" : choices.canStart.some((a) => a.id === agent.id) ? "new" : "own"}
         aria-haspopup={phone ? "dialog" : "menu"}
         aria-expanded={open}
         aria-label={t("agentChipChange", { label })}
