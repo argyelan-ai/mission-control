@@ -60,9 +60,9 @@ export function isAgentOff(agent: SessionFacts, now: Date = new Date()): boolean
   return false;
 }
 
-/** The picker's order: running agents first, those that are off below —
- *  each part keeps the order it came in. Only the picker sorts this way;
- *  the chat list stays newest first. */
+/** The full list's order (the phone's list screen and "All chats"):
+ *  running agents first, those that are off below — each part keeps the
+ *  order it came in. The shell's chat list stays newest first. */
 export function runningFirst<T extends SessionFacts>(agents: readonly T[], now: Date = new Date()): T[] {
   const on = agents.filter((a) => !isAgentOff(a, now));
   const off = agents.filter((a) => isAgentOff(a, now));
@@ -185,7 +185,10 @@ export function buildChatList(input: ChatListInput, now: Date = new Date()): Cha
       kind: "agent",
       id: agent.id,
       title: ownTitle ?? agent.name,
-      at: chat.lastActivityAt ?? null,
+      // A chat just made from the "New chat" draft has no activity in the
+      // record yet (the first line lands a moment later): its creation
+      // dates it, so it stands on top of Today, not last in Earlier.
+      at: chat.lastActivityAt ?? chat.createdAt ?? null,
       // The agent's state is its own chat's; a further chat claims none.
       state: "idle",
       href: `${chatEntryHref("agent", agent.id)}&chat=${encodeURIComponent(chat.id)}`,
@@ -249,4 +252,97 @@ export function chatRowTime(at: string | null, locale: string, now: Date = new D
   return locale === "de"
     ? `${d.getDate()}.${d.getMonth() + 1}.`
     : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+// ── "New chat" draft: who the agent chip offers (concept "Neuer Chat", P1 + P4) ──
+
+/** A host agent counts as alive for "New chat" while its last heartbeat is
+ *  younger than a day — the 90 s session rule above would hide an agent that
+ *  merely dozed; a test agent silent for days must not be offered. */
+export const NEW_CHAT_HOST_ALIVE_MS = 24 * 60 * 60 * 1000;
+
+/** The facts of a session row the chip needs. */
+export type NewChatAgent = {
+  id: string;
+  name: string;
+  status: string;
+  agent_runtime?: string | null;
+  container_state?: string | null;
+  last_seen_at?: string | null;
+  can_start_chat?: boolean | null;
+};
+
+export type NewChatChoices<T extends NewChatAgent = NewChatAgent> = {
+  /** Alive agents that can hold a further chat — a send makes a new chat. */
+  canStart: T[];
+  /** Alive agents with only their own chat — a tap opens that chat. */
+  onlyOne: T[];
+};
+
+/** Alive for "New chat": host = heartbeat under 24 h; container = running
+ *  (status not offline when the row carries no container fact). Archived
+ *  never. */
+export function isAgentAliveForNewChat(agent: NewChatAgent, now: Date = new Date()): boolean {
+  if (agent.status === "archived") return false;
+  if (agent.agent_runtime === "host") {
+    if (!agent.last_seen_at) return false;
+    const seen = Date.parse(agent.last_seen_at);
+    return !Number.isNaN(seen) && now.getTime() - seen < NEW_CHAT_HOST_ALIVE_MS;
+  }
+  if (agent.container_state != null) return agent.container_state === "running";
+  return agent.status !== "offline";
+}
+
+/**
+ * The chip's two sections, in the order the rows came in. `newChatsOn` is
+ * false while the chat record is off or the viewer is no admin (only admins
+ * may create chats): then nobody gets a new chat and every alive agent opens
+ * its own. Host agents get no further chats in this round, whatever a row
+ * claims.
+ */
+export function newChatChoices<T extends NewChatAgent>(
+  agents: readonly T[],
+  opts: { newChatsOn: boolean },
+  now: Date = new Date(),
+): NewChatChoices<T> {
+  const alive = agents.filter((a) => isAgentAliveForNewChat(a, now));
+  const can = (a: T) => opts.newChatsOn && a.can_start_chat === true && a.agent_runtime !== "host";
+  return { canStart: alive.filter(can), onlyOne: alive.filter((a) => !can(a)) };
+}
+
+/** The agent the draft starts with: the last used one that can start a chat,
+ *  else the first such; with none, the last used alive agent (its own chat),
+ *  else the first; nobody alive → null. `recentAgentIds` newest first. */
+export function defaultNewChatAgent<T extends NewChatAgent>(
+  choices: NewChatChoices<T>,
+  recentAgentIds: readonly string[],
+): T | null {
+  for (const list of [choices.canStart, choices.onlyOne]) {
+    if (list.length === 0) continue;
+    for (const id of recentAgentIds) {
+      const hit = list.find((a) => a.id === id);
+      if (hit) return hit;
+    }
+    return list[0];
+  }
+  return null;
+}
+
+/**
+ * The first lines of a new chat, handed from the draft to the real chat it
+ * became: the draft sent them already; the chat that opens next shows them
+ * as its own echoes until the record confirms them, so no line blinks out
+ * between the two screens. Taken once. Key: the record chat id, or
+ * `agent:<id>` for an agent's own chat. Two quick sends hand over two lines.
+ */
+const handedMessages = new Map<string, string[]>();
+
+export function handOverFirstMessage(key: string, text: string): void {
+  handedMessages.set(key, [...(handedMessages.get(key) ?? []), text]);
+}
+
+export function takeHandedMessages(key: string): string[] {
+  const texts = handedMessages.get(key) ?? [];
+  handedMessages.delete(key);
+  return texts;
 }

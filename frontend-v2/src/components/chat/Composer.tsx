@@ -282,6 +282,12 @@ interface ComposerProps {
   /** Plan/Standard switch of a headless (ACP) agent (P3, `ModeChip`), left
    *  of the effort chip. `null`/absent = the agent reports no plan mode. */
   modeSlot?: ReactNode;
+  /** A line above the input — the "New chat" draft's agent chip (P4,
+   *  `AgentChip`). Absent = nothing above the pill. */
+  chipSlot?: ReactNode;
+  /** No model chip and no effort chip — the "New chat" draft: there is no
+   *  session yet whose model or effort they could show or set (K3). */
+  noEffort?: boolean;
   /** Overrides the default placeholder — while a task runs in this agent's
    *  chat it says where a message goes ("to the chat, not the task", D12). */
   placeholder?: string;
@@ -322,7 +328,7 @@ const HIT_44 =
 const SLOT_HIT_44 =
   "contents [&>button]:relative [&>button]:before:absolute [&>button]:before:left-1/2 [&>button]:before:top-1/2 [&>button]:before:-translate-x-1/2 [&>button]:before:-translate-y-1/2 [&>button]:before:w-full [&>button]:before:h-full [&>button]:before:min-w-11 [&>button]:before:min-h-11 [&>button]:before:content-['']";
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, prefill = null, quote = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, prefill = null, quote = null, barBelow = false, voiceSlot = null, modeSlot = null, chipSlot = null, noEffort = false, placeholder }: ComposerProps) {
   const t = useTranslations("sessions");
   // One word per effort level, the same as the bench (round-2 Q2):
   // "High" / "Hoch" instead of the raw "high" the harness reports.
@@ -1034,6 +1040,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           pill's own frame stepping to a neutral grey (text-muted, 4.6:1
           against the pill — perceivable per WCAG 2.4.11 without being a halo,
           and unmistakably grey rather than white). */}
+      {chipSlot}
+
       <div
         ref={pillRef}
         data-testid="composer-dropzone"
@@ -1181,6 +1189,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               21.11.2026: "DeepS…"), so it is whole whenever the row has room;
               with mode chip, effort, mic and a long local model name on a
               390 px phone it cuts instead of pushing Send off the screen. */}
+          {!noEffort && (
           <div className="relative min-w-0 max-w-40" ref={modelBoxRef}>
             {modelOptions.length === 0 ? (
               /* Fremde CLI (kimi, omp): das Backend meldet explizit keine
@@ -1271,6 +1280,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               </PopoverPortal>
             )}
           </div>
+          )}
 
           {usage && pct != null && (
             // The ring stays the compact indicator and the tooltip stays the
@@ -1374,7 +1384,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               must stay on the screen; the model chip gives way instead. */}
           <div data-testid="composer-actions" className="ml-auto flex shrink-0 items-center gap-1.5">
           {modeSlot && <span className={SLOT_HIT_44}>{modeSlot}</span>}
-          {(currentEffort ||
+          {!noEffort && (currentEffort ||
             (effortSupported && effortLevels.length > 0) ||
             /* Der Chip erscheint AUCH ohne bekannte Stufe, sobald das Backend
                einen Grund mitliefert. Genau dieser Fall — openclaude auf einem

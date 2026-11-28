@@ -5,14 +5,18 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
-import { api, type RecordChat } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { C, alpha } from "@/lib/colors";
 import { BrowserLiveView } from "@/components/shared/BrowserLiveView";
 import { SessionSidebar } from "@/components/chat/SessionSidebar";
 import { ChatView, type CenterView, type DetailLevel, CENTER_VIEWS, DETAIL_LEVELS } from "@/components/chat/ChatView";
 import { DiffPanel } from "@/components/chat/DiffPanel";
-import { furtherChatHref, isRecordOff } from "@/components/chat/useRecordChat";
+import { furtherChatHref, sendToChat } from "@/components/chat/useRecordChat";
+import { AgentChip } from "@/components/chat/AgentChip";
+import { defaultNewChatAgent, handOverFirstMessage, newChatChoices } from "@/lib/chatList";
+import { isAgentStartingError } from "@/lib/chatTypes";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { RECORD_CHATS_QUERY_KEY } from "@/hooks/useChatSwitch";
 import type { PanelKind } from "@/components/chat/PanelButtons";
 import { agentIsRunning, type AgentWithState } from "@/components/chat/TerminalPanel";
@@ -155,48 +159,45 @@ function agentHasTranscript(agent: AgentWithState | null | undefined): boolean {
   return agent.agent_runtime === "host" && !!agent.slug && BOSS_SLUGS.has(agent.slug);
 }
 
-// ── New chat (chats slice S2) ───────────────────────────────────────────────
-// Can this agent hold a further chat? The backend says so on the agent row
-// (`can_start_chat`, the send path's own routing rule). Any other agent
-// (host agents, omp without ACP) would get a chat it cannot answer in —
-// the record creates it, the first message then fails with 409
-// `chat_harness_unsupported`. So the picker opens their own chat instead.
-function agentCanStartNewChat(agent: AgentWithState | null | undefined): boolean {
-  return agent?.can_start_chat === true;
-}
+// ── New chat = an empty draft (concept "Neuer Chat", P1 + P4) ───────────────
+// "New chat" opens `?new=1`: an empty chat that does not exist yet, the agent
+// chosen in a chip above the composer. The chat is made on the first send —
+// `POST /chat-record/chats`, then the send with its `chatId` — and the URL
+// becomes the real chat's. No empty rows: nothing is made before a send.
+// `?pick=1` (the old picker's address) opens the draft too.
 
-/** Why a new chat could not be had, as the toast that says so: the record
- *  is switched off (404 `chat_record_disabled`), only admins may (403), or
- *  it failed (any other answer, the agent gone, no answer in time). */
-function newChatRefusal(err: unknown): "newChatOff" | "newChatNotAllowed" | "newChatFailed" {
-  if (isRecordOff(err)) return "newChatOff";
-  if (err instanceof Error && /^API 403\b/.test(err.message)) return "newChatNotAllowed";
-  return "newChatFailed";
-}
-
-/** How long a pick waits for the record before it gives up and opens the
- *  agent's own chat — a hanging request must never lock the picker. */
+/** How long the first send waits for the record to make the chat before it
+ *  gives the text back — a hanging request must never lock the draft. */
 const NEW_CHAT_TIMEOUT_MS = 15_000;
+/** An agent that is still starting gets the first line once more after this. */
+const NEW_CHAT_START_RETRY_MS = 3_000;
 
-/** The newest further chat of this agent that nobody has written in yet:
- *  "New chat" opens it again instead of piling up empty rows, one per tap
- *  that went nowhere. Same harness only — after a harness switch the old
- *  empty chat belongs to the other harness. */
-function untouchedNewChat(
-  chats: readonly RecordChat[],
-  agentId: string,
-  harness: string,
-): RecordChat | null {
-  const empty = chats.filter(
-    (c) =>
-      !c.agentDefault &&
-      !c.archived &&
-      !c.lastActivityAt &&
-      c.legacyAgentId === agentId &&
-      (c.harness ?? "") === harness,
-  );
-  empty.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
-  return empty[0] ?? null;
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("new chat: no answer in time")), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/** Is the chat record on? Its list says `enabled: false` while it is off;
+ *  a list that could not be read cannot make a chat either. */
+function recordOnOf(list: unknown, failed: boolean): boolean {
+  if (failed || list === undefined) return false;
+  return (list as { enabled?: boolean }).enabled !== false;
+}
+
+/** Send once more if the agent is still booting (409 `agent_starting`). */
+async function sendRetryingStart(send: () => Promise<unknown>): Promise<void> {
+  try {
+    await send();
+  } catch (err) {
+    if (!isAgentStartingError(err)) throw err;
+    await new Promise((r) => setTimeout(r, NEW_CHAT_START_RETRY_MS));
+    await send();
+  }
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -209,10 +210,13 @@ function SessionsPageContent() {
   const router = useRouter();
   const pathname = usePathname() ?? "/sessions";
   const { activeBoardId } = useAppStore();
-  // "New chat" (drawer and desktop column) opens this page as a picker: the
-  // list of who to talk to, plus groups and heads. Until chats stop being
-  // bound to agents (ADR-102 stage 1) a new chat starts by picking one.
-  const picking = searchParams.get("pick") === "1";
+  // "New chat" (drawer and desktop column) opens an empty draft (P4).
+  const drafting = searchParams.get("new") === "1" || searchParams.get("pick") === "1";
+  // "All chats" (the quiet link under the shell's chat list): the full list
+  // — agents by project, head runs with their archive, groups and the group
+  // archive — in place of the chat, on the desktop too.
+  const allChats = searchParams.get("all") === "1" && !drafting;
+  const isAdmin = useIsAdmin();
   const [selected, setSelected] = useState<AgentWithState | null>(null);
   // Gruppen-Auswahl liegt bewusst NEBEN der Agenten-Auswahl statt in einer
   // Union: wer aus einer Gruppe zurück zu seinem Agenten springt, landet
@@ -225,14 +229,19 @@ function SessionsPageContent() {
   // the selection back the instant `selected` became null).
   const [selectedHeadId, setSelectedHeadId] = useState<string | null>(null);
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
-  // "New chat" → a pick is asking the record for a new chat: the agent's
-  // name while the request runs. The ref is the double-tap guard (state
-  // lands a render too late for two taps in one frame).
-  const [startingChatFor, setStartingChatFor] = useState<string | null>(null);
-  const startingChat = useRef(false);
-  // Is the operator still where the pick was made? A new chat that arrives
-  // after they left the page or the picker (back swipe, a tab tap, a slow
-  // phone network) must not pull them into it.
+  // The draft's agent as chosen in the chip; null = the default.
+  const [draftAgentId, setDraftAgentId] = useState<string | null>(null);
+  // The chat a draft's first send makes — kept as the PROMISE, set before
+  // anything is awaited: a second send while the first is still on its way
+  // (a quick second Enter on a slow phone network) goes into the same chat,
+  // and a retry after a failed send reuses it too. A fresh draft forgets it.
+  const draftChat = useRef<{ agentId: string; chatId: Promise<string> } | null>(null);
+  // The draft's sends, one after the other: the lines reach the chat in the
+  // order they were typed.
+  const draftQueue = useRef<Promise<unknown>>(Promise.resolve());
+  // Is the operator still in the draft? A new chat that arrives after they
+  // left the page or the draft (back swipe, a tab tap, a slow phone network)
+  // must not pull them into it.
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -240,10 +249,11 @@ function SessionsPageContent() {
       mounted.current = false;
     };
   }, []);
-  const pickingNow = useRef(picking);
+  const draftingNow = useRef(drafting);
   useEffect(() => {
-    pickingNow.current = picking;
-  }, [picking]);
+    draftingNow.current = drafting;
+    if (drafting) draftChat.current = null;
+  }, [drafting]);
   // Mobile (<md) stack navigation: which pane is visible. Desktop (≥md) ignores
   // this and always shows the split. Kept separate from `selected` so a
   // return-to-list action doesn't null `selected` (which would immediately
@@ -325,7 +335,7 @@ function SessionsPageContent() {
     refetchInterval: 30_000,
   });
 
-  const { data: hostAgents = [] } = useQuery({
+  const { data: hostAgents = [], isLoading: hostLoading } = useQuery({
     queryKey: ["agents", "host-sessions"],
     queryFn: () => api.agents.listHostSessions(),
     refetchInterval: 15_000,
@@ -466,9 +476,9 @@ function SessionsPageContent() {
     const paramAgent = paramId ? agents.find((a) => a.id === paramId) : undefined;
     // MC opens in the last chat (ADR-102, operator decision 2026-11-18): a
     // deep link and a remembered selection alike go straight to the chat
-    // screen on the phone. The list is one tap away in the drawer. Only the
-    // picker ("New chat", ?pick=1) stays on the list.
-    const open = searchParams.get("pick") !== "1";
+    // screen on the phone. The list is one tap away in the drawer. (The
+    // draft is a chat screen too.)
+    const open = true;
     if (paramAgent) { setSelected(paramAgent); setMobileView("chat"); return; }
 
     // ONE source for "the last chat": lib/recentChats (written on every
@@ -488,14 +498,14 @@ function SessionsPageContent() {
     if (!last || last.kind === "agent") rememberChat({ kind: "agent", id: fallback.id });
   }, [agents, selected, searchParams]);
 
-  // The picker opens and closes through the URL: "New chat" adds ?pick=1,
-  // the Chat tab (plain /sessions) takes it away and returns to the chat.
-  const wasPicking = useRef(picking);
+  // The draft is a chat screen: opening it shows the chat column on the phone.
   useEffect(() => {
-    if (picking === wasPicking.current) return;
-    wasPicking.current = picking;
-    setMobileView(picking ? "list" : "chat");
-  }, [picking]);
+    if (drafting) setMobileView("chat");
+  }, [drafting]);
+  // "All chats" is the list screen (on the phone the list it already has).
+  useEffect(() => {
+    if (allChats) setMobileView("list");
+  }, [allChats]);
 
   // Remember the selection for the next visit.
   useEffect(() => {
@@ -627,10 +637,10 @@ function SessionsPageContent() {
     // A pick from the list settles how the page was entered — even if the
     // linked chat never loaded (deleted), its list must not go in later.
     arrival.current = "none";
-    // A pick from the "New chat" picker replaces it: the picker is a step,
-    // not a place back goes to — and on the desktop the URL must lose
-    // ?pick=1, or the picker would stay over the chat.
-    if (picking) {
+    // Leaving the draft for a chat replaces it: the draft is a step, not a
+    // place back goes to — and the URL must lose ?new=1, or the draft
+    // would stay over the chat.
+    if (drafting || allChats) {
       router.replace(chatUrl(kind, id), { scroll: false });
       return;
     }
@@ -675,21 +685,12 @@ function SessionsPageContent() {
   });
 
   function handleSelect(agentId: string) {
-    if (startingChat.current) return;
     const agent = agents.find((a) => a.id === agentId);
     if (!agent) return;
-    // "New chat" means a new chat: in the picker a pick starts one.
-    if (picking) {
-      if (agentCanStartNewChat(agent)) {
-        void startNewChat(agent);
-        return;
-      }
-      notify.info(tCockpit("newChatUnsupported", { name: agent.name }));
-    }
     openAgentChat(agent);
   }
 
-  /** The agent's own chat — a pick outside the picker, and every fallback. */
+  /** The agent's own chat — a pick in the list, and the draft's dimmed rows. */
   function openAgentChat(agent: AgentWithState) {
     setSelected(agent);
     setSelectedGroupId(null);
@@ -703,65 +704,101 @@ function SessionsPageContent() {
     if (activePanel === "doc") setActivePanel(null);
   }
 
-  /** Picker → agent: a new, empty chat of that agent, opened in place of the
-   *  picker (replace — back returns to where "New chat" was pressed). When
-   *  the record will not make one, say so and open the agent's own chat;
-   *  never open the old chat silently as if it were new. */
-  async function startNewChat(agent: AgentWithState) {
-    startingChat.current = true;
-    setStartingChatFor(agent.name);
-    const stillHere = () => mounted.current && pickingNow.current;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const chat = await Promise.race([
-        reuseOrCreateChat(agent),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("new chat: no answer in time")), NEW_CHAT_TIMEOUT_MS);
-        }),
-      ]);
-      // The list asks the record again now: the new row stands there (and
-      // is marked) the moment the chat opens — or, if the operator left
-      // meanwhile, it simply shows up in the list.
-      void qc.invalidateQueries({ queryKey: RECORD_CHATS_QUERY_KEY });
-      if (!stillHere()) return;
-      arrival.current = "none";
-      router.replace(furtherChatHref(agent.id, chat.id), { scroll: false });
-    } catch (err) {
-      if (!stillHere()) return;
-      notify.info(tCockpit(newChatRefusal(err), { name: agent.name }));
-      openAgentChat(agent);
-    } finally {
-      clearTimeout(timer);
-      startingChat.current = false;
-      if (mounted.current) setStartingChatFor(null);
-    }
+  // ── The draft's agent chip (P4) ──
+  // New chats need the record on (its list says `enabled: false` otherwise)
+  // and an admin (only admins may create chats). Shared query with the chat
+  // list — one request serves both.
+  const recordQuery = {
+    queryKey: RECORD_CHATS_QUERY_KEY,
+    queryFn: () => api.chatRecord.listChats(),
+    retry: false,
+  } as const;
+  const { data: recordList, isError: recordError } = useQuery({ ...recordQuery, enabled: drafting });
+  // Not answered yet = unknown: the chip claims nothing and a send waits
+  // for the answer (never "With X" first and "off" a moment later). An
+  // unreachable record cannot make a chat: off.
+  const recordKnown = recordList !== undefined || recordError;
+  // While unknown the chip's menu is drawn as if on (so the default agent
+  // does not jump once the answer comes); the send checks the real answer.
+  const newChatsOn = isAdmin && (recordKnown ? recordOnOf(recordList, recordError) : true);
+  // Only chat partners: an agent without a chat transcript (Hermes, Jarvis)
+  // opens a terminal, not a chat — the chip leaves it out.
+  const chatAgents = useMemo(() => agents.filter((a) => agentHasTranscript(a)), [agents]);
+  const choices = useMemo(() => newChatChoices(chatAgents, { newChatsOn }), [chatAgents, newChatsOn]);
+  const draftAgent: AgentWithState | null = useMemo(() => {
+    const offered = [...choices.canStart, ...choices.onlyOne];
+    const picked = draftAgentId ? offered.find((a) => a.id === draftAgentId) : undefined;
+    if (picked) return picked;
+    const recent = loadRecentChats().filter((c) => c.kind === "agent").map((c) => c.id);
+    const last = loadLastAgentId();
+    return defaultNewChatAgent(choices, last ? [...recent, last] : recent);
+  }, [choices, draftAgentId]);
+
+  /** The draft's first send: make the chat, send into it, then open it in
+   *  place of the draft. An agent without a further chat (or new chats
+   *  off) gets the line in its own chat, which then opens. Rejects — with a
+   *  toast — to hand the text back to the composer. */
+  function sendDraft(text: string): Promise<void> {
+    const agent = draftAgent;
+    if (!agent) return Promise.reject(new Error("new chat: no agent"));
+    const run = draftQueue.current.then(() => sendDraftNow(agent, text));
+    draftQueue.current = run.catch(() => {});
+    return run;
   }
 
-  /** An untouched new chat of this agent if there is one, else a new one.
-   *  A list that cannot be read is no reason not to make the chat. */
-  async function reuseOrCreateChat(agent: AgentWithState): Promise<RecordChat> {
-    try {
-      const { chats } = await qc.fetchQuery({
-        queryKey: RECORD_CHATS_QUERY_KEY,
-        queryFn: () => api.chatRecord.listChats(),
-        staleTime: 0,
-      });
-      const reuse = untouchedNewChat(chats ?? [], agent.id, agent.harness ?? "claude");
-      if (reuse) return reuse;
-    } catch {
-      // fall through: make one
+  async function sendDraftNow(agent: AgentWithState, text: string): Promise<void> {
+    const stillDrafting = () => mounted.current && draftingNow.current;
+    // The record's answer decides where the line goes — wait for it if the
+    // chip is still waiting too.
+    let canMake = newChatsOn;
+    if (!recordKnown && isAdmin) {
+      try {
+        canMake = recordOnOf(await qc.fetchQuery(recordQuery), false);
+      } catch {
+        canMake = false;
+      }
     }
-    const created = api.chatRecord.createChat(agent.id);
-    // A chat that is made after the pick gave up still lands in the list.
-    created.then(
-      () => void qc.invalidateQueries({ queryKey: RECORD_CHATS_QUERY_KEY }),
-      () => {},
-    );
-    return created;
+    const intoNewChat = canMake && choices.canStart.some((a) => a.id === agent.id);
+    if (!intoNewChat) {
+      try {
+        await sendRetryingStart(() => api.chat.sendText(agent.id, text));
+      } catch (err) {
+        notify.error(t("sendFailed"));
+        throw err;
+      }
+      handOverFirstMessage(`agent:${agent.id}`, text);
+      if (stillDrafting()) router.replace(chatUrl("agent", agent.id), { scroll: false });
+      return;
+    }
+    try {
+      if (draftChat.current?.agentId !== agent.id) {
+        const made = withTimeout(api.chatRecord.createChat(agent.id), NEW_CHAT_TIMEOUT_MS).then((c) => c.id);
+        const entry = { agentId: agent.id, chatId: made };
+        draftChat.current = entry;
+        // A chat that could not be made is not kept: the next try asks again.
+        made.catch(() => {
+          if (draftChat.current === entry) draftChat.current = null;
+        });
+      }
+      const id = await draftChat.current!.chatId;
+      await sendRetryingStart(() => sendToChat(agent.id, id, text));
+      handOverFirstMessage(id, text);
+      // The list asks the record again now: the new row stands there (and
+      // is marked) the moment the chat opens.
+      void qc.invalidateQueries({ queryKey: RECORD_CHATS_QUERY_KEY });
+      if (!stillDrafting()) return;
+      rememberChat({ kind: "agent", id: agent.id });
+      router.replace(furtherChatHref(agent.id, id), { scroll: false });
+    } catch (err) {
+      // Whatever it was (record switched off meanwhile, 403, no answer in
+      // time): the list is read again, so the chip says the truth next.
+      void qc.invalidateQueries({ queryKey: RECORD_CHATS_QUERY_KEY });
+      if (stillDrafting()) notify.error(tCockpit("newChatFailed"));
+      throw err;
+    }
   }
 
   function handleSelectGroup(groupId: string) {
-    if (startingChat.current) return;
     setSelectedGroupId(groupId);
     setSelectedHeadId(null);
     saveLastGroupId(groupId);
@@ -778,7 +815,6 @@ function SessionsPageContent() {
   // head run is not "the last chat" the way an agent/group is, it comes
   // and goes within the 7-day window on its own.
   function handleSelectHead(runId: string, replace = false) {
-    if (startingChat.current) return;
     setSelectedHeadId(runId);
     setMobileView("chat");
     putChatInHistory("head", runId, replace);
@@ -800,7 +836,7 @@ function SessionsPageContent() {
     const storedId = last ? (last.kind === "group" ? last.id : null) : loadLastGroupId();
     if (storedId && groups.some((g) => g.id === storedId)) {
       setSelectedGroupId(storedId);
-      if (searchParams.get("pick") !== "1") setMobileView("chat");
+      setMobileView("chat");
     }
   }, [groups, selectedGroupId, searchParams]);
 
@@ -843,7 +879,7 @@ function SessionsPageContent() {
   // list + chat side by side, so every branch below resolves via `md:` classes.
   // Auch eine Gruppe ist ein „Chat-Bildschirm" im Handy-Stapel — sonst
   // tippt man eine Gruppe an und landet wieder in der Liste.
-  const onChatScreen = mobileView === "chat" && (!!selectedLive || !!selectedGroupId || !!selectedHeadId);
+  const onChatScreen = !allChats && (drafting || (mobileView === "chat" && (!!selectedLive || !!selectedGroupId || !!selectedHeadId)));
   // On the phone the list screen keeps the last chat mounted but hidden; a
   // live voice call must float there, not dock into the invisible chat.
   const phone = usePhoneViewport();
@@ -903,31 +939,23 @@ function SessionsPageContent() {
               area of its own and left the page blank whenever a restored
               selection kept `mobileView` on "list". */}
           {/* Desktop: the shell's left column lists the chats, so this list
-              shows only as the "New chat" picker, in place of the chat. */}
+              shows there only as "All chats" (?all=1), in place of the chat —
+              the one place for head runs, their archive and the group
+              archive. ("New chat" is a draft now, not a picker over this
+              list — concept P4.) */}
           <div
-            className={`${onChatScreen ? "hidden" : "flex"} ${picking ? "md:flex md:rounded-xl md:border md:border-[var(--color-border)]" : "md:hidden"} ${startingChatFor ? "pointer-events-none" : ""} flex-col flex-1 min-h-0 overflow-hidden`}
+            className={`${onChatScreen ? "hidden" : "flex"} ${allChats ? "md:flex md:rounded-xl md:border md:border-[var(--color-border)]" : "md:hidden"} flex-col flex-1 min-h-0 overflow-hidden`}
             data-testid="session-list-mobile"
-            aria-busy={startingChatFor ? true : undefined}
-            style={picking ? { background: C.bgSurface } : undefined}
+            style={allChats ? { background: C.bgSurface } : undefined}
           >
-            {picking && (
+            {allChats && (
               <h1
-                data-testid="chat-picker-title"
+                data-testid="all-chats-title"
                 className="shrink-0 px-4 pt-4 pb-2 text-base font-semibold"
                 style={{ color: C.textPrimary }}
               >
-                {tCockpit("pickTitle")}
+                {tCockpit("allChats")}
               </h1>
-            )}
-            {picking && startingChatFor && (
-              <p
-                role="status"
-                data-testid="chat-picker-starting"
-                className="shrink-0 px-4 pb-2 text-sm"
-                style={{ color: C.textMuted }}
-              >
-                {tCockpit("pickStarting", { name: startingChatFor })}
-              </p>
             )}
             <SessionSidebar
               agents={agents}
@@ -951,8 +979,7 @@ function SessionsPageContent() {
           </div>
           {/* The desktop rail of this page (SessionSidebar "rail") left with
               the new shell: its chats stand in the shell's left column
-              (ChatSidebar), the rest — groups, heads, archive — in the
-              "New chat" picker above. */}
+              (ChatSidebar). */}
           {/* Mobile stack, screen 2 (and the desktop island): the chat itself.
               ChatView paints no background of its own, so this wrapper supplies
               the island tone — on mobile it IS the whole screen, edge to edge,
@@ -967,7 +994,7 @@ function SessionsPageContent() {
               Fast-Schwarz war anstrengend). */}
           <div
             ref={islandRef}
-            className={`${onChatScreen || activePanel ? "flex" : "hidden"} ${picking ? "md:hidden" : "md:flex"} flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:flex-row md:relative md:rounded-xl md:border md:border-[var(--color-border)]`}
+            className={`${onChatScreen || activePanel ? "flex" : "hidden"} ${allChats ? "md:hidden" : "md:flex"} flex-1 min-w-0 min-h-0 overflow-hidden flex-col md:flex-row md:relative md:rounded-xl md:border md:border-[var(--color-border)]`}
             data-testid="chat-island"
           >
           <div
@@ -975,7 +1002,36 @@ function SessionsPageContent() {
             style={{ background: C.bgSurface }}
             data-testid="chat-column"
           >
-            {selectedHeadId ? (
+            {drafting ? (
+              // "New chat": an empty draft; the chat is made on the first send.
+              isLoading || hostLoading ? null : (
+                <ChatView
+                  key="draft"
+                  agent={draftAgent}
+                  hasTranscript
+                  voiceOnScreen={chatOnScreen}
+                  detailLevel={detailLevel}
+                  onDetailLevelChange={setDetailLevel}
+                  centerView="chat"
+                  onCenterViewChange={() => {}}
+                  onBack={backToList}
+                  draft={{
+                    onSend: sendDraft,
+                    chip: (
+                      <AgentChip
+                        agent={draftAgent}
+                        choices={choices}
+                        newChatsOn={newChatsOn}
+                        known={recordKnown || !isAdmin}
+                        onPick={setDraftAgentId}
+                        onOpenOwnChat={(id) => router.replace(chatUrl("agent", id), { scroll: false })}
+                        onNewGroup={() => setCreateGroupOpen(true)}
+                      />
+                    ),
+                  }}
+                />
+              )
+            ) : selectedHeadId ? (
               headStillResolving ? (
                 <HeadChatPlaceholder key={selectedHeadId} variant="loading" onBack={backToList} />
               ) : headNotFound ? (

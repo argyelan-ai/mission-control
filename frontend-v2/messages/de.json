@@ -5601,6 +5601,7 @@
     "closeChats": "Chats schliessen",
     "chatList": "Chats",
     "newChat": "Neuer Chat",
+    "allChats": "Alle Chats",
     "furtherChat": "{name} · Chat {n}",
     "sectionWaiting": "Wartet auf dich",
     "sectionToday": "Heute",
@@ -5611,12 +5612,8 @@
     "stateOff": "nicht gestartet",
     "more": "Mehr",
     "settings": "Einstellungen",
-    "pickTitle": "Mit wem willst du chatten?",
-    "pickStarting": "Neuer Chat mit {name} wird gestartet…",
-    "newChatOff": "Neue Chats sind noch nicht eingeschaltet — dein Chat mit {name} geht auf.",
-    "newChatNotAllowed": "Neue Chats können nur Admins starten — dein Chat mit {name} geht auf.",
-    "newChatFailed": "Neuer Chat ging nicht — dein Chat mit {name} geht auf.",
-    "newChatUnsupported": "{name} kann noch keinen zweiten Chat — dein Chat mit {name} geht auf.",
+    "newChatOff": "Neue Chats sind aus — dein Chat mit {name} geht auf.",
+    "newChatFailed": "Neuer Chat ging nicht — deine Nachricht steht wieder im Eingabefeld.",
     "knowledge": {
       "title": "Wissen",
       "lead": "Was MC weiss und was es kann.",
@@ -5710,7 +5707,17 @@
         "previous_session_gone": "Die frühere Sitzung gibt es nicht mehr.",
         "bad_model": "Dieser Modellname geht nicht."
       }
-    }
+    },
+    "agentChipWith": "Mit {name}",
+    "agentChipOwnChat": "{name} hat nur einen Chat — er geht auf.",
+    "agentChipNone": "Gerade läuft kein Agent.",
+    "agentChipChange": "{label} — Agent wählen",
+    "agentChipTitle": "Mit wem chatten?",
+    "agentChipClose": "Schliessen",
+    "agentChipSectionNew": "Neuer Chat",
+    "agentChipSectionOnlyOne": "Nur ein Chat",
+    "agentChipOpensChat": "öffnet deinen Chat mit {name}",
+    "agentChipNewGroup": "Neue Gruppe"
   },
   "taskForm": {
     "template": "Vorlage:",

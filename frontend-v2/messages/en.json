@@ -5601,6 +5601,7 @@
     "closeChats": "Close chats",
     "chatList": "Chats",
     "newChat": "New chat",
+    "allChats": "All chats",
     "furtherChat": "{name} · chat {n}",
     "sectionWaiting": "Waiting for you",
     "sectionToday": "Today",
@@ -5611,12 +5612,8 @@
     "stateOff": "not started",
     "more": "More",
     "settings": "Settings",
-    "pickTitle": "Who do you want to chat with?",
-    "pickStarting": "Starting a new chat with {name}…",
-    "newChatOff": "New chats aren't switched on yet — opening your chat with {name}.",
-    "newChatNotAllowed": "Only admins can start new chats — opening your chat with {name}.",
-    "newChatFailed": "Couldn't start a new chat — opening your chat with {name}.",
-    "newChatUnsupported": "{name} can't have a second chat yet — opening your chat with {name}.",
+    "newChatOff": "New chats are off — your chat with {name} opens.",
+    "newChatFailed": "Couldn't start a new chat — your message is back in the input.",
     "knowledge": {
       "title": "Knowledge",
       "lead": "What MC knows and what it can do.",
@@ -5710,7 +5707,17 @@
         "previous_session_gone": "The earlier session no longer exists.",
         "bad_model": "This model name does not work."
       }
-    }
+    },
+    "agentChipWith": "With {name}",
+    "agentChipOwnChat": "{name} has only one chat — it opens.",
+    "agentChipNone": "No agent is running right now.",
+    "agentChipChange": "{label} — choose agent",
+    "agentChipTitle": "Who to chat with?",
+    "agentChipClose": "Close",
+    "agentChipSectionNew": "New chat",
+    "agentChipSectionOnlyOne": "Only one chat",
+    "agentChipOpensChat": "opens your chat with {name}",
+    "agentChipNewGroup": "New group"
   },
   "taskForm": {
     "template": "Template:",

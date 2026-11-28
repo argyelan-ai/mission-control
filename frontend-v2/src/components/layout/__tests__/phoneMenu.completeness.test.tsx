@@ -169,7 +169,7 @@ describe("phone navigation completeness (tab bar + drawer + Knowledge + More)", 
     await waitFor(() =>
       expect(within(drawer).getByText("Lead").closest("a")).toHaveAttribute("href", "/sessions?agent=a1&enter=1"),
     );
-    expect(within(drawer).getByTestId("chat-list-new")).toHaveAttribute("href", "/sessions?pick=1");
+    expect(within(drawer).getByTestId("chat-list-new")).toHaveAttribute("href", "/sessions?new=1");
   });
 
   it("the app bar keeps the wordmark (→ the last chat via /) and the voice button", () => {

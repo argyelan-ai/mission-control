@@ -16,6 +16,22 @@ const nav = vi.hoisted(() => ({
   pushed: [] as string[],
   backs: 0,
 }));
+// The draft's send path talks to the record through `sendToChat` — a named
+// import the page uses directly, so it is replaced here (the rest of the
+// module stays real).
+type SendToChatMock = import("vitest").Mock<(agentId: string, chatId: string, text: string) => Promise<unknown>>;
+const record = vi.hoisted(() => ({
+  sendToChat: null as unknown as SendToChatMock,
+  draftRejected: 0,
+}));
+vi.mock("@/components/chat/useRecordChat", async () => {
+  const actual = await vi.importActual<typeof import("@/components/chat/useRecordChat")>(
+    "@/components/chat/useRecordChat",
+  );
+  const { vi: v } = await import("vitest");
+  record.sendToChat = v.fn((_a: string, _c: string, _t: string) => Promise.resolve(undefined as unknown)) as SendToChatMock;
+  return { ...actual, sendToChat: (a: string, c: string, t: string) => record.sendToChat(a, c, t) };
+});
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.searchParamsString),
   usePathname: () => "/sessions",
@@ -96,7 +112,9 @@ vi.mock("@/components/chat/ChatView", () => ({
     onTogglePanel,
     onOpenChat,
     onChatMissing,
+    draft,
   }: {
+    draft?: { chip: React.ReactNode; onSend: (text: string) => Promise<void> } | null;
     onOpenChat?: (chatId: string) => void;
     onChatMissing?: () => void;
     voiceOnScreen?: boolean;
@@ -111,6 +129,33 @@ vi.mock("@/components/chat/ChatView", () => ({
     workingOn?: { taskId: string; title: string } | null;
   }) => (
     <div data-testid="chat-view-stub" data-voice-on-screen={String(voiceOnScreen ?? true)}>
+      {/* "New chat" draft (P4): the chip above the composer and the first
+          send — what ChatView does with them is ChatView.draft.test.tsx. */}
+      {draft && (
+        <div data-testid="chat-view-draft">
+          {draft.chip}
+          <button
+            type="button"
+            onClick={() => {
+              draft.onSend("Sag PONG").catch(() => {
+                record.draftRejected += 1;
+              });
+            }}
+          >
+            Draft Send
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              draft.onSend("Zweite Zeile").catch(() => {
+                record.draftRejected += 1;
+              });
+            }}
+          >
+            Draft Send Second
+          </button>
+        </div>
+      )}
       {/* Heads in Chats (PR 2): the page's own `selectedHeadRun` resolution
           (recent list vs. the one-off fallback fetch) is observable here. */}
       <span data-testid="chat-view-head">{head ? `Head: ${head.run_id}` : ""}</span>
@@ -990,7 +1035,7 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     const bothVisible = () => !isHidden(list()) && !isHidden(chat());
     expect(bothVisible()).toBe(false);
 
-    await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
+    await user.click(await within(list()).findByRole("option", { name: /Agent Two/ }));
     expect(bothVisible()).toBe(false);
 
     await user.click(screen.getByRole("button", { name: "Stub Back" }));
@@ -1077,7 +1122,7 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findAllByText("Agent One");
-    await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
+    await user.click(await within(list()).findByRole("option", { name: /Agent Two/ }));
     expect(JSON.parse(localStorage.getItem("mc-recent-chats") ?? "[]")[0]).toEqual({ kind: "agent", id: "agent-2" });
   });
 
@@ -1138,333 +1183,311 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     expect(isHidden(list())).toBe(true);
   });
 
-  // "New chat" (drawer, desktop column) = ?pick=1: the list with a title,
-  // in place of the chat — on the phone and on the desktop alike.
-  it("?pick=1 shows the picker list with its title instead of the chat", async () => {
-    nav.searchParamsString = "pick=1";
+  // "New chat" (drawer, desktop column) = ?new=1: an empty draft in the chat
+  // column — no picker list over it, on the phone and on the desktop alike.
+  it("?new=1 opens the empty draft, not the old agent list", async () => {
+    nav.searchParamsString = "new=1";
     localStorage.setItem("mc-sessions-last-agent", "agent-2");
     renderPage();
-    await screen.findAllByText("Agent Two");
+    await screen.findByTestId("chat-view-draft");
 
-    expect(screen.getByTestId("chat-picker-title")).toHaveTextContent("Who do you want to chat with?");
-    expect(isHidden(list())).toBe(false);
-    expect(isHidden(chat())).toBe(true);
-    expect(list().className).toContain("md:flex");
-    expect(screen.getByTestId("chat-island").className).toContain("md:hidden");
+    expect(isHidden(chat())).toBe(false);
+    expect(isHidden(list())).toBe(true);
+    expect(list().className).toContain("md:hidden");
+    expect(screen.getByTestId("chat-island").className).toContain("md:flex");
+    expect(screen.queryByTestId("chat-picker-title")).toBeNull();
   });
 
-  it("a pick from the picker replaces it with the chat (back does not return to the picker)", async () => {
-    const user = userEvent.setup();
-    nav.replaced = [];
-    nav.pushed = [];
+  it("the old picker address (?pick=1) opens the draft too", async () => {
     nav.searchParamsString = "pick=1";
-    vi.spyOn(api.chatRecord, "createChat").mockResolvedValue({ id: "chat-new" } as never);
     renderPage();
-    await screen.findAllByText("Agent Two");
+    await screen.findByTestId("chat-view-draft");
+    expect(isHidden(list())).toBe(true);
+  });
 
-    await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
-    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=chat-new"]));
-    expect(nav.pushed).toEqual([]);
+  // "All chats" (the quiet link under the chat list): the full list — head
+  // runs with their archive, groups and the group archive — on the desktop
+  // too, where the shell's column has none of them (critic 28.11.).
+  it("?all=1 shows the full list in place of the chat, on the desktop too", async () => {
+    nav.searchParamsString = "all=1";
+    localStorage.setItem("mc-sessions-last-agent", "agent-2");
+    renderPage();
+    const title = await screen.findByTestId("all-chats-title");
+    expect(title).toHaveTextContent("All chats");
+    expect(isHidden(list())).toBe(false);
+    expect(list().className).toContain("md:flex");
+    expect(list().className).not.toContain("md:hidden");
+    expect(screen.getByTestId("chat-island").className).toContain("md:hidden");
+    expect(screen.queryByTestId("chat-view-draft")).toBeNull();
+  });
+
+  it("a pick in the full list opens that chat and leaves ?all=1", async () => {
+    const user = userEvent.setup();
+    nav.searchParamsString = "all=1";
+    nav.replaced = [];
+    renderPage();
+    await screen.findByTestId("all-chats-title");
+    await user.click(await within(list()).findByRole("option", { name: /Agent Two/ }));
+    await waitFor(() => expect(nav.replaced.at(-1)).toBe("/sessions?agent=agent-2"));
   });
 });
 
-// ── "New chat" really starts a new chat ─────────────────────────────────────
-// Picking an agent in the picker (?pick=1) asks the chat record for a further
-// chat of that agent and opens it. When the record cannot (switched off,
-// not allowed, broken) the operator is told so and gets the existing chat.
+// ── "New chat" = an empty draft, the agent in a chip (concept P1 + P4) ─────
+// The chip offers alive agents that can hold a further chat, dims alive
+// agents with only their own chat, and leaves out dead ones. The chat is
+// made on the first send: create, send with its id, then the URL becomes
+// the real chat's — nothing is made before a send (no empty rows).
 
-describe("SessionsPage — New chat picker starts a new chat", () => {
+describe("SessionsPage — New chat draft", () => {
   const latestToast = () => {
     const all = useNotificationStore.getState().notifications;
     return all.length ? all[all.length - 1] : null;
   };
+  const RECENT = new Date(Date.now() - 30_000).toISOString();
+  const OLD = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
 
   beforeEach(() => {
-    nav.searchParamsString = "pick=1";
+    nav.searchParamsString = "new=1";
     nav.replaced = [];
     nav.pushed = [];
+    record.draftRejected = 0;
+    record.sendToChat.mockReset();
+    record.sendToChat.mockResolvedValue(undefined);
     installLocalStorageShim();
     useNotificationStore.setState({ notifications: [] });
+    useAppStore.setState({ currentUser: { id: "u1", email: "op@example.test", role: "admin" } as never });
     vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
-      // The backend decides who can hold a further chat (`can_start_chat`);
-      // the host agent below carries no flag, so it cannot.
-      mkAgent({ id: "agent-1", name: "Agent One", can_start_chat: true }),
-      mkAgent({ id: "agent-2", name: "Nova", harness: "omp", headless_chat: true, can_start_chat: true } as never),
+      mkAgent({ id: "agent-1", name: "Agent One", can_start_chat: true, container_state: "running" }),
+      mkAgent({ id: "agent-2", name: "Nova", harness: "omp", headless_chat: true, can_start_chat: true, container_state: "running" } as never),
+      mkAgent({ id: "agent-3", name: "Stopped", can_start_chat: true, container_state: "exited" }),
     ]);
     vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([
-      mkAgent({ id: "host-1", name: "Boss", agent_runtime: "host", slug: "boss" }),
+      mkAgent({ id: "host-1", name: "Boss", agent_runtime: "host", slug: "boss", last_seen_at: RECENT }),
+      mkAgent({ id: "host-2", name: "Test Worker", agent_runtime: "host", last_seen_at: OLD }),
+      // Alive, but no chat transcript: its "chat" is a terminal — not a chat
+      // partner, so the chip never offers it.
+      mkAgent({ id: "host-3", name: "Hermes", agent_runtime: "host", slug: "hermes", last_seen_at: RECENT }),
     ]);
-    vi.spyOn(api.chatRecord, "listChats").mockResolvedValue({ chats: [] });
+    vi.spyOn(api.chatRecord, "listChats").mockResolvedValue({ chats: [], enabled: true } as never);
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    useAppStore.setState({ currentUser: null });
     vi.restoreAllMocks();
   });
 
-  const list = () => screen.getByTestId("session-list-mobile");
-  const pick = (user: ReturnType<typeof userEvent.setup>, name: RegExp) =>
-    user.click(within(list()).getByRole("option", { name }));
+  const chipButton = () => screen.findByTestId("agent-chip-button");
 
-  it("pick -> creates a chat for that agent -> opens it in place of the picker", async () => {
+  it("the chip offers alive agents that can start a chat, dims alive ones with only one chat, hides the dead", async () => {
     const user = userEvent.setup();
-    const create = vi.spyOn(api.chatRecord, "createChat").mockResolvedValue({ id: "chat-7" } as never);
+    renderPage();
+    await user.click(await chipButton());
+
+    const menu = await screen.findByTestId("agent-chip-menu");
+    const fresh = within(menu).getAllByTestId("agent-chip-row").map((r) => r.getAttribute("data-agent"));
+    const dimmed = within(menu).getAllByTestId("agent-chip-row-dimmed").map((r) => r.getAttribute("data-agent"));
+    expect(fresh).toEqual(["agent-1", "agent-2"]);
+    expect(dimmed).toEqual(["host-1"]);
+    expect(within(menu).getByTestId("agent-chip-row-dimmed")).toHaveTextContent("opens your chat with Boss");
+    expect(within(menu).getByTestId("agent-chip-new-group")).toHaveTextContent("New group");
+    expect(within(menu).queryByText("Stopped")).toBeNull();
+    expect(within(menu).queryByText("Test Worker")).toBeNull();
+    expect(within(menu).queryByText("Hermes")).toBeNull();
+  });
+
+  it("starts with the last used agent that can start a chat", async () => {
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "host-1" }, { kind: "agent", id: "agent-2" }]));
+    renderPage();
+    expect(await chipButton()).toHaveTextContent("With Nova");
+  });
+
+  it("nothing is made until the first send; then create -> send with its id -> the URL becomes the chat", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }]));
+    const calls: string[] = [];
+    const create = vi.spyOn(api.chatRecord, "createChat").mockImplementation(async (id: string) => {
+      calls.push(`create:${id}`);
+      return { id: "chat-7" } as never;
+    });
+    record.sendToChat.mockImplementation(async (agentId: string, chatId: string, text: string) => {
+      calls.push(`send:${agentId}:${chatId}:${text}`);
+      expect(nav.replaced).toEqual([]);
+    });
     const { qc } = renderPage();
     const invalidate = vi.spyOn(qc, "invalidateQueries");
-    await screen.findAllByText("Nova");
+    await chipButton();
+    expect(create).not.toHaveBeenCalled();
 
-    await pick(user, /Nova/);
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
 
     await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=chat-7"]));
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create).toHaveBeenCalledWith("agent-2");
+    expect(calls).toEqual(["create:agent-2", "send:agent-2:chat-7:Sag PONG"]);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["chat-record", "chats"] });
-    // A step, not a place: nothing pushed, so back returns to where
-    // "New chat" was pressed.
     expect(nav.pushed).toEqual([]);
     expect(latestToast()).toBeNull();
   });
 
-  it("record switched off (404): says so, then opens the existing chat", async () => {
+  it("a send that fails gives the text back (rejects, says so); the retry reuses the chat made", async () => {
     const user = userEvent.setup();
-    vi.spyOn(api.chatRecord, "createChat").mockRejectedValue(
-      new Error('API 404: {"detail":{"reason":"chat_record_disabled"}}'),
-    );
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }]));
+    const create = vi.spyOn(api.chatRecord, "createChat").mockResolvedValue({ id: "chat-7" } as never);
+    record.sendToChat.mockRejectedValueOnce(new Error("API 500: oops"));
     renderPage();
-    await screen.findAllByText("Nova");
+    await chipButton();
 
-    await pick(user, /Nova/);
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
+    await waitFor(() => expect(record.draftRejected).toBe(1));
+    expect(latestToast()?.message).toBe("Couldn't start a new chat — your message is back in the input.");
+    expect(nav.replaced).toEqual([]);
 
-    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
-    expect(latestToast()?.message).toBe("New chats aren't switched on yet — opening your chat with Nova.");
-  });
-
-  it("not allowed (403): says only admins can, then opens the existing chat", async () => {
-    const user = userEvent.setup();
-    vi.spyOn(api.chatRecord, "createChat").mockRejectedValue(new Error('API 403: {"detail":"Forbidden"}'));
-    renderPage();
-    await screen.findAllByText("Nova");
-
-    await pick(user, /Nova/);
-
-    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
-    expect(latestToast()?.message).toBe("Only admins can start new chats — opening your chat with Nova.");
-  });
-
-  it("a 404 that is not 'record off' (agent gone) is a failure, not 'not switched on'", async () => {
-    const user = userEvent.setup();
-    vi.spyOn(api.chatRecord, "createChat").mockRejectedValue(
-      new Error('API 404: {"detail":{"reason":"agent_not_found"}}'),
-    );
-    renderPage();
-    await screen.findAllByText("Nova");
-
-    await pick(user, /Nova/);
-
-    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
-    expect(latestToast()?.message).toBe("Couldn't start a new chat — opening your chat with Nova.");
-  });
-
-  it("server error (5xx): says the new chat failed, then opens the existing chat", async () => {
-    const user = userEvent.setup();
-    vi.spyOn(api.chatRecord, "createChat").mockRejectedValue(new Error("API 500: oops"));
-    renderPage();
-    await screen.findAllByText("Nova");
-
-    await pick(user, /Nova/);
-
-    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
-    expect(latestToast()?.message).toBe("Couldn't start a new chat — opening your chat with Nova.");
-  });
-
-  it("a double tap creates one chat, and the list is busy while it is made", async () => {
-    const user = userEvent.setup();
-    let finish: (v: unknown) => void = () => {};
-    const create = vi
-      .spyOn(api.chatRecord, "createChat")
-      .mockImplementation(() => new Promise((resolve) => { finish = resolve; }) as never);
-    renderPage();
-    await screen.findAllByText("Nova");
-
-    await pick(user, /Nova/);
-    await waitFor(() => expect(list()).toHaveAttribute("aria-busy", "true"));
-    expect(screen.getByTestId("chat-picker-starting")).toHaveTextContent("Starting a new chat with Nova…");
-    // The second tap lands on a list that is still on screen and busy.
-    fireEvent.click(within(list()).getByRole("option", { name: /Nova/ }));
-    fireEvent.click(within(list()).getByRole("option", { name: /Agent One/ }));
-    expect(create).toHaveBeenCalledTimes(1);
-
-    finish({ id: "chat-8" });
-    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=chat-8"]));
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=chat-7"]));
     expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it("an agent whose harness cannot hold a further chat opens its chat, with a word why", async () => {
+  it("record switched off: the chip says so before typing, and a send goes into the agent's own chat", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }]));
+    vi.spyOn(api.chatRecord, "listChats").mockResolvedValue({ chats: [], enabled: false } as never);
+    const create = vi.spyOn(api.chatRecord, "createChat");
+    const sendText = vi.spyOn(api.chat, "sendText").mockResolvedValue(undefined as never);
+    renderPage();
+    await waitFor(async () => expect(await chipButton()).toHaveTextContent("New chats are off — your chat with Nova opens."));
+
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
+
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
+    expect(sendText).toHaveBeenCalledWith("agent-2", "Sag PONG");
+    expect(create).not.toHaveBeenCalled();
+    expect(record.sendToChat).not.toHaveBeenCalled();
+  });
+
+  it("no admin: the same honest chip, no chat is made", async () => {
+    useAppStore.setState({ currentUser: { id: "u2", email: "v@example.test", role: "operator" } as never });
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }]));
+    const create = vi.spyOn(api.chatRecord, "createChat");
+    renderPage();
+    expect(await chipButton()).toHaveTextContent("New chats are off — your chat with Nova opens.");
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("a dimmed row opens that agent's own chat in place of the draft", async () => {
     const user = userEvent.setup();
     const create = vi.spyOn(api.chatRecord, "createChat");
     renderPage();
-    await screen.findAllByText("Boss");
-
-    await pick(user, /Boss/);
+    await user.click(await chipButton());
+    await user.click(await screen.findByTestId("agent-chip-row-dimmed"));
 
     await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=host-1"]));
     expect(create).not.toHaveBeenCalled();
-    expect(latestToast()?.message).toBe("Boss can't have a second chat yet — opening your chat with Boss.");
   });
 
-  it("outside the picker a pick still opens the agent's own chat (no new chat)", async () => {
+  it("picking another agent in the chip makes the chat for that agent", async () => {
     const user = userEvent.setup();
-    nav.searchParamsString = "";
-    const create = vi.spyOn(api.chatRecord, "createChat");
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }]));
+    const create = vi.spyOn(api.chatRecord, "createChat").mockResolvedValue({ id: "chat-1" } as never);
     renderPage();
-    await screen.findAllByText("Nova");
+    await user.click(await chipButton());
+    const menu = await screen.findByTestId("agent-chip-menu");
+    await user.click(within(menu).getByRole("menuitemradio", { name: /Agent One/ }));
+    expect(await chipButton()).toHaveTextContent("With Agent One");
 
-    await user.click(within(list()).getByRole("option", { name: /Nova/ }));
-    expect(create).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-1&chat=chat-1"]));
+    expect(create).toHaveBeenCalledWith("agent-1");
   });
 
-  // ── A late answer never takes over (critic A1/A2) ──
-  const deferredCreate = () => {
-    let resolve: (v: unknown) => void = () => {};
-    let reject: (e: unknown) => void = () => {};
-    const spy = vi.spyOn(api.chatRecord, "createChat").mockImplementation(
-      () => new Promise((res, rej) => { resolve = res; reject = rej; }) as never,
+  it("two quick sends while the chat is still being made: ONE chat, both lines into it, in order", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }]));
+    let finish: (v: unknown) => void = () => {};
+    const create = vi.spyOn(api.chatRecord, "createChat").mockImplementation(
+      () => new Promise((resolve) => { finish = resolve; }) as never,
     );
-    return { spy, resolve: (v: unknown) => resolve(v), reject: (e: unknown) => reject(e) };
-  };
+    const sent: string[] = [];
+    record.sendToChat.mockImplementation(async (_a: string, chatId: string, text: string) => {
+      sent.push(`${chatId}:${text}`);
+    });
+    renderPage();
+    await chipButton();
+
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
+    finish({ id: "chat-7" });
+
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(sent).toEqual(["chat-7:Sag PONG", "chat-7:Sag PONG"]);
+    expect(record.draftRejected).toBe(0);
+    expect(new Set(nav.replaced)).toEqual(new Set(["/sessions?agent=agent-2&chat=chat-7"]));
+  });
+
+  it("the second line waits for the first, even when the first has to retry a starting agent", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }]));
+    vi.spyOn(api.chatRecord, "createChat").mockResolvedValue({ id: "chat-7" } as never);
+    const delivered: string[] = [];
+    let first = true;
+    record.sendToChat.mockImplementation(async (_a: string, _c: string, text: string) => {
+      if (first) {
+        first = false;
+        throw new Error("API 409: agent_starting");
+      }
+      delivered.push(text);
+    });
+    renderPage();
+    await chipButton();
+
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
+    await user.click(screen.getByRole("button", { name: "Draft Send Second" }));
+
+    await waitFor(() => expect(delivered).toHaveLength(2), { timeout: 6000 });
+    expect(delivered).toEqual(["Sag PONG", "Zweite Zeile"]);
+  }, 10_000);
+
+  it("while the record has not answered yet, the chip claims nothing and a send waits for it", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }]));
+    let answer: (v: unknown) => void = () => {};
+    vi.spyOn(api.chatRecord, "listChats").mockImplementation(
+      () => new Promise((resolve) => { answer = resolve; }) as never,
+    );
+    const create = vi.spyOn(api.chatRecord, "createChat");
+    const sendText = vi.spyOn(api.chat, "sendText").mockResolvedValue(undefined as never);
+    renderPage();
+    const chip = await chipButton();
+    expect(chip).toHaveTextContent("Nova");
+    expect(chip).not.toHaveTextContent("With Nova");
+    expect(chip).not.toHaveTextContent("New chats are off");
+
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(create).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
+
+    // The record says it is off: the line goes quietly into the own chat.
+    answer({ chats: [], enabled: false });
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
+    expect(sendText).toHaveBeenCalledWith("agent-2", "Sag PONG");
+    expect(create).not.toHaveBeenCalled();
+    expect(latestToast()).toBeNull();
+  });
 
   it("leaving the page while the chat is made: the late answer does not navigate", async () => {
     const user = userEvent.setup();
-    const create = deferredCreate();
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }]));
+    let finish: (v: unknown) => void = () => {};
+    vi.spyOn(api.chatRecord, "createChat").mockImplementation(
+      () => new Promise((resolve) => { finish = resolve; }) as never,
+    );
     const { unmount } = renderPage();
-    await screen.findAllByText("Nova");
-    await pick(user, /Nova/);
-    await waitFor(() => expect(create.spy).toHaveBeenCalledTimes(1));
+    await chipButton();
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
 
     unmount();
-    create.resolve({ id: "late" });
+    finish({ id: "late" });
     await new Promise((r) => setTimeout(r, 20));
     expect(nav.replaced).toEqual([]);
-  });
-
-  it("leaving the picker (back) while the chat is made: no navigation, the list is refreshed", async () => {
-    const user = userEvent.setup();
-    const create = deferredCreate();
-    const { rerender, qc } = renderPage();
-    const invalidate = vi.spyOn(qc, "invalidateQueries");
-    await screen.findAllByText("Nova");
-    await pick(user, /Nova/);
-    await waitFor(() => expect(create.spy).toHaveBeenCalledTimes(1));
-
-    nav.searchParamsString = "";
-    rerender(
-      <QueryClientProvider client={qc}>
-        <SessionsPage />
-      </QueryClientProvider>,
-    );
-    create.resolve({ id: "late" });
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["chat-record", "chats"] }));
-    expect(nav.replaced).toEqual([]);
-  });
-
-  it("leaving the picker while the chat fails: the fallback does not navigate either", async () => {
-    const user = userEvent.setup();
-    const create = deferredCreate();
-    const { rerender, qc } = renderPage();
-    await screen.findAllByText("Nova");
-    await pick(user, /Nova/);
-    await waitFor(() => expect(create.spy).toHaveBeenCalledTimes(1));
-
-    nav.searchParamsString = "";
-    rerender(
-      <QueryClientProvider client={qc}>
-        <SessionsPage />
-      </QueryClientProvider>,
-    );
-    create.reject(new Error("API 500: oops"));
-    await new Promise((r) => setTimeout(r, 20));
-    expect(nav.replaced).toEqual([]);
-  });
-
-  // ── A hanging request never locks the picker (critic: timeout) ──
-  it("a create that never answers gives up after 15 s: says so, opens the existing chat, list usable again", async () => {
-    const user = userEvent.setup();
-    const create = deferredCreate();
-    renderPage();
-    await screen.findAllByText("Nova");
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    await pick(user, /Nova/);
-    await waitFor(() => expect(create.spy).toHaveBeenCalledTimes(1));
-    expect(list()).toHaveAttribute("aria-busy", "true");
-
-    await vi.advanceTimersByTimeAsync(14_000);
-    expect(nav.replaced).toEqual([]);
-    await vi.advanceTimersByTimeAsync(1_500);
-    vi.useRealTimers();
-
-    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
-    expect(latestToast()?.message).toBe("Couldn't start a new chat — opening your chat with Nova.");
-    expect(list()).not.toHaveAttribute("aria-busy");
-    // The chat that arrives after all does not pull the operator away.
-    create.resolve({ id: "too-late" });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]);
-  });
-
-  // ── Taps that go nowhere do not pile up empty chats (critic: empty rows) ──
-  const recordChat = (over: Record<string, unknown>) => ({
-    id: "c", title: "Nova", harness: "omp", model: null, legacyAgentId: "agent-2",
-    agentDefault: false, nativeSessionId: null, pinned: false, archived: false,
-    lastActivityAt: null, createdAt: "2026-11-20T10:00:00Z", ...over,
-  });
-
-  it("an untouched new chat of that agent is opened again instead of making another", async () => {
-    const user = userEvent.setup();
-    vi.spyOn(api.chatRecord, "listChats").mockResolvedValue({
-      chats: [
-        recordChat({ id: "default", agentDefault: true }),
-        recordChat({ id: "used", lastActivityAt: "2026-11-20T11:00:00Z" }),
-        recordChat({ id: "archived-empty", archived: true }),
-        recordChat({ id: "other-agent-empty", legacyAgentId: "agent-1" }),
-        recordChat({ id: "empty", createdAt: "2026-11-20T12:00:00Z" }),
-      ],
-    } as never);
-    const create = vi.spyOn(api.chatRecord, "createChat");
-    renderPage();
-    await screen.findAllByText("Nova");
-
-    await pick(user, /Nova/);
-
-    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=empty"]));
-    expect(create).not.toHaveBeenCalled();
-  });
-
-  it("only used chats of that agent: a new one is made", async () => {
-    const user = userEvent.setup();
-    vi.spyOn(api.chatRecord, "listChats").mockResolvedValue({
-      chats: [recordChat({ id: "used", lastActivityAt: "2026-11-20T11:00:00Z" })],
-    } as never);
-    const create = vi.spyOn(api.chatRecord, "createChat").mockResolvedValue({ id: "fresh" } as never);
-    renderPage();
-    await screen.findAllByText("Nova");
-
-    await pick(user, /Nova/);
-
-    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=fresh"]));
-    expect(create).toHaveBeenCalledTimes(1);
-  });
-
-  it("the chat list cannot be read: a new chat is still made", async () => {
-    const user = userEvent.setup();
-    vi.spyOn(api.chatRecord, "listChats").mockRejectedValue(new Error("API 500: list"));
-    const create = vi.spyOn(api.chatRecord, "createChat").mockResolvedValue({ id: "fresh" } as never);
-    renderPage();
-    await screen.findAllByText("Nova");
-
-    await pick(user, /Nova/);
-
-    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2&chat=fresh"]));
-    expect(create).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1743,7 +1766,7 @@ describe("SessionsPage — phone history puts the list behind every chat", () =>
     const user = userEvent.setup();
     renderPage();
     await screen.findAllByText("Agent One");
-    await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
+    await user.click(await within(list()).findByRole("option", { name: /Agent Two/ }));
     expect(nav.pushed).toEqual(["/sessions?agent=agent-2"]);
     expect(isHidden(chat())).toBe(false);
   });

@@ -9,10 +9,14 @@ import { chatRowTime, type ChatListEntry, type ChatListState } from "@/lib/chatL
 import { useRecentChats } from "./MobileTabBar";
 import { activeChatKey, useChatList, useOpenChat } from "./useChatList";
 
-/** Where "New chat" leads: the sessions page's picker — who to talk to, or a
- *  new group. Until chats stop being bound to agents (ADR-102 stage 1) a new
- *  chat starts by picking the agent. */
-export const NEW_CHAT_HREF = "/sessions?pick=1";
+/** Where "New chat" leads: an empty draft on the sessions page — the agent
+ *  is chosen in a chip above the composer, the chat is made on the first
+ *  send (concept "Neuer Chat", P4). No picker in between. */
+export const NEW_CHAT_HREF = "/sessions?new=1";
+
+/** The full list: agents by project, head runs with their archive, groups
+ *  and the group archive — none of them rows of this list. */
+export const ALL_CHATS_HREF = "/sessions?all=1";
 
 /** One muted dot for state, nothing at all for a quiet chat; a hollow grey
  *  ring for an agent whose session is not running (user test 21.11.2026). */
@@ -142,6 +146,17 @@ export function ChatList({ onNavigate }: { onNavigate?: () => void }) {
           {t("emptyChats")}
         </p>
       )}
+      {/* A quiet link (K11), desktop only: the phone reaches the same list
+          with back from any chat. */}
+      <Link
+        href={ALL_CHATS_HREF}
+        onClick={onNavigate}
+        data-testid="chat-list-all"
+        className="hidden md:flex items-center min-h-11 px-3 rounded-lg text-sm transition-colors hover:bg-[var(--color-bg-hover)]"
+        style={{ color: C.textMuted }}
+      >
+        {t("allChats")}
+      </Link>
     </div>
   );
 }

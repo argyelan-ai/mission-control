@@ -78,6 +78,7 @@ import { SpeedLine } from "./SpeedLine";
 import { DrawerButton } from "@/components/layout/ChatDrawer";
 import { setOpenChat } from "@/components/layout/useChatList";
 import { furtherChatLabel, newChatIdOf, sendToChat, useRecordChat } from "./useRecordChat";
+import { takeHandedMessages } from "@/lib/chatList";
 import { useCommsDirectory } from "@/hooks/useCommsDirectory";
 import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
 import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
@@ -108,6 +109,9 @@ export type { TimelineItem } from "./buildTimelineItems";
 // Distance (px) from the bottom of the scroll container within which the
 // view still counts as "at the bottom" — classic chat scroll-lock.
 const SCROLL_LOCK_THRESHOLD_PX = 48;
+
+/** The chat list's "open chat" while a draft is open — matches no row. */
+const DRAFT_OPEN_CHAT = "draft";
 
 /**
  * Wie lange eine Scroll-Geste nachwirkt (ms).
@@ -381,6 +385,13 @@ interface ChatViewProps {
    *  visible): the agent's own chat shows, and the page drops `&chat=` so
    *  the URL never names a chat the screen does not show. */
   onChatMissing?: () => void;
+  /** "New chat" draft (concept P4): an empty chat that does not exist yet.
+   *  `agent` is the chip's agent (null while nobody alive can be offered).
+   *  No history, no stream, no task rows; the header says "New chat" and
+   *  the chip sits above the composer. The first send goes to `onSend`,
+   *  which makes the chat and moves the page on to it; a rejection hands
+   *  the text back to the composer. */
+  draft?: { chip: React.ReactNode; onSend: (text: string) => Promise<void> } | null;
 }
 
 export function ChatView({
@@ -403,6 +414,7 @@ export function ChatView({
   onSelectHeadRun,
   onOpenChat,
   onChatMissing,
+  draft = null,
 }: ChatViewProps) {
   const t = useTranslations("sessions");
   const tCockpit = useTranslations("cockpit");
@@ -456,20 +468,27 @@ export function ChatView({
   // Only for the agent the URL names: a pick in the list on the desktop
   // changes the agent without touching the URL.
   const chatParam =
-    !head && agent && searchParams?.get("agent") === agent.id ? searchParams.get("chat") || null : null;
+    !head && !draft && agent && searchParams?.get("agent") === agent.id ? searchParams.get("chat") || null : null;
   const recordStream = useRecordChat(chatParam);
   const furtherChat = chatParam != null && !recordStream.disabled && !recordStream.missing;
   const chatMissing = chatParam != null && recordStream.missing;
   useEffect(() => {
     if (chatMissing) onChatMissing?.();
   }, [chatMissing, onChatMissing]);
-  const streamEnabled = hasTranscript && !!agent && !head && !furtherChat;
+  const streamEnabled = hasTranscript && !!agent && !head && !furtherChat && !draft;
   // The chat list marks this chat's own row while it is open.
   useEffect(() => {
     if (!furtherChat || !chatParam) return;
     setOpenChat(chatParam);
     return () => setOpenChat(null);
   }, [furtherChat, chatParam]);
+  // A draft is no row yet: no row of the list is marked while it is open.
+  const isDraft = !!draft;
+  useEffect(() => {
+    if (!isDraft) return;
+    setOpenChat(DRAFT_OPEN_CHAT);
+    return () => setOpenChat(null);
+  }, [isDraft]);
   // Its name in the header: the same words as its row ("Cody · chat 2").
   const furtherTitle = useMemo(
     () =>
@@ -505,7 +524,9 @@ export function ChatView({
   // stale subscription open.
   const agentStream = useChatStream(head ? null : agent?.id ?? null, streamEnabled);
   const headStream = useHeadTranscript(head?.run_id ?? null, head?.state ?? null);
-  const stream = head ? headStream : furtherChat ? recordStream : agentStream;
+  // A draft has no history yet: the record hook without a chat id is an
+  // empty, quiet stream that still carries the echo of the first send.
+  const stream = head ? headStream : furtherChat || draft ? recordStream : agentStream;
   const voiceCallActive = useVoiceLiveActive(head ? null : agent?.id);
   const headMeta = useHeadTranscriptMeta(head?.run_id ?? null);
 
@@ -529,7 +550,7 @@ export function ChatView({
   // transcript, a runtime 404 from the history fetch forces terminal mode
   // the same way a known-no-transcript agent (Hermes/Jarvis) does — no
   // separate dead-end empty-state screen, the toggle just can't reach "chat".
-  const canChat = furtherChat || (hasTranscript && !isNoTranscriptError(stream.error));
+  const canChat = furtherChat || !!draft || (hasTranscript && !isNoTranscriptError(stream.error));
   // Ein ACP-Agent (`headless_chat`) hat keinen zweiten Kopf: die TUI in
   // tmux-Fenster 0 faehrt nichts, was der Operator hier tippt. Der Umschalter
   // entfaellt darum — und mit ihm der gespeicherte `centerView`, der sonst
@@ -544,7 +565,7 @@ export function ChatView({
   // A head never has a terminal (ADR-085 Nachtrag 2026-10-04 §4: files only,
   // no tmux) — forced to "chat" ahead of every other rule below, including
   // `!canChat`, which otherwise exists precisely to FALL BACK to terminal.
-  const effectiveView: CenterView = head
+  const effectiveView: CenterView = head || draft
     ? "chat"
     : !canChat
       ? "terminal"
@@ -1000,8 +1021,12 @@ export function ChatView({
          * Bilder 18.11.2026, auch auf main). */
         paneObservable={agent.agent_runtime === "cli-bridge" || headlessChat}
         capabilities={stream.capabilities}
+        chipSlot={draft?.chip ?? null}
+        // Model and effort belong to the agent's running session, not to a
+        // chat that does not exist yet.
+        noEffort={!!draft}
         modeSlot={
-          headlessChat && !furtherChat ? (
+          headlessChat && !furtherChat && !draft ? (
             <ModeChip
               agentId={agent.id}
               capabilities={stream.capabilities}
@@ -1022,6 +1047,18 @@ export function ChatView({
 
   function handleSend(text: string) {
     if (!agent) return;
+    if (draft) {
+      // The chat is made on this first send (P4): the page creates it,
+      // sends, and opens it. Until then the line stands here as an echo;
+      // a refusal takes it back into the composer.
+      jumpToBottom();
+      stream.echoSent(text, false);
+      draft.onSend(text).catch(() => {
+        stream.echoFailed(text);
+        setComposerPrefill({ text, at: Date.now() });
+      });
+      return;
+    }
     // Echo BEFORE the request: the bubble and the scroll happen in this frame,
     // not a second later when the tailer has polled the transcript. The request
     // failing removes the echo again — an echo that outlived a failed send would
@@ -1350,6 +1387,23 @@ export function ChatView({
   const newChatEmpty =
     furtherChat && gateReady && !stream.loading && merged.entries.length === 0 && stream.pendingEchoes.length === 0;
   const focusedNewChat = useRef<string | null>(null);
+  // The draft opens ready to type, once (the keyboard comes up on the phone
+  // where the browser allows a focus outside a tap).
+  const draftOn = !!draft;
+  useEffect(() => {
+    if (!draftOn) return;
+    rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+  }, [draftOn]);
+  // The chat a draft became shows the draft's first line as its own echo
+  // until the record (or the transcript) confirms it — no blink between the
+  // two screens. Taken once per mount.
+  const handoffKey = draft || head || !agent ? null : furtherChat && chatParam ? chatParam : streamEnabled ? `agent:${agent.id}` : null;
+  const echoSentRef = useRef(stream.echoSent);
+  echoSentRef.current = stream.echoSent;
+  useEffect(() => {
+    if (!handoffKey) return;
+    for (const text of takeHandedMessages(handoffKey)) echoSentRef.current(text, false);
+  }, [handoffKey]);
   useEffect(() => {
     if (!newChatEmpty || !chatParam || focusedNewChat.current === chatParam) return;
     focusedNewChat.current = chatParam;
@@ -1438,6 +1492,28 @@ export function ChatView({
                 );
   }
 
+  if (!agent && !head && draft) {
+    // A draft with nobody alive to talk to: the header, an empty middle and
+    // the chip (which says so and still offers "New group"). No composer —
+    // there is nobody to send to.
+    return (
+      <div ref={rootRef} className="flex flex-col flex-1 min-h-0 overflow-hidden" data-testid="chat-draft">
+        <div
+          data-testid="chat-header"
+          className="relative flex items-center gap-2 pl-1 pr-2 md:px-4 py-2 md:py-3 pt-safe-top md:pt-3 border-b shrink-0 bg-[var(--color-bg-surface)]"
+          style={{ borderColor: C.border }}
+        >
+          <DrawerButton className="md:hidden -m-1" />
+          <h1 className="flex-1 min-w-0 truncate text-base leading-tight md:text-sm font-semibold md:font-medium" style={{ color: C.textPrimary }}>
+            {tCockpit("newChat")}
+          </h1>
+        </div>
+        <div className="flex-1 min-h-0" />
+        <div className="px-3 pt-2 pb-2 md:pb-4 md:px-4">{draft.chip}</div>
+      </div>
+    );
+  }
+
   if (!agent && !head) {
     return (
       <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: C.textMuted }}>
@@ -1520,15 +1596,18 @@ export function ChatView({
               className="text-base leading-tight md:text-sm font-semibold md:font-medium truncate min-w-0"
               style={{ color: C.textPrimary }}
             >
-              {furtherTitle ?? agent.name}
+              {draft ? tCockpit("newChat") : furtherTitle ?? agent.name}
             </h1>
           </span>
-          <ChatHeaderSubline
-            state={statusState}
-            aliveness={aliveness}
-            turnStartedAt={turnStartedAt}
-            sending={stream.awaitingResponse}
-          />
+          {/* A draft claims no state: nothing runs until the first send. */}
+          {!draft && (
+            <ChatHeaderSubline
+              state={statusState}
+              aliveness={aliveness}
+              turnStartedAt={turnStartedAt}
+              sending={stream.awaitingResponse}
+            />
+          )}
         </div>
         {/* Rechte Gruppe: EIN ml-auto buendelt Badge und "…" am rechten Rand.
             Zwei getrennte auto-Margins wuerden den freien Platz unter sich
@@ -1557,6 +1636,7 @@ export function ChatView({
             a chat is the composer's live-voice mic (ADR-102: "voice is a
             function in every chat"); the assistant's mic stays in the app
             bar of every other page and in the desktop column. */}
+        {!draft && (
         <button
           type="button"
           onClick={() => setOptionsOpen(true)}
@@ -1571,8 +1651,11 @@ export function ChatView({
             <MoreHorizontal size={18} />
           </span>
         </button>
+        )}
         </div>
 
+        {/* A draft has no view, panel or detail level to set yet. */}
+        {!draft && (
         <div className="hidden md:flex items-center gap-2 shrink-0">
           {!headlessChat && (
           <div
@@ -1704,12 +1787,13 @@ export function ChatView({
             </div>
           )}
         </div>
+        )}
       </div>
       ) : null}
 
       {/* Only where the chat shows no task sections: there the section head
           names the task (K3). */}
-      {!head && agent && !furtherChat && workingOn && !tasksApply && (!taskGateOn || chatTasks.settled) && (
+      {!head && agent && !furtherChat && !draft && workingOn && !tasksApply && (!taskGateOn || chatTasks.settled) && (
         <WorkingOnRow taskId={workingOn.taskId} title={workingOn.title} />
       )}
 
@@ -1776,6 +1860,19 @@ export function ChatView({
                 // A further chat that is still empty is a NEW chat ("New
                 // chat" → pick): it says so, and the terminal hint does not
                 // apply — the terminal shows the agent's own session.
+                draft ? (
+                  // The draft: the chip below already says who answers (K3);
+                  // the middle only says what happens.
+                  <div
+                    data-testid="chat-empty-draft"
+                    className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center"
+                  >
+                    <MessagesSquare size={20} style={{ color: C.textDim }} aria-hidden="true" />
+                    <span className="text-xs max-w-[42ch]" style={{ color: C.textMuted }}>
+                      {t("newChatHint")}
+                    </span>
+                  </div>
+                ) : (
                 <div
                   data-testid={furtherChat ? "chat-empty-new" : "chat-empty"}
                   className="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center"
@@ -1788,6 +1885,7 @@ export function ChatView({
                     {furtherChat ? t("newChatHint") : t("noMessagesHint", { name: agent?.name ?? "" })}
                   </span>
                 </div>
+                )
               )
             ) : (
               visibleEntries.map((entry, i) => {
@@ -1942,6 +2040,8 @@ export function ChatView({
             />
           ) : (
             <>
+              {/* A draft claims no state ("Ready" of what?) until the first send. */}
+              {!draft && (
               <StatusLine
                 state={statusState}
                 connected={stream.connected}
@@ -1953,9 +2053,15 @@ export function ChatView({
                 loading={firstStatePending}
                 hasTerminal={!headlessChat}
               />
+              )}
               {!isAdmin ? (
-                <AdminOnlyNotice compact message={t("inputAdminOnly")} />
-              ) : agent && furtherChat ? (
+                <>
+                  {/* The draft's chip stays for a viewer too: it says new
+                      chats are off and still opens an agent's own chat. */}
+                  {draft && <div className="px-3 pt-2 md:px-4">{draft.chip}</div>}
+                  <AdminOnlyNotice compact message={t("inputAdminOnly")} />
+                </>
+              ) : agent && (furtherChat || draft) ? (
                 // A further chat: the composer alone. Live voice and the
                 // mode chip act on the agent's own chat, not this one.
                 renderComposer(null)
@@ -1979,7 +2085,9 @@ export function ChatView({
               ) : null}
               {/* The speed line under the input (variant C, operator
                   decision 2026-11-18): box · model · live tok/s. */}
-              {agent && (
+              {/* Not under a draft: box, model and tok/s belong to a chat
+                  that exists (K3). */}
+              {agent && !draft && (
                 <SpeedLine
                   runtimeId={agent.runtime_id ?? null}
                   model={stream.usage?.model ?? stream.capabilities?.model ?? agent.model ?? null}
