@@ -185,7 +185,10 @@ export function buildChatList(input: ChatListInput, now: Date = new Date()): Cha
       kind: "agent",
       id: agent.id,
       title: ownTitle ?? agent.name,
-      at: chat.lastActivityAt ?? null,
+      // A chat just made from the "New chat" draft has no activity in the
+      // record yet (the first line lands a moment later): its creation
+      // dates it, so it stands on top of Today, not last in Earlier.
+      at: chat.lastActivityAt ?? chat.createdAt ?? null,
       // The agent's state is its own chat's; a further chat claims none.
       state: "idle",
       href: `${chatEntryHref("agent", agent.id)}&chat=${encodeURIComponent(chat.id)}`,

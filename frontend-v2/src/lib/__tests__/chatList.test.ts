@@ -172,6 +172,14 @@ describe("buildChatList — further chats of an agent (chats slice S2)", () => {
     expect(list.some((e) => e.key === "chat:d-1")).toBe(false);
   });
 
+  it("a chat just made from the draft (no activity recorded yet) is dated by its creation — Today, not last in Earlier", () => {
+    const list = buildChatList(input({ recordChats: [rec({ id: "c-new", lastActivityAt: null, createdAt: today(14) })] }), NOW);
+    const row = list.find((e) => e.key === "chat:c-new")!;
+    expect(row.at).toBe(today(14));
+    expect(list[0].key).toBe("chat:c-new");
+    expect(sectionChats(list, NOW).today.map((e) => e.key)).toContain("chat:c-new");
+  });
+
   it("the numbers follow creation, so writing in one chat renames none (critic 19.11.)", () => {
     const b = rec({ id: "c-b", createdAt: today(1) });
     const a = rec({ id: "c-a", createdAt: today(2) });
