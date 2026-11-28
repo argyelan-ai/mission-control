@@ -282,6 +282,9 @@ interface ComposerProps {
   /** Plan/Standard switch of a headless (ACP) agent (P3, `ModeChip`), left
    *  of the effort chip. `null`/absent = the agent reports no plan mode. */
   modeSlot?: ReactNode;
+  /** A line above the input — the "New chat" draft's agent chip (P4,
+   *  `AgentChip`). Absent = nothing above the pill. */
+  chipSlot?: ReactNode;
   /** Overrides the default placeholder — while a task runs in this agent's
    *  chat it says where a message goes ("to the chat, not the task", D12). */
   placeholder?: string;
@@ -322,7 +325,7 @@ const HIT_44 =
 const SLOT_HIT_44 =
   "contents [&>button]:relative [&>button]:before:absolute [&>button]:before:left-1/2 [&>button]:before:top-1/2 [&>button]:before:-translate-x-1/2 [&>button]:before:-translate-y-1/2 [&>button]:before:w-full [&>button]:before:h-full [&>button]:before:min-w-11 [&>button]:before:min-h-11 [&>button]:before:content-['']";
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, prefill = null, quote = null, barBelow = false, voiceSlot = null, modeSlot = null, placeholder }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, prefill = null, quote = null, barBelow = false, voiceSlot = null, modeSlot = null, chipSlot = null, placeholder }: ComposerProps) {
   const t = useTranslations("sessions");
   // One word per effort level, the same as the bench (round-2 Q2):
   // "High" / "Hoch" instead of the raw "high" the harness reports.
@@ -1034,6 +1037,8 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           pill's own frame stepping to a neutral grey (text-muted, 4.6:1
           against the pill — perceivable per WCAG 2.4.11 without being a halo,
           and unmistakably grey rather than white). */}
+      {chipSlot}
+
       <div
         ref={pillRef}
         data-testid="composer-dropzone"

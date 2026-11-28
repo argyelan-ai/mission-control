@@ -9,10 +9,10 @@ import { chatRowTime, type ChatListEntry, type ChatListState } from "@/lib/chatL
 import { useRecentChats } from "./MobileTabBar";
 import { activeChatKey, useChatList, useOpenChat } from "./useChatList";
 
-/** Where "New chat" leads: the sessions page's picker — who to talk to, or a
- *  new group. Until chats stop being bound to agents (ADR-102 stage 1) a new
- *  chat starts by picking the agent. */
-export const NEW_CHAT_HREF = "/sessions?pick=1";
+/** Where "New chat" leads: an empty draft on the sessions page — the agent
+ *  is chosen in a chip above the composer, the chat is made on the first
+ *  send (concept "Neuer Chat", P4). No picker in between. */
+export const NEW_CHAT_HREF = "/sessions?new=1";
 
 /** One muted dot for state, nothing at all for a quiet chat; a hollow grey
  *  ring for an agent whose session is not running (user test 21.11.2026). */

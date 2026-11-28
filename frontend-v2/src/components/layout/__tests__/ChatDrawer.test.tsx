@@ -204,7 +204,7 @@ describe("chat drawer (phone)", () => {
     const drawer = await openDrawer();
     const first = within(drawer).getAllByRole("link")[0];
     expect(first).toHaveTextContent("New chat");
-    expect(first).toHaveAttribute("href", "/sessions?pick=1");
+    expect(first).toHaveAttribute("href", "/sessions?new=1");
   });
 
   it("sorts chats into Waiting for you, Today and Earlier", async () => {
