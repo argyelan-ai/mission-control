@@ -72,7 +72,7 @@ export type ChatTitleOf = (entry: ChatListEntry) => string;
 
 /**
  * The chats that match, best first. `agentNameOf` names the agent behind a
- * further chat that carries its own title, so "Sparky" finds it too; a hit
+ * further chat that carries its own title, so "Alpha" finds it too; a hit
  * on that name ranks below a word-start title hit and above a fuzzy one.
  */
 export function rankChats(

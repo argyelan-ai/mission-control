@@ -115,11 +115,11 @@ beforeEach(() => {
   rec.searchError = null;
   list.waiting = [];
   list.today = [
-    row("agent:a1", "Sparky", "2026-11-28T10:00:00Z"),
+    row("agent:a1", "Alpha", "2026-11-28T10:00:00Z"),
     row("chat:c2", "Cooling stand", "2026-11-28T09:00:00Z", { id: "a1", chatId: "c2", href: "/sessions?agent=a1&from=link&chat=c2" }),
   ];
   list.earlier = [
-    row("agent:a2", "Hermes", "2026-11-20T10:00:00Z"),
+    row("agent:a2", "Beta", "2026-11-20T10:00:00Z"),
     row("group:g1", "Release crew", "2026-11-19T10:00:00Z"),
   ];
 });
@@ -146,7 +146,7 @@ describe("CommandPalette — empty box = recent chats", () => {
     const recent = group("palette-group-recent")!;
     expect(recent).toBeInTheDocument();
     expect(within(recent).getAllByTestId("palette-chat").map((el) => el.textContent)).toEqual(
-      expect.arrayContaining([expect.stringContaining("Sparky"), expect.stringContaining("Hermes")]),
+      expect.arrayContaining([expect.stringContaining("Alpha"), expect.stringContaining("Beta")]),
     );
     expect(group("palette-group-pages")).toBeNull();
     // the settings gear appears only while searching — not on every recent row
@@ -158,7 +158,7 @@ describe("CommandPalette — empty box = recent chats", () => {
     renderPalette();
     await waitFor(() => {
       const first = within(group("palette-group-recent")!).getAllByTestId("palette-chat")[0];
-      expect(first).toHaveTextContent("Hermes");
+      expect(first).toHaveTextContent("Beta");
     });
   });
 });
@@ -166,10 +166,10 @@ describe("CommandPalette — empty box = recent chats", () => {
 describe("CommandPalette — typing: groups and ranking", () => {
   it("'Chats' finds by title, an agent hit opens its chat — not its settings page", () => {
     renderPalette();
-    fireEvent.change(input(), { target: { value: "spar" } });
+    fireEvent.change(input(), { target: { value: "alph" } });
     const chats = group("palette-group-chats")!;
     const items = within(chats).getAllByTestId("palette-chat");
-    expect(items[0]).toHaveTextContent("Sparky");
+    expect(items[0]).toHaveTextContent("Alpha");
     fireEvent.click(items[0]);
     expect(nav.push).toHaveBeenCalledWith("/sessions?agent=a1&from=link");
     expect(nav.push).not.toHaveBeenCalledWith("/agents/a1");
@@ -177,15 +177,15 @@ describe("CommandPalette — typing: groups and ranking", () => {
 
   it("a titled further chat is found by its agent's name, below the agent's own chat", () => {
     renderPalette();
-    fireEvent.change(input(), { target: { value: "spar" } });
+    fireEvent.change(input(), { target: { value: "alph" } });
     const items = within(group("palette-group-chats")!).getAllByTestId("palette-chat");
     expect(items.map((el) => el.getAttribute("data-key"))).toEqual(["agent:a1", "chat:c2"]);
   });
 
   it("the agent's settings are a second action on its row", () => {
     renderPalette();
-    fireEvent.change(input(), { target: { value: "hermes" } });
-    fireEvent.click(screen.getByRole("button", { name: en.shell.searchAgentSettings.replace("{name}", "Hermes") }));
+    fireEvent.change(input(), { target: { value: "beta" } });
+    fireEvent.click(screen.getByRole("button", { name: en.shell.searchAgentSettings.replace("{name}", "Beta") }));
     expect(nav.push).toHaveBeenCalledWith("/agents/a2");
   });
 
@@ -251,7 +251,7 @@ describe("CommandPalette — 'In messages' (server search)", () => {
   it("record off (enabled: false) → the group stays hidden, quietly", async () => {
     rec.search = { hits: [], enabled: false };
     renderPalette();
-    fireEvent.change(input(), { target: { value: "spark" } });
+    fireEvent.change(input(), { target: { value: "alpha" } });
     await waitFor(() => expect(apiMock.chatRecord.search).toHaveBeenCalled());
     await act(async () => {});
     expect(group("palette-group-messages")).toBeNull();
@@ -261,9 +261,9 @@ describe("CommandPalette — 'In messages' (server search)", () => {
   it("once the record says it is off, typing on asks the server no more", async () => {
     rec.search = { hits: [], enabled: false };
     renderPalette();
-    fireEvent.change(input(), { target: { value: "spark" } });
+    fireEvent.change(input(), { target: { value: "alpha" } });
     await waitFor(() => expect(apiMock.chatRecord.search).toHaveBeenCalledTimes(1));
-    fireEvent.change(input(), { target: { value: "sparky chat" } });
+    fireEvent.change(input(), { target: { value: "alpha chat" } });
     await new Promise((r) => setTimeout(r, 400));
     expect(apiMock.chatRecord.search).toHaveBeenCalledTimes(1);
   });
@@ -271,7 +271,7 @@ describe("CommandPalette — 'In messages' (server search)", () => {
   it("an older backend (404) → the group stays hidden, the rest works", async () => {
     rec.searchError = new Error('API 404: {"detail":"Not Found"}');
     renderPalette();
-    fireEvent.change(input(), { target: { value: "spark" } });
+    fireEvent.change(input(), { target: { value: "alpha" } });
     await waitFor(() => expect(apiMock.chatRecord.search).toHaveBeenCalled());
     await act(async () => {});
     expect(group("palette-group-messages")).toBeNull();

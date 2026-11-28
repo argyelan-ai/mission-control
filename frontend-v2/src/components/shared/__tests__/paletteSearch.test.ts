@@ -30,7 +30,7 @@ const entry = (key: string, title: string, at: string | null, extra: Partial<Cha
 
 describe("matchScore — exact > word start > inside > fuzzy", () => {
   it("scores the four levels", () => {
-    expect(matchScore("sparky", "Sparky")).toBe(SCORE_EXACT);
+    expect(matchScore("alpha", "Alpha")).toBe(SCORE_EXACT);
     expect(matchScore("kühl", "Der Kühlstand")).toBe(SCORE_WORD_START);
     expect(matchScore("stand", "Der Kühlstand")).toBe(SCORE_INSIDE);
     expect(matchScore("kst", "Kühlstand")).toBe(SCORE_FUZZY);
@@ -58,26 +58,26 @@ describe("rankChats", () => {
   it("word-start title before fuzzy title, then recency", () => {
     const rows = [
       entry("agent:a", "Planner", "2026-11-28T10:00:00Z"),
-      entry("agent:b", "Sparky", "2026-11-28T09:00:00Z"),
-      entry("agent:c", "Spark notes", "2026-11-28T11:00:00Z"),
-      entry("agent:d", "Super-Parky", "2026-11-28T12:00:00Z"),
+      entry("agent:b", "Alpha", "2026-11-28T09:00:00Z"),
+      entry("agent:c", "Alpha notes", "2026-11-28T11:00:00Z"),
+      entry("agent:d", "Al-P-Ha-Xy", "2026-11-28T12:00:00Z"),
     ];
-    const ranked = rankChats(rows, "spar", titleOf, noAgent).map((e) => e.key);
-    // both word-start → newest first; fuzzy (S-u-p-e-r-P-a-r) last
+    const ranked = rankChats(rows, "alph", titleOf, noAgent).map((e) => e.key);
+    // both word-start → newest first; fuzzy (A-l-P-H-a) last
     expect(ranked).toEqual(["agent:c", "agent:b", "agent:d"]);
   });
 
   it("an exact title beats a newer word-start one", () => {
-    const rows = [entry("agent:a", "Sparky two", "2026-11-28T12:00:00Z"), entry("agent:b", "Sparky", "2026-11-01T09:00:00Z")];
-    expect(rankChats(rows, "sparky", titleOf, noAgent)[0].key).toBe("agent:b");
+    const rows = [entry("agent:a", "Alpha two", "2026-11-28T12:00:00Z"), entry("agent:b", "Alpha", "2026-11-01T09:00:00Z")];
+    expect(rankChats(rows, "alpha", titleOf, noAgent)[0].key).toBe("agent:b");
   });
 
   it("finds a titled further chat by its agent's name, below a title hit", () => {
     const rows = [
       entry("chat:c1", "Cooling stand", "2026-11-28T12:00:00Z", { chatId: "c1" }),
-      entry("agent:a", "Sparky", "2026-11-01T09:00:00Z"),
+      entry("agent:a", "Alpha", "2026-11-01T09:00:00Z"),
     ];
-    const ranked = rankChats(rows, "spar", titleOf, (e) => (e.key === "chat:c1" ? "Sparky" : null));
+    const ranked = rankChats(rows, "alph", titleOf, (e) => (e.key === "chat:c1" ? "Alpha" : null));
     expect(ranked.map((e) => e.key)).toEqual(["agent:a", "chat:c1"]);
   });
 });
@@ -105,7 +105,7 @@ describe("recentChats — pinned first, at most 8", () => {
 });
 
 describe("messageHitTarget", () => {
-  const rows = [entry("agent:a1", "Sparky", null), entry("chat:c2", "Sparky", null, { chatId: "c2", href: "/sessions?agent=a1&from=link&chat=c2" })];
+  const rows = [entry("agent:a1", "Alpha", null), entry("chat:c2", "Alpha", null, { chatId: "c2", href: "/sessions?agent=a1&from=link&chat=c2" })];
 
   it("a further chat opens its own row", () => {
     expect(messageHitTarget({ chatId: "c2", agentId: "a1" }, rows, [])?.href).toContain("chat=c2");
