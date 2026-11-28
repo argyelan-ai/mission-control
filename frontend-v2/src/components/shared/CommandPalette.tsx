@@ -501,7 +501,9 @@ function MessageHitItem({ hit, title, onOpen }: { hit: RecordSearchHit; title: s
       className={`${itemClass} items-start py-2`}
       data-testid="palette-message-hit"
     >
-      <MessageSquareText size={16} aria-hidden style={{ color: C.textMuted, flexShrink: 0, marginTop: 2 }} />
+      <span className="flex h-5 shrink-0 items-center" aria-hidden>
+        <MessageSquareText size={16} style={{ color: C.textMuted }} />
+      </span>
       <span className="flex-1 min-w-0 flex flex-col gap-0.5">
         <span className="truncate" style={{ color: C.textPrimary }}>
           {title}
