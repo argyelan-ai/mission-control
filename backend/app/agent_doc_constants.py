@@ -104,6 +104,7 @@ CANONICAL_VERBS: dict[str, str] = {
     "projects": "The board's projects — not folders on disk.",
     "project": "One project: phases + briefing (`<id-or-name>`).",
     "agents": "The board's agents + who is reachable.",
+    "ext": "Request a skill from the operator: search/request/status.",
 }
 
 
@@ -179,6 +180,9 @@ CANONICAL_VERB_SCOPES: dict[str, str | None] = {
     # GET /agent/boards/{id}/agents — require_scope(TASKS_READ); the comms/who
     # presence merge is best effort and skipped without comms:talk.
     "agents": "tasks:read",
+    # POST/GET /agent/install-requests — require_agent only; the operator's
+    # approval is the gate, an agent may request for itself.
+    "ext": None,
 }
 
 

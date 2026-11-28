@@ -3377,6 +3377,169 @@ def _add_agents_args(p):
     p.add_argument("--json", action="store_true", help="Raw JSON (roster merged with presence)")
 
 
+# ── Extensions: ask for a capability (extensions concept, PR 1) ──────────
+#
+# `mc ext request` files an install request that waits for the operator in
+# the inbox — it never installs anything itself. Skills only (plain text):
+# MC reads the files of both sources and refuses anything executable; a
+# GitHub skill is pinned to a commit. Feedback: a comment on the task when
+# one is in context, and always via `mc ext status`. The chat id (--chat, or
+# the further Claude chat the CLI runs in) is stored on the request for a
+# later chat card; no line is written into the chat yet.
+
+_EXT_BASE = "/api/v1/agent/install-requests"
+_UUID_TEXT = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
+
+
+def _ext_chat_id(explicit: str | None) -> str | None:
+    """The requester's chat: --chat, else the chat of a further Claude Code
+    chat (CLAUDE_CONFIG_DIR=<config>/chats/<id>/). Stored on the request."""
+    if explicit:
+        return explicit
+    cfg_dir = (os.environ.get("CLAUDE_CONFIG_DIR") or "").rstrip("/")
+    parent, _, last = cfg_dir.rpartition("/")
+    if parent.endswith("/chats") and _UUID_TEXT.match(last):
+        return last
+    return None
+
+
+def _ext_target_id(name_or_id: str | None, client: Client) -> str:
+    """Own id without --for; a UUID as given; else a name on the own board."""
+    if name_or_id and _UUID_TEXT.match(name_or_id):
+        return name_or_id
+    me = client.request("GET", "/api/v1/agent/me") or {}
+    if not name_or_id:
+        if not me.get("id"):
+            raise UsageError("could not read your own agent id (GET /agent/me)")
+        return me["id"]
+    board_id = me.get("board_id")
+    if not board_id:
+        raise UsageError("--for needs a board; use the agent's UUID instead")
+    resp = client.request("GET", f"/api/v1/agent/boards/{board_id}/agents")
+    agents = resp if isinstance(resp, list) else (resp or {}).get("agents", [])
+    matches = [a for a in agents if (a.get("name") or "").lower() == name_or_id.lower()]
+    if len(matches) != 1:
+        names = ", ".join(sorted(a.get("name", "") for a in agents)) or "(none)"
+        raise UsageError(
+            f"agent '{name_or_id}' not found exactly once on your board. Agents: {names}"
+        )
+    return matches[0]["id"]
+
+
+def _ext_line(r: dict) -> str:
+    line = f"{r.get('approval_id')} · {r.get('status')} · {r.get('action_type')} '{r.get('name')}'"
+    if r.get("commit"):
+        line += f" @ {str(r['commit'])[:12]}"
+    if r.get("target_agent_name"):
+        line += f" · for {r['target_agent_name']}"
+    if r.get("failure_reason"):
+        line += f" · failed: {r['failure_reason']}"
+    return line
+
+
+def _cmd_ext(args, client, cfg):
+    """mc ext — ask the operator for a capability (skills only).
+
+      mc ext search <words>                         # local skills library
+      mc ext request <name> --source <src> --reason "..." [--ref <sha|tag>] [--for <agent>] [--chat <id>]
+      mc ext status [<request-id>] [--json]
+
+    Sources: `~/.mc/skills/<name>` (library) or `github:<owner>/<repo>`
+    from an allowed owner (`mc ext search` lists them).
+    """
+    action = getattr(args, "action", None)
+    if action == "search":
+        query = " ".join(args.query).strip()
+        resp = client.request("GET", f"{_EXT_BASE}/search", query={"q": query}) or {}
+        if getattr(args, "json", False):
+            print(json.dumps(resp, indent=2, default=str))
+            return 0
+        found = resp.get("library") or []
+        if found:
+            print("In the skills library:")
+            for s in found:
+                desc = f" — {s['description']}" if s.get("description") else ""
+                if s.get("text_only") is False:
+                    print(f"  {s.get('name')}{desc}\n    cannot be requested: {s.get('refused_reason')}")
+                else:
+                    print(f"  {s.get('name')}{desc}\n    request with: --source {s.get('source')}")
+        else:
+            print(f"Nothing in the skills library matches '{query}'.")
+        allowed = resp.get("allowed_sources") or []
+        if allowed:
+            print("Allowed sources (regex): " + "  ".join(allowed))
+        return 0
+
+    if action == "request":
+        target = _ext_target_id(args.target, client)
+        body = {
+            "type": "skill",
+            "operation": "install",
+            "name": args.name,
+            "source": args.source,
+            "target_agent_id": target,
+            "reason": args.reason,
+        }
+        if args.ref:
+            body["ref"] = args.ref
+        chat_id = _ext_chat_id(args.chat)
+        if chat_id:
+            body["chat_id"] = chat_id
+        task_id = args.task or getattr(cfg, "task_id", None)
+        if task_id:
+            body["task_id"] = task_id
+        resp = _require_result(client.request("POST", _EXT_BASE, body=body), verb="ext request")
+        rid = resp.get("approval_id")
+        if resp.get("existing"):
+            print(f"Request {rid} is already waiting for the operator ({resp.get('status')}).")
+        else:
+            print(f"Request {rid} filed — it waits for the operator's approval.")
+        print(f"Check it with: mc ext status {rid}")
+        if not task_id:
+            print("(no task given: the result shows up in `mc ext status`)")
+        return 0
+
+    # status (default)
+    rid = getattr(args, "request_id", None)
+    path = f"{_EXT_BASE}/{rid}" if rid else _EXT_BASE
+    resp = client.request("GET", path) or {}
+    if getattr(args, "json", False):
+        print(json.dumps(resp, indent=2, default=str))
+        return 0
+    rows = [resp] if rid else (resp.get("requests") or [])
+    if not rows:
+        print("No install requests.")
+        return 0
+    for r in rows:
+        print(_ext_line(r))
+    return 0
+
+
+def _add_ext_args(p):
+    sub = p.add_subparsers(dest="action", required=False)
+    p_req = sub.add_parser("request", help="Ask the operator for a skill (waits for approval)")
+    p_req.add_argument("name", help="Skill name (folder name in the skills library)")
+    p_req.add_argument("--source", required=True,
+                       help="~/.mc/skills/<name> or github:<owner>/<repo>")
+    p_req.add_argument("--reason", required=True,
+                       help="Why you need it — the operator reads this")
+    p_req.add_argument("--ref", default=None, help="Version: commit SHA or tag (pinned to a commit)")
+    p_req.add_argument("--for", dest="target", default=None,
+                       help="Target agent (name on your board or UUID); default: yourself")
+    p_req.add_argument("--chat", default=None,
+                       help="Your chat id, stored on the request (default: the further chat you run in)")
+    p_req.add_argument("--task", default=None,
+                       help="Task that gets the feedback comment (default: your current task)")
+    p_search = sub.add_parser("search", help="Search the skills library by name/description")
+    p_search.add_argument("query", nargs="+", help="Words that must all match")
+    p_search.add_argument("--json", action="store_true", help="Print the raw answer")
+    p_status = sub.add_parser("status", help="Your install requests, or one of them")
+    p_status.add_argument("request_id", nargs="?", default=None, help="Request id")
+    p_status.add_argument("--json", action="store_true", help="Print the raw answer")
+
+
 # ── Plugin Management (Board Lead) ───────────────────────────────────────
 
 def _resolve_target_agent_id(name_or_id: str, client: Client, cfg: Config) -> str:
@@ -4088,6 +4251,19 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="tasks:read",  # backend require_scope(Scope.TASKS_READ)
         handler=_cmd_thread,
         add_args=_add_thread_args,
+    ),
+    "ext": CommandSpec(
+        name="ext",
+        help="Ask the operator for a skill: `mc ext search|request|status` (never installs itself)",
+        endpoints=(
+            "POST /install-requests",
+            "GET /install-requests",
+            "GET /install-requests/search",
+            "GET /install-requests/{approval_id}",
+        ),
+        scope="",  # require_agent only (routers/install_requests.py)
+        handler=_cmd_ext,
+        add_args=_add_ext_args,
     ),
     "box": CommandSpec(
         name="box",

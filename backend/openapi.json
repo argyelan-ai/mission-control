@@ -662,9 +662,34 @@
       }
     },
     "/api/v1/agent/install-requests": {
+      "get": {
+        "operationId": "list_install_requests_api_v1_agent_install_requests_get",
+        "summary": "List Install Requests",
+        "tags": [
+          "install-requests"
+        ]
+      },
       "post": {
         "operationId": "create_install_request_api_v1_agent_install_requests_post",
         "summary": "Create Install Request",
+        "tags": [
+          "install-requests"
+        ]
+      }
+    },
+    "/api/v1/agent/install-requests/search": {
+      "get": {
+        "operationId": "search_extensions_api_v1_agent_install_requests_search_get",
+        "summary": "Search Extensions",
+        "tags": [
+          "install-requests"
+        ]
+      }
+    },
+    "/api/v1/agent/install-requests/{approval_id}": {
+      "get": {
+        "operationId": "get_install_request_api_v1_agent_install_requests__approval_id__get",
+        "summary": "Get Install Request",
         "tags": [
           "install-requests"
         ]

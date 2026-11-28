@@ -411,6 +411,9 @@ def test_copytree_failure_after_copy_leaves_no_orphan_folder(tmp_path, monkeypat
         return "a" * 40
 
     monkeypatch.setattr("app.services.install_executor._fetch_commit", fake_fetch)
+    # The plain-text check would refuse this file before the copy; let it
+    # through so the failure happens after the folder exists (the rollback).
+    monkeypatch.setattr("app.services.install_executor.text_only_files", lambda folder: [])
     with pytest.raises(Exception):
         asyncio.run(_call_skill_install("github:obra/skill-bad", "bad", "a" * 40))
     assert not (tmp_path / ".mc" / "skills" / "bad").exists()

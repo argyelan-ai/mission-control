@@ -592,6 +592,111 @@ async def _fetch_commit(url: str, commit: str | None, dest: Path) -> str:
     return head
 
 
+# ── Plain-text skills only (extensions concept, section 6) ────────────────
+#
+# A skill is plain text the agent reads. Anything that can run (scripts,
+# binaries, executable bits, symlinks) is refused this round. The request
+# check (routers/install_requests.py) and the install below use the SAME two
+# helpers, and the install checks the folder it actually copies — so the
+# check and the install can never drift apart.
+
+#: File types that count as plain text in a skill folder.
+TEXT_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
+#: Plain-text files that usually carry no suffix.
+TEXT_NAMES = frozenset({"LICENSE", "LICENCE", "COPYING", "NOTICE"})
+#: Size caps: one file / the whole skill. Larger is refused, never read in full.
+MAX_FILE_BYTES = 1_000_000
+MAX_SKILL_BYTES = 10_000_000
+
+
+class SkillContentError(ValueError):
+    """The skill holds something other than plain text, or no clean layout."""
+
+
+def skill_source_dir(clone: Path, name: str) -> Path:
+    """The requested skill inside a fetched repo: ``/SKILL.md``,
+    ``/skills/<name>/SKILL.md`` or ``/<name>/SKILL.md`` — in that order.
+
+    A layout counts only when its ``SKILL.md`` is a regular file and no part
+    of the path is a symlink. A ``SKILL.md`` entry that exists but is not a
+    regular file (a directory, a symlink) refuses the repo instead of being
+    skipped, so no later layout can be picked by accident."""
+    for parts in ((), ("skills", name), (name,)):
+        candidate = clone.joinpath(*parts)
+        md = candidate / "SKILL.md"
+        walk = clone
+        linked = False
+        for part in (*parts, "SKILL.md"):
+            walk = walk / part
+            if walk.is_symlink():
+                linked = True
+                break
+        if linked:
+            raise SkillContentError(
+                f"{'/'.join((*parts, 'SKILL.md'))}: symlinks are not allowed in a skill"
+            )
+        if not md.exists():
+            continue
+        if not md.is_file():
+            raise SkillContentError(
+                f"{'/'.join((*parts, 'SKILL.md'))} is not a plain file"
+            )
+        return candidate
+    raise SkillContentError(
+        f"No skill layout: none of /SKILL.md, /skills/{name}/SKILL.md, /{name}/SKILL.md"
+    )
+
+
+def text_only_files(folder: Path) -> list[str]:
+    """Relative paths of every file in ``folder`` (``.git`` left out), or
+    ``SkillContentError`` naming the files that are not plain text."""
+    files: list[str] = []
+    bad: list[str] = []
+    total = 0
+    for path in sorted(folder.rglob("*")):
+        rel = path.relative_to(folder)
+        if rel.parts and rel.parts[0] == ".git":
+            continue
+        name = rel.as_posix()
+        if path.is_symlink():
+            bad.append(f"{name} (symlink)")
+            continue
+        if path.is_dir():
+            continue
+        if path.suffix.lower() not in TEXT_SUFFIXES and path.name not in TEXT_NAMES:
+            bad.append(name)
+            continue
+        st = path.stat()
+        if st.st_mode & 0o111:
+            bad.append(f"{name} (executable)")
+            continue
+        if st.st_size > MAX_FILE_BYTES:
+            bad.append(f"{name} (too large: {st.st_size} bytes)")
+            continue
+        total += st.st_size
+        if total > MAX_SKILL_BYTES:
+            raise SkillContentError(
+                f"Skill is too large: more than {MAX_SKILL_BYTES} bytes of text"
+            )
+        data = path.read_bytes()
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError:
+            bad.append(f"{name} (not UTF-8 text)")
+            continue
+        if b"\x00" in data:
+            bad.append(f"{name} (binary)")
+            continue
+        files.append(name)
+    if bad:
+        shown = ", ".join(bad[:5]) + (f" and {len(bad) - 5} more" if len(bad) > 5 else "")
+        raise SkillContentError(
+            "Only plain-text skills (SKILL.md plus .md/.txt files) can be "
+            f"requested; this one also contains: {shown}"
+        )
+    return files
+
+
 async def _call_skill_install(
     source: str, name: str, commit: str | None = None,
 ) -> dict[str, Any]:
@@ -628,13 +733,11 @@ async def _call_skill_install(
             tmp_clone = Path(tmp) / "clone"
             head = await _fetch_commit(github_url(source), commit, tmp_clone)
 
-            if (tmp_clone / "SKILL.md").exists():
-                source_dir = tmp_clone
-            elif (tmp_clone / "skills" / name / "SKILL.md").exists():
-                source_dir = tmp_clone / "skills" / name
-            elif (tmp_clone / name / "SKILL.md").exists():
-                source_dir = tmp_clone / name
-            else:
+            try:
+                source_dir = skill_source_dir(tmp_clone, name)
+            except SkillContentError as e:
+                if not str(e).startswith("No skill layout"):
+                    raise
                 top = ", ".join(sorted(p.name for p in tmp_clone.iterdir()
                                        if p.name != ".git"))[:200]
                 raise RuntimeError(
@@ -642,6 +745,8 @@ async def _call_skill_install(
                     f"/SKILL.md, /skills/{name}/SKILL.md, /{name}/SKILL.md. "
                     f"Top level: {top}"
                 )
+            # Same check as at request time, on exactly the folder we copy.
+            text_only_files(source_dir)
 
             skills_dir.parent.mkdir(parents=True, exist_ok=True)
             try:
@@ -669,8 +774,12 @@ async def _call_skill_install(
         return {"installed_version": version or head[:12], "commit": head,
                 "created_dir": True}
     elif source.startswith("~/.mc/skills/"):
-        if not skills_dir.exists():
+        if source != f"~/.mc/skills/{name}":
+            raise ValueError(f"Source {source!r} does not name the skill {name!r}")
+        if not skills_dir.is_dir():
             raise FileNotFoundError(f"Local skill {name!r} not found at {skills_dir}")
+        # The library folder may have changed since the request: check again.
+        text_only_files(skills_dir)
         return {"installed_version": None, "commit": None, "created_dir": False}
     else:
         raise ValueError(f"Unsupported skill source: {source!r}")

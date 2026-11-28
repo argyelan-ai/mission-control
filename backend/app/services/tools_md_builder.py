@@ -846,6 +846,32 @@ mc report "Deploy check: APP_NAME.your-domain.com — [OK/issues]" --photo <deli
 8. Record deploy (POST /api/v1/agent/deploy/record)
 """
 
+    # ── Extensions: ask for a capability (every agent, require_agent only) ──
+    extension_section = """---
+
+## Extensions — ask the operator for a skill (`mc ext`)
+
+When you need a skill you do not have (or the operator says "install X"),
+file a request. The operator approves or rejects it in the inbox; you never
+install anything yourself — never via curl, never via your own shell or
+your harness's install command.
+
+    mc ext search <words>          # skills library: name + description, plus allowed sources
+    mc ext request <name> --source <src> --reason "why you need it" [--ref <sha|tag>] [--for <agent>] [--chat <chat-id>]
+    mc ext status [<request-id>]   # your requests: pending / approved / rejected, failure reason
+
+- Sources: `~/.mc/skills/<name>` (already in the library) or `github:<owner>/<repo>`
+  from an allowed owner. MC reads the files first — for both sources — and
+  only plain-text skills (SKILL.md plus .md/.txt files) pass; anything with
+  scripts or executable files is refused. `mc ext search` marks library
+  skills that would be refused. A GitHub skill is pinned to one commit.
+- Plugins and MCP servers cannot be requested in this round.
+- Feedback: a comment on your current task when there is one (`--task`);
+  otherwise check `mc ext status`.
+- An installed skill takes effect from the next chat start, not in this turn.
+- A name that already exists is refused, never overwritten.
+"""
+
     # ── Install request section ───────────────────────────────────────────
     install_request_section = ""
     if _has(Scope.AGENTS_MANAGE):
@@ -865,9 +891,9 @@ no plugin overhead, etc.
 3. Set the new allowlist (`mc plugin-assign <agent> [...]`)
 4. Optional: restart the worker so plugins take effect immediately (`--restart` or `mc worker-restart <agent>`)
 
-If the desired plugin is NOT in the shared cache → request a new installation
-via `Installation Requests` (section below). Operator approval is
-mandatory for supply-chain protection.
+If the desired plugin is NOT in the shared cache, installing it is not offered
+in this round (plugins carry executable code) — tell the operator. Only
+plain-text skills can be requested (section below).
 
 ### Quick form via mc CLI (recommended)
 
@@ -951,13 +977,15 @@ WARNING: running task context is lost. Check beforehand via
 
 ## Installation Requests
 
-File install or uninstall requests for **skills, plugins, and MCP servers**
-that are NOT YET in the shared cache. The operator approves or rejects them in
+File install requests for **plain-text skills** and uninstall requests for
+skills, plugins and MCP servers. The operator approves or rejects them in
 their inbox. A successful approval triggers automatic installation via the
-InstallExecutor (including rollback on smoke-test failure for MCP).
+InstallExecutor.
 
-**Important:** For MCP installations on other agents, do NOT manually pip install /
-edit containers — always use this system.
+**This round:** installing a plugin or an MCP server is **not offered** (both
+carry executable code) — such a request is refused with HTTP 400. Skills pass
+only as plain text (SKILL.md plus .md/.txt files), for GitHub and library
+sources alike. Never pip install / edit containers by hand instead.
 
 Endpoint: POST /api/v1/agent/install-requests
 
@@ -983,8 +1011,6 @@ After success, the InstallExecutor AUTOMATICALLY records the installed item in
 the matching agent field:
 
 - **install_skill** → the name is appended to `target_agent.cli_skills`
-- **install_plugin** → the name is appended to `target_agent.cli_plugins`
-- **install_mcp** → the name is appended to `target_agent.mcp_servers` + MCP smoke test
 
 The executor then triggers `sync_config` so the change lands in claude-config
 for CLI-bridge agents. You do NOT need to additionally call `mc plugin-assign`
@@ -1011,25 +1037,6 @@ separate CLI command — they're automatically assigned after install success.
         "task_id": "'"$TASK_ID"'"
       }}'
 
-### MCP install
-
-    curl -X POST http://mc-backend:8000/api/v1/agent/install-requests \\
-      -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
-      -H "Content-Type: application/json" \\
-      -d '{{
-        "type": "mcp",
-        "operation": "install",
-        "source": "github:geopopos/higgsfield_ai_mcp",
-        "name": "higgsfield-ai",
-        "target_agent_id": "<davinci-uuid>",
-        "reason": "Davinci needs MCP tools for Higgsfield image/video generation in the marketing project",
-        "autonomy_level": "L2"
-      }}'
-
-After approval, the InstallExecutor installs the package, creates the manifest
-under ~/.mc/mcp-servers/<name>/, and syncs Davinci's .mcp.json.
-If the smoke test fails → automatic rollback.
-
 Response: 201 with approval_id + existing=false (or 200 + existing=true on duplicate).
 
 ### Uninstall
@@ -1045,16 +1052,11 @@ Response: 201 with approval_id + existing=false (or 200 + existing=true on dupli
         "reason": "no longer needed"
       }}'
 
-### Allowlist sources
-- **skill**: github:anthropic/*, github:obra/*, github:getcursor/*, ~/.mc/skills/*
-- **plugin**: claude-plugins-official, github:claude-plugins/*, github:anthropic/*
-- **mcp**:
-  - npm:@modelcontextprotocol/server-*
-  - npm:@supabase/*, npm:@vercel/*, npm:@cloudflare/mcp-*
-  - github:<any-org>/<repo-with-mcp-in-the-name> (e.g. `geopopos/higgsfield_ai_mcp`)
+### Allowlist sources (install)
+- **skill**: github:anthropic/*, github:obra/*, github:getcursor/*, ~/.mc/skills/<name>
 
 ### Important
-- Write a **concrete reason**: which task failed, why THIS skill/plugin/MCP,
+- Write a **concrete reason**: which task failed, why THIS skill,
   is there an alternative? The operator approves faster when context is clear.
 - Duplicates are detected automatically — same request 2× → same approval_id.
 - Already-installed check: HTTP 409 if the agent already has the item.
@@ -1640,21 +1642,12 @@ Rules:
             "mc plugin-assign Davinci higgsfield-mcp@anthropic-agent-skills --restart\n"
             "# → plugin set in Davinci's cli_plugins, claude session reloaded in tmux\n"
             "\n"
-            "# If NOT there: file an install request with operator approval\n"
-            "curl -sf -X POST \"$MC_API_URL/api/v1/agent/install-requests\" \\\n"
-            "  -H \"Authorization: Bearer $MC_AGENT_TOKEN\" \\\n"
-            "  -H \"Content-Type: application/json\" \\\n"
-            "  -d '{{\n"
-            "    \"type\": \"mcp\",\n"
-            "    \"operation\": \"install\",\n"
-            "    \"source\": \"github:geopopos/higgsfield_ai_mcp\",\n"
-            "    \"name\": \"higgsfield-ai\",\n"
-            "    \"target_agent_id\": \"<davinci-uuid>\",\n"
-            "    \"reason\": \"Davinci failed 2 video-tasks — needs Higgsfield MCP\",\n"
-            "    \"task_id\": \"'\"$TASK_ID\"'\"\n"
-            "  }}'\n"
-            "# task_id coupling → on approval, the backend posts an install_completed comment on YOUR task.\n"
-            "# You wait in_progress until the comment arrives. The InstallExecutor sets cli_plugins automatically.\n"
+            "# If NOT there: installing a new plugin or MCP server is not offered in this\n"
+            "# round (executable code) — tell the operator. A plain-text skill can be requested:\n"
+            "mc ext request <skill> --source ~/.mc/skills/<skill> --for Davinci \\\n"
+            "  --reason \"Davinci failed 2 video tasks — this skill has the checklist\" --task \"$TASK_ID\"\n"
+            "# --task → on approval, the backend posts an install_completed comment on YOUR task.\n"
+            "# You wait in_progress until the comment arrives. The InstallExecutor sets cli_skills automatically.\n"
             "\n"
             "# Manually reload the worker (if the plugin was assigned without --restart)\n"
             "mc worker-restart Davinci\n"
@@ -1686,7 +1679,7 @@ Rules:
     quick_ref = "\n\n".join(flow_blocks)
 
     # ── Assemble ───────────────────────────────────────────────────────────
-    sections = [s for s in [knowledge_section, vault_section, vault_remember_section, memory_section, heartbeat_section, help_request_section, comm_v2_section, install_request_section, credentials_section, deploy_section] if s]
+    sections = [s for s in [knowledge_section, vault_section, vault_remember_section, memory_section, heartbeat_section, help_request_section, comm_v2_section, extension_section, install_request_section, credentials_section, deploy_section] if s]
     main_body = "\n\n".join(sections)
 
     return f"""# {emoji} {name} — Mission Control Tools
