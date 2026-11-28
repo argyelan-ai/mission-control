@@ -884,6 +884,11 @@ internal:
   # reads it yet — the Knowledge page column is the frontend slice.
   - "endpoint:* /api/v1/knowledge-root/*"
   - "table:knowledge_entries"
+  # Extensions concept, sharing: export/import of text-only skills and
+  # personas as .mcext bundles (docs/extensions-sharing.md). Admin API only;
+  # an import creates pending approvals, never installs. The Settings ->
+  # Capabilities page is a later frontend slice.
+  - "endpoint:* /api/v1/extensions/*"
   # Skill packs: seeded for the playbook layer, which was removed in E5
   # (migration 0207); the rows stay, nothing reads them any more.
   - "table:skill_packs"

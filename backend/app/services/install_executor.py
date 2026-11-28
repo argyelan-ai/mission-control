@@ -458,6 +458,7 @@ _HANDLERS: dict[str, Any] = {
 # ───────────────────── Service-layer wrappers (patchable in tests) ─────────────────────
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_BUNDLE_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT_TIMEOUT_S = 120
 #: ls-remote runs inside the agent's install request; keep it short.
 _LS_REMOTE_TIMEOUT_S = 15
@@ -773,6 +774,15 @@ async def _call_skill_install(
                 raise
         return {"installed_version": version or head[:12], "commit": head,
                 "created_dir": True}
+    elif source.startswith("bundle:"):
+        # Imported .mcext skill (services/extension_bundle.py): copy the
+        # staged files after re-checking their sha256; an existing name is
+        # refused, never overwritten.
+        from app.services.extension_bundle import install_staged_skill
+        sha = source.removeprefix("bundle:")
+        if not _BUNDLE_SHA_RE.match(sha):
+            raise ValueError(f"Unsupported bundle source: {source!r}")
+        return install_staged_skill(sha, name)
     elif source.startswith("~/.mc/skills/"):
         if source != f"~/.mc/skills/{name}":
             raise ValueError(f"Source {source!r} does not name the skill {name!r}")
