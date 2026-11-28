@@ -3014,6 +3014,24 @@
         ]
       }
     },
+    "/api/v1/extensions/export": {
+      "get": {
+        "operationId": "export_extension_api_v1_extensions_export_get",
+        "summary": "Export Extension",
+        "tags": [
+          "extensions"
+        ]
+      }
+    },
+    "/api/v1/extensions/import": {
+      "post": {
+        "operationId": "import_extension_api_v1_extensions_import_post",
+        "summary": "Import Extension",
+        "tags": [
+          "extensions"
+        ]
+      }
+    },
     "/api/v1/files/content": {
       "get": {
         "operationId": "get_content_api_v1_files_content_get",
