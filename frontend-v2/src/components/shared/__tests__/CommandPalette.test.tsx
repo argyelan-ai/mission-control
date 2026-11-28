@@ -256,6 +256,16 @@ describe("CommandPalette — 'In messages' (server search)", () => {
     expect(group("palette-group-chats")).toBeInTheDocument();
   });
 
+  it("once the record says it is off, typing on asks the server no more", async () => {
+    rec.search = { hits: [], enabled: false };
+    renderPalette();
+    fireEvent.change(input(), { target: { value: "spark" } });
+    await waitFor(() => expect(apiMock.chatRecord.search).toHaveBeenCalledTimes(1));
+    fireEvent.change(input(), { target: { value: "sparky chat" } });
+    await new Promise((r) => setTimeout(r, 400));
+    expect(apiMock.chatRecord.search).toHaveBeenCalledTimes(1);
+  });
+
   it("an older backend (404) → the group stays hidden, the rest works", async () => {
     rec.searchError = new Error('API 404: {"detail":"Not Found"}');
     renderPalette();
