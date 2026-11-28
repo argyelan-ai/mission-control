@@ -144,6 +144,16 @@ vi.mock("@/components/chat/ChatView", () => ({
           >
             Draft Send
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              draft.onSend("Zweite Zeile").catch(() => {
+                record.draftRejected += 1;
+              });
+            }}
+          >
+            Draft Send Second
+          </button>
         </div>
       )}
       {/* Heads in Chats (PR 2): the page's own `selectedHeadRun` resolution
@@ -1411,6 +1421,29 @@ describe("SessionsPage — New chat draft", () => {
     expect(record.draftRejected).toBe(0);
     expect(new Set(nav.replaced)).toEqual(new Set(["/sessions?agent=agent-2&chat=chat-7"]));
   });
+
+  it("the second line waits for the first, even when the first has to retry a starting agent", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-2" }]));
+    vi.spyOn(api.chatRecord, "createChat").mockResolvedValue({ id: "chat-7" } as never);
+    const delivered: string[] = [];
+    let first = true;
+    record.sendToChat.mockImplementation(async (_a: string, _c: string, text: string) => {
+      if (first) {
+        first = false;
+        throw new Error("API 409: agent_starting");
+      }
+      delivered.push(text);
+    });
+    renderPage();
+    await chipButton();
+
+    await user.click(screen.getByRole("button", { name: "Draft Send" }));
+    await user.click(screen.getByRole("button", { name: "Draft Send Second" }));
+
+    await waitFor(() => expect(delivered).toHaveLength(2), { timeout: 6000 });
+    expect(delivered).toEqual(["Sag PONG", "Zweite Zeile"]);
+  }, 10_000);
 
   it("while the record has not answered yet, the chip claims nothing and a send waits for it", async () => {
     const user = userEvent.setup();
