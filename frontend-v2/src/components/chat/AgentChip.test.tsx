@@ -9,13 +9,13 @@ import userEvent from "@testing-library/user-event";
 import { AgentChip } from "./AgentChip";
 import type { NewChatAgent, NewChatChoices } from "@/lib/chatList";
 
-const sparky: NewChatAgent = { id: "s", name: "Sparky", status: "idle", agent_runtime: "cli-bridge", container_state: "running", can_start_chat: true };
-const boss: NewChatAgent = { id: "b", name: "Boss", status: "idle", agent_runtime: "host" };
+const alpha: NewChatAgent = { id: "s", name: "Alpha", status: "idle", agent_runtime: "cli-bridge", container_state: "running", can_start_chat: true };
+const lead: NewChatAgent = { id: "b", name: "Lead", status: "idle", agent_runtime: "host" };
 
 function renderChip(over: Partial<React.ComponentProps<typeof AgentChip>> = {}) {
   const props = {
-    agent: sparky,
-    choices: { canStart: [sparky], onlyOne: [boss] } as NewChatChoices,
+    agent: alpha,
+    choices: { canStart: [alpha], onlyOne: [lead] } as NewChatChoices,
     newChatsOn: true,
     onPick: vi.fn(),
     onOpenOwnChat: vi.fn(),
@@ -30,20 +30,20 @@ describe("AgentChip", () => {
   it("names who answers the new chat", () => {
     renderChip();
     const chip = screen.getByTestId("agent-chip-button");
-    expect(chip).toHaveTextContent("With Sparky");
+    expect(chip).toHaveTextContent("With Alpha");
     expect(chip).toHaveAttribute("data-mode", "new");
   });
 
   it("new chats off: says so before anything is typed", () => {
-    renderChip({ newChatsOn: false, choices: { canStart: [], onlyOne: [sparky, boss] } });
+    renderChip({ newChatsOn: false, choices: { canStart: [], onlyOne: [alpha, lead] } });
     const chip = screen.getByTestId("agent-chip-button");
-    expect(chip).toHaveTextContent("New chats are off — your chat with Sparky opens.");
+    expect(chip).toHaveTextContent("New chats are off — your chat with Alpha opens.");
     expect(chip).toHaveAttribute("data-mode", "off");
   });
 
   it("an agent with only one chat (new chats on): says that chat opens", () => {
-    renderChip({ agent: boss, choices: { canStart: [], onlyOne: [boss] } });
-    expect(screen.getByTestId("agent-chip-button")).toHaveTextContent("Boss has only one chat — it opens.");
+    renderChip({ agent: lead, choices: { canStart: [], onlyOne: [lead] } });
+    expect(screen.getByTestId("agent-chip-button")).toHaveTextContent("Lead has only one chat — it opens.");
   });
 
   it("nobody alive: says so, the menu still offers a new group", async () => {

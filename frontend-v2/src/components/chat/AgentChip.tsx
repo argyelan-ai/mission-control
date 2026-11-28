@@ -4,20 +4,20 @@
  * AgentChip — who a new chat goes to (concept "Neuer Chat", P4).
  *
  * "New chat" opens an empty draft at once; this quiet chip above the
- * composer says who answers: "With Sparky ▾". Its menu (a bottom sheet on the
+ * composer says who answers: "With Alpha ▾". Its menu (a bottom sheet on the
  * phone, a popover on the desktop) has two sections:
  *
  *   New chat       alive agents that can hold a further chat — a tap makes
  *                  that agent the draft's agent; the chat starts on send.
  *   Only one chat  alive agents with just their own chat, dimmed — a tap
- *                  opens that chat ("opens your chat with Boss").
+ *                  opens that chat ("opens your chat with Lead").
  *
  * and "New group" at the bottom. Dead and archived agents, head runs and the
  * group archive are not here (they live in the chat list and settings).
  *
  * While new chats are off (record flag off, or the viewer is no admin) the
  * chip says so before anything is typed: "New chats are off — your chat with
- * Sparky opens."
+ * Alpha opens."
  */
 import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";

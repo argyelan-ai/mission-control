@@ -51,16 +51,16 @@ describe("isAgentAliveForNewChat", () => {
 });
 
 describe("newChatChoices", () => {
-  const sparky = agent({ id: "sparky", can_start_chat: true });
-  const boss = agent({ id: "boss", agent_runtime: "host", container_state: undefined, last_seen_at: ago(30_000) });
+  const alpha = agent({ id: "alpha", can_start_chat: true });
+  const lead = agent({ id: "lead", agent_runtime: "host", container_state: undefined, last_seen_at: ago(30_000) });
   const deadTest = agent({ id: "mcp-test", agent_runtime: "host", container_state: undefined, last_seen_at: ago(10 * 24 * H) });
   const stopped = agent({ id: "rex", container_state: "exited", can_start_chat: true });
   const archived = agent({ id: "old", status: "archived", can_start_chat: true });
 
   it("splits alive agents into 'new chat' and 'only one chat', drops dead and archived", () => {
-    const c = newChatChoices([boss, sparky, deadTest, stopped, archived], { newChatsOn: true }, NOW);
-    expect(c.canStart.map((a) => a.id)).toEqual(["sparky"]);
-    expect(c.onlyOne.map((a) => a.id)).toEqual(["boss"]);
+    const c = newChatChoices([lead, alpha, deadTest, stopped, archived], { newChatsOn: true }, NOW);
+    expect(c.canStart.map((a) => a.id)).toEqual(["alpha"]);
+    expect(c.onlyOne.map((a) => a.id)).toEqual(["lead"]);
   });
 
   it("never offers a host agent a further chat, even if a row claims it could", () => {
@@ -71,29 +71,29 @@ describe("newChatChoices", () => {
   });
 
   it("with new chats off (flag or no admin) every alive agent has only its own chat", () => {
-    const c = newChatChoices([boss, sparky, deadTest], { newChatsOn: false }, NOW);
+    const c = newChatChoices([lead, alpha, deadTest], { newChatsOn: false }, NOW);
     expect(c.canStart).toEqual([]);
-    expect(c.onlyOne.map((a) => a.id)).toEqual(["boss", "sparky"]);
+    expect(c.onlyOne.map((a) => a.id)).toEqual(["lead", "alpha"]);
   });
 });
 
 describe("defaultNewChatAgent", () => {
   const a = agent({ id: "a", can_start_chat: true });
   const b = agent({ id: "b", can_start_chat: true });
-  const boss = agent({ id: "boss", agent_runtime: "host", container_state: undefined });
+  const lead = agent({ id: "lead", agent_runtime: "host", container_state: undefined });
 
   it("takes the last used agent that can start a chat", () => {
-    expect(defaultNewChatAgent({ canStart: [a, b], onlyOne: [boss] }, ["boss", "b", "a"])?.id).toBe("b");
+    expect(defaultNewChatAgent({ canStart: [a, b], onlyOne: [lead] }, ["lead", "b", "a"])?.id).toBe("b");
   });
 
   it("falls back to the first agent that can start a chat", () => {
-    expect(defaultNewChatAgent({ canStart: [a, b], onlyOne: [boss] }, ["boss"])?.id).toBe("a");
+    expect(defaultNewChatAgent({ canStart: [a, b], onlyOne: [lead] }, ["lead"])?.id).toBe("a");
   });
 
   it("with no agent that can start a chat, the last used alive agent (its own chat)", () => {
     const c = agent({ id: "c" });
-    expect(defaultNewChatAgent({ canStart: [], onlyOne: [boss, c] }, ["c"])?.id).toBe("c");
-    expect(defaultNewChatAgent({ canStart: [], onlyOne: [boss, c] }, [])?.id).toBe("boss");
+    expect(defaultNewChatAgent({ canStart: [], onlyOne: [lead, c] }, ["c"])?.id).toBe("c");
+    expect(defaultNewChatAgent({ canStart: [], onlyOne: [lead, c] }, [])?.id).toBe("lead");
   });
 
   it("nobody alive: null", () => {
